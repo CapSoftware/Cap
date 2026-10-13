@@ -8,6 +8,7 @@ mod sync_analysis;
 mod transcription_timing;
 mod voice;
 mod voice_level;
+mod waveform;
 
 pub use audio_data::*;
 pub use calibration_store::*;
@@ -19,6 +20,7 @@ pub use sync_analysis::*;
 pub use transcription_timing::*;
 pub use voice::*;
 pub use voice_level::*;
+pub use waveform::*;
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
     const BYTE_SIZE: usize;

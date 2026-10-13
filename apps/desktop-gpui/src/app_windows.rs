@@ -5455,26 +5455,27 @@ fn load_editor_waveforms(
         let Ok((mic, system)) = task.await else {
             return;
         };
-        let peaks = cx
-            .background_executor()
-            .spawn(async move {
-                let [mic, system] = [mic, system].map(|tracks| {
-                    tracks
-                        .into_iter()
-                        .map(|audio| {
-                            Arc::new(match audio {
-                                Some(audio) => editor_timeline::waveform_peaks(
-                                    &audio.sample_slices().collect::<Vec<_>>(),
-                                    audio.channels(),
-                                ),
-                                None => Vec::new(),
-                            })
+        let executor = cx.background_executor().clone();
+        let [mic, system] = [mic, system].map(|tracks| {
+            tracks
+                .into_iter()
+                .map(|audio| {
+                    executor.spawn(async move {
+                        Arc::new(match audio {
+                            Some(audio) => editor_timeline::waveform_peaks(
+                                &audio.sample_slices().collect::<Vec<_>>(),
+                                audio.channels(),
+                            ),
+                            None => Vec::new(),
                         })
-                        .collect::<Vec<_>>()
-                });
-                (mic, system)
-            })
-            .await;
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        let peaks = (
+            futures_util::future::join_all(mic).await,
+            futures_util::future::join_all(system).await,
+        );
         let _ = handle.update(cx, |view, window, cx| {
             tracing::info!(
                 mic = peaks.0.iter().filter(|peaks| !peaks.is_empty()).count(),
