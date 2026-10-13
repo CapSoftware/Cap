@@ -20,6 +20,27 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
+fn count_arg(args: &[String], index: usize) -> usize {
+    args.get(index)
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| usage())
+}
+
+fn secs(value: &str) -> Option<Duration> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+}
+
+fn secs_arg(args: &[String], index: usize) -> Duration {
+    args.get(index)
+        .and_then(|v| secs(v))
+        .unwrap_or_else(|| usage())
+}
+
 fn quiet_tone() -> Arc<AudioData> {
     let sample_rate = AudioData::SAMPLE_RATE as f64;
     let frames = (CLIP_SECS * sample_rate) as usize;
@@ -78,24 +99,16 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("idle") => {
-            let secs: f64 = args
-                .get(2)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or_else(|| usage());
+            let duration = secs_arg(&args, 2);
             let output = AudioOutput::new();
             output.prewarm();
-            std::thread::sleep(Duration::from_secs_f64(secs));
+            std::thread::sleep(duration);
             drop(output);
         }
         Some("latency") => {
-            let parse = |index: usize| -> f64 {
-                args.get(index)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| usage())
-            };
-            let reps = parse(2) as usize;
-            let warm_gap = Duration::from_secs_f64(parse(3));
-            let idle_gap = Duration::from_secs_f64(parse(4));
+            let reps = count_arg(&args, 2);
+            let warm_gap = secs_arg(&args, 3);
+            let idle_gap = secs_arg(&args, 4);
             let tone = quiet_tone();
             let mut cold = Vec::new();
             let mut prewarmed = Vec::new();
@@ -136,13 +149,8 @@ fn main() {
             }
         }
         Some("cycles") => {
-            let parse = |index: usize| -> f64 {
-                args.get(index)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| usage())
-            };
-            let cycles = parse(2) as usize;
-            let idle_gap = Duration::from_secs_f64(parse(3));
+            let cycles = count_arg(&args, 2);
+            let idle_gap = secs_arg(&args, 3);
             let tone = quiet_tone();
             let output = AudioOutput::new();
             output.prewarm();
@@ -175,20 +183,16 @@ fn main() {
             }
         }
         Some("presses") => {
-            let times: Vec<f64> = args
+            let times: Vec<Duration> = args
                 .get(2)
-                .map(|list| {
-                    list.split(',')
-                        .filter_map(|v| v.trim().parse().ok())
-                        .collect()
-                })
+                .and_then(|list| list.split(',').map(secs).collect())
                 .unwrap_or_else(|| usage());
             let tone = quiet_tone();
             let started = Instant::now();
             let output = AudioOutput::new();
             output.prewarm();
             for at in times {
-                let wait = Duration::from_secs_f64(at).saturating_sub(started.elapsed());
+                let wait = at.saturating_sub(started.elapsed());
                 std::thread::sleep(wait);
                 let ms = press(&output, &tone);
                 println!(
