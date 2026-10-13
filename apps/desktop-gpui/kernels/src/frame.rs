@@ -50,9 +50,10 @@ pub fn swap_red_blue(pixels: &mut [u8]) {
 }
 
 pub fn swap_red_blue_into(source: &[u8], target: &mut Vec<u8>) {
-    target.clear();
-    target.extend_from_slice(source);
-    swap_red_blue(target);
+    target.resize(source.len(), 0);
+    let pixels_end = source.len() / 4 * 4;
+    reorder_32bit_row::<2, 1, 0, 3>(&source[..pixels_end], &mut target[..pixels_end]);
+    target[pixels_end..].copy_from_slice(&source[pixels_end..]);
 }
 
 pub fn copy_rows(
@@ -115,38 +116,58 @@ pub fn convert_32bit_rows(
     height: usize,
     order: ChannelOrder,
 ) -> Option<Vec<u8>> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
+    if height == 0 {
+        return Some(Vec::new());
+    }
+    let row_bytes = width.checked_mul(4)?;
+    let readable_rows = match raw_data.len().checked_sub(row_bytes) {
+        None => 0,
+        Some(_) if bytes_per_row == 0 => height,
+        Some(remaining) => remaining / bytes_per_row + 1,
+    };
+    if readable_rows < height {
+        let row_start = readable_rows.checked_mul(bytes_per_row)?;
+        let row_end = row_start.checked_add(row_bytes)?;
+        tracing::warn!(
+            row_start,
+            row_end,
+            raw_len = raw_data.len(),
+            "Row bounds exceeded raw data length during thumbnail capture",
+        );
+        return None;
+    }
+    if row_bytes == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut rgba_data = vec![0; row_bytes.checked_mul(height)?];
     for y in 0..height {
         let row_start = y * bytes_per_row;
-        let row_end = row_start + width * 4;
-        if row_end > raw_data.len() {
-            tracing::warn!(
-                row_start,
-                row_end,
-                raw_len = raw_data.len(),
-                "Row bounds exceeded raw data length during thumbnail capture",
-            );
-            return None;
-        }
-
-        let row = &raw_data[row_start..row_end];
-        for chunk in row.chunks_exact(4) {
-            match order {
-                ChannelOrder::Bgra => {
-                    rgba_data.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]])
-                }
-                ChannelOrder::Rgba => rgba_data.extend_from_slice(chunk),
-                ChannelOrder::Argb => {
-                    rgba_data.extend_from_slice(&[chunk[1], chunk[2], chunk[3], chunk[0]])
-                }
-                ChannelOrder::Abgr => {
-                    rgba_data.extend_from_slice(&[chunk[3], chunk[2], chunk[1], chunk[0]])
-                }
-            }
+        let row = &raw_data[row_start..row_start + row_bytes];
+        let output = &mut rgba_data[y * row_bytes..(y + 1) * row_bytes];
+        match order {
+            ChannelOrder::Bgra => reorder_32bit_row::<2, 1, 0, 3>(row, output),
+            ChannelOrder::Rgba => output.copy_from_slice(row),
+            ChannelOrder::Argb => reorder_32bit_row::<1, 2, 3, 0>(row, output),
+            ChannelOrder::Abgr => reorder_32bit_row::<3, 2, 1, 0>(row, output),
         }
     }
 
     Some(rgba_data)
+}
+
+fn reorder_32bit_row<const R: usize, const G: usize, const B: usize, const A: usize>(
+    source: &[u8],
+    target: &mut [u8],
+) {
+    for (source, target) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(target.as_chunks_mut::<4>().0)
+    {
+        *target = [source[R], source[G], source[B], source[A]];
+    }
 }
 
 #[derive(Copy, Clone)]
