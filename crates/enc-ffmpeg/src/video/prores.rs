@@ -5,7 +5,7 @@ use ffmpeg::{
     Dictionary,
     codec::{context, encoder},
     color, format, frame,
-    threading::Config,
+    threading::{Config, Type},
 };
 
 use crate::base::EncoderBase;
@@ -74,7 +74,18 @@ impl ProResEncoderBuilder {
         let thread_count = thread::available_parallelism()
             .map(|v| v.get())
             .unwrap_or(1);
-        encoder_ctx.set_threading(Config::count(thread_count));
+        // `Config::count` leaves `thread_type` at 0, which libavcodec treats as
+        // "no threading" for prores_ks. Frame threading keeps a reference to each
+        // sent frame until a worker encodes it, so it is only safe when frames
+        // come from `converted_frames`, which never rewrites a frame the encoder
+        // still holds.
+        let mut threading = Config::kind(if converter.is_some() {
+            Type::Frame
+        } else {
+            Type::None
+        });
+        threading.count = thread_count;
+        encoder_ctx.set_threading(threading);
 
         let mut encoder = encoder_ctx.encoder().video()?;
         encoder.set_width(output_width);
@@ -103,15 +114,13 @@ impl ProResEncoderBuilder {
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
 
-        let converted_frame_pool = converter
-            .as_ref()
-            .map(|_| frame::Video::new(output_format, output_width, output_height));
-
         Ok(ProResEncoder {
             base: EncoderBase::new(stream_index),
             encoder,
             converter,
-            converted_frame_pool,
+            converted_frames: Vec::new(),
+            output_format,
+            output_size: (output_width, output_height),
         })
     }
 }
@@ -120,7 +129,9 @@ pub struct ProResEncoder {
     base: EncoderBase,
     encoder: encoder::Video,
     converter: Option<ffmpeg::software::scaling::Context>,
-    converted_frame_pool: Option<frame::Video>,
+    converted_frames: Vec<frame::Video>,
+    output_format: format::Pixel,
+    output_size: (u32, u32),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -148,23 +159,30 @@ impl ProResEncoder {
     ) -> Result<(), QueueFrameError> {
         self.base.update_pts(frame, timestamp, &mut self.encoder);
 
-        let frame_to_send = if let Some(converter) = &mut self.converter {
-            let pts = frame.pts();
-            let converted = self.converted_frame_pool.as_mut().unwrap();
-            converter
-                .run(frame, converted)
-                .map_err(QueueFrameError::Converter)?;
-            converted.set_pts(pts);
-            converted as &frame::Video
-        } else {
-            frame as &frame::Video
+        let Some(converter) = &mut self.converter else {
+            return self
+                .base
+                .send_frame(frame, output, &mut self.encoder)
+                .map_err(QueueFrameError::Encode);
         };
 
-        self.base
-            .send_frame(frame_to_send, output, &mut self.encoder)
-            .map_err(QueueFrameError::Encode)?;
+        let mut converted = match self.converted_frames.iter_mut().position(
+            |pooled| unsafe { ffmpeg::ffi::av_frame_is_writable(pooled.as_mut_ptr()) } != 0,
+        ) {
+            Some(index) => self.converted_frames.swap_remove(index),
+            None => frame::Video::new(self.output_format, self.output_size.0, self.output_size.1),
+        };
+        converter
+            .run(frame, &mut converted)
+            .map_err(QueueFrameError::Converter)?;
+        converted.set_pts(frame.pts());
 
-        Ok(())
+        let result = self
+            .base
+            .send_frame(&converted, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode);
+        self.converted_frames.push(converted);
+        result
     }
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
