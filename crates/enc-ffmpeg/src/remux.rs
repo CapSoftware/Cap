@@ -528,47 +528,59 @@ fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(),
     // Each probe decodes a full-resolution keyframe on one core; independent
     // demuxer and decoder instances let them overlap without changing what is
     // validated or which error is reported first.
-    let batches = (0..workers)
-        .map(|worker| {
-            probe_points
-                .iter()
-                .copied()
-                .skip(worker)
-                .step_by(workers)
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let results = std::thread::scope(|scope| {
-        let handles = batches
-            .iter()
-            .map(|batch| {
+    run_in_ordered_workers(&probe_points, workers, |&position_us| {
+        probe_video_seek_point_batch(path, &[position_us])
+    })
+    .into_iter()
+    .collect()
+}
+
+fn run_in_ordered_workers<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    run: impl Fn(&T) -> Result<R, String> + Sync,
+) -> Vec<Result<R, String>> {
+    let workers = workers.clamp(1, items.len().max(1));
+    let run = &run;
+    let mut ordered = std::thread::scope(|scope| {
+        let handles = (0..workers)
+            .map(|worker| {
                 scope.spawn(move || {
-                    batch
+                    items
                         .iter()
-                        .map(|&position_us| probe_video_seek_point_batch(path, &[position_us]))
+                        .enumerate()
+                        .skip(worker)
+                        .step_by(workers)
+                        .map(|(index, item)| (index, run(item)))
                         .collect::<Vec<_>>()
                 })
             })
             .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|_| vec![Err("Seek probe worker panicked".to_string())])
-            })
-            .collect::<Vec<_>>()
-    });
-
-    let mut ordered = vec![Ok(()); probe_points.len()];
-    for (worker, batch) in results.into_iter().enumerate() {
-        for (offset, result) in batch.into_iter().enumerate() {
-            if let Some(slot) = ordered.get_mut(worker + offset * workers) {
-                *slot = result;
+        let mut ordered = (0..items.len()).map(|_| None).collect::<Vec<_>>();
+        for (worker, handle) in handles.into_iter().enumerate() {
+            match handle.join() {
+                Ok(results) => {
+                    for (index, result) in results {
+                        ordered[index] = Some(result);
+                    }
+                }
+                Err(_) => {
+                    for index in (worker..items.len()).step_by(workers) {
+                        ordered[index] = Some(Err("Seek probe worker panicked".to_string()));
+                    }
+                }
             }
         }
-    }
-    ordered.into_iter().collect()
+        ordered
+    });
+    ordered
+        .iter_mut()
+        .map(|result| {
+            result
+                .take()
+                .unwrap_or_else(|| Err("Seek probe result missing".to_string()))
+        })
+        .collect()
 }
 
 fn seek_probe_worker_count(probes: usize) -> usize {
@@ -1795,5 +1807,56 @@ mod tests {
         for window in positions.windows(2) {
             assert!(window[0] < window[1]);
         }
+    }
+
+    #[test]
+    fn ordered_workers_report_the_first_error_by_position_for_uneven_batches() {
+        let items = (0..8).collect::<Vec<i64>>();
+        for workers in [1, 2, 3, 5, 8, 16] {
+            let results = super::run_in_ordered_workers(&items, workers, |&item| {
+                if item == 2 || item == 5 || item == 7 {
+                    Err(format!("probe {item}"))
+                } else {
+                    Ok(item * 10)
+                }
+            });
+            let expected = items
+                .iter()
+                .map(|&item| match item {
+                    2 | 5 | 7 => Err(format!("probe {item}")),
+                    _ => Ok(item * 10),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(results, expected, "workers={workers}");
+            assert_eq!(
+                results.into_iter().collect::<Result<Vec<_>, _>>(),
+                Err("probe 2".to_string()),
+                "workers={workers}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_workers_turn_a_panicked_worker_into_errors_for_its_positions() {
+        let items = (0..7).collect::<Vec<i64>>();
+        let results = super::run_in_ordered_workers(&items, 3, |&item| {
+            if item == 4 {
+                panic!("decoder crashed");
+            }
+            Ok(item)
+        });
+        for (index, result) in results.iter().enumerate() {
+            if index % 3 == 1 {
+                assert_eq!(result, &Err("Seek probe worker panicked".to_string()));
+            } else {
+                assert_eq!(result, &Ok(index as i64));
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_workers_accept_empty_input() {
+        let results = super::run_in_ordered_workers(&[] as &[i64], 4, |&item| Ok(item));
+        assert!(results.is_empty());
     }
 }
