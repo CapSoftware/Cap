@@ -147,9 +147,6 @@ tracing-appender = "0.2"
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
 # `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
-# Multipart export parts are read once and shared by every PUT attempt of that
-# part. reqwest already builds on this crate, so this makes an existing build
-# unit direct.
 bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",

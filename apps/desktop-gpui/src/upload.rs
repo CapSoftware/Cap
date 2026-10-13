@@ -1836,8 +1836,6 @@ impl PartConcurrency {
     }
 }
 
-/// One part read from the export. The bytes are read once and shared by every
-/// PUT attempt of the part, including the deferred retry.
 struct PartChunk {
     part_number: u32,
     offset: u64,
@@ -1934,11 +1932,8 @@ async fn wait_for_export_cancel(cancel: &AtomicBool) {
     }
 }
 
-/// Reads the export in order and keeps up to `concurrency.limit()` parts in
-/// flight. Reads, replacement checks and part numbering stay strictly
-/// sequential; only the presign and PUT of different parts overlap. At most
-/// that many read chunks are in flight, plus any failed parts held for the
-/// deferred retry. With a limit of one this is the previous serial uploader.
+/// Reads, replacement checks and part numbering stay strictly in order; only
+/// the presign and PUT of different parts overlap.
 #[allow(clippy::too_many_arguments)]
 async fn upload_file_parts(
     transport: &impl PartTransport,
@@ -2044,8 +2039,6 @@ async fn upload_file_parts(
     Ok(parts)
 }
 
-/// Every multipart part PUT shares one client so parts reuse warm
-/// connections instead of paying a TCP and TLS handshake plus slow start each.
 fn multipart_upload_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(reqwest::Client::new)
