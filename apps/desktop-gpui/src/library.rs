@@ -978,9 +978,13 @@ impl CacheSlot {
     }
 
     pub fn load(&self) -> Option<Arc<RenderImage>> {
+        self.load_rgba().map(rgba_to_render_image)
+    }
+
+    fn load_rgba(&self) -> Option<image::RgbaImage> {
         let bytes = std::fs::read(self.file()).ok()?;
         let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok()?;
-        Some(rgba_to_render_image(decoded.into_rgba8()))
+        Some(decoded.into_rgba8())
     }
 
     /// Best effort throughout: a cache that cannot be written (read-only
@@ -1060,11 +1064,14 @@ pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
 /// smaller than the card is handed over as-is and the element stretches it,
 /// same as the browser would.
 pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
+    thumbnail_rgba(path).map(rgba_to_render_image)
+}
+
+/// [`decode_thumbnail`]'s pixels before the BGRA swap, through the same cache.
+pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     let cache = CacheSlot::for_source(path);
-    if let Some(cache) = &cache
-        && let Some(image) = cache.load()
-    {
-        return Some(image);
+    if let Some(rgba) = cache.as_ref().and_then(CacheSlot::load_rgba) {
+        return Some(rgba);
     }
 
     let bytes = std::fs::read(path).ok()?;
@@ -1102,7 +1109,7 @@ pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
     if let Some(cache) = &cache {
         cache.store(&rgba);
     }
-    Some(rgba_to_render_image(rgba))
+    Some(rgba)
 }
 
 // ---------------------------------------------------------------------------
