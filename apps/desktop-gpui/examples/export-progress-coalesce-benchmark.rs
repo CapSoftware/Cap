@@ -2,15 +2,14 @@
 //! drain-to-latest coalescing, on the exact channel pattern used by the
 //! export UI in `src/editor_export.rs`.
 //!
-//! "old" reproduces the previous drain loop: one `update` + `cx.notify()`
-//! (a full editor render-tree rebuild) per progress message received.
-//! "new" is the replacement: drain to the latest message, single update +
-//! notify per 50ms wake. The producer sends at 60 msg/s for 5s in both.
+//! "old" reproduces the previous drain loop: one model update per progress
+//! message received. "new" is the replacement: drain to the latest message,
+//! single update per 50ms wake. The producer sends at 60 msg/s for 5s in both.
 //!
-//! The mock update body mirrors the real one (field writes + the
-//! `"{} / {} frames"` label); `cx.notify()` itself is not measurable here,
-//! so the headline metric is update invocations: every avoided update is one
-//! avoided render-tree rebuild while the machine is encode-bound.
+//! What is measured: update invocations (exact) and the mock update body
+//! cost (field writes + the `"{} / {} frames"` label). What is not measured:
+//! `cx.notify()`'s render-tree rebuild, which runs once per update in
+//! production and is the reason fewer updates matter.
 //!
 //! Run: cargo run -p cap-desktop-gpui --example export-progress-coalesce-benchmark --release
 
@@ -119,7 +118,7 @@ fn main() {
     println!("old updates: {old_updates}");
     println!("new updates: {new_updates}");
     println!(
-        "update reduction: {:.1}x (each avoided update skips a full render-tree rebuild)",
+        "update reduction: {:.1}x",
         old_updates as f64 / new_updates as f64
     );
     println!("final UI state old={old_final:?} new={new_final:?} (identical)");
