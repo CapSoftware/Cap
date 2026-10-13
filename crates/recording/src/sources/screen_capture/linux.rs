@@ -2048,8 +2048,6 @@ pub(crate) struct X11Grabber {
     shm: Option<X11ShmSegment>,
 }
 
-/// A MIT-SHM segment the X server writes each frame into, so a frame no longer
-/// streams through the socket as a `GetImage` reply.
 struct X11ShmSegment {
     seg: u32,
     data: *const u8,
@@ -2354,8 +2352,6 @@ impl X11Grabber {
         Ok(frame)
     }
 
-    /// Fill `source` through the shared segment. False means use `GetImage`:
-    /// the server has no MIT-SHM 1.2, or a shared read failed and turned it off.
     fn grab_shm(
         &mut self,
         drawable: u32,
@@ -3105,7 +3101,7 @@ mod x11_grabber_tests {
     }
 
     fn display() -> Option<Display> {
-        let name = std::env::var("DISPLAY").ok()?;
+        let name = std::env::var("CAP_TEST_X11_DISPLAY").ok()?;
         let (conn, screen) = x11rb::connect(Some(&name)).ok()?;
         let screen = &conn.setup().roots[screen];
         let (root, depth, width, height) = (
@@ -3207,7 +3203,9 @@ mod x11_grabber_tests {
     #[test]
     fn shared_memory_capture_matches_get_image() {
         let Some(display) = display() else {
-            eprintln!("No X11 display for the shared memory capture test");
+            eprintln!(
+                "Set CAP_TEST_X11_DISPLAY to a dedicated X server such as Xvfb to run this test"
+            );
             return;
         };
         paint_gradient(&display, display.root, 320, 200);
@@ -3272,7 +3270,9 @@ mod x11_grabber_tests {
         }
 
         let Some(display) = display() else {
-            eprintln!("No X11 display for the capture benchmark");
+            eprintln!(
+                "Set CAP_TEST_X11_DISPLAY to a dedicated X server such as Xvfb to run this benchmark"
+            );
             return;
         };
         let mut grabber =
