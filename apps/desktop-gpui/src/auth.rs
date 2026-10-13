@@ -59,6 +59,7 @@ pub enum AuthApiError {
     InvalidAuthentication,
     UpgradeRequired,
     Timeout,
+    Status(reqwest::StatusCode, String),
     Other(String),
 }
 
@@ -72,7 +73,7 @@ impl AuthApiError {
                 "User needs to upgrade their account to use this feature!".into()
             }
             Self::Timeout => "The request has timed out".into(),
-            Self::Other(message) => message.clone(),
+            Self::Status(_, message) | Self::Other(message) => message.clone(),
         }
     }
 }
