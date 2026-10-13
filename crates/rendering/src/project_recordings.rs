@@ -547,6 +547,140 @@ mod ordinary_media_access_tests {
         output.write_trailer().unwrap();
     }
 
+    fn write_test_opus_ogg(path: &Path) {
+        ffmpeg::init().unwrap();
+        let codec = ffmpeg::encoder::find_by_name("libopus")
+            .expect("bundled FFmpeg has no libopus encoder");
+        let mut output = ffmpeg::format::output(path).unwrap();
+        let (stream_index, mut encoder) = {
+            let mut stream = output.add_stream(codec).unwrap();
+            let stream_index = stream.index();
+            stream.set_time_base((1, 48_000));
+            let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+                .encoder()
+                .audio()
+                .unwrap();
+            encoder.set_bit_rate(128_000);
+            encoder.set_rate(48_000);
+            encoder.set_format(ffmpeg::format::Sample::F32(
+                ffmpeg::format::sample::Type::Packed,
+            ));
+            encoder.set_channel_layout(ffmpeg::ChannelLayout::MONO);
+            encoder.set_time_base((1, 48_000));
+            let encoder = encoder.open_as(codec).unwrap();
+            stream.set_parameters(&encoder);
+            (stream_index, encoder)
+        };
+        output.write_header().unwrap();
+        let output_time_base = output.stream(stream_index).unwrap().time_base();
+
+        for frame_index in 0..75 {
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                960,
+                ffmpeg::ChannelLayout::MONO,
+            );
+            frame.set_rate(48_000);
+            frame.set_pts(Some(frame_index * 960));
+            frame.data_mut(0).fill(0);
+            encoder.send_frame(&frame).unwrap();
+            write_audio_packets(&mut encoder, &mut output, stream_index, output_time_base);
+        }
+
+        encoder.send_eof().unwrap();
+        write_audio_packets(&mut encoder, &mut output, stream_index, output_time_base);
+        output.write_trailer().unwrap();
+    }
+
+    fn write_test_fragmented_aac(path: &Path, frame_count: usize, write_trailer: bool) {
+        ffmpeg::init().unwrap();
+        let codec =
+            ffmpeg::encoder::find_by_name("aac").expect("bundled FFmpeg has no AAC encoder");
+        let mut output = ffmpeg::format::output_as(path, "mp4").unwrap();
+        unsafe {
+            let context = output.as_mut_ptr();
+            assert_eq!(
+                ffmpeg::ffi::av_opt_set(
+                    (*context).priv_data,
+                    c"movflags".as_ptr(),
+                    c"frag_keyframe+empty_moov+default_base_moof+skip_trailer".as_ptr(),
+                    0,
+                ),
+                0
+            );
+            assert_eq!(
+                ffmpeg::ffi::av_opt_set_int(
+                    (*context).priv_data,
+                    c"frag_duration".as_ptr(),
+                    2_000_000,
+                    0,
+                ),
+                0
+            );
+            assert_eq!(
+                ffmpeg::ffi::av_opt_set_int(context.cast(), c"flush_packets".as_ptr(), 1, 0,),
+                0
+            );
+        }
+
+        let (stream_index, mut encoder) = {
+            let mut stream = output.add_stream(codec).unwrap();
+            let stream_index = stream.index();
+            stream.set_time_base((1, 48_000));
+            let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+                .encoder()
+                .audio()
+                .unwrap();
+            encoder.set_bit_rate(320_000);
+            encoder.set_rate(48_000);
+            encoder.set_format(ffmpeg::format::Sample::F32(
+                ffmpeg::format::sample::Type::Planar,
+            ));
+            encoder.set_channel_layout(ffmpeg::ChannelLayout::STEREO);
+            encoder.set_time_base((1, 48_000));
+            let encoder = encoder.open_as(codec).unwrap();
+            stream.set_parameters(&encoder);
+            (stream_index, encoder)
+        };
+        output.write_header().unwrap();
+        let output_time_base = output.stream(stream_index).unwrap().time_base();
+
+        for frame_index in 0..frame_count {
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                1024,
+                ffmpeg::ChannelLayout::STEREO,
+            );
+            frame.set_rate(48_000);
+            frame.set_pts(Some((frame_index * 1024) as i64));
+            frame.data_mut(0).fill(0);
+            frame.data_mut(1).fill(0);
+            encoder.send_frame(&frame).unwrap();
+            write_audio_packets(&mut encoder, &mut output, stream_index, output_time_base);
+        }
+
+        if write_trailer {
+            encoder.send_eof().unwrap();
+            write_audio_packets(&mut encoder, &mut output, stream_index, output_time_base);
+            output.write_trailer().unwrap();
+        }
+    }
+
+    fn assert_audio_metadata_eq(actual: Audio, expected: Audio, source: &str) {
+        assert_eq!(
+            actual.duration, expected.duration,
+            "{source} duration differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert_eq!(
+            actual.sample_rate, expected.sample_rate,
+            "{source} sample rate differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert_eq!(
+            actual.channels, expected.channels,
+            "{source} channel count differs: actual={actual:?}, expected={expected:?}"
+        );
+    }
+
     #[test]
     fn failed_project_refuses_before_opening_invalid_media() {
         let meta: StudioRecordingMeta = serde_json::from_str(
@@ -629,6 +763,55 @@ mod ordinary_media_access_tests {
         assert_eq!(actual.channels, expected.channels);
         assert_eq!(actual.duration, expected.duration);
         assert_eq!(actual.start_time, expected.start_time);
+    }
+
+    #[test]
+    fn opus_ogg_headers_match_full_probe() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio-input.ogg");
+        write_test_opus_ogg(&path);
+
+        let full_input = ffmpeg::format::input(&path).unwrap();
+        let expected = Audio::from_input(&full_input, 0.0).unwrap();
+        let header_input = open_headers(&path).expect("header open should succeed");
+        let from_headers =
+            Audio::from_headers(&header_input, 0.0).expect("Opus headers should be sufficient");
+        assert_audio_metadata_eq(from_headers, expected, "Opus header metadata");
+
+        let actual = Audio::new(&path, 0.0).unwrap();
+        assert_audio_metadata_eq(actual, expected, "Opus Audio::new metadata");
+    }
+
+    #[test]
+    fn fragmented_aac_m4a_headers_match_full_probe() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio-input.m4a");
+        write_test_fragmented_aac(&path, 72, true);
+
+        let full_input = ffmpeg::format::input(&path).unwrap();
+        let expected = Audio::from_input(&full_input, 0.0).unwrap();
+        let header_input = open_headers(&path).expect("header open should succeed");
+        let from_headers = Audio::from_headers(&header_input, 0.0)
+            .expect("fragmented AAC M4A headers should be sufficient");
+        assert_audio_metadata_eq(from_headers, expected, "fragmented AAC M4A header metadata");
+
+        let actual = Audio::new(&path, 0.0).unwrap();
+        assert_audio_metadata_eq(actual, expected, "fragmented AAC M4A Audio::new metadata");
+    }
+
+    #[test]
+    fn incomplete_fragmented_aac_headers_fall_back_to_full_probe() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("incomplete.m4a");
+        write_test_fragmented_aac(&path, 0, false);
+
+        let header_input = open_headers(&path).expect("fragmented MP4 header should open");
+        assert!(Audio::from_headers(&header_input, 0.0).is_none());
+
+        let full_input = ffmpeg::format::input(&path).unwrap();
+        let expected = Audio::from_input(&full_input, 0.0).unwrap();
+        let actual = Audio::new(&path, 0.0).unwrap();
+        assert_audio_metadata_eq(actual, expected, "incomplete fragmented AAC M4A fallback");
     }
 
     #[test]
