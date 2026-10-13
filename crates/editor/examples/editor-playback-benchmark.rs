@@ -583,7 +583,18 @@ async fn main() {
     let mut summary = BenchmarkSummary::default();
     let mut measured_elapsed = 0.0f64;
 
+    // `--press-gap <secs>` idles between presses, e.g. to exercise the audio
+    // output's idle pause before the next play.
+    let press_gap = arg_value(&args, "--press-gap")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(Duration::from_secs_f64);
+
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
+        if press_idx > 0
+            && let Some(gap) = press_gap
+        {
+            tokio::time::sleep(gap).await;
+        }
         let playback = Playback {
             renderer: renderer.clone(),
             render_constants: render_constants.clone(),
