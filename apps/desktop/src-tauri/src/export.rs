@@ -1950,6 +1950,7 @@ async fn generate_export_preview_inner(
             .map(|segment| segment.display.duration)
             .collect::<Vec<_>>(),
     );
+    let project_config = Arc::new(project_config);
 
     let render_constants = Arc::new(
         RenderVideoConstants::new(
@@ -2038,7 +2039,7 @@ async fn generate_export_preview_inner(
 
     let uniforms = ProjectUniforms::new(
         &render_constants,
-        &Arc::new(project_config.clone()),
+        &project_config,
         frame_number,
         settings.fps,
         settings.resolution_base,
@@ -2083,7 +2084,7 @@ async fn generate_export_preview_inner(
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
         let outgoing_uniforms = ProjectUniforms::new(
             &render_constants,
-            &Arc::new(project_config.clone()),
+            &project_config,
             frame_number,
             settings.fps,
             settings.resolution_base,
@@ -2546,6 +2547,7 @@ async fn generate_export_preview_fast_inner(
     })
     .await
     .map_err(|error| format!("Failed to synchronize export preview timing: {error}"))?;
+    let project_config = Arc::new(project_config);
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;
@@ -2602,7 +2604,7 @@ async fn generate_export_preview_fast_inner(
 
     let uniforms = ProjectUniforms::new(
         &editor.render_constants,
-        &Arc::new(project_config.clone()),
+        &project_config,
         frame_number,
         settings.fps,
         settings.resolution_base,
@@ -2649,7 +2651,7 @@ async fn generate_export_preview_fast_inner(
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
         let outgoing_uniforms = ProjectUniforms::new(
             &editor.render_constants,
-            &Arc::new(project_config.clone()),
+            &project_config,
             frame_number,
             settings.fps,
             settings.resolution_base,
