@@ -822,7 +822,7 @@ async fn upload_segments(
                             return Err(error);
                         }
                         last_error.clone_from(&error);
-                        if deferred.is_empty() {
+                        if retry_at <= now {
                             retry_at = now + segment_retry_backoff(retry_round);
                             retry_round = retry_round.saturating_add(1);
                         }
@@ -2808,6 +2808,7 @@ mod tests {
         retryable_failures: std::sync::atomic::AtomicUsize,
         stall_retries: AtomicBool,
         segment_calls: std::sync::atomic::AtomicUsize,
+        segment_call_limit: std::sync::atomic::AtomicUsize,
         segment_failed: tokio::sync::Notify,
         manifest_failures: std::sync::atomic::AtomicUsize,
         manifest_attempts: std::sync::atomic::AtomicUsize,
@@ -2855,7 +2856,13 @@ mod tests {
             _: Arc<Mutex<HashMap<String, String>>>,
             _: Arc<AtomicBool>,
         ) -> Result<SegmentCompletedEvent, SegmentUploadError> {
-            self.segment_calls.fetch_add(1, Ordering::AcqRel);
+            let calls = self.segment_calls.fetch_add(1, Ordering::AcqRel) + 1;
+            let limit = self.segment_call_limit.load(Ordering::Acquire);
+            if limit > 0 && calls > limit {
+                return Err(SegmentUploadError::Fatal(
+                    "segment call limit exceeded".into(),
+                ));
+            }
             if self.fatal_segment.load(Ordering::Acquire) {
                 return Err(SegmentUploadError::Fatal(
                     "Authentication expired while uploading the instant recording".into(),
@@ -3505,6 +3512,47 @@ mod tests {
         assert_eq!(started.elapsed(), SEGMENT_RETRY_WINDOW);
         assert_eq!(transport.segment_calls.load(Ordering::Acquire), 2);
         assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deferred_segments_beyond_the_upload_limit_still_back_off() {
+        let transport = FakeSegmentTransport::default();
+        transport.fail_segment.store(true, Ordering::Release);
+        let segments = 2 * MAX_SEGMENT_UPLOADS as u32;
+        let (sender, events) = flume::unbounded();
+        for index in 0..segments {
+            sender
+                .send(segment_event(
+                    index,
+                    f64::from(index),
+                    index == 0,
+                    SegmentMediaType::Video,
+                ))
+                .unwrap();
+        }
+        drop(sender);
+        let mut rounds = 1;
+        let mut elapsed = Duration::ZERO;
+        for round in 0.. {
+            elapsed += segment_retry_backoff(round);
+            if elapsed >= SEGMENT_RETRY_WINDOW {
+                break;
+            }
+            rounds += 1;
+        }
+        transport
+            .segment_call_limit
+            .store(segments as usize * rounds, Ordering::Release);
+        let error = upload_segments(
+            &transport,
+            "long-outage",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("segment upload failed"), "{error}");
     }
 
     #[tokio::test(start_paused = true)]
