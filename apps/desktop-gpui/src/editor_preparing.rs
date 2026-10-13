@@ -527,6 +527,7 @@ impl PreparingRunner {
         let frame_format = EditorFrameFormat::BgraSurface;
         #[cfg(not(target_os = "macos"))]
         let frame_format = EditorFrameFormat::Rgba;
+        let shared_device = crate::app_windows::shared_wgpu_device().await;
         self.control.accepts_frames.store(true, Ordering::Release);
         let playback = PreparingPlaybackSession::spawn_with_expected_metadata(
             input,
@@ -535,6 +536,7 @@ impl PreparingRunner {
                 preview: PreparingPreviewOptions {
                     use_hardware_decoding: preparing_hardware_decode(),
                     frame_format,
+                    shared_device,
                 },
                 fps: crate::editor_window::EDITOR_PREVIEW_FPS,
                 resolution: self.resolution,

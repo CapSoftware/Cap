@@ -93,6 +93,12 @@ fn platform_display_for_capture(
             .into_iter()
             .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid));
     }
+    #[cfg(target_os = "windows")]
+    if let Ok(id) = target.id().to_string().parse::<u64>()
+        && let Some(display) = cx.find_display(gpui::DisplayId::new(id))
+    {
+        return Some(display);
+    }
     let bounds = capture_display_bounds(target)?;
     let mut matching = cx
         .displays()
@@ -104,6 +110,20 @@ fn platform_display_for_capture(
         return None;
     }
     Some(display)
+}
+
+fn gpui_display_id(target: Option<&scap_targets::Display>, cx: &App) -> Option<gpui::DisplayId> {
+    #[cfg(target_os = "windows")]
+    {
+        target
+            .and_then(|target| platform_display_for_capture(target, cx))
+            .map(|display| display.id())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (target, cx);
+        None
+    }
 }
 
 fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixels>> {
@@ -168,9 +188,13 @@ fn fit_window_bounds(bounds: Bounds<Pixels>, available: Bounds<Pixels>) -> Bound
     }
 }
 
-fn opening_window_bounds(preferred: Size<Pixels>, cx: &App) -> Bounds<Pixels> {
+fn opening_window_placement(
+    preferred: Size<Pixels>,
+    cx: &App,
+) -> (Bounds<Pixels>, Option<gpui::DisplayId>) {
     let target = scap_targets::Display::get_containing_cursor();
-    match display_work_area(target.as_ref(), cx) {
+    let display_id = gpui_display_id(target.as_ref(), cx);
+    let bounds = match display_work_area(target.as_ref(), cx) {
         Some(available) => {
             let available = inset_work_area(available);
             fit_window_bounds(
@@ -178,8 +202,9 @@ fn opening_window_bounds(preferred: Size<Pixels>, cx: &App) -> Bounds<Pixels> {
                 available,
             )
         }
-        None => Bounds::centered(None, preferred, cx),
-    }
+        None => Bounds::centered(display_id, preferred, cx),
+    };
+    (bounds, display_id)
 }
 
 fn fitted_window_min_size(preferred: Size<Pixels>, bounds: Bounds<Pixels>) -> Size<Pixels> {
@@ -1143,7 +1168,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
         return;
     }
 
-    let bounds = opening_window_bounds(
+    let (bounds, display_id) = opening_window_placement(
         size(
             px(settings_window::SETTINGS_WIDTH),
             px(settings_window::SETTINGS_HEIGHT),
@@ -1154,6 +1179,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             // A real titlebar this time, transparent with the buttons moved
             // to (22, 22): `CapWindowId::Settings::traffic_lights_position` is
             // `Some(Some(...))`, which is what keeps the native lights and
@@ -1300,6 +1326,7 @@ pub fn open_onboarding(cx: &mut App) {
     }
 
     let display = scap_targets::Display::get_containing_cursor();
+    let display_id = gpui_display_id(display.as_ref(), cx);
     let bounds = match display_work_area(display.as_ref(), cx) {
         Some(available) => {
             let display_width = display
@@ -1319,7 +1346,7 @@ pub fn open_onboarding(cx: &mut App) {
             }
         }
         None => Bounds::centered(
-            None,
+            display_id,
             size(
                 px(onboarding_window::ONBOARDING_WIDTH),
                 px(onboarding_window::ONBOARDING_HEIGHT),
@@ -1331,6 +1358,7 @@ pub fn open_onboarding(cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             titlebar: None,
             kind: WindowKind::Normal,
             focus: true,
@@ -1466,7 +1494,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
         return true;
     }
 
-    let bounds = opening_window_bounds(
+    let (bounds, display_id) = opening_window_placement(
         size(
             px(mode_select_window::MODE_SELECT_WIDTH),
             px(mode_select_window::MODE_SELECT_HEIGHT),
@@ -1477,6 +1505,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             // `traffic_lights_position` has no ModeSelect arm, so it takes the
             // `_ => Some(None)` catch-all: the native buttons stay where AppKit
             // puts them and only the title is hidden (`hidden_title(true)` +
@@ -1585,7 +1614,7 @@ pub fn open_teleprompter(cx: &mut App) {
         return;
     }
 
-    let bounds = opening_window_bounds(
+    let (bounds, display_id) = opening_window_placement(
         size(
             px(teleprompter_window::TELEPROMPTER_WIDTH),
             px(teleprompter_window::TELEPROMPTER_HEIGHT),
@@ -1596,6 +1625,7 @@ pub fn open_teleprompter(cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             // `decorations: true`, `titleBarStyle: "overlay"`, `hiddenTitle:
             // true`, `trafficLightPosition: (14, 14)` -- the real AppKit
             // buttons, moved, as on the settings window.
@@ -2333,8 +2363,15 @@ fn open_overlay(
     };
     let width = bounds.size().width();
     let height = bounds.size().height();
+    #[cfg(target_os = "windows")]
+    let origin = point(
+        px(bounds.position().x() as f32),
+        px(bounds.position().y() as f32),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let origin = point(px(0.), px(0.));
     let window_bounds = WindowBounds::Windowed(Bounds {
-        origin: point(px(0.), px(0.)),
+        origin,
         size: size(px(width as f32), px(height as f32)),
     });
     #[cfg(target_os = "linux")]
@@ -2367,6 +2404,8 @@ fn open_overlay(
             window_bounds: Some(window_bounds),
             #[cfg(target_os = "linux")]
             display_id: overlay_display.as_ref().map(|display| display.id()),
+            #[cfg(target_os = "windows")]
+            display_id: gpui_display_id(Some(display), cx),
             titlebar: None,
             // `NSWindowStyleMaskNonActivatingPanel` in windows.rs: the overlay
             // takes clicks without activating the app over the one being
@@ -3778,6 +3817,7 @@ pub fn open_camera_window(cx: &mut App) {
         .or_else(scap_targets::Display::get_containing_cursor)
         .unwrap_or_else(scap_targets::Display::primary);
     let (x, y) = camera_window::opening_position(&display);
+    let display_id = gpui_display_id(Some(&display), cx);
 
     let inline = camera_preview_is_inline(cx);
     let handle = cx.open_window(
@@ -3786,6 +3826,7 @@ pub fn open_camera_window(cx: &mut App) {
                 origin: point(px(x), px(y)),
                 size: size(px(width), px(height)),
             })),
+            display_id,
             #[cfg(not(target_os = "linux"))]
             titlebar: None,
             #[cfg(target_os = "linux")]
@@ -4639,7 +4680,7 @@ fn open_editor_window(
         return Some(window_id);
     }
 
-    let bounds = opening_window_bounds(
+    let (bounds, display_id) = opening_window_placement(
         size(
             px(editor_window::EDITOR_WIDTH),
             px(editor_window::EDITOR_HEIGHT),
@@ -4650,6 +4691,7 @@ fn open_editor_window(
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             // Native traffic lights, inset to (20, 32):
             // `CapWindowId::Editor::traffic_lights_position` is
             // `Some(Some(LogicalPosition::new(20.0, 32.0)))`, and the header's
@@ -4714,6 +4756,7 @@ fn open_editor_window(
 
     hide_main_and_park_camera_preview(cx);
     reveal_editor_window(&key, cx);
+    prewarm_shared_wgpu_device(cx);
     if finalization.is_some() {
         tracing::info!(path = %key.display(), "preparing editor shell created");
         let frame_path = key.clone();
@@ -4728,6 +4771,69 @@ fn open_editor_window(
     }
     load_editor_project(key, handle, finalization, cx);
     Some(handle.window_id())
+}
+
+struct CachedWgpuDevice {
+    shared: cap_rendering::SharedWgpuDevice,
+    lost: Arc<std::sync::atomic::AtomicBool>,
+}
+
+static SHARED_WGPU_DEVICE: std::sync::LazyLock<tokio::sync::Mutex<Option<CachedWgpuDevice>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+fn clone_shared_wgpu_device(
+    shared: &cap_rendering::SharedWgpuDevice,
+) -> cap_rendering::SharedWgpuDevice {
+    cap_rendering::SharedWgpuDevice {
+        instance: shared.instance.clone(),
+        adapter: shared.adapter.clone(),
+        device: shared.device.clone(),
+        queue: shared.queue.clone(),
+        is_software_adapter: shared.is_software_adapter,
+    }
+}
+
+pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevice> {
+    let mut guard = SHARED_WGPU_DEVICE.lock().await;
+    if let Some(cached) = guard.as_ref() {
+        if !cached.lost.load(std::sync::atomic::Ordering::Acquire) {
+            return Some(clone_shared_wgpu_device(&cached.shared));
+        }
+        tracing::warn!("shared wgpu device was lost; recreating");
+        *guard = None;
+    }
+    let started = std::time::Instant::now();
+    match cap_rendering::create_shared_device().await {
+        Ok(shared) => {
+            let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let lost_flag = lost.clone();
+            shared
+                .device
+                .set_device_lost_callback(move |reason, message| {
+                    tracing::warn!(?reason, %message, "shared wgpu device lost");
+                    lost_flag.store(true, std::sync::atomic::Ordering::Release);
+                });
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                software = shared.is_software_adapter,
+                "shared wgpu device ready"
+            );
+            let cloned = clone_shared_wgpu_device(&shared);
+            *guard = Some(CachedWgpuDevice { shared, lost });
+            Some(cloned)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not precreate shared wgpu device");
+            None
+        }
+    }
+}
+
+pub(crate) fn prewarm_shared_wgpu_device(cx: &App) {
+    gpui_tokio::Tokio::spawn(cx, async {
+        let _ = shared_wgpu_device().await;
+    })
+    .detach();
 }
 
 fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
@@ -5021,10 +5127,6 @@ fn load_editor_project_candidate(
                 // `editor_instance.rs:305`). The video pump is identical on
                 // both paths.
                 //
-                // `shared_device: None`: gpui on macOS is Metal-direct and
-                // exposes no wgpu device to share, so cap-rendering owns its
-                // own. Two GPU contexts in-process is the shape the Tauri app
-                // already has.
                 let state_cb = editor_window::make_state_callback(playhead);
                 let frame_cb = editor_window::make_frame_callback(frame_tx, frame_stats);
                 #[cfg(target_os = "macos")]
@@ -5036,11 +5138,12 @@ fn load_editor_project_candidate(
                         .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
                         .await;
                 }
+                let shared_device = shared_wgpu_device().await;
                 let instance = cap_editor::EditorInstance::new_with_startup_inputs(
                     instance_path,
                     state_cb,
                     frame_cb,
-                    None,
+                    shared_device,
                     frame_format,
                     preparing_output.unwrap_or_else(editor_audio_output),
                     cap_editor::EditorStartupInputs {
@@ -6202,6 +6305,24 @@ fn camera_window_number(cx: &mut App) -> Option<isize> {
         .flatten()
 }
 
+fn window_logical_bounds_on_display(
+    window: &scap_targets::Window,
+) -> Option<scap_targets::bounds::LogicalBounds> {
+    if let Some(display) = window.display()
+        && let Some(display_bounds) = display.raw_handle().logical_bounds()
+        && let Some(relative) = window.display_relative_logical_bounds()
+    {
+        return Some(scap_targets::bounds::LogicalBounds::new(
+            scap_targets::bounds::LogicalPosition::new(
+                display_bounds.position().x() + relative.position().x(),
+                display_bounds.position().y() + relative.position().y(),
+            ),
+            relative.size(),
+        ));
+    }
+    window.raw_handle().logical_bounds()
+}
+
 /// Where the bar goes, from `fake_window.rs`: centered under a window target
 /// (48px up from its bottom edge), bottom-center of the recorded display
 /// otherwise (120px up).
@@ -6213,7 +6334,7 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
 
     if let ScreenCaptureTarget::Window { id } = &config.target
         && let Some(window) = scap_targets::Window::from_id(id)
-        && let Some(bounds) = window.raw_handle().logical_bounds()
+        && let Some(bounds) = window_logical_bounds_on_display(&window)
     {
         let x = bounds.position().x() + (bounds.size().width() - width) / 2.;
         let y = bounds.position().y() + bounds.size().height() - height - TARGET_CONTROLS_OFFSET_Y;
@@ -6253,7 +6374,9 @@ fn open_controls(
     let display = config
         .target
         .display()
-        .or_else(scap_targets::Display::get_containing_cursor);
+        .or_else(scap_targets::Display::get_containing_cursor)
+        .or_else(|| Some(scap_targets::Display::primary()));
+    let display_id = gpui_display_id(display.as_ref(), cx);
     let bounds = display_work_area(display.as_ref(), cx)
         .map(|available| fit_window_bounds(bounds, inset_work_area(available)))
         .unwrap_or(bounds);
@@ -6262,6 +6385,7 @@ fn open_controls(
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             // No titlebar at all: with one, the panel still draws standard
             // window buttons floating in the transparent top of the window.
             titlebar: None,
@@ -6404,7 +6528,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     }
 
-    let bounds = opening_window_bounds(
+    let (bounds, display_id) = opening_window_placement(
         size(
             px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
             px(screenshot_editor::SCREENSHOT_EDITOR_HEIGHT),
@@ -6415,6 +6539,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
+            display_id,
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Cap Screenshot Editor".into()),
                 appears_transparent: true,
@@ -6463,6 +6588,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         .ok();
 
     hide_main_window(cx);
+    prewarm_shared_wgpu_device(cx);
     screenshot_editor::load_screenshot_project(key, handle, cx);
 }
 
