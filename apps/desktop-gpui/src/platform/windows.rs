@@ -320,21 +320,35 @@ fn window_physical_frame(native: &NativeWindow) -> Option<Rect> {
     }
 }
 
-fn set_physical_frame(native: &NativeWindow, rect: Rect) {
+fn apply_physical_frame(hwnd: HWND, insert_after: HWND, rect: Rect, flags: u32) {
     if !rect.is_valid() {
         return;
     }
+    let x = rect.x.round() as i32;
+    let y = rect.y.round() as i32;
+    let width = rect.width.round() as i32;
+    let height = rect.height.round() as i32;
     unsafe {
-        SetWindowPos(
-            native.hwnd(),
-            HWND_TOP,
-            rect.x.round() as i32,
-            rect.y.round() as i32,
-            rect.width.round() as i32,
-            rect.height.round() as i32,
-            SWP_NOACTIVATE | SWP_NOZORDER | SWP_ASYNCWINDOWPOS,
-        );
+        SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
+        let mut actual = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut actual) != 0
+            && (actual.left != x
+                || actual.top != y
+                || actual.right - actual.left != width
+                || actual.bottom - actual.top != height)
+        {
+            SetWindowPos(hwnd, insert_after, x, y, width, height, flags);
+        }
     }
+}
+
+fn set_physical_frame(native: &NativeWindow, rect: Rect) {
+    apply_physical_frame(native.hwnd(), HWND_TOP, rect, SWP_NOACTIVATE | SWP_NOZORDER);
 }
 
 pub fn window_frame(native: &NativeWindow) -> (f64, f64, f64, f64) {
@@ -386,20 +400,12 @@ pub fn place_overlay_panel(
     let physical = select_logical_display(logical, &displays, true)
         .map(|display| logical_to_physical(logical, display))
         .unwrap_or(logical);
-    if !physical.is_valid() {
-        return;
-    }
-    unsafe {
-        SetWindowPos(
-            native.hwnd(),
-            HWND_TOPMOST,
-            physical.x.round() as i32,
-            physical.y.round() as i32,
-            physical.width.round() as i32,
-            physical.height.round() as i32,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
-        );
-    }
+    apply_physical_frame(
+        native.hwnd(),
+        HWND_TOPMOST,
+        physical,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
 }
 
 pub fn apply_panel_behavior(window: &Window, behavior: PanelBehavior) {
