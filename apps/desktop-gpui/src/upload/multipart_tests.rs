@@ -523,6 +523,18 @@ mod mock_network {
         pub addr: std::net::SocketAddr,
         pub connections: Arc<AtomicUsize>,
         pub recorded: Arc<Recorded>,
+        stop: Arc<AtomicBool>,
+        listener: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            let _ = TcpStream::connect(self.addr);
+            if let Some(listener) = self.listener.take() {
+                let _ = listener.join();
+            }
+        }
     }
 
     pub(super) fn start(profile: Profile) -> Server {
@@ -534,21 +546,31 @@ mod mock_network {
         });
         let connections = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::new(Recorded::default());
-        let server = Server {
-            addr,
-            connections: connections.clone(),
-            recorded: recorded.clone(),
-        };
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                connections.fetch_add(1, Ordering::AcqRel);
-                let link = link.clone();
-                let recorded = recorded.clone();
-                std::thread::spawn(move || serve(stream, addr, &link, &recorded));
+        let stop = Arc::new(AtomicBool::new(false));
+        let listener = std::thread::spawn({
+            let connections = connections.clone();
+            let recorded = recorded.clone();
+            let stop = stop.clone();
+            move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let Ok(stream) = stream else { return };
+                    connections.fetch_add(1, Ordering::AcqRel);
+                    let link = link.clone();
+                    let recorded = recorded.clone();
+                    std::thread::spawn(move || serve(stream, addr, &link, &recorded));
+                }
             }
         });
-        server
+        Server {
+            addr,
+            connections,
+            recorded,
+            stop,
+            listener: Some(listener),
+        }
     }
 
     fn serve(stream: TcpStream, addr: std::net::SocketAddr, link: &Link, recorded: &Recorded) {
