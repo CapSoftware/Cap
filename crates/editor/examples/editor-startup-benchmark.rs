@@ -164,6 +164,9 @@ async fn main() {
                 .map(|seconds| (seconds * fps as f64).round() as u32)
         })
         .unwrap_or(0);
+    let scrub_requests = arg_value(&args, "--scrub-requests")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
     let profile_stages = has_flag(&args, "--profile-stages");
     let profile_stages_only = has_flag(&args, "--profile-stages-only");
     let prewarm_fonts = has_flag(&args, "--prewarm-fonts");
@@ -175,6 +178,7 @@ async fn main() {
     println!("Recording: {}", recording_path.display());
     println!("Runs: {runs}");
     println!("Preview frame: {preview_frame}");
+    println!("Scrub requests: {scrub_requests}");
     println!("Profile stages: {profile_stages}");
     println!("Profile stages only: {profile_stages_only}");
     if prewarm_fonts {
@@ -194,6 +198,7 @@ async fn main() {
 
     let mut values_ms = Vec::with_capacity(runs);
     let mut preview_values_ms = Vec::with_capacity(runs);
+    let mut scrub_values_ms = Vec::with_capacity(runs * scrub_requests as usize);
 
     for run in 0..runs {
         let before_config = ProjectConfiguration::load(&recording_path).unwrap_or_default();
@@ -226,6 +231,19 @@ async fn main() {
             .expect("Preview did not produce a frame within 10 seconds");
         let preview_elapsed = preview_start.elapsed().as_secs_f64() * 1000.0;
         preview_values_ms.push(preview_elapsed);
+
+        for request in 0..scrub_requests {
+            let frame = preview_frame + request.abs_diff(scrub_requests / 2) * (fps / 4);
+            let scrub_start = Instant::now();
+            editor
+                .preview_tx
+                .send(Some((frame, fps, resolution_base)))
+                .expect("Failed to request scrub frame");
+            frame_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("Scrub did not produce a frame within 10 seconds");
+            scrub_values_ms.push(scrub_start.elapsed().as_secs_f64() * 1000.0);
+        }
 
         editor.dispose().await;
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -265,6 +283,17 @@ async fn main() {
         percentile(&preview_values_ms, 95.0),
         preview_values_ms.len()
     );
+
+    if !scrub_values_ms.is_empty() {
+        let scrub_avg = scrub_values_ms.iter().sum::<f64>() / scrub_values_ms.len() as f64;
+        let scrub_max = scrub_values_ms.iter().copied().fold(0.0, f64::max);
+        println!(
+            "Scrub preview: avg={scrub_avg:.1}ms p50={:.1}ms p95={:.1}ms max={scrub_max:.1}ms samples={}",
+            percentile(&scrub_values_ms, 50.0),
+            percentile(&scrub_values_ms, 95.0),
+            scrub_values_ms.len()
+        );
+    }
 
     if profile_stages {
         run_stage_profile(recording_path, runs).await;
