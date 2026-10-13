@@ -1187,8 +1187,16 @@ pub fn create_screenshot(
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        return cap_gpui_kernels::codec::save_rgb_image(&image, output, image::ImageFormat::Jpeg)
-            .map_err(|e| e.to_string());
+        let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+        cap_gpui_kernels::codec::save_rgb_image(&image, &staged, image::ImageFormat::Jpeg)
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&staged);
+                e.to_string()
+            })?;
+        return std::fs::rename(&staged, output).map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        });
     }
 
     Err("Failed to create screenshot".to_string())
