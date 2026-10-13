@@ -590,6 +590,26 @@ mod tests {
     }
 
     #[test]
+    fn streams_without_reordering_read_keyframes_from_the_sample_table() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-no-reordering.mp4");
+        let (indexed, scanned) = both_indexes(&fixture).unwrap();
+        let indexed = indexed.expect("a stream without reordering should use the sample table");
+        assert_eq!(indexed, scanned);
+        assert_eq!(
+            indexed,
+            vec![
+                (0, 0.0),
+                (15, 0.5),
+                (30, 1.0),
+                (45, 1.5),
+                (60, 2.0),
+                (75, 2.5)
+            ]
+        );
+    }
+
+    #[test]
     fn streams_with_reordering_fall_back_to_a_packet_scan() {
         let fixture =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
