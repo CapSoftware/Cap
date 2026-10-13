@@ -15,8 +15,25 @@ pub fn unpad_rgba_to_bgra(
     stride: usize,
     rows: usize,
 ) -> Option<Vec<u8>> {
-    let mut tight = unpad_rows(data, width * 4, stride, rows)?;
-    swap_red_blue(&mut tight);
+    let row_bytes = width.checked_mul(4)?;
+    let output_len = row_bytes.checked_mul(rows)?;
+    if stride < row_bytes || data.len() < stride.checked_mul(rows)? {
+        return None;
+    }
+
+    let mut tight = vec![0; output_len];
+    for (source, target) in data
+        .chunks_exact(stride)
+        .zip(tight.chunks_exact_mut(row_bytes))
+        .take(rows)
+    {
+        for (source, target) in source[..row_bytes]
+            .chunks_exact(4)
+            .zip(target.chunks_exact_mut(4))
+        {
+            target.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
+        }
+    }
     Some(tight)
 }
 
@@ -218,6 +235,17 @@ fn clamp_channel(value: f32) -> u8 {
 mod tests {
     use super::*;
 
+    fn reference_unpad_rgba_to_bgra(
+        data: &[u8],
+        width: usize,
+        stride: usize,
+        rows: usize,
+    ) -> Option<Vec<u8>> {
+        let mut tight = unpad_rows(data, width * 4, stride, rows)?;
+        swap_red_blue(&mut tight);
+        Some(tight)
+    }
+
     #[test]
     fn downsamples_with_nearest_source_pixels() {
         let source: Vec<u8> = (0..4u8)
@@ -268,6 +296,61 @@ mod tests {
         let mut target = vec![0; 99];
         swap_red_blue_into(&[1, 2, 3, 4], &mut target);
         assert_eq!(target, vec![3, 2, 1, 4]);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_unpad_rgba_to_bgra() {
+        use std::{hint::black_box, time::Instant};
+
+        for (width, height) in [(1248usize, 702usize), (1920, 1080), (3840, 2160)] {
+            let row_bytes = width * 4;
+            let stride = row_bytes.next_multiple_of(256);
+            let source: Vec<_> = (0..stride * height)
+                .map(|index| index.wrapping_mul(37) as u8)
+                .collect();
+            let expected = reference_unpad_rgba_to_bgra(&source, width, stride, height).unwrap();
+            let mut baseline = Vec::new();
+            let mut candidate = Vec::new();
+
+            for iteration in 0..12 {
+                let measure_baseline = || {
+                    let started = Instant::now();
+                    let output =
+                        reference_unpad_rgba_to_bgra(black_box(&source), width, stride, height)
+                            .unwrap();
+                    (output, started.elapsed().as_secs_f64() * 1_000_000.0)
+                };
+                let measure_candidate = || {
+                    let started = Instant::now();
+                    let output =
+                        unpad_rgba_to_bgra(black_box(&source), width, stride, height).unwrap();
+                    (output, started.elapsed().as_secs_f64() * 1_000_000.0)
+                };
+                let ((before, baseline_micros), (after, candidate_micros)) = if iteration % 2 == 0 {
+                    (measure_baseline(), measure_candidate())
+                } else {
+                    let candidate = measure_candidate();
+                    let baseline = measure_baseline();
+                    (baseline, candidate)
+                };
+                assert_eq!(before, expected);
+                assert_eq!(after, expected);
+                black_box((before, after));
+                if iteration > 1 {
+                    baseline.push(baseline_micros);
+                    candidate.push(candidate_micros);
+                }
+            }
+
+            baseline.sort_by(f64::total_cmp);
+            candidate.sort_by(f64::total_cmp);
+            println!(
+                "width={width} height={height} baseline_micros={:.1} candidate_micros={:.1} pixels_equal=true",
+                baseline[baseline.len() / 2],
+                candidate[candidate.len() / 2],
+            );
+        }
     }
 
     #[test]
