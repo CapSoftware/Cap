@@ -15,6 +15,7 @@ use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
 static VALIDATED_AGGREGATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SEEK_PROBE_PACKET_LIMIT: usize = 240;
+const MAX_SEEK_PROBE_WORKERS: usize = 8;
 const SEEK_PROBE_PADDING_US: i64 = 250_000;
 
 fn suppress_ffmpeg_logs() {
@@ -515,9 +516,68 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
 }
 
 fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(), String> {
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
-    let duration_us = input.duration();
+    let duration_us = avformat::input(path)
+        .map_err(|e| format!("Failed to open file: {e}"))?
+        .duration();
     let probe_points = build_seek_probe_positions(duration_us, sample_count);
+    let workers = seek_probe_worker_count(probe_points.len());
+    if workers <= 1 {
+        return probe_video_seek_point_batch(path, &probe_points);
+    }
+
+    // Each probe decodes a full-resolution keyframe on one core; independent
+    // demuxer and decoder instances let them overlap without changing what is
+    // validated or which error is reported first.
+    let batches = (0..workers)
+        .map(|worker| {
+            probe_points
+                .iter()
+                .copied()
+                .skip(worker)
+                .step_by(workers)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let results = std::thread::scope(|scope| {
+        let handles = batches
+            .iter()
+            .map(|batch| {
+                scope.spawn(move || {
+                    batch
+                        .iter()
+                        .map(|&position_us| probe_video_seek_point_batch(path, &[position_us]))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| vec![Err("Seek probe worker panicked".to_string())])
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let mut ordered = vec![Ok(()); probe_points.len()];
+    for (worker, batch) in results.into_iter().enumerate() {
+        for (offset, result) in batch.into_iter().enumerate() {
+            if let Some(slot) = ordered.get_mut(worker + offset * workers) {
+                *slot = result;
+            }
+        }
+    }
+    ordered.into_iter().collect()
+}
+
+fn seek_probe_worker_count(probes: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    probes.min(cores / 2).clamp(1, MAX_SEEK_PROBE_WORKERS)
+}
+
+fn probe_video_seek_point_batch(path: &Path, probe_points: &[i64]) -> Result<(), String> {
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let (stream_index, decoder_ctx) = {
         let input_stream = input
@@ -539,7 +599,7 @@ fn probe_video_seek_points_inner(path: &Path, sample_count: usize) -> Result<(),
 
     let mut frame = ffmpeg::frame::Video::empty();
 
-    for position_us in probe_points {
+    for &position_us in probe_points {
         probe_video_seek_point_with(
             &mut input,
             &mut decoder,
