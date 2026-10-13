@@ -614,6 +614,7 @@ async fn main() {
 
     let mut summary = BenchmarkSummary::default();
     let mut measured_elapsed = 0.0f64;
+    let mut live_edit_high = false;
 
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
         let playback = Playback {
@@ -673,7 +674,8 @@ async fn main() {
                     }
                 }
                 _ = async { edit_timer.as_mut().unwrap().tick().await }, if edit_timer.is_some() => {
-                    let offset = if live_edit_count % 2 == 0 { 1.0 } else { 0.0 };
+                    live_edit_high = !live_edit_high;
+                    let offset = if live_edit_high { 1.0 } else { 0.0 };
                     project_tx.send_modify(|project| match live_edit.unwrap() {
                         LiveEdit::Background => project.background.padding = base_padding + offset,
                         LiveEdit::CursorSpring => project.cursor.tension = base_tension + offset as f32,
