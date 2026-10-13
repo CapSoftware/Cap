@@ -3,7 +3,13 @@ import { getRedis, readState } from "../../../lib/store";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+	if (new URL(request.url).search) {
+		return Response.json(
+			{ error: "Query parameters are not supported" },
+			{ status: 400, headers: { "Cache-Control": "no-store" } },
+		);
+	}
 	try {
 		return Response.json(publicSnapshot(await readState(getRedis())), {
 			headers: {

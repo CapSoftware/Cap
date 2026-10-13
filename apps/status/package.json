@@ -3,9 +3,9 @@
 	"version": "1.0.0",
 	"private": true,
 	"scripts": {
-		"dev": "next dev --port 3002",
+		"dev": "next dev --port 3003",
 		"build": "next build",
-		"start": "next start --port 3002",
+		"start": "next start --port 3003",
 		"typecheck": "next typegen && tsc --noEmit",
 		"test": "bun test tests"
 	},

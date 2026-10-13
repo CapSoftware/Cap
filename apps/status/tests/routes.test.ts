@@ -8,6 +8,7 @@ import deployment from "../vercel.json";
 
 const values = new Map<string, string>();
 const realFetch = globalThis.fetch;
+let storageCommands = 0;
 const variableNames = [
 	"UPSTASH_REDIS_REST_URL",
 	"UPSTASH_REDIS_REST_TOKEN",
@@ -23,6 +24,7 @@ let failStorage = false;
 let stealLease = false;
 
 function command(args: string[]) {
+	storageCommands++;
 	const [name, key, value] = args;
 	if (name.toUpperCase() === "SET") {
 		if (args.some((arg) => arg.toUpperCase() === "NX") && values.has(key))
@@ -60,6 +62,7 @@ const server = Bun.serve({
 
 beforeEach(() => {
 	values.clear();
+	storageCommands = 0;
 	probeCalls = 0;
 	failStorage = false;
 	stealLease = false;
@@ -111,6 +114,23 @@ describe("scheduler → storage → public API", () => {
 		expect(values.size).toBe(0);
 	});
 
+	test("rejects cache-busting queries before accessing storage", async () => {
+		for (const query of [
+			"?x=one",
+			"?x=two",
+			"?cache=false&timestamp=123",
+			"?%78=encoded",
+		]) {
+			const response = await readStatus(
+				new Request(`https://status.example/api/status${query}`),
+			);
+			expect(response.status).toBe(400);
+			expect(response.headers.get("cache-control")).toBe("no-store");
+		}
+		expect(storageCommands).toBe(0);
+		expect(probeCalls).toBe(0);
+	});
+
 	test("previews never probe production services", async () => {
 		process.env.VERCEL_ENV = "preview";
 		expect(await (await collect(authorizedRequest())).json()).toEqual({
@@ -124,7 +144,9 @@ describe("scheduler → storage → public API", () => {
 		expect(probeCalls).toBe(6);
 		expect(values.has(STATE_KEY)).toBe(true);
 		expect(values.has(LOCK_KEY)).toBe(false);
-		const response = await readStatus();
+		const response = await readStatus(
+			new Request("https://status.example/api/status"),
+		);
 		const snapshot = await response.json();
 		expect(
 			snapshot.services.every(
@@ -188,7 +210,9 @@ describe("scheduler → storage → public API", () => {
 
 	test("storage outages return unknown data without cached success", async () => {
 		failStorage = true;
-		const response = await readStatus();
+		const response = await readStatus(
+			new Request("https://status.example/api/status"),
+		);
 		expect(response.status).toBe(503);
 		expect(response.headers.get("cache-control")).toBe("no-store");
 		expect(

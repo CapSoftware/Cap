@@ -9,6 +9,7 @@ An independent Next.js app for `status.cap.so`. It reuses the current landing pa
 3. Set a random `CRON_SECRET` of at least 32 bytes on production. Vercel sends it as the cron’s Bearer token. Do not prefix any of these variables with `NEXT_PUBLIC_`.
 4. Configure the production service URLs below. Deploy on a plan supporting **five-minute cron jobs** (Vercel Pro or higher), then add `status.cap.so` to this project and point its DNS at Vercel. The page starts with honest “no data” states until checks run.
 5. Verify the first `/api/cron/check` invocation succeeds in the Vercel logs and `/api/status` contains current observations for every configured service. Set an **external dead-man monitor** to alert when `/api/status` has an old `checkedAt` (over 15 minutes), returns non-200, or cannot be reached. This detects a failed scheduler, Redis, or the status deployment itself.
+6. Before public launch, configure a Vercel WAF rate limit for `/api/status` (GET and HEAD). Start with 300 requests per minute per IP in log mode, check expected traffic, then enforce with a 429 response. The public API rejects query parameters before accessing Redis, preventing cache-busting URLs from consuming storage requests. The WAF rule protects function usage as well and is configured on the separate status project, not the main site.
 
 No production deployment, DNS changes, external monitors, or storage resources are created by this PR.
 
@@ -50,7 +51,7 @@ bun run --cwd apps/status typecheck
 bun run --cwd apps/status build
 ```
 
-Copy `.env.example` to `.env.local` in this app for local configuration. Use a separate development Redis database. `bun run --cwd apps/status start` serves the production build on port 3002; `dev` uses the same port. Respect the repository’s existing-server rules when starting a local server.
+Copy `.env.example` to `.env.local` in this app for local configuration. Use a separate development Redis database. `bun run --cwd apps/status start` serves the production build on port 3003; `bun run --cwd apps/status dev` uses the same port. The status app is excluded from the root development commands, including the Windows wrapper, so it runs only when explicitly started and cannot take the desktop harness's port 3002. Respect the repository’s existing-server rules when starting a local server.
 
 ## Screenshots
 
