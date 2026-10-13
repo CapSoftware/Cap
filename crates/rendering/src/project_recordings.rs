@@ -10,7 +10,7 @@ use ffmpeg::Rescale;
 use serde::Serialize;
 use specta::Type;
 
-fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
+pub(crate) fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
     let path = CString::new(path.to_str()?).ok()?;
     let mut context = ptr::null_mut();
     let result = unsafe {
@@ -22,6 +22,22 @@ fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
     }
 
     Some(unsafe { ffmpeg::format::context::Input::wrap(context) })
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn header_video_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let input = open_headers(path)?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let parameters = stream.parameters();
+    let parameters = unsafe { &*parameters.as_ptr() };
+    let width = u32::try_from(parameters.width)
+        .ok()
+        .filter(|width| *width > 0)?;
+    let height = u32::try_from(parameters.height)
+        .ok()
+        .filter(|height| *height > 0)?;
+
+    Some((width, height))
 }
 
 fn header_duration_secs(input: &ffmpeg::format::context::Input) -> Option<f64> {
@@ -388,7 +404,7 @@ impl SegmentRecordings {
 
 #[cfg(test)]
 mod ordinary_media_access_tests {
-    use super::{Audio, ProjectRecordingsMeta, Video, open_headers};
+    use super::{Audio, ProjectRecordingsMeta, Video, header_video_dimensions, open_headers};
     use cap_project::StudioRecordingMeta;
     use std::path::{Path, PathBuf};
 
@@ -561,6 +577,18 @@ mod ordinary_media_access_tests {
         assert_eq!(actual.fps, expected.fps);
         assert_eq!(actual.duration, expected.duration);
         assert_eq!(actual.start_time, expected.start_time);
+    }
+
+    #[test]
+    fn header_video_dimensions_require_codec_header_dimensions() {
+        let directory = tempfile::tempdir().unwrap();
+        let h264_path = directory.path().join("h264.mp4");
+        let mpeg4_path = directory.path().join("mpeg4.mp4");
+        write_test_video(&h264_path, ffmpeg::codec::Id::H264);
+        write_test_video(&mpeg4_path, ffmpeg::codec::Id::MPEG4);
+
+        assert_eq!(header_video_dimensions(&h264_path), Some((64, 48)));
+        assert_eq!(header_video_dimensions(&mpeg4_path), None);
     }
 
     #[test]
