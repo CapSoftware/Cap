@@ -3595,6 +3595,10 @@ fn validate_recovered_track(path: &Path, kind: ffmpeg::media::Type) -> Result<()
     validate_recovery_track(path, kind, VideoValidation::Full)
 }
 
+fn full_validation_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+}
+
 fn validate_recovery_track(
     path: &Path,
     kind: ffmpeg::media::Type,
@@ -3607,8 +3611,14 @@ fn validate_recovery_track(
             .best(kind)
             .ok_or_else(|| format!("Missing {kind:?} stream"))?;
         let index = stream.index();
-        let context = ffmpeg::codec::Context::from_parameters(stream.parameters())
+        let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .map_err(|error| error.to_string())?;
+        if kind == ffmpeg::media::Type::Video && video_validation == VideoValidation::Full {
+            context.set_threading(ffmpeg::threading::Config {
+                kind: ffmpeg::threading::Type::Frame,
+                count: full_validation_decode_threads(),
+            });
+        }
         let codec =
             ffmpeg::decoder::find(context.id()).ok_or_else(|| "Decoder unavailable".to_string())?;
         let mut decoder = context.decoder();
