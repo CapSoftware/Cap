@@ -1740,9 +1740,11 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
     }
 
     #[cfg(test)]
-    fn wait_until_fully_rendered(&self) {
+    fn wait_until_rendered_to(&self, to_secs: f64) {
         match &self.mode {
-            PrerenderedAudioBufferMode::Progressive(buffer) => buffer.wait_until_fully_rendered(),
+            PrerenderedAudioBufferMode::Progressive(buffer) => {
+                buffer.wait_until_rendered_to(to_secs)
+            }
             PrerenderedAudioBufferMode::Streaming(_) => {}
         }
     }
@@ -1908,17 +1910,36 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         }
     }
 
+    /// Waits until everything from the read position up to `to_secs` is
+    /// rendered. The producer only renders the lookahead after the read
+    /// position, so `to_secs` must lie inside it.
     #[cfg(test)]
-    fn wait_until_fully_rendered(&self) {
+    fn wait_until_rendered_to(&self, to_secs: f64) {
+        let to = output_sample_index(
+            to_secs,
+            self.sample_rate,
+            self.channels,
+            self.timeline.samples.len(),
+        );
+        let lookahead = output_sample_index(
+            PROGRESSIVE_LOOKAHEAD_SECS,
+            self.sample_rate,
+            self.channels,
+            usize::MAX,
+        );
+        assert!(
+            to <= self.read_position.saturating_add(lookahead),
+            "{to_secs}s is past the render lookahead from the read position"
+        );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while self
             .timeline
-            .first_unrendered_block(0, self.timeline.samples.len())
+            .first_unrendered_block(self.read_position, to)
             .is_some()
         {
             assert!(
                 std::time::Instant::now() < deadline,
-                "progressive audio render did not complete in time"
+                "progressive audio render did not reach {to_secs}s in time"
             );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -2967,7 +2988,7 @@ mod tests {
                 .all(|sample| (sample - expected(4000)).abs() < 0.001)
         );
         playback.set_playhead(0.0);
-        playback.wait_until_fully_rendered();
+        playback.wait_until_rendered_to(4.0);
         let mut played = vec![0.0; timeline_index(4.0)];
         playback.fill(&mut played);
         for (second, value) in sections.iter().enumerate() {
@@ -3141,7 +3162,7 @@ mod tests {
                 duration_secs,
                 0.0,
             );
-            playback.wait_until_fully_rendered();
+            playback.wait_until_rendered_to(3.0);
             let mut playback_stream = vec![0.0; export_stream.len()];
             for block in playback_stream.chunks_mut(1024) {
                 assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
@@ -3206,7 +3227,7 @@ mod tests {
                     duration,
                     0.0,
                 );
-                playback.wait_until_fully_rendered();
+                playback.wait_until_rendered_to(3.0);
                 let mut played = vec![0.0; exported.len()];
                 for block in played.chunks_mut(1024) {
                     assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
@@ -3745,7 +3766,7 @@ mod tests {
             3.0,
             0.0,
         );
-        playback_buffer.wait_until_fully_rendered();
+        playback_buffer.wait_until_rendered_to(3.0);
         let mut playback_stream = vec![0.0; 3 * AudioData::SAMPLE_RATE as usize * 2];
         playback_buffer.fill(&mut playback_stream);
 
