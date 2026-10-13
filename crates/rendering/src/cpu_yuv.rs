@@ -1122,6 +1122,101 @@ mod tests {
     }
 
     #[test]
+    fn test_nv12_simd_matches_scalar_for_pair_tails_and_padded_rows() {
+        for (width, height, padding) in [
+            (1_u32, 1_u32, 0_u32),
+            (3, 5, 0),
+            (3, 5, 7),
+            (17, 18, 7),
+            (32, 3, 7),
+            (1921, 1081, 7),
+        ] {
+            let y_stride = width + padding;
+            let uv_width = width.div_ceil(2) * 2;
+            let uv_stride = uv_width + padding;
+            let y_len = ((height - 1) * y_stride + width) as usize;
+            let uv_len = ((height.div_ceil(2) - 1) * uv_stride + uv_width) as usize;
+            let y_data: Vec<u8> = (0..y_len).map(|i| (i * 37 + 11) as u8).collect();
+            let uv_data: Vec<u8> = (0..uv_len).map(|i| (i * 53 + 97) as u8).collect();
+            let mut expected = vec![0; (width * height * 4) as usize];
+            let mut actual = vec![0xa5; expected.len()];
+
+            nv12_to_rgba(
+                &y_data,
+                &uv_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut expected,
+            );
+            nv12_to_rgba_simd(
+                &y_data,
+                &uv_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut actual,
+            );
+
+            assert_eq!(
+                actual, expected,
+                "NV12 {width}x{height}, y_stride={y_stride}, uv_stride={uv_stride}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_yuv420p_simd_matches_scalar_for_pair_tails_and_padded_rows() {
+        for (width, height, padding) in [
+            (1_u32, 1_u32, 0_u32),
+            (3, 5, 0),
+            (3, 5, 7),
+            (17, 18, 7),
+            (32, 3, 7),
+            (1921, 1081, 7),
+        ] {
+            let y_stride = width + padding;
+            let uv_width = width.div_ceil(2);
+            let uv_stride = uv_width + padding;
+            let y_len = ((height - 1) * y_stride + width) as usize;
+            let uv_len = ((height.div_ceil(2) - 1) * uv_stride + uv_width) as usize;
+            let y_data: Vec<u8> = (0..y_len).map(|i| (i * 37 + 11) as u8).collect();
+            let u_data: Vec<u8> = (0..uv_len).map(|i| (i * 53 + 97) as u8).collect();
+            let v_data: Vec<u8> = (0..uv_len).map(|i| (i * 71 + 193) as u8).collect();
+            let mut expected = vec![0; (width * height * 4) as usize];
+            let mut actual = vec![0xa5; expected.len()];
+
+            yuv420p_to_rgba(
+                &y_data,
+                &u_data,
+                &v_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut expected,
+            );
+            yuv420p_to_rgba_simd(
+                &y_data,
+                &u_data,
+                &v_data,
+                width,
+                height,
+                y_stride,
+                uv_stride,
+                &mut actual,
+            );
+
+            assert_eq!(
+                actual, expected,
+                "YUV420P {width}x{height}, y_stride={y_stride}, uv_stride={uv_stride}"
+            );
+        }
+    }
+
+    #[test]
     fn test_large_frame_parallel() {
         let width = 1920u32;
         let height = 1080u32;
