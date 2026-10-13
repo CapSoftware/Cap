@@ -10,7 +10,7 @@ use ffmpeg::Rescale;
 use serde::Serialize;
 use specta::Type;
 
-fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
+pub(crate) fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
     let path = CString::new(path.to_str()?).ok()?;
     let mut context = ptr::null_mut();
     let result = unsafe {
@@ -22,6 +22,29 @@ fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input> {
     }
 
     Some(unsafe { ffmpeg::format::context::Input::wrap(context) })
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn header_video_metadata(path: &Path) -> Option<(u32, u32, crate::cpu_yuv::YuvMatrix)> {
+    let input = open_headers(path)?;
+    let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let parameters = stream.parameters();
+    let raw_parameters = unsafe { &*parameters.as_ptr() };
+    if raw_parameters.width <= 0 || raw_parameters.height <= 0 {
+        return None;
+    }
+    let video = ffmpeg::codec::Context::from_parameters(parameters)
+        .and_then(|context| context.decoder().video())
+        .ok()?;
+    if video.width() == 0 || video.height() == 0 {
+        return None;
+    }
+
+    Some((
+        video.width(),
+        video.height(),
+        crate::cpu_yuv::YuvMatrix::from_color_space(video.color_space()),
+    ))
 }
 
 fn header_duration_secs(input: &ffmpeg::format::context::Input) -> Option<f64> {
@@ -400,7 +423,7 @@ impl SegmentRecordings {
 
 #[cfg(test)]
 mod ordinary_media_access_tests {
-    use super::{Audio, ProjectRecordingsMeta, Video, open_headers};
+    use super::{Audio, ProjectRecordingsMeta, Video, header_video_metadata, open_headers};
     use cap_project::StudioRecordingMeta;
     use std::path::{Path, PathBuf};
 
@@ -573,6 +596,21 @@ mod ordinary_media_access_tests {
         assert_eq!(actual.fps, expected.fps);
         assert_eq!(actual.duration, expected.duration);
         assert_eq!(actual.start_time, expected.start_time);
+    }
+
+    #[test]
+    fn header_video_metadata_requires_codecpar_dimensions() {
+        let directory = tempfile::tempdir().unwrap();
+        let h264_path = directory.path().join("h264.mp4");
+        let mpeg4_path = directory.path().join("mpeg4.mp4");
+        write_test_video(&h264_path, ffmpeg::codec::Id::H264);
+        write_test_video(&mpeg4_path, ffmpeg::codec::Id::MPEG4);
+
+        assert_eq!(
+            header_video_metadata(&h264_path).map(|(width, height, _)| (width, height)),
+            Some((64, 48))
+        );
+        assert_eq!(header_video_metadata(&mpeg4_path), None);
     }
 
     #[test]
