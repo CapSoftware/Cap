@@ -31,7 +31,10 @@
 //!   A segment wider than the viewport has its true centre off screen, so
 //!   [`visible_box`] clamps it (`useSegmentVisibleBox`, `TL/Track.tsx:147-181`).
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 mod playback_follow;
 
@@ -563,18 +566,18 @@ fn waveform_amplitude(peaks: &[f32], source_time: Option<f64>) -> f64 {
 /// it by `(canvasWidth, canvasHeight * scale)` after translating down by
 /// `canvasHeight * (1 - scale)` (`:285-290`); gpui has no path transform on
 /// `paint_path`, so the same maths is applied to each point as it is emitted.
-#[allow(clippy::too_many_arguments)]
-pub fn waveform_path(
-    peaks: &[f32],
-    range: (f64, f64),
-    target_samples: usize,
-    holds: &[(f64, f64)],
-    segment_start: f64,
-    origin: gpui::Point<Pixels>,
-    size: gpui::Size<Pixels>,
-    scale: f64,
-    clip_bounds: gpui::Bounds<Pixels>,
-) -> Option<gpui::Path<Pixels>> {
+pub fn waveform_path(geometry: &WaveformGeometry) -> Option<gpui::Path<Pixels>> {
+    let &WaveformGeometry {
+        ref peaks,
+        range,
+        target_samples,
+        ref holds,
+        source_start: segment_start,
+        origin,
+        size,
+        scale,
+        clip_bounds,
+    } = geometry;
     if peaks.is_empty() || scale <= 0. {
         return None;
     }
@@ -667,6 +670,129 @@ pub fn waveform_path(
     ));
     builder.close();
     builder.build().ok()
+}
+
+/// Everything [`waveform_path`] reads, and the [`WaveformPaths`] key. The peak
+/// table is compared by pointer: an entry keeps a strong reference, so the
+/// allocation can't be reused while it is cached.
+#[derive(Debug, Clone)]
+pub struct WaveformGeometry {
+    pub peaks: Arc<Vec<f32>>,
+    pub range: (f64, f64),
+    pub target_samples: usize,
+    pub holds: Vec<(f64, f64)>,
+    pub source_start: f64,
+    pub origin: gpui::Point<Pixels>,
+    pub size: gpui::Size<Pixels>,
+    pub scale: f64,
+    pub clip_bounds: gpui::Bounds<Pixels>,
+}
+
+impl PartialEq for WaveformGeometry {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.peaks, &other.peaks)
+            && self.range == other.range
+            && self.target_samples == other.target_samples
+            && self.holds == other.holds
+            && self.source_start == other.source_start
+            && self.origin == other.origin
+            && self.size == other.size
+            && self.scale == other.scale
+            && self.clip_bounds == other.clip_bounds
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WaveformTrack {
+    Mic,
+    System,
+}
+
+/// Shared by every clone of the model, so a drag preview reuses the committed
+/// paths and an edit keeps the paths whose slot and geometry it left alone.
+#[derive(Default)]
+pub struct WaveformPaths(Mutex<WaveformPathsInner>);
+
+#[derive(Default)]
+struct WaveformPathsInner {
+    entries: HashMap<(usize, WaveformTrack), WaveformEntry>,
+    builds: u64,
+    hits: u64,
+}
+
+struct WaveformEntry {
+    geometry: WaveformGeometry,
+    path: gpui::Path<Pixels>,
+    painted: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WaveformPathStats {
+    pub builds: u64,
+    pub hits: u64,
+}
+
+impl std::fmt::Debug for WaveformPaths {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.try_lock() {
+            Ok(inner) => f
+                .debug_struct("WaveformPaths")
+                .field("entries", &inner.entries.len())
+                .field("builds", &inner.builds)
+                .field("hits", &inner.hits)
+                .finish(),
+            Err(_) => f.write_str("WaveformPaths(<locked>)"),
+        }
+    }
+}
+
+impl WaveformPaths {
+    fn inner(&self) -> std::sync::MutexGuard<'_, WaveformPathsInner> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn get_or_build(
+        &self,
+        slot: (usize, WaveformTrack),
+        geometry: WaveformGeometry,
+    ) -> Option<gpui::Path<Pixels>> {
+        let mut inner = self.inner();
+        if let Some(entry) = inner.entries.get_mut(&slot)
+            && entry.geometry == geometry
+        {
+            entry.painted = true;
+            let path = entry.path.clone();
+            inner.hits += 1;
+            return Some(path);
+        }
+        let path = waveform_path(&geometry)?;
+        inner.builds += 1;
+        inner.entries.insert(
+            slot,
+            WaveformEntry {
+                geometry,
+                path: path.clone(),
+                painted: true,
+            },
+        );
+        Some(path)
+    }
+
+    pub fn sweep(&self) {
+        self.inner()
+            .entries
+            .retain(|_, entry| std::mem::take(&mut entry.painted));
+    }
+
+    pub fn stats(&self) -> WaveformPathStats {
+        let inner = self.inner();
+        WaveformPathStats {
+            builds: inner.builds,
+            hits: inner.hits,
+        }
+    }
 }
 
 fn rounded_corner_inset(x: f64, width: f64, radius: f64) -> f64 {
@@ -1063,6 +1189,7 @@ pub struct TimelineModel {
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
     pub system_waveforms: Vec<Arc<Vec<f32>>>,
+    pub waveform_paths: Arc<WaveformPaths>,
     /// The span a live ghost trim is removing, in output time. Drawn as a gap
     /// with a red duration badge, the way Blip's ghost resize marks the cut.
     pub clip_ghost_gap: Option<(f64, f64)>,
@@ -1292,6 +1419,7 @@ impl TimelineModel {
             system_volume_db: config.audio.system_volume_db as f64,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
+            waveform_paths: Arc::default(),
             clip_ghost_gap: None,
         };
         model.rows = build_rows(
@@ -2025,6 +2153,7 @@ fn render_track_content(
             theme,
             model,
             row.kind,
+            index,
             segment,
             view,
             secs_per_pixel,
@@ -2444,6 +2573,7 @@ fn render_segment(
     theme: &Theme,
     model: &TimelineModel,
     kind: TrackKind,
+    index: usize,
     segment: &Segment,
     view: TimelineView,
     secs_per_pixel: f64,
@@ -2508,6 +2638,7 @@ fn render_segment(
         if segment.detail.shows_waveform() {
             fill = fill.child(render_waveform(
                 model,
+                index,
                 segment,
                 *recording_clip,
                 holds,
@@ -2999,6 +3130,7 @@ fn render_hold(
 #[allow(clippy::too_many_arguments)]
 fn render_waveform(
     model: &TimelineModel,
+    index: usize,
     segment: &Segment,
     recording_clip: u32,
     holds: &[(f64, f64)],
@@ -3041,6 +3173,7 @@ fn render_waveform(
     let full_width = width.max(1.) as f64;
     let wave_height = height.min(WAVEFORM_MAX_HEIGHT);
     let wave_color = waveform_color(color);
+    let paths = model.waveform_paths.clone();
 
     gpui::canvas(
         |bounds, _window, _cx| bounds,
@@ -3063,21 +3196,27 @@ fn render_waveform(
             let size = gpui::size(px(slice_width), px(wave_height));
             let samples = waveform_sample_count(slice_width as f64);
 
-            for (peaks, scale) in [(&mic, mic_scale), (&system, system_scale)] {
-                if let Some(path) = waveform_path(
-                    peaks,
-                    (visible_start, visible_end),
-                    samples,
-                    &holds,
-                    segment_start,
+            let clip_bounds = gpui::Bounds {
+                origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
+                size: gpui::size(px(width), px(height)),
+            };
+
+            for (track, peaks, scale) in [
+                (WaveformTrack::Mic, &mic, mic_scale),
+                (WaveformTrack::System, &system, system_scale),
+            ] {
+                let geometry = WaveformGeometry {
+                    peaks: peaks.clone(),
+                    range: (visible_start, visible_end),
+                    target_samples: samples,
+                    holds: holds.clone(),
+                    source_start: segment_start,
                     origin,
                     size,
                     scale,
-                    gpui::Bounds {
-                        origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
-                        size: gpui::size(px(width), px(height)),
-                    },
-                ) {
+                    clip_bounds,
+                };
+                if let Some(path) = paths.get_or_build((index, track), geometry) {
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                         window.paint_path(path, wave_color)
                     });
@@ -4336,21 +4475,22 @@ mod tests {
         };
         let mut peaks = vec![-60.; 220];
         peaks[200..].fill(-30.);
+        let peaks = Arc::new(peaks);
+        let geometry = |scale| WaveformGeometry {
+            peaks: peaks.clone(),
+            range: (0., 2.),
+            target_samples: 400,
+            holds: Vec::new(),
+            source_start: 20.,
+            origin: gpui::point(px(0.), px(26.)),
+            size: gpui::size(px(200.), px(18.)),
+            scale,
+            clip_bounds: bounds,
+        };
         for volume in [0.25, 0.5, 1.0, 2.0] {
             for gain in [-15., 0.] {
                 let scale = gain_to_scale(gain) * volume;
-                let path = waveform_path(
-                    &peaks,
-                    (0., 2.),
-                    400,
-                    &[],
-                    20.,
-                    gpui::point(px(0.), px(26.)),
-                    gpui::size(px(200.), px(18.)),
-                    scale,
-                    bounds,
-                )
-                .unwrap();
+                let path = waveform_path(&geometry(scale)).unwrap();
                 let top = path
                     .vertices
                     .iter()
@@ -4364,20 +4504,7 @@ mod tests {
                 assert!((top - expected_top).abs() < 0.01, "{top} != {expected_top}");
             }
         }
-        assert!(
-            waveform_path(
-                &peaks,
-                (0., 2.),
-                400,
-                &[],
-                20.,
-                gpui::point(px(0.), px(26.)),
-                gpui::size(px(200.), px(18.)),
-                0.,
-                bounds,
-            )
-            .is_none()
-        );
+        assert!(waveform_path(&geometry(0.)).is_none());
     }
 
     #[test]
@@ -4425,6 +4552,219 @@ mod tests {
         assert!(waveform_peaks(&[], 1).is_empty());
     }
 
+    fn waveform_vertices(path: &gpui::Path<Pixels>) -> Vec<(f32, f32)> {
+        path.vertices
+            .iter()
+            .map(|vertex| {
+                (
+                    f32::from(vertex.xy_position.x),
+                    f32::from(vertex.xy_position.y),
+                )
+            })
+            .collect()
+    }
+
+    fn speech_like_peaks(len: usize, period: f32) -> Arc<Vec<f32>> {
+        Arc::new(
+            (0..len)
+                .map(|i| -40. + 30. * ((i as f32 / period).sin().abs()))
+                .collect(),
+        )
+    }
+
+    fn waveform_geometry(peaks: Arc<Vec<f32>>) -> WaveformGeometry {
+        WaveformGeometry {
+            peaks,
+            range: (0., 20.),
+            target_samples: 400,
+            holds: Vec::new(),
+            source_start: 5.,
+            origin: gpui::point(px(10.), px(26.)),
+            size: gpui::size(px(300.), px(18.)),
+            scale: 0.8,
+            clip_bounds: gpui::Bounds {
+                origin: gpui::point(px(10.), px(0.)),
+                size: gpui::size(px(300.), px(44.)),
+            },
+        }
+    }
+
+    #[test]
+    fn cached_waveform_matches_an_uncached_build_after_every_input_change() {
+        let paths = WaveformPaths::default();
+        let slot = (0, WaveformTrack::Mic);
+        let base = waveform_geometry(speech_like_peaks(300, 7.));
+        let first = paths.get_or_build(slot, base.clone()).unwrap();
+        let again = paths.get_or_build(slot, base.clone()).unwrap();
+        assert_eq!(waveform_vertices(&first), waveform_vertices(&again));
+        assert_eq!(paths.stats().builds, 1);
+        assert_eq!(paths.stats().hits, 1);
+
+        let same_contents_new_table = Arc::new((*base.peaks).clone());
+        let mutations: Vec<(&str, WaveformGeometry)> = vec![
+            (
+                "range",
+                WaveformGeometry {
+                    range: (2., 20.),
+                    ..base.clone()
+                },
+            ),
+            (
+                "samples",
+                WaveformGeometry {
+                    target_samples: 200,
+                    ..base.clone()
+                },
+            ),
+            (
+                "hold added",
+                WaveformGeometry {
+                    holds: vec![(4., 6.)],
+                    ..base.clone()
+                },
+            ),
+            (
+                "source start",
+                WaveformGeometry {
+                    source_start: 6.,
+                    ..base.clone()
+                },
+            ),
+            (
+                "origin",
+                WaveformGeometry {
+                    origin: gpui::point(px(12.), px(26.)),
+                    ..base.clone()
+                },
+            ),
+            (
+                "size",
+                WaveformGeometry {
+                    size: gpui::size(px(280.), px(18.)),
+                    ..base.clone()
+                },
+            ),
+            (
+                "scale",
+                WaveformGeometry {
+                    scale: 0.4,
+                    ..base.clone()
+                },
+            ),
+            (
+                "clip bounds",
+                WaveformGeometry {
+                    clip_bounds: gpui::Bounds {
+                        origin: gpui::point(px(10.), px(0.)),
+                        size: gpui::size(px(40.), px(44.)),
+                    },
+                    ..base.clone()
+                },
+            ),
+            (
+                "new table, new contents",
+                WaveformGeometry {
+                    peaks: speech_like_peaks(300, 3.),
+                    ..base.clone()
+                },
+            ),
+        ];
+        for (label, mutated) in mutations {
+            let paths = WaveformPaths::default();
+            paths.get_or_build(slot, base.clone()).unwrap();
+            let cached = paths.get_or_build(slot, mutated.clone()).unwrap();
+            let uncached = waveform_path(&mutated).unwrap();
+            assert_eq!(
+                waveform_vertices(&cached),
+                waveform_vertices(&uncached),
+                "{label}"
+            );
+            assert_eq!(paths.stats().builds, 2, "{label} must rebuild");
+            assert_ne!(
+                waveform_vertices(&cached),
+                waveform_vertices(&first),
+                "{label} must change the mesh"
+            );
+        }
+
+        let paths = WaveformPaths::default();
+        paths.get_or_build(slot, base.clone()).unwrap();
+        let rebuilt = paths
+            .get_or_build(
+                slot,
+                WaveformGeometry {
+                    peaks: same_contents_new_table,
+                    ..base
+                },
+            )
+            .unwrap();
+        assert_eq!(waveform_vertices(&rebuilt), waveform_vertices(&first));
+        assert_eq!(paths.stats().builds, 2);
+    }
+
+    #[test]
+    fn split_segments_from_one_recording_clip_keep_their_own_paths() {
+        let paths = WaveformPaths::default();
+        let peaks = speech_like_peaks(300, 7.);
+        let first_half = WaveformGeometry {
+            range: (0., 10.),
+            ..waveform_geometry(peaks.clone())
+        };
+        let second_half = WaveformGeometry {
+            source_start: 15.,
+            origin: gpui::point(px(320.), px(26.)),
+            ..waveform_geometry(peaks)
+        };
+        for _ in 0..4 {
+            let a = paths
+                .get_or_build((0, WaveformTrack::Mic), first_half.clone())
+                .unwrap();
+            let b = paths
+                .get_or_build((1, WaveformTrack::Mic), second_half.clone())
+                .unwrap();
+            assert_eq!(
+                waveform_vertices(&a),
+                waveform_vertices(&waveform_path(&first_half).unwrap())
+            );
+            assert_eq!(
+                waveform_vertices(&b),
+                waveform_vertices(&waveform_path(&second_half).unwrap())
+            );
+        }
+        assert_eq!(paths.stats().builds, 2);
+        assert_eq!(paths.stats().hits, 6);
+    }
+
+    #[test]
+    fn waveform_cache_keeps_only_paths_painted_last_frame() {
+        let paths = WaveformPaths::default();
+        let geometry = waveform_geometry(speech_like_peaks(300, 7.));
+        for index in 0..4 {
+            paths
+                .get_or_build((index, WaveformTrack::Mic), geometry.clone())
+                .unwrap();
+            paths
+                .get_or_build((index, WaveformTrack::System), geometry.clone())
+                .unwrap();
+        }
+        paths.sweep();
+        paths
+            .get_or_build((1, WaveformTrack::Mic), geometry.clone())
+            .unwrap();
+        paths.sweep();
+        let stats = paths.stats();
+        assert_eq!((stats.builds, stats.hits), (8, 1));
+
+        paths
+            .get_or_build((1, WaveformTrack::Mic), geometry.clone())
+            .unwrap();
+        paths
+            .get_or_build((0, WaveformTrack::Mic), geometry)
+            .unwrap();
+        let stats = paths.stats();
+        assert_eq!((stats.builds, stats.hits), (9, 2));
+    }
+
     #[test]
     fn waveform_mesh_stays_inside_real_clip_corners() {
         for width in [4., 16., 100., 10_000.] {
@@ -4436,17 +4776,17 @@ mod tests {
                 for gain in [0.1, 0.5, 1., 2.] {
                     let x = start / 10. * width as f64;
                     let span = (end - start) / 10. * width as f64;
-                    let path = waveform_path(
-                        &[-6.; 200],
-                        (start, end),
-                        200,
-                        &[],
-                        0.,
-                        gpui::point(px(50. + x as f32), px(56.)),
-                        gpui::size(px(span as f32), px(18.)),
-                        gain,
-                        bounds,
-                    )
+                    let path = waveform_path(&WaveformGeometry {
+                        peaks: Arc::new(vec![-6.; 200]),
+                        range: (start, end),
+                        target_samples: 200,
+                        holds: Vec::new(),
+                        source_start: 0.,
+                        origin: gpui::point(px(50. + x as f32), px(56.)),
+                        size: gpui::size(px(span as f32), px(18.)),
+                        scale: gain,
+                        clip_bounds: bounds,
+                    })
                     .unwrap();
                     assert!(!path.vertices.is_empty());
                     for vertex in &path.vertices {

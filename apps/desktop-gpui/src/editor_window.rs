@@ -2288,6 +2288,7 @@ impl EditorWindow {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let waveform_paths = self.timeline.waveform_paths.clone();
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
             self.has_camera,
@@ -2296,6 +2297,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.waveform_paths = waveform_paths;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -3304,6 +3306,10 @@ impl EditorWindow {
             present(&self.timeline.mic_waveforms),
             present(&self.timeline.system_waveforms),
         )
+    }
+
+    pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
+        self.timeline.waveform_paths.stats()
     }
 
     pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
@@ -10189,6 +10195,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        self.timeline.waveform_paths.sweep();
         if !self.project_ready() {
             if self
                 .preparing_presentation

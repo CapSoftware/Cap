@@ -156,20 +156,33 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         }
 
         let mut draw_us = Vec::with_capacity(MEASURED_FRAMES);
+        let mut built = 0;
+        let mut reused = 0;
         for iteration in 0..WARMUP_FRAMES + MEASURED_FRAMES {
             cx.background_executor().timer(FRAME_INTERVAL).await;
             let elapsed = cx.update(|cx| {
-                handle
+                let before = handle
                     .update(cx, |view, window, cx| {
-                        scenario.step(iteration, view, window, cx)
+                        scenario.step(iteration, view, window, cx);
+                        view.waveform_cache_stats()
                     })
                     .ok()?;
-                draw_bench::timed_draw(handle.into(), cx)
+                let elapsed = draw_bench::timed_draw(handle.into(), cx)?;
+                let after = handle
+                    .update(cx, |view, _, _| view.waveform_cache_stats())
+                    .ok()?;
+                Some((
+                    elapsed,
+                    after.builds.saturating_sub(before.builds),
+                    after.hits.saturating_sub(before.hits),
+                ))
             });
             if iteration >= WARMUP_FRAMES
-                && let Some(elapsed) = elapsed
+                && let Some((elapsed, draw_built, draw_reused)) = elapsed
             {
                 draw_us.push(elapsed.as_secs_f64() * 1e6);
+                built += draw_built;
+                reused += draw_reused;
             }
         }
 
@@ -182,6 +195,11 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             std::process::exit(1);
         }
         draw_bench::report("timeline-bench", scenario.label(), &mut draw_us);
+        println!(
+            "timeline-bench: {} waveform paths built {built} / reused {reused} in {} timed draws",
+            scenario.label(),
+            draw_us.len()
+        );
     }
 
     std::process::exit(0);
