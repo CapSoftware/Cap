@@ -971,7 +971,7 @@ fn park_idle_camera_preview(cx: &mut App) {
             .ok();
     }
     close_camera_window(cx);
-    crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
+    crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.release_inputs(cx));
 }
 
 fn camera_preview_can_be_parked(phase: Phase) -> bool {
