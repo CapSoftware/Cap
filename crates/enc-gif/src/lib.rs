@@ -1,6 +1,7 @@
 use gifski::{Collector, Repeat, Settings};
 use rgb::RGBA8;
 use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
@@ -84,9 +85,7 @@ impl GifEncoderWrapper {
         let output_path = path.as_ref().to_path_buf();
         let writer_thread = thread::spawn(move || {
             let file = File::create(output_path).map_err(GifEncodingError::Io)?;
-            writer
-                .write(file, &mut gifski::progress::NoProgress {})
-                .map_err(|e| GifEncodingError::Gifski(e.to_string()))
+            write_gif(writer, file)
         });
 
         Ok(Self {
@@ -197,6 +196,14 @@ impl GifEncoderWrapper {
     }
 }
 
+fn write_gif(writer: gifski::Writer, output: impl Write) -> Result<(), GifEncodingError> {
+    let mut output = BufWriter::new(output);
+    writer
+        .write(&mut output, &mut gifski::progress::NoProgress {})
+        .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
+    output.flush().map_err(GifEncodingError::Io)
+}
+
 impl Drop for GifEncoderWrapper {
     fn drop(&mut self) {
         if !self.finished && self.collector.is_some() {
@@ -210,5 +217,61 @@ impl Drop for GifEncoderWrapper {
 
             self.finished = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    fn single_frame_writer() -> gifski::Writer {
+        let (collector, writer) = gifski::new(Settings {
+            width: Some(2),
+            height: Some(2),
+            ..Settings::default()
+        })
+        .unwrap();
+        collector
+            .add_frame_rgba(
+                0,
+                imgref::Img::new(vec![RGBA8::new(255, 0, 0, 255); 4], 2, 2),
+                0.0,
+            )
+            .unwrap();
+        drop(collector);
+        writer
+    }
+
+    #[test]
+    fn buffered_output_matches_unbuffered_gif() {
+        let mut expected = Vec::new();
+        single_frame_writer()
+            .write(&mut expected, &mut gifski::progress::NoProgress {})
+            .unwrap();
+        assert!(expected.len() < BufWriter::new(Vec::<u8>::new()).capacity());
+        assert_eq!(expected.last(), Some(&0x3b));
+
+        let mut actual = Vec::new();
+        write_gif(single_frame_writer(), &mut actual).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn buffered_tail_write_error_is_returned() {
+        struct FailingOutput;
+
+        impl Write for FailingOutput {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("output full"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let error = write_gif(single_frame_writer(), FailingOutput).unwrap_err();
+        assert!(matches!(error, GifEncodingError::Io(error) if error.to_string() == "output full"));
     }
 }
