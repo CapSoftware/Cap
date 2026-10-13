@@ -137,7 +137,7 @@ impl MaskLayer {
 
         pass.set_pipeline(config.render_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        config.uniforms.draw(&mut pass);
 
         drop(pass);
     }
@@ -165,6 +165,50 @@ impl Default for MaskUniforms {
 }
 
 impl MaskUniforms {
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(rect @ [left, top, width, height]) = self.blur_scissor() {
+            if width == 0 || height == 0 {
+                return;
+            }
+            if rect != [0, 0, self.output_size[0] as u32, self.output_size[1] as u32] {
+                pass.set_scissor_rect(left, top, width, height);
+            }
+        }
+        pass.draw(0..3, 0..1);
+    }
+
+    fn blur_scissor(&self) -> Option<[u32; 4]> {
+        let padding = match self.mode {
+            BLUR_HORIZONTAL_MODE => [2.0, self.effect_size.max(1.0) + 2.0],
+            BLUR_VERTICAL_MODE => [1.0, 1.0],
+            _ => return None,
+        };
+        if !self
+            .rect_center
+            .iter()
+            .chain(&self.rect_size)
+            .chain(&self.output_size)
+            .chain(std::iter::once(&self.effect_size))
+            .all(|value| value.is_finite())
+            || self.output_size.iter().any(|size| *size <= 0.0)
+        {
+            return None;
+        }
+
+        let bounds = std::array::from_fn::<_, 2, _>(|axis| {
+            let center = self.rect_center[axis] * self.output_size[axis];
+            let half_size = self.rect_size[axis] * self.output_size[axis] * 0.5;
+            let start = (center - half_size - padding[axis])
+                .floor()
+                .clamp(0.0, self.output_size[axis]) as u32;
+            let end = (center + half_size + padding[axis])
+                .ceil()
+                .clamp(0.0, self.output_size[axis]) as u32;
+            (start, end.saturating_sub(start))
+        });
+        Some([bounds[0].0, bounds[1].0, bounds[0].1, bounds[1].1])
+    }
+
     fn from_mask(mask: &PreparedMask, mode: u32) -> Self {
         Self {
             rect_center: [mask.center.x, mask.center.y],
@@ -322,5 +366,66 @@ impl MaskPipeline {
                 },
             ],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uniforms(center: [f32; 2], size: [f32; 2], effect_size: f32, mode: u32) -> MaskUniforms {
+        MaskUniforms {
+            rect_center: center,
+            rect_size: size,
+            effect_size,
+            mode,
+            output_size: [1920.0, 1080.0],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn blur_scissor_bounds() {
+        let cases = [
+            ([0.5, 0.5], [0.1, 0.1], 12.0, [862, 472, 196, 136]),
+            ([0.5, 0.5], [0.5, 0.5], 24.0, [478, 244, 964, 592]),
+            ([0.5, 0.5], [1.0, 1.0], 12.0, [0, 0, 1920, 1080]),
+            ([0.02, 0.04], [0.1, 0.12], 8.0, [0, 0, 137, 118]),
+            ([-0.2, 0.5], [0.1, 0.1], 12.0, [0, 472, 0, 136]),
+            (
+                [0.3333, 0.6667],
+                [0.1234, 0.2345],
+                7.25,
+                [519, 584, 242, 272],
+            ),
+            ([0.5, 0.5], [0.1, 0.1], 0.25, [862, 483, 196, 114]),
+        ];
+
+        for (center, size, radius, expected) in cases {
+            assert_eq!(
+                uniforms(center, size, radius, BLUR_HORIZONTAL_MODE).blur_scissor(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            uniforms([0.5, 0.5], [0.1, 0.1], 12.0, BLUR_VERTICAL_MODE).blur_scissor(),
+            Some([863, 485, 194, 110])
+        );
+    }
+
+    #[test]
+    fn blur_scissor_fallback() {
+        assert_eq!(
+            uniforms([0.5, 0.5], [0.1, 0.1], 12.0, PIXELATE_MODE).blur_scissor(),
+            None
+        );
+        assert_eq!(
+            uniforms([f32::NAN, 0.5], [0.1, 0.1], 12.0, BLUR_HORIZONTAL_MODE).blur_scissor(),
+            None
+        );
+
+        let mut zero_output = uniforms([0.5, 0.5], [0.1, 0.1], 12.0, BLUR_HORIZONTAL_MODE);
+        zero_output.output_size[0] = 0.0;
+        assert_eq!(zero_output.blur_scissor(), None);
     }
 }
