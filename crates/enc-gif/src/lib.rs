@@ -197,10 +197,43 @@ impl GifEncoderWrapper {
 }
 
 fn write_gif(writer: gifski::Writer, output: impl Write) -> Result<(), GifEncodingError> {
-    let mut output = BufWriter::new(output);
+    struct CheckedBuffer<W: Write> {
+        buffered: BufWriter<W>,
+        error: Option<std::io::Error>,
+    }
+
+    impl<W: Write> Write for CheckedBuffer<W> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            match self.buffered.write(bytes) {
+                Err(error)
+                    if error.kind() != std::io::ErrorKind::Interrupted && self.error.is_none() =>
+                {
+                    self.error = Some(match error.raw_os_error() {
+                        Some(code) => std::io::Error::from_raw_os_error(code),
+                        None => std::io::Error::new(error.kind(), error.to_string()),
+                    });
+                    Err(error)
+                }
+                result => result,
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.buffered.flush()
+        }
+    }
+
+    let mut output = CheckedBuffer {
+        buffered: BufWriter::new(output),
+        error: None,
+    };
     writer
         .write(&mut output, &mut gifski::progress::NoProgress {})
         .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
+    // gif writes its trailer in Drop and can discard a buffer-drain error there.
+    if let Some(error) = output.error {
+        return Err(GifEncodingError::Io(error));
+    }
     output.flush().map_err(GifEncodingError::Io)
 }
 
@@ -273,5 +306,110 @@ mod tests {
 
         let error = write_gif(single_frame_writer(), FailingOutput).unwrap_err();
         assert!(matches!(error, GifEncodingError::Io(error) if error.to_string() == "output full"));
+    }
+
+    fn buffer_boundary_writer() -> gifski::Writer {
+        let (collector, writer) = gifski::new(Settings {
+            width: Some(100),
+            height: Some(77),
+            quality: 90,
+            fast: false,
+            ..Settings::default()
+        })
+        .unwrap();
+        let mut hash = 161u32;
+        let pixels = (0..100 * 77)
+            .map(|_| {
+                hash ^= hash << 13;
+                hash ^= hash >> 17;
+                hash ^= hash << 5;
+                let value = hash % 64;
+                RGBA8::new(
+                    ((value & 3) * 85) as u8,
+                    (((value >> 2) & 3) * 85) as u8,
+                    (((value >> 4) & 3) * 85) as u8,
+                    255,
+                )
+            })
+            .collect();
+        collector
+            .add_frame_rgba(0, imgref::Img::new(pixels, 100, 77), 0.0)
+            .unwrap();
+        drop(collector);
+        writer
+    }
+
+    fn buffer_boundary_gif() -> Vec<u8> {
+        let mut expected = Vec::new();
+        buffer_boundary_writer()
+            .write(&mut expected, &mut gifski::progress::NoProgress {})
+            .unwrap();
+        assert_eq!(
+            expected.len(),
+            BufWriter::new(Vec::<u8>::new()).capacity() + 1
+        );
+        assert_eq!(expected.last(), Some(&0x3b));
+        expected
+    }
+
+    struct RecoveringOutput {
+        bytes: Vec<u8>,
+        first_error: Option<io::ErrorKind>,
+        max_write: usize,
+    }
+
+    impl Write for RecoveringOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(kind) = self.first_error.take() {
+                return if kind == io::ErrorKind::WriteZero {
+                    Ok(0)
+                } else {
+                    Err(io::Error::new(kind, "injected write failure"))
+                };
+            }
+            let count = bytes.len().min(self.max_write);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn assert_trailer_buffer_error(kind: io::ErrorKind) {
+        let expected = buffer_boundary_gif();
+        let mut output = RecoveringOutput {
+            bytes: Vec::new(),
+            first_error: Some(kind),
+            max_write: usize::MAX,
+        };
+        let result = write_gif(buffer_boundary_writer(), &mut output);
+        assert!(output.first_error.is_none());
+        assert_ne!(output.bytes, expected);
+        assert!(matches!(result, Err(GifEncodingError::Io(error)) if error.kind() == kind));
+    }
+
+    #[test]
+    fn trailer_buffer_write_error_is_returned_after_sink_recovers() {
+        assert_trailer_buffer_error(io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn trailer_buffer_write_zero_is_returned_after_sink_recovers() {
+        assert_trailer_buffer_error(io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn interrupted_and_short_writes_preserve_complete_gif() {
+        let expected = buffer_boundary_gif();
+        let mut output = RecoveringOutput {
+            bytes: Vec::new(),
+            first_error: Some(io::ErrorKind::Interrupted),
+            max_write: 7,
+        };
+        write_gif(buffer_boundary_writer(), &mut output).unwrap();
+        assert!(output.first_error.is_none());
+        assert_eq!(output.bytes, expected);
     }
 }
