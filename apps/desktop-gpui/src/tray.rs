@@ -173,12 +173,18 @@ pub fn cover_crop_geometry(orig_w: u32, orig_h: u32, size: u32) -> (u32, u32, u3
 
 /// `load_thumbnail_data`, ending in a PNG rather than raw RGBA -- muda hands
 /// its icon to AppKit as a PNG too (`PlatformIcon::to_nsimage`), so this is the
-/// same conversion one step earlier. It starts from the Recents card thumbnail
-/// cache instead of decoding the native-resolution original for a 32px icon.
+/// same conversion one step earlier. A JPEG source starts from the Recents card
+/// thumbnail cache instead of the native-resolution original. That cache is
+/// itself JPEG and drops alpha, so anything else (a transparent screenshot PNG)
+/// still decodes directly.
 fn load_thumbnail_png(path: &Path) -> Option<Vec<u8>> {
-    use image::{GenericImageView, ImageEncoder, RgbaImage, imageops::FilterType};
+    use image::{GenericImageView, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType};
 
-    let img = image::DynamicImage::ImageRgba8(library::thumbnail_rgba(path)?);
+    let img = if ImageFormat::from_path(path).ok() == Some(ImageFormat::Jpeg) {
+        image::DynamicImage::ImageRgba8(library::thumbnail_rgba(path)?)
+    } else {
+        image::load_from_memory(&std::fs::read(path).ok()?).ok()?
+    };
     let (orig_w, orig_h) = img.dimensions();
     if orig_w == 0 || orig_h == 0 {
         return None;
@@ -1233,6 +1239,37 @@ mod tests {
                 .all(|(a, b)| a.abs_diff(b) <= 3)),
             "the warm icon is built from the cached thumbnail, not the original"
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn previous_thumbnails_keep_png_transparency_cold_and_warm() {
+        let root = temp_root("alpha");
+        std::fs::create_dir_all(&root).unwrap();
+        let png = root.join("screenshot.png");
+        image::RgbaImage::from_fn(800, 600, |x, _| {
+            if x < 400 {
+                image::Rgba([0, 0, 0, 0])
+            } else {
+                image::Rgba([220, 40, 40, 255])
+            }
+        })
+        .save_with_format(&png, image::ImageFormat::Png)
+        .unwrap();
+
+        for scan in ["cold", "warm"] {
+            let icon = image::load_from_memory(&load_thumbnail_png(&png).unwrap())
+                .unwrap()
+                .into_rgba8();
+            assert!(
+                icon.get_pixel(2, 16)[3] < 8,
+                "{scan} scan lost the transparent half"
+            );
+            assert!(
+                icon.get_pixel(29, 16)[3] > 247,
+                "{scan} scan lost the opaque half"
+            );
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 
