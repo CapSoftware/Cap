@@ -866,7 +866,15 @@ mod tests {
                     invisible_background(&mut config);
                 }
                 let out = composite(&raw, &config);
-                let reference = reference_unannotated_composite(&raw, &config);
+                let reference = if invisible {
+                    Composited {
+                        rgba: raw.rgba.clone(),
+                        width: raw.width.max(1),
+                        height: raw.height.max(1),
+                    }
+                } else {
+                    reference_unannotated_composite(&raw, &config)
+                };
                 assert_eq!(out.rgba, reference.rgba);
                 let expected = if needs_transparency(&reference, &config) {
                     reference
