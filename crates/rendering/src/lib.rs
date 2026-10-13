@@ -9127,6 +9127,16 @@ mod project_uniforms_tests {
         use std::hint::black_box;
 
         let constants = cursor_test_constants().await;
+        let screen_size = constants.options.screen_size;
+        let events = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size,
+            screen_frame: Some(DecodedFrame::new(Vec::new(), screen_size.x, screen_size.y)),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
         for (transcript, segments) in [
             ("none", 0),
             ("10 min", 200),
@@ -9134,11 +9144,26 @@ mod project_uniforms_tests {
             ("60 min", 1200),
         ] {
             let project = Arc::new(captioned_project(segments));
+            let mut zoom_timeline =
+                ZoomTransformTimeline::from_project(&project, &events, 60.0, screen_size);
+            zoom_timeline.ensure_precomputed_until(60.0);
             let mut runs: Vec<f64> = (0..400)
                 .map(|frame| {
                     let start = Instant::now();
-                    black_box(uniforms_at(&constants, &project, frame % 1800));
-                    start.elapsed().as_secs_f64() * 1_000_000.0
+                    let uniforms = ProjectUniforms::new(
+                        &constants,
+                        &project,
+                        frame % 1800,
+                        30,
+                        screen_size,
+                        &events,
+                        &frames,
+                        60.0,
+                        &zoom_timeline,
+                    );
+                    let elapsed = start.elapsed().as_secs_f64() * 1_000_000.0;
+                    black_box(uniforms);
+                    elapsed
                 })
                 .collect();
             runs.sort_by(f64::total_cmp);
