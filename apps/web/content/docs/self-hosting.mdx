@@ -214,6 +214,10 @@ APPLE_CLIENT_SECRET=your-client-secret-jwt
 Apple client-secret JWTs expire, so rotate the secret before its configured
 expiration date.
 
+## Pinning Image Versions
+
+`cap-web:latest` and `cap-media-server:latest` follow `main`. cap-web runs database migrations automatically on start, and they only go forward, so after a newer image has migrated your database you can't safely roll back to an older one. New required settings also arrive with updates (for example, `MEDIA_SERVER_WEBHOOK_SECRET` became mandatory for media processing). For production, pin both images to a specific tag or digest, back up MySQL before upgrading, and read the self-hosting changes before moving the pin.
+
 ## Production Checklist
 
 <Warning title="Critical: Use Unique Secrets">
