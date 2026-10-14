@@ -216,7 +216,7 @@ jobs:
         with:
           target: ${{ matrix.settings.target }}
           prefix-key: v1-rust-clippy
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'ci/gpui-only-fast-ci' }}
 
       - name: Run setup
         shell: bash
@@ -271,7 +271,7 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
           prefix-key: v1-rust-tests
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'ci/gpui-only-fast-ci' }}
 
       - name: Run setup
         run: node scripts/setup.js
@@ -330,7 +330,7 @@ jobs:
         with:
           target: ${{ matrix.settings.target }}
           prefix-key: v1-rust-gpui
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'ci/gpui-only-fast-ci' }}
           workspaces: apps/desktop-gpui -> target
 
       - name: Run setup
