@@ -106,7 +106,7 @@ impl AudioData {
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
         let mut resampler_output = ResamplerOutput::new();
         let mut samples = Vec::new();
-        samples.reserve(decoded_sample_capacity(
+        let _ = samples.try_reserve(decoded_sample_capacity(
             stream_duration,
             stream_time_base,
             target_channels,
@@ -323,12 +323,6 @@ fn decoded_sample_capacity(
     range: Option<&Range<usize>>,
 ) -> usize {
     let channels = usize::from(target_channels);
-    if let Some(window) = range {
-        return window
-            .end
-            .saturating_sub(window.start)
-            .saturating_mul(channels);
-    }
     if duration <= 0 || !stream_time_base.is_finite() || stream_time_base <= 0.0 {
         return 0;
     }
@@ -336,9 +330,17 @@ fn decoded_sample_capacity(
     if !frames.is_finite() || frames <= 0.0 {
         return 0;
     }
-    (frames.ceil() as usize)
+    let from_duration = (frames.ceil() as usize)
         .saturating_add(64)
+        .saturating_mul(channels);
+    let Some(window) = range else {
+        return from_duration;
+    };
+    window
+        .end
+        .saturating_sub(window.start)
         .saturating_mul(channels)
+        .min(from_duration)
 }
 
 pub(crate) struct ResamplerOutput {
@@ -817,14 +819,53 @@ mod tests {
     #[test]
     fn decoded_sample_capacity_uses_range_or_duration() {
         assert_eq!(
-            decoded_sample_capacity(0, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
             500
+        );
+        assert_eq!(
+            decoded_sample_capacity(0, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
+            0
         );
         assert_eq!(decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, None), 0);
         assert_eq!(
             decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, None),
             (48_000 + 64) * 2
         );
+    }
+
+    #[test]
+    fn decoded_sample_capacity_caps_load_track_open_ended_end() {
+        let end = usize::MAX / 4;
+        assert_eq!(
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 1, Some(&(0..end))),
+            48_000 + 64
+        );
+        assert_eq!(
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..end))),
+            (48_000 + 64) * 2
+        );
+        assert_eq!(
+            decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, Some(&(0..end))),
+            0
+        );
+        assert_eq!(
+            decoded_sample_capacity(48_000, f64::NAN, 2, Some(&(0..end))),
+            0
+        );
+    }
+
+    #[test]
+    fn from_file_range_accepts_load_track_open_ended_end() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("open_ended.wav");
+        let frames = AudioData::SAMPLE_RATE as usize;
+        write_pcm_wav(&path, AudioData::SAMPLE_RATE, frames, &[2_000]);
+
+        let data = AudioData::from_file_range(&path, 0, usize::MAX / 4).unwrap();
+        assert_eq!(data.channels(), 1);
+        assert!(data.sample_count().abs_diff(frames) <= 64);
+        assert!(data.covers_source_range(0, usize::MAX / 4));
     }
 
     #[test]
