@@ -1084,6 +1084,7 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
     if let Some(mut state) = read_state(&canonical)? {
+        manager().forget_pending_rechecks(&state.video_id);
         state.phase = UploadPhase::Cancelled;
         write_state(&canonical, &state)?;
     }
@@ -1464,7 +1465,11 @@ mod tests {
         fixture.assert_retained();
     }
 
-    async fn confirm_pending(fixture: &Fixture, manager: &Arc<Manager<FakeBackend>>) -> i64 {
+    async fn confirm_pending(
+        fixture: &Fixture,
+        manager: &Arc<Manager<FakeBackend>>,
+        delay: Duration,
+    ) {
         let before = now();
         manager
             .admit(fixture.project(), fixture.upload(), false)
@@ -1474,9 +1479,8 @@ mod tests {
         let after = now();
         let state = fixture.state();
         assert_eq!(state.phase, UploadPhase::Processing);
-        let next = state.next_retry_at.unwrap();
-        assert!(next >= before && next <= after + RECONCILE_INTERVAL.as_secs() as i64);
-        next - before
+        let delay = delay.as_secs() as i64;
+        assert!((before + delay..=after + delay).contains(&state.next_retry_at.unwrap()));
     }
 
     #[tokio::test]
@@ -1484,13 +1488,11 @@ mod tests {
         let fixture = Fixture::new();
         fixture.cache_receipt();
         let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
-        let fast = PENDING_RECHECK_INTERVAL.as_secs() as i64;
-        let slow = RECONCILE_INTERVAL.as_secs() as i64;
         for _ in 0..FAST_PENDING_RECHECKS {
-            assert!((fast..=fast + 1).contains(&confirm_pending(&fixture, &manager).await));
+            confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
         }
-        assert!((slow..=slow + 1).contains(&confirm_pending(&fixture, &manager).await));
-        assert!((slow..=slow + 1).contains(&confirm_pending(&fixture, &manager).await));
+        confirm_pending(&fixture, &manager, RECONCILE_INTERVAL).await;
+        confirm_pending(&fixture, &manager, RECONCILE_INTERVAL).await;
         assert_eq!(
             manager.backend.confirmations.load(Ordering::Acquire),
             FAST_PENDING_RECHECKS as usize + 2
@@ -1505,7 +1507,7 @@ mod tests {
         fixture.cache_receipt();
         let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
         for _ in 0..3 {
-            confirm_pending(&fixture, &manager).await;
+            confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
         }
         manager.backend.verified.store(true, Ordering::Release);
         manager
@@ -1522,7 +1524,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.cache_receipt();
         let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
-        confirm_pending(&fixture, &manager).await;
+        confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
         manager
             .backend
             .fail_confirmation
@@ -1553,7 +1555,9 @@ mod tests {
         tokio::time::timeout(RECONCILE_INTERVAL, manager.wake.notified())
             .await
             .unwrap();
-        assert!(started.elapsed() >= PENDING_RECHECK_INTERVAL - Duration::from_millis(50));
+        assert!(
+            started.elapsed() >= PENDING_RECHECK_INTERVAL.saturating_sub(Duration::from_millis(50))
+        );
     }
 
     #[tokio::test]
