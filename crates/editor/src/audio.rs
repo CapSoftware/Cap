@@ -3376,7 +3376,10 @@ impl SeekFill {
             if count == 0 {
                 return !finished;
             }
-            if let Some((filled, claimed_end)) = timeline.claim_for_fill(block, self.write_pos) {
+            let claim = (self.write_pos == block * timeline.block_samples)
+                .then(|| timeline.claim_for_fill(block, self.write_pos))
+                .flatten();
+            if let Some((filled, claimed_end)) = claim {
                 count = count.min(claimed_end - self.write_pos);
                 for (offset, sample) in self.pending[..count].iter().enumerate() {
                     timeline.samples[self.write_pos + offset]
