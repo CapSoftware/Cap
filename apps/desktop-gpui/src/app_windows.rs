@@ -2386,6 +2386,12 @@ fn open_overlay(
     };
     let width = bounds.size().width();
     let height = bounds.size().height();
+    let main = cx.global::<AppWindows>().main;
+    let capture_scale = main
+        .update(cx, |_, window, _| {
+            crate::target_overlay::capture_scale_factor(window)
+        })
+        .unwrap_or(1.);
     #[cfg(target_os = "windows")]
     let origin = point(
         px(bounds.position().x() as f32),
@@ -2395,7 +2401,10 @@ fn open_overlay(
     let origin = point(px(0.), px(0.));
     let window_bounds = WindowBounds::Windowed(Bounds {
         origin,
-        size: size(px(width as f32), px(height as f32)),
+        size: size(
+            px(width as f32 / capture_scale),
+            px(height as f32 / capture_scale),
+        ),
     });
     #[cfg(target_os = "linux")]
     let overlay_display = if uses_wayland() {
