@@ -76,12 +76,19 @@ fn clip_marking_construction() {
     ] {
         let model = fixture(count, duration);
         let view = TimelineView {
-            transform: Transform {
-                zoom: model.total_duration,
-                position: 0.0,
-            },
+            transform: Transform::initial(model.total_duration),
             ..TimelineView::default()
         };
+        let visible_clips = model
+            .clips
+            .iter()
+            .filter(|segment| view.transform.segment_visible(segment.start, segment.end))
+            .count();
+        println!(
+            "fixture,{name},total_clips={},visible_clips={visible_clips},zoom_seconds={:.3}",
+            model.clips.len(),
+            view.transform.zoom
+        );
         for _ in 0..5 {
             black_box(measure(&model, view, false));
             black_box(measure(&model, view, true));
