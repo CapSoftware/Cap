@@ -410,6 +410,13 @@ impl YuvConverterPipelines {
     }
 }
 
+/// Conversions whose GPU work can still be pending when a new one starts. The
+/// renderer waits for the previous frame only after submitting the next one,
+/// and a transition frame converts twice (outgoing, then incoming), so up to
+/// three earlier sources may still be sampled.
+#[cfg(target_os = "macos")]
+const RETAINED_IOSURFACE_SOURCES: usize = 4;
+
 #[cfg(target_os = "macos")]
 struct RetainedImageBuf {
     _image_buf: cidre::arc::R<cv::ImageBuf>,
@@ -442,7 +449,9 @@ pub struct YuvToRgbaConverter {
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
     #[cfg(target_os = "macos")]
-    iosurface_sources: [Option<RetainedImageBuf>; 2],
+    iosurface_sources: [Option<RetainedImageBuf>; RETAINED_IOSURFACE_SOURCES],
+    #[cfg(target_os = "macos")]
+    next_iosurface_source: usize,
     #[cfg(target_os = "windows")]
     d3d11_staging_texture: Option<ID3D11Texture2D>,
     #[cfg(target_os = "windows")]
@@ -504,7 +513,9 @@ impl YuvToRgbaConverter {
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
             #[cfg(target_os = "macos")]
-            iosurface_sources: [None, None],
+            iosurface_sources: Default::default(),
+            #[cfg(target_os = "macos")]
+            next_iosurface_source: 0,
             #[cfg(target_os = "windows")]
             d3d11_staging_texture: None,
             #[cfg(target_os = "windows")]
@@ -1117,11 +1128,12 @@ impl YuvToRgbaConverter {
 
         // The Metal textures alias the IOSurface without retaining the pixel
         // buffer, and the decoder recycles released buffers for new pictures.
-        // Hold the source until this output slot is reused, by which point
+        // Hold the source until enough later conversions have started that
         // the caller has waited for the GPU work that sampled it.
-        self.iosurface_sources[self.current_output] = Some(RetainedImageBuf {
+        self.iosurface_sources[self.next_iosurface_source] = Some(RetainedImageBuf {
             _image_buf: image_buf.retained(),
         });
+        self.next_iosurface_source = (self.next_iosurface_source + 1) % RETAINED_IOSURFACE_SOURCES;
 
         Ok(self.current_output_view())
     }
