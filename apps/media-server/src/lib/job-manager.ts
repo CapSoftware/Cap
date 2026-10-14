@@ -329,9 +329,31 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+let draining = false;
+
+export function beginDraining() {
+	draining = true;
+}
+
+export function isDraining(): boolean {
+	return draining;
+}
+
+export async function waitForActiveVideoProcesses(
+	timeoutMs: number,
+	pollMs = 250,
+): Promise<number> {
+	const deadline = Date.now() + timeoutMs;
+	while (getActiveVideoProcessCount() > 0 && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, pollMs));
+	}
+	return getActiveVideoProcessCount();
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
+	if (draining) return false;
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
 	return (
