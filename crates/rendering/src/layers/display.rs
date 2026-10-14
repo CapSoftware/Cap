@@ -9,6 +9,9 @@ use crate::{
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
+#[cfg(target_os = "macos")]
+use crate::yuv_converter::RetainedImageBuf;
+
 struct PendingTextureCopy {
     width: u32,
     height: u32,
@@ -25,6 +28,8 @@ pub struct DisplayLayer {
     last_recording_time: Option<f32>,
     last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
+    #[cfg(target_os = "macos")]
+    frame_sources: [Option<RetainedImageBuf>; 2],
     pending_copy: Option<PendingTextureCopy>,
     prefer_cpu_conversion: bool,
     has_valid_frame: bool,
@@ -85,6 +90,8 @@ impl DisplayLayer {
             last_recording_time: None,
             last_frame_storage: None,
             yuv_converter,
+            #[cfg(target_os = "macos")]
+            frame_sources: [None, None],
             pending_copy: None,
             prefer_cpu_conversion,
             has_valid_frame: false,
@@ -613,6 +620,9 @@ impl DisplayLayer {
                 ));
             }
 
+            #[cfg(target_os = "macos")]
+            let mut frame_source = None;
+
             frame_uploaded = match format {
                 PixelFormat::Rgba => {
                     let frame_data = screen_frame.data();
@@ -764,15 +774,23 @@ impl DisplayLayer {
                     #[cfg(not(target_os = "windows"))]
                     if !self.prefer_cpu_conversion {
                         #[cfg(target_os = "macos")]
-                        let iosurface_converted = screen_frame
-                            .with_image_buf(|image_buf| {
-                                self.yuv_converter
-                                    .convert_nv12_from_iosurface_to_encoder(
-                                        device, encoder, image_buf,
-                                    )
-                                    .is_ok()
-                            })
-                            .unwrap_or(false);
+                        let converted_into_frame = {
+                            frame_source = screen_frame
+                                .with_image_buf(|image_buf| {
+                                    self.yuv_converter
+                                        .convert_nv12_from_iosurface_into(
+                                            device,
+                                            encoder,
+                                            image_buf,
+                                            &self.frame_texture_views[next_texture],
+                                        )
+                                        .ok()
+                                })
+                                .flatten();
+                            frame_source.is_some()
+                        };
+                        #[cfg(not(target_os = "macos"))]
+                        let converted_into_frame = false;
                         // Submitted ahead of `encoder`, so the conversion
                         // lands before the pending copy recorded below.
                         #[cfg(target_os = "linux")]
@@ -784,10 +802,14 @@ impl DisplayLayer {
                                 )
                                 .is_ok()
                         });
-                        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                        #[cfg(not(target_os = "linux"))]
                         let iosurface_converted = false;
 
-                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                        if converted_into_frame {
+                            true
+                        } else if iosurface_converted
+                            && self.yuv_converter.output_texture().is_some()
+                        {
                             self.pending_copy = Some(PendingTextureCopy {
                                 width: source_size.x,
                                 height: source_size.y,
@@ -921,6 +943,12 @@ impl DisplayLayer {
             };
 
             if frame_uploaded {
+                #[cfg(target_os = "macos")]
+                RetainedImageBuf::replace(
+                    queue,
+                    &mut self.frame_sources[next_texture],
+                    frame_source,
+                );
                 self.last_recording_time = Some(current_recording_time);
                 self.last_frame_storage = Some(frame_storage);
                 self.current_texture = next_texture;
