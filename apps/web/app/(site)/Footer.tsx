@@ -54,7 +54,7 @@ const footerLinks = {
 		},
 		{
 			label: "System Status",
-			href: "https://cap.openstatus.dev/",
+			href: "https://status.cap.so",
 			isExternal: true,
 		},
 	] as FooterLink[],

@@ -2096,16 +2096,40 @@ impl RecoveryManager {
             Self::ensure_video_decodes(path, label)?;
         }
 
-        if let Err(seek_error) = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT) {
-            finalization_info!(
-                "Finalized {} video failed seek validation, normalizing via remux: {}",
-                label,
-                seek_error
-            );
-            Self::normalize_recovered_video(path, label)?;
-        }
-        if video_validation == VideoValidation::Bounded {
-            validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+        let (seek_result, track_result) = std::thread::scope(|scope| {
+            let track = (video_validation == VideoValidation::Bounded).then(|| {
+                scope.spawn(|| {
+                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)
+                })
+            });
+            let seek = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT);
+            let track = track.map(|handle| {
+                handle.join().unwrap_or_else(|_| {
+                    Err(RecoveryError::Validation(format!(
+                        "{label} video track validation panicked"
+                    )))
+                })
+            });
+            (seek, track)
+        });
+
+        match seek_result {
+            Ok(()) => {
+                if let Some(track_result) = track_result {
+                    track_result?;
+                }
+            }
+            Err(seek_error) => {
+                finalization_info!(
+                    "Finalized {} video failed seek validation, normalizing via remux: {}",
+                    label,
+                    seek_error
+                );
+                Self::normalize_recovered_video(path, label)?;
+                if video_validation == VideoValidation::Bounded {
+                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+                }
+            }
         }
 
         Ok(())
@@ -2887,36 +2911,104 @@ fn clone_recovery_file(input: &std::fs::File, destination: &Path) -> bool {
 
 type RecoverySnapshot = std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>;
 
-fn hash_recovery_files(root: &Path, paths: &[PathBuf]) -> Result<RecoverySnapshot, RecoveryError> {
+fn hash_recovery_file(root: &Path, path: &Path) -> Result<(PathBuf, Vec<u8>), RecoveryError> {
     use std::io::Read;
 
-    let mut entries = RecoverySnapshot::new();
+    let metadata = path.symlink_metadata()?;
+    reject_recovery_link(&metadata)?;
+    if !metadata.is_file() {
+        return Err(RecoveryError::Validation(format!(
+            "Unsupported recovery input: {}",
+            path.display()
+        )));
+    }
+    let mut input = std::fs::File::open(path)?;
+    let mut digest = blake3::Hasher::new();
     let mut buffer = [0_u8; 65536];
+    loop {
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|error| RecoveryError::Validation(error.to_string()))?
+        .to_path_buf();
+    Ok((relative, digest.finalize().as_bytes().to_vec()))
+}
+
+fn hash_recovery_files(root: &Path, paths: &[PathBuf]) -> Result<RecoverySnapshot, RecoveryError> {
+    let mut entries = RecoverySnapshot::new();
     for path in paths {
-        let metadata = path.symlink_metadata()?;
-        reject_recovery_link(&metadata)?;
-        if !metadata.is_file() {
-            return Err(RecoveryError::Validation(format!(
-                "Unsupported recovery input: {}",
-                path.display()
-            )));
-        }
-        let mut input = std::fs::File::open(path)?;
-        let mut digest = blake3::Hasher::new();
-        loop {
-            let count = input.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
-        }
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|error| RecoveryError::Validation(error.to_string()))?
-            .to_path_buf();
-        let _ = entries.insert(relative, Some(digest.finalize().as_bytes().to_vec()));
+        let (relative, hash) = hash_recovery_file(root, path)?;
+        let _ = entries.insert(relative, Some(hash));
     }
     Ok(entries)
+}
+
+const MAX_RECOVERY_HASH_WORKERS: usize = 8;
+
+fn hash_recovery_files_parallel(
+    root: &Path,
+    paths: &[PathBuf],
+    workers: usize,
+) -> Result<RecoverySnapshot, RecoveryError> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let drain = || -> Result<Vec<(PathBuf, Vec<u8>)>, RecoveryError> {
+        let mut hashes = Vec::new();
+        while !failed.load(Ordering::Relaxed) {
+            let Some(path) = paths.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                break;
+            };
+            match hash_recovery_file(root, path) {
+                Ok(hash) => hashes.push(hash),
+                Err(error) => {
+                    failed.store(true, Ordering::Relaxed);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(hashes)
+    };
+    std::thread::scope(|scope| {
+        let helpers: Vec<_> = (1..workers)
+            .filter_map(|_| {
+                std::thread::Builder::new()
+                    .name("studio-integrity-check".into())
+                    .spawn_scoped(scope, drain)
+                    .ok()
+            })
+            .collect();
+        let own = drain();
+        let results: Vec<_> = std::iter::once(Ok(own))
+            .chain(helpers.into_iter().map(|helper| {
+                helper.join().map_err(|_| {
+                    RecoveryError::Validation("Recovery integrity worker panicked".into())
+                })
+            }))
+            .collect();
+        let mut first_error = None;
+        let mut entries = RecoverySnapshot::new();
+        for hashes in results {
+            match hashes? {
+                Ok(hashes) => {
+                    entries.extend(hashes.into_iter().map(|(path, hash)| (path, Some(hash))))
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(entries),
+        }
+    })
 }
 
 fn recovery_snapshot(project: &Path) -> Result<RecoverySnapshot, RecoveryError> {
@@ -2960,27 +3052,12 @@ fn recovery_snapshot(project: &Path) -> Result<RecoverySnapshot, RecoveryError> 
             Err(error) => return Err(error.into()),
         }
     }
-    let can_parallelize = bytes >= 32 * 1024 * 1024
-        && files.len() >= 2
-        && std::thread::available_parallelism().is_ok_and(|count| count.get() > 1);
-    let hashes = if can_parallelize {
-        let middle = files.len().div_ceil(2);
-        std::thread::scope(|scope| {
-            match std::thread::Builder::new()
-                .name("studio-integrity-check".into())
-                .spawn_scoped(scope, || hash_recovery_files(project, &files[..middle]))
-            {
-                Ok(worker) => {
-                    let remaining = hash_recovery_files(project, &files[middle..]);
-                    let mut hashes = worker.join().map_err(|_| {
-                        RecoveryError::Validation("Recovery integrity worker panicked".into())
-                    })??;
-                    hashes.extend(remaining?);
-                    Ok(hashes)
-                }
-                Err(_) => hash_recovery_files(project, &files),
-            }
-        })?
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |count| count.get())
+        .min(MAX_RECOVERY_HASH_WORKERS)
+        .min(files.len());
+    let hashes = if bytes >= 32 * 1024 * 1024 && workers > 1 {
+        hash_recovery_files_parallel(project, &files, workers)?
     } else {
         hash_recovery_files(project, &files)?
     };
@@ -3571,6 +3648,10 @@ fn validate_recovered_track(path: &Path, kind: ffmpeg::media::Type) -> Result<()
     validate_recovery_track(path, kind, VideoValidation::Full)
 }
 
+fn full_validation_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+}
+
 fn validate_recovery_track(
     path: &Path,
     kind: ffmpeg::media::Type,
@@ -3583,8 +3664,14 @@ fn validate_recovery_track(
             .best(kind)
             .ok_or_else(|| format!("Missing {kind:?} stream"))?;
         let index = stream.index();
-        let context = ffmpeg::codec::Context::from_parameters(stream.parameters())
+        let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .map_err(|error| error.to_string())?;
+        if kind == ffmpeg::media::Type::Video && video_validation == VideoValidation::Full {
+            context.set_threading(ffmpeg::threading::Config {
+                kind: ffmpeg::threading::Type::Frame,
+                count: full_validation_decode_threads(),
+            });
+        }
         let codec =
             ffmpeg::decoder::find(context.id()).ok_or_else(|| "Decoder unavailable".to_string())?;
         let mut decoder = context.decoder();
@@ -6323,6 +6410,75 @@ mod transactional_recovery_tests {
         assert!(copy_recovery_input(&project.join("content"), &project.join("copy")).is_err());
         assert_eq!(std::fs::read(&outside).unwrap(), b"outside");
     }
+
+    fn large_recovery_project() -> (tempfile::TempDir, Vec<PathBuf>) {
+        let dir = tempfile::tempdir().unwrap();
+        let fragments = dir.path().join("content/segments/segment-0/display");
+        std::fs::create_dir_all(&fragments).unwrap();
+        std::fs::write(dir.path().join("recording-meta.json"), b"{}").unwrap();
+        let mut seed = 0x9e37_79b9_u32;
+        let files = (0..24)
+            .map(|index| {
+                let bytes: Vec<u8> = (0..2 * 1024 * 1024)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 17;
+                        seed ^= seed << 5;
+                        seed as u8
+                    })
+                    .collect();
+                let path = fragments.join(format!("segment_{index:03}.m4s"));
+                std::fs::write(&path, bytes).unwrap();
+                path
+            })
+            .collect();
+        (dir, files)
+    }
+
+    #[test]
+    fn parallel_recovery_snapshot_matches_sequential_hashes() {
+        let (dir, fragments) = large_recovery_project();
+        let snapshot = recovery_snapshot(dir.path()).unwrap();
+
+        let mut files = fragments.clone();
+        files.push(dir.path().join("recording-meta.json"));
+        let sequential = hash_recovery_files(dir.path(), &files).unwrap();
+        assert_eq!(
+            hash_recovery_files_parallel(dir.path(), &files, 4).unwrap(),
+            sequential
+        );
+        for (path, hash) in &sequential {
+            assert_eq!(snapshot.get(path), Some(hash));
+        }
+        for fragment in &fragments {
+            let relative = fragment.strip_prefix(dir.path()).unwrap();
+            assert_eq!(
+                snapshot.get(relative),
+                Some(&Some(
+                    blake3::hash(&std::fs::read(fragment).unwrap())
+                        .as_bytes()
+                        .to_vec()
+                ))
+            );
+        }
+        assert_eq!(snapshot.get(Path::new("content/segments")), Some(&None));
+        assert_eq!(snapshot.len(), sequential.len() + 4);
+
+        let last = fragments.last().unwrap();
+        let mut bytes = std::fs::read(last).unwrap();
+        bytes[1024] ^= 1;
+        std::fs::write(last, bytes).unwrap();
+        assert_ne!(recovery_snapshot(dir.path()).unwrap(), snapshot);
+    }
+
+    #[test]
+    fn parallel_recovery_hashing_reports_unreadable_inputs() {
+        let (dir, mut fragments) = large_recovery_project();
+        fragments.insert(12, dir.path().join("content/missing.m4s"));
+        assert!(hash_recovery_files_parallel(dir.path(), &fragments, 4).is_err());
+        assert!(hash_recovery_files_parallel(dir.path(), &fragments, 1).is_err());
+    }
+
     #[test]
     fn recovery_declared_complete_missing_or_corrupt_fragment_is_not_skipped() {
         let dir = tempfile::tempdir().unwrap();

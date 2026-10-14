@@ -52,21 +52,13 @@ fn blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
 }
 
 pub fn blit_over(canvas: &mut [u8], size: (u32, u32), region: &image::RgbaImage, at: (u32, u32)) {
-    let stride = size.0 as usize * 4;
-    for (row_index, row) in region.rows().enumerate() {
-        let y = at.1 as usize + row_index;
-        if y >= size.1 as usize {
-            break;
-        }
-        for (column_index, pixel) in row.enumerate() {
-            let x = at.0 as usize + column_index;
-            if x >= size.0 as usize {
-                break;
-            }
-            let start = y * stride + x * 4;
-            blend_pixel_over(&mut canvas[start..start + 4], pixel.0);
-        }
-    }
+    blit_over_offset(
+        canvas,
+        size,
+        region.as_raw(),
+        region.dimensions(),
+        (i64::from(at.0), i64::from(at.1)),
+    );
 }
 
 pub fn blit_over_offset(
@@ -76,27 +68,33 @@ pub fn blit_over_offset(
     src_size: (u32, u32),
     offset: (i64, i64),
 ) {
+    if offset.0 >= i64::from(dst_size.0)
+        || offset.1 >= i64::from(dst_size.1)
+        || offset.0 <= -i64::from(src_size.0)
+        || offset.1 <= -i64::from(src_size.1)
+    {
+        return;
+    }
+
+    let src_x = (-offset.0).max(0) as usize;
+    let src_y = (-offset.1).max(0) as usize;
+    let dst_x = offset.0.max(0) as usize;
+    let dst_y = offset.1.max(0) as usize;
+    let width = (src_size.0 as usize - src_x).min(dst_size.0 as usize - dst_x);
+    let height = (src_size.1 as usize - src_y).min(dst_size.1 as usize - dst_y);
     let dst_stride = dst_size.0 as usize * 4;
     let src_stride = src_size.0 as usize * 4;
-    for src_y in 0..src_size.1 as i64 {
-        let dst_y = src_y + offset.1;
-        if dst_y < 0 || dst_y >= i64::from(dst_size.1) {
-            continue;
-        }
-        for src_x in 0..src_size.0 as i64 {
-            let dst_x = src_x + offset.0;
-            if dst_x < 0 || dst_x >= i64::from(dst_size.0) {
-                continue;
+    for row in 0..height {
+        let src_start = (src_y + row) * src_stride + src_x * 4;
+        let dst_start = (dst_y + row) * dst_stride + dst_x * 4;
+        let source = &src[src_start..src_start + width * 4];
+        let target = &mut dst[dst_start..dst_start + width * 4];
+        if is_opaque(source) {
+            target.copy_from_slice(source);
+        } else {
+            for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                blend_pixel_over(target, source.try_into().unwrap());
             }
-            let src_start = src_y as usize * src_stride + src_x as usize * 4;
-            let dst_start = dst_y as usize * dst_stride + dst_x as usize * 4;
-            let pixel = [
-                src[src_start],
-                src[src_start + 1],
-                src[src_start + 2],
-                src[src_start + 3],
-            ];
-            blend_pixel_over(&mut dst[dst_start..dst_start + 4], pixel);
         }
     }
 }
@@ -217,6 +215,96 @@ pub fn mask_filter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_blit(
+        dst: &mut [u8],
+        dst_size: (u32, u32),
+        src: &[u8],
+        src_size: (u32, u32),
+        offset: (i64, i64),
+    ) {
+        for y in 0..src_size.1 {
+            for x in 0..src_size.0 {
+                let dx = i64::from(x) + offset.0;
+                let dy = i64::from(y) + offset.1;
+                if dx < 0 || dy < 0 || dx >= i64::from(dst_size.0) || dy >= i64::from(dst_size.1) {
+                    continue;
+                }
+                let source = (y as usize * src_size.0 as usize + x as usize) * 4;
+                let target = (dy as usize * dst_size.0 as usize + dx as usize) * 4;
+                blend_pixel_over(
+                    &mut dst[target..target + 4],
+                    src[source..source + 4].try_into().unwrap(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_blits_match_scalar_source_over() {
+        for width in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33] {
+            let src_size = (width, 4);
+            let dst_size = (19, 7);
+            for alpha in [0, 128, 255] {
+                let mut src: Vec<u8> = (0..width * 4)
+                    .flat_map(|i| [i as u8, (i * 17) as u8, (i * 29) as u8, alpha])
+                    .collect();
+                for mixed in [false, true] {
+                    if mixed {
+                        for (i, pixel) in src.chunks_exact_mut(4).enumerate() {
+                            pixel[3] = i.wrapping_mul(71) as u8;
+                        }
+                    }
+                    for x in [-34, -17, -1, 0, 1, 18, 19, 34] {
+                        for y in [-5, -1, 0, 1, 6, 7] {
+                            let initial: Vec<u8> = (0..19 * 7)
+                                .flat_map(|i| [31, 127, 231, (i * 43) as u8])
+                                .collect();
+                            let mut expected = initial.clone();
+                            let mut actual = initial;
+                            reference_blit(&mut expected, dst_size, &src, src_size, (x, y));
+                            blit_over_offset(&mut actual, dst_size, &src, src_size, (x, y));
+                            assert_eq!(
+                                actual, expected,
+                                "{src_size:?}, {alpha}, {mixed}, {x}, {y}"
+                            );
+                            if x >= 0 && y >= 0 {
+                                let region =
+                                    image::RgbaImage::from_raw(width, 4, src.clone()).unwrap();
+                                let mut actual: Vec<u8> = (0..19 * 7)
+                                    .flat_map(|i| [31, 127, 231, (i * 43) as u8])
+                                    .collect();
+                                blit_over(&mut actual, dst_size, &region, (x as u32, y as u32));
+                                assert_eq!(actual, expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_row_fast_path_respects_every_alpha_byte() {
+        let size = (33, 2);
+        for changed in 0..66 {
+            let mut src = vec![255; 33 * 2 * 4];
+            src[changed * 4 + 3] = 127;
+            let mut expected = vec![61; src.len()];
+            let mut actual = expected.clone();
+            reference_blit(&mut expected, size, &src, size, (0, 0));
+            blit_over_offset(&mut actual, size, &src, size, (0, 0));
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn blits_outside_the_canvas_do_not_touch_buffers() {
+        for offset in [(i64::MIN, 0), (i64::MAX, 0), (0, i64::MIN), (0, i64::MAX)] {
+            blit_over_offset(&mut [], (1, 1), &[], (1, 1), offset);
+        }
+        blit_over_offset(&mut [], (0, 0), &[], (0, 0), (0, 0));
+    }
 
     fn reference_flatten(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
         let mut out = vec![255; rgba.len()];
