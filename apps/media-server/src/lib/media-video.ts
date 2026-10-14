@@ -1776,6 +1776,15 @@ async function processVideoWithCapcodec(
 	}
 }
 
+export function resolveThumbnailOptions(
+	options: ThumbnailOptions = {},
+): Required<ThumbnailOptions> {
+	const defined = Object.fromEntries(
+		Object.entries(options).filter(([, value]) => value !== undefined),
+	) as ThumbnailOptions;
+	return { ...DEFAULT_THUMBNAIL_OPTIONS, ...defined };
+}
+
 function getThumbnailTimestamp(
 	duration: number,
 	requestedTimestamp: number,
@@ -1798,7 +1807,7 @@ export async function generateThumbnail(
 	abortSignal?: AbortSignal,
 ): Promise<Uint8Array> {
 	abortSignal?.throwIfAborted();
-	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
+	const opts = resolveThumbnailOptions(options);
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
 	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
 	try {
