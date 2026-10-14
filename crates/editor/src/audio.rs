@@ -4911,6 +4911,8 @@ mod tests {
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
     }
 
+    static CACHE_RELEASE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
     struct ProgressiveFixture {
         _dir: TempDir,
         segments: Vec<AudioSegment>,
@@ -5196,6 +5198,7 @@ mod tests {
 
     #[test]
     fn cached_replay_resumes_the_paused_render_bit_identically() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         for improve in [false, true] {
             let fixture = ProgressiveFixture::new(improve);
             for output_info in output_infos() {
@@ -5307,6 +5310,7 @@ mod tests {
 
     #[test]
     fn every_audio_change_renders_fresh_and_visual_changes_reuse() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         type Edit = fn(&mut ProgressiveFixture);
         let audio_edits: [(&str, Edit); 12] = [
             ("mic volume", |f| f.project.audio.mic_volume_db = -6.0),
@@ -5417,6 +5421,7 @@ mod tests {
 
     #[test]
     fn audio_edits_and_editor_close_release_the_cached_render() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         let fixture = ProgressiveFixture::new(false);
         let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
         let wait_released = |timeline: Weak<ProgressiveTimeline>| {
@@ -5514,5 +5519,84 @@ mod tests {
         }
 
         assert_ne!(key(&base, Some(vec![(1.0, 2.0)])), original);
+    }
+
+    fn wait_until_released(timeline: Weak<ProgressiveTimeline>, within: std::time::Duration) {
+        let deadline = std::time::Instant::now() + within;
+        while timeline.strong_count() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cached render was not released"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn idle_pause_releases_the_cached_render() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new(false);
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let idle = std::time::Duration::from_millis(300);
+        let (_project_tx, project_rx) = watch::channel(fixture.project.clone());
+
+        for complete in [true, false] {
+            let cache = PlaybackAudioCache::with_idle_release(idle);
+            let mut playing = fixture.cached(&cache, output_info, 0.0, Some(project_rx.clone()));
+            if complete {
+                read_everything(&mut playing);
+            }
+            std::thread::sleep(idle * 2);
+            assert!(
+                lock(&cache.entry).is_some(),
+                "a playing render must stay cached"
+            );
+            let timeline = Arc::downgrade(&progressive_timeline(&playing));
+            let paused = std::time::Instant::now();
+            drop(playing);
+            wait_until_released(timeline, std::time::Duration::from_secs(10));
+            assert!(paused.elapsed() >= idle);
+            assert!(lock(&cache.entry).is_none());
+        }
+    }
+
+    #[test]
+    fn export_and_memory_pressure_release_every_cached_render() {
+        let _release = CACHE_RELEASE
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new(false);
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let (_project_tx, project_rx) = watch::channel(fixture.project.clone());
+        type Release = fn();
+        let releases: Vec<(&str, Release)> = vec![
+            ("export", release_playback_audio_caches),
+            #[cfg(target_os = "macos")]
+            ("memory pressure", || {
+                memory_pressure::on_memory_pressure(std::ptr::null_mut())
+            }),
+        ];
+        for (name, release) in releases {
+            let caches = [PlaybackAudioCache::default(), PlaybackAudioCache::default()];
+            let timelines = caches
+                .iter()
+                .map(|cache| {
+                    let paused = fixture.cached(cache, output_info, 0.0, Some(project_rx.clone()));
+                    Arc::downgrade(&progressive_timeline(&paused))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                caches.iter().all(|cache| lock(&cache.entry).is_some()),
+                "{name}"
+            );
+            release();
+            for timeline in timelines {
+                wait_until_released(timeline, std::time::Duration::from_secs(10));
+            }
+            assert!(
+                caches.iter().all(|cache| lock(&cache.entry).is_none()),
+                "{name}"
+            );
+        }
     }
 }
