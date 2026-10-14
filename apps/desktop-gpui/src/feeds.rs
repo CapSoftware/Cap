@@ -690,6 +690,7 @@ pub struct Feeds {
     pub microphone: Option<String>,
     /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
     pub mic_level_db: f64,
+    mic_level_shown: Arc<std::sync::atomic::AtomicU64>,
     pub camera_error: Option<String>,
     camera_preview_parked: bool,
     /// Bumped on every camera/mic selection change; async completions from a
@@ -749,6 +750,7 @@ impl Feeds {
             camera: None,
             microphone: None,
             mic_level_db: -96.0,
+            mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
             camera_error: None,
             camera_preview_parked: false,
             camera_epoch: 0,
@@ -1111,7 +1113,7 @@ impl Feeds {
         self.microphone_error = None;
         self.mic_input_pending = label.is_some();
         self.mic_input_released = false;
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
         let gate = self.mic_input_gate.clone();
@@ -1223,8 +1225,13 @@ impl Feeds {
             })
             .detach();
         }
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         cx.notify();
+    }
+
+    fn set_mic_level(&mut self, db: f64) {
+        self.mic_level_db = db;
+        self.mic_level_shown.store(db.to_bits(), Ordering::Release);
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
@@ -1328,36 +1335,29 @@ impl Feeds {
             .detach();
         }
 
-        let pump = cx.spawn(async move |this, cx| {
-            // Port of `audio_meter.rs`: a 200ms max-hold window, coalesced to
-            // ~20 updates/s so the meter does not repaint the window per audio
-            // callback.
-            let mut window_entries: Vec<(Instant, f64)> = Vec::new();
-            let mut last_push = Instant::now() - Duration::from_secs(1);
+        // Port of `audio_meter.rs`. The windowing runs off the main thread so
+        // an audio callback (50-100/s) only wakes the UI when the level it
+        // would draw has changed.
+        let (level_tx, level_rx) = flume::bounded::<f64>(1);
+        let shown = self.mic_level_shown.clone();
+        let meter = cx.background_executor().spawn(async move {
+            let mut window = MeterWindow::default();
             while let Ok(samples) = meter_rx.recv_async().await {
-                let now = Instant::now();
-                let db = db_fs(&samples);
-                window_entries.push((now, db));
-                window_entries
-                    .retain(|(at, _)| now.duration_since(*at) <= Duration::from_millis(200));
-                if now.duration_since(last_push) < Duration::from_millis(50) {
-                    continue;
+                if let Some(level) = window.push(Instant::now(), db_fs(&samples))
+                    && level.to_bits() != shown.load(Ordering::Acquire)
+                {
+                    let _ = level_tx.try_send(level);
                 }
-                last_push = now;
-                let max = window_entries
-                    .iter()
-                    .map(|(_, db)| *db)
-                    .fold(f64::MIN, f64::max);
-                // Quantized to 0.5dB -- under a pixel on both level mappings --
-                // so an unchanged level (a silent or absent signal pins at
-                // -96.0) stops waking every `Feeds` observer and the controls
-                // bar at 20Hz for a bar that would not visibly move.
-                let quantized = (max * 2.0).round() / 2.0;
+            }
+        });
+        let pump = cx.spawn(async move |this, cx| {
+            let _meter = meter;
+            while let Ok(level) = level_rx.recv_async().await {
                 let changed = this.update(cx, |this: &mut Feeds, cx| {
-                    if this.mic_level_db == quantized {
+                    if this.mic_level_db == level {
                         return false;
                     }
-                    this.mic_level_db = quantized;
+                    this.set_mic_level(level);
                     cx.notify();
                     true
                 });
@@ -1439,6 +1439,35 @@ pub(crate) fn camera_preview_image(
         image::Frame::new(image)
     ]));
     Some((image, (width, height)))
+}
+
+/// A 200ms max-hold window, coalesced to ~20 updates/s and quantized to
+/// 0.5dB (under a pixel on both level mappings).
+#[derive(Default)]
+struct MeterWindow {
+    entries: Vec<(Instant, f64)>,
+    last_push: Option<Instant>,
+}
+
+impl MeterWindow {
+    fn push(&mut self, now: Instant, db: f64) -> Option<f64> {
+        self.entries.push((now, db));
+        self.entries
+            .retain(|(at, _)| now.saturating_duration_since(*at) <= Duration::from_millis(200));
+        if self
+            .last_push
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_millis(50))
+        {
+            return None;
+        }
+        self.last_push = Some(now);
+        let max = self
+            .entries
+            .iter()
+            .map(|(_, db)| *db)
+            .fold(f64::MIN, f64::max);
+        Some((max * 2.0).round() / 2.0)
+    }
 }
 
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
@@ -1586,6 +1615,37 @@ mod meter_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_window_coalesces_to_one_update_per_50ms_with_a_200ms_max_hold() {
+        let start = Instant::now();
+        let mut window = MeterWindow::default();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        assert_eq!(window.push(at(0), -20.2), Some(-20.0));
+        assert_eq!(window.push(at(10), -10.0), None);
+        assert_eq!(window.push(at(49), -30.0), None);
+        assert_eq!(window.push(at(50), -40.0), Some(-10.0));
+        assert_eq!(window.push(at(205), -50.0), Some(-10.0));
+        assert_eq!(window.push(at(260), -50.0), Some(-50.0));
+    }
+
+    #[test]
+    fn a_steady_level_produces_no_main_thread_updates_after_the_first() {
+        let start = Instant::now();
+        let mut window = MeterWindow::default();
+        let mut shown = -96.0f64;
+        let mut ui_wakeups = 0;
+        for callback in 0..1000u64 {
+            let now = start + Duration::from_micros(callback * 10_667);
+            if let Some(level) = window.push(now, -96.0)
+                && level != shown
+            {
+                shown = level;
+                ui_wakeups += 1;
+            }
+        }
+        assert_eq!(ui_wakeups, 0);
+    }
 
     #[test]
     fn preview_rejects_frames_queued_before_input_readiness() {
