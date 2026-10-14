@@ -282,7 +282,7 @@ impl FFmpegDecoder {
             )
         };
 
-        Self::from_input(input, hw_device_type)
+        Self::from_input(input, hw_device_type, get_hw_decoder_capabilities())
     }
 
     pub fn new_relocatable<'a>(
@@ -292,7 +292,11 @@ impl FFmpegDecoder {
     ) -> Result<Self, String> {
         let input = cap_enc_ffmpeg::SegmentedInput::open_relocatable(source, paths)
             .map_err(|error| format!("open relocatable video / {error}"))?;
-        Self::from_input(DecoderInput::Segmented(input), hw_device_type)
+        Self::from_input(
+            DecoderInput::Segmented(input),
+            hw_device_type,
+            get_hw_decoder_capabilities(),
+        )
     }
 
     pub fn new_relocatable_interruptible<'a>(
@@ -305,12 +309,17 @@ impl FFmpegDecoder {
             source, paths, interrupt,
         )
         .map_err(|error| format!("open relocatable video / {error}"))?;
-        Self::from_input(DecoderInput::Segmented(input), hw_device_type)
+        Self::from_input(
+            DecoderInput::Segmented(input),
+            hw_device_type,
+            get_hw_decoder_capabilities(),
+        )
     }
 
     fn from_input(
         input: DecoderInput,
         hw_device_type: Option<AVHWDeviceType>,
+        hw_caps: &HwDecoderCapabilities,
     ) -> Result<Self, String> {
         let input_stream = input
             .input()
@@ -346,7 +355,6 @@ impl FFmpegDecoder {
             Ok(decoder)
         };
 
-        let hw_caps = get_hw_decoder_capabilities();
         let exceeds_hw_limits =
             width > hw_caps.max_width || height > hw_caps.max_height || !hw_caps.supports_hw_decode;
 
@@ -586,10 +594,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("segments");
         encode_segments(&source);
-        // MediaCodec never exists on desktop, so it exercises the failed
-        // hardware fallback.
+        // MediaCodec never exists on desktop, so with hardware-capable limits
+        // it exercises the failed hardware fallback.
         for hw_device_type in [None, Some(AVHWDeviceType::AV_HWDEVICE_TYPE_MEDIACODEC)] {
-            let decoder = FFmpegDecoder::new(&source, hw_device_type).unwrap();
+            let input = DecoderInput::Segmented(open_fragmented_input(&source).unwrap());
+            let decoder =
+                FFmpegDecoder::from_input(input, hw_device_type, &HwDecoderCapabilities::default())
+                    .unwrap();
             assert!(decoder.hw_device.is_none());
             let context = unsafe { &*decoder.decoder.as_ptr() };
             assert!(context.thread_count >= 2);
