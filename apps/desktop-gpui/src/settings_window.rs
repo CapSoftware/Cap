@@ -3268,7 +3268,7 @@ impl SettingsWindow {
             })
             .when(!checked, |this| {
                 this.border_1()
-                    .border_color(theme.settings_border())
+                    .border_color(theme.settings_muted().opacity(0.55))
                     .group_hover("studio-quality-option", |style| {
                         style.border_color(theme.settings_muted())
                     })
