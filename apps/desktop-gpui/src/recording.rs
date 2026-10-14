@@ -55,6 +55,10 @@ pub struct StartConfig {
     /// When set, the pipeline is primed behind this gate and records nothing
     /// until the session arms it at the end of the start cue.
     pub start_gate: Option<cap_recording::RecordingStartGate>,
+    /// Notified when the session cancels this start. A macOS Instant start
+    /// checks it while the shareable link is still pending behind a built
+    /// capture, and discards the capture instead of waiting for the link.
+    pub start_cancel: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2305,7 +2309,10 @@ async fn start_attempt_with_upload(
                     .context("instant recording actor")?,
             );
             let pre_created_video = match pending_video {
-                Some(pending) => match pending.video().await {
+                Some(pending) => match pending
+                    .video_unless_cancelled(config.start_cancel.as_deref())
+                    .await
+                {
                     Ok(video) => Some(video),
                     Err(error) => {
                         discard_unpublished_instant_capture(
@@ -2412,6 +2419,20 @@ impl PendingInstantVideo {
         self.video
             .clone()
             .ok_or_else(|| anyhow!("instant recording has no reserved upload"))
+    }
+
+    async fn video_unless_cancelled(
+        &mut self,
+        cancel: Option<&tokio::sync::Notify>,
+    ) -> anyhow::Result<cap_project::VideoUploadInfo> {
+        let Some(cancel) = cancel else {
+            return self.video().await;
+        };
+        tokio::select! {
+            biased;
+            () = cancel.notified() => Err(anyhow!("Recording start was cancelled")),
+            video = self.video() => video,
+        }
     }
 
     async fn created(mut self) -> Option<cap_project::VideoUploadInfo> {

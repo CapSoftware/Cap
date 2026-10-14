@@ -7020,6 +7020,7 @@ mod tests {
                 mic_feed: None,
                 linux_instant_camera: None,
                 start_gate: None,
+                start_cancel: None,
             }),
             gate: CleanCaptureGate::default(),
             camera: None,

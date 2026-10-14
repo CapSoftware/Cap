@@ -443,6 +443,12 @@ pub struct RecordingSession {
     /// Teardown of a cancelled primed start still releasing its devices; the
     /// next start waits for it before locking the mic and camera again.
     discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
+    /// macOS Instant builds the capture while the shareable link is pending;
+    /// Stop after the start cue cancels that start through this signal.
+    #[cfg(target_os = "macos")]
+    instant_start_cancel: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(target_os = "macos")]
+    instant_start_cancelled: bool,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
@@ -489,6 +495,10 @@ impl RecordingSession {
             start_cue: None,
             primed: None,
             discarding: None,
+            #[cfg(target_os = "macos")]
+            instant_start_cancel: None,
+            #[cfg(target_os = "macos")]
+            instant_start_cancelled: false,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
             #[cfg(target_os = "linux")]
@@ -658,8 +668,19 @@ impl RecordingSession {
             .recording_countdown
             .unwrap_or(0);
         let start_gate = cap_recording::RecordingStartGate::new();
+        #[cfg(target_os = "macos")]
+        let start_cancel = (config.mode == recording::RecordingMode::Instant)
+            .then(|| Arc::new(tokio::sync::Notify::new()));
+        #[cfg(not(target_os = "macos"))]
+        let start_cancel = None;
+        #[cfg(target_os = "macos")]
+        {
+            self.instant_start_cancel = start_cancel.clone();
+            self.instant_start_cancelled = false;
+        }
         let config = StartConfig {
             start_gate: Some(start_gate.clone()),
+            start_cancel,
             ..config
         };
         self.start_gate = Some(start_gate);
@@ -836,6 +857,14 @@ impl RecordingSession {
                     if let Ok(Ok(active)) = result {
                         this.discard_stale_start(active, cx);
                     }
+                    return;
+                }
+                #[cfg(target_os = "macos")]
+                if std::mem::take(&mut this.instant_start_cancelled) {
+                    if let Ok(Ok(active)) = result {
+                        this.discard_stale_start(active, cx);
+                    }
+                    this.finish(cx);
                     return;
                 }
                 match result {
@@ -1060,6 +1089,15 @@ impl RecordingSession {
         if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
             self.countdown_remaining = None;
             self.finish(cx);
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if self.phase == Phase::Starting
+            && let Some(cancel) = &self.instant_start_cancel
+        {
+            cancel.notify_one();
+            self.instant_start_cancelled = true;
+            cx.notify();
             return;
         }
         #[cfg(target_os = "linux")]
