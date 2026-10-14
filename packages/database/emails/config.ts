@@ -74,12 +74,10 @@ export const sendEmail = async ({
 		contentType?: string;
 	}[];
 }): Promise<SendEmailResult | undefined> => {
-	const status = getEmailDeliveryStatus();
+	const env = serverEnv();
 	const r = resend();
-	if (!status.configured || !r) {
-		const reason = status.configured
-			? EMAIL_NOT_CONFIGURED_MESSAGE
-			: status.reason;
+	if (!env.RESEND_API_KEY || !r) {
+		const reason = `${EMAIL_NOT_CONFIGURED_MESSAGE}: RESEND_API_KEY is not set`;
 		warnEmailNotConfigured(reason);
 		return {
 			data: null,
@@ -88,13 +86,23 @@ export const sendEmail = async ({
 	}
 
 	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
-	let from: string;
-
-	if (fromOverride) from = fromOverride;
-	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
-	else if (buildEnv.NEXT_PUBLIC_IS_CAP)
-		from = "Cap Auth <no-reply@auth.cap.so>";
-	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
+	const from = fromOverride
+		? fromOverride
+		: marketing
+			? "Richie from Cap <richie@send.cap.so>"
+			: buildEnv.NEXT_PUBLIC_IS_CAP
+				? "Cap Auth <no-reply@auth.cap.so>"
+				: env.RESEND_FROM_DOMAIN?.trim()
+					? `auth@${env.RESEND_FROM_DOMAIN.trim()}`
+					: undefined;
+	if (!from?.includes("@")) {
+		const reason = `${EMAIL_NOT_CONFIGURED_MESSAGE}: RESEND_FROM_DOMAIN is not set`;
+		warnEmailNotConfigured(reason);
+		return {
+			data: null,
+			error: { name: "email_not_configured", message: reason },
+		};
+	}
 
 	const result = await r.emails.send(
 		{

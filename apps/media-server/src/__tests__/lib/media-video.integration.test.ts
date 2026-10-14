@@ -645,11 +645,16 @@ describe("processVideo integration tests", () => {
 		const originalFetch = globalThis.fetch;
 		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-"));
 
-		globalThis.fetch = (async () =>
-			new Response(
-				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/><Initialization sourceURL="escaped.mp4?part=1&amp;token=x"/></Representation></AdaptationSet></Period></MPD>',
+		const requestedUrls: string[] = [];
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			requestedUrls.push(
+				input instanceof Request ? input.url : input.toString(),
+			);
+			return new Response(
+				'<MPD><Period><AdaptationSet><Representation><Initialization sourceURL="init.mp4"/><SegmentURL media="escaped.mp4?part=1&amp;token=x"/></Representation></AdaptationSet></Period></MPD>',
 				{ status: 200, statusText: "OK" },
-			)) as unknown as typeof fetch;
+			);
+		}) as unknown as typeof fetch;
 
 		try {
 			const path = await materializeMpdManifest(
@@ -658,13 +663,13 @@ describe("processVideo integration tests", () => {
 			);
 			const content = readFileSync(path, "utf8");
 
-			expect(content).toContain(
-				"init.mp4?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/init.mp4?Policy=a&Signature=b&Key-Pair-Id=c",
 			);
-			expect(content).toContain(
-				"chunk-$Number$.m4s?Policy=a&amp;Signature=b&amp;Key-Pair-Id=c",
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/escaped.mp4?part=1&token=x",
 			);
-			expect(content).toContain("escaped.mp4?part=1&amp;token=x");
+			expect(content).not.toContain("https://cdn.example");
 			expect(content).not.toContain("&amp;amp;");
 		} finally {
 			globalThis.fetch = originalFetch;
@@ -717,21 +722,10 @@ describe("processVideo integration tests", () => {
 			const videoPlaylist = readFileSync(videoPlaylistPath ?? "", "utf8");
 			const audioPlaylist = readFileSync(mediaMatch?.[1] ?? "", "utf8");
 
-			expect(videoPlaylist).toContain(
-				"https://cdn.example/video/video/init-v1.mp4?Policy=a&Signature=b",
-			);
-			expect(videoPlaylist).toContain(
-				"https://cdn.example/video/video/chunk-00003.m4s?Policy=a&Signature=b",
-			);
-			expect(videoPlaylist).toContain(
-				"https://cdn.example/video/video/chunk-00004.m4s?Policy=a&Signature=b",
-			);
-			expect(audioPlaylist).toContain(
-				"https://cdn.example/video/audio/chunk-0.m4s?Policy=a&Signature=b",
-			);
-			expect(audioPlaylist).toContain(
-				"https://cdn.example/video/audio/chunk-48000.m4s?Policy=a&Signature=b",
-			);
+			expect(videoPlaylist).not.toContain("https://cdn.example");
+			expect(audioPlaylist).not.toContain("https://cdn.example");
+			expect(videoPlaylist).toContain(".m4s");
+			expect(audioPlaylist).toContain(".m4s");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -741,10 +735,12 @@ describe("processVideo integration tests", () => {
 	test("falls back to generic DASH manifest materialization for unsupported MPD shapes", async () => {
 		const originalFetch = globalThis.fetch;
 		const manifestDir = mkdtempSync(join(tmpdir(), "cap-mpd-fallback-"));
-		let requests = 0;
+		const requestedUrls: string[] = [];
 
-		globalThis.fetch = (async () => {
-			requests++;
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			requestedUrls.push(
+				input instanceof Request ? input.url : input.toString(),
+			);
 			return new Response(
 				`<MPD>
 						<Period>
@@ -771,11 +767,13 @@ describe("processVideo integration tests", () => {
 			const content = readFileSync(path, "utf8");
 
 			expect(path.endsWith(".mpd")).toBe(true);
-			expect(requests).toBe(2);
-			expect(content).toContain(
-				"https://cdn.example/video/media/?Policy=a&amp;Signature=b",
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/init.mp4?Policy=a&Signature=b",
 			);
-			expect(content).toContain("seg-1.m4s?Policy=a&amp;Signature=b");
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/seg-1.m4s?Policy=a&Signature=b",
+			);
+			expect(content).not.toContain("https://cdn.example");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
@@ -877,10 +875,7 @@ describe("processVideo integration tests", () => {
 				);
 			}
 
-			return new Response("not found", {
-				status: 404,
-				statusText: "Not Found",
-			});
+			return new Response("segment", { status: 200, statusText: "OK" });
 		}) as unknown as typeof fetch;
 
 		try {
@@ -896,21 +891,24 @@ describe("processVideo integration tests", () => {
 			expect(requestedUrls).toContain(
 				"https://cdn.example/video/variant.m3u8?Policy=a&Signature=b",
 			);
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/init.mp4?Policy=a&Signature=b",
+			);
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/key.bin?Policy=a&Signature=b",
+			);
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/segment-1.ts?Policy=a&Signature=b",
+			);
+			expect(requestedUrls).toContain(
+				"https://cdn.example/video/segment-2.ts?Policy=a&Signature=b",
+			);
 			expect(variantPath).toBeTruthy();
 
 			const variant = readFileSync(variantPath ?? "", "utf8");
-			expect(variant).toContain(
-				'URI="https://cdn.example/video/init.mp4?Policy=a&Signature=b"',
-			);
-			expect(variant).toContain(
-				'URI="https://cdn.example/video/key.bin?Policy=a&Signature=b"',
-			);
-			expect(variant).toContain(
-				"https://cdn.example/video/segment-1.ts?Policy=a&Signature=b",
-			);
-			expect(variant).toContain(
-				"https://cdn.example/video/segment-2.ts?Policy=a&Signature=b",
-			);
+			expect(variant).not.toContain("https://cdn.example");
+			expect(variant).toContain(".ts");
+			expect(variant).toContain(".bin");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });

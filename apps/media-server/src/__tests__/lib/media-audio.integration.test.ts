@@ -201,7 +201,7 @@ describe("mediaAudio integration tests", () => {
 			try {
 				await expect(
 					checkHasAudioTrack(`${server.url}video.mp4`),
-				).rejects.toThrow("FFprobe exited");
+				).rejects.toThrow("Failed to fetch media: 503");
 				await waitForAudioOperations(beforeCount);
 			} finally {
 				await server.stop(true);

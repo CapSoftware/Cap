@@ -57,6 +57,21 @@ describe("email config", () => {
 		}
 	});
 
+	it("sends an explicit sender without a default from-domain", async () => {
+		mocks.env.RESEND_API_KEY = "re_test";
+		mocks.send.mockResolvedValue({ data: { id: "email_2" }, error: null });
+
+		const result = await sendEmail({
+			...message,
+			fromOverride: "Cap Support <richie@send.cap.so>",
+		});
+
+		expect(mocks.send.mock.calls[0]?.[0].from).toBe(
+			"Cap Support <richie@send.cap.so>",
+		);
+		expect(result).toEqual({ data: { id: "email_2" }, error: null });
+	});
+
 	it("sends from the configured domain and returns the provider id", async () => {
 		mocks.env.RESEND_API_KEY = "re_test";
 		mocks.env.RESEND_FROM_DOMAIN = "example.com";

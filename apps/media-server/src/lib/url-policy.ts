@@ -230,11 +230,21 @@ async function redirectTarget(
 	return new URL(location, current).toString();
 }
 
+function withManualRedirect(init: RequestInit): RequestInit {
+	const body = init.body;
+	return {
+		...init,
+		body: body instanceof Blob ? body.slice() : body,
+		redirect: "manual",
+	};
+}
+
 export async function resolveAllowedUrl(
 	input: string,
 	policy: UrlPolicy = getUrlPolicy(),
 	resolve: Resolver = defaultResolver,
 	fetcher: Fetcher = fetch,
+	signal?: AbortSignal,
 ): Promise<string> {
 	let current = input;
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -242,10 +252,15 @@ export async function resolveAllowedUrl(
 		let response = await fetcher(current, {
 			method: "HEAD",
 			redirect: "manual",
+			signal,
 		});
 		if (response.status === 405 || response.status === 501) {
 			await response.body?.cancel();
-			response = await fetcher(current, { method: "GET", redirect: "manual" });
+			response = await fetcher(current, {
+				method: "GET",
+				redirect: "manual",
+				signal,
+			});
 		}
 		const next = await redirectTarget(response, current);
 		await response.body?.cancel();
@@ -268,7 +283,7 @@ export async function fetchAllowed(
 	let current = input;
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
 		await assertUrlAllowed(current, policy, resolve);
-		const response = await fetcher(current, { ...init, redirect: "manual" });
+		const response = await fetcher(current, withManualRedirect(init));
 		const next = await redirectTarget(response, current);
 		if (!next) return response;
 		await response.body?.cancel();
