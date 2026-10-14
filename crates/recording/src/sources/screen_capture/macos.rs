@@ -16,7 +16,7 @@ use std::{
         Arc, Mutex,
         atomic::{self, AtomicBool, AtomicU32, AtomicU64},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{select, sync::broadcast};
 use tokio_util::{
@@ -208,7 +208,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let (video_tx, video_rx) = flume::bounded(buffer_size);
         let drop_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let (mut audio_tx, audio_rx) = if self.system_audio {
-            let (tx, rx) = mpsc::channel(128);
+            let (tx, rx) = mpsc::channel(output_pipeline::AUDIO_SOURCE_CHANNEL_CAPACITY);
             (Some(tx), Some(rx))
         } else {
             (None, None)
@@ -1263,13 +1263,18 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         let stats_cancel = cancel_token.clone();
         tokio::spawn(
             async move {
-                let mut last_log = Instant::now();
+                let mut prev_captured: u64 = 0;
+                let mut prev_dropped: u64 = 0;
                 loop {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     let captured = frame_counter.load(atomic::Ordering::Relaxed);
                     let dropped = drop_counter.load(atomic::Ordering::Relaxed);
 
-                    if dropped > 0 {
+                    // Report drops that happened since the last tick only: a
+                    // single hiccup used to keep warning every five seconds
+                    // for the rest of the recording.
+                    let new_drops = dropped.saturating_sub(prev_dropped);
+                    if new_drops > 0 {
                         let total = captured + dropped;
                         let drop_pct = if total > 0 {
                             100.0 * dropped as f64 / total as f64
@@ -1277,18 +1282,18 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                             0.0
                         };
 
-                        if last_log.elapsed() >= Duration::from_secs(5) {
-                            warn!(
-                                captured = captured,
-                                dropped = dropped,
-                                drop_pct = format!("{:.1}%", drop_pct),
-                                "System audio dropping frames due to full channel"
-                            );
-                            last_log = Instant::now();
-                        }
-                    } else if captured > 0 {
+                        warn!(
+                            captured = captured,
+                            dropped = dropped,
+                            new_drops = new_drops,
+                            drop_pct = format!("{:.1}%", drop_pct),
+                            "System audio dropping frames due to full channel"
+                        );
+                    } else if captured != prev_captured {
                         debug!(captured = captured, "System audio frames captured");
                     }
+                    prev_captured = captured;
+                    prev_dropped = dropped;
                 }
             }
             .with_cancellation_token_owned(stats_cancel)
