@@ -206,7 +206,7 @@ fn build() -> Guide {
             cmd(
                 "export-preview",
                 "Render a still frame from a .cap project at a given timestamp. JSON emits jpeg_base64 plus frame metadata.",
-                OutputMode::SingleJson,
+                OutputMode::AlwaysJson,
                 &[],
             ),
             cmd(
