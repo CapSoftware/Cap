@@ -2063,6 +2063,12 @@ struct X11WindowCapture {
 
 impl X11Grabber {
     pub fn new(config: &X11InputConfig) -> anyhow::Result<Self> {
+        Self::with_shm(config, true)
+    }
+
+    /// Like [`Self::new`], but `allow_shm: false` forces the `GetImage`
+    /// backend, the same as setting `CAP_X11_DISABLE_SHM=1`.
+    pub fn with_shm(config: &X11InputConfig, allow_shm: bool) -> anyhow::Result<Self> {
         ffmpeg::init().context("initialize FFmpeg")?;
 
         let (conn, screen_num) = x11rb::connect(Some(config.display_name.as_str()))
@@ -2188,11 +2194,15 @@ impl X11Grabber {
             show_cursor,
         };
         grabber.refresh_window_pixmap()?;
-        grabber.backend = grabber.initial_backend();
+        grabber.backend = grabber.initial_backend(allow_shm);
         Ok(grabber)
     }
 
-    fn initial_backend(&self) -> GrabBackend {
+    fn initial_backend(&self, allow_shm: bool) -> GrabBackend {
+        if !allow_shm {
+            tracing::info!("X11 MIT-SHM capture disabled by caller");
+            return GrabBackend::GetImage;
+        }
         if linux_shm::shm_disabled_by_env() {
             tracing::info!(
                 "X11 MIT-SHM capture disabled by {}",
