@@ -1,0 +1,187 @@
+:root {
+	/* Surfaces */
+	--surface: #ffffff;
+	--surface-secondary: #fafafa;
+	--surface-subtle: #fafafa;
+	--surface-raised: #f0f0f0;
+	--surface-overlay: color-mix(in srgb, #000000 50%, transparent);
+	--surface-inverse: #222222;
+
+	/* Borders */
+	--border: #e5e5e5;
+	--border-secondary: var(--border);
+	--border-subtle: #f0f0f0;
+	--border-softer: #f5f5f5;
+	--border-strong: #c2c2c2;
+	--border-inverse: #222222;
+
+	/* Text */
+	--text-primary: #222222;
+	--text-default: #404040;
+	--text-secondary: #646465;
+	--text-muted: #c2c2c2;
+	--text-positive: var(--positive);
+	--text-negative: var(--negative);
+	--text-danger: var(--danger);
+	--text-warning: #ff6900;
+	/* Text on interactive items (buttons, tabs, links). Keep these values in
+     step with --icon / --icon-active: normal text = normal icon colour,
+     hover/active text = active icon colour. They are separate tokens on
+     purpose, never point one at the other. */
+	--text-interactive: #646465;
+	--text-hover: #404040;
+	--text-active: #404040;
+
+	/* Interaction states — hover / selected fill, pressed fill, disabled fill. */
+	--hover-bg: #f0f0f0;
+	--active-bg: #e5e5e5;
+	--disabled-bg: #e5e5e5;
+
+	/* Icons — normal and hovered/pressed/selected */
+	--icon: #646465;
+	--icon-active: #404040;
+
+	/* Status — gains / losses, success / failure. Shared with the main platform. */
+	--positive: #089981;
+	--positive-subtle: #dcf5f0;
+	--negative: #f7525f;
+	--negative-subtle: #ffe2e2;
+	--warning: #ff6900;
+	--warning-subtle: #ffedd4;
+	--indigo: #615fff;
+	--indigo-subtle: #e0e7ff;
+	--purple: #ad46ff;
+	--purple-subtle: #f3e8ff;
+
+	/* Actions */
+	--primary: #0182fb;
+	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-active: #006bd6;
+	--primary-disabled: color-mix(in srgb, var(--primary) 30%, var(--surface));
+	--primary-disabled-foreground: color-mix(
+		in srgb,
+		var(--primary) 65%,
+		var(--surface)
+	);
+	--primary-subtle: color-mix(in srgb, var(--primary) 12%, var(--surface));
+	--primary-foreground: #f5f5f5;
+	--danger: #f7525f;
+	--danger-hover: #e5404d;
+	--danger-disabled: #ffc9c9;
+	--danger-disabled-foreground: #ffa2a2;
+	--danger-ring: #ffc9c9;
+	--danger-foreground: #ffffff;
+
+	/* Buttons — neutral default button */
+	--button-fill: #333333;
+	--button-fill-hover: #404040;
+	--button-fill-active: #222222;
+	--button-fill-foreground: #ffffff;
+	--button-fill-subtle: #f5f5f5;
+
+	/* Focus */
+	--ring-primary: var(--primary);
+
+	/* Radius */
+	--radius-default: 8px;
+	--radius-medium: 12px;
+	--radius-small: 4px;
+	--radius-large: 999px;
+	--radius-compact: 6px;
+
+	/* Shadows */
+	--shadow-1:
+		0 0 1px 0 color-mix(in srgb, #000000 20%, transparent),
+		0 1px 2px 0 color-mix(in srgb, #000000 5%, transparent),
+		0 1px 1px 0 color-mix(in srgb, #000000 1%, transparent);
+	--shadow-2: 0 1px 6px 0 color-mix(in srgb, #000000 10%, transparent);
+	--shadow-3: 0 2.75px 5.5px 0 color-mix(in srgb, #000000 10%, transparent);
+	--shadow-dialog:
+		0 4px 6px -4px color-mix(in srgb, #101828 10%, transparent),
+		0 10px 15px -3px color-mix(in srgb, #000000 10%, transparent);
+}
+
+.dark {
+	/* Surfaces */
+	--surface: #1f1f1f;
+	--surface-secondary: #222222;
+	--surface-subtle: #2b2b2b;
+	--surface-raised: #333333;
+	--surface-overlay: color-mix(in srgb, #000000 60%, transparent);
+	--surface-inverse: #ffffff;
+
+	/* Borders */
+	--border: #333333;
+	--border-secondary: var(--border);
+	--border-subtle: #333333;
+	--border-softer: #2b2b2b;
+	--border-strong: #404040;
+	--border-inverse: #ffffff;
+
+	/* Text */
+	--text-primary: #f5f5f5;
+	--text-default: #f0f0f0;
+	--text-secondary: #c2c2c2;
+	--text-muted: #808080;
+	--text-positive: var(--positive);
+	--text-negative: var(--negative);
+	--text-danger: #ffa2a2;
+	--text-warning: #ffb86a;
+	--text-interactive: #c2c2c2;
+	--text-hover: #f0f0f0;
+	--text-active: #f0f0f0;
+
+	/* Interaction states */
+	--hover-bg: #333333;
+	--active-bg: #404040;
+	--disabled-bg: #404040;
+
+	/* Icons */
+	--icon: #c2c2c2;
+	--icon-active: #f0f0f0;
+
+	/* Status — gains / losses, success / failure. Shared with the main platform. */
+	--positive: #089981;
+	--positive-subtle: #193c37;
+	--negative: #f7525f;
+	--negative-subtle: #532b2e;
+	--warning: #ff6900;
+	--warning-subtle: #7e2a0c;
+	--indigo: #615fff;
+	--indigo-subtle: #312c85;
+	--purple: #ad46ff;
+	--purple-subtle: #59168b;
+
+	/* Actions */
+	--primary: #0182fb;
+	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-active: #006bd6;
+	--primary-disabled: color-mix(in srgb, var(--primary) 35%, var(--surface));
+	--primary-disabled-foreground: color-mix(in srgb, var(--primary) 65%, white);
+	--primary-subtle: color-mix(in srgb, var(--primary) 22%, var(--surface));
+	--primary-foreground: #f5f5f5;
+	--danger: #f7525f;
+	--danger-hover: #f96a75;
+	--danger-disabled: #6b3135;
+	--danger-disabled-foreground: #d0646c;
+	--danger-ring: #c10007;
+	--danger-foreground: #ffffff;
+
+	/* Buttons — neutral default button */
+	--button-fill: #f5f5f5;
+	--button-fill-hover: #e0e0e0;
+	--button-fill-active: #d4d4d4;
+	--button-fill-foreground: #404040;
+	--button-fill-subtle: #222222;
+
+	/* Focus */
+	--ring-primary: var(--primary);
+}
+button.bg-primary {
+	transition: background-color 240ms ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+	button.bg-primary {
+		transition: none;
+	}
+}

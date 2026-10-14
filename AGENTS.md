@@ -72,6 +72,12 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 (See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
 
+## Desktop Design Tokens
+- `apps/desktop-gpui/CSS.md` holds the desktop app's design tokens and the rules for using them. Read it before any desktop UI work and always follow it.
+- `apps/desktop-gpui/platform.css` is the supplied target palette, not yet wired into GPUI. For new and migrated UI, take colors, radii and shadows from its semantic tokens, never hardcode values or derive ad-hoc tints. Do not invent more CSS or tokens; raise missing roles for a design decision.
+- Keep `platform.css` and the Theme CSS block in `CSS.md` identical.
+- These rules cover the desktop app only; `apps/web` and `apps/desktop` keep their own styles.
+
 ## Testing
 - TS/JS: Vitest where present (e.g., desktop). Name tests `*.test.ts(x)` near sources.
 - Rust: `cargo test` per crate; tests in `src` or `tests`.
