@@ -1270,6 +1270,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-recording",
+ "cap-rendering",
  "cap-timestamp",
  "cap-utils",
  "chrono",
