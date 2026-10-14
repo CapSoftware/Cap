@@ -228,7 +228,6 @@ pub fn resume(cx: &mut App) -> bool {
     true
 }
 
-/// Store keys of the bindings the OS refused at the last registration.
 pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
     cx.try_global::<Hotkeys>()
         .map(|hotkeys| {

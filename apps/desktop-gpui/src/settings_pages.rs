@@ -189,15 +189,12 @@ struct DriveQuota {
     stale: bool,
 }
 
-/// The row recording a new combo. Global hotkeys are paused for as long as
-/// this is set, so pressing an already-bound combo reaches the page.
 struct ListeningHotkey {
     action: &'static str,
     modifiers: gpui::Modifiers,
     error: Option<&'static str>,
 }
 
-/// The confirmation a row shows for a few seconds after a combo is saved.
 struct SavedShortcut {
     action: &'static str,
     moved_from: Option<&'static str>,
@@ -951,7 +948,6 @@ const WHILE_RECORDING_SHORTCUTS: [&str; 3] =
 
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
 
-/// One choice in an "After ..." panel.
 #[derive(Clone, Copy)]
 struct OutcomeOption {
     icon: &'static str,
@@ -1117,7 +1113,6 @@ fn shortcut_effect(
     }
 }
 
-/// Rows whose description quotes an "After ..." choice on this page.
 fn description_follows_outcome(action: &str) -> bool {
     SCREENSHOT_SHORTCUTS.contains(&action)
         || matches!(action, "startStudioRecording" | "startInstantRecording")
@@ -1246,7 +1241,6 @@ fn held_modifier_keys(modifiers: gpui::Modifiers) -> Vec<String> {
     keys
 }
 
-/// A combo written into a sentence: `⌘⇧4` on macOS, `Ctrl+Shift+4` elsewhere.
 fn hotkey_inline_text(hotkey: &Hotkey) -> String {
     let separator = if cfg!(target_os = "macos") { "" } else { "+" };
     hotkey_display_keys(hotkey)
@@ -1411,8 +1405,6 @@ impl SettingsWindow {
             return true;
         }
 
-        // One combo, one action: taking a combo another row uses moves it
-        // here, and the confirmation says where it came from.
         let mut moved_from = None;
         for other in SCREENSHOT_SHORTCUTS
             .iter()
@@ -1549,7 +1541,6 @@ impl SettingsWindow {
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
             self.rows(rows)
                 .id(id)
-                // A press anywhere else on the card abandons a recording row.
                 .when(listening_any, |this| {
                     this.on_mouse_down(
                         MouseButton::Left,
@@ -1584,9 +1575,6 @@ impl SettingsWindow {
         ]
     }
 
-    /// The "After ..." choices: a tinted panel at the foot of a group with
-    /// every option visible as a card, so what happens next reads as
-    /// something to pick rather than one more setting row.
     fn render_outcome_panel(
         &self,
         id: &'static str,
@@ -1853,8 +1841,6 @@ impl SettingsWindow {
             .into_any_element()
     }
 
-    /// The combo as key caps in a pill, "Record shortcut" when unbound, or the
-    /// live recording state with whatever modifiers are held.
     fn render_shortcut_field(
         &self,
         action: &'static str,
