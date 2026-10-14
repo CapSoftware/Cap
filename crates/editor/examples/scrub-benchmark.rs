@@ -5,7 +5,7 @@ use std::{
 };
 
 use cap_editor::{EditorFrameOutput, EditorInstance, FrameLayout};
-use cap_project::{ProjectConfiguration, XY};
+use cap_project::XY;
 
 const FPS: u32 = 60;
 const MOUSE_HZ: f64 = 120.0;
@@ -48,6 +48,7 @@ async fn sweep(
     let started = Instant::now();
     let mut presented = Vec::new();
     let mut last_send = started;
+    let mut after_last_send = 0;
 
     for step in 0..=steps {
         let progress = step as f64 / steps as f64;
@@ -56,6 +57,7 @@ async fn sweep(
             .preview_tx
             .send_modify(|value| *value = Some((frame, FPS, resolution)));
         last_send = Instant::now();
+        after_last_send = presented.len();
         while let Ok(event) = frames_rx.try_recv() {
             presented.push(event);
         }
@@ -65,17 +67,25 @@ async fn sweep(
         }
     }
 
-    let settle_ms = loop {
-        match frames_rx.recv_timeout(Duration::from_secs(10)) {
-            Ok((at, frame)) => {
-                presented.push((at, frame));
-                if frame == to {
-                    break at.saturating_duration_since(last_send).as_secs_f64() * 1000.0;
+    let already_presented = presented[after_last_send..]
+        .iter()
+        .find(|(_, frame)| *frame == to)
+        .map(|(at, _)| *at);
+    let final_at = match already_presented {
+        Some(at) => at,
+        None => loop {
+            match frames_rx.recv_timeout(Duration::from_secs(10)) {
+                Ok((at, frame)) => {
+                    presented.push((at, frame));
+                    if frame == to {
+                        break at;
+                    }
                 }
+                Err(_) => panic!("final frame {to} never presented"),
             }
-            Err(_) => panic!("final frame {to} never presented"),
-        }
+        },
     };
+    let settle_ms = final_at.saturating_duration_since(last_send).as_secs_f64() * 1000.0;
 
     let during_drag = || presented.iter().filter(|(at, _)| *at <= last_send);
     let presented_during_drag = during_drag().count();
@@ -103,14 +113,9 @@ async fn main() {
         .expect("Usage: scrub-benchmark --recording-path <path> [--runs <count>]");
     let runs = arg_value(&args, "--runs")
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(3);
+        .unwrap_or(3)
+        .max(1);
     let resolution = XY::new(960, 540);
-
-    let duration = ProjectConfiguration::load(&recording_path)
-        .ok()
-        .and_then(|config| config.timeline.map(|timeline| timeline.duration()))
-        .expect("project needs a timeline");
-    let last_frame = ((duration * FPS as f64).floor() as u32).saturating_sub(2);
 
     let (frames_tx, frames_rx) = mpsc::channel::<(Instant, u32)>();
     let editor = EditorInstance::new(
@@ -123,6 +128,21 @@ async fn main() {
     )
     .await
     .expect("Failed to create editor instance");
+
+    let timeline_duration = editor
+        .project_config
+        .1
+        .borrow()
+        .timeline
+        .as_ref()
+        .map(|timeline| timeline.duration());
+    let duration = timeline_duration
+        .unwrap_or_else(|| f64::from(editor.get_total_frames(FPS)) / f64::from(FPS));
+    let last_frame = ((duration * FPS as f64).floor() as u32).saturating_sub(2);
+    assert!(
+        last_frame > 0,
+        "the recording is too short to benchmark scrubbing"
+    );
 
     editor
         .preview_tx
