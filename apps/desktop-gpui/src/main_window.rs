@@ -1005,7 +1005,7 @@ impl MainWindow {
             device_format_generation: 0,
             device_format_pending: None,
             device_format_notice: None,
-            system_audio: false,
+            system_audio: crate::store::recording_system_audio(),
             selected_display: None,
             selected_window: None,
             panel: None,
@@ -2556,10 +2556,14 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Toggle system audio capture -- the system-audio row is a plain flag.
+    /// Toggle system audio capture -- the system-audio row is a plain flag,
+    /// persisted as `recording_settings.systemAudio` like the Tauri app did.
     pub fn set_system_audio(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.system_audio != enabled {
             self.system_audio = enabled;
+            if !crate::store::set_recording_system_audio(enabled) {
+                tracing::warn!("Could not save the system audio setting");
+            }
             cx.notify();
         }
     }

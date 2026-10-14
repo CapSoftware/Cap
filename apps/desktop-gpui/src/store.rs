@@ -1034,6 +1034,19 @@ pub fn set_recording_camera_id(id: Option<&cap_recording::feeds::camera::DeviceO
     set_store_setting(RECORDING_SETTINGS, "cameraId", value)
 }
 
+/// `RecordingSettingsStore.systemAudio`, which the Tauri app restored on
+/// launch. Anything but a boolean reads as off.
+pub fn recording_system_audio() -> bool {
+    store_section(RECORDING_SETTINGS)
+        .get("systemAudio")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_recording_system_audio(enabled: bool) -> bool {
+    set_store_setting(RECORDING_SETTINGS, "systemAudio", Value::Bool(enabled))
+}
+
 pub fn set_recording_microphone_name(name: Option<&str>) -> bool {
     set_store_setting(
         RECORDING_SETTINGS,
@@ -2002,6 +2015,27 @@ mod tests {
         expected[RECORDING_SETTINGS]["cameraId"] = Value::Null;
         expected[RECORDING_SETTINGS]["micName"] = Value::Null;
         assert_eq!(store.read(), expected);
+    }
+
+    #[test]
+    fn system_audio_restores_and_saves_without_touching_devices() {
+        let store = TempStore::new(
+            "recording-inputs-system-audio",
+            Some(r#"{"recording_settings":{"systemAudio":true,"micName":"Desk"}}"#),
+        );
+        assert!(recording_system_audio());
+
+        assert!(set_recording_system_audio(false));
+        assert!(!recording_system_audio());
+        assert_eq!(store.read()[RECORDING_SETTINGS]["systemAudio"], false);
+        assert_eq!(store.read()[RECORDING_SETTINGS]["micName"], "Desk");
+        drop(store);
+
+        let _store = TempStore::new(
+            "recording-inputs-system-audio-malformed",
+            Some(r#"{"recording_settings":{"systemAudio":"yes"}}"#),
+        );
+        assert!(!recording_system_audio());
     }
 
     #[test]
