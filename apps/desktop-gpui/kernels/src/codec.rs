@@ -226,7 +226,7 @@ mod tests {
             flatten_rgba_to_rgb_over_white(&rgba),
             rgba_to_rgb(&crate::screenshot::flatten_onto_white(&rgba))
         );
-        assert_eq!(flatten_rgba_to_rgb_over_white(&[]), Vec::new());
+        assert_eq!(flatten_rgba_to_rgb_over_white(&[]), Vec::<u8>::new());
         let trailing: [u8; 7] = [10, 20, 30, 40, 50, 60, 70];
         assert_eq!(
             flatten_rgba_to_rgb_over_white(&trailing),
