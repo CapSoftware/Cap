@@ -205,8 +205,10 @@ impl SourceClockState {
     /// frames are moved onto their real timestamp once the next frame shows the
     /// source kept its cadence (the lag did not shrink), instead of being
     /// snapped back a slot for the rest of the recording. A single late frame,
-    /// or a backlog that drains, is still smoothed onto the cadence: sources
-    /// stamped on callback arrival (Windows cameras) report a stall that way.
+    /// or a backlog that drains, is still smoothed onto the cadence. Only for
+    /// sources stamped at capture time: on sources stamped on callback arrival
+    /// (Windows cameras), scheduling jitter can persist for a frame and read as
+    /// a skip.
     pub fn detecting_skipped_frames(mut self) -> Self {
         self.detect_skipped_frames = true;
         self
