@@ -1599,11 +1599,12 @@ impl ProgressiveTimeline {
     }
 
     fn fill_claimable(&self, index: usize) -> bool {
-        match self.block_state(index / self.block_samples) {
-            BLOCK_EMPTY => true,
-            BLOCK_PRIMARY_HEAD => index < self.primary_start,
-            _ => false,
-        }
+        self.primary_covered_until(index) <= index
+            && match self.block_state(index / self.block_samples) {
+                BLOCK_EMPTY => true,
+                BLOCK_PRIMARY_HEAD => index < self.primary_start,
+                _ => false,
+            }
     }
 
     fn primary_covered_until(&self, index: usize) -> usize {
@@ -1688,7 +1689,7 @@ impl ProgressiveTimeline {
         loop {
             let next = match current {
                 BLOCK_EMPTY if head => BLOCK_PRIMARY_HEAD,
-                BLOCK_EMPTY => BLOCK_PRIMARY,
+                BLOCK_EMPTY | BLOCK_PRIMARY_HEAD if !head => BLOCK_PRIMARY,
                 BLOCK_FILLED | BLOCK_HEAD_FILLED => BLOCK_PRIMARY_OVER_FILL,
                 BLOCK_FILL_WRITING | BLOCK_HEAD_FILL_WRITING => {
                     std::thread::yield_now();
@@ -5038,6 +5039,10 @@ mod tests {
                     assert!(buffer.wait_until_ready(std::time::Duration::from_secs(30)));
                     let timeline = progressive_timeline(&buffer);
                     let played = read_everything(&mut buffer);
+                    assert!(
+                        (0..timeline.content_end).all(|index| !timeline.fill_claimable(index)),
+                        "{context}: a finished render must leave nothing for a seek fill"
+                    );
                     assert!(
                         timeline.blocks.iter().all(|state| !matches!(
                             state.load(Ordering::Acquire),
