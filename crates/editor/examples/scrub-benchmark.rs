@@ -47,6 +47,7 @@ async fn sweep(
     let interval = Duration::from_secs_f64(1.0 / MOUSE_HZ);
     let started = Instant::now();
     let mut presented = Vec::new();
+    let mut last_send = started;
 
     for step in 0..=steps {
         let progress = step as f64 / steps as f64;
@@ -54,15 +55,16 @@ async fn sweep(
         editor
             .preview_tx
             .send_modify(|value| *value = Some((frame, FPS, resolution)));
-        let deadline = started + interval * (step as u32 + 1);
+        last_send = Instant::now();
         while let Ok(event) = frames_rx.try_recv() {
             presented.push(event);
         }
-        tokio::time::sleep_until(deadline.into()).await;
+        if step < steps {
+            let deadline = started + interval * (step as u32 + 1);
+            tokio::time::sleep_until(deadline.into()).await;
+        }
     }
 
-    let last_send = Instant::now();
-    let presented_during_drag = presented.len();
     let settle_ms = loop {
         match frames_rx.recv_timeout(Duration::from_secs(10)) {
             Ok((at, frame)) => {
@@ -75,9 +77,11 @@ async fn sweep(
         }
     };
 
+    let during_drag = || presented.iter().filter(|(at, _)| *at <= last_send);
+    let presented_during_drag = during_drag().count();
     let mut longest_gap = Duration::ZERO;
     let mut previous = started;
-    for (at, _) in presented.iter().filter(|(at, _)| *at <= last_send) {
+    for (at, _) in during_drag() {
         longest_gap = longest_gap.max(at.saturating_duration_since(previous));
         previous = *at;
     }

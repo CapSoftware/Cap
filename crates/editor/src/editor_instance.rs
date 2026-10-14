@@ -29,7 +29,7 @@ pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
-type PreviewRequest = Option<(u32, u32, XY<u32>)>;
+type PreviewRequest = Option<PreviewFrameInstruction>;
 
 // A scrub sends a new request faster than a seek can decode. Abandoning the
 // in-flight frame for every newer request starves the preview until the mouse
