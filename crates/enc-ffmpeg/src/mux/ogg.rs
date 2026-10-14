@@ -85,13 +85,14 @@ impl OggFile {
         self.finished = true;
 
         let encoder = &mut self.encoder;
-        let flush_result = self
+        let (flush_result, trailer_result) = self
             .output
-            .finish_flush(|output| encoder.flush_to(output))
+            .finish(
+                |output| encoder.flush_to(output),
+                |output: &mut OggOutput, flush_result| (flush_result, output.0.write_trailer()),
+            )
             .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
-        self.output
-            .with_target(|output| output.0.write_trailer())
-            .map_err(FinishError::WriteTrailerFailed)?;
+        trailer_result.map_err(FinishError::WriteTrailerFailed)?;
 
         Ok(flush_result)
     }

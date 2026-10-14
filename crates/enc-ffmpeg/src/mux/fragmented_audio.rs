@@ -144,17 +144,19 @@ impl FragmentedAudioFile {
 
         let has_frames = self.has_frames;
         let encoder = &mut self.encoder;
-        let flush_result = self
+        let (flush_result, trailer_result) = self
             .output
-            .finish_flush(|output| {
-                if has_frames {
-                    encoder.flush_to(output)
-                } else {
-                    Ok(())
-                }
-            })
+            .finish(
+                |output| {
+                    if has_frames {
+                        encoder.flush_to(output)
+                    } else {
+                        Ok(())
+                    }
+                },
+                |output: &mut AudioOutput, flush_result| (flush_result, output.0.write_trailer()),
+            )
             .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
-        let trailer_result = self.output.with_target(|output| output.0.write_trailer());
         finish_result(flush_result, trailer_result)
     }
 }

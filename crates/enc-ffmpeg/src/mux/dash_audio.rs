@@ -1,6 +1,8 @@
 use super::fragment_metadata::read_fragment_metadata;
 use crate::audio::aac::{AACEncoder, AACEncoderError};
-use crate::mux::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
+use crate::mux::segmented_stream::{
+    SegmentCompletedEvent, SegmentMediaType, SegmentSender, notify_segment,
+};
 use crate::mux::write_behind::{AUDIO_BUDGET_BYTES, MuxSink, MuxTarget};
 use cap_media_info::AudioInfo;
 use ffmpeg::{format, frame};
@@ -49,6 +51,7 @@ pub struct DashAudioSegmentEncoder {
     base_path: PathBuf,
     encoder: AACEncoder,
     mux: MuxSink<AudioSegmentMux>,
+    segment_tx: SegmentSender,
 }
 
 struct AudioSegmentMux {
@@ -62,7 +65,7 @@ struct AudioSegmentMux {
 
     frames_since_segment_scan: u32,
 
-    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    segment_tx: SegmentSender,
     init_notified: bool,
 }
 
@@ -230,9 +233,10 @@ impl DashAudioSegmentEncoder {
             current_index: 1,
             completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
-            segment_tx: None,
+            segment_tx: SegmentSender::default(),
             init_notified: false,
         };
+        let segment_tx = mux.segment_tx.clone();
 
         mux.write_in_progress_manifest();
 
@@ -240,6 +244,7 @@ impl DashAudioSegmentEncoder {
             base_path,
             encoder,
             mux: MuxSink::Direct(mux),
+            segment_tx,
         })
     }
 
@@ -256,10 +261,14 @@ impl DashAudioSegmentEncoder {
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
-        self.mux.with_target(|mux| {
-            mux.segment_tx = Some(tx);
-            mux.try_notify_init_segment();
-        });
+        *self
+            .segment_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        if !self.mux.is_write_behind() {
+            self.mux
+                .with_target(AudioSegmentMux::try_notify_init_segment);
+        }
     }
 
     pub fn queue_frame(
@@ -277,14 +286,17 @@ impl DashAudioSegmentEncoder {
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
         let encoder = &mut self.encoder;
-        let flush_result = self
-            .mux
-            .finish_flush(|mux| encoder.flush_to(mux))
+        self.mux
+            .finish(
+                |mux| encoder.flush_to(mux),
+                |mux: &mut AudioSegmentMux, flush_result| {
+                    let flush_result = flush_result.inspect_err(|error| {
+                        tracing::warn!(%error, "Audio encoder flush failed");
+                    });
+                    mux.finish(flush_result)
+                },
+            )
             .map_err(std::io::Error::from)?
-            .inspect_err(|error| {
-                tracing::warn!(%error, "Audio encoder flush failed");
-            });
-        self.mux.with_target(|mux| mux.finish(flush_result))
     }
 
     pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
@@ -327,11 +339,7 @@ impl AudioSegmentMux {
     }
 
     fn notify_segment(&self, event: SegmentCompletedEvent) {
-        if let Some(tx) = &self.segment_tx
-            && let Err(e) = tx.send(event)
-        {
-            tracing::warn!("Failed to send audio segment completed event: {e}");
-        }
+        notify_segment(&self.segment_tx, event);
     }
 
     fn flush_pending_segments(&mut self) {

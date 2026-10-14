@@ -27,6 +27,22 @@ pub struct DiskSpaceWarning {
 
 pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
+/// Shared so a write-behind muxer can install the callback without waiting
+/// for the writer thread, which may be blocked on storage.
+pub(crate) type SegmentSender =
+    Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>>>;
+
+pub(crate) fn notify_segment(sender: &SegmentSender, event: SegmentCompletedEvent) {
+    let sender = sender
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(tx) = sender.as_ref()
+        && let Err(e) = tx.send(event)
+    {
+        tracing::warn!("Failed to send segment completed event: {e}");
+    }
+}
+
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
@@ -78,6 +94,7 @@ pub struct SegmentedVideoEncoder {
 
     encoder: H264Encoder,
     mux: MuxSink<SegmentMux>,
+    segment_tx: SegmentSender,
 
     segment_duration: Duration,
 
@@ -96,7 +113,7 @@ struct SegmentMux {
 
     codec_info: CodecInfo,
 
-    segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
+    segment_tx: SegmentSender,
     init_notified: bool,
     initial_manifest_pending: bool,
 }
@@ -360,15 +377,17 @@ impl SegmentedVideoEncoder {
             completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
             codec_info,
-            segment_tx: None,
+            segment_tx: SegmentSender::default(),
             init_notified: false,
             initial_manifest_pending: true,
         };
+        let segment_tx = mux.segment_tx.clone();
 
         let mut instance = Self {
             base_path,
             encoder,
             mux: MuxSink::Direct(mux),
+            segment_tx,
             segment_duration: config.segment_duration,
             disk_space_callback: None,
         };
@@ -394,10 +413,13 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn set_segment_callback(&mut self, tx: std::sync::mpsc::Sender<SegmentCompletedEvent>) {
-        self.mux.with_target(|mux| {
-            mux.segment_tx = Some(tx);
-            mux.try_notify_init_segment();
-        });
+        *self
+            .segment_tx
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(tx);
+        if !self.mux.is_write_behind() {
+            self.mux.with_target(SegmentMux::try_notify_init_segment);
+        }
     }
 
     /// Whether frames should be queued as CVPixelBuffers via
@@ -443,14 +465,17 @@ impl SegmentedVideoEncoder {
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
         let encoder = &mut self.encoder;
-        let flush_result = self
-            .mux
-            .finish_flush(|mux| encoder.flush_to(mux))
+        self.mux
+            .finish(
+                |mux| encoder.flush_to(mux),
+                |mux: &mut SegmentMux, flush_result| {
+                    let flush_result = flush_result.inspect_err(|error| {
+                        tracing::warn!(%error, "Video encoder flush failed");
+                    });
+                    mux.finish(flush_result)
+                },
+            )
             .map_err(std::io::Error::from)?
-            .inspect_err(|error| {
-                tracing::warn!(%error, "Video encoder flush failed");
-            });
-        self.mux.with_target(|mux| mux.finish(flush_result))
     }
 
     pub fn finish_with_timestamp(&mut self, _timestamp: Duration) -> Result<(), FinishError> {
@@ -545,11 +570,7 @@ impl SegmentMux {
     }
 
     fn notify_segment(&self, event: SegmentCompletedEvent) {
-        if let Some(tx) = &self.segment_tx
-            && let Err(e) = tx.send(event)
-        {
-            tracing::warn!("Failed to send segment completed event: {e}");
-        }
+        notify_segment(&self.segment_tx, event);
     }
 
     fn flush_pending_segments(&mut self) {
@@ -999,6 +1020,28 @@ mod tests {
         assert_eq!(manifest["is_complete"], false);
         assert_eq!(manifest["segments"][0]["index"], 1);
         drop(encoder);
+    }
+
+    #[test]
+    fn write_behind_segment_callback_does_not_wait_for_stalled_storage() {
+        ffmpeg::init().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        encoder.mux.drain();
+        let stall = encoder.mux.stall_storage_for(Duration::from_millis(800));
+        let started = std::time::Instant::now();
+        let (tx, _rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        encoder
+            .queue_frame(create_test_frame(320, 240), Duration::ZERO)
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(400));
+        stall.join().unwrap();
     }
 
     #[test]

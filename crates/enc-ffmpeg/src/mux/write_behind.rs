@@ -8,16 +8,16 @@
 //! budget; once it is full the producer blocks until the writer catches up,
 //! which is the inline behaviour.
 //!
-//! Finishing drains the queue while storage keeps making progress, bounded
-//! by [`DRAIN_NO_PROGRESS_LIMIT`] without a completed write and
-//! [`DRAIN_TOTAL_LIMIT`] overall. Past the total limit the unwritten tail is
-//! discarded and the output is finalized normally ([`DrainOutcome::Truncated`]).
-//! When no write completes for the no-progress limit, finishing returns
-//! [`DrainOutcome::Stuck`] without the trailer or final manifest, leaving the
-//! files in the state recovery expects from an interrupted recording. As with
-//! an encoder blocked in an inline write, the queued packets still reach disk
-//! once storage recovers. Dropping a writer that was never finished discards
-//! its queue instead and touches nothing after its current call returns.
+//! Finishing is one bounded operation: the writer drains the queue, then
+//! runs the finalization (trailer, final manifest) itself. When storage is
+//! still accepting writes after [`FINISH_DRAIN_LIMIT`], the packets still
+//! queued are discarded so finalization can start. If finalization has not
+//! completed within [`FINISH_LIMIT`], finishing
+//! returns [`StorageStalled`]: finalization is cancelled, the files keep the
+//! state recovery expects from an interrupted recording, and the packets
+//! still queued reach disk once storage recovers, as they would from an
+//! encoder blocked in an inline write. Dropping a writer that was never
+//! finished discards its queue and touches nothing after its current call.
 
 use crate::base::PacketSink;
 use ffmpeg::{Packet, Rational, format};
@@ -26,6 +26,7 @@ use std::{
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -39,10 +40,11 @@ pub(crate) const AUDIO_BUDGET_BYTES: usize = 16 * 1024 * 1024;
 const STALL_LOG_THRESHOLD: Duration = Duration::from_secs(1);
 const WRITE_ERROR_LOG_INTERVAL: u64 = 100;
 // Muxers join their encoder thread for up to 5 s before finishing, and an
-// unjoined pipeline stop gives up after 10 s; draining for at most 4 s keeps
-// the trailer and manifest inside that window.
-pub(crate) const DRAIN_NO_PROGRESS_LIMIT: Duration = Duration::from_secs(4);
-pub(crate) const DRAIN_TOTAL_LIMIT: Duration = Duration::from_secs(4);
+// unjoined pipeline stop gives up after 10 s; finishing within 4 s keeps the
+// whole stop inside that window.
+pub(crate) const FINISH_DRAIN_LIMIT: Duration = Duration::from_secs(3);
+pub(crate) const FINISH_LIMIT: Duration = Duration::from_secs(4);
+const STORAGE_MOVING_WINDOW: Duration = Duration::from_secs(1);
 const DROP_JOIN_LIMIT: Duration = Duration::from_millis(250);
 const WAIT_POLL: Duration = Duration::from_millis(50);
 
@@ -98,13 +100,6 @@ impl From<StorageStalled> for ffmpeg::Error {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DrainOutcome {
-    Complete,
-    Truncated { packets: usize, bytes: usize },
-    Stuck,
-}
-
 pub(crate) enum MuxSink<M: MuxTarget> {
     Direct(M),
     Behind(WriteBehind<M>),
@@ -123,7 +118,7 @@ impl<M: MuxTarget> MuxSink<M> {
         let Self::Direct(target) = std::mem::replace(self, Self::Detached) else {
             unreachable!("checked above");
         };
-        match WriteBehind::spawn(label, target, budget, DrainLimits::DEFAULT) {
+        match WriteBehind::spawn(label, target, budget, FinishLimits::DEFAULT) {
             Ok(writer) => {
                 *self = Self::Behind(writer);
                 Ok(())
@@ -161,37 +156,24 @@ impl<M: MuxTarget> MuxSink<M> {
         }
     }
 
-    /// Marks the following packets as the end-of-stream flush: they bypass
-    /// the budget and their write errors are reported by [`Self::close`],
-    /// as an inline flush would report them.
-    pub fn begin_finish(&mut self) {
+    /// Runs the encoder's end-of-stream `flush` into this sink, then
+    /// `finalize` with the flush result, which also carries write errors of
+    /// the end-of-stream packets as an inline flush would. With write-behind
+    /// both run within [`FINISH_LIMIT`]; `Err` means storage stalled and the
+    /// output was left unfinalized.
+    pub fn finish<R: Send + 'static>(
+        &mut self,
+        flush: impl FnOnce(&mut Self) -> Result<(), ffmpeg::Error>,
+        finalize: impl FnOnce(&mut M, Result<(), ffmpeg::Error>) -> R + Send + 'static,
+    ) -> Result<R, StorageStalled> {
         if let Self::Behind(writer) = self {
             writer.begin_finish();
         }
-    }
-
-    /// Drains the queued packets within the drain limits. An `Err` is the
-    /// first write error among the end-of-stream packets.
-    pub fn close(&mut self) -> Result<DrainOutcome, ffmpeg::Error> {
-        match self {
-            Self::Behind(writer) => writer.close(),
-            Self::Direct(_) | Self::Detached => Ok(DrainOutcome::Complete),
-        }
-    }
-
-    /// Runs the encoder's end-of-stream `flush` into this sink and drains
-    /// the writer. `Err` means storage stalled: the output was abandoned and
-    /// must not be finalized.
-    pub fn finish_flush(
-        &mut self,
-        flush: impl FnOnce(&mut Self) -> Result<(), ffmpeg::Error>,
-    ) -> Result<Result<(), ffmpeg::Error>, StorageStalled> {
-        self.begin_finish();
         let flush_result = flush(self);
-        match self.close() {
-            Ok(DrainOutcome::Stuck) => Err(StorageStalled),
-            Ok(DrainOutcome::Complete | DrainOutcome::Truncated { .. }) => Ok(flush_result),
-            Err(error) => Ok(flush_result.and(Err(error))),
+        match self {
+            Self::Direct(target) => Ok(finalize(target, flush_result)),
+            Self::Behind(writer) => writer.finish(flush_result, finalize),
+            Self::Detached => unreachable!("mux sink detached"),
         }
     }
 
@@ -200,6 +182,22 @@ impl<M: MuxTarget> MuxSink<M> {
         if let Self::Behind(writer) = self {
             writer.drain();
         }
+    }
+
+    #[cfg(test)]
+    pub fn stall_storage_for(&self, duration: Duration) -> std::thread::JoinHandle<()> {
+        let Self::Behind(writer) = self else {
+            panic!("write-behind not enabled");
+        };
+        let shared = writer.shared.clone();
+        let (held_tx, held_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _held = lock(&shared.target);
+            held_tx.send(()).unwrap();
+            std::thread::sleep(duration);
+        });
+        held_rx.recv().unwrap();
+        handle
     }
 }
 
@@ -222,34 +220,42 @@ impl<M: MuxTarget> PacketSink for MuxSink<M> {
 }
 
 #[derive(Clone, Copy)]
-struct DrainLimits {
-    no_progress: Duration,
+struct FinishLimits {
+    drain: Duration,
     total: Duration,
 }
 
-impl DrainLimits {
+impl FinishLimits {
     const DEFAULT: Self = Self {
-        no_progress: DRAIN_NO_PROGRESS_LIMIT,
-        total: DRAIN_TOTAL_LIMIT,
+        drain: FINISH_DRAIN_LIMIT,
+        total: FINISH_LIMIT,
     };
 }
 
-struct Queue {
-    packets: VecDeque<(Packet, bool)>,
+type Finalizer<M> = Box<dyn FnOnce(&mut M, Result<(), ffmpeg::Error>) + Send>;
+
+enum Job<M> {
+    Packet { packet: Packet, end_of_stream: bool },
+    Finalize(Finalizer<M>),
+}
+
+struct Queue<M> {
+    jobs: VecDeque<Job<M>>,
     bytes: usize,
     in_flight: bool,
     closed: bool,
     finishing: bool,
     exited: bool,
-    completed_writes: u64,
+    last_write_completed: Option<Instant>,
     write_errors: u64,
-    final_error: Option<ffmpeg::Error>,
+    end_of_stream_error: Option<ffmpeg::Error>,
 }
 
 struct Shared<M> {
-    queue: Mutex<Queue>,
+    queue: Mutex<Queue<M>>,
     changed: Condvar,
     abandoned: AtomicBool,
+    finalize_cancelled: AtomicBool,
     target: Mutex<M>,
 }
 
@@ -260,24 +266,39 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl<M> Shared<M> {
-    fn wait<'a>(&self, queue: MutexGuard<'a, Queue>, timeout: Duration) -> MutexGuard<'a, Queue> {
+    fn wait<'a>(
+        &self,
+        queue: MutexGuard<'a, Queue<M>>,
+        timeout: Duration,
+    ) -> MutexGuard<'a, Queue<M>> {
         self.changed
             .wait_timeout(queue, timeout)
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .0
     }
 
-    fn abandon(&self, queue: &mut Queue) -> (usize, usize) {
-        self.abandoned.store(true, Ordering::Release);
-        let packets = queue.packets.len();
-        let bytes = queue
-            .packets
-            .drain(..)
-            .map(|(packet, _)| packet.size())
-            .sum::<usize>();
+    fn discard_packets(&self, queue: &mut Queue<M>) -> (usize, usize) {
+        let mut packets = 0;
+        let mut bytes = 0;
+        queue.jobs.retain(|job| match job {
+            Job::Packet { packet, .. } => {
+                packets += 1;
+                bytes += packet.size();
+                false
+            }
+            Job::Finalize(_) => true,
+        });
         queue.bytes -= bytes;
         self.changed.notify_all();
         (packets, bytes)
+    }
+
+    fn abandon(&self, queue: &mut Queue<M>) {
+        self.abandoned.store(true, Ordering::Release);
+        self.finalize_cancelled.store(true, Ordering::Release);
+        queue.jobs.clear();
+        queue.bytes = 0;
+        self.changed.notify_all();
     }
 }
 
@@ -286,7 +307,7 @@ pub(crate) struct WriteBehind<M: MuxTarget> {
     time_bases: Vec<Rational>,
     budget: usize,
     label: &'static str,
-    limits: DrainLimits,
+    limits: FinishLimits,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -295,7 +316,7 @@ impl<M: MuxTarget> WriteBehind<M> {
         label: &'static str,
         target: M,
         budget: usize,
-        limits: DrainLimits,
+        limits: FinishLimits,
     ) -> Result<Self, (M, std::io::Error)> {
         let time_bases = target
             .output()
@@ -304,18 +325,19 @@ impl<M: MuxTarget> WriteBehind<M> {
             .collect();
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue {
-                packets: VecDeque::new(),
+                jobs: VecDeque::new(),
                 bytes: 0,
                 in_flight: false,
                 closed: false,
                 finishing: false,
                 exited: false,
-                completed_writes: 0,
+                last_write_completed: None,
                 write_errors: 0,
-                final_error: None,
+                end_of_stream_error: None,
             }),
             changed: Condvar::new(),
             abandoned: AtomicBool::new(false),
+            finalize_cancelled: AtomicBool::new(false),
             target: Mutex::new(target),
         });
         let spawned = std::thread::Builder::new()
@@ -377,8 +399,11 @@ impl<M: MuxTarget> WriteBehind<M> {
             queue = self.shared.wait(queue, WAIT_POLL);
         }
         queue.bytes += size;
-        let final_packet = queue.finishing;
-        queue.packets.push_back((packet, final_packet));
+        let end_of_stream = queue.finishing;
+        queue.jobs.push_back(Job::Packet {
+            packet,
+            end_of_stream,
+        });
         drop(queue);
         self.shared.changed.notify_all();
 
@@ -396,56 +421,73 @@ impl<M: MuxTarget> WriteBehind<M> {
     #[cfg(test)]
     fn drain(&self) {
         let mut queue = lock(&self.shared.queue);
-        while (!queue.packets.is_empty() || queue.in_flight) && !queue.exited {
+        while (!queue.jobs.is_empty() || queue.in_flight) && !queue.exited {
             queue = self.shared.wait(queue, WAIT_POLL);
         }
     }
 
-    fn close(&mut self) -> Result<DrainOutcome, ffmpeg::Error> {
+    fn finish<R: Send + 'static>(
+        &mut self,
+        flush_result: Result<(), ffmpeg::Error>,
+        finalize: impl FnOnce(&mut M, Result<(), ffmpeg::Error>) -> R + Send + 'static,
+    ) -> Result<R, StorageStalled> {
         let Some(thread) = self.thread.take() else {
-            return Ok(DrainOutcome::Complete);
+            return Err(StorageStalled);
         };
-        let started = Instant::now();
-        let mut last_progress = started;
-        let mut queue = lock(&self.shared.queue);
-        queue.closed = true;
+        let (result_tx, result_rx) = mpsc::sync_channel(1);
+        {
+            let mut queue = lock(&self.shared.queue);
+            queue
+                .jobs
+                .push_back(Job::Finalize(Box::new(move |target, end_of_stream| {
+                    let _ = result_tx.send(finalize(target, flush_result.and(end_of_stream)));
+                })));
+            queue.closed = true;
+        }
         self.shared.changed.notify_all();
-        let mut seen_writes = queue.completed_writes;
-        let mut truncated = None;
-        while !queue.exited {
-            if queue.completed_writes != seen_writes {
-                seen_writes = queue.completed_writes;
-                last_progress = Instant::now();
+
+        let started = Instant::now();
+        let mut truncated = false;
+        loop {
+            match result_rx.recv_timeout(WAIT_POLL) {
+                Ok(result) => {
+                    let _ = thread.join();
+                    return Ok(result);
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = thread.join();
+                    tracing::error!(writer = self.label, "Output writer exited before finishing");
+                    return Err(StorageStalled);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            if last_progress.elapsed() >= self.limits.no_progress {
+            let storage_moving = lock(&self.shared.queue)
+                .last_write_completed
+                .is_some_and(|completed| completed.elapsed() < STORAGE_MOVING_WINDOW);
+            if !truncated && storage_moving && started.elapsed() >= self.limits.drain {
+                truncated = true;
+                let (packets, bytes) = self.shared.discard_packets(&mut lock(&self.shared.queue));
+                if packets > 0 {
+                    tracing::warn!(
+                        writer = self.label,
+                        discarded_packets = packets,
+                        discarded_bytes = bytes,
+                        "Output storage too slow to drain the write-behind buffer; finishing without its tail"
+                    );
+                }
+            }
+            if started.elapsed() >= self.limits.total {
+                self.shared
+                    .finalize_cancelled
+                    .store(true, Ordering::Release);
+                let queue = lock(&self.shared.queue);
                 tracing::error!(
                     writer = self.label,
-                    stalled_ms = last_progress.elapsed().as_millis() as u64,
-                    queued_packets = queue.packets.len(),
                     queued_bytes = queue.bytes,
-                    "Output storage made no progress while finishing; leaving the recording for recovery and writing the buffer once storage recovers"
+                    "Output storage stalled while finishing; leaving the recording for recovery and writing the buffer once storage recovers"
                 );
-                return Ok(DrainOutcome::Stuck);
+                return Err(StorageStalled);
             }
-            if truncated.is_none() && started.elapsed() >= self.limits.total {
-                let (packets, bytes) = self.shared.abandon(&mut queue);
-                tracing::warn!(
-                    writer = self.label,
-                    discarded_packets = packets,
-                    discarded_bytes = bytes,
-                    "Output storage too slow to drain the write-behind buffer; finishing without its tail"
-                );
-                truncated = Some(DrainOutcome::Truncated { packets, bytes });
-            }
-            queue = self.shared.wait(queue, WAIT_POLL);
-        }
-        let final_error = queue.final_error.take();
-        drop(queue);
-        let panicked = thread.join().is_err();
-        match final_error {
-            Some(error) => Err(error),
-            None if panicked => Err(ffmpeg::Error::Bug),
-            None => Ok(truncated.unwrap_or(DrainOutcome::Complete)),
         }
     }
 }
@@ -497,7 +539,7 @@ fn run_writer<M: MuxTarget>(shared: &Shared<M>, label: &'static str) {
                 if shared.abandoned.load(Ordering::Acquire) {
                     break None;
                 }
-                if let Some(next) = queue.packets.pop_front() {
+                if let Some(next) = queue.jobs.pop_front() {
                     queue.in_flight = true;
                     break Some(next);
                 }
@@ -510,8 +552,26 @@ fn run_writer<M: MuxTarget>(shared: &Shared<M>, label: &'static str) {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
-        let Some((packet, final_packet)) = next else {
+        let Some(job) = next else {
             return;
+        };
+
+        let (packet, end_of_stream) = match job {
+            Job::Packet {
+                packet,
+                end_of_stream,
+            } => (packet, end_of_stream),
+            Job::Finalize(finalize) => {
+                let end_of_stream_error = lock(&shared.queue).end_of_stream_error.take();
+                let mut target = lock(&shared.target);
+                if !shared.finalize_cancelled.load(Ordering::Acquire) {
+                    finalize(&mut target, end_of_stream_error.map_or(Ok(()), Err));
+                }
+                drop(target);
+                lock(&shared.queue).in_flight = false;
+                shared.changed.notify_all();
+                continue;
+            }
         };
 
         let size = packet.size();
@@ -532,13 +592,13 @@ fn run_writer<M: MuxTarget>(shared: &Shared<M>, label: &'static str) {
 
         let (backlog, error_count) = {
             let mut queue = lock(&shared.queue);
-            queue.bytes -= size;
+            queue.bytes = queue.bytes.saturating_sub(size);
             queue.in_flight = false;
-            queue.completed_writes += 1;
+            queue.last_write_completed = Some(Instant::now());
             if let Some(Err(error)) = &result {
                 queue.write_errors += 1;
-                if final_packet && queue.final_error.is_none() {
-                    queue.final_error = Some(*error);
+                if end_of_stream && queue.end_of_stream_error.is_none() {
+                    queue.end_of_stream_error = Some(*error);
                 }
             }
             (queue.bytes, queue.write_errors)
@@ -625,7 +685,7 @@ mod tests {
         packet
     }
 
-    fn behind(target: NutTarget, budget: usize, limits: DrainLimits) -> MuxSink<NutTarget> {
+    fn behind(target: NutTarget, budget: usize, limits: FinishLimits) -> MuxSink<NutTarget> {
         MuxSink::Behind(
             WriteBehind::spawn("test", target, budget, limits)
                 .ok()
@@ -644,6 +704,17 @@ mod tests {
         let path = directory.join("header-only.nut");
         drop(nut_target(&path));
         std::fs::metadata(path).unwrap().len()
+    }
+
+    fn finish_with_trailer(sink: &mut MuxSink<NutTarget>) -> Result<(), ffmpeg::Error> {
+        sink.finish(
+            |_| Ok(()),
+            |target, result| {
+                target.output.write_trailer().unwrap();
+                result
+            },
+        )
+        .unwrap()
     }
 
     fn written_pts(path: &std::path::Path) -> Vec<i64> {
@@ -671,8 +742,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
         drop(stalled);
 
-        assert_eq!(sink.close(), Ok(DrainOutcome::Complete));
-        sink.with_target(|target| target.output.write_trailer().unwrap());
+        finish_with_trailer(&mut sink).unwrap();
         assert_eq!(
             written_pts(&path),
             (0..64).map(|pts| pts * 1024).collect::<Vec<_>>()
@@ -699,7 +769,7 @@ mod tests {
         drop(stalled);
         let (mut sink, waited) = producer.join().unwrap();
         assert!(waited >= Duration::from_millis(250));
-        assert_eq!(sink.close(), Ok(DrainOutcome::Complete));
+        finish_with_trailer(&mut sink).unwrap();
     }
 
     #[test]
@@ -708,7 +778,7 @@ mod tests {
         let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
         sink.enable_write_behind("test", 1024).unwrap();
         sink.write_packet(packet(0, 4096)).unwrap();
-        assert_eq!(sink.close(), Ok(DrainOutcome::Complete));
+        finish_with_trailer(&mut sink).unwrap();
     }
 
     #[test]
@@ -722,11 +792,17 @@ mod tests {
         sink.write_packet(invalid_packet(1024)).unwrap();
         sink.drain();
         sink.write_packet(packet(2048, 64)).unwrap();
-        sink.begin_finish();
-        sink.write_packet(packet(3072, 64)).unwrap();
+        let result = sink
+            .finish(
+                |sink| sink.write_packet(packet(3072, 64)),
+                |target, result| {
+                    target.output.write_trailer().unwrap();
+                    result
+                },
+            )
+            .unwrap();
 
-        assert_eq!(sink.close(), Ok(DrainOutcome::Complete));
-        sink.with_target(|target| target.output.write_trailer().unwrap());
+        assert_eq!(result, Ok(()));
         assert_eq!(written_pts(&path), vec![0, 2048, 3072]);
     }
 
@@ -736,24 +812,28 @@ mod tests {
         let mut sink = MuxSink::Direct(nut_target(&directory.path().join("out.nut")));
         sink.enable_write_behind("test", 1 << 20).unwrap();
         sink.write_packet(packet(0, 64)).unwrap();
-        sink.begin_finish();
-        sink.write_packet(invalid_packet(1024)).unwrap();
-        assert!(sink.close().is_err());
+        let result = sink
+            .finish(
+                |sink| sink.write_packet(invalid_packet(1024)),
+                |_, result| result,
+            )
+            .unwrap();
+        assert!(result.is_err());
     }
 
     #[test]
-    fn finish_returns_on_stuck_storage_and_keeps_the_buffer_for_when_it_recovers() {
+    fn stalled_finish_returns_in_time_and_keeps_the_buffer_for_when_storage_recovers() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("out.nut");
         let packets = 8usize;
         let packet_size = 64 * 1024;
+        let finalized = Arc::new(AtomicBool::new(false));
         {
-            let target = nut_target(&path);
-            let limits = DrainLimits {
-                no_progress: Duration::from_millis(200),
-                total: Duration::from_secs(30),
+            let limits = FinishLimits {
+                drain: Duration::from_millis(100),
+                total: Duration::from_millis(300),
             };
-            let mut sink = behind(target, 1 << 20, limits);
+            let mut sink = behind(nut_target(&path), 1 << 20, limits);
             let shared = shared(&sink);
             let stalled = lock(&shared.target);
             for pts in 0..packets {
@@ -761,8 +841,13 @@ mod tests {
                     .unwrap();
             }
             let started = Instant::now();
-            assert_eq!(sink.close(), Ok(DrainOutcome::Stuck));
-            assert!(started.elapsed() < Duration::from_secs(2));
+            let finalized_flag = finalized.clone();
+            let result = sink.finish(
+                |_| Ok(()),
+                move |_, _| finalized_flag.store(true, Ordering::Release),
+            );
+            assert_eq!(result, Err(StorageStalled));
+            assert!(started.elapsed() < Duration::from_secs(1));
             drop(sink);
             drop(stalled);
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -771,6 +856,7 @@ mod tests {
             }
             assert_eq!(Arc::strong_count(&shared), 1);
         }
+        assert!(!finalized.load(Ordering::Acquire));
         assert!(
             std::fs::metadata(&path).unwrap().len()
                 >= header_only_len(directory.path()) + (packets * packet_size) as u64
@@ -778,38 +864,62 @@ mod tests {
     }
 
     #[test]
-    fn slow_storage_drains_within_the_total_limit_then_finishes_without_the_tail() {
+    fn slow_storage_finishes_without_the_tail_within_the_limit() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("out.nut");
         let mut target = nut_target(&path);
         target.write_delay = Duration::from_millis(60);
-        let limits = DrainLimits {
-            no_progress: Duration::from_secs(2),
-            total: Duration::from_millis(300),
+        let limits = FinishLimits {
+            drain: Duration::from_millis(300),
+            total: Duration::from_secs(2),
         };
         let mut sink = behind(target, 1 << 20, limits);
         for pts in 0..40 {
             sink.write_packet(packet(pts * 1024, 64)).unwrap();
         }
         let started = Instant::now();
-        let outcome = sink.close().unwrap();
+        let result = sink
+            .finish(
+                |_| Ok(()),
+                |target, result| {
+                    target.write_delay = Duration::ZERO;
+                    target.output.write_trailer().unwrap();
+                    result
+                },
+            )
+            .unwrap();
+        assert_eq!(result, Ok(()));
         assert!(started.elapsed() < Duration::from_secs(2));
-        let DrainOutcome::Truncated { packets, .. } = outcome else {
-            panic!("expected a truncated drain, got {outcome:?}");
-        };
-        assert!(packets > 0);
-        sink.with_target(|target| {
-            target.write_delay = Duration::ZERO;
-            target.output.write_trailer().unwrap();
-        });
         let pts = written_pts(&path);
-        assert_eq!(pts.len() + packets, 40);
+        assert!(!pts.is_empty() && pts.len() < 40);
         assert_eq!(
             pts,
             (0..pts.len() as i64)
                 .map(|pts| pts * 1024)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn slow_finalization_counts_against_the_finish_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let limits = FinishLimits {
+            drain: Duration::from_millis(100),
+            total: Duration::from_millis(300),
+        };
+        let mut sink = behind(
+            nut_target(&directory.path().join("out.nut")),
+            1 << 20,
+            limits,
+        );
+        sink.write_packet(packet(0, 64)).unwrap();
+        let started = Instant::now();
+        let result = sink.finish(
+            |_| Ok(()),
+            |_, _| std::thread::sleep(Duration::from_secs(1)),
+        );
+        assert_eq!(result, Err(StorageStalled));
+        assert!(started.elapsed() < Duration::from_millis(900));
     }
 
     #[test]
@@ -862,7 +972,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut target = nut_target(&directory.path().join("out.nut"));
         target.panic_on_write = true;
-        let mut sink = behind(target, 1 << 20, DrainLimits::DEFAULT);
+        let mut sink = behind(target, 1 << 20, FinishLimits::DEFAULT);
         sink.write_packet(packet(0, 64)).unwrap();
         let shared = shared(&sink);
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -870,7 +980,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(sink.write_packet(packet(1024, 64)), Err(ffmpeg::Error::Bug));
-        assert_eq!(sink.close(), Err(ffmpeg::Error::Bug));
+        assert_eq!(
+            sink.finish(|_| Ok(()), |_, result| result),
+            Err(StorageStalled)
+        );
     }
 
     #[test]
