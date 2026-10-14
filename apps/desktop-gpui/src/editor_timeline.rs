@@ -33,6 +33,9 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
+mod markings_benchmark;
+
 mod playback_follow;
 
 pub use playback_follow::PlaybackFollow;
@@ -2726,6 +2729,9 @@ fn render_clip_markings(
             continue;
         }
         let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
+        if x + 1.0 <= 0.0 || x >= width {
+            continue;
+        }
         let radius = SEGMENT_RADIUS.min(width / 2.).min(height / 2.);
         let inset = rounded_corner_inset(f64::from(x), f64::from(width), f64::from(radius)).max(
             rounded_corner_inset(f64::from(x + 1.), f64::from(width), f64::from(radius)),
