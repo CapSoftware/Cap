@@ -2394,10 +2394,10 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             timeline: timeline.clone(),
         });
 
+        let reader = Self::reader(render, sample_rate, channels, start_playhead_secs);
         spawn_seek_fill(timeline.clone(), job.clone());
         spawn_primary_render(timeline, job, pass1_start_secs, release);
-
-        Self::reader(render, sample_rate, channels, start_playhead_secs)
+        reader
     }
 
     fn attach(
@@ -2407,7 +2407,6 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     ) -> Self {
         let sample_rate = job.render_info.sample_rate;
         let channels = job.render_info.channels;
-        render.timeline.readers.fetch_add(1, Ordering::AcqRel);
         let reader = Self::reader(render, sample_rate, channels, start_playhead_secs);
         let timeline = &reader.render.timeline;
         if !timeline.is_ready(reader.ready_from, reader.ready_to) {
@@ -2423,6 +2422,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                 serve_from: reader.ready_from,
             });
         }
+        timeline.readers.fetch_add(1, Ordering::AcqRel);
         timeline.resume.notify_one();
         timeline.wake_fill();
         reader
