@@ -94,7 +94,7 @@ export async function previewSeatChange(
 	newQuantity: number,
 ) {
 	validateQuantity(newQuantity);
-	const { owner, subscription, subscriptionItem, proSeatsUsed } =
+	const { owner, subscriptionItem, proSeatsUsed } =
 		await getOwnerSubscription(organizationId);
 	const customerId = owner.stripeCustomerId;
 	const subscriptionId = owner.stripeSubscriptionId;
@@ -113,35 +113,37 @@ export async function previewSeatChange(
 
 	// Decreases don't prorate: the current period stays fully paid and no
 	// credit is issued, so the preview must not advertise one.
-	const previewParams = {
+	const preview = await stripe().invoices.createPreview({
 		customer: customerId,
 		subscription: subscriptionId,
-		subscription_items: [
-			{
-				id: subscriptionItem.id,
-				quantity: newQuantity,
-			},
-		],
-		subscription_proration_behavior:
-			newQuantity > currentQuantity
-				? ("create_prorations" as const)
-				: ("none" as const),
-	};
-
-	const preview = await stripe().invoices.retrieveUpcoming(previewParams);
+		subscription_details: {
+			items: [
+				{
+					id: subscriptionItem.id,
+					quantity: newQuantity,
+				},
+			],
+			proration_behavior:
+				newQuantity > currentQuantity ? "create_prorations" : "none",
+		},
+	});
 	const previewLines = preview.lines.has_more
 		? await stripe()
-				.invoices.listUpcomingLines(previewParams)
+				.invoices.listLineItems(preview.id)
 				.autoPagingToArray({ limit: 1000 })
 		: preview.lines.data;
 
 	let proratedAmount = previewLines.reduce((total, line) => {
-		if (!line.proration) return total;
+		const isProration =
+			line.parent?.subscription_item_details?.proration ??
+			line.parent?.invoice_item_details?.proration ??
+			false;
+		if (!isProration) return total;
 		return total + line.amount;
 	}, 0);
 
 	if (proratedAmount === 0 && newQuantity !== currentQuantity) {
-		const currentPeriodEnd = subscription.current_period_end;
+		const currentPeriodEnd = subscriptionItem.current_period_end;
 		proratedAmount = previewLines.reduce((total, line) => {
 			if (line.period.end <= currentPeriodEnd) {
 				return total + line.amount;
