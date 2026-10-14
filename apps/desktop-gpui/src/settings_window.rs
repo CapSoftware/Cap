@@ -3230,7 +3230,11 @@ impl SettingsWindow {
 
         self.section(
             "Instant recordings",
-            Some("Uploaded while you record, so the link is ready the moment you stop."),
+            Some(
+                "Uploaded while you record, so the link is ready the moment you stop. For the \
+                 best quality, use Studio mode: it records at the highest quality your screen \
+                 allows, and you can export up to 4K.",
+            ),
             None,
             vec![self.rows(rows).into_any_element()],
         )

@@ -344,7 +344,7 @@ pub(crate) struct PagesState {
     s3: S3Page,
     gdrive: GDrivePage,
 
-    // Experimental (experimental.tsx). The Native app row's hand-back takes the
+    // Experimental (experimental.tsx). The Developer section's hand-back takes the
     // whole settings window over, so its clock and the ticker that repaints the
     // sequence live here and the overlay renders from the window root.
     switch_back: Option<SwitchBack>,
@@ -2008,10 +2008,10 @@ impl SettingsWindow {
         if dev_supervisor_available() {
             sections.push(
                 self.section(
-                    "Native app",
+                    "Developer",
+                    Some("Only shown in development builds."),
                     None,
-                    None,
-                    vec![self.rows(vec![self.native_app_row(cx)]).into_any_element()],
+                    vec![self.rows(vec![self.classic_app_row(cx)]).into_any_element()],
                 )
                 .into_any_element(),
             );
@@ -2019,15 +2019,16 @@ impl SettingsWindow {
         sections
     }
 
-    /// The dev harness's Native app row: being in this app is what the toggle
-    /// means, and turning it off reopens the classic app under `tauri dev`.
-    fn native_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    /// The dev harness's way back to the classic app: being in this app is what
+    /// the toggle means, and turning it off reopens the classic app under
+    /// `tauri dev`.
+    fn classic_app_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let checked = !matches!(self.pages.switch_back, Some(SwitchBack::Running(_)));
         self.setting_row(
-            "Cap GPUI",
+            "Use native app",
             Some(
-                "You are using the native version of Cap. Turning this off closes it and reopens \
-                 the classic app in the dev harness. Your recordings and settings are shared.",
+                "Turn off to close this app and reopen the classic Tauri app in the dev harness. \
+                 Recordings and settings are shared.",
             ),
             self.toggle("enable-gpui-app", checked, cx, |this, cx| {
                 match this.pages.switch_back {
