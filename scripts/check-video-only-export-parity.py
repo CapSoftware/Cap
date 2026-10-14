@@ -3,6 +3,42 @@ import json
 import subprocess
 from pathlib import Path
 
+ALPHA_READ_BYTES = 64 * 1024
+
+
+def read_alpha_extrema(stream):
+    minimum = None
+    maximum = None
+    while True:
+        chunk = stream.read(ALPHA_READ_BYTES)
+        if not chunk:
+            return minimum, maximum
+        chunk_minimum = min(chunk)
+        chunk_maximum = max(chunk)
+        minimum = chunk_minimum if minimum is None else min(minimum, chunk_minimum)
+        maximum = chunk_maximum if maximum is None else max(maximum, chunk_maximum)
+
+
+def alpha_extrema(path):
+    command = [
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", str(path), "-map", "0:v:0", "-vf", "alphaextract",
+        "-pix_fmt", "gray", "-f", "rawvideo", "-",
+    ]
+    with subprocess.Popen(command, stdout=subprocess.PIPE) as process:
+        try:
+            if process.stdout is None:
+                raise RuntimeError("FFmpeg alpha output pipe was not created")
+            extrema = read_alpha_extrema(process.stdout)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        returncode = process.wait()
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command)
+        return extrema
+
 
 def probe(path):
     raw = subprocess.check_output([
@@ -56,13 +92,9 @@ def main():
         if not alpha_match:
             raise SystemExit("Decoded alpha differs")
         if args.require_visible_alpha:
-            raw_alpha = subprocess.check_output([
-                "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-i", str(args.baseline), "-map", "0:v:0", "-vf", "alphaextract",
-                "-pix_fmt", "gray", "-f", "rawvideo", "-",
-            ])
+            minimum, maximum = alpha_extrema(args.baseline)
             hashes = {line.rsplit(",", 1)[-1].strip() for line in aa}
-            visible_alpha = bool(raw_alpha) and min(raw_alpha) == 0 and max(raw_alpha) > 0 and len(hashes) > 1
+            visible_alpha = minimum == 0 and maximum is not None and maximum > 0 and len(hashes) > 1
             if not visible_alpha:
                 raise SystemExit("Cursor alpha is empty, fully opaque, or static")
     print(json.dumps({"decoded_frame_parity": True, "frames": len(fa),
