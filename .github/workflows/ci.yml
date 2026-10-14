@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   # A cancelled main run never reaches its cache save. Main runs still never
@@ -198,8 +202,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
     runs-on: ${{ matrix.settings.runner }}
-    permissions:
-      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
