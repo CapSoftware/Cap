@@ -3396,8 +3396,8 @@ impl SeekFill {
 mod tests {
     use super::*;
     use cap_project::{
-        ClipConfiguration, ClipTransition, ProjectConfiguration, TimelineConfiguration,
-        TimelineSegment,
+        ClipConfiguration, ClipTransition, ClipTransitionType, ProjectConfiguration,
+        TimelineConfiguration, TimelineSegment,
     };
     use std::{path::Path, sync::Arc};
     use tempfile::TempDir;
@@ -4770,5 +4770,550 @@ mod tests {
         let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
         assert!((left_at_second(&stream, 0) - expected(4_000)).abs() < 0.02);
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
+    }
+
+    struct ProgressiveFixture {
+        _dir: TempDir,
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        music_path: String,
+        project: ProjectConfiguration,
+    }
+
+    impl ProgressiveFixture {
+        fn new(improve: bool) -> Self {
+            let _ = ffmpeg::init();
+            let dir = tempfile::tempdir().unwrap();
+            let mic_path = dir.path().join("mic.wav");
+            let system_path = dir.path().join("system.wav");
+            let music_path = dir.path().join("music.wav");
+            write_sine_wav(&mic_path, 440.0, 8.0);
+            write_sine_wav(&system_path, 220.0, 8.0);
+            write_step_wav(&music_path, &[3_000, 6_000]);
+            let load = |path: &Path| {
+                Arc::new(DecodedAudio::from(Arc::new(
+                    AudioData::from_file(path).unwrap(),
+                )))
+            };
+            let segments = vec![crate::segments::audio_segment_from_decoded(
+                Some(load(&mic_path)),
+                Some(load(&system_path)),
+                crate::SegmentAudioTimingRepair::default(),
+            )];
+            let mut faster = segment(0, 3.0, 6.0, 2.0);
+            faster.speed_audio_mode = Some(ClipSpeedAudioMode::MaintainPitch);
+            let mut quiet = segment(0, 6.0, 8.0, 1.0);
+            quiet.volume = Some(0.5);
+            let mut project = ProjectConfiguration {
+                timeline: Some(TimelineConfiguration {
+                    segments: vec![segment(0, 0.0, 3.0, 1.0), faster, quiet],
+                    transitions: Vec::new(),
+                    zoom_segments: Vec::new(),
+                    scene_segments: Vec::new(),
+                    style_segments: Vec::new(),
+                    image_segments: Vec::new(),
+                    mask_segments: Vec::new(),
+                    text_segments: Vec::new(),
+                    caption_segments: Vec::new(),
+                    keyboard_segments: Vec::new(),
+                    audio_segments: Vec::new(),
+                    camera3d_segments: Vec::new(),
+                }),
+                clips: vec![ClipConfiguration {
+                    index: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            project.audio.improve = improve;
+            let music_path = music_path.to_string_lossy().into_owned();
+            let mut music = MusicTracks::new();
+            music.insert(
+                music_path.clone(),
+                Arc::new(AudioData::from_file(&music_path).unwrap()),
+            );
+            Self {
+                _dir: dir,
+                segments,
+                music,
+                music_path,
+                project,
+            }
+        }
+
+        fn duration(&self) -> f64 {
+            self.project.timeline.as_ref().unwrap().duration()
+        }
+
+        fn buffer(&self, output_info: AudioInfo, start: f64) -> PrerenderedAudioBuffer<f32> {
+            PrerenderedAudioBuffer::new(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+            )
+        }
+
+        fn cached(
+            &self,
+            cache: &PlaybackAudioCache,
+            output_info: AudioInfo,
+            start: f64,
+            updates: Option<watch::Receiver<ProjectConfiguration>>,
+        ) -> PrerenderedAudioBuffer<f32> {
+            PrerenderedAudioBuffer::new_cached(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+                cache,
+                updates,
+            )
+        }
+
+        fn job(&self, output_info: AudioInfo) -> ProgressiveRenderJob {
+            ProgressiveRenderJob {
+                segments: self.segments.clone(),
+                music: self.music.clone(),
+                project: self.project.clone(),
+                render_info: AudioInfo::new_raw(
+                    AudioData::SAMPLE_FORMAT,
+                    output_info.sample_rate,
+                    output_info.channels as u16,
+                ),
+                duration_secs: self.duration(),
+            }
+        }
+
+        fn reference(&self, output_info: AudioInfo, start: f64) -> Vec<f32> {
+            reference_progressive_render(
+                self.segments.clone(),
+                self.music.clone(),
+                &self.project,
+                output_info,
+                self.duration(),
+                start,
+            )
+        }
+    }
+
+    fn output_infos() -> [AudioInfo; 2] {
+        [
+            AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
+            AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 44_100, 2),
+        ]
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reference_pass(
+        out: &mut [f32],
+        renderer: &mut AudioRenderer,
+        project: &ProjectConfiguration,
+        render_info: AudioInfo,
+        start_secs: f64,
+        from_source: usize,
+        to_source: usize,
+        mut out_idx: usize,
+        out_limit: usize,
+    ) {
+        let mut resampler = AudioResampler::new(render_info).unwrap();
+        renderer.set_playhead(start_secs, project);
+        let mut store = |bytes: &[u8], out_idx: &mut usize| {
+            for chunk in bytes.chunks_exact(f32::BYTE_SIZE) {
+                if *out_idx >= out_limit {
+                    break;
+                }
+                out[*out_idx] = f32::from_bytes(chunk);
+                *out_idx += 1;
+            }
+        };
+        let mut rendered = from_source;
+        while rendered < to_source {
+            let frame = match renderer.render_frame(1024, project) {
+                Some(frame) => frame,
+                None => silent_audio_frame(1024),
+            };
+            store(resampler.queue_and_process_frame(&frame), &mut out_idx);
+            rendered += 1024;
+        }
+        while let Some(flushed) = resampler.flush_frame() {
+            if flushed.is_empty() || out_idx >= out_limit {
+                break;
+            }
+            store(flushed, &mut out_idx);
+        }
+    }
+
+    fn reference_progressive_render(
+        segments: Vec<AudioSegment>,
+        music: MusicTracks,
+        project: &ProjectConfiguration,
+        output_info: AudioInfo,
+        duration: f64,
+        start: f64,
+    ) -> Vec<f32> {
+        let output_info = output_info.for_ffmpeg_output();
+        let (rate, channels) = (output_info.sample_rate, output_info.channels);
+        let render_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, rate, channels as u16);
+        let len = progressive_buffer_samples(duration, rate, channels);
+        let mut out = vec![0.0f32; len];
+        let mut renderer = AudioRenderer::new(segments).with_music(music);
+        let pass1_start = (start - 1.0).max(0.0).min(duration);
+        let primary_start = output_sample_index(pass1_start, rate, channels, len);
+        let total = (duration * AudioData::SAMPLE_RATE as f64) as usize;
+        let pass1_source = (pass1_start * AudioData::SAMPLE_RATE as f64) as usize;
+        reference_pass(
+            &mut out,
+            &mut renderer,
+            project,
+            render_info,
+            pass1_start,
+            pass1_source,
+            total,
+            primary_start,
+            len,
+        );
+        if pass1_source > 0 {
+            reference_pass(
+                &mut out,
+                &mut renderer,
+                project,
+                render_info,
+                0.0,
+                0,
+                pass1_source,
+                0,
+                primary_start,
+            );
+        }
+        out
+    }
+
+    fn progressive_timeline(buffer: &PrerenderedAudioBuffer<f32>) -> Arc<ProgressiveTimeline> {
+        let PrerenderedAudioBufferMode::Progressive(progressive) = &buffer.mode else {
+            panic!("expected a progressive buffer");
+        };
+        progressive.render.timeline.clone()
+    }
+
+    fn read_everything(buffer: &mut PrerenderedAudioBuffer<f32>) -> Vec<f32> {
+        buffer.wait_until_fully_rendered();
+        let len = progressive_timeline(buffer).samples.len();
+        buffer.set_playhead(0.0);
+        let mut out = vec![1.0f32; len];
+        buffer.fill(&mut out);
+        out
+    }
+
+    fn assert_bit_identical(actual: &[f32], expected: &[f32], context: &str) {
+        assert_eq!(actual.len(), expected.len(), "{context}");
+        if let Some(index) = actual
+            .iter()
+            .zip(expected)
+            .position(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            panic!(
+                "{context}: sample {index} differs: {} vs {}",
+                actual[index], expected[index]
+            );
+        }
+    }
+
+    #[test]
+    fn unseeked_progressive_playback_is_one_uninterrupted_render() {
+        for improve in [false, true] {
+            let fixture = ProgressiveFixture::new(improve);
+            for output_info in output_infos() {
+                for start in [0.0, 2.7] {
+                    let context = format!(
+                        "improve {improve}, {} Hz, start {start}",
+                        output_info.sample_rate
+                    );
+                    let mut buffer = fixture.buffer(output_info, start);
+                    buffer.set_playhead(start);
+                    assert!(buffer.wait_until_ready(std::time::Duration::from_secs(30)));
+                    let timeline = progressive_timeline(&buffer);
+                    let played = read_everything(&mut buffer);
+                    assert!(
+                        timeline.blocks.iter().all(|state| !matches!(
+                            state.load(Ordering::Acquire),
+                            BLOCK_FILLED | BLOCK_PRIMARY_OVER_FILL | BLOCK_HEAD_FILLED
+                        )),
+                        "{context}: an unseeked play must never run a seek fill"
+                    );
+                    assert_bit_identical(&played, &fixture.reference(output_info, start), &context);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cached_replay_resumes_the_paused_render_bit_identically() {
+        for improve in [false, true] {
+            let fixture = ProgressiveFixture::new(improve);
+            for output_info in output_infos() {
+                let context = format!("improve {improve}, {} Hz", output_info.sample_rate);
+                let cache = PlaybackAudioCache::default();
+                let first = fixture.cached(&cache, output_info, 2.7, None);
+                let timeline = progressive_timeline(&first);
+                drop(first);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+
+                let mut second = fixture.cached(&cache, output_info, 0.4, None);
+                assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&second)));
+                second.set_playhead(0.4);
+                assert!(second.wait_until_ready(std::time::Duration::from_secs(30)));
+                let replayed = read_everything(&mut second);
+                drop(second);
+                assert_bit_identical(&replayed, &fixture.reference(output_info, 2.7), &context);
+
+                let mut fresh = fixture.buffer(output_info, 2.7);
+                assert_bit_identical(&replayed, &read_everything(&mut fresh), &context);
+
+                let mut third = fixture.cached(&cache, output_info, 5.0, None);
+                assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&third)));
+                let third_timeline = progressive_timeline(&third);
+                let ready_from = output_sample_index(
+                    5.0,
+                    output_info.sample_rate,
+                    output_info.channels,
+                    usize::MAX,
+                );
+                assert!(third_timeline.is_ready(ready_from, ready_from + 1));
+                assert_bit_identical(&read_everything(&mut third), &replayed, &context);
+            }
+        }
+    }
+
+    #[test]
+    fn seek_fill_serves_unrendered_audio_like_a_fresh_render() {
+        let fixture = ProgressiveFixture::new(true);
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let job = fixture.job(output_info);
+        let (rate, channels) = (output_info.sample_rate, output_info.channels);
+        let len = progressive_buffer_samples(fixture.duration(), rate, channels);
+        let index = |secs| output_sample_index(secs, rate, channels, len);
+        let window = index(0.25);
+
+        let timeline = Arc::new(ProgressiveTimeline::new(
+            len,
+            index(fixture.duration()),
+            channels,
+            index(fixture.duration()),
+            false,
+        ));
+        spawn_seek_fill(timeline.clone(), job);
+
+        let start = 4.2;
+        let serve_from = index(start);
+        timeline.read_position.store(serve_from, Ordering::Release);
+        *lock(&timeline.fill_request) = Some(FillRequest {
+            start_secs: start - 1.0,
+            write_pos: index(start - 1.0),
+            serve_from,
+        });
+        timeline.wake_fill();
+        assert!(timeline.wait_for(std::time::Duration::from_secs(30), || {
+            timeline.range_readable(serve_from, serve_from + window)
+        }));
+        let fresh = fixture.reference(output_info, start);
+        for (offset, expected) in fresh[serve_from..serve_from + window].iter().enumerate() {
+            let actual =
+                f32::from_bits(timeline.samples[serve_from + offset].load(Ordering::Relaxed));
+            assert_eq!(actual.to_bits(), expected.to_bits(), "sample {offset}");
+        }
+
+        let seek = index(1.3);
+        timeline.read_position.store(seek, Ordering::Release);
+        timeline.request_fill();
+        assert!(timeline.wait_for(std::time::Duration::from_secs(30), || {
+            timeline.range_readable(seek, seek + window)
+        }));
+        assert!(
+            (seek..seek + window).any(|index| f32::from_bits(
+                timeline.samples[index].load(Ordering::Relaxed)
+            ) != 0.0)
+        );
+        timeline.shut_down();
+    }
+
+    #[test]
+    fn seek_fills_are_overwritten_by_the_uninterrupted_render() {
+        let fixture = ProgressiveFixture::new(true);
+        for output_info in output_infos() {
+            let mut buffer = fixture.buffer(output_info, 4.0);
+            buffer.set_playhead(4.0);
+            assert!(buffer.wait_until_ready(std::time::Duration::from_secs(30)));
+            for target in [0.5, 6.0, 1.5] {
+                buffer.set_playhead(target);
+                let mut block = [0.0f32; 1024];
+                buffer.fill(&mut block);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert_bit_identical(
+                &read_everything(&mut buffer),
+                &fixture.reference(output_info, 4.0),
+                &format!("{} Hz", output_info.sample_rate),
+            );
+        }
+    }
+
+    #[test]
+    fn every_audio_change_renders_fresh_and_visual_changes_reuse() {
+        type Edit = fn(&mut ProgressiveFixture);
+        let audio_edits: [(&str, Edit); 12] = [
+            ("mic volume", |f| f.project.audio.mic_volume_db = -6.0),
+            ("system volume", |f| f.project.audio.system_volume_db = -6.0),
+            ("mute", |f| f.project.audio.mute = true),
+            ("studio sound", |f| f.project.audio.improve = true),
+            ("stereo mode", |f| {
+                f.project.audio.mic_stereo_mode = cap_project::StereoMode::MonoL;
+                f.project.audio.mic_volume_db = -1.0;
+            }),
+            ("clip volume", |f| {
+                f.project.timeline.as_mut().unwrap().segments[0].volume = Some(0.25)
+            }),
+            ("speed", |f| {
+                f.project.timeline.as_mut().unwrap().segments[1].timescale = 1.5
+            }),
+            ("speed audio mode", |f| {
+                f.project.timeline.as_mut().unwrap().segments[1].speed_audio_mode =
+                    Some(ClipSpeedAudioMode::MatchSpeed)
+            }),
+            ("trim", |f| {
+                f.project.timeline.as_mut().unwrap().segments[2].end = 7.0
+            }),
+            ("clip offset", |f| f.project.clips[0].offsets.mic = 0.2),
+            ("transition", |f| {
+                f.project.timeline.as_mut().unwrap().transitions = vec![ClipTransition {
+                    segment_index: 1,
+                    kind: ClipTransitionType::CrossFade,
+                    duration: 0.5,
+                }]
+            }),
+            ("music", |f| {
+                let path = f.music_path.clone();
+                f.project.timeline.as_mut().unwrap().audio_segments =
+                    vec![music_track_segment(&path, 0.5, 2.0, 0.0, 0.0)]
+            }),
+        ];
+        let visual_edits: [(&str, Edit); 4] = [
+            ("zoom", |f| {
+                f.project.timeline.as_mut().unwrap().zoom_segments =
+                    vec![cap_project::ZoomSegment {
+                        start: 1.0,
+                        end: 2.0,
+                        amount: 2.0,
+                        mode: cap_project::ZoomMode::Auto,
+                        glide_direction: Default::default(),
+                        glide_speed: 1.0,
+                        instant_animation: false,
+                        edge_snap_ratio: 0.1,
+                    }]
+            }),
+            ("motion blur", |f| f.project.screen_motion_blur = 0.9),
+            ("clip name", |f| {
+                f.project.timeline.as_mut().unwrap().segments[0].name = Some("Intro".into())
+            }),
+            ("hide cursor", |f| {
+                f.project.timeline.as_mut().unwrap().segments[0].hide_cursor = Some(true)
+            }),
+        ];
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+
+        for (name, edit) in audio_edits {
+            let mut fixture = ProgressiveFixture::new(false);
+            let cache = PlaybackAudioCache::default();
+            let mut before = fixture.cached(&cache, output_info, 0.0, None);
+            let before_audio = read_everything(&mut before);
+            let before_timeline = progressive_timeline(&before);
+            drop(before);
+            edit(&mut fixture);
+            let mut after = fixture.cached(&cache, output_info, 0.0, None);
+            assert!(
+                !Arc::ptr_eq(&before_timeline, &progressive_timeline(&after)),
+                "{name} must not reuse the cached render"
+            );
+            let after_audio = read_everything(&mut after);
+            assert_bit_identical(&after_audio, &fixture.reference(output_info, 0.0), name);
+            assert!(
+                before_audio.len() != after_audio.len()
+                    || before_audio
+                        .iter()
+                        .zip(&after_audio)
+                        .any(|(a, b)| a.to_bits() != b.to_bits()),
+                "{name} must change the rendered audio"
+            );
+        }
+
+        for (name, edit) in visual_edits {
+            let mut fixture = ProgressiveFixture::new(false);
+            let cache = PlaybackAudioCache::default();
+            let before = fixture.cached(&cache, output_info, 0.0, None);
+            let before_timeline = progressive_timeline(&before);
+            drop(before);
+            edit(&mut fixture);
+            let after = fixture.cached(&cache, output_info, 0.0, None);
+            assert!(
+                Arc::ptr_eq(&before_timeline, &progressive_timeline(&after)),
+                "{name} must reuse the cached render"
+            );
+        }
+
+        let fixture = ProgressiveFixture::new(false);
+        let cache = PlaybackAudioCache::default();
+        let before = progressive_timeline(&fixture.cached(&cache, output_info, 0.0, None));
+        let other_rate = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 44_100, 2);
+        let after = progressive_timeline(&fixture.cached(&cache, other_rate, 0.0, None));
+        assert!(!Arc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn audio_edits_and_editor_close_release_the_cached_render() {
+        let fixture = ProgressiveFixture::new(false);
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2);
+        let wait_released = |timeline: Weak<ProgressiveTimeline>| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while timeline.strong_count() > 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "cached render was not released"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+
+        let cache = PlaybackAudioCache::default();
+        let (project_tx, project_rx) = watch::channel(fixture.project.clone());
+        let mut playing = fixture.cached(&cache, output_info, 0.0, Some(project_rx.clone()));
+        read_everything(&mut playing);
+        let timeline = Arc::downgrade(&progressive_timeline(&playing));
+        drop(playing);
+
+        project_tx.send_modify(|project| project.screen_motion_blur = 0.9);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(lock(&cache.entry).is_some());
+        assert!(timeline.strong_count() > 0);
+
+        project_tx.send_modify(|project| project.audio.mic_volume_db = -12.0);
+        wait_released(timeline);
+        assert!(lock(&cache.entry).is_none());
+
+        let paused = fixture.cached(&cache, output_info, 0.0, Some(project_rx));
+        let timeline = Arc::downgrade(&progressive_timeline(&paused));
+        drop(paused);
+        drop(project_tx);
+        wait_released(timeline);
+        assert!(lock(&cache.entry).is_none());
+
+        let kept = fixture.cached(&cache, output_info, 0.0, None);
+        let timeline = Arc::downgrade(&progressive_timeline(&kept));
+        drop(kept);
+        drop(cache);
+        wait_released(timeline);
     }
 }
