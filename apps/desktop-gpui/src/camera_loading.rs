@@ -83,12 +83,8 @@ fn ease_in_out(progress: f32) -> f32 {
     0.5 - 0.5 * (progress * std::f32::consts::PI).cos()
 }
 
-/// The camera bubble's loading state until the first frame lands: dark glass
-/// with soft drifting light and a quiet handwritten "loading" that a soft
-/// highlight passes across. `radius` is the bubble's corner radius; zero is
-/// the background-cutout mode, whose window is transparent, so a feathered
-/// glass disc stands in for the bubble. With `animate` off it paints one still
-/// frame and requests nothing.
+/// A zero `radius` is the background-cutout mode: its window is transparent,
+/// so a feathered disc stands in for the rounded glass.
 pub(crate) fn camera_loading(
     started: Instant,
     radius: f32,
@@ -137,9 +133,6 @@ pub(crate) fn camera_loading(
     .inset_0()
 }
 
-/// Where the highlight band's centre sits across the word, as a fraction
-/// of its width: an eased sweep from off the left edge to off the right, then
-/// a rest before the next pass.
 fn sweep_center(elapsed: f32) -> Option<f32> {
     if !elapsed.is_finite() {
         return None;
@@ -246,10 +239,8 @@ fn paint_script(area: Bounds<Pixels>, elapsed: f32, opacity: f32, window: &mut W
     }
 }
 
-/// The cutout window is transparent, so the glass becomes a disc whose edge
-/// feathers away instead of ending on a hard rim. Drop shadows are not
-/// clipped to a rounded mask, so the disc and its blur stay inside the
-/// window's inscribed circle. Returns the area the script sits in.
+/// Drop shadows are not clipped to a rounded mask, so the disc and its blur
+/// are sized to stay inside the window's inscribed circle.
 fn paint_feathered(
     bounds: Bounds<Pixels>,
     seconds: f32,
