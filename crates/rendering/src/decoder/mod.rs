@@ -673,8 +673,9 @@ const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
 /// Records a pts hole discovered from a decode-order vend jump (frames vend
 /// in pts order, so a jump means no samples exist in between). The map stays
-/// bounded by dropping the narrowest hole — wide static-screen holds matter
-/// most.
+/// bounded by dropping the hole farthest from the one just recorded: requests
+/// trail the reader, so the newest holes are the ones about to be asked for,
+/// and a dropped hole is rediscovered whenever the reader passes it again.
 pub(super) fn record_pts_hole(
     holes: &mut std::collections::BTreeMap<u32, u32>,
     start: u32,
@@ -683,12 +684,14 @@ pub(super) fn record_pts_hole(
     const MAX_TRACKED_HOLES: usize = 64;
     holes.insert(start, end);
     if holes.len() > MAX_TRACKED_HOLES
-        && let Some(narrowest) = holes
-            .iter()
-            .min_by_key(|&(&s, &e)| e.saturating_sub(s))
-            .map(|(&s, _)| s)
+        && let (Some(&first), Some(&last)) = (holes.keys().next(), holes.keys().next_back())
     {
-        holes.remove(&narrowest);
+        let farthest = if start.abs_diff(first) >= start.abs_diff(last) {
+            first
+        } else {
+            last
+        };
+        holes.remove(&farthest);
     }
 }
 
@@ -1653,6 +1656,33 @@ pub async fn spawn_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pts_hole_tracking_keeps_the_newest_holes_when_full() {
+        let mut holes = std::collections::BTreeMap::new();
+        let mut frame = 0u32;
+        for i in 0..1000u32 {
+            let width = if i % 4 == 0 { 3 } else { 2 };
+            record_pts_hole(&mut holes, frame, frame + width);
+            assert_eq!(holes.get(&frame), Some(&(frame + width)));
+            frame += width;
+        }
+        assert_eq!(holes.len(), 64);
+        assert!(holes.keys().all(|&start| start + 200 >= frame));
+    }
+
+    #[test]
+    fn pts_hole_tracking_drops_the_farthest_hole_after_a_backward_seek() {
+        let mut holes = std::collections::BTreeMap::new();
+        for i in 0..64u32 {
+            record_pts_hole(&mut holes, 1000 + i * 2, 1000 + i * 2 + 2);
+        }
+        record_pts_hole(&mut holes, 10, 40);
+        assert_eq!(holes.len(), 64);
+        assert_eq!(holes.get(&10), Some(&40));
+        assert!(holes.contains_key(&1000));
+        assert!(!holes.contains_key(&(1000 + 63 * 2)));
+    }
 
     #[test]
     fn decoded_frame_storage_identity_matches_clones() {
