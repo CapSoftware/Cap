@@ -5307,4 +5307,60 @@ mod tests {
         drop(cache);
         wait_released(timeline);
     }
+
+    #[test]
+    fn cache_key_keeps_every_field_not_listed_as_visual() {
+        let fixture = ProgressiveFixture::new(false);
+        let holds = fixture
+            .project
+            .timeline
+            .as_ref()
+            .map(TimelineConfiguration::hold_windows);
+        let base = serde_json::to_value(&fixture.project).unwrap();
+        let key = |value: &serde_json::Value, holds: Option<Vec<(f64, f64)>>| {
+            audio_key_from_value(value.clone(), holds).unwrap()
+        };
+        let original = key(&base, holds.clone());
+        assert_eq!(audio_project_key(&fixture.project).unwrap(), original);
+
+        type Edit = fn(&mut serde_json::Value);
+        let unknown: [(&str, Edit); 5] = [
+            ("project", |v| v["futureAudioSetting"] = 1.into()),
+            ("audio", |v| v["audio"]["futureAudioSetting"] = 1.into()),
+            ("timeline", |v| v["timeline"]["futureTrack"] = 1.into()),
+            ("segment", |v| {
+                v["timeline"]["segments"][0]["futureSegmentSetting"] = 1.into()
+            }),
+            ("clip", |v| v["clips"][0]["futureClipSetting"] = 1.into()),
+        ];
+        for (name, edit) in unknown {
+            let mut edited = base.clone();
+            edit(&mut edited);
+            assert_ne!(
+                key(&edited, holds.clone()),
+                original,
+                "an unknown {name} field must invalidate the cached render"
+            );
+        }
+
+        let visual: [(&str, Edit); 4] = [
+            ("background", |v| v["background"] = "changed".into()),
+            ("zoom", |v| v["timeline"]["zoomSegments"] = "changed".into()),
+            ("text", |v| v["timeline"]["textSegments"] = "changed".into()),
+            ("segment name", |v| {
+                v["timeline"]["segments"][0]["name"] = "changed".into()
+            }),
+        ];
+        for (name, edit) in visual {
+            let mut edited = base.clone();
+            edit(&mut edited);
+            assert_eq!(
+                key(&edited, holds.clone()),
+                original,
+                "{name} must keep the cached render"
+            );
+        }
+
+        assert_ne!(key(&base, Some(vec![(1.0, 2.0)])), original);
+    }
 }
