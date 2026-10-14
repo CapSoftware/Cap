@@ -3,6 +3,7 @@
 import {
 	act,
 	type ComponentProps,
+	type ComponentType,
 	createElement,
 	type MouseEventHandler,
 	type ReactNode,
@@ -24,6 +25,27 @@ import {
 	type SharePageBrandingInput,
 } from "@/lib/share-branding";
 
+const dynamicImports = vi.hoisted(() => [] as Promise<unknown>[]);
+
+vi.mock("next/dynamic", async () => {
+	const { createElement } = await import("react");
+	return {
+		default: (
+			loader: () => Promise<
+				ComponentType<object> | { default: ComponentType<object> }
+			>,
+		) => {
+			let Loaded: ComponentType<object> | null = null;
+			dynamicImports.push(
+				loader().then((module) => {
+					Loaded = "default" in module ? module.default : module;
+				}),
+			);
+			return (props: object) => (Loaded ? createElement(Loaded, props) : null);
+		},
+	};
+});
+
 vi.mock("@cap/env", () => ({ NODE_ENV: "test" }));
 
 vi.mock("@cap/ui", async () => {
@@ -34,7 +56,7 @@ vi.mock("@cap/ui", async () => {
 	};
 });
 
-vi.mock("framer-motion", async () => {
+vi.mock("motion/react", async () => {
 	const { createElement } = await import("react");
 	type MotionProps = {
 		children?: ReactNode;
@@ -175,6 +197,10 @@ const expectChromeHidden = (container: HTMLElement) => {
 	expect(container.textContent).not.toContain("Test video");
 	expect(container.querySelector('[aria-label="Powered by Cap"]')).toBeNull();
 };
+
+beforeAll(async () => {
+	await Promise.all(dynamicImports);
+});
 
 describe("EmbedVideo playback chrome", () => {
 	beforeAll(() => {
