@@ -1323,23 +1323,14 @@ mod tests {
 
         for tick in -100..1_200 {
             let time = tick as f64 / 100.0;
-            let expected = baseline_lookup(time, &segments, 0.35)
-                .map(|segment| segment.id.as_str());
-            let actual = optimized_lookup(time, &segments, 0.35)
-                .map(|segment| segment.id.as_str());
+            let expected = baseline_lookup(time, &segments, 0.35).map(|segment| segment.id.as_str());
+            let actual = optimized_lookup(time, &segments, 0.35).map(|segment| segment.id.as_str());
             assert_eq!(actual, expected, "caption selection differs at t={time}");
         }
     }
 
-    fn measure_lookup(
-        lookup: CaptionLookup,
-        segments: &[CaptionTrackSegment],
-        time: f64,
-    ) -> f64 {
-        use std::{
-            hint::black_box,
-            time::Instant,
-        };
+    fn measure_lookup(lookup: CaptionLookup, segments: &[CaptionTrackSegment], time: f64) -> f64 {
+        use std::{hint::black_box, time::Instant};
 
         const WARMUP_ITERATIONS: usize = 250;
         const MEASURED_ITERATIONS: usize = 3_000;
@@ -1354,9 +1345,7 @@ mod tests {
         let start = Instant::now();
         for iteration in 0..MEASURED_ITERATIONS {
             let time = time + ((iteration & 1) as f64 * 0.000_001);
-            if let Some(segment) =
-                lookup(black_box(time), black_box(segments), black_box(0.25))
-            {
+            if let Some(segment) = lookup(black_box(time), black_box(segments), black_box(0.25)) {
                 checksum = checksum.wrapping_add(segment.id.as_ptr() as usize);
             }
         }
