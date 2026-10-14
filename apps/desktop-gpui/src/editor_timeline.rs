@@ -2686,6 +2686,20 @@ fn render_handle(theme: &Theme, color: Hsla, start: bool, opacity: f32) -> impl 
         )
 }
 
+fn clip_marking_position(
+    holds_relative: &[(f64, f64)],
+    effective: f64,
+    secs_per_pixel: f64,
+    width: f32,
+) -> Option<f32> {
+    let x = (effective_to_output(holds_relative, effective) / secs_per_pixel) as f32;
+    if x + 1.0 <= 0.0 || x >= width {
+        None
+    } else {
+        Some(x)
+    }
+}
+
 /// `Markings` (`TL/ClipTrack.tsx:1425-1476`): one hairline per ruler tick,
 /// drawn *inside* each clip box in recording time and pushed past the holds the
 /// stretched box inserts before it. The gradient is a three-stop fade with the
@@ -2728,10 +2742,10 @@ fn render_clip_markings(
         if effective < 0. {
             continue;
         }
-        let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
-        if x + 1.0 <= 0.0 || x >= width {
+        let Some(x) = clip_marking_position(&holds_relative, effective, secs_per_pixel, width)
+        else {
             continue;
-        }
+        };
         let radius = SEGMENT_RADIUS.min(width / 2.).min(height / 2.);
         let inset = rounded_corner_inset(f64::from(x), f64::from(width), f64::from(radius)).max(
             rounded_corner_inset(f64::from(x + 1.), f64::from(width), f64::from(radius)),
@@ -3544,6 +3558,32 @@ mod tests {
     use super::*;
 
     const AUDIO_SAMPLE_RATE: usize = 48_000;
+
+    #[test]
+    fn clip_markings_reject_rectangles_outside_the_clip() {
+        assert_eq!(clip_marking_position(&[], -0.5, 0.25, 16.0), None);
+        assert_eq!(clip_marking_position(&[], -0.25, 0.25, 16.0), None);
+        assert_eq!(clip_marking_position(&[], 4.0, 0.25, 16.0), None);
+        assert_eq!(clip_marking_position(&[], 4.25, 0.25, 16.0), None);
+    }
+
+    #[test]
+    fn clip_markings_preserve_fractional_overlaps_and_exact_edges() {
+        assert_eq!(clip_marking_position(&[], -0.125, 0.25, 16.0), Some(-0.5));
+        assert_eq!(clip_marking_position(&[], 0.0, 0.25, 16.0), Some(0.0));
+        assert_eq!(clip_marking_position(&[], 3.75, 0.25, 16.0), Some(15.0));
+        assert_eq!(clip_marking_position(&[], 3.6, 0.25, 14.5), Some(14.4));
+    }
+
+    #[test]
+    fn clip_markings_apply_fullscreen_holds_before_culling() {
+        let holds = [(2.0, 4.0)];
+        assert_eq!(clip_marking_position(&holds, 1.75, 0.5, 10.0), Some(3.5));
+        assert_eq!(clip_marking_position(&holds, 2.0, 0.5, 10.0), Some(8.0));
+        assert_eq!(clip_marking_position(&holds, 2.75, 0.5, 10.0), Some(9.5));
+        assert_eq!(clip_marking_position(&holds, 3.0, 0.5, 10.0), None);
+        assert_eq!(clip_marking_position(&holds, 4.5, 0.5, 10.0), None);
+    }
 
     // -- The ruler ----------------------------------------------------------
 
