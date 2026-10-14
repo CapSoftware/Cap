@@ -80,6 +80,17 @@ class Job:
         ):
             raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
 
+    def resume(self, process):
+        if self.handle is None:
+            return
+        from ctypes import wintypes
+
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        status = ntdll.NtResumeProcess(wintypes.HANDLE(int(process._handle)))
+        if status != 0:
+            raise OSError(status, "NtResumeProcess failed")
+
     def stats(self):
         if self.handle is None:
             return {}
@@ -149,9 +160,13 @@ if os.name == "nt":
         ]
 
 
+CREATE_SUSPENDED = 0x4
+
+
 def run_measured(argv, timeout, env=None, cwd=None, affinity=None):
     job = Job(affinity)
     started = time.perf_counter()
+    # Started suspended so nothing it spawns can run before it is in the job.
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -161,9 +176,16 @@ def run_measured(argv, timeout, env=None, cwd=None, affinity=None):
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=CREATE_SUSPENDED if job.handle is not None else 0,
     )
     try:
-        job.assign(process)
+        try:
+            job.assign(process)
+            job.resume(process)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
         lines = []
 
         def pump():
@@ -255,6 +277,18 @@ def parse_export(lines):
     return metrics
 
 
+def export_problem(probe, expected_frames, resolution):
+    if not probe.get("out_frames"):
+        return "export has no readable video frames"
+    if expected_frames and probe["out_frames"] != expected_frames:
+        return f"export has {probe['out_frames']:.0f} frames, expected {expected_frames:.0f}"
+    max_width, max_height = (float(side) for side in resolution.split("x"))
+    width, height = probe.get("out_width", 0), probe.get("out_height", 0)
+    if not (0 < width <= max_width and 0 < height <= max_height):
+        return f"export is {width:.0f}x{height:.0f}, outside {resolution}"
+    return None
+
+
 def export_bench(fps, resolution, quality, extra=()):
     def argv(ctx, out_dir):
         return [
@@ -264,6 +298,9 @@ def export_bench(fps, resolution, quality, extra=()):
 
     def post(ctx, out_dir, metrics):
         probe = ffprobe_video(out_dir / "export.mp4")
+        problem = export_problem(probe, metrics.get("frames"), resolution)
+        if problem:
+            raise InvalidRun(problem)
         metrics.update(probe)
         if metrics.get("frames") and metrics.get("wall_s"):
             metrics["export_fps"] = metrics["frames"] / metrics["wall_s"]
@@ -405,6 +442,8 @@ BENCHES = {
     "export-1080p60": export_bench(60, "1920x1080", "maximum"),
     "export-4k60": export_bench(60, "3840x2160", "maximum"),
     "export-720p30": export_bench(30, "1280x720", "social"),
+    # The editor decodes with FFmpeg on Windows (editor_instance.rs), so playback measures that path;
+    # Media Foundation is covered by decode-display and the exports.
     "playback-pipeline": example_bench(
         "playback-pipeline-benchmark",
         lambda ctx: ["--recording-path", str(ctx.fixture), "--fps", "60", "--frames", "300", "--force-ffmpeg"],

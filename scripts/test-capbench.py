@@ -107,6 +107,15 @@ class CapbenchTests(unittest.TestCase):
         self.assertEqual(metrics["frames"], 100.0)
         self.assertAlmostEqual(metrics["steady_fps"], 50.0)
 
+    def test_export_problem_rejects_broken_exports(self):
+        good = {"out_frames": 1850.0, "out_width": 1664.0, "out_height": 1080.0}
+        self.assertIsNone(capbench.export_problem(good, 1850.0, "1920x1080"))
+        self.assertIsNotNone(capbench.export_problem({}, 1850.0, "1920x1080"))
+        self.assertIsNotNone(capbench.export_problem({**good, "out_frames": 0.0}, None, "1920x1080"))
+        self.assertIsNotNone(capbench.export_problem({**good, "out_frames": 1849.0}, 1850.0, "1920x1080"))
+        self.assertIsNotNone(capbench.export_problem({**good, "out_width": 0.0}, 1850.0, "1920x1080"))
+        self.assertIsNotNone(capbench.export_problem({**good, "out_height": 2160.0}, 1850.0, "1920x1080"))
+
     def test_compare_flags_only_separated_changes(self):
         def results(values):
             return {"benches": {"b": {"runs": [{"wall_s": v} for v in values], "better": {"wall_s": "lower"}}}}
