@@ -465,7 +465,6 @@ impl DecoderInstance {
             self.run_start,
             self.prev_vended,
             cache.range(..=frame).next_back().map(|(&cached, _)| cached),
-            frame,
         )
     }
 }
@@ -1308,21 +1307,18 @@ impl AVAssetReaderDecoder {
 // next frame, are answered with the newest cached frame at or before them.
 // That frame is only trustworthy when this reader vended it in its current
 // run; an older one comes from an unrelated seek and shows stale content.
-// With nothing cached, a gap right after an evicted last frame would be
-// answered with the following frame instead of the one on screen.
+// With nothing cached at or before the request, whether the reader has
+// passed it or a gap follows its evicted last frame, the only answer left is
+// a later frame instead of the one on screen.
 fn reuse_would_serve_stale_frame(
     run_start: Option<u32>,
     prev_vended: Option<u32>,
     newest_cached_at_or_before: Option<u32>,
-    frame: u32,
 ) -> bool {
-    let (Some(run_start), Some(vended)) = (run_start, prev_vended) else {
+    let (Some(run_start), Some(_)) = (run_start, prev_vended) else {
         return false;
     };
-    match newest_cached_at_or_before {
-        Some(cached) => cached < run_start,
-        None => vended < frame,
-    }
+    newest_cached_at_or_before.is_none_or(|cached| cached < run_start)
 }
 
 fn should_grow_decoder_pool(
@@ -1406,33 +1402,27 @@ mod tests {
 
     #[test]
     fn reused_readers_never_answer_with_frames_from_an_unrelated_seek() {
-        assert!(!reuse_would_serve_stale_frame(None, None, Some(10), 50));
+        assert!(!reuse_would_serve_stale_frame(None, None, Some(10)));
+        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), Some(48)));
+        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), Some(40)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(55), Some(39)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(55), Some(10)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(48), None));
+    }
+
+    #[test]
+    fn returning_to_a_passed_hold_after_its_frame_is_evicted_resets_the_reader() {
+        let (run_start, held, vended) = (40, 48, 55);
         assert!(!reuse_would_serve_stale_frame(
-            Some(40),
-            Some(55),
-            Some(48),
-            50
-        ));
-        assert!(!reuse_would_serve_stale_frame(
-            Some(40),
-            Some(55),
-            Some(40),
-            50
+            Some(run_start),
+            Some(vended),
+            Some(held)
         ));
         assert!(reuse_would_serve_stale_frame(
-            Some(40),
-            Some(55),
-            Some(39),
-            50
+            Some(run_start),
+            Some(vended),
+            None
         ));
-        assert!(reuse_would_serve_stale_frame(
-            Some(40),
-            Some(55),
-            Some(10),
-            50
-        ));
-        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), None, 50));
-        assert!(reuse_would_serve_stale_frame(Some(40), Some(48), None, 50));
     }
 
     #[test]
