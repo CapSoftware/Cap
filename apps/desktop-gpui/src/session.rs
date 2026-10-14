@@ -861,10 +861,10 @@ impl RecordingSession {
                 }
                 #[cfg(target_os = "macos")]
                 if std::mem::take(&mut this.instant_start_cancelled) {
-                    if let Ok(Ok(active)) = result {
-                        this.discard_stale_start(active, cx);
+                    match result {
+                        Ok(Ok(active)) => this.finish_after_discarding(active, cx),
+                        _ => this.finish(cx),
                     }
-                    this.finish(cx);
                     return;
                 }
                 match result {
@@ -970,6 +970,33 @@ impl RecordingSession {
         if let Some(active) = self.primed.take() {
             self.discard_stale_start(active, cx);
         }
+    }
+
+    /// A start cancelled by Stop that still completed: stays `Starting` until
+    /// the capture, the shareable link and the local folder are discarded, so a
+    /// pending Quit waits for the cleanup.
+    #[cfg(target_os = "macos")]
+    fn finish_after_discarding(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
+        let generation = self.recording_generation;
+        let previous = self.discarding.take();
+        let task = gpui_tokio::Tokio::spawn(cx, async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            if let Err(error) = active.cancel_and_delete().await {
+                tracing::warn!(%error, "discarding a cancelled recording start failed");
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let _ = task.await;
+            this.update(cx, |this, cx| {
+                if this.recording_generation == generation && this.phase == Phase::Starting {
+                    this.finish(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
