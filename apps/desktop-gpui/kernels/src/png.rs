@@ -2,6 +2,7 @@ const LEVEL: u32 = 6;
 const WINDOW: usize = 32 * 1024;
 const MIN_STRIP_BYTES: usize = 1024 * 1024;
 const MAX_STRIPS: usize = 8;
+const MAX_CHUNK: usize = (u32::MAX >> 1) as usize;
 
 pub fn encode(
     data: &[u8],
@@ -9,10 +10,34 @@ pub fn encode(
     height: u32,
     color: image::ExtendedColorType,
 ) -> image::ImageResult<Vec<u8>> {
+    let mut png = Vec::new();
+    write(&mut png, data, width, height, color)?;
+    Ok(png)
+}
+
+pub fn write<W: std::io::Write>(
+    out: W,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    color: image::ExtendedColorType,
+) -> image::ImageResult<()> {
+    write_strips(out, data, width, height, color, None, MAX_CHUNK)
+}
+
+fn write_strips<W: std::io::Write>(
+    mut out: W,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    color: image::ExtendedColorType,
+    strips: Option<usize>,
+    max_chunk: usize,
+) -> image::ImageResult<()> {
     let (bpp, color_type) = match color {
         image::ExtendedColorType::Rgb8 => (3, 2),
         image::ExtendedColorType::Rgba8 => (4, 6),
-        _ => return encode_single(data, width, height, color),
+        _ => return write_single(&mut out, data, width, height, color),
     };
     let stride = width as usize * bpp;
     let rows = height as usize;
@@ -24,16 +49,18 @@ pub fn encode(
         ));
     }
     if width == 0 || height == 0 {
-        return encode_single(data, width, height, color);
+        return write_single(&mut out, data, width, height, color);
     }
 
     let filtered_len = rows * (stride + 1);
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(MAX_STRIPS);
-    let strips = (filtered_len / MIN_STRIP_BYTES).clamp(1, threads).min(rows);
-    let per_strip = rows.div_ceil(strips);
+    let strips = strips.unwrap_or_else(|| {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(MAX_STRIPS);
+        (filtered_len / MIN_STRIP_BYTES).clamp(1, threads)
+    });
+    let per_strip = rows.div_ceil(strips.clamp(1, rows));
     let ranges: Vec<(usize, usize)> = (0..rows)
         .step_by(per_strip)
         .map(|start| (start, per_strip.min(rows - start)))
@@ -49,7 +76,7 @@ pub fn encode(
         }
     });
 
-    let filtered = filtered.as_slice();
+    let filtered_rows = filtered.as_slice();
     let compressed = std::thread::scope(|scope| {
         let handles: Vec<_> = ranges
             .iter()
@@ -57,8 +84,12 @@ pub fn encode(
                 scope.spawn(move || {
                     let from = start * (stride + 1);
                     let to = from + count * (stride + 1);
-                    let dictionary = &filtered[from.saturating_sub(WINDOW)..from];
-                    compress_strip(&filtered[from..to], dictionary, to == filtered.len())
+                    let dictionary = &filtered_rows[from.saturating_sub(WINDOW)..from];
+                    compress_strip(
+                        &filtered_rows[from..to],
+                        dictionary,
+                        to == filtered_rows.len(),
+                    )
                 })
             })
             .collect();
@@ -70,15 +101,9 @@ pub fn encode(
     .map_err(image::ImageError::IoError)?;
 
     let mut adler = simd_adler32::Adler32::new();
-    adler.write(filtered);
-
-    let deflated: usize = compressed.iter().map(Vec::len).sum();
-    let mut idat = Vec::with_capacity(deflated + 6);
-    idat.extend_from_slice(&[0x78, 0x9c]);
-    for strip in &compressed {
-        idat.extend_from_slice(strip);
-    }
-    idat.extend_from_slice(&adler.finish().to_be_bytes());
+    adler.write(filtered_rows);
+    let adler = adler.finish().to_be_bytes();
+    drop(filtered);
 
     let mut ihdr = [0u8; 13];
     ihdr[..4].copy_from_slice(&width.to_be_bytes());
@@ -86,31 +111,35 @@ pub fn encode(
     ihdr[8] = 8;
     ihdr[9] = color_type;
 
-    let mut png = Vec::with_capacity(idat.len() + 64);
-    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-    write_chunk(&mut png, b"IHDR", &ihdr);
-    for chunk in idat.chunks((u32::MAX >> 1) as usize) {
-        write_chunk(&mut png, b"IDAT", chunk);
-    }
-    write_chunk(&mut png, b"IEND", &[]);
-    Ok(png)
+    let mut idat: Vec<&[u8]> = Vec::with_capacity(compressed.len() + 2);
+    idat.push(&[0x78, 0x9c]);
+    idat.extend(compressed.iter().map(Vec::as_slice));
+    idat.push(&adler);
+
+    out.write_all(b"\x89PNG\r\n\x1a\n")?;
+    write_chunk(&mut out, b"IHDR", &[&ihdr], MAX_CHUNK)?;
+    write_chunk(&mut out, b"IDAT", &idat, max_chunk)?;
+    write_chunk(&mut out, b"IEND", &[], MAX_CHUNK)?;
+    out.flush()?;
+    Ok(())
 }
 
-fn encode_single(
+fn write_single<W: std::io::Write>(
+    out: &mut W,
     data: &[u8],
     width: u32,
     height: u32,
     color: image::ExtendedColorType,
-) -> image::ImageResult<Vec<u8>> {
+) -> image::ImageResult<()> {
     use image::ImageEncoder as _;
-    let mut png = Vec::new();
     image::codecs::png::PngEncoder::new_with_quality(
-        &mut png,
+        &mut *out,
         image::codecs::png::CompressionType::Default,
         image::codecs::png::FilterType::Adaptive,
     )
     .write_image(data, width, height, color)?;
-    Ok(png)
+    out.flush()?;
+    Ok(())
 }
 
 fn compress_strip(strip: &[u8], dictionary: &[u8], last: bool) -> std::io::Result<Vec<u8>> {
@@ -141,14 +170,40 @@ fn compress_strip(strip: &[u8], dictionary: &[u8], last: bool) -> std::io::Resul
     }
 }
 
-fn write_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(kind);
-    crc.update(data);
-    png.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    png.extend_from_slice(kind);
-    png.extend_from_slice(data);
-    png.extend_from_slice(&crc.finalize().to_be_bytes());
+// Writes `parts` back to back as the payload of one chunk, or of several
+// consecutive chunks of the same type when it is longer than `max_chunk`.
+fn write_chunk<W: std::io::Write>(
+    out: &mut W,
+    kind: &[u8; 4],
+    parts: &[&[u8]],
+    max_chunk: usize,
+) -> std::io::Result<()> {
+    let mut remaining: usize = parts.iter().map(|part| part.len()).sum();
+    let mut parts = parts.iter().copied();
+    let mut current: &[u8] = &[];
+    loop {
+        let len = remaining.min(max_chunk);
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(kind);
+        out.write_all(&(len as u32).to_be_bytes())?;
+        out.write_all(kind)?;
+        let mut left = len;
+        while left > 0 {
+            while current.is_empty() {
+                current = parts.next().expect("chunk parts cover its length");
+            }
+            let (head, tail) = current.split_at(left.min(current.len()));
+            out.write_all(head)?;
+            crc.update(head);
+            current = tail;
+            left -= head.len();
+        }
+        out.write_all(&crc.finalize().to_be_bytes())?;
+        remaining -= len;
+        if remaining == 0 {
+            return Ok(());
+        }
+    }
 }
 
 fn filter_rows(data: &[u8], stride: usize, bpp: usize, first_row: usize, out: &mut [u8]) {
@@ -314,7 +369,15 @@ mod tests {
         let (width, height) = (3024, 1964);
         let data = screen_like(width, height, 3);
         let parallel = encode(&data, width, height, image::ExtendedColorType::Rgb8).unwrap();
-        let single = encode_single(&data, width, height, image::ExtendedColorType::Rgb8).unwrap();
+        let mut single = Vec::new();
+        write_single(
+            &mut single,
+            &data,
+            width,
+            height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .unwrap();
         let ratio = parallel.len() as f64 / single.len() as f64;
         assert!(
             ratio < 1.005,
