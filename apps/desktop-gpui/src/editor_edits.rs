@@ -34,6 +34,10 @@ use cap_project::{
 
 use crate::editor_timeline::{self, Segment, TrackKind};
 
+mod indices;
+
+use indices::{delete_indices, descending_indices};
+
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
@@ -685,32 +689,6 @@ fn normalize_track<T: TrackSegmentOps>(segments: &mut [T], set_lane: impl Fn(&mu
         set_lane(segment, next as u32);
     }
     sort_track(segments);
-}
-
-/// `[...new Set(indices)].filter(in bounds).sort(descending)` -- the guard
-/// every `delete*Segments` action opens with (`ED/context.ts:625-637`).
-fn descending_indices(indices: &[usize], length: usize) -> Vec<usize> {
-    let mut sorted: Vec<usize> = indices
-        .iter()
-        .copied()
-        .filter(|index| *index < length)
-        .collect();
-    sorted.sort_unstable();
-    sorted.dedup();
-    sorted.reverse();
-    sorted
-}
-
-/// Splice out every listed index, highest first.
-fn delete_indices<T>(segments: &mut Vec<T>, indices: &[usize]) -> bool {
-    let sorted = descending_indices(indices, segments.len());
-    if sorted.is_empty() {
-        return false;
-    }
-    for index in sorted {
-        segments.remove(index);
-    }
-    true
 }
 
 /// `split*Segment(index, time)` for the seven tracks whose split is a plain

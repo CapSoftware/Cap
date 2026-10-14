@@ -23,6 +23,10 @@ path = "src/main.rs"
 name = "studio-finalization-benchmark"
 path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
+[[bench]]
+name = "timeline-delete"
+harness = false
+
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
 cap-gpui-kernels = { path = "kernels" }
