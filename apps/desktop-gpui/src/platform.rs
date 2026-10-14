@@ -1178,7 +1178,6 @@ mod mac {
         pub visible: (f64, f64, f64, f64),
     }
 
-    /// Every connected `NSScreen` in AppKit coordinates, menu-bar screen first.
     pub fn screen_geometries() -> Vec<ScreenGeometry> {
         use objc2::{class, msg_send, runtime::AnyObject};
         use objc2_foundation::{NSRect, NSString};

@@ -1,7 +1,3 @@
-//! Editor window placement on macOS: open filling the work area on laptop
-//! sized displays (capped on large ones), and reopen wherever the editor last
-//! sat on that display.
-//!
 //! All geometry is AppKit screen space (bottom-left origin, y up), read
 //! straight from `NSScreen` and `NSWindow`. gpui's own display rects mix a
 //! display-local x with a global y, which places windows wrongly on displays
@@ -108,8 +104,6 @@ fn remembered_frame(screen: &Screen, memory: &EditorWindowMemory) -> Option<Rect
     frame.is_usable().then_some(frame)
 }
 
-/// The last display the editor was on when it is still connected, otherwise
-/// the display under the cursor.
 pub(super) fn opening_frame(
     screens: &[Screen],
     memory: Option<&EditorWindowMemory>,
