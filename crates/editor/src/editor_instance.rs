@@ -1896,6 +1896,61 @@ mod tests {
     use super::*;
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
 
+    fn scrub_request(frame: u32) -> PreviewRequest {
+        Some((frame, 60, XY::new(960, 540)))
+    }
+
+    fn overdue_frame() -> Option<Instant> {
+        Instant::now().checked_sub(PREVIEW_SCRUB_FRAME_INTERVAL)
+    }
+
+    #[test]
+    fn preview_frames_go_overdue_after_the_scrub_interval() {
+        assert!(preview_frame_overdue(None));
+        assert!(!preview_frame_overdue(Some(Instant::now())));
+        assert!(preview_frame_overdue(overdue_frame()));
+    }
+
+    #[test]
+    fn newer_requests_cancel_only_while_a_frame_is_fresh() {
+        let (tx, rx) = watch::channel(scrub_request(0));
+        assert!(!preview_superseded(&rx, Some(Instant::now())));
+
+        tx.send_modify(|request| *request = scrub_request(10));
+        assert!(preview_superseded(&rx, Some(Instant::now())));
+        assert!(!preview_superseded(&rx, overdue_frame()));
+        assert!(!preview_superseded(&rx, None));
+    }
+
+    #[tokio::test]
+    async fn fresh_frames_yield_to_newer_requests_and_keep_them_queued() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), Some(Instant::now()));
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        tokio::time::timeout(Duration::from_secs(1), superseded)
+            .await
+            .expect("a newer request should cancel a frame while the last one is fresh");
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
+
+    #[tokio::test]
+    async fn overdue_frames_finish_before_newer_requests() {
+        let (tx, mut rx) = watch::channel(scrub_request(0));
+        let superseded = preview_superseded_while_fresh(rx.clone(), overdue_frame());
+        tx.send_modify(|request| *request = scrub_request(10));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), superseded)
+                .await
+                .is_err(),
+            "an overdue frame should not be cancelled by a newer request"
+        );
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), scrub_request(10));
+    }
+
     #[tokio::test]
     async fn completed_pcm_loader_reuses_arc_without_opening_a_missing_file() {
         let audio = crate::completed_audio::tests::audio();
