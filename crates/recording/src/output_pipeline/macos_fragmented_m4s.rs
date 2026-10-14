@@ -295,8 +295,11 @@ impl MacOSFragmentedM4SMuxer {
             prefer_videotoolbox_hw_input: true,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
@@ -682,8 +685,11 @@ impl MacOSFragmentedM4SCameraMuxer {
             prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_write_behind(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
