@@ -130,24 +130,7 @@ impl CameraLayer {
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
 
-            if self.frame_textures[next_texture].width() != frame_size.x
-                || self.frame_textures[next_texture].height() != frame_size.y
-            {
-                self.frame_textures[next_texture] =
-                    CompositeVideoFramePipeline::create_frame_texture(
-                        device,
-                        frame_size.x,
-                        frame_size.y,
-                    );
-                self.frame_texture_views[next_texture] =
-                    self.frame_textures[next_texture].create_view(&Default::default());
-
-                self.bind_groups[next_texture] = Some(self.pipeline.bind_group(
-                    device,
-                    &self.uniforms_buffer,
-                    &self.frame_texture_views[next_texture],
-                ));
-            }
+            self.resize_frame_texture(device, next_texture, frame_size.x, frame_size.y);
 
             match format {
                 PixelFormat::Rgba => {
@@ -415,24 +398,7 @@ impl CameraLayer {
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
 
-            if self.frame_textures[next_texture].width() != frame_size.x
-                || self.frame_textures[next_texture].height() != frame_size.y
-            {
-                self.frame_textures[next_texture] =
-                    CompositeVideoFramePipeline::create_frame_texture(
-                        device,
-                        frame_size.x,
-                        frame_size.y,
-                    );
-                self.frame_texture_views[next_texture] =
-                    self.frame_textures[next_texture].create_view(&Default::default());
-
-                self.bind_groups[next_texture] = Some(self.pipeline.bind_group(
-                    device,
-                    &self.uniforms_buffer,
-                    &self.frame_texture_views[next_texture],
-                ));
-            }
+            self.resize_frame_texture(device, next_texture, frame_size.x, frame_size.y);
 
             match format {
                 PixelFormat::Rgba => {
@@ -635,7 +601,34 @@ impl CameraLayer {
         }
     }
 
+    fn resize_frame_texture(
+        &mut self,
+        device: &wgpu::Device,
+        index: usize,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        if self.frame_textures[index].width() == width
+            && self.frame_textures[index].height() == height
+        {
+            return false;
+        }
+        self.frame_textures[index] =
+            CompositeVideoFramePipeline::create_frame_texture(device, width, height);
+        self.frame_texture_views[index] =
+            self.frame_textures[index].create_view(&Default::default());
+        self.bind_groups[index] = Some(self.pipeline.bind_group(
+            device,
+            &self.uniforms_buffer,
+            &self.frame_texture_views[index],
+        ));
+        true
+    }
+
     pub fn prepare_for_video_dimensions(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
         if let Err(e) = self
             .yuv_converter
             .prepare_for_dimensions(device, width, height)
@@ -646,6 +639,24 @@ impl CameraLayer {
                 error = ?e,
                 "Failed to pre-allocate camera YUV converter textures"
             );
+            return;
+        }
+        let max_dimension = device.limits().max_texture_dimension_2d;
+        if width > max_dimension || height > max_dimension {
+            tracing::warn!(
+                width,
+                height,
+                max_dimension,
+                "Camera frame dimensions exceed the texture limit"
+            );
+            return;
+        }
+        let mut resized = false;
+        for index in 0..self.frame_textures.len() {
+            resized |= self.resize_frame_texture(device, index, width, height);
+        }
+        if resized {
+            self.reset_frame_state();
         }
     }
 }
@@ -764,12 +775,142 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a working native WGPU adapter"]
+    async fn camera_setup_keeps_frame_resources_out_of_first_uploads() {
+        let constants = constants().await;
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        layers.prepare_for_video_dimensions(&constants.device, 320, 180, None, None);
+        for camera in [&layers.camera, &layers.camera_only] {
+            assert!(
+                camera
+                    .frame_textures
+                    .iter()
+                    .all(|texture| { texture.width() == 1 && texture.height() == 1 })
+            );
+        }
+        let initial_resources = (
+            layers.camera.frame_textures.clone(),
+            layers.camera.frame_texture_views.clone(),
+            layers.camera.bind_groups.clone(),
+        );
+        let max_dimension = constants.device.limits().max_texture_dimension_2d;
+        for (width, height) in [(0, 1080), (max_dimension + 1, 2), (2, max_dimension + 1)] {
+            layers
+                .camera
+                .prepare_for_video_dimensions(&constants.device, width, height);
+            assert_eq!(layers.camera.frame_textures, initial_resources.0);
+            assert_eq!(layers.camera.frame_texture_views, initial_resources.1);
+            assert_eq!(layers.camera.bind_groups, initial_resources.2);
+        }
+
+        for (width, height) in [(1920, 1080), (1280, 720), (3840, 2160), (1080, 1920)] {
+            for camera_only in [false, true] {
+                for ordinary_prepare in [false, true] {
+                    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+                    layers.prepare_for_video_dimensions(
+                        &constants.device,
+                        320,
+                        180,
+                        Some(width),
+                        Some(height),
+                    );
+                    let resources: Vec<_> = [&layers.camera, &layers.camera_only]
+                        .into_iter()
+                        .map(|camera| {
+                            assert!(camera.frame_textures.iter().all(|texture| {
+                                texture.width() == width && texture.height() == height
+                            }));
+                            (
+                                camera.frame_textures.clone(),
+                                camera.frame_texture_views.clone(),
+                                camera.bind_groups.clone(),
+                            )
+                        })
+                        .collect();
+                    layers.prepare_for_video_dimensions(
+                        &constants.device,
+                        320,
+                        180,
+                        Some(width),
+                        Some(height),
+                    );
+                    let mut project = ProjectConfiguration::default();
+                    project.camera.hide = false;
+                    if camera_only {
+                        project.timeline = Some(
+                            serde_json::from_value(serde_json::json!({
+                                "segments": [], "zoomSegments": [],
+                                "sceneSegments": [{
+                                    "start": 2.0, "end": 5.0, "mode": "cameraOnly",
+                                    "transitionIn": 0.0, "transitionOut": 0.0
+                                }]
+                            }))
+                            .unwrap(),
+                        );
+                    }
+                    for (number, color) in
+                        [[255, 0, 0, 255], [0, 0, 255, 255]].into_iter().enumerate()
+                    {
+                        let camera = DecodedFrame::new(
+                            color.repeat(width as usize * height as usize),
+                            width,
+                            height,
+                        );
+                        let output = pixels(
+                            &constants,
+                            &project,
+                            frames(Some(camera), 180 + number as u32),
+                            &mut layers,
+                            ordinary_prepare,
+                        )
+                        .await;
+                        assert!(
+                            output
+                                .chunks_exact(4)
+                                .filter(|pixel| matches_color(pixel, color))
+                                .count()
+                                > 100
+                        );
+                        for (camera, expected) in [&layers.camera, &layers.camera_only]
+                            .into_iter()
+                            .zip(&resources)
+                        {
+                            assert_eq!(&camera.frame_textures, &expected.0);
+                            assert_eq!(&camera.frame_texture_views, &expected.1);
+                            assert_eq!(&camera.bind_groups, &expected.2);
+                        }
+                    }
+                }
+            }
+        }
+
+        let project = ProjectConfiguration::default();
+        let camera = DecodedFrame::new([255, 0, 0, 255].repeat(1920 * 1080), 1920, 1080);
+        let input = frames(Some(camera), 180);
+        layers.prepare_for_video_dimensions(&constants.device, 320, 180, Some(1920), Some(1080));
+        let original = pixels(&constants, &project, input.clone(), &mut layers, false).await;
+        layers.prepare_for_video_dimensions(&constants.device, 320, 180, Some(1280), Some(720));
+        layers.prepare_for_video_dimensions(&constants.device, 320, 180, Some(1920), Some(1080));
+        let repeated = pixels(&constants, &project, input, &mut layers, false).await;
+        assert_eq!(original, repeated);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a working native WGPU adapter"]
     async fn camera_placeholders_preserve_pixels_through_frame_state_changes() {
         let constants = constants().await;
         for camera_only in [false, true] {
             for ordinary_prepare in [false, true] {
                 let mut current = RendererLayers::new(&constants.device, &constants.queue);
                 let mut legacy = legacy_layers(&constants);
+                for layers in [&mut current, &mut legacy] {
+                    layers.prepare_for_video_dimensions(
+                        &constants.device,
+                        320,
+                        180,
+                        Some(1920),
+                        Some(1080),
+                    );
+                }
                 let mut project = ProjectConfiguration::default();
                 project.background.source = cap_project::BackgroundSource::Color {
                     value: [0, 255, 0],
