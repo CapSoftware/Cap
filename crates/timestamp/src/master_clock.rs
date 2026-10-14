@@ -202,10 +202,11 @@ impl SourceClockState {
     }
 
     /// Frames that arrive a whole cadence slot late because the source skipped
-    /// frames are moved onto their real timestamp once the lag persists into the
-    /// next frame, instead of being snapped back a slot for the rest of the
-    /// recording. A single late frame, or a backlog that drains, is still
-    /// smoothed onto the cadence.
+    /// frames are moved onto their real timestamp once the next frame shows the
+    /// source kept its cadence (the lag did not shrink), instead of being
+    /// snapped back a slot for the rest of the recording. A single late frame,
+    /// or a backlog that drains, is still smoothed onto the cadence: sources
+    /// stamped on callback arrival (Windows cameras) report a stall that way.
     pub fn detecting_skipped_frames(mut self) -> Self {
         self.detect_skipped_frames = true;
         self
@@ -389,7 +390,7 @@ impl SourceClockState {
             return false;
         }
         if skip_confirmed
-            || pending_lag_ns.is_some_and(|previous| lag_ns >= previous - half_frame_ns)
+            || pending_lag_ns.is_some_and(|previous| lag_ns >= previous - duration_ns / 8)
         {
             return true;
         }
@@ -1088,26 +1089,49 @@ mod tests {
 
     #[test]
     fn delivery_backlog_draining_is_still_smoothed() {
-        for stall_ms in [20, 40, 60] {
-            let stall_ns = stall_ms * 1_000_000;
-            let resume = frame_raw_ns(30) + stall_ns;
-            let raws: Vec<i64> = (0..120)
-                .map(|frame| {
-                    let raw = frame_raw_ns(frame);
-                    if frame >= 30 {
-                        raw.max(resume + (frame as i64 - 30) * 100_000)
-                    } else {
-                        raw
-                    }
-                })
-                .collect();
-            let output = replay(&mut skip_tracking(), &raws, FRAME_60_NS);
-            assert_eq!(
-                output,
-                replay(&mut SourceClockState::new("legacy"), &raws, FRAME_60_NS),
-                "stall={stall_ms}ms"
-            );
+        for (fps, spacings_us) in [
+            (60, [100, 5_000, 10_000, 14_000]),
+            (30, [100, 10_000, 20_000, 28_000]),
+        ] {
+            let frame_ns = 1_000_000_000 / fps;
+            for stall_ms in [20, 40, 60] {
+                for spacing_us in spacings_us {
+                    let resume = 30 * frame_ns as i64 + stall_ms * 1_000_000;
+                    let raws: Vec<i64> = (0..(4 * fps as i64))
+                        .map(|frame| {
+                            let raw = frame * frame_ns as i64;
+                            if frame >= 30 {
+                                raw.max(resume + (frame - 30) * spacing_us * 1_000)
+                            } else {
+                                raw
+                            }
+                        })
+                        .collect();
+                    let mut state = skip_tracking();
+                    let output = replay(&mut state, &raws, frame_ns);
+                    assert_eq!(
+                        output,
+                        replay(&mut SourceClockState::new("legacy"), &raws, frame_ns),
+                        "fps={fps} stall={stall_ms}ms spacing={spacing_us}us"
+                    );
+                    assert_eq!(state.skip_count(), 0);
+                }
+            }
         }
+    }
+
+    #[test]
+    fn skipped_frames_with_timestamp_jitter_return_to_source_time() {
+        let mut rng = TestRng(0xD12);
+        let raws: Vec<i64> = frames_with_skips(240, &[(1, 2), (150, 3)])
+            .into_iter()
+            .map(|raw| raw + ((rng.next_f64() * 2.0 - 1.0) * 500_000.0) as i64)
+            .collect();
+        let mut state = skip_tracking();
+        let output = replay(&mut state, &raws, FRAME_60_NS);
+        assert_eq!(state.skip_count(), 2);
+        let last = raws.len() - 1;
+        assert!((raws[last] as u64).abs_diff(output[last]) < 1_000_000);
     }
 
     #[test]
