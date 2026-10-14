@@ -341,6 +341,32 @@ mod tests {
         image::load_from_memory_with_format(png, image::ImageFormat::Png).unwrap()
     }
 
+    fn encode_with(
+        data: &[u8],
+        width: u32,
+        height: u32,
+        color: image::ExtendedColorType,
+        strips: Option<usize>,
+        max_chunk: usize,
+    ) -> Vec<u8> {
+        let mut png = Vec::new();
+        write_strips(&mut png, data, width, height, color, strips, max_chunk).unwrap();
+        png
+    }
+
+    fn assert_round_trip(png: &[u8], data: &[u8], width: u32, height: u32, channels: usize) {
+        let decoded = decode(png);
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        let pixels = match channels {
+            3 => decoded.to_rgb8().into_raw(),
+            _ => decoded.to_rgba8().into_raw(),
+        };
+        assert!(
+            pixels == data,
+            "{width}x{height}x{channels} did not round-trip"
+        );
+    }
+
     #[test]
     fn round_trips_rgb_and_rgba_across_strip_counts() {
         for (width, height) in [(1, 1), (7, 3), (3024, 1964), (1501, 2049), (4000, 300)] {
@@ -350,18 +376,35 @@ mod tests {
             ] {
                 let data = screen_like(width, height, channels);
                 let png = encode(&data, width, height, color).unwrap();
-                let decoded = decode(&png);
-                assert_eq!((decoded.width(), decoded.height()), (width, height));
-                let pixels = match channels {
-                    3 => decoded.to_rgb8().into_raw(),
-                    _ => decoded.to_rgba8().into_raw(),
-                };
-                assert!(
-                    pixels == data,
-                    "{width}x{height}x{channels} did not round-trip"
-                );
+                assert_round_trip(&png, &data, width, height, channels);
+                for strips in [1, 2, 3, 8] {
+                    let png = encode_with(&data, width, height, color, Some(strips), MAX_CHUNK);
+                    assert_round_trip(&png, &data, width, height, channels);
+                }
             }
         }
+    }
+
+    #[test]
+    fn splits_long_image_data_across_idat_chunks() {
+        let (width, height) = (640, 480);
+        let data = screen_like(width, height, 4);
+        let color = image::ExtendedColorType::Rgba8;
+        let whole = encode_with(&data, width, height, color, Some(4), MAX_CHUNK);
+        let split = encode_with(&data, width, height, color, Some(4), 1000);
+        let idat_chunks = |png: &[u8]| {
+            let (mut offset, mut count) = (8, 0);
+            while offset < png.len() {
+                let len = u32::from_be_bytes(png[offset..offset + 4].try_into().unwrap());
+                count += usize::from(&png[offset + 4..offset + 8] == b"IDAT");
+                offset += 12 + len as usize;
+            }
+            count
+        };
+        assert_eq!(idat_chunks(&whole), 1);
+        assert!(idat_chunks(&split) > 1);
+        assert_round_trip(&whole, &data, width, height, 4);
+        assert_round_trip(&split, &data, width, height, 4);
     }
 
     #[test]
