@@ -604,6 +604,7 @@ fn project_keyboard_events(
     };
     let mut edited_start = 0.0;
     let mut result = Vec::new();
+    let mut prepared: Vec<Option<Vec<&KeyPressEvent>>> = (0..takes.len()).map(|_| None).collect();
     for (index, clip) in timeline.segments.iter().enumerate() {
         if !clip.start.is_finite()
             || !clip.end.is_finite()
@@ -624,12 +625,15 @@ fn project_keyboard_events(
             let source_end = clip.end + capture_offset;
             let mut presses = Vec::new();
             let mut modifiers = Vec::new();
-            let mut ordered: Vec<_> = events
-                .presses
-                .iter()
-                .filter(|event| event.time_ms.is_finite())
-                .collect();
-            ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+            let ordered = prepared[clip.recording_clip as usize].get_or_insert_with(|| {
+                let mut ordered: Vec<_> = events
+                    .presses
+                    .iter()
+                    .filter(|event| event.time_ms.is_finite())
+                    .collect();
+                ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+                ordered
+            });
             for event in ordered {
                 let source = event.time_ms / 1000.0;
                 if source < source_start {
