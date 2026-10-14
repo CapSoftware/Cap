@@ -32,6 +32,9 @@ pub struct ControlsWindow {
     /// Repaints the timer. An inactive window is repainted lazily by the
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
+    /// The mic level bar's fill in device pixels as last drawn, `None` while
+    /// the bar is hidden.
+    drawn_level_px: std::cell::Cell<Option<u32>>,
 }
 
 #[derive(Clone, Copy)]
@@ -60,23 +63,26 @@ impl ControlsWindow {
         let theme = Theme::for_window(window, cx, false);
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
 
-        // 4 ticks a second keeps the seconds display honest without burning a
-        // frame budget; `refresh` (not just `notify`) because this window is
-        // usually not the active one while a recording runs.
+        // The timer shows whole seconds, so wake just after each one ticks
+        // over; `refresh` (not just `notify`) because this window is usually
+        // not the active one while a recording runs.
         let tick = cx.spawn_in(window, async move |this, cx| {
+            let mut delay = Duration::from_secs(1);
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(250))
-                    .await;
-                if this
-                    .update_in(cx, |_, window, cx| {
-                        cx.notify();
-                        window.refresh();
-                    })
-                    .is_err()
-                {
+                cx.background_executor().timer(delay).await;
+                let Ok(next) = this.update_in(cx, |this, window, cx| {
+                    cx.notify();
+                    window.refresh();
+                    let session = this.session.read(cx);
+                    if matches!(session.phase, Phase::Recording { paused: false }) {
+                        until_next_second(session.elapsed())
+                    } else {
+                        Duration::from_secs(1)
+                    }
+                }) else {
                     return;
-                }
+                };
+                delay = next;
             }
         });
 
@@ -87,7 +93,15 @@ impl ControlsWindow {
             #[cfg(target_os = "linux")]
             confirmation_pending: false,
             _tick: tick,
+            drawn_level_px: std::cell::Cell::new(None),
         }
+    }
+
+    /// Whether a new mic level would move the bar by at least a device pixel.
+    pub fn level_bar_moves(&self, db: f64) -> bool {
+        self.drawn_level_px
+            .get()
+            .is_some_and(|drawn| drawn != level_bar_px(db))
     }
 
     /// `formatTime`: `M:SS`, hours folded into minutes the same way.
@@ -200,7 +214,10 @@ impl ControlsWindow {
         let can_mute = session.mode() == Some(RecordingMode::Instant)
             && session.has_microphone()
             && matches!(session.phase, Phase::Recording { .. });
-        let level = feeds::bar_level(Feeds::global(cx).read(cx).mic_level_db);
+        let level_db = Feeds::global(cx).read(cx).mic_level_db;
+        let level = feeds::bar_level(level_db);
+        self.drawn_level_px
+            .set((self.has_microphone && !muted).then(|| level_bar_px(level_db)));
 
         let icon = if !self.has_microphone || muted {
             "icons/mic-off.svg"
@@ -539,4 +556,41 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         } else {
             error
         })
+}
+
+/// The bar's track is 20pt wide; 40 steps covers a 2x display.
+fn level_bar_px(db: f64) -> u32 {
+    (feeds::bar_level(db) * 40.0).round() as u32
+}
+
+fn until_next_second(elapsed: Duration) -> Duration {
+    Duration::from_secs(1)
+        .saturating_sub(Duration::from_nanos(u64::from(elapsed.subsec_nanos())))
+        .max(Duration::from_millis(20))
+}
+
+#[cfg(test)]
+mod repaint_tests {
+    use super::*;
+
+    #[test]
+    fn the_timer_wakes_once_per_displayed_second() {
+        assert_eq!(
+            until_next_second(Duration::from_millis(3_250)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            until_next_second(Duration::from_millis(3_995)),
+            Duration::from_millis(20)
+        );
+        assert_eq!(until_next_second(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn level_changes_under_a_device_pixel_do_not_move_the_bar() {
+        assert_eq!(level_bar_px(-30.0), level_bar_px(-30.5));
+        assert_ne!(level_bar_px(-30.0), level_bar_px(-32.0));
+        assert_eq!(level_bar_px(-96.0), 0);
+        assert_eq!(level_bar_px(0.0), 40);
+    }
 }
