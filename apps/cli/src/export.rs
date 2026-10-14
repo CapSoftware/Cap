@@ -45,8 +45,8 @@ impl From<QualityArg> for cap_export::mp4::ExportCompression {
 Pass one project for a single export, or several to export them all in one run. With more than
 one project the output must be a directory (--output, or a trailing directory argument), and
 each project is written as '<project name>.<ext>'. Every positional is read as a project; a
-trailing path that cannot be read as one is taken as the output location, as in
-`cap export project.cap out.mp4`.
+trailing path that cannot be read as one is taken as the output location (as in
+`cap export project.cap out.mp4`); with --output, every positional is a project.
 
 NOTE: here --format selects the CONTAINER (mp4/gif/mov), NOT the output mode. For machine-readable
 output pass --json (the global flag), which streams NDJSON progress + completion events to stdout.
@@ -263,8 +263,7 @@ enum ExportProgressMessage<'a> {
     },
 }
 
-/// True when `path` reads as a '.cap' project: it ends in `.cap`, or it is a directory holding a
-/// `recording-meta.json`. Tells a trailing output argument apart from a project argument.
+/// Distinguishes a project argument from a trailing output path.
 fn looks_like_project(path: &Path) -> bool {
     if path
         .extension()
@@ -275,41 +274,40 @@ fn looks_like_project(path: &Path) -> bool {
     path.join("recording-meta.json").is_file()
 }
 
-/// Split positional arguments into projects plus an optional output. A trailing path that cannot
-/// be read as a project is the output location, but only when --output was not given; passing both
-/// stays an error. With --output present, every positional is a project.
+/// Positionals are projects, except that a trailing path that cannot be read as one is the
+/// output location. With --output present every positional is a project, so a mistyped or
+/// missing project still reaches the per-file failure path.
 fn split_projects_and_output(
     mut paths: Vec<PathBuf>,
     flag_output: Option<PathBuf>,
 ) -> Result<(Vec<PathBuf>, Option<PathBuf>), String> {
-    let trailing_output =
-        paths.len() >= 2 && paths.last().is_some_and(|path| !looks_like_project(path));
-
     if let Some(output) = flag_output {
-        if trailing_output {
-            return Err(
-                "Specify the output path either positionally or with --output, not both"
-                    .to_string(),
-            );
-        }
         return Ok((paths, Some(output)));
     }
 
+    let trailing_output =
+        paths.len() >= 2 && paths.last().is_some_and(|path| !looks_like_project(path));
     let output = if trailing_output { paths.pop() } else { None };
     Ok((paths, output))
 }
 
-/// `<project name>.<ext>` inside `dir` for one batch entry.
 fn batch_output_name(project: &Path, extension: &str) -> String {
-    let stem = project
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
+    let name = project
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
         .unwrap_or("export");
+    let stem = match project.extension() {
+        Some(ext) if ext.eq_ignore_ascii_case("cap") => project
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or(name),
+        _ => name,
+    };
     format!("{stem}.{extension}")
 }
 
-/// Pair every project with its output inside `dir`, rejecting runs that would write one name twice.
 fn plan_batch_outputs(
     projects: Vec<PathBuf>,
     dir: &Path,
@@ -319,7 +317,7 @@ fn plan_batch_outputs(
     let mut claimed = std::collections::HashMap::new();
     for project in projects {
         let name = batch_output_name(&project, extension);
-        if let Some(previous) = claimed.insert(name.clone(), project.clone()) {
+        if let Some(previous) = claimed.insert(name.to_lowercase(), project.clone()) {
             return Err(format!(
                 "Two projects would both export to '{name}' ({} and {}); rename one of them or export it separately",
                 previous.display(),
@@ -495,7 +493,6 @@ impl Export {
         Ok(())
     }
 
-    /// Export one project. Batch runs pass the planned destination file explicitly.
     async fn export_project(
         project_path: &Path,
         output: Option<PathBuf>,
@@ -1269,12 +1266,17 @@ mod tests {
     }
 
     #[test]
-    fn output_flag_plus_trailing_output_is_rejected() {
-        let result = split_projects_and_output(
-            vec![PathBuf::from("/tmp/a.cap"), PathBuf::from("/tmp/out.mp4")],
-            Some(PathBuf::from("/tmp/out2.mp4")),
-        );
-        assert!(result.is_err());
+    fn output_flag_makes_every_positional_a_project() {
+        let (projects, output) = split_projects_and_output(
+            vec![
+                PathBuf::from("/tmp/a.cap"),
+                PathBuf::from("/tmp/missing-project"),
+            ],
+            Some(PathBuf::from("/tmp/out")),
+        )
+        .unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(output, Some(PathBuf::from("/tmp/out")));
     }
 
     #[test]
@@ -1297,11 +1299,26 @@ mod tests {
         let result = plan_batch_outputs(
             vec![
                 PathBuf::from("/tmp/one/Talk.cap"),
-                PathBuf::from("/tmp/two/Talk.cap"),
+                PathBuf::from("/tmp/two/talk.cap"),
             ],
             Path::new("/tmp/exports"),
             "mp4",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn batch_keeps_dotted_project_names() {
+        let planned = plan_batch_outputs(
+            vec![
+                PathBuf::from("/tmp/one/release.v1"),
+                PathBuf::from("/tmp/two/release.v2"),
+            ],
+            Path::new("/tmp/exports"),
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(planned[0].1, PathBuf::from("/tmp/exports/release.v1.mp4"));
+        assert_eq!(planned[1].1, PathBuf::from("/tmp/exports/release.v2.mp4"));
     }
 }
