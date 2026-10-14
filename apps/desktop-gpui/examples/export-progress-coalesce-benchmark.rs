@@ -1,15 +1,7 @@
-//! Export-progress drain benchmark: per-message model updates against
-//! drain-to-latest coalescing, on the exact channel pattern used by the
-//! export UI in `src/editor_export.rs`.
+//! Model-update counts in the export-progress drain loop, at 60 msg/s with a
+//! 50 ms consumer over 5 s.
 //!
-//! "old" reproduces the previous drain loop: one model update per progress
-//! message received. "new" is the replacement: drain to the latest message,
-//! single update per 50ms wake. The producer sends at 60 msg/s for 5s in both.
-//!
-//! What is measured: update invocations (exact) and the mock update body
-//! cost (field writes + the `"{} / {} frames"` label). What is not measured:
-//! `cx.notify()`'s render-tree rebuild, which runs once per update in
-//! production and is the reason fewer updates matter.
+//! Measures update invocations, not `cx.notify()` render cost.
 //!
 //! Run: cargo run -p cap-desktop-gpui --example export-progress-coalesce-benchmark --release
 

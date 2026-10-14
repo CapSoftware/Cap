@@ -1,13 +1,7 @@
-//! Cost of acquiring GPU layer pipelines for one export-preview frame.
-//!
-//! Baseline mirrors what `render_preview_frame` did before pooling:
-//! `RendererLayers::new_with_options` on every frame, paying full
-//! shader/pipeline compilation each time. Improved measures the
-//! `take_reusable_layers` / `return_reusable_layers` round trip used now.
+//! Per-frame cost of acquiring `RendererLayers`: fresh build vs pooled reuse.
 //!
 //! Run: `cargo run --release -p cap-export --example preview-layers-benchmark`
-//! Needs a wgpu adapter; the software fallback is fine, the cost under test
-//! is pipeline compilation, not rasterization.
+//! Needs a wgpu adapter (software fallback works).
 
 use std::time::Instant;
 
