@@ -280,6 +280,7 @@ pub(crate) fn start_instant_upload(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_instant_upload_with_ownership(
     video: VideoUploadInfo,
     project_path: PathBuf,
