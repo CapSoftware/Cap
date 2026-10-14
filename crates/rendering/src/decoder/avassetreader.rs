@@ -380,6 +380,8 @@ struct DecoderInstance {
     /// Lives on the instance because the reader vends in pts order between
     /// resets, but request batches may be served by different pool decoders.
     prev_vended: Option<u32>,
+    /// First frame of the uninterrupted vend run that ends at `prev_vended`.
+    run_start: Option<u32>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -405,6 +407,7 @@ impl DecoderInstance {
             tokio_handle,
             keyframe_index,
             prev_vended: None,
+            run_start: None,
             _permit: permit,
         })
     }
@@ -416,6 +419,7 @@ impl DecoderInstance {
                 self.frames_iter_valid = true;
                 self.health.reset_counters();
                 self.prev_vended = None;
+                self.run_start = None;
             }
             Err(e) => {
                 tracing::error!(
@@ -448,11 +452,21 @@ impl DecoderInstance {
         self.frames_iter_valid = true;
         self.health = DecoderHealth::new();
         self.prev_vended = None;
+        self.run_start = None;
         Ok(())
     }
 
     fn current_position(&self) -> f32 {
         self.inner.current_position_secs()
+    }
+
+    fn would_serve_stale_frame(&self, frame: u32, cache: &BTreeMap<u32, CachedFrame>) -> bool {
+        reuse_would_serve_stale_frame(
+            self.run_start,
+            self.prev_vended,
+            cache.range(..=frame).next_back().map(|(&cached, _)| cached),
+            frame,
+        )
     }
 }
 
@@ -537,7 +551,12 @@ impl AVAssetReaderDecoder {
         })
     }
 
-    fn select_best_decoder(&mut self, requested_time: f32, is_scrubbing: bool) -> (usize, bool) {
+    fn select_best_decoder(
+        &mut self,
+        requested_time: f32,
+        is_scrubbing: bool,
+        must_reset: impl Fn(&DecoderInstance) -> bool,
+    ) -> (usize, bool) {
         let decoder_count = self.decoders.len();
         let (best_id, _distance, needs_reset) = if is_scrubbing {
             self.pool_manager
@@ -552,6 +571,7 @@ impl AVAssetReaderDecoder {
         };
 
         let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
+        let needs_reset = needs_reset || must_reset(&self.decoders[decoder_idx]);
 
         let max_decoder_count = self
             .pool_manager
@@ -890,7 +910,10 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
-            let (decoder_idx, was_reset) = this.select_best_decoder(requested_time, is_scrubbing);
+            let (decoder_idx, was_reset) =
+                this.select_best_decoder(requested_time, is_scrubbing, |decoder| {
+                    decoder.would_serve_stale_frame(requested_frame, &cache)
+                });
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
@@ -954,6 +977,9 @@ impl AVAssetReaderDecoder {
                         && current_frame > prev + 1
                     {
                         record_pts_hole(&mut pts_holes, prev, current_frame);
+                    }
+                    if decoder.prev_vended.is_none() {
+                        decoder.run_start = Some(current_frame);
                     }
                     decoder.prev_vended = Some(current_frame);
 
@@ -1278,6 +1304,27 @@ impl AVAssetReaderDecoder {
     }
 }
 
+// Requests the reader has already passed, or that fall in a gap before its
+// next frame, are answered with the newest cached frame at or before them.
+// That frame is only trustworthy when this reader vended it in its current
+// run; an older one comes from an unrelated seek and shows stale content.
+// With nothing cached, a gap right after an evicted last frame would be
+// answered with the following frame instead of the one on screen.
+fn reuse_would_serve_stale_frame(
+    run_start: Option<u32>,
+    prev_vended: Option<u32>,
+    newest_cached_at_or_before: Option<u32>,
+    frame: u32,
+) -> bool {
+    let (Some(run_start), Some(vended)) = (run_start, prev_vended) else {
+        return false;
+    };
+    match newest_cached_at_or_before {
+        Some(cached) => cached < run_start,
+        None => vended < frame,
+    }
+}
+
 fn should_grow_decoder_pool(
     is_scrubbing: bool,
     needs_reset: bool,
@@ -1355,6 +1402,37 @@ mod tests {
             1,
             limit
         ));
+    }
+
+    #[test]
+    fn reused_readers_never_answer_with_frames_from_an_unrelated_seek() {
+        assert!(!reuse_would_serve_stale_frame(None, None, Some(10), 50));
+        assert!(!reuse_would_serve_stale_frame(
+            Some(40),
+            Some(55),
+            Some(48),
+            50
+        ));
+        assert!(!reuse_would_serve_stale_frame(
+            Some(40),
+            Some(55),
+            Some(40),
+            50
+        ));
+        assert!(reuse_would_serve_stale_frame(
+            Some(40),
+            Some(55),
+            Some(39),
+            50
+        ));
+        assert!(reuse_would_serve_stale_frame(
+            Some(40),
+            Some(55),
+            Some(10),
+            50
+        ));
+        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), None, 50));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(48), None, 50));
     }
 
     #[test]
