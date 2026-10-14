@@ -2688,6 +2688,48 @@ fn render_handle(theme: &Theme, color: Hsla, start: bool, opacity: f32) -> impl 
 /// stretched box inserts before it. The gradient is a three-stop fade with the
 /// mid colour at the centre -- gpui takes two stops, so it is drawn as two
 /// stacked halves.
+/// Where a clip's ruler hairlines fall, in pixels from its left edge.
+fn clip_marking_xs(
+    segment_start: f64,
+    source_start: f64,
+    holds: &[(f64, f64)],
+    position: f64,
+    zoom: f64,
+    secs_per_pixel: f64,
+    width: f32,
+) -> Vec<f32> {
+    let resolution = marking_resolution(zoom);
+    // `visibleMin = transform.position - props.prevDuration + props.segment.start`
+    // (`TL/ClipTrack.tsx:1437-1439`): `prevDuration` is the box's output start
+    // and `segment.start` its recording-domain start, so the grid is walked in
+    // recording time and mapped back through the holds below.
+    let visible_min = position - segment_start + source_start;
+    let visible_max = visible_min + zoom;
+    let first = (visible_min / resolution).floor();
+    let count = ((visible_max / resolution).ceil() - first).max(0.) as usize;
+    let holds_relative: Vec<(f64, f64)> = holds
+        .iter()
+        .map(|(start, end)| (start - segment_start, end - segment_start))
+        .collect();
+
+    let mut xs = Vec::new();
+    for index in 0..count.min(512) {
+        let marking = (first + index as f64) * resolution;
+        let effective = marking - source_start;
+        if effective < 0. {
+            continue;
+        }
+        let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
+        // The grid spans the whole viewport, but the clip clips everything
+        // past its own right edge.
+        if x > width {
+            break;
+        }
+        xs.push(x);
+    }
+    xs
+}
+
 fn render_clip_markings(
     color: Hsla,
     segment: &Segment,
@@ -2700,32 +2742,19 @@ fn render_clip_markings(
     let SegmentDetail::Clip { source_start, .. } = segment.detail else {
         return div();
     };
-    let resolution = marking_resolution(view.transform.zoom);
-    // `visibleMin = transform.position - props.prevDuration + props.segment.start`
-    // (`TL/ClipTrack.tsx:1437-1439`): `prevDuration` is the box's output start
-    // and `segment.start` its recording-domain start, so the grid is walked in
-    // recording time and mapped back through the holds below.
-    let visible_min = view.transform.position - segment.start + source_start;
-    let visible_max = visible_min + view.transform.zoom;
-    let first = (visible_min / resolution).floor();
-    let count = ((visible_max / resolution).ceil() - first).max(0.) as usize;
-
     let via = with_alpha(color, 0.14);
     let transparent = with_alpha(color, 0.);
 
     let mut root = div();
-    let holds_relative: Vec<(f64, f64)> = holds
-        .iter()
-        .map(|(start, end)| (start - segment.start, end - segment.start))
-        .collect();
-
-    for index in 0..count.min(512) {
-        let marking = (first + index as f64) * resolution;
-        let effective = marking - source_start;
-        if effective < 0. {
-            continue;
-        }
-        let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
+    for x in clip_marking_xs(
+        segment.start,
+        source_start,
+        holds,
+        view.transform.position,
+        view.transform.zoom,
+        secs_per_pixel,
+        width,
+    ) {
         let radius = SEGMENT_RADIUS.min(width / 2.).min(height / 2.);
         let inset = rounded_corner_inset(f64::from(x), f64::from(width), f64::from(radius)).max(
             rounded_corner_inset(f64::from(x + 1.), f64::from(width), f64::from(radius)),
@@ -3540,6 +3569,24 @@ mod tests {
     const AUDIO_SAMPLE_RATE: usize = 48_000;
 
     // -- The ruler ----------------------------------------------------------
+
+    #[test]
+    fn clip_markings_stop_at_the_clip_edge() {
+        // A 30s clip 10 minutes into a fully zoomed-out 30-minute timeline:
+        // the 30s grid spans the viewport, only the clip's own hairlines draw.
+        let secs_per_pixel = 1800. / 1400.;
+        let width = (30. / secs_per_pixel) as f32;
+        let xs = clip_marking_xs(600., 600., &[], 0., 1800., secs_per_pixel, width);
+        assert!(xs.iter().all(|x| (0. ..=width).contains(x)));
+        assert_eq!(xs.len(), 2);
+
+        // With a hold the grid is still mapped through it, and still clipped.
+        let holds = [(605., 610.)];
+        let xs = clip_marking_xs(600., 0., &holds, 590., 20., 0.02, 500.);
+        assert!(xs.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(xs.iter().all(|x| (0. ..=500.).contains(x)));
+        assert_eq!(xs.len(), 6);
+    }
 
     #[test]
     fn marking_resolution_walks_the_ladder() {
