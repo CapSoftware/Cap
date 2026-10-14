@@ -378,13 +378,13 @@ impl KeyframeIndex {
 
 fn compute_seek_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> f32 {
     if let Some(kf_index) = keyframe_index {
-        let fps = kf_index.fps();
-        let target_frame = (requested_time as f64 * fps).round() as u32;
-        if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
-            return keyframe_time as f32;
-        }
-        if let Some((_, first_keyframe_time)) = kf_index.keyframes().first() {
-            return *first_keyframe_time as f32;
+        let keyframes = kf_index.keyframes();
+        // Rounded frame numbers can alias keyframes across a VFR gap and seek
+        // past the image that should still be held at the requested time.
+        let after_request =
+            keyframes.partition_point(|(_, time)| *time <= f64::from(requested_time));
+        if let Some((_, keyframe_time)) = keyframes.get(after_request.saturating_sub(1)) {
+            return *keyframe_time as f32;
         }
     }
     requested_time
@@ -660,6 +660,41 @@ mod tests {
     use super::*;
 
     type Keyframes = Vec<(u32, f64)>;
+
+    fn seek_index(keyframes: Keyframes) -> Arc<KeyframeIndex> {
+        Arc::new(KeyframeIndex {
+            keyframes,
+            fps: 2.0,
+            duration_secs: 8.0,
+            pixel_format: None,
+            width: 0,
+            height: 0,
+        })
+    }
+
+    #[test]
+    fn seek_time_does_not_round_forward_across_a_vfr_gap() {
+        let index = seek_index(vec![(0, 0.0), (6, 3.2), (10, 5.0)]);
+        assert_eq!(compute_seek_time(Some(&index), 3.0), 0.0);
+        assert_eq!(compute_seek_time(Some(&index), 3.2), 3.2);
+        assert_eq!(compute_seek_time(Some(&index), 4.9), 3.2);
+        assert_eq!(compute_seek_time(Some(&index), 5.0), 5.0);
+    }
+
+    #[test]
+    fn seek_time_distinguishes_keyframes_with_the_same_rounded_number() {
+        let index = seek_index(vec![(0, 0.0), (6, 2.8), (6, 3.2)]);
+        assert_eq!(compute_seek_time(Some(&index), 3.0), 2.8);
+    }
+
+    #[test]
+    fn seek_time_preserves_start_and_missing_index_fallbacks() {
+        let index = seek_index(vec![(1, 0.3), (2, 1.0)]);
+        assert_eq!(compute_seek_time(Some(&index), 0.0), 0.3);
+        assert_eq!(compute_seek_time(Some(&index), 8.0), 1.0);
+        assert_eq!(compute_seek_time(Some(&seek_index(Vec::new())), 3.0), 3.0);
+        assert_eq!(compute_seek_time(None, 3.0), 3.0);
+    }
 
     fn both_indexes(path: &Path) -> Option<(Option<Keyframes>, Keyframes)> {
         ffmpeg::init().unwrap();

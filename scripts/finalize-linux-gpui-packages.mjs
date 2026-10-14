@@ -1,6 +1,7 @@
 import {
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
 	rename,
@@ -221,6 +222,54 @@ const captured = (env) => ({
 	stdio: ["ignore", "pipe", "inherit"],
 });
 
+async function verifyDebGlibc(root, control, { env, run }) {
+	const dependencies = /^Depends:(.*(?:\n[ \t].*)*)/m
+		.exec(control)?.[1]
+		.replace(/\n[ \t]+/g, " ")
+		.split(",");
+	const minimum = dependencies
+		?.map((dependency) =>
+			/^\s*libc6\s*\(>=\s*(\d+(?:\.\d+)+)\)\s*$/.exec(dependency),
+		)
+		.find(Boolean)?.[1];
+	if (!minimum) {
+		throw new Error(
+			"The Cap deb must declare a versioned libc6 (>= version) dependency",
+		);
+	}
+	async function verifyDirectory(directory) {
+		for (const entry of await readdir(directory, { withFileTypes: true })) {
+			const filename = path.join(directory, entry.name);
+			if (entry.isDirectory()) {
+				await verifyDirectory(filename);
+			} else if (entry.isFile()) {
+				const file = await open(filename, "r");
+				const magic = Buffer.alloc(4);
+				try {
+					await file.read(magic, 0, 4, 0);
+				} finally {
+					await file.close();
+				}
+				if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue;
+				const { stdout } = await run(
+					"readelf",
+					["--wide", "--version-info", filename],
+					captured(env),
+				);
+				const needs = stdout.split("Version needs section")[1] ?? "";
+				for (const match of needs.matchAll(/Name: GLIBC_(\d+(?:\.\d+)+)\b/g)) {
+					if (match[1].localeCompare(minimum, "en", { numeric: true }) > 0) {
+						throw new Error(
+							`${path.relative(root, filename)} requires GLIBC_${match[1]}, exceeding the declared libc6 (>= ${minimum}) dependency`,
+						);
+					}
+				}
+			}
+		}
+	}
+	await verifyDirectory(root);
+}
+
 async function recompressDebData(uncompressed, output, members, { env, run }) {
 	await mkdir(members);
 	const names = (await run("ar", ["t", uncompressed], captured(env))).stdout
@@ -267,6 +316,10 @@ export async function finalizeGpuiDeb(
 			path.join(root, "usr", "lib", "cap"),
 		);
 		const control = path.join(root, "DEBIAN", "control");
+		await verifyDebGlibc(root, await readFile(control, "utf8"), {
+			env: tools,
+			run,
+		});
 		await writeFile(
 			control,
 			withInstalledSize(

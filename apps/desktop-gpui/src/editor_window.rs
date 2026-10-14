@@ -2858,6 +2858,12 @@ impl EditorWindow {
             .is_some_and(|current| Arc::ptr_eq(current, instance))
     }
 
+    pub(crate) fn holds_instance(&self, instance: &std::sync::Weak<EditorInstance>) -> bool {
+        self.instance
+            .as_ref()
+            .is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), instance.as_ptr()))
+    }
+
     fn retry_preparing_candidate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.preparing_retry_pending {
             return;
