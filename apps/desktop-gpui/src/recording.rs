@@ -2398,10 +2398,13 @@ impl PendingInstantVideo {
         }
     }
 
+    /// Cancel safe: the request task is kept until it completes, so an
+    /// interrupted wait can still recover the created link for cleanup.
     async fn video(&mut self) -> anyhow::Result<cap_project::VideoUploadInfo> {
-        if let Some(task) = self.task.take() {
-            let video = task
-                .await
+        if let Some(task) = self.task.as_mut() {
+            let result = task.await;
+            self.task = None;
+            let video = result
                 .map_err(|error| anyhow!("Could not create the shareable link: {error}"))?
                 .map_err(anyhow::Error::msg)?;
             self.video = Some(video);
