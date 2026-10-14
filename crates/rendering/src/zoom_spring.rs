@@ -183,9 +183,41 @@ impl CursorCropMaps {
     }
 }
 
+struct ClusterCenters {
+    clusters: Vec<ClickCluster>,
+    time_ordered: bool,
+}
+
+impl ClusterCenters {
+    fn new(clusters: Vec<ClickCluster>) -> Self {
+        let time_ordered =
+            clusters.is_sorted_by(|left, right| left.start_time_ms <= right.start_time_ms);
+        Self {
+            clusters,
+            time_ordered,
+        }
+    }
+
+    fn center_at(&self, time_ms: f64) -> Option<(f64, f64)> {
+        if self.time_ordered {
+            let through_time = self
+                .clusters
+                .partition_point(|cluster| cluster.start_time_ms <= time_ms);
+            self.clusters.get(through_time.saturating_sub(1))
+        } else {
+            self.clusters
+                .iter()
+                .rev()
+                .find(|cluster| cluster.start_time_ms <= time_ms)
+                .or_else(|| self.clusters.first())
+        }
+        .map(ClickCluster::center)
+    }
+}
+
 struct CroppedClusters {
     crop: Option<CursorCropMap>,
-    clusters: Vec<ClickCluster>,
+    clusters: ClusterCenters,
 }
 
 struct TimedClusterVariant {
@@ -195,7 +227,7 @@ struct TimedClusterVariant {
 }
 
 enum ZoomClusters {
-    Static(Vec<ClickCluster>),
+    Static(ClusterCenters),
     Styled {
         variants: Vec<CroppedClusters>,
         styles: Vec<TimedClusterVariant>,
@@ -212,14 +244,14 @@ impl ZoomClusters {
         crops: &CursorCropMaps,
     ) -> Self {
         let build = |crop| {
-            build_clusters(
+            ClusterCenters::new(build_clusters(
                 cursor_events,
                 moves_time_ordered,
                 recording_start,
                 recording_end,
                 segment.amount,
                 crop,
-            )
+            ))
         };
         let base = build(crops.base);
         let overlaps =
@@ -275,7 +307,7 @@ impl ZoomClusters {
                 &variants[variant].clusters
             }
         };
-        cluster_center_at_time(clusters, recording_ms)
+        clusters.center_at(recording_ms)
     }
 }
 
@@ -415,20 +447,6 @@ pub(crate) fn build_clusters(
     clusters.push(current);
 
     clusters
-}
-
-/// The active cluster at `time_ms` (RECORDING time) is the last cluster whose
-/// first event time is <= t; the spring smooths the discrete re-aims.
-pub(crate) fn cluster_center_at_time(
-    clusters: &[ClickCluster],
-    time_ms: f64,
-) -> Option<(f64, f64)> {
-    clusters
-        .iter()
-        .rev()
-        .find(|c| c.start_time_ms <= time_ms)
-        .or_else(|| clusters.first())
-        .map(|c| c.center())
 }
 
 /// One entry of the timeline-time -> recording-time mapping derived from
@@ -2608,6 +2626,308 @@ mod tests {
                         format!("{ordered:?}"),
                         format!("{scanned:?}"),
                         "range {start}..{end} amount {amount}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn linear_cluster_center_at_time(
+        clusters: &[ClickCluster],
+        time_ms: f64,
+    ) -> Option<(f64, f64)> {
+        clusters
+            .iter()
+            .rev()
+            .find(|cluster| cluster.start_time_ms <= time_ms)
+            .or_else(|| clusters.first())
+            .map(ClickCluster::center)
+    }
+
+    #[test]
+    fn cluster_centers_match_linear_lookup_for_all_short_sequences() {
+        let starts = [
+            f64::NEG_INFINITY,
+            -0.0,
+            0.0,
+            1.0,
+            2.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let queries = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0_f64.next_down(),
+            1.0,
+            1.0_f64.next_up(),
+            2.0,
+            3.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for length in 0..=4 {
+            for mut sequence in 0..starts.len().pow(length) {
+                let clusters = (0..length)
+                    .map(|index| {
+                        let start = starts[sequence % starts.len()];
+                        sequence /= starts.len();
+                        ClickCluster::new(f64::from(index), f64::from(index) * 0.5, start)
+                    })
+                    .collect();
+                let centers = ClusterCenters::new(clusters);
+                for time in queries {
+                    assert_eq!(
+                        centers.center_at(time),
+                        linear_cluster_center_at_time(&centers.clusters, time),
+                        "clusters {:?}, time {time}",
+                        centers.clusters
+                    );
+                }
+            }
+        }
+    }
+
+    fn smooth_cluster_cursor(duration_secs: f64) -> CursorEvents {
+        let moves = (0..(duration_secs * 60.0) as usize)
+            .map(|index| {
+                let time = index as f64 / 60.0;
+                let phase = (time % 3.2) / 3.2;
+                let triangle = 1.0 - (2.0 * phase - 1.0).abs();
+                move_event(
+                    time * 1000.0,
+                    0.1 + 0.8 * triangle,
+                    0.5 + 0.2 * (time * std::f64::consts::TAU / 11.0).sin(),
+                )
+            })
+            .collect();
+        CursorEvents {
+            moves,
+            clicks: Vec::new(),
+        }
+    }
+
+    fn force_linear_cluster_lookup(timeline: &mut ZoomTransformTimeline) {
+        for clusters in timeline.clusters.iter_mut().flatten() {
+            match clusters {
+                ZoomClusters::Static(centers) => centers.time_ordered = false,
+                ZoomClusters::Styled { variants, .. } => {
+                    for variant in variants {
+                        variant.clusters.time_ordered = false;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_cluster_samples_match_linear_lookup_across_crops_and_clip_jumps() {
+        for styled in [false, true] {
+            let styles = if styled {
+                vec![
+                    crop_style(
+                        1.5,
+                        6.0,
+                        0,
+                        Some(Crop {
+                            position: XY::new(0, 0),
+                            size: XY::new(500, 1000),
+                        }),
+                    ),
+                    crop_style(
+                        3.0,
+                        4.5,
+                        1,
+                        Some(Crop {
+                            position: XY::new(0, 500),
+                            size: XY::new(1000, 500),
+                        }),
+                    ),
+                ]
+            } else {
+                Vec::new()
+            };
+            for reordered_clips in [false, true] {
+                let mut project =
+                    project_with_crop_styles(vec![auto_segment(0.25, 7.75, 2.0)], styles.clone());
+                let config = project.timeline.as_mut().unwrap();
+                if styled {
+                    config.text_segments.push(
+                        serde_json::from_value(serde_json::json!({
+                            "start": 2.0,
+                            "end": 3.0,
+                            "layout": "fullscreen",
+                        }))
+                        .unwrap(),
+                    );
+                }
+                let ranges = if reordered_clips {
+                    vec![(0, 0.0, 2.0), (1, 6.0, 8.0), (0, 2.0, 6.0)]
+                } else {
+                    vec![(0, 0.0, 8.0)]
+                };
+                config.segments = ranges
+                    .into_iter()
+                    .map(|(recording_clip, start, end)| TimelineSegment {
+                        recording_clip,
+                        timescale: 1.0,
+                        start,
+                        end,
+                        name: None,
+                        speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
+                    })
+                    .collect();
+                if reordered_clips {
+                    config.transitions = [1, 2]
+                        .into_iter()
+                        .map(|segment_index| ClipTransition {
+                            segment_index,
+                            kind: ClipTransitionType::CrossFade,
+                            duration: 0.25,
+                        })
+                        .collect();
+                }
+                for reordered_moves in [false, true] {
+                    let mut cursor = smooth_cluster_cursor(8.0);
+                    if reordered_moves {
+                        cursor.moves.reverse();
+                    }
+                    for (recording_clip, outgoing) in [(0, false), (0, true), (1, false)] {
+                        let build = || {
+                            if outgoing {
+                                ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                    &project,
+                                    &cursor,
+                                    8.0,
+                                    XY::new(1000, 1000),
+                                    recording_clip,
+                                )
+                            } else {
+                                ZoomTransformTimeline::from_project_for_clip(
+                                    &project,
+                                    &cursor,
+                                    8.0,
+                                    XY::new(1000, 1000),
+                                    recording_clip,
+                                )
+                            }
+                        };
+                        let mut indexed = build();
+                        let mut linear = build();
+                        force_linear_cluster_lookup(&mut linear);
+                        indexed.precompute();
+                        for time in [1.0, 3.5, 2.0, 8.0] {
+                            linear.ensure_precomputed_until(time);
+                        }
+                        assert_samples_identical(&indexed, &linear);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --release --ignored --nocapture"]
+    fn zoom_cluster_timeline_rebuild() {
+        use std::time::{Duration, Instant};
+
+        const RUNS: usize = 7;
+        let percentile = |times: &mut Vec<Duration>, p: f64| {
+            times.sort_unstable();
+            let index = ((times.len() - 1) as f64 * p).round() as usize;
+            times[index].as_secs_f64() * 1000.0
+        };
+        let cluster_count = |timeline: &ZoomTransformTimeline| {
+            timeline
+                .clusters
+                .iter()
+                .flatten()
+                .map(|clusters| match clusters {
+                    ZoomClusters::Static(centers) => centers.clusters.len(),
+                    ZoomClusters::Styled { variants, .. } => variants
+                        .iter()
+                        .map(|variant| variant.clusters.clusters.len())
+                        .sum(),
+                })
+                .sum::<usize>()
+        };
+        println!(
+            "| seconds | zoom | playhead | moves | clusters | samples | build p50 ms | precompute p50 ms | rebuild p50 ms | rebuild min ms | rebuild max ms | samples hash |"
+        );
+        println!(
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+        );
+        for duration_secs in [60.0, 600.0] {
+            let cursor = smooth_cluster_cursor(duration_secs);
+            for long_zoom in [false, true] {
+                let mut project = benchmark_project(duration_secs, (duration_secs / 30.0) as usize);
+                if long_zoom {
+                    project.timeline.as_mut().unwrap().zoom_segments =
+                        vec![auto_segment(0.0, duration_secs, 2.0)];
+                }
+                for fraction in [0.5, 1.0] {
+                    let playhead = (duration_secs * fraction) as f32;
+                    let mut build_times = Vec::with_capacity(RUNS);
+                    let mut precompute_times = Vec::with_capacity(RUNS);
+                    let mut rebuild_times = Vec::with_capacity(RUNS);
+                    let mut expected_hash = None;
+                    let mut clusters = 0;
+                    let mut samples = 0;
+                    let mut reference = ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &cursor,
+                        duration_secs,
+                        XY::new(1920, 1080),
+                        0,
+                    );
+                    force_linear_cluster_lookup(&mut reference);
+                    reference.ensure_precomputed_until(playhead);
+                    for run in 0..=RUNS {
+                        let build_start = Instant::now();
+                        let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                            &project,
+                            &cursor,
+                            duration_secs,
+                            XY::new(1920, 1080),
+                            0,
+                        );
+                        let build_elapsed = build_start.elapsed();
+                        let precompute_start = Instant::now();
+                        timeline.ensure_precomputed_until(playhead);
+                        let precompute_elapsed = precompute_start.elapsed();
+                        let rebuild_elapsed = build_start.elapsed();
+                        assert_samples_identical(&timeline, &reference);
+                        let hash = samples_hash(&timeline);
+                        if let Some(expected_hash) = expected_hash {
+                            assert_eq!(hash, expected_hash);
+                        } else {
+                            expected_hash = Some(hash);
+                        }
+                        clusters = cluster_count(&timeline);
+                        samples = timeline.samples.len();
+                        assert!(samples > (f64::from(playhead) * 1000.0 / STEP_MS) as usize);
+                        std::hint::black_box(timeline.sample(playhead));
+                        if run > 0 {
+                            build_times.push(build_elapsed);
+                            precompute_times.push(precompute_elapsed);
+                            rebuild_times.push(rebuild_elapsed);
+                        }
+                    }
+                    let rebuild_p50 = percentile(&mut rebuild_times, 0.5);
+                    println!(
+                        "| {duration_secs:.0} | {} | {:.0}% | {} | {clusters} | {samples} | {:.3} | {:.3} | {rebuild_p50:.3} | {:.3} | {:.3} | {:016x} |",
+                        if long_zoom { "long" } else { "4s every 30s" },
+                        fraction * 100.0,
+                        cursor.moves.len(),
+                        percentile(&mut build_times, 0.5),
+                        percentile(&mut precompute_times, 0.5),
+                        rebuild_times[0].as_secs_f64() * 1000.0,
+                        rebuild_times[RUNS - 1].as_secs_f64() * 1000.0,
+                        expected_hash.unwrap(),
                     );
                 }
             }
