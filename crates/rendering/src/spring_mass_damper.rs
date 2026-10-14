@@ -245,8 +245,103 @@ impl SpringMassDamperSimulation {
 mod tests {
     use super::*;
 
+    fn original_solve_spring_1d(
+        displacement: f32,
+        velocity: f32,
+        t: f32,
+        omega0: f32,
+        zeta: f32,
+    ) -> (f32, f32) {
+        const CRITICAL_EPSILON: f32 = 0.01;
+
+        if zeta < 1.0 - CRITICAL_EPSILON {
+            let omega_d = omega0 * (1.0 - zeta * zeta).sqrt();
+            let decay = (-zeta * omega0 * t).exp();
+            let cos_term = (omega_d * t).cos();
+            let sin_term = (omega_d * t).sin();
+
+            let a = displacement;
+            let b = (velocity + displacement * zeta * omega0) / omega_d.max(1e-4);
+
+            let new_disp = decay * (a * cos_term + b * sin_term);
+            let new_vel = decay
+                * ((b * omega_d - a * zeta * omega0) * cos_term
+                    - (a * omega_d + b * zeta * omega0) * sin_term);
+
+            (new_disp, new_vel)
+        } else if zeta > 1.0 + CRITICAL_EPSILON {
+            let sqrt_term = (zeta * zeta - 1.0).sqrt();
+            let s1 = -omega0 * (zeta - sqrt_term);
+            let s2 = -omega0 * (zeta + sqrt_term);
+            let denom = s1 - s2;
+
+            if denom.abs() < 1e-10 {
+                let s_avg = 0.5 * (s1 + s2);
+                let decay = (s_avg * t).exp();
+                let new_disp = decay * (displacement + (velocity - displacement * s_avg) * t);
+                let new_vel = decay
+                    * ((velocity - displacement * s_avg)
+                        + s_avg * (displacement + (velocity - displacement * s_avg) * t));
+                (new_disp, new_vel)
+            } else {
+                let c1 = (velocity - displacement * s2) / denom;
+                let c2 = displacement - c1;
+
+                let e1 = (s1 * t).exp();
+                let e2 = (s2 * t).exp();
+
+                let new_disp = c1 * e1 + c2 * e2;
+                let new_vel = c1 * s1 * e1 + c2 * s2 * e2;
+
+                (new_disp, new_vel)
+            }
+        } else {
+            let decay = (-omega0 * t).exp();
+            let a = displacement;
+            let b = velocity + displacement * omega0;
+
+            let new_disp = decay * (a + b * t);
+            let new_vel = decay * (b - omega0 * (a + b * t));
+
+            (new_disp, new_vel)
+        }
+    }
+
+    fn original_run(
+        config: SpringMassDamperSimulationConfig,
+        position: &mut XY<f32>,
+        velocity: &mut XY<f32>,
+        target: XY<f32>,
+        dt_ms: f32,
+    ) {
+        let t = dt_ms / 1000.0;
+        let mass = config.mass.max(0.001);
+        let stiffness = config.tension;
+        let damping = config.friction;
+
+        let omega0 = (stiffness / mass).sqrt();
+        let zeta = damping / (2.0 * (stiffness * mass).sqrt());
+
+        let disp_x = position.x - target.x;
+        let disp_y = position.y - target.y;
+
+        let (new_disp_x, new_vel_x) = original_solve_spring_1d(disp_x, velocity.x, t, omega0, zeta);
+        let (new_disp_y, new_vel_y) = original_solve_spring_1d(disp_y, velocity.y, t, omega0, zeta);
+
+        *position = XY::new(target.x + new_disp_x, target.y + new_disp_y);
+        *velocity = XY::new(new_vel_x, new_vel_y);
+
+        let disp_mag = (new_disp_x * new_disp_x + new_disp_y * new_disp_y).sqrt();
+        let vel_mag = (new_vel_x * new_vel_x + new_vel_y * new_vel_y).sqrt();
+
+        if disp_mag < REST_DISPLACEMENT_THRESHOLD && vel_mag < REST_VELOCITY_THRESHOLD {
+            *position = target;
+            *velocity = XY::new(0.0, 0.0);
+        }
+    }
+
     #[test]
-    fn cached_spring_steps_match_fresh_simulations() {
+    fn cached_spring_steps_match_original_solver() {
         let configs = [
             SpringMassDamperSimulationConfig {
                 tension: 200.0,
@@ -264,6 +359,11 @@ mod tests {
                 friction: 200.0,
             },
             SpringMassDamperSimulationConfig {
+                tension: 1e-24,
+                mass: 1.0,
+                friction: 1e-11,
+            },
+            SpringMassDamperSimulationConfig {
                 tension: 400.0,
                 mass: 0.0,
                 friction: 1.0,
@@ -278,23 +378,23 @@ mod tests {
             let target = XY::new(((step / 150) % 3) as f32 * 0.4, 0.5);
             let dt_ms = if step % 11 == 0 { 16.0 } else { 8.0 };
 
-            let mut fresh = SpringMassDamperSimulation::new(config);
-            fresh.set_position(position);
-            fresh.set_velocity(velocity);
-            fresh.set_target_position(target);
-            let expected = fresh.run(dt_ms);
+            original_run(config, &mut position, &mut velocity, target, dt_ms);
 
             cached.set_config(config);
             cached.set_target_position(target);
-            let actual = cached.run(dt_ms);
+            cached.run(dt_ms);
 
             assert_eq!(
-                [actual.x, actual.y, cached.velocity.x, cached.velocity.y].map(f32::to_bits),
-                [expected.x, expected.y, fresh.velocity.x, fresh.velocity.y].map(f32::to_bits),
+                [
+                    cached.position.x,
+                    cached.position.y,
+                    cached.velocity.x,
+                    cached.velocity.y
+                ]
+                .map(f32::to_bits),
+                [position.x, position.y, velocity.x, velocity.y].map(f32::to_bits),
                 "step {step}"
             );
-            position = fresh.position;
-            velocity = fresh.velocity;
         }
     }
 }
