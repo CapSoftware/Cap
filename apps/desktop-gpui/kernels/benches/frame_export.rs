@@ -1,5 +1,3 @@
-//! Run: cargo bench -p cap-gpui-kernels --bench frame_export --release
-
 use cap_gpui_kernels::{
     codec as candidate_codec, frame as candidate_frame, screenshot as candidate,
 };
