@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import type { PublicShareVideo } from "@/lib/public-share-video";
 
 const DEFAULT_WIDTH = 800;
@@ -49,6 +50,17 @@ const scaleDimensions = ({
 	};
 };
 
+const configuredShareHost = () => {
+	try {
+		return new URL(serverEnv().WEB_URL).hostname
+			.toLowerCase()
+			.replace(/^www\./, "");
+	} catch {
+		// A missing or invalid WEB_URL must not reject cap.so / cap.link links.
+		return undefined;
+	}
+};
+
 export const parseCapShareUrl = (value: string) => {
 	let url: URL;
 	try {
@@ -62,7 +74,11 @@ export const parseCapShareUrl = (value: string) => {
 	const segments = url.pathname.split("/").filter(Boolean);
 	let videoId: string | undefined;
 
-	if (hostname === "cap.so" && segments.length === 2 && segments[0] === "s") {
+	if (
+		segments.length === 2 &&
+		segments[0] === "s" &&
+		(hostname === "cap.so" || hostname === configuredShareHost())
+	) {
 		videoId = segments[1];
 	}
 	if (

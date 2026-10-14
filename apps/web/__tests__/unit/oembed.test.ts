@@ -1,7 +1,15 @@
 import { Video } from "@cap/web-domain";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildOEmbedVideo, parseCapShareUrl } from "@/lib/oembed";
 import type { PublicShareVideo } from "@/lib/public-share-video";
+
+const serverEnvMock = vi.hoisted(() =>
+	vi.fn(() => ({ WEB_URL: "https://www.video.example.com" })),
+);
+
+vi.mock("@cap/env", () => ({
+	serverEnv: serverEnvMock,
+}));
 
 const video: PublicShareVideo = {
 	id: Video.VideoId.make("abc123"),
@@ -20,19 +28,35 @@ describe("Cap oEmbed", () => {
 		["https://www.cap.so/s/abc123?t=3", "abc123"],
 		["https://cap.link/abc123", "abc123"],
 		["https://www.cap.link/abc123?foo=bar", "abc123"],
+		["https://video.example.com/s/abc123", "abc123"],
+		["https://www.video.example.com/s/abc123?t=3", "abc123"],
 	])("parses supported share URL %s", (url, expected) => {
 		expect(parseCapShareUrl(url)).toBe(expected);
 	});
 
 	it.each([
 		"http://cap.so/s/abc123",
+		"http://video.example.com/s/abc123",
 		"https://example.com/s/abc123",
+		"https://video.example.com/abc123",
+		"https://video.example.com/embed/abc123",
+		"https://cap.link/s/abc123",
 		"https://cap.so/embed/abc123",
 		"https://cap.link/video/demo.mp4",
 		"https://cap.so/s/abc123/extra",
 		"not-a-url",
 	])("rejects unsupported URL %s", (url) => {
 		expect(parseCapShareUrl(url)).toBeNull();
+	});
+
+	it("ignores an unreadable WEB_URL instead of failing the parse", () => {
+		serverEnvMock.mockImplementationOnce(() => {
+			throw new Error("Invalid environment variables");
+		});
+
+		expect(parseCapShareUrl("https://video.example.com/s/abc123")).toBeNull();
+		expect(parseCapShareUrl("https://cap.so/s/abc123")).toBe("abc123");
+		expect(parseCapShareUrl("https://cap.link/abc123")).toBe("abc123");
 	});
 
 	it("returns a responsive video response with preserved dimensions", () => {
