@@ -215,9 +215,6 @@ fn pixelate_region(
     (x0, y0, width, height): (u32, u32, u32, u32),
     block: u32,
 ) -> Option<image::RgbaImage> {
-    if width == 0 || height == 0 {
-        return Some(image::RgbaImage::new(width, height));
-    }
     let columns: Vec<usize> = pixelated_samples(width, block)
         .map(|x| (x0 as usize + x) * 4)
         .collect();
@@ -291,6 +288,8 @@ mod tests {
         for region in [
             (0, 0, 61, 47),
             (3, 5, 1, 1),
+            (4, 4, 0, 9),
+            (4, 4, 9, 0),
             (7, 2, 13, 29),
             (60, 0, 1, 47),
             (10, 11, 50, 36),
