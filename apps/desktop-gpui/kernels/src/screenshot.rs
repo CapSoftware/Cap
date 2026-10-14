@@ -182,6 +182,11 @@ pub fn mask_filter(
     }
 
     let (x0, y0, width, height) = region;
+    if pixelate {
+        let block = (level.round() as u32).max(2);
+        return pixelate_region(rgba, stride, region, block);
+    }
+
     let mut copied = Vec::with_capacity(width as usize * height as usize * 4);
     for row in 0..height {
         let start = (y0 + row) as usize * stride + x0 as usize * 4;
@@ -189,8 +194,84 @@ pub fn mask_filter(
     }
     let source = image::RgbaImage::from_raw(width, height, copied)?;
 
-    let processed = if pixelate {
-        let block = (level.round() as u32).max(2);
+    let factor = ((level / 4.).round() as u32).max(2);
+    let small = image::imageops::resize(
+        &source,
+        (width / factor).max(1),
+        (height / factor).max(1),
+        image::imageops::FilterType::Triangle,
+    );
+    Some(image::imageops::resize(
+        &small,
+        width,
+        height,
+        image::imageops::FilterType::Triangle,
+    ))
+}
+
+fn pixelate_region(
+    rgba: &[u8],
+    stride: usize,
+    (x0, y0, width, height): (u32, u32, u32, u32),
+    block: u32,
+) -> Option<image::RgbaImage> {
+    if width == 0 || height == 0 {
+        return Some(image::RgbaImage::new(width, height));
+    }
+    let columns: Vec<usize> = pixelated_samples(width, block)
+        .map(|x| (x0 as usize + x) * 4)
+        .collect();
+    let row_bytes = width as usize * 4;
+    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+    let mut previous = None;
+    for y in pixelated_samples(height, block) {
+        if previous == Some(y) {
+            pixels.extend_from_within(pixels.len() - row_bytes..);
+            continue;
+        }
+        let row = &rgba[(y0 as usize + y) * stride..];
+        for &offset in &columns {
+            pixels.extend_from_slice(&row[offset..offset + 4]);
+        }
+        previous = Some(y);
+    }
+    image::RgbaImage::from_raw(width, height, pixels)
+}
+
+fn pixelated_samples(size: u32, block: u32) -> impl Iterator<Item = usize> {
+    let small = (size / block).max(1);
+    (0..size).map(move |x| nearest_sample(nearest_sample(x, small, size), size, small) as usize)
+}
+
+fn nearest_sample(output: u32, input: u32, output_size: u32) -> u32 {
+    let ratio = input as f32 / output_size as f32;
+    let sample = ((output as f32 + 0.5) * ratio).floor() as i64;
+    sample.clamp(0, i64::from(input) - 1) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reference_pixelate(
+        rgba: &[u8],
+        frame_width: u32,
+        (x0, y0, width, height): (u32, u32, u32, u32),
+        block: u32,
+    ) -> Vec<u8> {
+        let source = image::imageops::crop_imm(
+            &image::RgbaImage::from_raw(
+                frame_width,
+                (rgba.len() / 4) as u32 / frame_width,
+                rgba.to_vec(),
+            )
+            .unwrap(),
+            x0,
+            y0,
+            width,
+            height,
+        )
+        .to_image();
         let small = image::imageops::resize(
             &source,
             (width / block).max(1),
@@ -198,23 +279,35 @@ pub fn mask_filter(
             image::imageops::FilterType::Nearest,
         );
         image::imageops::resize(&small, width, height, image::imageops::FilterType::Nearest)
-    } else {
-        let factor = ((level / 4.).round() as u32).max(2);
-        let small = image::imageops::resize(
-            &source,
-            (width / factor).max(1),
-            (height / factor).max(1),
-            image::imageops::FilterType::Triangle,
-        );
-        image::imageops::resize(&small, width, height, image::imageops::FilterType::Triangle)
-    };
+            .into_raw()
+    }
 
-    Some(processed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
+    #[test]
+    fn pixelate_matches_two_nearest_resizes() {
+        let (frame_width, frame_height) = (61u32, 47u32);
+        let rgba: Vec<u8> = (0..frame_width * frame_height * 4)
+            .map(|i| (i.wrapping_mul(37) % 251) as u8)
+            .collect();
+        for region in [
+            (0, 0, 61, 47),
+            (3, 5, 1, 1),
+            (7, 2, 13, 29),
+            (60, 0, 1, 47),
+            (10, 11, 50, 36),
+        ] {
+            for level in [1., 2., 2.6, 3., 7., 16., 40., 100.] {
+                let block = (f64::round(level) as u32).max(2);
+                let actual =
+                    mask_filter(&rgba, frame_width, frame_height, region, true, level).unwrap();
+                assert_eq!(actual.dimensions(), (region.2, region.3));
+                assert_eq!(
+                    actual.into_raw(),
+                    reference_pixelate(&rgba, frame_width, region, block),
+                    "{region:?} at {level}"
+                );
+            }
+        }
+    }
 
     fn reference_blit(
         dst: &mut [u8],

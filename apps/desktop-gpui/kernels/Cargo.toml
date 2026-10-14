@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "png_encode"
 harness = false
+
+[[bench]]
+name = "screenshot_mask"
+harness = false
