@@ -581,7 +581,7 @@ fn draw_text(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
 
     let stack = TEXT_STACK.get_or_init(|| {
         Mutex::new((
-            cosmic_text::FontSystem::new(),
+            cap_rendering::new_font_system(),
             cosmic_text::SwashCache::new(),
         ))
     });
