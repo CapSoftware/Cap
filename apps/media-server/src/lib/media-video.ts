@@ -1929,33 +1929,47 @@ export async function generateThumbnail(
 	const opts = resolveThumbnailOptions(options);
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
 	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
+	let localInput: { path: string; cleanup: () => Promise<void> };
 	try {
-		return await generateThumbnailFrame(
-			inputPath,
-			opts,
-			timestamp,
-			THUMBNAIL_TIMEOUT_MS,
-			abortSignal,
-		);
+		localInput = /^https?:/i.test(inputPath)
+			? await downloadVideoToTemp(inputPath, undefined, abortSignal)
+			: { path: inputPath, cleanup: async () => {} };
 	} catch (error) {
 		abortSignal?.throwIfAborted();
-		const remainingMs = deadline - performance.now();
-		if (
-			!(error instanceof EmptyThumbnailError) ||
-			!isAbsolute(normalizeLocalPath(inputPath)) ||
-			timestamp <= 0 ||
-			remainingMs <= 0
-		) {
-			throw error;
+		throw error;
+	}
+	try {
+		try {
+			return await generateThumbnailFrame(
+				localInput.path,
+				opts,
+				timestamp,
+				THUMBNAIL_TIMEOUT_MS,
+				abortSignal,
+				true,
+			);
+		} catch (error) {
+			abortSignal?.throwIfAborted();
+			const remainingMs = deadline - performance.now();
+			if (
+				!(error instanceof EmptyThumbnailError) ||
+				!isAbsolute(normalizeLocalPath(localInput.path)) ||
+				timestamp <= 0 ||
+				remainingMs <= 0
+			) {
+				throw error;
+			}
+			return await generateThumbnailFrame(
+				localInput.path,
+				opts,
+				0,
+				remainingMs,
+				abortSignal,
+				true,
+			);
 		}
-		return await generateThumbnailFrame(
-			inputPath,
-			opts,
-			0,
-			remainingMs,
-			abortSignal,
-			true,
-		);
+	} finally {
+		await localInput.cleanup();
 	}
 }
 

@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -329,7 +328,7 @@ describe("generateThumbnail integration tests", () => {
 		}
 	});
 
-	test("joins an in-flight thumbnail decoder when its worker is cancelled", async () => {
+	test("cancels an in-flight remote thumbnail download", async () => {
 		let ready: (() => void) | undefined;
 		const started = new Promise<void>((resolve) => {
 			ready = resolve;
@@ -358,35 +357,8 @@ describe("generateThumbnail integration tests", () => {
 		);
 		try {
 			await withTimeout(started, 5_000);
-			const commands =
-				process.platform === "linux"
-					? readdirSync("/proc")
-							.filter((entry) => /^\d+$/.test(entry))
-							.map((pid) => {
-								try {
-									return `${pid} ${readFileSync(`/proc/${pid}/cmdline`, "utf8")}`;
-								} catch (error) {
-									if (
-										error instanceof Error &&
-										"code" in error &&
-										(error.code === "ENOENT" || error.code === "ESRCH")
-									)
-										return "";
-									throw error;
-								}
-							})
-					: execFileSync("ps", ["-axo", "pid=,command="])
-							.toString()
-							.split("\n");
-			const pids = commands
-				.filter(
-					(command) => command.includes("ffmpeg") && command.includes(input),
-				)
-				.map((command) => Number.parseInt(command.trim(), 10));
-			expect(pids).toHaveLength(1);
 			controller.abort(reason);
 			expect(await withTimeout(outcome, 7_000)).toBe(reason);
-			for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
 		} finally {
 			controller.abort(reason);
 			await server.stop(true);
