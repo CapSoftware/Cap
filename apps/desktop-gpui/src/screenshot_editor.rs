@@ -5061,12 +5061,41 @@ mod tests {
         assert!(RenderInputGate::default().admit(&mut project));
     }
 
+    #[cfg(unix)]
     fn cpu_secs() -> f64 {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
         unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
         let usage = unsafe { usage.assume_init() };
         let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
         secs(usage.ru_utime) + secs(usage.ru_stime)
+    }
+
+    #[cfg(windows)]
+    fn cpu_secs() -> f64 {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentProcess, GetProcessTimes},
+        };
+
+        let empty = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (empty, empty, empty, empty);
+        unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        let secs = |time: FILETIME| {
+            ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+                / 10_000_000.0
+        };
+        secs(kernel) + secs(user)
     }
 
     fn synthetic_source(width: u32, height: u32) -> LoadedSource {
