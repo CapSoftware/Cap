@@ -1409,6 +1409,10 @@ fn open_h264_with_codec(
         "libx264" => {
             options.set("preset", "veryfast");
             options.set("tune", "zerolatency");
+            // zerolatency also switches x264 to sliced threads, which encode one
+            // frame at a time. An offline import can take frame threads' few
+            // frames of delay; the stream stays free of B-frames and lookahead.
+            options.set("x264-params", "sliced-threads=0");
             options.set("g", &keyframe_interval);
             options.set("keyint_min", &keyframe_interval);
         }
