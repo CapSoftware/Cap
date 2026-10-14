@@ -98,6 +98,28 @@ pub struct PersistedState {
     /// also `localStorage` over there.
     #[serde(default)]
     pub screenshot_crop_snap_to_ratio: Option<bool>,
+    #[serde(default)]
+    pub editor_window: Option<EditorWindowMemory>,
+}
+
+/// Where the editor window last sat on each display, keyed by display UUID.
+/// Offsets are measured from the display's top-left corner, so they survive
+/// the display being moved around in the arrangement.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditorWindowMemory {
+    #[serde(default)]
+    pub last_display: Option<String>,
+    #[serde(default)]
+    pub displays: Vec<RememberedEditorFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RememberedEditorFrame {
+    pub display: String,
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// `export_settings` in the Tauri editor (`ExportPage.tsx` localStorage).
@@ -276,9 +298,16 @@ pub fn load() -> PersistedState {
         .unwrap_or_default()
 }
 
+static UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read-modify-write on the caller's thread; callers hand this to the
-/// background executor.
+/// background executor. Writers are serialized and the file is replaced by
+/// rename, because [`load`] treats a half-written file as empty and the next
+/// update would then persist defaults over every other preference.
 pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
+    let _guard = UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = state_path();
     let mut state = load();
     mutate(&mut state);
@@ -287,7 +316,10 @@ pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
     }
     match serde_json::to_vec_pretty(&state) {
         Ok(bytes) => {
-            if let Err(error) = std::fs::write(&path, bytes) {
+            let temp = path.with_extension("json.tmp");
+            if let Err(error) =
+                std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &path))
+            {
                 tracing::warn!("persisting gpui state: {error}");
             }
         }

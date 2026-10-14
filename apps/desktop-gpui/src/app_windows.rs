@@ -44,6 +44,9 @@ pub const CONTROLS_HEIGHT: f32 = 150.;
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
 
+#[cfg(any(target_os = "macos", test))]
+mod editor_placement;
+
 pub(crate) fn display_work_area(
     target: Option<&scap_targets::Display>,
     cx: &App,
@@ -4680,13 +4683,17 @@ fn open_editor_window(
         return Some(window_id);
     }
 
-    let (bounds, display_id) = opening_window_placement(
-        size(
-            px(editor_window::EDITOR_WIDTH),
-            px(editor_window::EDITOR_HEIGHT),
-        ),
-        cx,
+    let preferred = size(
+        px(editor_window::EDITOR_WIDTH),
+        px(editor_window::EDITOR_HEIGHT),
     );
+    #[cfg(target_os = "macos")]
+    let (bounds, display_id) = match editor_placement::opening_bounds(cx) {
+        Some(bounds) => (bounds, None),
+        None => opening_window_placement(preferred, cx),
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (bounds, display_id) = opening_window_placement(preferred, cx);
 
     let handle = cx.open_window(
         WindowOptions {
@@ -4709,13 +4716,7 @@ fn open_editor_window(
             show: true,
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(fitted_window_min_size(
-                size(
-                    px(editor_window::EDITOR_WIDTH),
-                    px(editor_window::EDITOR_HEIGHT),
-                ),
-                bounds,
-            )),
+            window_min_size: Some(fitted_window_min_size(preferred, bounds)),
             // Opaque, and no native material: `is_transparent()`
             // (`windows.rs:1069-1082`) does not list Editor, and
             // `applyMacOSWindowMaterial` runs only in the `(window-chrome)`
@@ -4745,6 +4746,8 @@ fn open_editor_window(
             platform::kick_display_link(window);
             #[cfg(target_os = "windows")]
             platform::maximize_if_larger_than_work_area(window, cx);
+            #[cfg(target_os = "macos")]
+            editor_placement::track(window, cx);
             view.focus_root(window, cx);
             tracing::info!(
                 number = platform::window_number(window),

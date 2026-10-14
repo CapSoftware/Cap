@@ -1172,6 +1172,63 @@ mod mac {
         false
     }
 
+    pub struct ScreenGeometry {
+        pub id: u32,
+        pub frame: (f64, f64, f64, f64),
+        pub visible: (f64, f64, f64, f64),
+    }
+
+    pub fn screen_geometries() -> Vec<ScreenGeometry> {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSRect, NSString};
+
+        let mut geometries = Vec::new();
+        unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return geometries;
+            }
+            let enumerator: *mut AnyObject = msg_send![screens, objectEnumerator];
+            if enumerator.is_null() {
+                return geometries;
+            }
+            let number_key = NSString::from_str("NSScreenNumber");
+            loop {
+                let screen: *mut AnyObject = msg_send![enumerator, nextObject];
+                if screen.is_null() {
+                    break;
+                }
+                let description: *mut AnyObject = msg_send![screen, deviceDescription];
+                if description.is_null() {
+                    continue;
+                }
+                let number: *mut AnyObject = msg_send![description, objectForKey: &*number_key];
+                if number.is_null() {
+                    continue;
+                }
+                let id: u32 = msg_send![number, unsignedIntValue];
+                let frame: NSRect = msg_send![screen, frame];
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                geometries.push(ScreenGeometry {
+                    id,
+                    frame: (
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    ),
+                    visible: (
+                        visible.origin.x,
+                        visible.origin.y,
+                        visible.size.width,
+                        visible.size.height,
+                    ),
+                });
+            }
+        }
+        geometries
+    }
+
     /// `orderFrontRegardless` on the retained handle: bring a restored window
     /// forward without activating the app -- the dev loop relaunches on every
     /// rebuild and must not steal focus from whatever the user is typing in.
