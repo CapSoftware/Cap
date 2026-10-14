@@ -9,10 +9,29 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 import { migrateDb } from "@cap/database/migrate";
-import { buildEnv, serverEnv } from "@cap/env";
+import {
+	buildEnv,
+	findInsecureSecrets,
+	formatInsecureSecrets,
+	REQUIRED_SELF_HOST_SECRETS,
+	serverEnv,
+} from "@cap/env";
 
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
+
+	if (process.env.NODE_ENV === "production") {
+		const insecureSecrets = findInsecureSecrets(
+			process.env,
+			process.env.MEDIA_SERVER_URL || process.env.MEDIA_SERVER_WEBHOOK_SECRET
+				? REQUIRED_SELF_HOST_SECRETS
+				: ["NEXTAUTH_SECRET", "DATABASE_ENCRYPTION_KEY"],
+		);
+		if (insecureSecrets.length > 0) {
+			console.error(`🚨 ${formatInsecureSecrets(insecureSecrets)}`);
+			process.exit(1);
+		}
+	}
 
 	console.log("Waiting 5 seconds to run migrations");
 	// Function to trigger migrations with retry logic

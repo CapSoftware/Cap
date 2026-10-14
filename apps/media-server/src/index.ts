@@ -2,6 +2,9 @@ import app from "./app";
 import { abortAllJobs } from "./lib/job-manager";
 import { cancelAllMediaOperations } from "./lib/media-operations";
 import { cleanupMediaTransferCache } from "./lib/media-transfer";
+import { assertSecureStartup } from "./lib/startup-checks";
+
+assertSecureStartup();
 
 const port = Number(process.env.PORT) || 3456;
 
