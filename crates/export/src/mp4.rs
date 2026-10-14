@@ -1549,6 +1549,9 @@ async fn export_render_to_channel(
 
     let (_, encoder_blocked) = render_result?;
 
+    // The loop_stats counters are process-wide, so an export that overlaps another one reports
+    // a mix of both. That is fine for profiling one export at a time; per-export numbers need
+    // the counters passed through the render loop instead of kept in statics.
     if cap_rendering::loop_stats::enabled() {
         let [decode, render, prefetch, join, render_send, frames] =
             cap_rendering::loop_stats::take();
