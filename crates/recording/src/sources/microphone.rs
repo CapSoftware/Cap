@@ -1,6 +1,8 @@
 use crate::{
     feeds::microphone::{self, MicrophoneFeedLock},
-    output_pipeline::{AudioFrame, AudioSource, PipelineHealthEvent, emit_health},
+    output_pipeline::{
+        AUDIO_SOURCE_CHANNEL_CAPACITY, AudioFrame, AudioSource, PipelineHealthEvent, emit_health,
+    },
     sources::audio_mixer::AudioMixer,
 };
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
@@ -417,12 +419,15 @@ impl Microphone {
             let cancel = CancellationToken::new();
             #[cfg(windows)]
             let cancel = source_cancel;
-            let (tx, rx) = flume::bounded(128);
+            let (tx, rx) = flume::bounded(AUDIO_SOURCE_CHANNEL_CAPACITY);
 
+            // The timeout only guards against a stuck feed; the channel itself
+            // absorbs multi-second consumer stalls, so a few tens of
+            // milliseconds of scheduler jitter must not drop audio.
             let send_timeout = if is_wireless {
-                Duration::from_millis(20)
+                Duration::from_millis(200)
             } else {
-                Duration::from_millis(5)
+                Duration::from_millis(50)
             };
 
             #[cfg(windows)]
