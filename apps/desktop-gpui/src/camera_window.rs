@@ -1193,8 +1193,8 @@ impl Render for CameraPreviewView {
             .size_full()
             .overflow_hidden()
             .rounded(px(radius))
-            .when(radius > 0., |this| this.bg(theme.gray_1))
-            .text_color(theme.gray_12);
+            .when(radius > 0., |this| this.bg(theme.surface))
+            .text_color(theme.text_primary);
 
         #[cfg(target_os = "macos")]
         if let Some(buffer) = self
@@ -2130,7 +2130,7 @@ impl CameraWindow {
             .p(px(8. * scale))
             .rounded(px(8. * scale))
             .when(pressed, |this| {
-                this.bg(theme.gray_3).text_color(theme.gray_12)
+                this.bg(theme.surface_subtle).text_color(theme.text_primary)
             })
             // No `.occlude()` here: an occluding hitbox breaks gpui's hit
             // test at the button (`hit_test` stops at `BlockMouse`), which
@@ -2158,9 +2158,9 @@ impl CameraWindow {
                             .path(icon)
                             .size(px(22. * scale))
                             .text_color(if pressed {
-                                theme.gray_12.into()
+                                theme.text_primary.into()
                             } else {
-                                gpui::Hsla::from(theme.gray_10)
+                                gpui::Hsla::from(theme.text_secondary)
                             }),
                     )
                     .when_some(label, |this, label| {
@@ -2174,7 +2174,7 @@ impl CameraWindow {
                                 .justify_center()
                                 .text_size(px(7. * scale))
                                 .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(theme.gray_12)
+                                .text_color(theme.text_primary)
                                 .child(label),
                         )
                     }),
@@ -2209,10 +2209,10 @@ impl CameraWindow {
                     .gap(px(4. * scale))
                     .p(px(4. * scale))
                     .rounded(px(12. * scale))
-                    .bg(theme.gray_1)
+                    .bg(theme.surface)
                     .border_1()
                     .border_color(gpui::hsla(0., 0., 1., 0.2))
-                    .text_color(theme.gray_10)
+                    .text_color(theme.text_secondary)
                     .when(!self.chrome_visible && self.resizing.is_none(), |this| {
                         this.invisible()
                     })
@@ -2339,13 +2339,13 @@ impl CameraWindow {
                         .left(px(5.))
                         .border_t_4()
                         .border_l_4()
-                        .rounded_tl(px(7.)),
+                        .rounded_tl(crate::theme::radius(crate::theme::RadiusToken::Default)),
                     bracket
                         .top(px(6.))
                         .left(px(6.))
                         .border_t_2()
                         .border_l_2()
-                        .rounded_tl(px(6.)),
+                        .rounded_tl(crate::theme::radius(crate::theme::RadiusToken::Compact)),
                 ),
                 ResizeCorner::NorthEast => (
                     outline
@@ -2353,13 +2353,13 @@ impl CameraWindow {
                         .right(px(5.))
                         .border_t_4()
                         .border_r_4()
-                        .rounded_tr(px(7.)),
+                        .rounded_tr(crate::theme::radius(crate::theme::RadiusToken::Default)),
                     bracket
                         .top(px(6.))
                         .right(px(6.))
                         .border_t_2()
                         .border_r_2()
-                        .rounded_tr(px(6.)),
+                        .rounded_tr(crate::theme::radius(crate::theme::RadiusToken::Compact)),
                 ),
                 ResizeCorner::SouthWest => (
                     outline
@@ -2367,13 +2367,13 @@ impl CameraWindow {
                         .left(px(5.))
                         .border_b_4()
                         .border_l_4()
-                        .rounded_bl(px(7.)),
+                        .rounded_bl(crate::theme::radius(crate::theme::RadiusToken::Default)),
                     bracket
                         .bottom(px(6.))
                         .left(px(6.))
                         .border_b_2()
                         .border_l_2()
-                        .rounded_bl(px(6.)),
+                        .rounded_bl(crate::theme::radius(crate::theme::RadiusToken::Compact)),
                 ),
                 ResizeCorner::SouthEast => (
                     outline
@@ -2381,13 +2381,13 @@ impl CameraWindow {
                         .right(px(5.))
                         .border_b_4()
                         .border_r_4()
-                        .rounded_br(px(7.)),
+                        .rounded_br(crate::theme::radius(crate::theme::RadiusToken::Default)),
                     bracket
                         .bottom(px(6.))
                         .right(px(6.))
                         .border_b_2()
                         .border_r_2()
-                        .rounded_br(px(6.)),
+                        .rounded_br(crate::theme::radius(crate::theme::RadiusToken::Compact)),
                 ),
             };
             let glyph = div()
@@ -2525,7 +2525,7 @@ impl Render for CameraWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family(crate::theme::UI_FONT)
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             // One hover region for the whole window -- bubble, toolbar and

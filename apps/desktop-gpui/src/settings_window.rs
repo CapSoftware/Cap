@@ -56,9 +56,8 @@ pub const TRAFFIC_LIGHTS: Point<Pixels> = Point {
     y: px(15.),
 };
 
-/// AppKit's titled-window shadow uses a 16px contour; a larger content mask
-/// leaves a transparent crescent between the settings window and its shadow.
-pub const SETTINGS_MATERIAL_RADIUS: f64 = 16.;
+/// The native content clip must match the root shell's `radius-medium`.
+pub const SETTINGS_MATERIAL_RADIUS: f64 = 12.;
 
 // -- Sidebar/content metrics, all `:root` custom properties -----------------
 
@@ -168,6 +167,14 @@ impl Page {
             Self::License => "icons/gift.svg",
             Self::Feedback => "icons/message-square-plus.svg",
             Self::Changelog => "icons/bell.svg",
+        }
+    }
+
+    fn selected_icon(self) -> &'static str {
+        match self {
+            Self::General => "solar/settings-bold.svg",
+            Self::Changelog => "solar/bell-bold.svg",
+            _ => self.icon(),
         }
     }
 
@@ -1567,10 +1574,11 @@ impl Render for SettingsWindow {
             .flex()
             .flex_row()
             .overflow_hidden()
-            .rounded(px(theme
-                .settings_window_radius()
-                .min(SETTINGS_MATERIAL_RADIUS as f32)))
-            .font_family(crate::theme::UI_FONT)
+            // Windows keeps its native frame, so DWM supplies the outer corners.
+            .when(!cfg!(target_os = "windows"), |shell| {
+                shell.rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
+            .font_family(crate::theme::ui_font())
             .font_weight(FontWeight::NORMAL)
             .text_color(theme.settings_text());
 
@@ -1637,20 +1645,27 @@ impl SettingsWindow {
             .w(px(SIDEBAR_WIDTH))
             .flex_shrink_0()
             .bg(theme.settings_sidebar_bg())
-            .child(
-                // `.cap-settings-window-spacer`, the strip the traffic lights
-                // sit in. `data-tauri-drag-region` on the sidebar makes it a
-                // drag handle; AppKit already drags the top ~28pt of a
-                // transparent titlebar, this covers the rest of the strip.
-                div()
-                    .id("settings-drag")
-                    .h(px(SIDEBAR_SPACER))
-                    .flex_shrink_0()
-                    .w_full()
-                    .on_mouse_down(MouseButton::Left, |_, window, _| {
-                        window.start_window_move();
-                    }),
-            )
+            .when(cfg!(target_os = "macos"), |sidebar| {
+                sidebar
+                    .rounded_l(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                    .child(
+                        // `.cap-settings-window-spacer`, the strip the traffic lights
+                        // sit in. `data-tauri-drag-region` on the sidebar makes it a
+                        // drag handle; AppKit already drags the top ~28pt of a
+                        // transparent titlebar, this covers the rest of the strip.
+                        div()
+                            .id("settings-drag")
+                            .h(px(SIDEBAR_SPACER))
+                            .flex_shrink_0()
+                            .w_full()
+                            .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                window.start_window_move();
+                            }),
+                    )
+            })
+            .when(!cfg!(target_os = "macos"), |sidebar| {
+                sidebar.pt(px(SIDEBAR_PADDING_X))
+            })
             .child(self.render_profile(cx))
             .child(self.render_nav(cx))
             .child(self.render_account(cx))
@@ -1666,7 +1681,7 @@ impl SettingsWindow {
                     .size(px(32.))
                     .flex_shrink_0()
                     .object_fit(gpui::ObjectFit::Cover)
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .into_any_element()
             }
             _ => div()
@@ -1675,7 +1690,7 @@ impl SettingsWindow {
                 .justify_center()
                 .size(px(32.))
                 .flex_shrink_0()
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .bg(theme.settings_fill())
                 .child(
                     svg()
@@ -1700,10 +1715,9 @@ impl SettingsWindow {
             .mb(px(16.))
             .px(px(4.))
             .py(px(6.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .cursor_pointer()
             .hover(move |style| style.bg(theme.settings_hover()))
-            .active(move |style| style.bg(theme.settings_selection()))
             .child(avatar)
             .child(
                 div()
@@ -1759,6 +1773,7 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .group(SharedString::from(page.slug()))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1767,27 +1782,44 @@ impl SettingsWindow {
                     .h(px(30.))
                     .px(px(6.))
                     .gap(px(8.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .focus_visible(move |style| style.border_color(theme.ring_primary))
                     .text_size(px(13.))
+                    .text_color(if selected {
+                        theme.text_active
+                    } else {
+                        theme.text_interactive
+                    })
                     .when(selected, |this| {
-                        this.bg(Theme::with_alpha(
-                            rgb(Theme::SETTINGS_ACCENT),
-                            if theme.is_dark() { 0.22 } else { 0.12 },
-                        ))
-                        .font_weight(FontWeight::MEDIUM)
+                        this.bg(theme.hover_bg).font_weight(FontWeight::MEDIUM)
                     })
                     .when(!selected, |this| {
-                        this.hover(|style| style.bg(theme.settings_hover()))
+                        this.hover(|style| style.bg(theme.hover_bg).text_color(theme.text_hover))
                     })
                     .child(
                         svg()
-                            .path(page.icon())
+                            .path(if selected {
+                                page.selected_icon()
+                            } else {
+                                page.icon()
+                            })
+                            .id(SharedString::from(format!("{}-glyph", page.slug())))
                             .size(px(16.))
                             .flex_shrink_0()
                             .text_color(if selected {
-                                rgb(Theme::SETTINGS_ACCENT).into()
+                                theme.icon_active
                             } else {
-                                theme.settings_muted()
+                                theme.icon
+                            })
+                            .when(!selected, |icon| {
+                                icon.group_hover(page.slug(), move |style| {
+                                    style.text_color(theme.icon_active)
+                                })
+                                .group_active(page.slug(), move |style| {
+                                    style.text_color(theme.icon_active)
+                                })
                             }),
                     )
                     .child(page.label())
@@ -1838,7 +1870,7 @@ impl SettingsWindow {
                     .id("settings-version")
                     .px(px(4.))
                     .py(px(2.))
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
             )
             .child(
@@ -2103,6 +2135,9 @@ impl SettingsWindow {
             .h_full()
             .overflow_hidden()
             .bg(theme.settings_content_bg())
+            .when(cfg!(target_os = "macos"), |content| {
+                content.rounded_r(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
             // `divide-x divide-gray-3` on the shell, remapped to
             // `var(--macos-settings-border)` under Liquid Glass.
             .border_l_1()
@@ -2282,7 +2317,7 @@ impl SettingsWindow {
             .flex()
             .flex_col()
             .relative()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_color(theme.settings_border())
             .bg(theme.settings_card_bg())
@@ -2341,15 +2376,15 @@ impl SettingsWindow {
                     .size(px(48.))
                     .flex_shrink_0()
                     .object_fit(gpui::ObjectFit::Cover)
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .into_any_element()
             }
             None => div()
                 .size(px(44.))
                 .mr(px(16.))
                 .flex_shrink_0()
-                .rounded(px(4.))
-                .bg(theme.gray_10)
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                .bg(theme.text_secondary)
                 .into_any_element(),
         };
 
@@ -2484,7 +2519,7 @@ impl SettingsWindow {
                     .gap(px(6.))
                     .py(px(8.))
                     .px(px(12.))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .border_1()
                     // `border-gray-5` on both states, remapped to the settings
                     // border by the material.
@@ -2576,7 +2611,7 @@ impl SettingsWindow {
             .flex_col()
             .relative()
             // `rounded-xl`, which the settings material takes to 10px.
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_color(theme.settings_border())
             .bg(theme.settings_card_bg())
@@ -2638,7 +2673,7 @@ impl SettingsWindow {
                     .size(px(48.))
                     .flex_shrink_0()
                     .object_fit(gpui::ObjectFit::Cover)
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .into_any_element()
             }
             // `<img onError>`'s fallback: `mr-4 rounded-sm bg-gray-10 size-11`.
@@ -2648,8 +2683,8 @@ impl SettingsWindow {
                 .size(px(44.))
                 .mr(px(16.))
                 .flex_shrink_0()
-                .rounded(px(4.))
-                .bg(theme.gray_10)
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                .bg(theme.text_secondary)
                 .into_any_element(),
         };
 
@@ -2725,7 +2760,7 @@ impl SettingsWindow {
                 .gap(px(6.))
                 .px(px(8.))
                 .py(px(2.))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .bg(bg)
                 .text_size(px(11.))
                 .font_weight(FontWeight::MEDIUM)
@@ -2748,7 +2783,7 @@ impl SettingsWindow {
             .child(
                 // `bg-blue-100` for instant, `bg-gray-4` for studio.
                 pill(match item.mode {
-                    RecordingMode::Instant => Hsla::from(theme.blue_100),
+                    RecordingMode::Instant => Hsla::from(theme.primary_subtle),
                     RecordingMode::Studio => theme.settings_fill(),
                 })
                 .child(glyph(item.mode.icon()))
@@ -2764,11 +2799,8 @@ impl SettingsWindow {
                     pill(theme.settings_fill())
                         .id("recording-upload-status")
                         .child(label)
-                        .tooltip(move |_, cx| {
-                            ui::Tooltip::new(&theme, message.clone())
-                                .style(ui::TooltipStyle::Light)
-                                .view(cx)
-                        }),
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                        .tooltip(move |_, cx| ui::Tooltip::new(&theme, message.clone()).view(cx)),
                 )
             })
             .when(item.clip_count > 1, |this| {
@@ -2776,7 +2808,7 @@ impl SettingsWindow {
             })
             .when(item.status.is_in_progress(), |this| {
                 this.child(
-                    pill(Hsla::from(theme.blue_500))
+                    pill(Hsla::from(theme.primary))
                         .child(glyph("icons/record-fill.svg"))
                         .child("Recording in progress"),
                 )
@@ -2785,14 +2817,13 @@ impl SettingsWindow {
                 this.child(
                     // The badge is wrapped in a `<CapTooltip>` whose content is
                     // the error string.
-                    pill(Hsla::from(theme.red_9))
+                    pill(Hsla::from(theme.danger))
                         .id("recording-failed")
                         .child(glyph("icons/warning-bold.svg"))
                         .child("Recording failed")
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                         .tooltip(move |_window, cx| {
-                            ui::Tooltip::new(&theme, error.clone())
-                                .style(ui::TooltipStyle::Light)
-                                .view(cx)
+                            ui::Tooltip::new(&theme, error.clone()).view(cx)
                         }),
                 )
             })
@@ -2934,7 +2965,7 @@ impl SettingsWindow {
             .justify_center()
             .size(px(36.))
             .flex_shrink_0()
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .opacity(if disabled { 0.45 } else { 0.7 })
             .child(
                 svg()
@@ -2945,11 +2976,8 @@ impl SettingsWindow {
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .hover(|style| style.opacity(1.).bg(theme.settings_fill()))
-                    .tooltip(move |_window, cx| {
-                        ui::Tooltip::new(&theme, tooltip)
-                            .style(ui::TooltipStyle::Light)
-                            .view(cx)
-                    })
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
             })
@@ -2998,16 +3026,16 @@ impl SettingsWindow {
                             // is the height the tile has at the window's
                             // default 782 width (see the README).
                             .h(px(93.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .overflow_hidden()
                             .border_2()
                             .border_color(if selected {
-                                theme.blue_9.into()
+                                theme.primary.into()
                             } else {
-                                Hsla::from(theme.gray_4)
+                                Hsla::from(theme.hover_bg)
                             })
                             .when(!selected, |this| {
-                                this.hover(|style| style.border_color(Hsla::from(theme.gray_6)))
+                                this.hover(|style| style.border_color(Hsla::from(theme.border)))
                             })
                             .child(img(theme_preview(option)).size_full()),
                     )
@@ -3222,7 +3250,7 @@ impl SettingsWindow {
                 div()
                     .p(px(12.))
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.amber_11))
+                    .text_color(Hsla::from(theme.text_warning))
                     .child("Couldn't save your recording settings. Please try again.")
                     .into_any_element(),
             );
@@ -3261,10 +3289,14 @@ impl SettingsWindow {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .when(checked, |this| {
-                this.bg(accent)
-                    .child(div().size(px(6.)).rounded_full().bg(gpui::white()))
+                this.bg(accent).child(
+                    div()
+                        .size(px(6.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                        .bg(gpui::white()),
+                )
             })
             .when(!checked, |this| {
                 this.border_1()
@@ -3330,7 +3362,9 @@ impl SettingsWindow {
                                             div()
                                                 .px(px(6.))
                                                 .py(px(1.))
-                                                .rounded(px(4.))
+                                                .rounded(crate::theme::radius(
+                                                    crate::theme::RadiusToken::Small,
+                                                ))
                                                 .bg(theme.settings_fill())
                                                 .text_size(px(11.))
                                                 .text_color(theme.settings_muted())
@@ -3366,7 +3400,7 @@ impl SettingsWindow {
                 div()
                     .p(px(12.))
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.amber_11))
+                    .text_color(Hsla::from(theme.text_warning))
                     .child("Couldn't save your recording settings. Please try again.")
                     .into_any_element(),
             );
@@ -3712,7 +3746,9 @@ impl SettingsWindow {
                                     .px(px(12.))
                                     .py(px(8.))
                                     .min_w_0()
-                                    .rounded(px(8.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Default,
+                                    ))
                                     .bg(theme.settings_fill())
                                     .border_1()
                                     .border_color(theme.settings_border())
@@ -3813,7 +3849,7 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .px(px(12.))
                     .py(px(8.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(theme.settings_fill())
                     .border_dashed()
                     .border_1()
@@ -3885,7 +3921,9 @@ impl SettingsWindow {
                                                         div()
                                                             .px(px(6.))
                                                             .py(px(2.))
-                                                            .rounded(px(6.))
+                                                            .rounded(crate::theme::radius(
+                                                                crate::theme::RadiusToken::Compact,
+                                                            ))
                                                             .bg(theme.settings_fill())
                                                             .text_size(px(11.))
                                                             .child(code.to_string()),
@@ -3978,7 +4016,7 @@ impl SettingsWindow {
                             .pl(px(12.))
                             .pr(px(4.))
                             .py(px(6.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(theme.settings_fill())
                             .border_1()
                             .border_color(theme.settings_border())
@@ -4005,7 +4043,7 @@ impl SettingsWindow {
                                     .items_center()
                                     .justify_center()
                                     .size(px(20.))
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .child(
                                         svg()
                                             .path("icons/x.svg")
@@ -4043,17 +4081,17 @@ impl SettingsWindow {
                     .mb(px(12.))
                     .px(px(12.))
                     .py(px(10.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(theme.amber_6))
-                    .bg(Theme::with_alpha(theme.amber_3, 0.3))
+                    .border_color(Hsla::from(theme.warning))
+                    .bg(Theme::with_alpha(theme.warning_subtle, 0.3))
                     .child(
                         svg()
                             .path("icons/triangle-alert.svg")
                             .size(px(16.))
                             .flex_shrink_0()
                             .mt(px(2.))
-                            .text_color(Hsla::from(theme.amber_11)),
+                            .text_color(Hsla::from(theme.text_warning)),
                     )
                     .child(
                         div()
@@ -4062,7 +4100,7 @@ impl SettingsWindow {
                             .flex_1()
                             .min_w_0()
                             .gap(px(4.))
-                            .text_color(Hsla::from(theme.amber_11))
+                            .text_color(Hsla::from(theme.text_warning))
                             .child(
                                 div()
                                     .text_size(px(12.))
@@ -4346,7 +4384,7 @@ impl SettingsWindow {
             .gap(px(6.))
             .px(px(12.))
             .py(px(10.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .bg(self.theme.settings_fill())
     }
 
@@ -4371,7 +4409,7 @@ impl SettingsWindow {
         kind: MenuKind,
         cx: &mut Context<Self>,
     ) -> ui::Select {
-        ui::Select::settings(&self.theme, id, label).on_click(cx.listener(
+        ui::Select::new(&self.theme, id, label).on_click(cx.listener(
             move |this, event: &gpui::ClickEvent, window, cx| {
                 this.open_menu(kind, event.position(), window, cx);
             },
@@ -4537,13 +4575,13 @@ impl SettingsWindow {
         ui::Slider::new("zoom-slider", fraction, self.slider_track.clone())
             .flex()
             .track(px(5.), theme.settings_fill())
-            .fill(Hsla::from(theme.blue_9))
+            .fill(Hsla::from(theme.primary))
             .thumb(
                 px(16.),
                 if theme.is_dark() {
-                    Hsla::from(theme.gray_12)
+                    Hsla::from(theme.text_primary)
                 } else {
-                    Hsla::from(theme.gray_1)
+                    Hsla::from(theme.surface)
                 },
                 Some(theme.settings_border()),
             )
@@ -4608,7 +4646,7 @@ impl SettingsWindow {
         let items = self.menu_items(kind);
 
         Some(
-            ui::Menu::settings(&self.theme, "settings-menu", items, &menu.state)
+            ui::Menu::new(&self.theme, "settings-menu", items, &menu.state)
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose(kind, *index, window, cx);
                 }))

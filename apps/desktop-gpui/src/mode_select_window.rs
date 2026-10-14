@@ -111,30 +111,30 @@ impl ModeSelectWindow {
             .min_w_0()
             .items_center()
             // `rounded-xl border-2 overflow-hidden`
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_2()
             .overflow_hidden()
             .border_color(if selected {
-                Hsla::from(theme.blue_9)
+                Hsla::from(theme.primary)
             } else if dark {
                 // `border-gray-4 dark:border-gray-5`
-                Hsla::from(theme.gray_5)
+                Hsla::from(theme.active_bg)
             } else {
-                Hsla::from(theme.gray_4)
+                Hsla::from(theme.hover_bg)
             })
             .bg(if selected {
                 // `bg-blue-3 dark:bg-blue-3/30`
                 theme.tile_selected_bg()
             } else if dark {
                 // `bg-gray-2 dark:bg-gray-3`
-                Hsla::from(theme.gray_3)
+                Hsla::from(theme.surface_subtle)
             } else {
-                Hsla::from(theme.gray_2)
+                Hsla::from(theme.surface_secondary)
             })
             .when(selected, |this| {
                 // `shadow-lg shadow-blue-9/10`
                 this.shadow(vec![gpui::BoxShadow {
-                    color: Theme::with_alpha(theme.blue_9, 0.1),
+                    color: Theme::with_alpha(theme.primary, 0.1),
                     offset: gpui::point(px(0.), px(10.)),
                     blur_radius: px(15.),
                     spread_radius: px(-3.),
@@ -145,10 +145,10 @@ impl ModeSelectWindow {
                 // `hover:border-gray-6 dark:hover:border-gray-6
                 //  hover:bg-gray-3 dark:hover:bg-gray-4`
                 this.hover(move |style| {
-                    style.border_color(Hsla::from(theme.gray_6)).bg(if dark {
-                        Hsla::from(theme.gray_4)
+                    style.border_color(Hsla::from(theme.border)).bg(if dark {
+                        Hsla::from(theme.hover_bg)
                     } else {
-                        Hsla::from(theme.gray_3)
+                        Hsla::from(theme.surface_subtle)
                     })
                 })
             })
@@ -164,8 +164,8 @@ impl ModeSelectWindow {
                         .items_center()
                         .justify_center()
                         .size(px(20.))
-                        .rounded_full()
-                        .bg(Hsla::from(theme.blue_9))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                        .bg(Hsla::from(theme.primary))
                         .child(
                             svg()
                                 .path("icons/check.svg")
@@ -191,7 +191,7 @@ impl ModeSelectWindow {
                             // `invert dark:invert-0`: a monochrome glyph in the
                             // foreground colour. gpui tints the alpha mask, so
                             // the filter trick is just the text colour here.
-                            .text_color(theme.gray_12),
+                            .text_color(theme.text_primary),
                     ),
             )
             .child(
@@ -213,9 +213,9 @@ impl ModeSelectWindow {
                             .text_size(px(16.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(if selected {
-                                Hsla::from(theme.blue_11)
+                                Hsla::from(theme.text_interactive)
                             } else {
-                                Hsla::from(theme.gray_12)
+                                Hsla::from(theme.text_primary)
                             })
                             .child(mode.panel_title()),
                     )
@@ -225,7 +225,7 @@ impl ModeSelectWindow {
                             .text_size(px(12.))
                             .line_height(px(12. * 1.625))
                             .line_clamp(3)
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(mode.card_description()),
                     ),
             )
@@ -248,8 +248,8 @@ impl Render for ModeSelectWindow {
             .flex_col()
             .justify_center()
             .items_center()
-            .bg(Hsla::from(theme.gray_1))
-            .font_family(crate::theme::UI_FONT)
+            .bg(Hsla::from(theme.surface))
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)
@@ -278,14 +278,14 @@ impl Render for ModeSelectWindow {
                                     .mb(px(4.))
                                     .text_size(px(20.))
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child("Choose Recording Mode"),
                             )
                             .child(
                                 // `text-sm text-gray-11`
                                 div()
                                     .text_size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child("Select how you want to capture your screen"),
                             ),
                     )

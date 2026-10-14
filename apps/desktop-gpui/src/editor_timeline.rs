@@ -117,6 +117,7 @@ const TRACK_TILE_INSET: f32 = 4.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
 const SEGMENT_RADIUS: f32 = 8.;
+const SEGMENT_SELECTED_BORDER: f32 = 1.5;
 const SEGMENT_ACCENT_BAR: f32 = 3.;
 const SEGMENT_PADDING_LEFT: f32 = 13.;
 const SEGMENT_PADDING_RIGHT: f32 = 10.;
@@ -191,7 +192,7 @@ pub mod track_color {
 /// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
 /// the row's own disabled state rather than as a different track.
 fn muted_clip_color(theme: &Theme) -> Hsla {
-    Hsla::from(theme.editor.text_3)
+    Hsla::from(theme.text_muted)
 }
 
 /// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
@@ -574,6 +575,7 @@ pub fn waveform_path(
     size: gpui::Size<Pixels>,
     scale: f64,
     clip_bounds: gpui::Bounds<Pixels>,
+    corner_radius: f64,
 ) -> Option<gpui::Path<Pixels>> {
     if peaks.is_empty() || scale <= 0. {
         return None;
@@ -618,20 +620,51 @@ pub fn waveform_path(
     let clip_right = f32::from(clip_bounds.right()) as f64;
     let clip_bottom = f32::from(clip_bounds.bottom()) as f64;
     let clip_width = clip_right - clip_left;
-    let radius = f64::from(SEGMENT_RADIUS)
+    let radius = corner_radius
+        .max(0.)
         .min(clip_width / 2.)
         .min(f32::from(clip_bounds.size.height) as f64 / 2.);
     let bottom_at = |x: f64| clip_bottom - rounded_corner_inset(x - clip_left, clip_width, radius);
-    let map = |x: f64, y: f64| {
-        let x = (left + x * width).clamp(clip_left, clip_right);
-        gpui::point(
-            px(x as f32),
-            px((top + y * scaled_height).min(bottom_at(x)) as f32),
+    let unclamped = |x: f64, y: f64| {
+        (
+            (left + x * width).clamp(clip_left, clip_right),
+            top + y * scaled_height,
         )
+    };
+    let clamp_to_clip =
+        |(x, y): (f64, f64)| gpui::point(px(x as f32), px(y.min(bottom_at(x)) as f32));
+    let in_corner = |x: f64| x < clip_left + radius || x > clip_right - radius;
+
+    // Samples are up to ~10 px apart, so clamping only a curve's end and
+    // control points to the corner arc lets the curve cut a chord across it:
+    // a crescent of waveform colour along the segment border, even in silence.
+    // Curves that touch a corner are flattened so every point is clamped.
+    let curve_to = |builder: &mut gpui::PathBuilder,
+                    from: (f64, f64),
+                    c1: (f64, f64),
+                    c2: (f64, f64),
+                    to: (f64, f64)| {
+        if !(in_corner(from.0) || in_corner(to.0)) {
+            builder.cubic_bezier_to(clamp_to_clip(to), clamp_to_clip(c1), clamp_to_clip(c2));
+            return;
+        }
+        let steps = (((to.0 - from.0).abs() * 2.).ceil() as usize).clamp(1, 64);
+        for step in 1..=steps {
+            let t = step as f64 / steps as f64;
+            let u = 1. - t;
+            let blend = |a: f64, b: f64, c: f64, d: f64| {
+                u * u * u * a + 3. * u * u * t * b + 3. * u * t * t * c + t * t * t * d
+            };
+            builder.line_to(clamp_to_clip((
+                blend(from.0, c1.0, c2.0, to.0),
+                blend(from.1, c1.1, c2.1, to.1),
+            )));
+        }
     };
 
     let mut builder = gpui::PathBuilder::fill();
-    builder.move_to(map(0., 1.));
+    let mut pen = unclamped(0., 1.);
+    builder.move_to(clamp_to_clip(pen));
 
     let control_step = (WAVEFORM_CONTROL_STEP / duration).min(0.25);
 
@@ -644,11 +677,20 @@ pub fn waveform_path(
         let prev_y = 1. - waveform_amplitude(peaks, source_time_at(prev_time));
         let cp_x1 = prev_x + control_step / 2.;
         let cp_x2 = normalized_x - control_step / 2.;
-        builder.cubic_bezier_to(map(normalized_x, y), map(cp_x1, prev_y), map(cp_x2, y));
+        let to = unclamped(normalized_x, y);
+        curve_to(
+            &mut builder,
+            pen,
+            unclamped(cp_x1, prev_y),
+            unclamped(cp_x2, y),
+            to,
+        );
+        pen = to;
     }
 
     let closing_x = (range.1 + WAVEFORM_PADDING_SECONDS - range.0) / duration;
-    builder.line_to(map(closing_x, 1.));
+    let closing = unclamped(closing_x, 1.);
+    curve_to(&mut builder, pen, pen, closing, closing);
     let baseline_left = left.max(clip_left);
     let baseline_right = (left + closing_x * width).min(clip_right);
     // GPUI content masks are rectangular. Keep the waveform's curve and
@@ -1642,7 +1684,7 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
             div()
                 .flex_none()
                 .size(px(TRACK_TILE_SIZE))
-                .rounded(px(6.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1683,8 +1725,8 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
 
     let count = (2. + (transform.zoom + 5.) / resolution).ceil().max(0.) as usize;
     let offset = transform.position % resolution;
-    let tick = Hsla::from(theme.editor.line_strong);
-    let label = Hsla::from(theme.editor.text_3);
+    let tick = Hsla::from(theme.border);
+    let label = Hsla::from(theme.text_muted);
 
     let mut body = div().relative().flex_1().h_full().ml(px(TRACK_GUTTER));
 
@@ -1867,8 +1909,8 @@ pub fn render_minimap(
         .w_full()
         .h(px(MINIMAP_BAR_HEIGHT))
         .overflow_hidden()
-        .rounded(px(2.))
-        .bg(Hsla::from(theme.editor.ctl_active))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+        .bg(Hsla::from(theme.active_bg))
         .when(!zoomed_in, |this| this.opacity(0.));
 
     for offset in &model.clip_boundaries {
@@ -1900,10 +1942,10 @@ pub fn render_minimap(
                     .bottom_0()
                     .left(px(chip_left))
                     .w(px(chip_width))
-                    .rounded(px(2.))
-                    .bg(with_alpha(Hsla::from(theme.editor.text_3), 0.5))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                    .bg(with_alpha(Hsla::from(theme.text_muted), 0.5))
                     .cursor(gpui::CursorStyle::OpenHand)
-                    .hover(|style| style.bg(with_alpha(Hsla::from(theme.editor.text_3), 0.75)))
+                    .hover(|style| style.bg(with_alpha(Hsla::from(theme.text_muted), 0.75)))
                     .children([true, false].map(|left| {
                         div()
                             .absolute()
@@ -1933,8 +1975,8 @@ pub fn render_row(
 ) -> AnyElement {
     let height = model.track_height();
     let selected = ui.row_selected(model, row);
-    let active_bg = Hsla::from(theme.editor.ctl_hover);
-    let active_text = Hsla::from(theme.editor.text_1);
+    let active_bg = Hsla::from(theme.hover_bg);
+    let active_text = Hsla::from(theme.text_primary);
     div()
         .relative()
         .flex()
@@ -1946,12 +1988,12 @@ pub fn render_row(
         .bg(if selected {
             active_bg
         } else {
-            Hsla::from(theme.editor.ctl)
+            Hsla::from(theme.surface_subtle)
         })
         .text_color(if selected {
             active_text
         } else {
-            Hsla::from(theme.editor.text_2)
+            Hsla::from(theme.text_secondary)
         })
         .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
@@ -2124,14 +2166,14 @@ fn render_track_content(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                 .bg(with_alpha(Hsla::from(gpui::rgb(0xef4444)), 0.12));
             if width >= 26. {
                 gap = gap.child(
                     div()
                         .px(px(6.))
                         .py(px(2.))
-                        .rounded(px(6.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                         .bg(Hsla::from(gpui::rgb(0xef4444)))
                         .text_size(px(10.))
                         .line_height(px(12.))
@@ -2378,9 +2420,9 @@ fn render_empty_prompt(
         .text_size(px(12.))
         .line_height(px(16.))
         .text_color(Hsla::from(if hovered {
-            theme.editor.text_2
+            theme.text_secondary
         } else {
-            theme.editor.text_3
+            theme.text_muted
         }))
         .child(div().min_w_0().truncate().child(copy))
         .children(action.map(|action| {
@@ -2394,7 +2436,7 @@ fn render_empty_prompt(
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child(action),
                 )
         }))
@@ -2493,7 +2535,7 @@ fn render_segment(
                 .bottom(px(SEGMENT_RADIUS))
                 .left(px(2.))
                 .w(px(SEGMENT_ACCENT_BAR))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .bg(color),
         );
 
@@ -2579,17 +2621,16 @@ fn render_segment(
                 .absolute()
                 .top(px((height - CAMERA3D_POSE_DOT) / 2.))
                 .size(px(CAMERA3D_POSE_DOT))
-                .rounded_full();
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large));
             dot = if end {
                 dot.right(px(CAMERA3D_POSE_DOT_INSET))
             } else {
                 dot.left(px(CAMERA3D_POSE_DOT_INSET))
             };
             fill = fill.child(if end == camera3d_editing_end {
-                dot.bg(Hsla::from(theme.editor.accent))
+                dot.bg(Hsla::from(theme.primary))
             } else {
-                dot.border(px(1.5))
-                    .border_color(Hsla::from(theme.editor.accent))
+                dot.border(px(1.5)).border_color(Hsla::from(theme.primary))
             });
         }
     }
@@ -2628,8 +2669,8 @@ fn render_segment(
                 .map(|border| {
                     if selected || (split_mode && hovered) {
                         border
-                            .border(px(1.5))
-                            .border_color(Hsla::from(theme.editor.accent))
+                            .border(px(SEGMENT_SELECTED_BORDER))
+                            .border_color(Hsla::from(theme.primary))
                     } else {
                         border.border_1().border_color(seg_border(
                             theme,
@@ -2671,7 +2712,7 @@ fn render_handle(theme: &Theme, color: Hsla, start: bool, opacity: f32) -> impl 
                 .absolute()
                 .w(px(3.))
                 .h(px(16.))
-                .rounded(px(2.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                 .bg(seg_handle(theme, color))
                 .map(|this| {
                     if start {
@@ -2783,7 +2824,7 @@ fn render_fade(
 ) -> impl IntoElement {
     let span = (fraction * width).max(0.);
     let shade_x = if edge_in { 0. } else { width - span };
-    let shade = with_alpha(Hsla::from(theme.editor.card), 0.55);
+    let shade = with_alpha(Hsla::from(theme.surface), 0.55);
     let curve = with_alpha(seg_label(theme, color), 0.85);
     let corner = with_alpha(seg_handle(theme, color), 0.8);
 
@@ -2950,7 +2991,7 @@ fn render_hold(
                 .left(px(-x))
                 .w(px(segment_width))
                 .rounded(px(SEGMENT_RADIUS))
-                .bg(with_alpha(Hsla::from(theme.editor.card), 0.6)),
+                .bg(with_alpha(Hsla::from(theme.surface), 0.6)),
         )
         .children([0., width - 1.].map(|edge| {
             let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
@@ -3074,9 +3115,16 @@ fn render_waveform(
                     size,
                     scale,
                     gpui::Bounds {
-                        origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
-                        size: gpui::size(px(width), px(height)),
+                        origin: gpui::point(
+                            bounds.origin.x + px(SEGMENT_SELECTED_BORDER),
+                            bounds.bottom() - px(height),
+                        ),
+                        size: gpui::size(
+                            px((width - SEGMENT_SELECTED_BORDER * 2.).max(0.)),
+                            px(height - SEGMENT_SELECTED_BORDER),
+                        ),
                     },
+                    f64::from(SEGMENT_RADIUS - SEGMENT_SELECTED_BORDER),
                 ) {
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                         window.paint_path(path, wave_color)
@@ -3354,7 +3402,7 @@ fn label_body(
                 div()
                     .size(px(8.))
                     .flex_none()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(*text_color),
             )
             .child(
@@ -3438,7 +3486,7 @@ fn clip_badge(
         .items_center()
         .gap(px(3.))
         .px(px(5.))
-        .rounded(px(4.))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
         .bg(seg_border(theme, color, 0.))
         .text_size(px(10.))
         .line_height(px(14.))
@@ -3483,18 +3531,13 @@ pub fn ghost_offset(view: TimelineView, content_width: f32) -> Option<f32> {
 /// wider circle of card painted under the head.
 pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
     let color = Hsla::from(theme.editor.playhead);
-    render_line(
-        color,
-        x,
-        opacity,
-        Some((12., color, theme.editor.card.into())),
-    )
+    render_line(color, x, opacity, Some((12., color, theme.surface.into())))
 }
 
 /// The hover preview line (`TL/index.tsx:1255-1277`).
 pub fn render_preview_line(theme: &Theme, x: f32) -> AnyElement {
-    let color = with_alpha(Hsla::from(theme.editor.text_3), 0.5);
-    render_line(color, x, 1., Some((10., color, theme.editor.card.into())))
+    let color = with_alpha(Hsla::from(theme.text_muted), 0.5);
+    render_line(color, x, 1., Some((10., color, theme.surface.into())))
 }
 
 fn render_line(color: Hsla, x: f32, opacity: f32, head: Option<(f32, Hsla, Hsla)>) -> AnyElement {
@@ -3516,12 +3559,17 @@ fn render_line(color: Hsla, x: f32, opacity: f32, head: Option<(f32, Hsla, Hsla)
                 .top(px(-ring_size / 2.))
                 .left(px(-(ring_size - 1.) / 2.))
                 .size(px(ring_size))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(ring)
-                .child(div().size(px(size)).rounded_full().bg(fill))
+                .child(
+                    div()
+                        .size(px(size))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                        .bg(fill),
+                )
         }))
         .into_any_element()
 }
@@ -4349,6 +4397,7 @@ mod tests {
                     gpui::size(px(200.), px(18.)),
                     scale,
                     bounds,
+                    8.,
                 )
                 .unwrap();
                 let top = path
@@ -4375,6 +4424,7 @@ mod tests {
                 gpui::size(px(200.), px(18.)),
                 0.,
                 bounds,
+                8.,
             )
             .is_none()
         );
@@ -4446,6 +4496,7 @@ mod tests {
                         gpui::size(px(span as f32), px(18.)),
                         gain,
                         bounds,
+                        8.,
                     )
                     .unwrap();
                     assert!(!path.vertices.is_empty());
@@ -4470,6 +4521,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_silent_waveform_follows_the_corner_arc_instead_of_cutting_across_it() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(px(0.), px(0.)),
+            size: gpui::size(px(200.), px(44.)),
+        };
+        let path = waveform_path(
+            &[-60.; 40],
+            (0., 2.),
+            400,
+            &[],
+            0.,
+            gpui::point(px(0.), px(26.)),
+            gpui::size(px(200.), px(18.)),
+            1.,
+            bounds,
+            8.,
+        )
+        .unwrap();
+        let rise = path
+            .vertices
+            .iter()
+            .map(|vertex| {
+                let x = f32::from(vertex.xy_position.x);
+                let floor = 44. - rounded_corner_inset(f64::from(x), 200., 8.) as f32;
+                floor - f32::from(vertex.xy_position.y)
+            })
+            .fold(0., f32::max);
+        assert!(rise < 0.05, "{rise}");
     }
 
     #[test]
@@ -4706,7 +4788,7 @@ pub(crate) fn render_preparing_timeline(
                 .flex_row()
                 .h(px(TRACK_HEIGHT))
                 .rounded(px(TRACK_BAND_RADIUS))
-                .bg(Hsla::from(theme.editor.ctl))
+                .bg(Hsla::from(theme.surface_subtle))
                 .child(
                     div()
                         .w(px(TRACK_GUTTER))
@@ -4721,16 +4803,16 @@ pub(crate) fn render_preparing_timeline(
                     div()
                         .flex_1()
                         .m(px(8.))
-                        .rounded(px(6.))
-                        .bg(Hsla::from(theme.editor.ctl_hover)),
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+                        .bg(Hsla::from(theme.hover_bg)),
                 ),
         );
     }
-    let mut veil = theme.editor.card;
+    let mut veil = theme.surface;
     veil.a = 0.88;
-    let mut edge = theme.editor.card;
+    let mut edge = theme.surface;
     edge.a = 0.35;
-    let mut clear = theme.editor.card;
+    let mut clear = theme.surface;
     clear.a = 0.0;
     div()
         .size_full()
@@ -4755,7 +4837,7 @@ pub(crate) fn render_preparing_timeline(
                         .left(px(4.))
                         .bottom_0()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.editor.text_3))
+                        .text_color(Hsla::from(theme.text_muted))
                         .child("Timeline"),
                 ),
         )

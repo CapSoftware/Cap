@@ -2500,7 +2500,7 @@ impl EditorWindow {
                     .min_h_0()
                     .h_full()
                     .overflow_hidden()
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .bg(self.panel_bg())
                     .border_1()
                     .border_color(self.card_line())
@@ -2510,7 +2510,7 @@ impl EditorWindow {
                         div()
                             .p(px(12.))
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_1))
+                            .text_color(Hsla::from(theme.text_primary))
                             .child(error.clone())
                     }))
                     .children(
@@ -2597,7 +2597,7 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .child(self.render_source_field(cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(
                 ui::Field::section(&theme, "Layout").child(
                     div()
@@ -2627,7 +2627,7 @@ impl EditorWindow {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.editor.text_2))
+                                        .text_color(Hsla::from(theme.text_secondary))
                                         .child("Custom screen position (dragged on canvas)"),
                                 )
                                 .child(section_action(
@@ -2668,11 +2668,11 @@ impl EditorWindow {
                         })),
                 ),
             )
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_border_field(cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_notch_field(cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_shadow_field(cx))
             // `<ColorCorrectionSection target="screen" />` (`:2962`).
             .children(
@@ -2708,9 +2708,7 @@ impl EditorWindow {
             .child(
                 ui::SegmentedControl::editor(&theme, "background-source", options)
                     .stretch()
-                    .item_height(px(26.))
-                    .item_padding(px(4.), px(0.))
-                    .text_size(px(11.5))
+                    .item_padding(px(6.), px(0.))
                     .on_select(cx.listener(|this, index: &usize, window, cx| {
                         if let Some(item) = ui::option_at(&SourceTab::PICKER, *index) {
                             this.select_source_tab(item, window, cx);
@@ -2759,19 +2757,19 @@ impl EditorWindow {
                 .justify_center()
                 .p(px(24.))
                 .w_full()
-                .rounded(px(8.))
-                .border_dashed_1(Hsla::from(theme.editor.line_strong))
-                .bg(Hsla::from(theme.editor.ctl))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                .border_dashed_1(Hsla::from(theme.border))
+                .bg(Hsla::from(theme.surface_subtle))
                 .child(
                     svg()
                         .path("icons/monitor-outline.svg")
                         .size(px(24.))
-                        .text_color(Hsla::from(theme.editor.text_2)),
+                        .text_color(Hsla::from(theme.text_secondary)),
                 )
                 .child(
                     div()
                         .text_size(px(13.))
-                        .text_color(Hsla::from(theme.editor.text_1))
+                        .text_color(Hsla::from(theme.text_primary))
                         .child("Use the wallpaper from your desktop"),
                 )
                 .child(
@@ -2804,21 +2802,23 @@ impl EditorWindow {
                             .w_full()
                             // `h-48`
                             .h(px(192.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .border_1()
-                            .when(selected, |this| this.border_color(Hsla::from(theme.blue_9)))
+                            .when(selected, |this| {
+                                this.border_color(Hsla::from(theme.primary))
+                            })
                             .when(!selected, |this| {
-                                this.border_color(Hsla::from(theme.editor.line_strong))
+                                this.border_color(Hsla::from(theme.border))
                                     .cursor_pointer()
-                                    .hover(|this| {
-                                        this.border_color(Hsla::from(theme.editor.accent))
-                                    })
+                                    .hover(|this| this.border_color(Hsla::from(theme.primary)))
                             })
                             .children(preview.map(|image| {
                                 img(image)
                                     .size_full()
                                     .object_fit(gpui::ObjectFit::Cover)
-                                    .rounded(px(8.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Default,
+                                    ))
                             }))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let path = path.to_string_lossy().into_owned();
@@ -2873,51 +2873,32 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                // The theme sub-tabs: `flex overflow-x-auto ... gap-2 mb-3
-                // text-xs` (`:2348-2382`). The source's scroll fade is a
-                // `mask-image`; with only six chips at this width the row
-                // does not overflow, so there is nothing to fade.
                 div()
                     .id("wallpaper-themes")
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(4.))
                     .mb(px(10.))
-                    .text_size(px(12.))
                     .overflow_x_scroll()
-                    .children(
-                        BACKGROUND_THEMES
-                            .iter()
-                            .enumerate()
-                            .map(|(index, (_, label))| {
-                                let selected = index == selected_theme;
-                                div()
-                                    .id(SharedString::from(format!("wallpaper-theme-{index}")))
-                                    .flex()
-                                    .flex_1()
-                                    .justify_center()
-                                    .items_center()
-                                    .h(px(24.))
-                                    .px(px(8.))
-                                    .rounded(px(6.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .when(selected, |this| {
-                                        this.bg(Hsla::from(theme.editor.ctl_hover))
-                                            .text_color(Hsla::from(theme.editor.text_1))
-                                    })
-                                    .when(!selected, |this| {
-                                        this.text_color(Hsla::from(theme.editor.text_2))
-                                            .cursor_pointer()
-                                            .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
-                                    })
-                                    .child(*label)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.sidebar.wallpaper_theme = index;
-                                        this.ensure_wallpapers(window, cx);
-                                        cx.notify();
-                                    }))
-                            }),
+                    .child(
+                        ui::SegmentedControl::pills(
+                            &theme,
+                            "wallpaper-theme",
+                            BACKGROUND_THEMES
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (_, label))| {
+                                    ui::SegmentOption::new(*label, index == selected_theme)
+                                })
+                                .collect(),
+                        )
+                        .stretch()
+                        .on_select(cx.listener(
+                            |this, index: &usize, window, cx| {
+                                if *index < BACKGROUND_THEMES.len() {
+                                    this.sidebar.wallpaper_theme = *index;
+                                    this.ensure_wallpapers(window, cx);
+                                    cx.notify();
+                                }
+                            },
+                        )),
                     ),
             )
             .child(
@@ -2933,15 +2914,17 @@ impl EditorWindow {
                             .id(SharedString::from(format!("wallpaper-{id}")))
                             .w(px(cell))
                             .h(px(WALLPAPER_TILE_HEIGHT + 2. * (RING_WIDTH + RING_GAP)))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .cursor_pointer()
-                            .selection_ring(self.panel_bg(), theme.editor.accent, selected)
+                            .selection_ring(self.panel_bg(), theme.primary, selected)
                             .child(
                                 div()
                                     .size_full()
-                                    .rounded(px(6.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Compact,
+                                    ))
                                     .overflow_hidden()
-                                    .bg(Hsla::from(theme.editor.ctl_hover))
+                                    .bg(Hsla::from(theme.hover_bg))
                                     .children(image.map(|image| {
                                         // `overflow_hidden` clips to the rect,
                                         // not the radius, so the picture needs
@@ -2949,7 +2932,9 @@ impl EditorWindow {
                                         img(image)
                                             .size_full()
                                             .object_fit(gpui::ObjectFit::Cover)
-                                            .rounded(px(6.))
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Compact,
+                                            ))
                                     })),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -2989,21 +2974,21 @@ impl EditorWindow {
                 .gap(px(8.))
                 .p(px(24.))
                 .w_full()
-                .rounded(px(8.))
-                .bg(Hsla::from(theme.editor.ctl))
-                .border_dashed_1(Hsla::from(theme.editor.line_strong))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                .bg(Hsla::from(theme.surface_subtle))
+                .border_dashed_1(Hsla::from(theme.border))
                 .text_size(px(13.))
                 .cursor_pointer()
-                .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+                .hover(|this| this.bg(Hsla::from(theme.hover_bg)))
                 .child(
                     svg()
                         .path("icons/image.svg")
                         .size(px(24.))
-                        .text_color(Hsla::from(theme.editor.text_2)),
+                        .text_color(Hsla::from(theme.text_secondary)),
                 )
                 .child(
                     div()
-                        .text_color(Hsla::from(theme.editor.text_1))
+                        .text_color(Hsla::from(theme.text_primary))
                         .child("Click to select or drag and drop image"),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -3014,25 +2999,25 @@ impl EditorWindow {
                 .relative()
                 .w_full()
                 .h(px(192.))
-                .rounded(px(6.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                 .overflow_hidden()
                 .border_1()
-                .border_color(Hsla::from(theme.editor.line))
+                .border_color(Hsla::from(theme.border_subtle))
                 .children(self.tile_image(&path).map(|image| {
                     img(image)
                         .size_full()
                         .object_fit(gpui::ObjectFit::Cover)
-                        .rounded(px(6.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                 }))
                 .child(
                     div().absolute().top(px(8.)).right(px(8.)).child(
                         ui::IconButton::new("clear-background-image", "icons/circle-x.svg")
                             .size(px(32.))
                             .icon_size(px(16.))
-                            .rounded(px(16.))
-                            .color(gpui::white())
-                            .filled(with_alpha(gpui::black(), 0.5), None)
-                            .hover_bg(with_alpha(gpui::black(), 0.7))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                            .color(theme.button_fill_foreground.into())
+                            .filled(theme.button_fill.into(), None)
+                            .hover_bg(theme.button_fill_hover.into())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.edit_background(
                                     "image",
@@ -3087,13 +3072,15 @@ impl EditorWindow {
                         div()
                             .id(SharedString::from(format!("bg-color-{index}")))
                             .size(px(32.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .cursor_pointer()
-                            .selection_ring(self.panel_bg(), theme.editor.accent, selected)
+                            .selection_ring(self.panel_bg(), theme.primary, selected)
                             .child(
                                 div()
                                     .size_full()
-                                    .rounded(px(6.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Compact,
+                                    ))
                                     .when(transparent, |this| {
                                         // `CHECKERED_BUTTON_BACKGROUND`
                                         // (`:6500`): an 8px `#a0a0a0` checker.
@@ -3151,13 +3138,13 @@ impl EditorWindow {
                 div()
                     .id(SharedString::from(format!("{id}-swatch")))
                     .size(px(32.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(color_to_hsla(value))
                     .border_1()
                     .border_color(preview_border_color(value))
                     .cursor_pointer()
                     .when(open, |this| {
-                        this.border_2().border_color(Hsla::from(theme.blue_9))
+                        this.border_2().border_color(Hsla::from(theme.primary))
                     })
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
@@ -3173,9 +3160,9 @@ impl EditorWindow {
                     .padding_y(px(6.))
                     .height(px(30.))
                     .radius(px(7.))
-                    .bg(Hsla::from(theme.editor.ctl))
+                    .bg(Hsla::from(theme.surface_subtle))
                     .text_size(px(13.))
-                    .text_color(Hsla::from(theme.editor.text_1))
+                    .text_color(Hsla::from(theme.text_primary))
             }))
     }
 
@@ -3223,9 +3210,9 @@ impl EditorWindow {
                     .h(px(GRADIENT_PREVIEW_HEIGHT))
                     .w_full()
                     .overflow_hidden()
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
-                    .border_color(Hsla::from(theme.editor.line_strong))
+                    .border_color(Hsla::from(theme.border))
                     .bg(linear_gradient(
                         angle,
                         linear_color_stop(color_to_hsla(from), 0.),
@@ -3261,7 +3248,7 @@ impl EditorWindow {
                         cx,
                     )),
             )
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(
                 div()
                     .flex()
@@ -3289,7 +3276,7 @@ impl EditorWindow {
                         .into_any_element()
                     })),
             )
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             // Randomize, then the 18 presets -- which rotate live with the
             // angle, because each swatch draws the same gradient the preview
             // does (`:255-282`).
@@ -3306,16 +3293,16 @@ impl EditorWindow {
                             .items_center()
                             .justify_center()
                             .size(px(32.))
-                            .rounded(px(8.))
-                            .bg(Hsla::from(theme.editor.ctl))
-                            .border_dashed_1(Hsla::from(theme.editor.line_strong))
-                            .text_color(Hsla::from(theme.editor.text_3))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                            .bg(Hsla::from(theme.surface_subtle))
+                            .border_dashed_1(Hsla::from(theme.border))
+                            .text_color(Hsla::from(theme.text_muted))
                             .cursor_pointer()
                             .child(
                                 svg()
                                     .path("icons/shuffle.svg")
                                     .size(px(14.))
-                                    .text_color(Hsla::from(theme.editor.text_3)),
+                                    .text_color(Hsla::from(theme.text_muted)),
                             )
                             .on_click(cx.listener(|this, _, window, cx| {
                                 // `Math.floor(Math.random() * 256)` per
@@ -3360,18 +3347,25 @@ impl EditorWindow {
                             div()
                                 .id(SharedString::from(format!("gradient-preset-{index}")))
                                 .size(px(32.))
-                                .rounded(px(8.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                                 .cursor_pointer()
                                 .selection_ring(
                                     self.panel_bg(),
-                                    theme.editor.accent,
+                                    theme.primary,
                                     preset == Some(index),
                                 )
-                                .child(div().size_full().rounded(px(6.)).bg(linear_gradient(
-                                    angle,
-                                    linear_color_stop(color_to_hsla(preset_from), 0.),
-                                    linear_color_stop(color_to_hsla(preset_to), 1.),
-                                )))
+                                .child(
+                                    div()
+                                        .size_full()
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Compact,
+                                        ))
+                                        .bg(linear_gradient(
+                                            angle,
+                                            linear_color_stop(color_to_hsla(preset_from), 0.),
+                                            linear_color_stop(color_to_hsla(preset_to), 1.),
+                                        )),
+                                )
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.edit_background(
                                         "gradient-preset",
@@ -3412,7 +3406,7 @@ impl EditorWindow {
                 div()
                     .mb(px(4.))
                     .text_size(px(11.))
-                    .text_color(Hsla::from(theme.editor.text_3))
+                    .text_color(Hsla::from(theme.text_muted))
                     .child(label),
             )
             .child(self.render_rgb_input(id, target, value, cx))
@@ -3554,7 +3548,7 @@ impl EditorWindow {
                         div()
                             .pt(px(4.))
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_2))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(
                                 "Draws a MacBook notch over the recording. Recordings made \
                                  on a Mac with a notch use their own measurements; \
@@ -3764,11 +3758,11 @@ impl EditorWindow {
                 )
                 .flex()
                 .row_height(px(28.))
-                .track(px(3.), Hsla::from(theme.editor.ctl_active))
+                .track(px(3.), Hsla::from(theme.active_bg))
                 .fill(Hsla::from(if disabled {
-                    theme.editor.text_3
+                    theme.text_muted
                 } else {
-                    theme.editor.accent
+                    theme.primary
                 }))
                 .thumb(
                     px(14.),
@@ -3784,6 +3778,7 @@ impl EditorWindow {
                     ))
                 }),
             )
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label.clone()).view(cx))
     }
 }
@@ -3820,8 +3815,8 @@ pub(crate) fn disclosure_row(
 ) -> AnyElement {
     let id = id.into();
     let group: SharedString = SharedString::from(format!("dr-{id:?}"));
-    let rest = Hsla::from(theme.editor.text_2);
-    let hover = Hsla::from(theme.editor.text_1);
+    let rest = Hsla::from(theme.text_secondary);
+    let hover = Hsla::from(theme.text_primary);
 
     div()
         .id(id)
@@ -3848,7 +3843,7 @@ pub(crate) fn disclosure_row(
                 })
                 .size(px(12.))
                 .flex_shrink_0()
-                .text_color(Hsla::from(theme.editor.text_3))
+                .text_color(Hsla::from(theme.text_muted))
                 .group_hover(group, move |style| style.text_color(hover)),
         )
         .on_click(handler)
@@ -3868,8 +3863,8 @@ pub(crate) fn section_action(
 ) -> AnyElement {
     let id = id.into();
     let group: SharedString = SharedString::from(format!("sa-{id:?}"));
-    let rest = Hsla::from(theme.editor.text_2);
-    let hover = Hsla::from(theme.editor.text_1);
+    let rest = Hsla::from(theme.text_secondary);
+    let hover = Hsla::from(theme.text_primary);
     let foreground = if active { hover } else { rest };
 
     div()
@@ -3881,18 +3876,14 @@ pub(crate) fn section_action(
         .gap(px(4.))
         .h(px(22.))
         .px(px(6.))
-        .rounded(px(6.))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
         .flex_shrink_0()
         .text_size(px(12.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(foreground)
-        .when(active, |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+        .when(active, |this| this.bg(Hsla::from(theme.hover_bg)))
         .cursor_pointer()
-        .hover(move |this| {
-            this.bg(Hsla::from(theme.editor.ctl_hover))
-                .text_color(hover)
-        })
-        .active(move |this| this.bg(Hsla::from(theme.editor.ctl_active)))
+        .hover(move |this| this.bg(Hsla::from(theme.hover_bg)).text_color(hover))
         .children(icon.map(|icon| {
             svg()
                 .path(icon)

@@ -13,12 +13,12 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Anchor, App, Bounds, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Point, RenderOnce, SharedString, Size, StatefulInteractiveElement,
-    Styled, Window, div, point, prelude::FluentBuilder, px, svg,
+    Anchor, App, Bounds, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Point, RenderOnce, SharedString, Size, StatefulInteractiveElement, Styled, Window, div,
+    point, prelude::FluentBuilder, px, svg,
 };
 
-use crate::theme::Theme;
+use crate::theme::{RadiusToken, Theme, radius};
 
 pub(crate) type OpenHandler = Box<dyn Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
@@ -156,88 +156,32 @@ pub struct Menu {
     highlighted: Option<usize>,
     min_width: Pixels,
     max_height: Pixels,
-    radius: Pixels,
-    shadow: Vec<gpui::BoxShadow>,
-    bg: Hsla,
-    border: Hsla,
-    hover: Hsla,
-    text: Hsla,
+    theme: Theme,
     on_select: Option<SelectHandler>,
     on_dismiss: Option<crate::ui::button::ClickHandler>,
 }
 
+const ROW_HEIGHT: f32 = 28.;
+const PANEL_INSET: f32 = 4.;
+
 impl Menu {
-    /// The settings window's stand-in for `Menu.popup()`: a menu-shaped panel
-    /// at the pointer -- which is where `popup()` with no argument puts a real
-    /// `NSMenu` -- with the same check marks and the same click-away dismiss.
-    pub fn settings(
+    pub fn new(
         theme: &Theme,
         id: impl Into<ElementId>,
         items: Vec<MenuItem>,
         state: &MenuState,
     ) -> Self {
-        let bg = if theme.is_dark() {
-            Hsla::from(gpui::rgb(0x2a2a2c))
-        } else {
-            gpui::white()
-        };
         Self {
             id: id.into(),
             items,
             origin: state.origin,
             trigger_bounds: state.trigger_bounds,
             highlighted: state.visible_highlight(),
-            min_width: px(180.),
+            min_width: px(160.),
             max_height: px(320.),
-            radius: px(10.),
-            shadow: vec![gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 0., 0.18),
-                offset: gpui::point(px(0.), px(6.)),
-                blur_radius: px(18.),
-                spread_radius: px(0.),
-                inset: false,
-            }],
-            bg,
-            border: theme.settings_border(),
-            hover: theme.settings_hover(),
-            text: theme.settings_text(),
+            theme: *theme,
             on_select: None,
             on_dismiss: None,
-        }
-    }
-
-    /// `PopperContent` on the plain palette: `rounded-xl border border-gray-3
-    /// bg-gray-1 shadow-s`.
-    pub fn plain(
-        theme: &Theme,
-        id: impl Into<ElementId>,
-        items: Vec<MenuItem>,
-        state: &MenuState,
-    ) -> Self {
-        Self {
-            bg: theme.gray(1),
-            border: theme.gray(3),
-            hover: theme.gray(3),
-            text: theme.gray(12),
-            ..Self::settings(theme, id, items, state)
-        }
-    }
-
-    /// The editor's popovers: an `ed-card` panel behind an `ed-line` hairline.
-    pub fn editor(
-        theme: &Theme,
-        id: impl Into<ElementId>,
-        items: Vec<MenuItem>,
-        state: &MenuState,
-    ) -> Self {
-        Self {
-            radius: px(12.),
-            shadow: theme.editor.pop_shadow(),
-            bg: Hsla::from(theme.editor.card),
-            border: Hsla::from(theme.editor.line),
-            hover: Hsla::from(theme.editor.ctl_hover),
-            text: Hsla::from(theme.editor.text_1),
-            ..Self::settings(theme, id, items, state)
         }
     }
 
@@ -294,7 +238,7 @@ fn anchored_placement(
     let margin = px(12.);
     let below = (viewport.height - margin - trigger.bottom() - gap).max(px(0.));
     let above = (trigger.top() - gap - margin).max(px(0.));
-    let height = (px(item_count as f32 * 24. + 10.)).min(max_height);
+    let height = (px(item_count as f32 * ROW_HEIGHT + PANEL_INSET * 2. + 2.)).min(max_height);
     if height <= below || below >= above {
         (
             trigger.bottom_left() + point(px(0.), gap),
@@ -320,15 +264,12 @@ impl RenderOnce for Menu {
             highlighted,
             min_width,
             max_height,
-            radius,
-            shadow,
-            bg,
-            border,
-            hover,
-            text,
+            theme,
             on_select,
             on_dismiss,
         } = self;
+        let hover = theme.hover_bg;
+        let icon = theme.icon_active;
 
         let prefix: SharedString = match &id {
             ElementId::Name(name) => name.clone(),
@@ -377,14 +318,13 @@ impl RenderOnce for Menu {
                             .max_w(max_width)
                             .max_h(max_height)
                             .overflow_y_scroll()
-                            .p(px(4.))
-                            .rounded(radius)
-                            .shadow(shadow)
+                            .p(px(PANEL_INSET))
+                            .rounded(radius(RadiusToken::Default))
                             .border_1()
-                            .border_color(border)
-                            .bg(bg)
-                            .text_color(text)
-                            .text_size(px(12.))
+                            .border_color(theme.border_secondary)
+                            .bg(theme.surface_secondary)
+                            .text_color(theme.text_primary)
+                            .text_size(px(13.))
                             .children(items.into_iter().enumerate().map(|(index, item)| {
                                 let handler = handler.clone();
                                 div()
@@ -393,21 +333,22 @@ impl RenderOnce for Menu {
                                     .flex_row()
                                     .flex_shrink_0()
                                     .items_center()
-                                    .gap(px(6.))
-                                    .h(px(24.))
-                                    .px(px(6.))
-                                    .rounded(px(4.))
+                                    .gap(px(8.))
+                                    .h(px(ROW_HEIGHT))
+                                    .px(px(8.))
+                                    .rounded(radius(RadiusToken::Small))
+                                    .cursor_pointer()
                                     .when(highlighted == Some(index), |this| this.bg(hover))
                                     .hover(move |style| style.bg(hover))
-                                    .child(div().w(px(12.)).flex_shrink_0().children(
+                                    .child(div().flex_1().min_w_0().truncate().child(item.label))
+                                    .child(div().size(px(14.)).flex_shrink_0().children(
                                         item.checked.then(|| {
                                             svg()
                                                 .path("icons/check.svg")
-                                                .size(px(12.))
-                                                .text_color(text)
+                                                .size(px(14.))
+                                                .text_color(icon)
                                         }),
                                     ))
-                                    .child(div().flex_1().min_w_0().truncate().child(item.label))
                                     .when_some(handler, |this, handler| {
                                         this.on_click(move |_, window, cx| {
                                             handler(&index, window, cx)

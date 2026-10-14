@@ -1,10 +1,4 @@
-//! Colour tokens, transcribed from the web app's resolved values.
-//!
-//! The Tauri UI gets these from Radix Colors via Tailwind v4 `@theme` aliases,
-//! with a handful of dark-mode entries overridden in
-//! `apps/desktop/src/styles/theme.css` (`:root.dark`, which outranks Radix's own
-//! `.dark`). The overridden ones are marked below -- they are *not* stock Radix,
-//! so regenerating this from a Radix crate would silently change the palette.
+//! GPUI colors, radii, and shadows are compiled from `platform.css`.
 
 use gpui::{
     App, BoxShadow, Context, Global, Hsla, Rgba, Window, WindowAppearance, point, px, rgb, rgba,
@@ -13,14 +7,75 @@ use gpui::{
 use crate::platform::{self, ForcedAppearance, MaterialKind};
 use crate::store::AppTheme;
 
-/// The interface face: the platform's own UI font (SF Pro on macOS, Segoe UI
-/// on Windows) so text matches the system. Linux distros have no reliable
-/// equivalent, so they keep the bundled Geist.
-pub const UI_FONT: &str = if cfg!(any(target_os = "macos", target_os = "windows")) {
-    ".SystemUIFont"
-} else {
-    "Geist"
+pub use cap_desktop_gpui::design_tokens::{
+    PlatformColors, RadiusToken, ShadowToken, dark_colors, light_colors, radius, shadow,
 };
+
+#[cfg(test)]
+#[path = "../token_compiler.rs"]
+mod token_compiler;
+
+const BUNDLED_UI_FONT: &str = "Inter";
+const BUNDLED_DISPLAY_FONT: &str = "Faculty Glyphic";
+const SYSTEM_UI_FONT: &str = ".SystemUIFont";
+
+struct FontFamilies {
+    ui: &'static str,
+    display: &'static str,
+}
+
+static FONT_FAMILIES: std::sync::OnceLock<FontFamilies> = std::sync::OnceLock::new();
+
+/// Registers the bundled faces and records which families actually resolve.
+/// GPUI's own fallback for an unresolvable family is a fixed list (Helvetica
+/// before Segoe UI), so a failed face is mapped to the platform UI font here.
+pub fn install_fonts(cx: &App) {
+    let loaded = match crate::assets::Assets.load_fonts(cx) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::error!("bundled fonts unavailable, using the system font: {error:#}");
+            false
+        }
+    };
+    let resolve = |family: &'static str| {
+        if loaded && family_resolves(cx, family) {
+            family
+        } else {
+            tracing::warn!(
+                family,
+                "bundled font did not resolve, using the system font"
+            );
+            SYSTEM_UI_FONT
+        }
+    };
+    let families = FontFamilies {
+        ui: resolve(BUNDLED_UI_FONT),
+        display: resolve(BUNDLED_DISPLAY_FONT),
+    };
+    let _ = FONT_FAMILIES.set(families);
+}
+
+fn family_resolves(cx: &App, family: &str) -> bool {
+    let text_system = cx.text_system();
+    let id = text_system.resolve_font(&gpui::font(family.to_string()));
+    text_system
+        .get_font_for_id(id)
+        .is_some_and(|font| font.family.as_ref() == family)
+}
+
+/// The platform text face: bundled Inter, or the system UI font when it failed.
+pub fn ui_font() -> &'static str {
+    FONT_FAMILIES
+        .get()
+        .map_or(BUNDLED_UI_FONT, |families| families.ui)
+}
+
+/// The brand/display face, reserved for display headings and wordmarks.
+pub fn display_font() -> &'static str {
+    FONT_FAMILIES
+        .get()
+        .map_or(BUNDLED_DISPLAY_FONT, |families| families.display)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
@@ -163,14 +218,6 @@ pub struct MaterialTokens {
 }
 
 impl MaterialTokens {
-    /// Only Liquid Glass remaps the body's gray fills: every
-    /// `.cap-window-body .bg-gray-N` rule in `theme.css` is gated on
-    /// `[data-macos-visual-system="liquid-glass"]`. Under vibrancy the body
-    /// keeps its Radix grays and only the shell and header change.
-    fn remaps_body(&self) -> bool {
-        self.kind == MaterialKind::LiquidGlass
-    }
-
     /// The panel material under `NSGlassEffectView`.
     fn liquid_glass(appearance: Appearance) -> Self {
         match appearance {
@@ -344,6 +391,7 @@ impl MaterialTokens {
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     pub appearance: Appearance,
+    pub platform: PlatformColors,
 
     /// The native window material behind the shell, already resolved for this
     /// appearance. `None` -- non-mac, or the install failed -- keeps the
@@ -420,11 +468,16 @@ pub struct Theme {
     pub gray_400_legacy: Rgba,
     pub gray_500_legacy: Rgba,
 
-    /// `--text-primary`, the root text colour. Slightly translucent by design.
-    pub text_primary: Rgba,
-
     /// The editor's layered surface system (`--ed-*` in `theme.css`).
     pub editor: EditorPalette,
+}
+
+impl std::ops::Deref for Theme {
+    type Target = PlatformColors;
+
+    fn deref(&self) -> &Self::Target {
+        &self.platform
+    }
 }
 
 /// Editor surfaces, transcribed from the `--ed-*` custom properties in
@@ -456,13 +509,10 @@ pub struct EditorPalette {
     /// track colour pulled this far toward black (light) or white (dark).
     pub seg_label_base: Rgba,
     pub seg_label_mix: f32,
-    /// `--ed-card-shadow` / `--ed-pop-shadow`: how black each surface's drop
-    /// shadow is. A card lifts barely at all on white and much more on the dark
-    /// window, where the hairline alone is invisible.
+    /// `--ed-card-shadow`: how black a card's drop shadow is. A card lifts
+    /// barely at all on white and much more on the dark window, where the
+    /// hairline alone is invisible.
     pub card_shadow_alpha: f32,
-    pub pop_shadow_alpha: f32,
-    pub pop_shadow_offset: f32,
-    pub pop_shadow_blur: f32,
 }
 
 impl EditorPalette {
@@ -489,9 +539,6 @@ impl EditorPalette {
             seg_label_base: rgb(0x000000),
             seg_label_mix: 0.58,
             card_shadow_alpha: 0.04,
-            pop_shadow_alpha: 0.25,
-            pop_shadow_offset: 12.,
-            pop_shadow_blur: 32.,
         }
     }
 
@@ -518,9 +565,6 @@ impl EditorPalette {
             seg_label_base: rgb(0xffffff),
             seg_label_mix: 0.55,
             card_shadow_alpha: 0.30,
-            pop_shadow_alpha: 0.60,
-            pop_shadow_offset: 16.,
-            pop_shadow_blur: 40.,
         }
     }
 
@@ -575,17 +619,6 @@ impl EditorPalette {
             inset: false,
         }]
     }
-
-    /// `--ed-pop-shadow`: the lift under a menu, popover or dialog.
-    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
-        vec![BoxShadow {
-            color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
-            offset: point(px(0.), px(self.pop_shadow_offset)),
-            blur_radius: px(self.pop_shadow_blur),
-            spread_radius: px(-12.),
-            inset: false,
-        }]
-    }
 }
 
 /// The drop shadow under the stage's letterboxed preview. The stage is nearly
@@ -598,27 +631,6 @@ pub fn preview_shadow() -> Vec<BoxShadow> {
         spread_radius: px(-8.),
         inset: false,
     }]
-}
-
-/// The lift under a selected segmented-control pill on the light editor
-/// surface (`shadow-[0_1px_2px_rgba(0,0,0,.12),0_0_0_.5px_rgba(0,0,0,.06)]`).
-pub fn raised_pill_shadow() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow {
-            color: gpui::hsla(0., 0., 0., 0.12),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-            inset: false,
-        },
-        BoxShadow {
-            color: gpui::hsla(0., 0., 0., 0.06),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(0.5),
-            inset: false,
-        },
-    ]
 }
 
 /// The drop shadow under a slider knob.
@@ -688,6 +700,7 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             appearance: Appearance::Light,
+            platform: light_colors(),
             material: None,
             editor: EditorPalette::light(),
 
@@ -735,14 +748,13 @@ impl Theme {
             // `--gray-400: #868e9f` (`theme.css:42`).
             gray_400_legacy: rgb(0x868e9f),
             gray_500_legacy: rgb(0x161b26),
-
-            text_primary: rgba(0x12161ff2),
         }
     }
 
     pub fn dark() -> Self {
         Self {
             appearance: Appearance::Dark,
+            platform: dark_colors(),
             material: None,
             editor: EditorPalette::dark(),
 
@@ -791,8 +803,6 @@ impl Theme {
             // `--gray-400: #a1a1a1` (`theme.css:105`).
             gray_400_legacy: rgb(0xa1a1a1),
             gray_500_legacy: rgb(0xffffff),
-
-            text_primary: rgba(0xfffffff2),
         }
     }
 
@@ -829,284 +839,104 @@ impl Theme {
         .into()
     }
 
-    /// `.cap-window-shell`'s background: the material's tint when one is
-    /// installed, `bg-gray-1` otherwise.
     pub fn shell_bg(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.shell.into(),
-            None => self.gray_1.into(),
-        }
+        self.surface.into()
     }
 
-    /// The shell's `1px solid var(--macos-settings-border)`. Liquid Glass
-    /// draws none (`.cap-window-shell { border: 0 }`), and neither does the
-    /// bare window.
     pub fn shell_border(&self) -> Option<Hsla> {
-        self.material
-            .filter(|material| !material.remaps_body())
-            .map(|material| material.border.into())
+        Some(self.border.into())
     }
 
-    /// `.cap-window-header`'s background.
     pub fn header_bg(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.header.into(),
-            None => self.gray_2.into(),
-        }
+        self.surface_secondary.into()
     }
 
-    /// The `divide-y divide-gray-5` hairline under the header. Liquid Glass
-    /// erases it: `.cap-window-shell > * + * { border-color: transparent }`.
     pub fn header_border(&self) -> Hsla {
-        match self.material {
-            Some(material) if material.remaps_body() => gpui::transparent_black(),
-            Some(material) => material.border.into(),
-            None => self.gray_5.into(),
-        }
+        self.border.into()
     }
 
-    /// `.cap-window-body`'s inherited text colour.
     pub fn body_text(&self) -> Hsla {
-        match self.material {
-            Some(material) if material.remaps_body() => material.text.into(),
-            _ => self.text_primary.into(),
-        }
+        self.text_primary.into()
     }
 
-    /// A `.bg-gray-N` fill inside `.cap-window-body`.
-    ///
-    /// ```text
-    /// .bg-gray-2, .bg-gray-3 { background-color: var(--macos-settings-control-fill) }
-    /// .bg-gray-4            { background-color: var(--macos-settings-control-hover) }
-    /// .bg-gray-5            { background-color: var(--macos-settings-control-active) }
-    /// ```
-    ///
-    /// (The `.dark\:bg-gray-3` / `.dark\:bg-gray-4` rule lands on the same
-    /// `control-fill`, so a dark-mode `bg-gray-3 dark:bg-gray-4` pair --
-    /// already collapsed to one token by the time it reaches here -- resolves
-    /// identically either way.)
     pub fn body_fill(&self, step: u8) -> Hsla {
-        let Some(material) = self.material.filter(MaterialTokens::remaps_body) else {
-            return self.gray(step);
-        };
         match step {
-            2 | 3 => material.control_fill.into(),
-            4 => material.control_hover.into(),
-            5 => material.control_active.into(),
+            2 | 3 => self.surface_subtle.into(),
+            4 => self.hover_bg.into(),
+            5 => self.active_bg.into(),
             _ => self.gray(step),
         }
     }
 
-    /// A `hover:bg-gray-N` fill inside `.cap-window-body`.
-    ///
-    /// ```text
-    /// [class*="hover:bg-gray-4"]:hover, [class*="hover:bg-gray-5"]:hover
-    ///   { background-color: var(--macos-settings-control-hover) }
-    /// [class*="hover:bg-gray-6"]:hover, [class*="hover:bg-gray-7"]:hover
-    ///   { background-color: var(--macos-settings-selection) }
-    /// ```
     pub fn body_hover_fill(&self, step: u8) -> Hsla {
-        let Some(material) = self.material.filter(MaterialTokens::remaps_body) else {
-            return self.gray(step);
-        };
         match step {
-            4 | 5 => material.control_hover.into(),
-            6 | 7 => material.selection.into(),
+            4 | 5 => self.hover_bg.into(),
+            6 | 7 => self.active_bg.into(),
             _ => self.gray(step),
         }
     }
 
-    /// A `border-gray-N` inside `.cap-window-body`.
-    ///
-    /// ```text
-    /// .border-gray-4, .dark\:border-gray-5 { border-color: var(--macos-settings-border) }
-    /// .border-gray-5, .border-gray-6       { border-color: var(--macos-settings-border) }
-    /// ```
     pub fn body_border(&self, step: u8) -> Hsla {
-        let Some(material) = self.material.filter(MaterialTokens::remaps_body) else {
-            return self.gray(step);
-        };
         match step {
-            4..=6 => material.border.into(),
+            4..=6 => self.border.into(),
             _ => self.gray(step),
         }
     }
 
-    /// `ring-offset-gray-1`, the 1px gap between the selected Mode button and
-    /// its blue ring. Liquid Glass makes it transparent
-    /// (`--tw-ring-offset-color: transparent`) so the ring is not sitting on a
-    /// solid disc floating over the material.
     pub fn ring_offset(&self) -> Hsla {
-        match self.material {
-            Some(material) if material.remaps_body() => gpui::transparent_black(),
-            _ => self.gray_1.into(),
-        }
+        self.surface.into()
     }
 
-    // ---- The settings window's surfaces -------------------------------
-    //
-    // Same tokens, a different set of elements. Every rule quoted below is
-    // under `[data-macos-native-material="settings"]`; the fallbacks are the
-    // Tailwind classes the TSX carries when no material was installed, which
-    // is what the window would paint on a non-mac.
-
-    /// `.cap-settings-shell`'s corner: `border-radius:
-    /// var(--macos-settings-window-radius)` with no per-material override
-    /// (unlike `.cap-window-shell`'s `16px` for "panel").
-    pub fn settings_window_radius(&self) -> f32 {
-        self.material
-            .map(|material| material.window_radius)
-            .unwrap_or(16.)
-    }
-
-    /// `.cap-settings-sidebar { background: var(--macos-settings-sidebar) }`,
-    /// `bg-gray-2` without a material.
     pub fn settings_sidebar_bg(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.sidebar.into(),
-            None => self.gray_2.into(),
-        }
+        self.surface_secondary.into()
     }
 
-    /// `.cap-settings-content { background: var(--macos-settings-content) }`.
-    /// Bare, the pane has no background of its own and shows the shell's
-    /// `bg-gray-1`.
     pub fn settings_content_bg(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.content.into(),
-            None => self.gray_1.into(),
-        }
+        self.surface.into()
     }
 
-    /// `.cap-settings-card, .cap-settings-content .bg-gray-2
-    /// { background-color: var(--macos-settings-card) }`.
     pub fn settings_card_bg(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.card.into(),
-            None => self.gray_2.into(),
-        }
+        self.surface_raised.into()
     }
 
-    /// `.cap-settings-content .bg-gray-3, .bg-gray-4, .bg-gray-5
-    /// { background-color: var(--macos-settings-fill) }` -- selects, inline
-    /// code chips, the summary boxes.
     pub fn settings_fill(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.fill.into(),
-            None => self.gray_3.into(),
-        }
+        self.surface_subtle.into()
     }
 
-    /// `.cap-settings-nav-item:hover`, `.cap-settings-profile:hover`
-    /// `{ background: var(--macos-settings-hover) }`; `hover:bg-gray-3` bare.
     pub fn settings_hover(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.hover.into(),
-            None => self.gray_3.into(),
-        }
+        self.hover_bg.into()
     }
 
-    /// `.cap-settings-nav-item.bg-gray-5 { background:
-    /// var(--macos-settings-selection) }` -- the selected sidebar row.
     pub fn settings_selection(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.selection.into(),
-            None => self.gray_5.into(),
-        }
+        self.active_bg.into()
     }
 
-    /// `--macos-settings-border`: the row dividers, the account footer's top
-    /// rule, and the sidebar/content divider.
     pub fn settings_border(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.border.into(),
-            None => self.gray_3.into(),
-        }
+        self.border.into()
     }
 
-    /// The divider between the sidebar and the content pane:
-    /// `[..liquid-glass][..settings] .cap-settings-shell > * + *
-    /// { border-color: var(--macos-settings-border) }`. Only the glass path
-    /// remaps it; on the others the shell's own `divide-x divide-gray-3`
-    /// stands.
     pub fn settings_divider(&self) -> Hsla {
-        match self.material {
-            Some(material) if material.kind == MaterialKind::LiquidGlass => material.border.into(),
-            _ => self.gray_3.into(),
-        }
+        self.border_subtle.into()
     }
 
-    /// `.cap-settings-page { color: var(--macos-settings-text) }`; the page's
-    /// `text-gray-12` bare.
     pub fn settings_text(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.text.into(),
-            None => self.gray_12.into(),
-        }
+        self.text_default.into()
     }
 
-    /// `.cap-settings-page .text-gray-10, .text-gray-11 { color:
-    /// var(--macos-settings-muted) }` -- every description line.
     pub fn settings_muted(&self) -> Hsla {
-        match self.material {
-            Some(material) => material.muted.into(),
-            None => self.gray_10.into(),
-        }
+        self.text_secondary.into()
     }
 
-    // ---- The teleprompter window's shell -------------------------------
-    //
-    // `applyMacOSWindowMaterial("teleprompter")` sets the same two data
-    // attributes as the other two windows, and `theme.css` gives the material
-    // exactly two rules of its own:
-    //
-    // ```text
-    // [data-macos-native-material="teleprompter"] .cap-window-shell { border-radius: 16px }
-    // [..visual-system="liquid-glass"][..native-material="teleprompter"]
-    //   .cap-window-shell { border-radius: 22px }
-    // ```
-    //
-    // Everything else it paints comes from the shared blocks: the base
-    // `[data-macos-native-material] .cap-window-shell` wash + border under
-    // vibrancy, and `[..="liquid-glass"] .cap-window-shell { background:
-    // transparent; border: 0 }` under glass. The panel's `rgba(255,255,255,
-    // 0.55)` tint is *not* inherited -- that rule is `[..="panel"]`-gated --
-    // so under Liquid Glass this window is bare glass. The body remaps are
-    // panel-gated too, so the footer and script keep their Radix grays.
-
-    /// `.cap-window-shell` under material `"teleprompter"`.
     pub fn teleprompter_shell_bg(&self) -> Hsla {
-        match self.material {
-            // `[data-macos-visual-system="liquid-glass"] .cap-window-shell
-            //  { background: transparent }`, with no panel-style tint on top.
-            Some(material) if material.remaps_body() => gpui::transparent_black(),
-            // `background: var(--macos-settings-window)`, which is what
-            // `MaterialTokens::shell` already holds on the vibrancy path.
-            Some(material) => material.shell.into(),
-            // No material (non-mac): the route's own
-            // `bg-gray-1/90 rounded-2xl border border-gray-5` fallback.
-            None => Self::with_alpha(self.gray_1, 0.9),
-        }
+        self.surface.into()
     }
 
-    /// The teleprompter shell's `1px solid var(--macos-settings-border)` --
-    /// the same base rule the panel material takes, erased by the glass block.
-    /// Without a material the route draws `border border-gray-5`.
     pub fn teleprompter_shell_border(&self) -> Option<Hsla> {
-        match self.material {
-            Some(material) if material.remaps_body() => None,
-            Some(material) => Some(material.border.into()),
-            None => Some(self.gray_5.into()),
-        }
+        Some(self.border.into())
     }
 
-    /// 22 under Liquid Glass, 16 under vibrancy; `rounded-2xl` (16) is also
-    /// what the non-mac fallback draws.
     pub fn teleprompter_window_radius(&self) -> f32 {
-        match self.material_kind() {
-            Some(MaterialKind::LiquidGlass) => 22.,
-            _ => 16.,
-        }
+        f32::from(radius(RadiusToken::Medium))
     }
 
     pub fn is_dark(&self) -> bool {
@@ -1156,9 +986,6 @@ impl Theme {
 mod tests {
     use super::*;
 
-    /// With no material the palette must be byte-for-byte what it was before
-    /// the material existed: the shell is opaque `gray-1`, and every body fill
-    /// is its plain Radix step.
     #[test]
     fn theme_preference_resolves_like_tauri() {
         assert_eq!(
@@ -1180,177 +1007,45 @@ mod tests {
     }
 
     #[test]
-    fn no_material_keeps_the_radix_palette() {
-        for theme in [Theme::light(), Theme::dark()] {
-            assert_eq!(theme.shell_bg(), Hsla::from(theme.gray_1));
-            assert_eq!(theme.shell_border(), None);
-            assert_eq!(theme.header_bg(), Hsla::from(theme.gray_2));
-            assert_eq!(theme.header_border(), Hsla::from(theme.gray_5));
-            assert_eq!(theme.body_text(), Hsla::from(theme.text_primary));
-            assert_eq!(theme.ring_offset(), Hsla::from(theme.gray_1));
-            for step in 1..=12 {
-                assert_eq!(theme.body_fill(step), theme.gray(step));
-                assert_eq!(theme.body_hover_fill(step), theme.gray(step));
-                assert_eq!(theme.body_border(step), theme.gray(step));
-            }
-        }
-    }
-
-    /// The `.cap-window-body` remaps are gated on
-    /// `[data-macos-visual-system="liquid-glass"]`, so vibrancy must leave
-    /// them alone and change only the shell and header.
-    #[test]
-    fn vibrancy_changes_the_shell_but_not_the_body() {
+    fn platform_colors_and_window_surfaces_are_stable_before_material_installation() {
         for appearance in [Appearance::Light, Appearance::Dark] {
-            let theme = Theme::new(appearance).with_material(Some(MaterialKind::Vibrancy));
-            assert_ne!(theme.shell_bg(), Hsla::from(theme.gray_1));
-            // `border: 1px solid var(--macos-settings-border)` -- only the
-            // vibrancy path draws it.
-            assert!(theme.shell_border().is_some());
-            for step in 1..=12 {
-                assert_eq!(theme.body_fill(step), theme.gray(step));
-                assert_eq!(theme.body_hover_fill(step), theme.gray(step));
-                assert_eq!(theme.body_border(step), theme.gray(step));
-            }
+            let before = Theme::new(appearance);
+            let after = before.with_material(Some(MaterialKind::LiquidGlass));
+            assert_eq!(before.shell_bg(), after.shell_bg());
+            assert_eq!(before.header_bg(), after.header_bg());
+            assert_eq!(before.body_text(), after.body_text());
+            assert_eq!(before.settings_sidebar_bg(), after.settings_sidebar_bg());
+            assert_eq!(
+                before.teleprompter_shell_bg(),
+                after.teleprompter_shell_bg()
+            );
+            assert_eq!(before.shell_bg(), Hsla::from(before.surface));
+            assert_eq!(before.header_bg(), Hsla::from(before.surface_secondary));
+            assert_eq!(before.header_border(), Hsla::from(before.border));
         }
+        assert_eq!(light_colors().surface.r, 1.);
+        assert_eq!(dark_colors().surface.r, 31. / 255.);
+        assert_eq!(dark_colors().primary, light_colors().primary);
+        assert_ne!(
+            light_colors().surface_overlay.a,
+            dark_colors().surface_overlay.a
+        );
     }
 
-    /// The exact `theme.css` mapping for material "panel" under Liquid Glass.
     #[test]
-    fn liquid_glass_maps_body_fills_to_the_panel_material() {
-        for appearance in [Appearance::Light, Appearance::Dark] {
-            let theme = Theme::new(appearance).with_material(Some(MaterialKind::LiquidGlass));
-            let material = theme.material.expect("material was just installed");
-
-            // `.cap-window-shell { border: 0; box-shadow: none }`, then the
-            // panel tint.
-            assert_eq!(theme.shell_border(), None);
-            assert_eq!(theme.shell_bg(), Hsla::from(material.shell));
-            // `.cap-window-header { background: transparent;
-            //  border-bottom-color: transparent }`
-            assert_eq!(theme.header_bg().a, 0.);
-            assert_eq!(theme.header_border(), gpui::transparent_black());
-            assert_eq!(theme.body_text(), Hsla::from(material.text));
-            // `.ring-offset-gray-1 { --tw-ring-offset-color: transparent }`
-            assert_eq!(theme.ring_offset(), gpui::transparent_black());
-
-            // `.bg-gray-2, .bg-gray-3 -> control-fill`, `.bg-gray-4 ->
-            // control-hover`, `.bg-gray-5 -> control-active`.
-            assert_eq!(theme.body_fill(2), Hsla::from(material.control_fill));
-            assert_eq!(theme.body_fill(3), Hsla::from(material.control_fill));
-            assert_eq!(theme.body_fill(4), Hsla::from(material.control_hover));
-            assert_eq!(theme.body_fill(5), Hsla::from(material.control_active));
-            // Untouched steps stay Radix.
-            assert_eq!(theme.body_fill(6), theme.gray(6));
-
-            // `hover:bg-gray-4|5 -> control-hover`, `hover:bg-gray-6|7 ->
-            // selection`.
-            assert_eq!(theme.body_hover_fill(4), Hsla::from(material.control_hover));
-            assert_eq!(theme.body_hover_fill(5), Hsla::from(material.control_hover));
-            assert_eq!(theme.body_hover_fill(6), Hsla::from(material.selection));
-            assert_eq!(theme.body_hover_fill(7), Hsla::from(material.selection));
-
-            // `border-gray-4|5|6 -> --macos-settings-border`.
-            for step in 4..=6 {
-                assert_eq!(theme.body_border(step), Hsla::from(material.border));
-            }
-            assert_eq!(theme.body_border(8), theme.gray(8));
+    fn radius_and_shadow_tokens_match_the_css() {
+        assert_eq!(f32::from(radius(RadiusToken::Small)), 4.);
+        assert_eq!(f32::from(radius(RadiusToken::Compact)), 6.);
+        assert_eq!(f32::from(radius(RadiusToken::Default)), 8.);
+        assert_eq!(f32::from(radius(RadiusToken::Medium)), 12.);
+        assert_eq!(f32::from(radius(RadiusToken::Large)), 999.);
+        for (token, layers) in [
+            (ShadowToken::One, 3),
+            (ShadowToken::Two, 1),
+            (ShadowToken::Three, 1),
+            (ShadowToken::Dialog, 2),
+        ] {
+            assert_eq!(shadow(token).len(), layers);
         }
-    }
-
-    /// The settings window's own surfaces, material "settings".
-    #[test]
-    fn liquid_glass_settings_surfaces() {
-        for appearance in [Appearance::Light, Appearance::Dark] {
-            let theme = Theme::new(appearance).with_material(Some(MaterialKind::LiquidGlass));
-            let material = theme.material.expect("material was just installed");
-
-            // `--macos-settings-window-radius: 26px` under the glass block,
-            // and the settings shell takes it unmodified -- 16 is the panel's
-            // override, which must not leak over here.
-            assert_eq!(theme.settings_window_radius(), 26.);
-            assert_eq!(material.sidebar_radius, 18.);
-
-            assert_eq!(theme.settings_sidebar_bg(), Hsla::from(material.sidebar));
-            assert_eq!(theme.settings_content_bg(), Hsla::from(material.content));
-            assert_eq!(theme.settings_card_bg(), Hsla::from(material.card));
-            assert_eq!(theme.settings_fill(), Hsla::from(material.fill));
-            assert_eq!(theme.settings_hover(), Hsla::from(material.hover));
-            assert_eq!(theme.settings_selection(), Hsla::from(material.selection));
-            assert_eq!(theme.settings_border(), Hsla::from(material.border));
-            assert_eq!(theme.settings_divider(), Hsla::from(material.border));
-            assert_eq!(theme.settings_text(), Hsla::from(material.text));
-            assert_eq!(theme.settings_muted(), Hsla::from(material.muted));
-        }
-
-        // The sidebar is a wash over the live backdrop; the content pane is
-        // opaque in both appearances.
-        let light = Theme::light().with_material(Some(MaterialKind::LiquidGlass));
-        assert!((light.settings_sidebar_bg().a - 0.78).abs() < 0.01);
-        assert_eq!(light.settings_content_bg().a, 1.);
-        let dark = Theme::dark().with_material(Some(MaterialKind::LiquidGlass));
-        assert!((dark.settings_sidebar_bg().a - 0.88).abs() < 0.01);
-        assert_eq!(dark.settings_content_bg().a, 1.);
-    }
-
-    /// Vibrancy keeps the `:root` radius and the pre-Tahoe surface set, and
-    /// the sidebar/content divider falls back to the shell's own
-    /// `divide-x divide-gray-3`.
-    #[test]
-    fn vibrancy_settings_surfaces() {
-        for appearance in [Appearance::Light, Appearance::Dark] {
-            let theme = Theme::new(appearance).with_material(Some(MaterialKind::Vibrancy));
-            assert_eq!(theme.settings_window_radius(), 16.);
-            assert_eq!(theme.settings_divider(), theme.gray(3));
-        }
-        // No material at all: the Tailwind classes, unremapped.
-        let bare = Theme::light();
-        assert_eq!(bare.settings_sidebar_bg(), bare.gray(2));
-        assert_eq!(bare.settings_card_bg(), bare.gray(2));
-        assert_eq!(bare.settings_fill(), bare.gray(3));
-        assert_eq!(bare.settings_selection(), bare.gray(5));
-        assert_eq!(bare.settings_text(), bare.gray(12));
-        assert_eq!(bare.settings_muted(), bare.gray(10));
-        assert_eq!(bare.settings_window_radius(), 16.);
-    }
-
-    /// Material `"teleprompter"` differs from `"panel"` in exactly one thing:
-    /// the radius. It gets no tint under Liquid Glass (that rule is
-    /// `[..native-material="panel"]`-gated) and the shared vibrancy wash
-    /// otherwise.
-    #[test]
-    fn the_teleprompter_material_is_the_shared_one_at_radius_22() {
-        for appearance in [Appearance::Light, Appearance::Dark] {
-            let glass = Theme::new(appearance).with_material(Some(MaterialKind::LiquidGlass));
-            assert_eq!(glass.teleprompter_window_radius(), 22.);
-            assert_eq!(glass.teleprompter_shell_bg(), gpui::transparent_black());
-            assert_eq!(glass.teleprompter_shell_border(), None);
-            // The panel's tint must not leak over: it is a different window.
-            assert_ne!(glass.teleprompter_shell_bg(), glass.shell_bg());
-
-            let vibrancy = Theme::new(appearance).with_material(Some(MaterialKind::Vibrancy));
-            assert_eq!(vibrancy.teleprompter_window_radius(), 16.);
-            // `background: var(--macos-settings-window)` -- the same value the
-            // panel and settings shells take on this path.
-            assert_eq!(vibrancy.teleprompter_shell_bg(), vibrancy.shell_bg());
-            assert!(vibrancy.teleprompter_shell_border().is_some());
-        }
-
-        // No material at all: the route's own non-macOS classes.
-        let bare = Theme::dark();
-        assert_eq!(bare.teleprompter_window_radius(), 16.);
-        assert!((bare.teleprompter_shell_bg().a - 0.9).abs() < 0.01);
-        assert_eq!(bare.teleprompter_shell_border(), Some(bare.gray(5)));
-    }
-
-    /// The light panel tint is `rgba(255, 255, 255, 0.55)` and the dark one
-    /// `rgba(17, 17, 17, 0.88)` -- both translucent, or there would be no
-    /// glass to see.
-    #[test]
-    fn panel_glass_tint_is_translucent() {
-        let light = Theme::light().with_material(Some(MaterialKind::LiquidGlass));
-        let dark = Theme::dark().with_material(Some(MaterialKind::LiquidGlass));
-        assert!((light.shell_bg().a - 0.55).abs() < 0.01);
-        assert!((dark.shell_bg().a - 0.88).abs() < 0.01);
     }
 }

@@ -1200,7 +1200,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
             // deactivates.
             kind: WindowKind::Normal,
             focus: true,
-            show: true,
+            show: !cfg!(target_os = "macos"),
             // `.resizable(true).maximized(false)`, and `min_inner_size`.
             is_resizable: true,
             is_minimizable: true,
@@ -1274,6 +1274,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
         }
         handle
             .update(cx, |_, window, cx| {
+                crate::theme::apply_native(window, cx);
                 // The unit-3 macOS 26 display-link repair, once the window is
                 // actually on screen.
                 platform::kick_display_link(window);
@@ -1281,6 +1282,11 @@ pub fn open_settings(page: Page, cx: &mut App) {
                 window.refresh();
             })
             .ok();
+        if cfg!(target_os = "macos")
+            && let Some(native) = &native
+        {
+            platform::show_native(native);
+        }
     })
     .detach();
 
@@ -1362,14 +1368,26 @@ pub fn open_onboarding(cx: &mut App) {
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id,
+            #[cfg(target_os = "windows")]
+            titlebar: Some(gpui::TitlebarOptions {
+                title: Some("Welcome to Cap".into()),
+                appears_transparent: true,
+                ..Default::default()
+            }),
+            #[cfg(not(target_os = "windows"))]
             titlebar: None,
+            app_owns_titlebar_drag: true,
             kind: WindowKind::Normal,
             focus: true,
-            show: true,
+            show: !cfg!(target_os = "macos"),
             is_resizable: false,
             is_minimizable: true,
             window_min_size: Some(bounds.size),
-            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            window_background: if cfg!(target_os = "windows") {
+                gpui::WindowBackgroundAppearance::Opaque
+            } else {
+                gpui::WindowBackgroundAppearance::Transparent
+            },
             ..Default::default()
         },
         |window, cx| {
@@ -1395,9 +1413,18 @@ pub fn open_onboarding(cx: &mut App) {
         })
         .ok()
         .flatten();
-    cx.spawn(async move |_| {
+    cx.spawn(async move |cx| {
         if let Some(native) = &native {
-            let _ = platform::install_window_material(native, 16.);
+            let _ = platform::install_window_material(native, 12.);
+            cx.update(|cx| {
+                handle
+                    .update(cx, |_, window, cx| {
+                        crate::theme::apply_native(window, cx);
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .ok();
+            });
             platform::show_native(native);
         }
     })
@@ -1654,8 +1681,14 @@ pub fn open_teleprompter(cx: &mut App) {
                 bounds,
             )),
             // `transparent: true`, `shadow: true`: the shell paints a tint and
-            // the material shows through.
-            window_background: gpui::WindowBackgroundAppearance::Transparent,
+            // the material shows through. Windows has no material and keeps
+            // its native frame, so a transparent backdrop only leaves see-through
+            // gaps where DWM's corner radius differs from the painted one.
+            window_background: if cfg!(target_os = "windows") {
+                gpui::WindowBackgroundAppearance::Opaque
+            } else {
+                gpui::WindowBackgroundAppearance::Transparent
+            },
             ..Default::default()
         },
         |window, cx| cx.new(|cx| TeleprompterWindow::new(window, cx)),
@@ -5016,9 +5049,19 @@ fn load_editor_project_candidate(
         preparing_joins.push(joined);
     }
     cx.spawn(async move |cx| {
+        let startup = std::time::Instant::now();
         let finalized = match finalization {
             Some(finalization) => finalization.wait().await,
             None => Ok(()),
+        };
+        tracing::info!(elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0, "editor finalization wait complete");
+        let preflight = if finalized.is_ok() && handle.update(cx, |_, _, _| ()).is_ok() {
+            let preflight_path = path.clone();
+            Some(cx.background_executor().spawn(async move {
+                editor_window::preflight(&preflight_path)
+            }))
+        } else {
+            None
         };
         let mut completed_audio = None;
         let mut live_handoff = None;
@@ -5067,6 +5110,7 @@ fn load_editor_project_candidate(
                 .preparing_cleanup
                 .prune_completed()
         });
+        tracing::info!(elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0, "editor preparing ownership settled");
         if let Err(message) = finalized {
             handle
                 .update(cx, |view, window, cx| view.set_error(message, window, cx))
@@ -5076,11 +5120,9 @@ fn load_editor_project_candidate(
         if handle.update(cx, |_, _, _| ()).is_err() {
             return;
         }
-        let preflight_path = path.clone();
-        let summary = cx
-            .background_executor()
-            .spawn(async move { editor_window::preflight(&preflight_path) })
-            .await;
+        let Some(preflight) = preflight else { return };
+        let summary = preflight.await;
+        tracing::info!(elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0, "editor media preflight complete");
 
         let summary = match summary {
             Ok(summary) => summary,
@@ -5184,7 +5226,7 @@ fn load_editor_project_candidate(
             }
         };
 
-        tracing::info!(path = %path.display(), "editor instance ready");
+        tracing::info!(path = %path.display(), elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0, "editor instance ready");
         let (total, config) = {
             let config = instance.project_config.1.borrow().clone();
             let total = config
@@ -5219,6 +5261,7 @@ fn load_editor_project_candidate(
             instance.dispose().await;
             return;
         }
+        tracing::info!(elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0, "editor state published");
 
         // The pump: convert on the background executor (un-padding plus the
         // BGRA swap is a few megabytes per frame), deliver on the main one.

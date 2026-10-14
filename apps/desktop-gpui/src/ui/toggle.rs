@@ -58,43 +58,33 @@ pub struct Toggle {
 }
 
 impl Toggle {
-    /// The editor track: `ed-ctl-active` off, `ed-accent` on, white knob.
     pub fn plain(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
             id: id.into(),
             checked,
             size: ToggleSize::Sm,
-            off_fill: Hsla::from(theme.editor.ctl_active),
-            on_fill: Hsla::from(theme.editor.accent),
-            thumb: gpui::white(),
+            off_fill: theme.disabled_bg.into(),
+            on_fill: theme.primary.into(),
+            thumb: theme.primary_foreground.into(),
             disabled: false,
             on_click: None,
         }
     }
 
-    /// The settings window: `[data-macos-native-material="settings"]
-    /// .cap-toggle { background: var(--macos-settings-control-fill) }`, checked
-    /// `var(--macos-settings-accent)`. The `inset 0 1px 2px rgba(0,0,0,.16)`
-    /// bevel the same rule adds has no gpui equivalent (README deviation).
     pub fn settings(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
             size: ToggleSize::Sm,
-            off_fill: theme
-                .material
-                .map(|material| Hsla::from(material.control_fill))
-                .unwrap_or_else(|| Hsla::from(theme.gray_6)),
-            on_fill: gpui::rgb(Theme::SETTINGS_ACCENT).into(),
+            off_fill: theme.disabled_bg.into(),
+            on_fill: theme.primary.into(),
             ..Self::plain(theme, id, checked)
         }
     }
 
-    /// The teleprompter's settings popover: bare glass, so the track is a
-    /// `gray-12/10` wash rather than a material token.
     pub fn glass(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
             size: ToggleSize::Sm,
-            off_fill: Theme::with_alpha(theme.gray_12, 0.10),
-            on_fill: gpui::rgb(Theme::SETTINGS_ACCENT).into(),
+            off_fill: theme.disabled_bg.into(),
+            on_fill: theme.primary.into(),
             ..Self::plain(theme, id, checked)
         }
     }
@@ -107,7 +97,7 @@ impl Toggle {
     pub fn disabled(mut self, theme: &Theme, disabled: bool) -> Self {
         self.disabled = disabled;
         if disabled && !self.checked {
-            self.off_fill = Hsla::from(theme.editor.ctl);
+            self.off_fill = theme.disabled_bg.into();
         }
         self
     }
@@ -143,13 +133,18 @@ impl RenderOnce for Toggle {
             .flex()
             .flex_row()
             .flex_shrink_0()
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             // `data-checked:translate-x-[calc(100%)]` on the thumb -- the same
             // end position a flex justification reaches, without a transform.
             .when(checked, |this| this.justify_end())
             .when(!disabled, |this| this.cursor_pointer())
             .bg(if checked { on_fill } else { off_fill })
-            .child(div().size(size.thumb()).rounded_full().bg(thumb))
+            .child(
+                div()
+                    .size(size.thumb())
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(thumb),
+            )
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })

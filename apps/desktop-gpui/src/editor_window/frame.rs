@@ -394,11 +394,10 @@ impl EditorWindow {
                     .min(window.viewport_size().height - px(24.)),
             )
             .overflow_y_scroll()
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(gpui::Hsla::from(theme.editor.line))
-            .bg(gpui::Hsla::from(theme.editor.card))
-            .shadow(theme.editor.pop_shadow())
+            .border_color(gpui::Hsla::from(theme.border_secondary))
+            .bg(gpui::Hsla::from(theme.surface_secondary))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -463,7 +462,7 @@ impl EditorWindow {
                             .items_center()
                             .gap(px(12.))
                             .p(px(8.))
-                            .rounded(px(12.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                             .cursor_pointer()
                             .hover(|row| row.bg(theme.gray(3)))
                             .focus_visible(|row| row.bg(theme.gray(3)))
@@ -474,9 +473,11 @@ impl EditorWindow {
                                     .justify_center()
                                     .size(px(32.))
                                     .flex_shrink_0()
-                                    .rounded(px(10.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Medium,
+                                    ))
                                     .bg(if selected {
-                                        theme.blue_9.into()
+                                        theme.primary.into()
                                     } else {
                                         theme.gray(3)
                                     })
@@ -514,7 +515,7 @@ impl EditorWindow {
                                         .path("icons/circle-check.svg")
                                         .size(px(16.))
                                         .flex_shrink_0()
-                                        .text_color(theme.blue_9),
+                                        .text_color(theme.primary),
                                 )
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -552,7 +553,9 @@ impl EditorWindow {
                                         .h(px(32.))
                                         .border_1()
                                         .border_color(theme.gray(3))
-                                        .rounded(px(8.))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Default,
+                                        ))
                                         .p(px(1.))
                                         .children(
                                             [
@@ -572,7 +575,9 @@ impl EditorWindow {
                                                         .flex_1()
                                                         .items_center()
                                                         .justify_center()
-                                                        .rounded(px(7.))
+                                                        .rounded(crate::theme::radius(
+                                                            crate::theme::RadiusToken::Default,
+                                                        ))
                                                         .text_size(px(12.))
                                                         .text_color(if value == frame_theme {
                                                             theme.gray(12)

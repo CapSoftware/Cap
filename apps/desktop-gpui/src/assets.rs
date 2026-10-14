@@ -20,23 +20,23 @@ macro_rules! assets {
     };
 }
 
-/// Exactly the three faces the webview loads -- `unplugin-fonts` is configured
-/// for `weights: [400, 500, 700]` (`packages/ui-solid/vite.js:31-33`) and
-/// nothing else. Deliberately *not* four: there is no SemiBold here because
-/// there is none over there, so a Tailwind `font-semibold` (600) finds no 600
-/// face and CSS font-matching resolves it up to 700. Embedding a real 600 would
-/// let this app render a weight the original cannot, which is how the two
-/// drift apart.
 const FONTS: &[(&str, &[u8])] = assets!("fonts":
-    "Geist.ttf",
-    "Geist-Medium.ttf",
-    "Geist-Bold.ttf",
+    "Inter.ttf",
+    "FacultyGlyphic-Regular.ttf",
 );
 
-/// Mostly Cap's own icon set, lifted from `packages/ui-solid/icons`. gpui
-/// rasterises an SVG and keeps only its alpha, tinting the result with the
-/// element's text colour, so these must be single-colour glyphs -- a full-colour
-/// illustration would come out as a filled silhouette.
+const UI_ASSETS: &[(&str, &[u8])] = assets!("ui":
+    "tooltip-pointer.svg",
+);
+
+const SOLAR_ICONS: &[(&str, &[u8])] = assets!("solar":
+    "settings-bold.svg",
+    "bell-bold.svg",
+);
+
+/// The generic glyphs are generated from the MIT-licensed Hugeicons free
+/// Stroke Rounded package. GPUI uses each SVG's alpha as a tintable glyph;
+/// brand art and native window controls are left in their original form.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
     "app-window-mac.svg",
     "app-window.svg",
@@ -46,6 +46,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "arrows.svg",
     "audio-on.svg",
     "bell.svg",
+    "brush.svg",
     "camera.svg",
     "caret-down.svg",
     "captions.svg",
@@ -71,13 +72,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "folder.svg",
     "gauge.svg",
     "gear.svg",
-    // The config sidebar's field glyphs. Four are Cap's own
-    // (`packages/ui-solid/icons/{padding,corners,shadow,bg-blur}.svg`); the
-    // rest of the background section's are Lucide, drawn here from the same
-    // 24x24 originals `~icons/lucide/*` resolves to -- laptop (MacBook notch),
-    // wind (motion blur), image-off (the "None" source tile). `shuffle` is the
-    // gradient editor's own inline randomise glyph (`GradientEditor.tsx:237-253`),
-    // which is Lucide `shuffle` with its paths spelled out in the TSX.
     "padding.svg",
     "corners.svg",
     "shadow.svg",
@@ -101,13 +95,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
-    "move-left.svg",
     "next.svg",
-    // The timeline's track glyphs. `trackIcons` (`TL/index.tsx:70-80`) and
-    // `getSceneIcon` (`TL/SceneTrack.tsx:80-96`) are Lucide, and the app has
-    // no Cap equivalent for most of them, so these nine are the Lucide 24x24
-    // originals: type, box-select (an alias of square-dashed since Lucide
-    // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
     "columns-2.svg",
     "monitor-outline.svg",
@@ -136,7 +124,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
-    // The onboarding permissions surface's header badge.
     "shield.svg",
     "stop-circle.svg",
     "search.svg",
@@ -148,10 +135,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "user-round.svg",
     "window.svg",
     "x.svg",
-    // E5b's field glyphs: the rest of the sidebar's Lucide set, drawn from the
-    // same 24x24 originals `~icons/lucide/*` resolves to. `ease-curve` stands
-    // in for `~icons/hugeicons/ease-curve-control-points`, which is the one
-    // non-Lucide glyph in the sidebar (Smooth Movement's header).
     "align-center.svg",
     "align-left.svg",
     "align-right.svg",
@@ -167,37 +150,22 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
+    "reset.svg",
     "volume-x.svg",
     "gem.svg",
     "sliders-horizontal.svg",
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
-    // The settings Recordings page. `link` is Cap's own
-    // (`packages/ui-solid/icons/link.svg`, which is Lucide's glyph); `import`
-    // and `edit` are the Lucide 24x24 originals `~icons/lucide/*` resolves to;
-    // `record-fill` and `warning-bold` are Phosphor's 256x256 originals, which
-    // is what `IconPhRecordFill` / `IconPhWarningBold` are in `recordings.tsx`.
     "link.svg",
     "import.svg",
     "edit.svg",
     "copy.svg",
     "record-fill.svg",
     "warning-bold.svg",
-    // The main window's hand-drawn traffic lights: the x and expand glyphs
-    // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    // The remaining settings pages (`settings_pages.rs`). `circle-check` is
-    // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
-    // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
-    // `~icons/lucide/*` imports resolve to, except `google-drive`, which is
-    // integrations/index.tsx's inline multi-colour logo flattened to one fill
-    // (gpui's `svg()` keeps only the alpha).
     "circle-check.svg",
     "lock.svg",
-    // The screenshot editor's annotation toolbar, layers panel and header
-    // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
-    // originals, matching the `~icons/lucide/*` imports over there.
     "pencil.svg",
     "arrow-up-right.svg",
     "more-horizontal.svg",
@@ -244,6 +212,8 @@ impl Assets {
     fn all() -> impl Iterator<Item = &'static (&'static str, &'static [u8])> {
         FONTS
             .iter()
+            .chain(UI_ASSETS.iter())
+            .chain(SOLAR_ICONS.iter())
             .chain(ICONS.iter())
             .chain(IMAGES.iter())
             .chain(ONBOARDING.iter())
@@ -266,11 +236,6 @@ impl AssetSource for Assets {
 }
 
 impl Assets {
-    /// Register the embedded Geist faces with the text system.
-    ///
-    /// gpui resolves `.font_family("Geist")` against whatever the platform text
-    /// system knows about, so this has to run before the first window renders or
-    /// text silently falls back to the system UI font.
     pub fn load_fonts(&self, cx: &App) -> Result<()> {
         cx.text_system().add_fonts(
             FONTS
@@ -428,12 +393,49 @@ mod tests {
 
     #[test]
     fn fonts_and_icons_resolve() {
-        assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
+        assert!(Assets.load("fonts/Inter.ttf").unwrap().is_some());
+        assert!(
+            Assets
+                .load("fonts/FacultyGlyphic-Regular.ttf")
+                .unwrap()
+                .is_some()
+        );
         assert!(Assets.load("icons/camera.svg").unwrap().is_some());
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
         assert!(Assets.load("images/auto.jpg").unwrap().is_some());
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
         assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
+    }
+
+    #[test]
+    fn generated_hugeicons_are_valid_tintable_svgs() {
+        let preserved = [
+            "icons/logo-full.svg",
+            "icons/logo-full-dark.svg",
+            "icons/google-drive.svg",
+            "icons/caption-close-windows.svg",
+            "icons/caption-maximize-windows.svg",
+            "icons/caption-minimize-windows.svg",
+            "icons/caption-restore-windows.svg",
+            "icons/traffic-close.svg",
+            // Aeris's drawing-tool brush, kept at its own 28px grid.
+            "icons/brush.svg",
+            // Aeris's filled Solar reset glyph.
+            "icons/reset.svg",
+        ];
+        let mut count = 0;
+        for (path, bytes) in ICONS {
+            if preserved.contains(path) {
+                continue;
+            }
+            let svg = std::str::from_utf8(bytes).unwrap();
+            assert!(svg.contains("viewBox=\"0 0 24 24\""), "{path}");
+            assert!(svg.contains("currentColor"), "{path}");
+            resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default())
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            count += 1;
+        }
+        assert_eq!(count, 134);
     }
 }

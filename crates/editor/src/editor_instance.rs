@@ -336,6 +336,7 @@ impl EditorInstance {
         audio_output: Arc<crate::AudioOutput>,
         inputs: EditorStartupInputs,
     ) -> Result<Arc<Self>, String> {
+        let startup = std::time::Instant::now();
         let EditorStartupInputs {
             recordings: preloaded_recordings,
             completed_audio,
@@ -487,6 +488,10 @@ impl EditorInstance {
                 .await
             }
         });
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor segment setup started"
+        );
 
         // Open the session's audio output stream now (in the background) so
         // the first play press doesn't wait on the device — Bluetooth outputs
@@ -531,6 +536,10 @@ impl EditorInstance {
                 meta.as_ref(),
             )?),
         };
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor recording metadata ready"
+        );
 
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
         cap_project::synchronize_captions(
@@ -561,13 +570,25 @@ impl EditorInstance {
             .map_err(|e| format!("Failed to create render constants: {e}"))?;
             Arc::new(rc)
         };
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor render constants ready"
+        );
 
         let layers_rx = editor::start_renderer_layers_creation(&render_constants, &project);
 
         let segments = segments_task
             .await
             .map_err(|e| format!("Segment setup task failed: {e}"))??;
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor segment decoders ready"
+        );
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor renderer layers ready"
+        );
 
         let renderer = Arc::new(editor::Renderer::spawn_with_format(
             render_constants.clone(),
@@ -608,6 +629,10 @@ impl EditorInstance {
 
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
+        tracing::info!(
+            elapsed_ms = startup.elapsed().as_secs_f64() * 1000.0,
+            "editor engine constructed"
+        );
 
         Ok(this)
     }

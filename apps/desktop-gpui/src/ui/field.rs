@@ -81,12 +81,12 @@ impl Field {
             children: Vec::new(),
             gap,
             style,
-            text: Hsla::from(theme.editor.text_1),
-            muted: Hsla::from(theme.editor.text_2),
-            value_color: Hsla::from(theme.editor.text_3),
-            disabled_text: Hsla::from(theme.editor.text_3),
-            badge_bg: Hsla::from(theme.editor.ctl),
-            badge_text: Hsla::from(theme.editor.text_2),
+            text: Hsla::from(theme.text_primary),
+            muted: Hsla::from(theme.text_secondary),
+            value_color: Hsla::from(theme.text_muted),
+            disabled_text: Hsla::from(theme.text_muted),
+            badge_bg: Hsla::from(theme.surface_subtle),
+            badge_text: Hsla::from(theme.text_secondary),
             disabled: false,
         }
     }
@@ -261,7 +261,7 @@ impl RenderOnce for Field {
                         div()
                             .px(px(6.))
                             .py(px(2.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(badge_bg)
                             .text_size(px(10.))
                             .font_weight(FontWeight::MEDIUM)
@@ -295,8 +295,8 @@ impl Subfield {
             required: false,
             children: Vec::new(),
             gap: None,
-            text: Hsla::from(theme.editor.text_1),
-            accent: Hsla::from(theme.editor.accent),
+            text: Hsla::from(theme.text_primary),
+            accent: Hsla::from(theme.primary),
         }
     }
 

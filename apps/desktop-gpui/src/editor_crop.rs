@@ -2346,7 +2346,6 @@ impl EditorWindow {
     pub(crate) fn render_crop_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.crop.as_ref()?;
         let theme = self.theme;
-        let editor = theme.editor;
 
         Some(
             div()
@@ -2367,8 +2366,6 @@ impl EditorWindow {
                         })),
                 )
                 .child(
-                    // `rounded-[1.25rem] overflow-hidden border-0 bg-ed-card
-                    // shadow-ed-pop` (`ui.tsx:272-275`).
                     div()
                         // The modal's own hit shield. Without it the backdrop's
                         // click handler is still "hovered" under the card --
@@ -2384,11 +2381,13 @@ impl EditorWindow {
                         .flex()
                         .flex_col()
                         .max_w(px(CROP_DIALOG_MAX_WIDTH))
-                        .rounded(px(20.))
-                        .bg(Hsla::from(editor.card))
-                        .shadow(editor.pop_shadow())
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                        .border_1()
+                        .border_color(Hsla::from(theme.border_secondary))
+                        .bg(Hsla::from(theme.surface))
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::Dialog))
                         .overflow_hidden()
-                        .text_color(Hsla::from(editor.text_1))
+                        .text_color(Hsla::from(theme.text_primary))
                         .child(self.render_crop_header(cx))
                         .child(self.render_crop_body(state, cx))
                         .child(self.render_crop_hint())
@@ -2414,7 +2413,7 @@ impl EditorWindow {
                 div()
                     .text_size(px(14.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(Hsla::from(theme.editor.text_1))
+                    .text_color(Hsla::from(theme.text_primary))
                     .child("Crop"),
             )
             .child(
@@ -2462,7 +2461,6 @@ impl EditorWindow {
     /// the three actions.
     fn render_crop_inspector(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let real = state.real();
         let target = state.target_vec();
         let full = real.width >= target.x && real.height >= target.y;
@@ -2475,14 +2473,19 @@ impl EditorWindow {
             div()
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(Hsla::from(editor.text_2))
+                .text_color(Hsla::from(theme.text_secondary))
                 .child(text)
         };
-        let hairline = || div().h(px(1.)).flex_none().bg(Hsla::from(editor.line));
+        let hairline = || {
+            div()
+                .h(px(1.))
+                .flex_none()
+                .bg(Hsla::from(theme.border_subtle))
+        };
         let row_label = |text: &'static str| {
             div()
                 .text_size(px(12.))
-                .text_color(Hsla::from(editor.text_2))
+                .text_color(Hsla::from(theme.text_secondary))
                 .child(text)
         };
         let row = || {
@@ -2525,8 +2528,8 @@ impl EditorWindow {
             .w(px(INSPECTOR_WIDTH))
             .gap(px(12.))
             .p(px(INSPECTOR_PADDING))
-            .rounded(px(12.))
-            .bg(Hsla::from(editor.card_2))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            .bg(Hsla::from(theme.surface_secondary))
             .child(label("Preview"))
             .child(self.render_crop_preview(px(preview_width), px(preview_height)))
             .child(hairline())
@@ -2553,7 +2556,7 @@ impl EditorWindow {
                             div()
                                 .w(px(8.))
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child("×"),
                         )
                         .child(self.render_crop_field(CropField::Height)),
@@ -2637,7 +2640,7 @@ impl EditorWindow {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let editor = self.theme.editor;
+        let theme = self.theme;
         let label = match ratio {
             Some((a, b)) => SharedString::from(format!("{a}:{b}")),
             None => SharedString::from("Free"),
@@ -2649,22 +2652,22 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .h(px(INSPECTOR_CONTROL_HEIGHT))
-            .rounded(px(7.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .when(selected, |chip| {
-                chip.bg(Hsla::from(crate::theme::rgba_alpha(editor.accent, 0.12)))
+                chip.bg(Hsla::from(theme.primary_subtle))
                     .border_1()
-                    .border_color(Hsla::from(editor.accent))
-                    .text_color(Hsla::from(editor.accent))
+                    .border_color(Hsla::from(theme.primary))
+                    .text_color(Hsla::from(theme.primary))
             })
             .when(!selected, |chip| {
-                chip.bg(Hsla::from(editor.ctl))
-                    .text_color(Hsla::from(editor.text_2))
+                chip.bg(Hsla::from(theme.surface_subtle))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .hover(move |chip| {
-                        chip.bg(Hsla::from(editor.ctl_hover))
-                            .text_color(Hsla::from(editor.text_1))
+                        chip.bg(Hsla::from(theme.hover_bg))
+                            .text_color(Hsla::from(theme.text_primary))
                     })
             })
             .child(label)
@@ -2682,7 +2685,7 @@ impl EditorWindow {
         disabled: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
-        let editor = self.theme.editor;
+        let theme = self.theme;
         div()
             .id(id)
             .flex()
@@ -2690,17 +2693,16 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .h(px(INSPECTOR_CONTROL_HEIGHT))
-            .rounded(px(7.))
-            .bg(Hsla::from(editor.ctl))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+            .bg(Hsla::from(theme.surface_subtle))
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(editor.text_1))
+            .text_color(Hsla::from(theme.text_primary))
             .when(disabled, |button| button.opacity(0.45))
             .when(!disabled, |button| {
                 button
                     .cursor_pointer()
-                    .hover(move |button| button.bg(Hsla::from(editor.ctl_hover)))
-                    .active(move |button| button.bg(Hsla::from(editor.ctl_active)))
+                    .hover(move |button| button.bg(Hsla::from(theme.hover_bg)))
                     .on_click(on_click)
             })
             .child(label)
@@ -2717,7 +2719,7 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .p(px(16.))
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .bg(Hsla::from(self.theme.editor.stage))
             .child(self.render_crop_area(state))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::crop_mouse_down))
@@ -2783,7 +2785,7 @@ impl EditorWindow {
                                 div()
                                     .h(px(18.))
                                     .w(px(44.))
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -2795,7 +2797,7 @@ impl EditorWindow {
                                         gpui::hsla(0., 0., 1., 0.5)
                                     })
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(SharedString::from(format!("{}:{}", ratio.0, ratio.1))),
                             )
                     }),
@@ -2886,7 +2888,7 @@ impl EditorWindow {
                     .bg(Hsla::from(theme.editor.stage))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_2))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child("Loading frame…")
             }))
             .into_any_element()
@@ -2899,6 +2901,7 @@ impl EditorWindow {
     /// The inspector's preview: the live composited frame, which is the same
     /// `latestFrame` the player draws, `object-contain` inside the box.
     fn render_crop_preview(&self, w: Pixels, h: Pixels) -> AnyElement {
+        let theme = self.theme;
         let editor = self.theme.editor;
         let frame_size = self
             .frame_layout
@@ -2914,7 +2917,7 @@ impl EditorWindow {
             .flex_none()
             .items_center()
             .justify_center()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .bg(Hsla::from(editor.stage))
             .overflow_hidden()
             .children(match self.latest_frame.clone() {
@@ -2931,7 +2934,7 @@ impl EditorWindow {
                     div()
                         .text_size(px(11.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(editor.text_3))
+                        .text_color(Hsla::from(theme.text_muted))
                         .child("Rendering preview…")
                         .into_any_element(),
                 ),
@@ -2941,7 +2944,7 @@ impl EditorWindow {
 
     /// The one-line hint under the stage.
     fn render_crop_hint(&self) -> AnyElement {
-        let editor = self.theme.editor;
+        let theme = self.theme;
         div()
             .flex()
             .flex_row()
@@ -2952,14 +2955,14 @@ impl EditorWindow {
             .pt(px(12.))
             .pb(px(DIALOG_PADDING_X))
             .text_size(px(12.))
-            .text_color(Hsla::from(editor.text_3))
+            .text_color(Hsla::from(theme.text_muted))
             .child("Drag to move · Arrow keys nudge · Hold")
             .child(
                 div()
                     .px(px(4.))
-                    .rounded(px(4.))
-                    .bg(Hsla::from(editor.ctl))
-                    .text_color(Hsla::from(editor.text_2))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                    .bg(Hsla::from(theme.surface_subtle))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child("⇧"),
             )
             .child("to skip snapping")
@@ -2970,9 +2973,11 @@ impl EditorWindow {
     /// Save on the right.
     fn render_crop_footer(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let note: Option<(SharedString, Hsla)> = match (&state.error, &state.style_target) {
-            (Some(error), _) => Some((SharedString::from(error.clone()), Hsla::from(theme.red_11))),
+            (Some(error), _) => Some((
+                SharedString::from(error.clone()),
+                Hsla::from(theme.text_danger),
+            )),
             (None, Some(target)) => Some((
                 SharedString::from(if target.opting_in {
                     format!(
@@ -2982,7 +2987,7 @@ impl EditorWindow {
                 } else {
                     format!("Editing Style {} only", target.index + 1)
                 }),
-                Hsla::from(editor.text_2),
+                Hsla::from(theme.text_secondary),
             )),
             (None, None) => None,
         };
@@ -3001,7 +3006,7 @@ impl EditorWindow {
             .px(px(DIALOG_PADDING_X))
             .flex_none()
             .border_t_1()
-            .border_color(Hsla::from(editor.line))
+            .border_color(Hsla::from(theme.border_subtle))
             .child(
                 div().min_w(px(0.)).text_size(px(12.)).children(
                     note.map(|(text, color)| div().truncate().text_color(color).child(text)),
@@ -3028,58 +3033,17 @@ impl EditorWindow {
 
     /// The accent-gradient primary, the same one the header's Export uses.
     fn render_crop_save_button(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
-        let editor = self.theme.editor;
-        let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
-            gpui::linear_gradient(
-                180.,
-                gpui::linear_color_stop(top, 0.),
-                gpui::linear_color_stop(bottom, 1.),
-            )
-        };
-        div()
-            .id("crop-save")
-            .relative()
-            .flex()
-            .items_center()
-            .justify_center()
-            .px(px(14.))
-            .h(px(30.))
-            .flex_none()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .bg(gradient(editor.accent_2, editor.accent))
-            .text_size(px(13.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(gpui::white())
-            .when(!enabled, |button| button.opacity(0.45))
-            .when(enabled, |button| {
-                button
-                    .cursor_pointer()
-                    .hover(move |style| {
-                        style.bg(gradient(
-                            crate::theme::mix(editor.accent_2, gpui::rgb(0xffffff), 0.10),
-                            crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.10),
-                        ))
-                    })
-                    .active(move |style| {
-                        style.bg(gradient(
-                            crate::theme::mix(editor.accent_2, gpui::rgb(0x000000), 0.06),
-                            crate::theme::mix(editor.accent, gpui::rgb(0x000000), 0.06),
-                        ))
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx)))
-            })
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(1.))
-                    .bg(gpui::hsla(0., 0., 1., 0.22)),
-            )
-            .child("Save")
-            .into_any_element()
+        ui::Button::plain(
+            &self.theme,
+            "crop-save",
+            ui::ButtonVariant::Blue,
+            ui::ButtonSize::Sm,
+        )
+        .height(px(30.))
+        .label("Save")
+        .disabled(!enabled)
+        .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx)))
+        .into_any_element()
     }
 
     fn render_crop_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -3087,7 +3051,7 @@ impl EditorWindow {
         let menu = state.menu.as_ref()?;
         let items = crop_menu_items(state.aspect, self.crop_snap_to_ratio);
         Some(
-            ui::Menu::editor(&self.theme, "crop-menu", items, menu)
+            ui::Menu::new(&self.theme, "crop-menu", items, menu)
                 .on_select(cx.listener(|this, index: &usize, window, cx| {
                     this.choose_crop_menu(*index, window, cx);
                 }))
@@ -3313,7 +3277,7 @@ fn editor_handle_glyph(handle: Handle, bounds: CropBounds) -> gpui::Div {
         .top(px(y as f32 - h / 2.))
         .w(px(w))
         .h(px(h))
-        .rounded(px(3.))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
         .border_1()
         .border_color(outline)
         .bg(gpui::rgb(0xffffff))

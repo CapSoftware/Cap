@@ -182,10 +182,6 @@ fn glass_hover(theme: Theme) -> Hsla {
     glass_tint(theme, 0.06, 0.07)
 }
 
-fn glass_press(theme: Theme) -> Hsla {
-    glass_tint(theme, 0.1, 0.11)
-}
-
 fn glass_selected(theme: Theme) -> Hsla {
     glass_tint(theme, 0.08, 0.1)
 }
@@ -217,14 +213,14 @@ fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
             gpui::hsla(0., 0., 1., 0.07),
         ),
         (true, false) => (
-            Theme::with_alpha(theme.blue_3, 0.9),
-            Theme::with_alpha(theme.blue_3, 0.75),
-            Theme::with_alpha(theme.blue_8, 0.4),
+            Theme::with_alpha(theme.primary_subtle, 0.9),
+            Theme::with_alpha(theme.primary_subtle, 0.75),
+            Theme::with_alpha(theme.primary_hover, 0.4),
         ),
         (true, true) => (
-            Theme::with_alpha(theme.blue_9, 0.24),
-            Theme::with_alpha(theme.blue_9, 0.18),
-            Theme::with_alpha(theme.blue_9, 0.3),
+            Theme::with_alpha(theme.primary, 0.24),
+            Theme::with_alpha(theme.primary, 0.18),
+            Theme::with_alpha(theme.primary, 0.3),
         ),
     };
     let (highlight, lift) = if dark {
@@ -248,17 +244,9 @@ fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
     if selected {
-        Theme::with_alpha(theme.blue_9, 0.06)
+        Theme::with_alpha(theme.primary, 0.06)
     } else {
         glass_tint(theme, 0.04, 0.05)
-    }
-}
-
-fn capture_press_fill(theme: Theme, selected: bool) -> Hsla {
-    if selected {
-        Theme::with_alpha(theme.blue_9, 0.12)
-    } else {
-        glass_tint(theme, 0.07, 0.09)
     }
 }
 
@@ -317,11 +305,11 @@ impl gpui::RenderOnce for ModeHoverCard {
             .w(px(240.))
             .px(px(12.))
             .py(px(10.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(theme.gray_3)
-            .bg(theme.gray_12)
-            .text_color(theme.gray_1)
+            .border_color(theme.surface_subtle)
+            .bg(theme.text_primary)
+            .text_color(theme.surface)
             .shadow_lg()
             .child(
                 div()
@@ -332,7 +320,7 @@ impl gpui::RenderOnce for ModeHoverCard {
                 div()
                     .text_size(px(10.))
                     .line_height(px(13.75))
-                    .text_color(theme.gray_4)
+                    .text_color(theme.hover_bg)
                     .child(description),
             )
             .when(mode != Mode::Screenshot, |this| {
@@ -347,17 +335,17 @@ impl gpui::RenderOnce for ModeHoverCard {
                         .mx(px(-4.))
                         .px(px(8.))
                         .py(px(4.))
-                        .rounded(px(6.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                         .text_size(px(11.))
-                        .text_color(theme.gray_4)
-                        .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
+                        .text_color(theme.hover_bg)
+                        .hover(|style| style.bg(theme.text_secondary).text_color(theme.surface))
                         .child(
                             svg()
                                 .path("icons/settings.svg")
                                 .size(px(12.))
-                                .text_color(theme.gray_4)
+                                .text_color(theme.hover_bg)
                                 .group_hover("mode-quality-settings", |style| {
-                                    style.text_color(theme.gray_1)
+                                    style.text_color(theme.surface)
                                 }),
                         )
                         .child("Quality settings")
@@ -1962,6 +1950,29 @@ impl MainWindow {
                 return;
             }
 
+            let mut recording_started = false;
+            for _ in 0..300 {
+                if this
+                    .update_in(cx, |this, _, cx| {
+                        matches!(
+                            this.session.read(cx).phase,
+                            crate::session::Phase::Recording { .. }
+                        )
+                    })
+                    .unwrap_or(false)
+                {
+                    recording_started = true;
+                    break;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+            }
+            if !recording_started {
+                tracing::error!("auto-record never entered the recording phase");
+                return;
+            }
+
             let third = std::time::Duration::from_secs(record_secs.div_ceil(3));
             let toggle = |this: &gpui::WeakEntity<Self>, cx: &mut gpui::AsyncWindowContext| {
                 this.update_in(cx, |this, _, cx| {
@@ -2577,7 +2588,7 @@ impl Render for MainWindow {
             && self.microphone.is_some()
             && self.session.read(cx).phase == Phase::Idle;
         self.microphone_level.update(cx, |meter, cx| {
-            meter.configure(meter_active, theme.blue_9.into(), cx);
+            meter.configure(meter_active, theme.primary.into(), cx);
         });
 
         div()
@@ -2587,7 +2598,9 @@ impl Render for MainWindow {
             .flex_col()
             .overflow_hidden()
             // Windows keeps its native frame, so DWM supplies the outer corners.
-            .when(!cfg!(target_os = "windows"), |shell| shell.rounded(px(16.)))
+            .when(!cfg!(target_os = "windows"), |shell| {
+                shell.rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
             // Opaque `bg-gray-1` with no material; a translucent tint over the
             // live `NSGlassEffectView`/`NSVisualEffectView` backdrop with one.
             .bg(theme.shell_bg())
@@ -2596,7 +2609,7 @@ impl Render for MainWindow {
             .when_some(theme.shell_border(), |this, color| {
                 this.border_1().border_color(color)
             })
-            .font_family(crate::theme::UI_FONT)
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
@@ -2652,7 +2665,7 @@ impl MainWindow {
             .when(cfg!(target_os = "windows"), |overlay| {
                 overlay.top(px(HEADER_HEIGHT))
             })
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .occlude()
             .flex()
             .items_center()
@@ -2664,20 +2677,20 @@ impl MainWindow {
                 div()
                     .w_full()
                     .max_w(px(360.))
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
                     .border_color(theme.body_border(6))
-                    .bg(theme.gray_1)
+                    .bg(theme.surface)
                     .p(px(16.))
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(div().text_size(px(15.)).text_color(theme.gray_12).child("No microphone detected"))
+                    .child(div().text_size(px(15.)).text_color(theme.text_primary).child("No microphone detected"))
                     .child(
                         div()
                             .text_size(px(12.))
                             .line_height(px(18.))
-                            .text_color(theme.gray_11)
+                            .text_color(theme.text_secondary)
                             .child("This recording will not include your voice. Select a microphone, or continue without one."),
                     )
                     .child(
@@ -2691,13 +2704,13 @@ impl MainWindow {
                             .child(
                                 div()
                                     .size(px(16.))
-                                    .rounded(px(4.))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                     .border_1()
-                                    .border_color(if checked { theme.blue_9 } else { theme.gray_7 })
-                                    .bg(if checked { theme.blue_9 } else { theme.gray_2 })
+                                    .border_color(if checked { theme.primary } else { theme.border_strong })
+                                    .bg(if checked { theme.primary } else { theme.surface_secondary })
                                     .when(checked, |this| this.child(svg().path("icons/check.svg").size(px(14.)).text_color(rgb(0xffffff)))),
                             )
-                            .child(div().text_size(px(12.)).text_color(theme.gray_11).child("Don't show again"))
+                            .child(div().text_size(px(12.)).text_color(theme.text_secondary).child("Don't show again"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(warning) = &mut this.microphone_warning {
                                     warning.dont_show_again = !warning.dont_show_again;
@@ -2706,7 +2719,7 @@ impl MainWindow {
                                 cx.notify();
                             })),
                     )
-                    .when_some(error, |this, error| this.child(div().text_size(px(11.)).text_color(theme.red_9).child(error)))
+                    .when_some(error, |this, error| this.child(div().text_size(px(11.)).text_color(theme.danger).child(error)))
                     .child(
                         div()
                             .flex()
@@ -2731,7 +2744,7 @@ impl MainWindow {
         div()
             .absolute()
             .inset_0()
-            .bg(theme.gray_1)
+            .bg(theme.surface)
             .flex()
             .flex_col()
             .justify_center()
@@ -2751,9 +2764,9 @@ impl MainWindow {
             .child(
                 div()
                     .id("cancel-clean-capture")
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .p(px(12.))
-                    .bg(theme.gray_3)
+                    .bg(theme.surface_subtle)
                     .cursor_pointer()
                     .child("Cancel")
                     .on_click(
@@ -2795,10 +2808,10 @@ impl MainWindow {
             .bottom(px(12.))
             .left(px(12.))
             .right(px(12.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(theme.red_4)
-            .bg(theme.red_2)
+            .border_color(theme.negative_subtle)
+            .bg(theme.negative_subtle)
             .p(px(10.))
             .shadow_md()
             .child(
@@ -2817,7 +2830,7 @@ impl MainWindow {
                                 div()
                                     .text_size(px(10.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.red_11)
+                                    .text_color(theme.text_danger)
                                     .child("Incomplete Recording"),
                             )
                             .child(
@@ -2825,13 +2838,13 @@ impl MainWindow {
                                     .truncate()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.gray_12)
+                                    .text_color(theme.text_primary)
                                     .child(recording.pretty_name),
                             )
                             .child(
                                 div()
                                     .text_size(px(10.))
-                                    .text_color(theme.gray_11)
+                                    .text_color(theme.text_secondary)
                                     .child(segments),
                             )
                             .when_some(self.recovery_error.clone(), |this, error| {
@@ -2839,7 +2852,7 @@ impl MainWindow {
                                     div()
                                         .mt(px(4.))
                                         .text_size(px(10.))
-                                        .text_color(theme.red_11)
+                                        .text_color(theme.text_danger)
                                         .child(error),
                                 )
                             }),
@@ -2898,6 +2911,9 @@ impl MainWindow {
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
             .bg(theme.header_bg())
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.rounded_t(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
             // `divide-y divide-gray-5` between header and body.
             .border_b_1()
             .border_color(theme.header_border())
@@ -2924,7 +2940,6 @@ impl MainWindow {
             if window.is_window_active() { 0.8 } else { 0.4 },
         );
         let hover = gpui::rgba(if dark { 0xffffff0d } else { 0x0000000d });
-        let pressed = gpui::rgba(if dark { 0xe9e9e908 } else { 0x00000008 });
         let button = |id: &'static str, icon: &'static str, height: f32| {
             div()
                 .id(id)
@@ -2942,13 +2957,6 @@ impl MainWindow {
                         rgb(0xc42b1c)
                     } else {
                         hover
-                    })
-                })
-                .active(move |style| {
-                    style.bg(if id == "caption-close" {
-                        gpui::rgba(0xc42b1ce6)
-                    } else {
-                        pressed
                     })
                 })
                 .child(
@@ -2996,7 +3004,7 @@ impl MainWindow {
             div()
                 .id(id)
                 .size(px(14.))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3073,17 +3081,17 @@ impl MainWindow {
                 .justify_center()
                 .size(px(20.))
                 .flex_shrink_0()
-                .rounded_full()
-                .text_color(theme.gray_11)
-                .hover(|style| style.text_color(theme.gray_12))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                .text_color(theme.text_secondary)
+                .hover(|style| style.text_color(theme.text_primary))
                 .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
                 .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                 .child(
                     svg()
                         .path(path)
                         .size(px(size))
-                        .text_color(theme.gray_11)
-                        .group_hover(id, |style| style.text_color(theme.gray_12)),
+                        .text_color(theme.text_secondary)
+                        .group_hover(id, |style| style.text_color(theme.text_primary)),
                 )
         };
 
@@ -3190,7 +3198,7 @@ impl MainWindow {
             .max_h(px(72.))
             .gap(px(4.))
             .overflow_hidden()
-            .child(recording_error_text(error).text_color(self.theme.red_9))
+            .child(recording_error_text(error).text_color(self.theme.danger))
             .child(
                 div()
                     .flex()
@@ -3301,7 +3309,7 @@ impl MainWindow {
         #[cfg(not(target_os = "linux"))]
         let can_resume = false;
 
-        let mut wash: Hsla = theme.gray_1.into();
+        let mut wash: Hsla = theme.surface.into();
         wash.a = 0.8;
 
         div()
@@ -3310,7 +3318,7 @@ impl MainWindow {
             .when(cfg!(target_os = "windows"), |overlay| {
                 overlay.top(px(HEADER_HEIGHT))
             })
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .flex()
             .flex_col()
             .justify_end()
@@ -3332,7 +3340,7 @@ impl MainWindow {
                         .flex_shrink_0()
                         .mb(px(8.))
                         .text_size(px(11.))
-                        .text_color(theme.red_9)
+                        .text_color(theme.danger)
                         .text_center()
                         .child(error),
                 )
@@ -3354,10 +3362,10 @@ impl MainWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(8.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                                 .border_1()
-                                .border_color(theme.gray_5)
-                                .bg(theme.gray_3)
+                                .border_color(theme.active_bg)
+                                .bg(theme.surface_subtle)
                                 .child("Resume")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     #[cfg(target_os = "linux")]
@@ -3391,15 +3399,15 @@ impl MainWindow {
                     .items_center()
                     .justify_center()
                     .gap(px(8.))
-                    .rounded(px(12.))
-                    .bg(theme.red_9)
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                    .bg(theme.danger)
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
                     // `disabled:opacity-60` while pending.
                     .when(!can_stop, |this| this.opacity(0.6))
                     .when(can_stop, |this| {
-                        this.hover(|style| style.bg(theme.red_10))
+                        this.hover(|style| style.bg(theme.danger_hover))
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.session.update(cx, |session, cx| session.stop(cx));
                             }))
@@ -3433,7 +3441,7 @@ impl MainWindow {
                 .min_w_0()
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.gray_11)
+                .text_color(theme.text_secondary)
                 .child("Recording Modes")
                 .into_any_element(),
             Panel::Library(kind) => self.render_library_header(kind, cx).into_any_element(),
@@ -3442,7 +3450,7 @@ impl MainWindow {
                 .min_w_0()
                 .truncate()
                 .text_size(px(12.))
-                .text_color(theme.gray_11)
+                .text_color(theme.text_secondary)
                 .child(match self.device_format_target.as_ref().unwrap() {
                     DeviceFormatTarget::Camera(camera) => camera.label.clone(),
                     DeviceFormatTarget::Microphone(name) => name.clone(),
@@ -3476,23 +3484,22 @@ impl MainWindow {
                             .h(px(36.))
                             .px(px(8.))
                             .flex_shrink_0()
-                            .rounded(px(6.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                             .text_size(px(12.))
-                            .text_color(theme.gray_11)
+                            .text_color(theme.text_secondary)
                             .child(
                                 svg()
-                                    .path("icons/move-left.svg")
+                                    .path("icons/arrow-left.svg")
                                     .size(px(12.))
-                                    .text_color(theme.gray_11),
+                                    .text_color(theme.text_secondary),
                             )
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.gray_12)
+                                    .text_color(theme.text_primary)
                                     .child("Back"),
                             )
                             .hover(move |style| style.bg(glass_hover(theme)))
-                            .active(move |style| style.bg(glass_press(theme)))
                             .on_click(cx.listener(|this, _, _window, cx| this.back_panel(cx))),
                     )
                     .child(header_trailing),
@@ -3868,7 +3875,7 @@ impl MainWindow {
                         .flex_1()
                         .min_w_0()
                         .h(px(128.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .bg(theme.body_fill(3))
                         .into_any_element(),
                 );
@@ -3938,13 +3945,13 @@ impl MainWindow {
                 .h(px(76.))
                 .items_center()
                 .justify_center()
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
                 .border_color(theme.body_border(5))
                 .bg(theme.body_fill(3))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.gray_12)
+                .text_color(theme.text_primary)
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.body_hover_fill(4)))
                 .child(view_all)
@@ -3982,13 +3989,13 @@ impl MainWindow {
                 svg()
                     .path(kind.empty_icon())
                     .size(px(20.))
-                    .text_color(theme.gray_10),
+                    .text_color(theme.text_secondary),
             )
             .child(
                 div()
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.gray_12)
+                    .text_color(theme.text_primary)
                     .child(if searching {
                         kind.no_match()
                     } else {
@@ -3999,7 +4006,7 @@ impl MainWindow {
                 this.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(theme.gray_11)
+                        .text_color(theme.text_secondary)
                         .text_center()
                         .child(kind.empty_description()),
                 )
@@ -4030,10 +4037,10 @@ impl MainWindow {
         let converting = entry.stage == crate::import::ImportStage::Converting;
         let ring = {
             let ring =
-                ui::CircularProgress::new(px(36.), px(3.), theme.gray(4), theme.blue_9.into());
+                ui::CircularProgress::new(px(36.), px(3.), theme.gray(4), theme.primary.into());
             if converting {
                 ring.progress(entry.progress as f32)
-                    .label(theme.gray_12.into(), px(9.))
+                    .label(theme.text_primary.into(), px(9.))
             } else {
                 ring.indeterminate()
             }
@@ -4046,14 +4053,14 @@ impl MainWindow {
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .bg(theme.body_fill(3))
             .child(
                 div()
                     .relative()
                     .w_full()
                     .h(px(76.))
-                    .rounded_t(px(8.))
+                    .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .overflow_hidden()
                     .bg(theme.body_fill(4))
                     .flex()
@@ -4065,7 +4072,7 @@ impl MainWindow {
                             .absolute()
                             .left(px(4.))
                             .top(px(4.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(black_alpha(0.55))
                             .px(px(6.))
                             .py(px(2.))
@@ -4090,14 +4097,14 @@ impl MainWindow {
                             .w_full()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.gray_12)
+                            .text_color(theme.text_primary)
                             .child(entry.pretty_name.clone()),
                     )
                     .child(
                         div()
                             .w_full()
                             .truncate()
-                            .text_color(theme.gray_11)
+                            .text_color(theme.text_secondary)
                             .child(entry.message.clone()),
                     ),
             )
@@ -4322,11 +4329,20 @@ impl MainWindow {
             .items_center()
             .justify_center()
             .p(px(4.))
-            .rounded(px(4.))
-            .text_color(theme.gray_11)
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+            .text_color(theme.text_secondary)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.body_hover_fill(5)).text_color(theme.gray_12))
-            .child(svg().path(icon).size(px(14.)).text_color(theme.gray_11))
+            .hover(|style| {
+                style
+                    .bg(theme.body_hover_fill(5))
+                    .text_color(theme.text_primary)
+            })
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(14.))
+                    .text_color(theme.text_secondary),
+            )
             .on_click(on_click)
     }
 
@@ -4348,18 +4364,23 @@ impl MainWindow {
                 use gpui::StyledImage as _;
                 img(image)
                     .size_full()
-                    .rounded_t(px(8.))
+                    .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .object_fit(gpui::ObjectFit::Cover)
                     .into_any_element()
             }
             None => div()
-                .rounded_t(px(8.))
+                .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .flex()
                 .size_full()
                 .items_center()
                 .justify_center()
                 .bg(theme.body_fill(4))
-                .child(svg().path(fallback).size(px(24.)).text_color(theme.gray_9))
+                .child(
+                    svg()
+                        .path(fallback)
+                        .size(px(24.))
+                        .text_color(theme.text_muted),
+                )
                 .into_any_element(),
         };
 
@@ -4370,7 +4391,7 @@ impl MainWindow {
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .bg(theme.body_fill(3))
             .hover(|style| style.bg(theme.body_hover_fill(4)))
             .child(
@@ -4382,7 +4403,7 @@ impl MainWindow {
                             .relative()
                             .w_full()
                             .h(px(76.))
-                            .rounded_t(px(8.))
+                            .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .overflow_hidden()
                             .bg(theme.body_fill(4))
                             .child(thumb)
@@ -4392,7 +4413,9 @@ impl MainWindow {
                                         .absolute()
                                         .left(px(4.))
                                         .top(px(4.))
-                                        .rounded_full()
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
                                         .bg(black_alpha(0.55))
                                         .px(px(6.))
                                         .py(px(2.))
@@ -4417,14 +4440,14 @@ impl MainWindow {
                                     .w_full()
                                     .truncate()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.gray_12)
+                                    .text_color(theme.text_primary)
                                     .child(label),
                             )
                             .children(subtitle.map(|subtitle| {
                                 div()
                                     .w_full()
                                     .truncate()
-                                    .text_color(theme.gray_11)
+                                    .text_color(theme.text_secondary)
                                     .child(subtitle)
                             })),
                     )
@@ -4568,18 +4591,10 @@ impl MainWindow {
         if self.device_format_target.is_some() {
             return self.render_device_formats(menu, cx);
         }
-        let theme = self.theme;
         let list = div().flex().flex_col().gap(px(4.)).w_full();
 
         if self.enumerating {
-            return list.child(
-                div()
-                    .py(px(24.))
-                    .w_full()
-                    .text_size(px(14.))
-                    .text_color(theme.gray_11)
-                    .child("Loading..."),
-            );
+            return list.child(self.render_device_list_skeleton());
         }
 
         // The "none" row is always offered and is never filtered out -- it is
@@ -4961,7 +4976,7 @@ impl MainWindow {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(theme.gray_11)
+                    .text_color(theme.text_secondary)
                     .pb(px(8.))
                     .child("Preferred format"),
             )
@@ -4969,7 +4984,7 @@ impl MainWindow {
                 list.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(theme.gray_11)
+                        .text_color(theme.text_secondary)
                         .pb(px(8.))
                         .child(format!("Current: {}", format.label())),
                 )
@@ -5018,19 +5033,18 @@ impl MainWindow {
             .justify_center()
             .w(px(32.))
             .flex_shrink_0()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .when(enabled, |button| {
                 button
                     .cursor_pointer()
                     .hover(move |style| style.bg(glass_hover(theme)))
-                    .active(move |style| style.bg(glass_press(theme)))
             })
             .when(!enabled, |button| button.opacity(0.45))
             .child(
                 svg()
                     .path("icons/settings-2.svg")
                     .size(px(15.))
-                    .text_color(theme.gray_10),
+                    .text_color(theme.text_secondary),
             )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.open_device_formats(target.clone(), cx)),
@@ -5056,18 +5070,10 @@ impl MainWindow {
     /// which is exactly what the Tauri card does before its thumbnail arrives
     /// or when the `<img>` errors (`TargetCard.tsx:367-374`).
     fn render_target_grid(&self, target: TargetType, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = self.theme;
         let grid = div().flex().flex_col().gap(px(8.)).w_full();
 
         if self.enumerating {
-            return grid.child(
-                div()
-                    .py(px(24.))
-                    .w_full()
-                    .text_size(px(14.))
-                    .text_color(theme.gray_11)
-                    .child("Loading..."),
-            );
+            return grid.child(self.render_target_grid_skeleton());
         }
 
         let mut cards: Vec<gpui::AnyElement> = Vec::new();
@@ -5197,10 +5203,10 @@ impl MainWindow {
             .flex_none()
             .min_w_0()
             .overflow_hidden()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
             .border_color(if selected {
-                Hsla::from(theme.blue_8)
+                Hsla::from(theme.primary_hover)
             } else {
                 gpui::transparent_black()
             })
@@ -5220,21 +5226,21 @@ impl MainWindow {
                             .w_full()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.gray_12)
+                            .text_color(theme.text_primary)
                             .child(label),
                     )
                     .children(subtitle.map(|subtitle| {
                         div()
                             .w_full()
                             .truncate()
-                            .text_color(theme.gray_11)
+                            .text_color(theme.text_secondary)
                             .child(subtitle)
                     }))
                     .children(metadata.map(|metadata| {
                         div()
                             .w_full()
                             .truncate()
-                            .text_color(theme.gray_10)
+                            .text_color(theme.text_secondary)
                             .child(metadata)
                     })),
             )
@@ -5263,10 +5269,10 @@ impl MainWindow {
                     .gap(px(12.))
                     .p(px(12.))
                     .w_full()
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_2()
                     .border_color(if selected {
-                        Hsla::from(theme.blue_9)
+                        Hsla::from(theme.primary)
                     } else if theme.is_dark() {
                         theme.body_border(5)
                     } else {
@@ -5285,9 +5291,9 @@ impl MainWindow {
                             .size(px(20.))
                             .flex_shrink_0()
                             .text_color(if selected {
-                                theme.blue_11
+                                theme.text_interactive
                             } else {
-                                theme.gray_12
+                                theme.text_primary
                             }),
                     )
                     .child(
@@ -5306,16 +5312,16 @@ impl MainWindow {
                                     // there (`ui-solid/vite.js:31-33`).
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(if selected {
-                                        theme.blue_11
+                                        theme.text_interactive
                                     } else {
-                                        theme.gray_12
+                                        theme.text_primary
                                     })
                                     .child(mode.panel_title()),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(theme.gray_11)
+                                    .text_color(theme.text_secondary)
                                     .child(mode.panel_description()),
                             ),
                     )
@@ -5328,12 +5334,103 @@ impl MainWindow {
         )
     }
 
+    fn render_device_row_skeleton(&self, id: &'static str) -> gpui::AnyElement {
+        let theme = &self.theme;
+        ui::skeleton_pulse(
+            id,
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(10.))
+                .pl(px(12.))
+                .pr(px(6.))
+                .w_full()
+                .h(px(DEVICE_ROW_HEIGHT))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                .map(|this| glass_button(this, self.theme, false))
+                .child(ui::skeleton_block(theme, px(16.), px(16.)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(ui::skeleton_text(theme, px(128.), 14.)),
+                )
+                .child(
+                    ui::skeleton_block(theme, px(44.), px(24.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large)),
+                ),
+            true,
+        )
+    }
+
+    fn render_device_list_skeleton(&self) -> gpui::AnyElement {
+        let theme = &self.theme;
+        ui::skeleton_pulse(
+            "device-list-skeleton",
+            div().flex().flex_col().gap(px(4.)).w_full().children(
+                [148., 112., 132.].into_iter().map(|width| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(10.))
+                        .h(px(40.))
+                        .w_full()
+                        .child(ui::skeleton_block(theme, px(16.), px(16.)))
+                        .child(ui::skeleton_text(theme, px(width), 13.))
+                }),
+            ),
+            true,
+        )
+    }
+
+    fn render_target_grid_skeleton(&self) -> gpui::AnyElement {
+        let theme = &self.theme;
+        let card = |label: f32| {
+            div()
+                .flex()
+                .flex_col()
+                .w(px(self.target_card_width()))
+                .flex_none()
+                .overflow_hidden()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                .bg(theme.surface_subtle)
+                .child(div().w_full().h(px(76.)).bg(theme.hover_bg))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.))
+                        .px(px(8.))
+                        .py(px(8.))
+                        .child(ui::skeleton_text(theme, px(label), 11.))
+                        .child(ui::skeleton_text(theme, px(56.), 11.)),
+                )
+        };
+        ui::skeleton_pulse(
+            "target-grid-skeleton",
+            div().flex().flex_col().gap(px(8.)).w_full().children(
+                [[96., 72.], [84., 104.]].into_iter().map(|pair| {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.))
+                        .w_full()
+                        .children(pair.into_iter().map(card))
+                }),
+            ),
+            true,
+        )
+    }
+
     fn render_empty_state(&self, message: impl Into<SharedString>) -> gpui::AnyElement {
         div()
             .py(px(24.))
             .w_full()
             .text_size(px(14.))
-            .text_color(self.theme.gray_11)
+            .text_color(self.theme.text_secondary)
             .child(message.into())
             .into_any_element()
     }
@@ -5360,7 +5457,7 @@ impl MainWindow {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
-        let accent = Hsla::from(theme.blue_500);
+        let accent = Hsla::from(theme.primary);
 
         div()
             .id(id)
@@ -5373,19 +5470,18 @@ impl MainWindow {
             .py(px(7.))
             .min_h(px(40.))
             .w_full()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .cursor_pointer()
             .when(selected, |this| this.bg(glass_selected(theme)))
             .when(!selected, |this| {
                 this.hover(move |style| style.bg(glass_hover(theme)))
-                    .active(move |style| style.bg(glass_press(theme)))
             })
             .child(
                 svg()
                     .path(icon)
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(theme.gray_11),
+                    .text_color(theme.text_secondary),
             )
             .child(
                 div()
@@ -5398,14 +5494,14 @@ impl MainWindow {
                         div()
                             .truncate()
                             .text_size(px(13.))
-                            .text_color(theme.gray_12)
+                            .text_color(theme.text_primary)
                             .child(label),
                     )
                     .children(detail.map(|detail| {
                         div()
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(theme.gray_10)
+                            .text_color(theme.text_secondary)
                             .child(detail)
                     }))
                     .when_some(audio_level.filter(|_| selected), |this, level| {
@@ -5414,7 +5510,7 @@ impl MainWindow {
                                 .mt(px(3.))
                                 .h(px(3.))
                                 .w_full()
-                                .rounded_full()
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                 .overflow_hidden()
                                 .bg(if theme.is_dark() {
                                     gpui::hsla(0., 0., 1., 0.1)
@@ -5424,7 +5520,9 @@ impl MainWindow {
                                 .child(
                                     div()
                                         .h_full()
-                                        .rounded_full()
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
                                         .bg(accent)
                                         .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
                                 ),
@@ -5473,7 +5571,7 @@ impl MainWindow {
                                 .child(
                                     div()
                                         .text_size(px(10.))
-                                        .text_color(self.theme.gray_11)
+                                        .text_color(self.theme.text_secondary)
                                         .child("Add to your current project"),
                                 ),
                         )
@@ -5490,7 +5588,7 @@ impl MainWindow {
                         div()
                             .text_size(px(9.))
                             .line_height(px(11.))
-                            .text_color(self.theme.gray_11)
+                            .text_color(self.theme.text_secondary)
                             .child(format!("{} Mode", self.effective_mode(cx).panel_title())),
                     ),
             )
@@ -5511,7 +5609,7 @@ impl MainWindow {
             .ml(px(8.))
             .px(px(4.))
             .py(px(2.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .text_size(px(9.6));
 
         match self.plan {
@@ -5519,14 +5617,14 @@ impl MainWindow {
                 .border_1()
                 .border_color(theme.body_border(5))
                 .bg(theme.body_fill(3))
-                .text_color(theme.gray_12)
+                .text_color(theme.text_primary)
                 .child("Personal")
                 .hover(|style| style.bg(theme.body_hover_fill(5)))
                 .on_click(|_, _, cx| {
                     cx.open_url(crate::auth::PRICING_URL);
                 }),
             PlanBadge::Pro | PlanBadge::Commercial => badge
-                .bg(theme.blue_9)
+                .bg(theme.primary)
                 .text_color(gpui::white())
                 .child(if self.plan == PlanBadge::Commercial {
                     "Commercial"
@@ -5577,7 +5675,9 @@ impl MainWindow {
             self.mode_hover.visible = None;
             cx.notify();
         }
-        let delay = std::time::Duration::from_millis(if target.is_some() { 120 } else { 80 });
+        let delay = target
+            .map(|_| ui::TOOLTIP_SHOW_DELAY)
+            .unwrap_or(std::time::Duration::from_millis(80));
         self.mode_hover_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |this, cx| {
@@ -5647,16 +5747,16 @@ impl MainWindow {
                 .items_center()
                 .justify_center()
                 .size(px(28.))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .bg(if selected {
-                    Hsla::from(theme.gray_7)
+                    Hsla::from(theme.border_strong)
                 } else {
                     theme.body_fill(3)
                 })
                 .when(selected, |this| {
                     // `ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-1`.
                     this.border_2()
-                        .border_color(theme.blue_500)
+                        .border_color(theme.primary)
                         .shadow(vec![gpui::BoxShadow {
                             color: theme.ring_offset(),
                             offset: gpui::point(px(0.), px(0.)),
@@ -5674,7 +5774,7 @@ impl MainWindow {
                     svg()
                         .path(mode.icon())
                         .size(px(mode.icon_size()))
-                        .text_color(theme.gray_12),
+                        .text_color(theme.text_primary),
                 )
                 .hover(|style| style.bg(theme.body_hover_fill(7)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
@@ -5693,7 +5793,7 @@ impl MainWindow {
             .items_center()
             .gap(px(8.))
             .p(px(6.))
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .border_1()
             .border_color(theme.body_border(5))
             .bg(theme.body_fill(3))
@@ -5715,13 +5815,13 @@ impl MainWindow {
                     .items_center()
                     .justify_center()
                     .p(px(4.))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(theme.body_fill(5))
                     .child(
                         svg()
                             .path("icons/info.svg")
                             .size(px(10.))
-                            .text_color(theme.gray_12),
+                            .text_color(theme.text_primary),
                     )
                     .hover(|style| style.opacity(0.5))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -5749,7 +5849,7 @@ impl MainWindow {
                     .px(px(4.))
                     .text_size(px(10.))
                     .line_height(px(14.))
-                    .text_color(self.theme.gray_11)
+                    .text_color(self.theme.text_secondary)
                     .child("Choose a capture source"),
             )
             .child(
@@ -5785,7 +5885,7 @@ impl MainWindow {
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, true, cx))
             .child(
@@ -5793,7 +5893,7 @@ impl MainWindow {
                     .id(dropdown_id.clone())
                     .flex()
                     .w(px(28.))
-                    .rounded_r(px(9.))
+                    .rounded_r(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
@@ -5805,7 +5905,7 @@ impl MainWindow {
                             .bottom(px(10.))
                             .w(px(1.))
                             .bg(if selected {
-                                Theme::with_alpha(theme.blue_9, 0.25)
+                                Theme::with_alpha(theme.primary, 0.25)
                             } else {
                                 glass_tint(theme, 0.08, 0.1)
                             }),
@@ -5816,13 +5916,12 @@ impl MainWindow {
                             .path("icons/chevron-down.svg")
                             .size(px(14.))
                             .text_color(if selected {
-                                theme.blue_10
+                                theme.primary_hover
                             } else {
-                                theme.gray_10
+                                theme.text_secondary
                             }),
                     )
                     .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
-                    .active(move |style| style.bg(capture_press_fill(theme, selected)))
                     .tooltip(move |_, cx| {
                         ui::Tooltip::new(
                             &theme,
@@ -5850,7 +5949,7 @@ impl MainWindow {
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, false, cx))
     }
@@ -5864,14 +5963,14 @@ impl MainWindow {
         let theme = self.theme;
         let selected = self.target == Some(target);
         let icon_color = if selected {
-            theme.blue_10
+            theme.primary_hover
         } else {
-            theme.gray_10
+            theme.text_secondary
         };
         let label_color = if selected {
-            theme.blue_11
+            theme.text_interactive
         } else {
-            theme.gray_12
+            theme.text_primary
         };
 
         let icon = svg()
@@ -5885,10 +5984,13 @@ impl MainWindow {
             .flex()
             .flex_1()
             .py(px(8.))
-            .when(split, |this| this.rounded_l(px(9.)))
-            .when(!split, |this| this.rounded(px(9.)))
+            .when(split, |this| {
+                this.rounded_l(crate::theme::radius(crate::theme::RadiusToken::Default))
+            })
+            .when(!split, |this| {
+                this.rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+            })
             .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
-            .active(move |style| style.bg(capture_press_fill(theme, selected)))
             .on_click(cx.listener(move |this, _, _window, cx| {
                 // `toggleTargetMode`: clicking the armed tile again is a
                 // cancel, which takes the overlays down with it.
@@ -5930,79 +6032,85 @@ impl MainWindow {
                     .px(px(4.))
                     .text_size(px(10.))
                     .line_height(px(14.))
-                    .text_color(self.theme.gray_11)
+                    .text_color(self.theme.text_secondary)
                     .child("Choose your camera and microphone"),
             )
-            .child(
-                div().flex().flex_col().child(
-                    self.render_device_row(
-                        "camera-row",
-                        "icons/camera.svg",
-                        self.camera
-                            .as_ref()
-                            .map(|camera| camera.label.clone())
-                            .unwrap_or_else(|| "No Camera".into()),
-                        if self.camera.is_some() {
-                            if self.devices.cameras.iter().any(|camera| {
-                                Some(&camera.device_id)
-                                    == self.camera.as_ref().map(|selected| &selected.device_id)
-                            }) {
-                                PillState::On
+            .when(self.enumerating, |this| {
+                this.child(self.render_device_row_skeleton("camera-row-skeleton"))
+                    .child(self.render_device_row_skeleton("microphone-row-skeleton"))
+            })
+            .when(!self.enumerating, |this| {
+                this.child(
+                    div().flex().flex_col().child(
+                        self.render_device_row(
+                            "camera-row",
+                            "icons/camera.svg",
+                            self.camera
+                                .as_ref()
+                                .map(|camera| camera.label.clone())
+                                .unwrap_or_else(|| "No Camera".into()),
+                            if self.camera.is_some() {
+                                if self.devices.cameras.iter().any(|camera| {
+                                    Some(&camera.device_id)
+                                        == self.camera.as_ref().map(|selected| &selected.device_id)
+                                }) {
+                                    PillState::On
+                                } else {
+                                    PillState::Disconnected
+                                }
                             } else {
-                                PillState::Disconnected
+                                PillState::Off
+                            },
+                            Some(DeviceMenu::Camera),
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // Through `open_panel`, so the filter field takes focus
+                            // the way it already does for the display and window
+                            // panels -- before the field was real there was nothing
+                            // to focus into.
+                            if !this.enumerating && this.device_changes_allowed(cx) {
+                                this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
                             }
-                        } else {
-                            PillState::Off
-                        },
-                        Some(DeviceMenu::Camera),
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Through `open_panel`, so the filter field takes focus
-                        // the way it already does for the display and window
-                        // panels -- before the field was real there was nothing
-                        // to focus into.
-                        if !this.enumerating && this.device_changes_allowed(cx) {
-                            this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
-                        }
-                    })),
-                ),
-            )
-            .child(
-                div().flex().flex_col().child(
-                    self.render_device_row(
-                        "microphone-row",
-                        "icons/microphone.svg",
-                        self.microphone
-                            .as_ref()
-                            .map(|mic| mic.name.clone())
-                            .unwrap_or_else(|| "No Microphone".into()),
-                        if self.microphone.is_some() {
-                            if self.devices.microphones.iter().any(|microphone| {
-                                Some(&microphone.name)
-                                    == self.microphone.as_ref().map(|selected| &selected.name)
-                            }) {
-                                PillState::On
+                        })),
+                    ),
+                )
+                .child(
+                    div().flex().flex_col().child(
+                        self.render_device_row(
+                            "microphone-row",
+                            "icons/microphone.svg",
+                            self.microphone
+                                .as_ref()
+                                .map(|mic| mic.name.clone())
+                                .unwrap_or_else(|| "No Microphone".into()),
+                            if self.microphone.is_some() {
+                                if self.devices.microphones.iter().any(|microphone| {
+                                    Some(&microphone.name)
+                                        == self.microphone.as_ref().map(|selected| &selected.name)
+                                }) {
+                                    PillState::On
+                                } else {
+                                    PillState::Disconnected
+                                }
                             } else {
-                                PillState::Disconnected
+                                PillState::Off
+                            },
+                            Some(DeviceMenu::Microphone),
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // Through `open_panel`, so the filter field takes focus
+                            // the way it already does for the display and window
+                            // panels -- before the field was real there was nothing
+                            // to focus into.
+                            if !this.enumerating && this.device_changes_allowed(cx) {
+                                this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx);
                             }
-                        } else {
-                            PillState::Off
-                        },
-                        Some(DeviceMenu::Microphone),
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Through `open_panel`, so the filter field takes focus
-                        // the way it already does for the display and window
-                        // panels -- before the field was real there was nothing
-                        // to focus into.
-                        if !this.enumerating && this.device_changes_allowed(cx) {
-                            this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx);
-                        }
-                    })),
-                ),
-            )
+                        })),
+                    ),
+                )
+            })
             .child(
                 div().flex().flex_col().child(
                     self.render_device_row(
@@ -6056,7 +6164,7 @@ impl MainWindow {
             .pr(px(6.))
             .w_full()
             .h(px(DEVICE_ROW_HEIGHT))
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .map(|this| glass_button(this, theme, false))
             .cursor_default()
             .overflow_hidden()
@@ -6067,9 +6175,8 @@ impl MainWindow {
                     .top_0()
                     .left_0()
                     .size_full()
-                    .rounded(px(9.))
-                    .group_hover(id, move |style| style.bg(capture_hover_fill(theme, false)))
-                    .group_active(id, move |style| style.bg(capture_press_fill(theme, false))),
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                    .group_hover(id, move |style| style.bg(capture_hover_fill(theme, false))),
             )
             .when(menu == Some(DeviceMenu::Microphone), |this| {
                 this.child(
@@ -6087,7 +6194,7 @@ impl MainWindow {
                     .path(icon)
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(theme.gray_11),
+                    .text_color(theme.text_secondary),
             )
             .child(
                 div()
@@ -6095,7 +6202,7 @@ impl MainWindow {
                     .min_w_0()
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.gray_12)
+                    .text_color(theme.text_primary)
                     .truncate()
                     .child(label),
             )
@@ -6177,11 +6284,11 @@ enum PillState {
 impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
-            Self::On => (Hsla::from(theme.blue_9), gpui::white(), "On"),
-            Self::Off => (theme.body_fill(5), Hsla::from(theme.gray_11), "Off"),
+            Self::On => (Hsla::from(theme.primary), gpui::white(), "On"),
+            Self::Off => (theme.body_fill(5), Hsla::from(theme.text_secondary), "Off"),
             Self::Disconnected => (
                 theme.body_fill(5),
-                Hsla::from(theme.gray_11),
+                Hsla::from(theme.text_secondary),
                 "Not connected",
             ),
         };
@@ -6194,7 +6301,7 @@ impl PillState {
             .min_w(px(40.))
             .px(px(10.))
             .flex_shrink_0()
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .bg(bg)
             .text_size(px(11.))
             .font_weight(FontWeight::MEDIUM)

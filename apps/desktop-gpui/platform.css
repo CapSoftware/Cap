@@ -55,7 +55,7 @@
 
 	/* Actions */
 	--primary: #0182fb;
-	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-hover: color-mix(in srgb, var(--primary) 80%, transparent);
 	--primary-active: #006bd6;
 	--primary-disabled: color-mix(in srgb, var(--primary) 30%, var(--surface));
 	--primary-disabled-foreground: color-mix(
@@ -64,7 +64,7 @@
 		var(--surface)
 	);
 	--primary-subtle: color-mix(in srgb, var(--primary) 12%, var(--surface));
-	--primary-foreground: #f5f5f5;
+	--primary-foreground: #ffffff;
 	--danger: #f7525f;
 	--danger-hover: #e5404d;
 	--danger-disabled: #ffc9c9;
@@ -99,6 +99,10 @@
 	--shadow-dialog:
 		0 4px 6px -4px color-mix(in srgb, #101828 10%, transparent),
 		0 10px 15px -3px color-mix(in srgb, #000000 10%, transparent);
+
+	/* Chart */
+	--bullish: var(--positive);
+	--bearish: var(--negative);
 }
 
 .dark {
@@ -154,12 +158,12 @@
 
 	/* Actions */
 	--primary: #0182fb;
-	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-hover: color-mix(in srgb, var(--primary) 80%, transparent);
 	--primary-active: #006bd6;
 	--primary-disabled: color-mix(in srgb, var(--primary) 35%, var(--surface));
 	--primary-disabled-foreground: color-mix(in srgb, var(--primary) 65%, white);
 	--primary-subtle: color-mix(in srgb, var(--primary) 22%, var(--surface));
-	--primary-foreground: #f5f5f5;
+	--primary-foreground: #ffffff;
 	--danger: #f7525f;
 	--danger-hover: #f96a75;
 	--danger-disabled: #6b3135;
@@ -176,12 +180,8 @@
 
 	/* Focus */
 	--ring-primary: var(--primary);
-}
-button.bg-primary {
-	transition: background-color 240ms ease-in-out;
-}
-@media (prefers-reduced-motion: reduce) {
-	button.bg-primary {
-		transition: none;
-	}
+
+	/* Chart */
+	--bullish: var(--positive);
+	--bearish: var(--negative);
 }

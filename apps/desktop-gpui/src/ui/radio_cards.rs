@@ -70,19 +70,19 @@ impl RadioCards {
         items: Vec<RadioCard>,
         selected: Option<usize>,
     ) -> Self {
-        let mut selected_bg = Hsla::from(theme.blue_3);
+        let mut selected_bg = Hsla::from(theme.primary_subtle);
         selected_bg.a = 0.4;
         Self {
             id: id.into(),
             items,
             selected,
-            border: Hsla::from(theme.gray_3),
-            selected_border: Hsla::from(theme.blue_8),
+            border: Hsla::from(theme.surface_subtle),
+            selected_border: Hsla::from(theme.primary_hover),
             selected_bg,
-            dot_border: Hsla::from(theme.gray_7),
-            dot_fill: Hsla::from(theme.blue_9),
-            title: Hsla::from(theme.gray_12),
-            description: Hsla::from(theme.gray_11),
+            dot_border: Hsla::from(theme.border_strong),
+            dot_fill: Hsla::from(theme.primary),
+            title: Hsla::from(theme.text_primary),
+            description: Hsla::from(theme.text_secondary),
             on_select: None,
         }
     }
@@ -127,7 +127,7 @@ impl RenderOnce for RadioCards {
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
                     .border_color(if checked { selected_border } else { border })
                     .when(checked, |this| this.bg(selected_bg))
@@ -148,7 +148,7 @@ impl RenderOnce for RadioCards {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .border_1()
                                     .border_color(if checked { dot_fill } else { dot_border })
                                     .when(checked, |this| {

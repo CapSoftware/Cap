@@ -124,7 +124,7 @@ fn rasterize_cursor(shape: CursorShape, width: u32, height: u32) -> Option<Arc<R
 fn circle_art() -> AnyElement {
     div()
         .size(px(CIRCLE_DISC))
-        .rounded_full()
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
         .bg(white(0.15))
         .border_1()
         .border_color(black(0.38))
@@ -138,7 +138,7 @@ fn circle_art() -> AnyElement {
         .child(
             div()
                 .size_full()
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .border_1()
                 .border_color(white(0.42)),
         )
@@ -205,7 +205,7 @@ impl EditorWindow {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.gray_11))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child("Recorded cursors"),
                 )
                 .into_any_element(),
@@ -224,21 +224,22 @@ impl EditorWindow {
             .map(|this| {
                 if selected {
                     this.border_2()
-                        .border_color(Hsla::from(theme.blue_8))
-                        .bg(with_alpha(theme.blue_3, 0.4))
+                        .border_color(Hsla::from(theme.primary_hover))
+                        .bg(with_alpha(theme.primary_subtle, 0.4))
                 } else {
                     this.border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_2))
+                        .border_color(Hsla::from(theme.surface_subtle))
+                        .bg(Hsla::from(theme.surface_secondary))
                         .group_hover(CARD_GROUP, |this| {
-                            this.border_color(Hsla::from(theme.gray_5))
+                            this.border_color(Hsla::from(theme.active_bg))
                         })
                 }
             })
             .when(recorded, |this| {
-                this.tooltip(move |_window, cx| {
-                    ui::Tooltip::new(&theme, "Recorded with this cursor").view(cx)
-                })
+                this.tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| {
+                        ui::Tooltip::new(&theme, "Recorded with this cursor").view(cx)
+                    })
             })
             .child(art)
             .into_any_element()
@@ -277,13 +278,13 @@ impl EditorWindow {
                         .line_height(px(11.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(Hsla::from(if selected {
-                            theme.gray_12
+                            theme.text_primary
                         } else {
-                            theme.gray_11
+                            theme.text_secondary
                         }))
                         .when(!selected, |this| {
                             this.group_hover(CARD_GROUP, |this| {
-                                this.text_color(Hsla::from(theme.gray_12))
+                                this.text_color(Hsla::from(theme.text_primary))
                             })
                         })
                         .child(card.label()),
@@ -340,7 +341,7 @@ impl EditorWindow {
             .child(
                 div()
                     .text_size(px(11.))
-                    .text_color(Hsla::from(self.theme.gray_11))
+                    .text_color(Hsla::from(self.theme.text_secondary))
                     .child(description),
             )
             .into_any_element()

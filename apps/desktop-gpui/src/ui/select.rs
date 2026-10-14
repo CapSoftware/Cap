@@ -1,41 +1,23 @@
 //! `Select`'s trigger -- the closed half of the control [`crate::ui::Menu`]
-//! opens. `KSelect.Trigger` in the Solid app is `flex h-8 rounded-lg bg-gray-3
-//! px-2` plus a chevron that rotates on `data-expanded`; the settings window's
-//! `SelectSettingItem` is the same shape at `px-2.5 py-1.5` with a border.
+//! opens.
 //!
 //! The chevron does not rotate: this gpui rev has no transform (the same gap
 //! that leaves the camera bubble's mirror button disabled).
 
 use gpui::{
-    App, Bounds, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, prelude::FluentBuilder, px, svg,
+    App, Bounds, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px, svg,
 };
 
 use super::menu::OpenHandler;
-use crate::theme::Theme;
+use crate::theme::{RadiusToken, Theme, radius};
 
 #[derive(IntoElement)]
 pub struct Select {
     id: ElementId,
     label: SharedString,
-    padding_x: Pixels,
-    padding_y: Pixels,
-    height: Option<Pixels>,
-    radius: Pixels,
-    text_size: Pixels,
-    /// The two triggers disagree: `SelectSettingItem`'s button names no
-    /// `font-*` class and so inherits `body`'s Medium, while the editor's
-    /// `KSelect.Value` says `font-normal` explicitly (`ConfigSidebar.tsx:740`
-    /// and friends) and drops back to Regular.
-    weight: FontWeight,
-    bg: Option<Hsla>,
-    border: Option<Hsla>,
-    text: Hsla,
-    chevron: Hsla,
-    chevron_size: Pixels,
-    /// `gap-1.5` on the settings row, `gap-2` on the editor's trigger.
-    gap: Pixels,
+    theme: Theme,
     stretch: bool,
     disabled: bool,
     on_click: Option<crate::ui::button::ClickHandler>,
@@ -43,56 +25,15 @@ pub struct Select {
 }
 
 impl Select {
-    /// `SelectSettingItem`'s button: `flex flex-row gap-1.5 text-xs items-center
-    /// px-2.5 py-1.5 rounded-lg border bg-gray-3 text-gray-12 border-gray-4`,
-    /// radius 8 under the settings material.
-    pub fn settings(
-        theme: &Theme,
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-    ) -> Self {
+    pub fn new(theme: &Theme, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
-            padding_x: px(10.),
-            padding_y: px(6.),
-            height: None,
-            radius: px(8.),
-            text_size: px(12.),
-            // No `font-*` class on the button, so it keeps `body`'s Medium.
-            weight: FontWeight::MEDIUM,
-            bg: Some(theme.settings_fill()),
-            border: Some(theme.settings_border()),
-            text: theme.settings_text(),
-            chevron: theme.settings_muted(),
-            chevron_size: px(14.),
-            gap: px(6.),
+            theme: *theme,
             stretch: false,
             disabled: false,
             on_click: None,
             on_open: None,
-        }
-    }
-
-    /// The editor's `KSelect.Trigger`: a borderless `ed-ctl` pill.
-    pub fn plain(theme: &Theme, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
-        Self {
-            padding_x: px(10.),
-            padding_y: px(0.),
-            height: Some(px(30.)),
-            radius: px(7.),
-            text_size: px(13.),
-            // `KSelect.Value` is `text-sm ... font-normal`, which opts out of
-            // `body`'s Medium (`ConfigSidebar.tsx:740`, `:3121`, `:3173`,
-            // `:3369`, `:5283`, `:5380`).
-            weight: FontWeight::NORMAL,
-            bg: Some(Hsla::from(theme.editor.ctl)),
-            border: None,
-            text: Hsla::from(theme.editor.text_1),
-            chevron: Hsla::from(theme.editor.text_3),
-            chevron_size: px(12.),
-            gap: px(8.),
-            ..Self::settings(theme, id, label)
         }
     }
 
@@ -130,45 +71,39 @@ impl RenderOnce for Select {
         let Select {
             id,
             label,
-            padding_x,
-            padding_y,
-            height,
-            radius,
-            text_size,
-            weight,
-            bg,
-            border,
-            text,
-            chevron,
-            chevron_size,
-            gap,
+            theme,
             stretch,
             disabled,
             on_click,
             on_open,
         } = self;
+        let hover = theme.hover_bg;
 
         div()
             .id(id)
             .flex()
             .flex_row()
             .items_center()
-            .gap(gap)
-            .px(padding_x)
-            .when(f32::from(padding_y) > 0., |this| this.py(padding_y))
-            .when_some(height, |this, height| this.h(height))
-            .rounded(radius)
-            .when_some(border, |this, border| this.border_1().border_color(border))
-            .when_some(bg, |this, bg| this.bg(bg))
-            .when(!disabled, |this| this.cursor_pointer())
-            .text_size(text_size)
-            // The label is the only text under here -- the chevron is an svg.
-            .font_weight(weight)
-            .text_color(text)
-            .when(disabled, |this| this.opacity(0.5))
+            .gap(px(6.))
+            .h(px(28.))
+            .px(px(10.))
+            .rounded(radius(RadiusToken::Default))
+            .border_1()
+            .border_color(theme.border)
+            .text_size(px(13.))
+            .map(|this| {
+                if disabled {
+                    this.bg(theme.disabled_bg).text_color(theme.text_muted)
+                } else {
+                    this.bg(theme.surface_secondary)
+                        .text_color(theme.text_primary)
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                }
+            })
             .map(|this| {
                 if stretch {
-                    this.child(div().flex_1().child(label))
+                    this.child(div().flex_1().min_w_0().truncate().child(label))
                 } else {
                     this.child(label)
                 }
@@ -176,9 +111,13 @@ impl RenderOnce for Select {
             .child(
                 svg()
                     .path("icons/chevron-down.svg")
-                    .size(chevron_size)
+                    .size(px(14.))
                     .flex_shrink_0()
-                    .text_color(chevron),
+                    .text_color(if disabled {
+                        theme.text_muted
+                    } else {
+                        theme.icon
+                    }),
             )
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))

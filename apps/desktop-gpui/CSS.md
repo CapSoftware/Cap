@@ -4,9 +4,11 @@ The target design system for Cap's GPUI desktop app (`apps/desktop-gpui`) only. 
 block below is an exact copy of `platform.css`, formatted by Biome. This is the supplied palette,
 not an extension of the web or Tauri styles. Read these rules before desktop UI work.
 
-`platform.css` is not loaded by GPUI yet. The existing Rust theme still uses its older palette and
-hardcoded styling; adding these files alone does not change the app's appearance. The Rust token
-mapping, component migration and enforcement are subsequent work.
+`build.rs` compiles `platform.css` into Rust light/dark colors, radii and shadows. The desktop
+theme and migrated components use these tokens. Legacy editor palettes, material-derived styling
+and literal UI colors still exist in other components; the strict token migration is not complete.
+`scripts/migrate-theme-tokens.ts` migrates legacy field references and literal corner radii, while
+`scripts/sync-hugeicons.ts` regenerates the generic SVG assets from the pinned free icon package.
 
 ## Rules
 
@@ -32,8 +34,10 @@ mapping, component migration and enforcement are subsequent work.
   - **Interactive text and icons:** `text-interactive` with `icon` at rest; `text-hover` /
     `text-active` with `icon-active` on hover, press or selection. Keep text and icon in step, as the
     CSS comment requires; never point one token at the other.
-  - **Interaction fills:** `hover-bg` for hover and selected rows, `active-bg` for the pressed fill,
-    `disabled-bg` for disabled fills.
+  - **Interaction fills:** `hover-bg` for hover and selected rows, `active-bg` for a toggle or
+    trigger that is on (selected, open), `disabled-bg` for disabled fills. No control paints a press
+    state: hover is the only pointer feedback, and a click shows itself by changing the control's
+    state, never by flashing a second fill over the hover one.
   - **Status:** `positive`, `negative`, `warning`, `indigo`, `purple`, each paired with its `-subtle`
     fill for badges and banners when that status is relevant.
   - **Primary action:** `primary` fill with `primary-foreground` text, `primary-hover` /
@@ -49,9 +53,11 @@ mapping, component migration and enforcement are subsequent work.
 - **Radii** come from the five radius tokens only: `radius-small` (4), `radius-compact` (6),
   `radius-default` (8), `radius-medium` (12) and `radius-large` (999, pills and circles).
 - **Shadows** come from `shadow-1`, `shadow-2`, `shadow-3` or `shadow-dialog` (dialogs only).
-- **Motion:** the CSS specifies a 240ms ease-in-out background transition for
-  `button.bg-primary`, disabled by reduced-motion preference. That CSS selector does not apply
-  to GPUI; only implement the matching behavior if GPUI supports it and can respect reduced motion.
+- **Font family:** the bundled Inter face is the default for all UI text, and the bundled Faculty
+  Glyphic face is for display headings and brand text only. Take them from `theme::ui_font()` and
+  `theme::display_font()`, which fall back to the system UI font when a bundled face fails to
+  load. Set the family on every window root and on anything GPUI lays out outside it (tooltips,
+  prompts).
 - **User content is not UI.** Colors the user picks or that come from media (wallpapers, gradient
   and color presets, annotation colors, the color picker's swatches, camera and video frames) are
   data, not theme tokens. The controls around them still use tokens.
@@ -65,14 +71,15 @@ do not silently make up values or claim the strict-token migration is complete.
 - Typography: font family, sizes, weights and line heights.
 - Spacing and control sizes.
 - Window materials (macOS glass, Windows Mica or Acrylic).
-- Any transition other than the primary button's.
+- Transitions and animations.
 
 ## Components
 
 Put shared controls in `src/ui`; the component owns its colors, border, radius, shadow and
 interaction states. Callers choose the existing component variant by meaning and supply layout,
-not per-window paint overrides. Migrate the existing `plain`, `body`, `settings` and `glass`
-styles deliberately; they are not tokenized yet. Do not copy Aeris's trading-specific variants.
+not per-window paint overrides. Migrate the remaining `plain`, `body`, `settings` and `glass`
+styling deliberately rather than reintroducing material-specific colors. Do not copy Aeris's
+trading-specific variants.
 
 Map neutral filled buttons to `button-fill` / `button-fill-hover` / `button-fill-active` /
 `button-fill-foreground`, brand actions to the `primary-*` set, destructive actions to
@@ -148,7 +155,7 @@ then copy the formatted result here.
 
 	/* Actions */
 	--primary: #0182fb;
-	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-hover: color-mix(in srgb, var(--primary) 80%, transparent);
 	--primary-active: #006bd6;
 	--primary-disabled: color-mix(in srgb, var(--primary) 30%, var(--surface));
 	--primary-disabled-foreground: color-mix(
@@ -157,7 +164,7 @@ then copy the formatted result here.
 		var(--surface)
 	);
 	--primary-subtle: color-mix(in srgb, var(--primary) 12%, var(--surface));
-	--primary-foreground: #f5f5f5;
+	--primary-foreground: #ffffff;
 	--danger: #f7525f;
 	--danger-hover: #e5404d;
 	--danger-disabled: #ffc9c9;
@@ -192,6 +199,10 @@ then copy the formatted result here.
 	--shadow-dialog:
 		0 4px 6px -4px color-mix(in srgb, #101828 10%, transparent),
 		0 10px 15px -3px color-mix(in srgb, #000000 10%, transparent);
+
+	/* Chart */
+	--bullish: var(--positive);
+	--bearish: var(--negative);
 }
 
 .dark {
@@ -247,12 +258,12 @@ then copy the formatted result here.
 
 	/* Actions */
 	--primary: #0182fb;
-	--primary-hover: color-mix(in srgb, var(--primary) 90%, transparent);
+	--primary-hover: color-mix(in srgb, var(--primary) 80%, transparent);
 	--primary-active: #006bd6;
 	--primary-disabled: color-mix(in srgb, var(--primary) 35%, var(--surface));
 	--primary-disabled-foreground: color-mix(in srgb, var(--primary) 65%, white);
 	--primary-subtle: color-mix(in srgb, var(--primary) 22%, var(--surface));
-	--primary-foreground: #f5f5f5;
+	--primary-foreground: #ffffff;
 	--danger: #f7525f;
 	--danger-hover: #f96a75;
 	--danger-disabled: #6b3135;
@@ -269,13 +280,9 @@ then copy the formatted result here.
 
 	/* Focus */
 	--ring-primary: var(--primary);
-}
-button.bg-primary {
-	transition: background-color 240ms ease-in-out;
-}
-@media (prefers-reduced-motion: reduce) {
-	button.bg-primary {
-		transition: none;
-	}
+
+	/* Chart */
+	--bullish: var(--positive);
+	--bearish: var(--negative);
 }
 ```

@@ -111,15 +111,14 @@ impl ControlsWindow {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .when(!disabled, |this| {
-                this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
-                    .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
+                this.hover(|style| style.bg(theme.hover_bg))
             })
             .child(svg().path(icon).size(px(20.)).text_color(if disabled {
-                Theme::with_alpha(theme.gray_11, 0.5)
+                theme.text_muted
             } else {
-                theme.gray_11.into()
+                theme.icon
             }))
     }
 
@@ -159,13 +158,12 @@ impl ControlsWindow {
             .flex_row()
             .items_center()
             .gap(px(4.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .py(px(4.))
             .px(px(6.))
-            .text_color(theme.red_300)
+            .text_color(theme.danger)
             .when(can_stop, |this| {
-                this.hover(|style| style.bg(Theme::with_alpha(theme.red_300, 0.08)))
-                    .active(|style| style.bg(Theme::with_alpha(theme.red_300, 0.12)))
+                this.hover(|style| style.bg(theme.hover_bg))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.session.update(cx, |session, cx| session.stop(cx));
                     }))
@@ -176,7 +174,7 @@ impl ControlsWindow {
                     .path("icons/stop-circle.svg")
                     .size(px(20.))
                     .flex_shrink_0()
-                    .text_color(theme.red_300),
+                    .text_color(theme.danger),
             )
             .child(
                 div()
@@ -208,12 +206,11 @@ impl ControlsWindow {
             "icons/microphone.svg"
         };
         let icon_color: gpui::Hsla = if muted {
-            theme.red_9.into()
+            theme.danger.into()
         } else if self.has_microphone {
-            theme.gray_12.into()
+            theme.text_primary.into()
         } else {
-            // `IconLucideMicOff text-gray-7`.
-            Theme::with_alpha(theme.gray_12, 0.35)
+            theme.text_muted.into()
         };
 
         div()
@@ -226,9 +223,8 @@ impl ControlsWindow {
             .items_center()
             .justify_center()
             .when(can_mute, |this| {
-                this.rounded(px(8.))
-                    .hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.06)))
-                    .active(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.10)))
+                this.rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                    .hover(|style| style.bg(theme.hover_bg))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.session
                             .update(cx, |session, cx| session.toggle_mic_mute(cx));
@@ -243,9 +239,9 @@ impl ControlsWindow {
                         .left(px(4.))
                         .right(px(4.))
                         .h(px(2.))
-                        .rounded_full()
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                         .overflow_hidden()
-                        .bg(theme.gray_10)
+                        .bg(theme.text_secondary)
                         .child(
                             div()
                                 .absolute()
@@ -253,7 +249,7 @@ impl ControlsWindow {
                                 .top_0()
                                 .bottom_0()
                                 .w(gpui::relative(level as f32))
-                                .bg(theme.blue_9),
+                                .bg(theme.primary),
                         ),
                 )
             })
@@ -363,18 +359,12 @@ impl ControlsWindow {
             .flex_row()
             .items_stretch()
             .overflow_hidden()
-            .rounded(px(16.))
-            .bg(theme.gray_1)
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            .bg(theme.surface)
             .border_1()
-            .border_color(theme.gray_5)
-            .when(paused, |this| this.border_color(theme.amber_6))
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 0., 0.1),
-                offset: gpui::point(px(0.), px(1.)),
-                blur_radius: px(3.),
-                spread_radius: px(0.),
-                inset: false,
-            }])
+            .border_color(theme.border_strong)
+            .when(paused, |this| this.border_color(theme.warning))
+            .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
             .child(
                 div()
                     .flex()
@@ -405,21 +395,20 @@ impl ControlsWindow {
                                     busy,
                                 )
                                 .when(paused, |this| {
-                                    this.bg(theme.amber_3)
+                                    this.bg(theme.warning_subtle)
                                         .border_1()
-                                        .border_color(theme.amber_6)
+                                        .border_color(theme.warning)
                                 })
                                 .when(pause_pending, |this| this.opacity(0.5))
+                                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                                 .tooltip(move |_, cx| {
                                     ui::Tooltip::new(&theme, pause_tooltip).view(cx)
                                 })
                                 .when(!busy, |this| {
-                                    this.active(|style| style.bg(theme.amber_6)).on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.session
-                                                .update(cx, |session, cx| session.toggle_pause(cx));
-                                        }),
-                                    )
+                                    this.on_click(cx.listener(|this, _, _, cx| {
+                                        this.session
+                                            .update(cx, |session, cx| session.toggle_pause(cx));
+                                    }))
                                 }),
                             )
                             .child(
@@ -455,11 +444,11 @@ impl ControlsWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_r(px(15.))
+                    .rounded_r(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_l_1()
-                    .border_color(theme.gray_5)
+                    .border_color(theme.border)
                     .p(px(4.))
-                    .hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.04)))
+                    .hover(|style| style.bg(theme.hover_bg))
                     .on_mouse_down(MouseButton::Left, |_, window, _| {
                         window.start_window_move();
                     })
@@ -467,7 +456,7 @@ impl ControlsWindow {
                         svg()
                             .path("icons/more-vertical.svg")
                             .size(px(16.))
-                            .text_color(theme.gray_10),
+                            .text_color(theme.text_secondary),
                     ),
             )
     }
@@ -489,7 +478,7 @@ impl Render for ControlsWindow {
             .flex_col()
             .justify_end()
             .p(px(12.))
-            .font_family(crate::theme::UI_FONT)
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .when_some(issue, |this, issue| {
@@ -501,19 +490,19 @@ impl Render for ControlsWindow {
                         .items_start()
                         .gap(px(8.))
                         .mb(px(8.))
-                        .rounded(px(12.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                         .border_1()
-                        .border_color(Theme::with_alpha(self.theme.red_9, 0.4))
-                        .bg(self.theme.gray_1)
+                        .border_color(Theme::with_alpha(self.theme.danger, 0.4))
+                        .bg(self.theme.surface)
                         .p(px(8.))
                         .text_size(px(12.))
-                        .text_color(self.theme.red_11)
+                        .text_color(self.theme.text_danger)
                         .child(
                             svg()
                                 .path("icons/triangle-alert.svg")
                                 .size(px(20.))
                                 .flex_shrink_0()
-                                .text_color(self.theme.red_9),
+                                .text_color(self.theme.danger),
                         )
                         .child(recording_issue_text(issue)),
                 )

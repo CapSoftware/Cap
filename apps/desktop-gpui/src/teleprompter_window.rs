@@ -587,15 +587,20 @@ impl Render for TeleprompterWindow {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(theme.teleprompter_window_radius()))
-            .bg(theme.teleprompter_shell_bg())
-            .when_some(theme.teleprompter_shell_border(), |this, color| {
-                this.border_1().border_color(color)
+            // Windows keeps its native frame, so DWM supplies the outer corners
+            // and the 1px edge.
+            .when(!cfg!(target_os = "windows"), |shell| {
+                shell
+                    .rounded(px(theme.teleprompter_window_radius()))
+                    .when_some(theme.teleprompter_shell_border(), |this, color| {
+                        this.border_1().border_color(color)
+                    })
             })
-            .font_family(crate::theme::UI_FONT)
+            .bg(theme.teleprompter_shell_bg())
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.gray_12))
+            .text_color(Hsla::from(theme.text_primary))
             .child(self.render_header(window))
             .child(self.render_body(window, cx))
             .child(self.render_footer(cx))
@@ -630,7 +635,9 @@ impl TeleprompterWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
-            .rounded_t(px(theme.teleprompter_window_radius()))
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.rounded_t(px(theme.teleprompter_window_radius()))
+            })
             .bg(theme.header_bg())
             .child(
                 // `pointer-events-none ml-auto flex items-center gap-1.5
@@ -651,13 +658,13 @@ impl TeleprompterWindow {
                     .items_center()
                     .gap(px(6.))
                     .text_size(px(10.))
-                    .text_color(Hsla::from(theme.gray_9))
+                    .text_color(Hsla::from(theme.text_muted))
                     .child(
                         svg()
                             .path("icons/eye-off.svg")
                             .size(px(12.))
                             .flex_shrink_0()
-                            .text_color(Hsla::from(theme.gray_9)),
+                            .text_color(Hsla::from(theme.text_muted)),
                     )
                     .child(if self.playback_state.recording_paused {
                         "Scrolling paused with recording"
@@ -720,13 +727,13 @@ impl TeleprompterWindow {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_size(px(state.font_size))
                                 .line_height(px(state.font_size * state.line_height))
-                                .text_color(Hsla::from(theme.gray_12))
+                                .text_color(Hsla::from(theme.text_primary))
                                 // `placeholder:text-gray-8/70`
-                                .placeholder_color(Theme::with_alpha(theme.gray_8, 0.7))
+                                .placeholder_color(Theme::with_alpha(theme.border_strong, 0.7))
                                 // Bare glass: `gray-12` at 25 %, the same wash
                                 // the other teleprompter controls use rather
                                 // than the settings accent.
-                                .selection_color(Theme::with_alpha(theme.gray_12, 0.25)),
+                                .selection_color(Theme::with_alpha(theme.text_primary, 0.25)),
                         ),
                     )
                     .child(div().h(px(spacer)).flex_shrink_0()),
@@ -745,8 +752,8 @@ impl TeleprompterWindow {
                     .h(gpui::relative(0.34))
                     .bg(linear_gradient(
                         180.,
-                        linear_color_stop(Theme::with_alpha(theme.gray_1, 0.6), 0.),
-                        linear_color_stop(Theme::with_alpha(theme.gray_1, 0.), 1.),
+                        linear_color_stop(Theme::with_alpha(theme.surface, 0.6), 0.),
+                        linear_color_stop(Theme::with_alpha(theme.surface, 0.), 1.),
                     )),
             )
             .child(
@@ -758,8 +765,8 @@ impl TeleprompterWindow {
                     .h(gpui::relative(0.34))
                     .bg(linear_gradient(
                         0.,
-                        linear_color_stop(Theme::with_alpha(theme.gray_1, 0.6), 0.),
-                        linear_color_stop(Theme::with_alpha(theme.gray_1, 0.), 1.),
+                        linear_color_stop(Theme::with_alpha(theme.surface, 0.6), 0.),
+                        linear_color_stop(Theme::with_alpha(theme.surface, 0.), 1.),
                     )),
             )
             .when(state.show_cue_markers, |this| {
@@ -781,13 +788,13 @@ impl TeleprompterWindow {
                             svg()
                                 .path("icons/chevron-right.svg")
                                 .size(px(16.))
-                                .text_color(Theme::with_alpha(theme.blue_10, 0.75)),
+                                .text_color(Theme::with_alpha(theme.primary_hover, 0.75)),
                         )
                         .child(
                             svg()
                                 .path("icons/chevron-left.svg")
                                 .size(px(16.))
-                                .text_color(Theme::with_alpha(theme.blue_10, 0.75)),
+                                .text_color(Theme::with_alpha(theme.primary_hover, 0.75)),
                         ),
                 )
             })
@@ -818,13 +825,13 @@ impl TeleprompterWindow {
                     .justify_center()
                     .size(px(32.))
                     .flex_shrink_0()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .border_1()
-                    .border_color(Theme::with_alpha(theme.gray_12, 0.06))
-                    .bg(Theme::with_alpha(theme.gray_12, 0.07))
+                    .border_color(Theme::with_alpha(theme.text_primary, 0.06))
+                    .bg(Theme::with_alpha(theme.text_primary, 0.07))
                     .when(!enabled, |this| this.opacity(0.3))
                     .when(enabled, |this| {
-                        this.hover(|style| style.bg(Theme::with_alpha(theme.gray_12, 0.11)))
+                        this.hover(|style| style.bg(Theme::with_alpha(theme.text_primary, 0.11)))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_playback(window, cx);
                             }))
@@ -837,7 +844,7 @@ impl TeleprompterWindow {
                                 "icons/play.svg"
                             })
                             .size(px(14.))
-                            .text_color(Hsla::from(theme.gray_12)),
+                            .text_color(Hsla::from(theme.text_primary)),
                     ),
             )
             .child(
@@ -850,13 +857,13 @@ impl TeleprompterWindow {
                             .path("icons/gauge.svg")
                             .size(px(14.))
                             .flex_shrink_0()
-                            .text_color(Hsla::from(theme.gray_9)),
+                            .text_color(Hsla::from(theme.text_muted)),
                     )
                     .child(self.render_range(
                         "speed",
                         Slider::Speed,
                         (self.state.words_per_minute as f32 - WPM_MIN) / (WPM_MAX - WPM_MIN),
-                        Hsla::from(theme.blue_9),
+                        Hsla::from(theme.primary),
                         cx,
                     ))
                     .child(
@@ -865,7 +872,7 @@ impl TeleprompterWindow {
                             .w(px(48.))
                             .text_right()
                             .text_size(px(10.))
-                            .text_color(Hsla::from(theme.gray_9))
+                            .text_color(Hsla::from(theme.text_muted))
                             .child(format!("{} wpm", self.state.words_per_minute)),
                     ),
             )
@@ -884,14 +891,14 @@ impl TeleprompterWindow {
                                     .path("icons/layers.svg")
                                     .size(px(14.))
                                     .flex_shrink_0()
-                                    .text_color(Hsla::from(theme.gray_9)),
+                                    .text_color(Hsla::from(theme.text_muted)),
                             )
                             .child(self.render_range(
                                 "opacity",
                                 Slider::Opacity,
                                 (self.state.window_opacity_percent as f32 - OPACITY_MIN)
                                     / (OPACITY_MAX - OPACITY_MIN),
-                                Hsla::from(theme.gray_11),
+                                Hsla::from(theme.text_secondary),
                                 cx,
                             )),
                     )
@@ -902,10 +909,10 @@ impl TeleprompterWindow {
                             .flex_row()
                             .items_center()
                             .h(px(32.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_1()
-                            .border_color(Theme::with_alpha(theme.gray_12, 0.06))
-                            .bg(Theme::with_alpha(theme.gray_12, 0.05))
+                            .border_color(Theme::with_alpha(theme.text_primary, 0.06))
+                            .bg(Theme::with_alpha(theme.text_primary, 0.05))
                             .px(px(2.))
                             .child(self.tool_button(
                                 "font-smaller",
@@ -921,7 +928,7 @@ impl TeleprompterWindow {
                                     .w(px(24.))
                                     .text_center()
                                     .text_size(px(10.))
-                                    .text_color(Hsla::from(theme.gray_9))
+                                    .text_color(Hsla::from(theme.text_muted))
                                     .child(format!("{}", self.state.font_size as i32)),
                             )
                             .child(self.tool_button(
@@ -981,7 +988,7 @@ impl TeleprompterWindow {
 
         ui::Slider::new(id, fraction, track)
             .row_width(px(48.))
-            .track(px(4.), Theme::with_alpha(self.theme.gray_12, 0.10))
+            .track(px(4.), Theme::with_alpha(self.theme.text_primary, 0.10))
             .thumb(px(12.), thumb, None)
             .on_drag_start(
                 cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -1072,7 +1079,7 @@ impl TeleprompterWindow {
             .px(px(8.))
             .py(px(8.))
             .text_size(px(12.))
-            .text_color(Hsla::from(theme.gray_10))
+            .text_color(Hsla::from(theme.text_secondary))
             .child(
                 div()
                     .flex()
@@ -1084,7 +1091,7 @@ impl TeleprompterWindow {
                             .path(icon)
                             .size(px(14.))
                             .flex_shrink_0()
-                            .text_color(Hsla::from(theme.gray_10)),
+                            .text_color(Hsla::from(theme.text_secondary)),
                     )
                     .child(label),
             )

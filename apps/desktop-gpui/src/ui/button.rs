@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::menu::OpenHandler;
-use crate::theme::Theme;
+use crate::theme::{RadiusToken, Theme, radius};
 
 /// The click handler every component takes. `cx.listener(..)` produces exactly
 /// this shape for any window type, so components stay window-agnostic without
@@ -104,8 +104,12 @@ impl ButtonSize {
 struct ButtonPaint {
     bg: Option<Hsla>,
     hover_bg: Option<Hsla>,
+    disabled_bg: Option<Hsla>,
     text: Hsla,
     hover_text: Option<Hsla>,
+    disabled_text: Hsla,
+    icon: Hsla,
+    hover_icon: Option<Hsla>,
     border: Option<Hsla>,
     hover_border: Option<Hsla>,
 }
@@ -118,6 +122,7 @@ pub struct Button {
     right_icon: Option<SharedString>,
     size: ButtonSize,
     paint: ButtonPaint,
+    focus_ring: Hsla,
     /// `rounded-full` unless a surface overrides it -- the settings material
     /// takes every `button[data-variant]` down to `border-radius: 8px`.
     radius: Option<Pixels>,
@@ -127,9 +132,6 @@ pub struct Button {
     width: Option<Pixels>,
     full_width: bool,
     height: Option<Pixels>,
-    /// Whether the disabled look is the plain surface's `opacity-50` rather
-    /// than the settings surface's repaint.
-    dim_disabled: bool,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
 }
@@ -150,14 +152,14 @@ impl Button {
             right_icon: None,
             size,
             paint: radix_paint(theme, variant),
-            radius: None,
+            focus_ring: theme.ring_primary.into(),
+            radius: Some(radius(RadiusToken::Compact)),
             disabled: false,
             gap: px(6.),
             font_weight: None,
             width: None,
             full_width: false,
             height: None,
-            dim_disabled: false,
             on_click: None,
             on_open: None,
         }
@@ -172,15 +174,7 @@ impl Button {
         variant: ButtonVariant,
         size: ButtonSize,
     ) -> Self {
-        let mut button = Self::plain(theme, id, variant, size);
-        if variant == ButtonVariant::Gray {
-            // `bg-gray-5 hover:bg-gray-7` under the panel material's
-            // `--macos-settings-control-active` / `--macos-settings-selection`.
-            button.paint.bg = Some(theme.body_fill(5));
-            button.paint.hover_bg = Some(theme.body_hover_fill(7));
-            button.paint.text = theme.body_text();
-        }
-        button
+        Self::plain(theme, id, variant, size)
     }
 
     /// The settings window. `theme.css`'s settings block rewrites every
@@ -194,43 +188,10 @@ impl Button {
         variant: ButtonVariant,
         size: ButtonSize,
     ) -> Self {
-        let control_fill = theme
-            .material
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(|| Hsla::from(theme.gray_5));
-
-        // No `:hover` arm: the settings block's hover rules land on the nav and
-        // profile rows, not on `button[data-variant]`, and the window has never
-        // drawn one.
-        let paint = match variant {
-            ButtonVariant::Gray | ButtonVariant::White | ButtonVariant::Outline => ButtonPaint {
-                bg: Some(control_fill),
-                hover_bg: None,
-                text: theme.settings_text(),
-                hover_text: None,
-                border: Some(theme.settings_border()),
-                hover_border: None,
-            },
-            _ => ButtonPaint {
-                bg: Some(gpui::rgb(Theme::SETTINGS_ACCENT).into()),
-                hover_bg: None,
-                text: gpui::white(),
-                hover_text: None,
-                border: None,
-                hover_border: None,
-            },
-        };
-
         Self {
-            radius: Some(px(8.)),
+            radius: Some(radius(RadiusToken::Default)),
             ..Self::plain(theme, id, variant, size)
         }
-        .paint(paint)
-    }
-
-    fn paint(mut self, paint: ButtonPaint) -> Self {
-        self.paint = paint;
-        self
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
@@ -253,7 +214,6 @@ impl Button {
     /// this dims rather than repainting.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self.dim_disabled = disabled;
         self
     }
 
@@ -263,10 +223,14 @@ impl Button {
         self.disabled = disabled;
         if disabled {
             self.paint = ButtonPaint {
-                bg: Some(theme.settings_fill()),
+                bg: Some(theme.disabled_bg.into()),
                 hover_bg: None,
-                text: theme.settings_muted(),
+                disabled_bg: Some(theme.disabled_bg.into()),
+                text: theme.text_muted.into(),
                 hover_text: None,
+                disabled_text: theme.text_muted.into(),
+                icon: theme.icon.into(),
+                hover_icon: None,
                 border: None,
                 hover_border: None,
             };
@@ -311,6 +275,7 @@ impl Button {
 
     pub fn text_color(mut self, color: Hsla) -> Self {
         self.paint.text = color;
+        self.paint.icon = color;
         self
     }
 
@@ -339,68 +304,98 @@ impl Button {
 fn radix_paint(theme: &Theme, variant: ButtonVariant) -> ButtonPaint {
     match variant {
         ButtonVariant::Primary => ButtonPaint {
-            bg: Some(theme.gray(12)),
-            hover_bg: None,
-            text: theme.gray(1),
+            bg: Some(theme.button_fill.into()),
+            hover_bg: Some(theme.button_fill_hover.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.button_fill_foreground.into(),
             hover_text: None,
+            disabled_text: theme.text_muted.into(),
+            icon: theme.button_fill_foreground.into(),
+            hover_icon: None,
             border: None,
             hover_border: None,
         },
-        // `bg-blue-600 ... hover:bg-blue-700`: Tailwind's blue, not Radix's --
-        // the two scales differ and the class is `blue-600`, not `blue-9`.
         ButtonVariant::Blue => ButtonPaint {
-            bg: Some(gpui::rgb(0x2563eb).into()),
-            hover_bg: Some(gpui::rgb(0x1d4ed8).into()),
-            text: gpui::white(),
+            bg: Some(theme.primary.into()),
+            hover_bg: Some(theme.primary_hover.into()),
+            disabled_bg: Some(theme.primary_disabled.into()),
+            text: theme.primary_foreground.into(),
             hover_text: None,
-            border: Some(gpui::rgb(0x1e40af).into()),
+            disabled_text: theme.primary_disabled_foreground.into(),
+            icon: theme.primary_foreground.into(),
+            hover_icon: None,
+            border: None,
             hover_border: None,
         },
         ButtonVariant::Destructive => ButtonPaint {
-            bg: Some(gpui::rgb(0xef4444).into()),
-            hover_bg: Some(gpui::rgb(0xdc2626).into()),
-            text: gpui::white(),
+            bg: Some(theme.danger.into()),
+            hover_bg: Some(theme.danger_hover.into()),
+            disabled_bg: Some(theme.danger_disabled.into()),
+            text: theme.danger_foreground.into(),
             hover_text: None,
+            disabled_text: theme.danger_disabled_foreground.into(),
+            icon: theme.danger_foreground.into(),
+            hover_icon: None,
             border: None,
             hover_border: None,
         },
         ButtonVariant::Outline => ButtonPaint {
-            bg: None,
-            hover_bg: Some(theme.gray(12)),
-            text: theme.gray(12),
-            hover_text: Some(theme.gray(1)),
-            border: Some(theme.gray(4)),
-            hover_border: Some(theme.gray(12)),
+            bg: Some(theme.surface.into()),
+            hover_bg: Some(theme.hover_bg.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.text_default.into(),
+            hover_text: Some(theme.text_hover.into()),
+            disabled_text: theme.text_muted.into(),
+            icon: theme.icon.into(),
+            hover_icon: Some(theme.icon_active.into()),
+            border: Some(theme.border.into()),
+            hover_border: Some(theme.border_strong.into()),
         },
         ButtonVariant::White => ButtonPaint {
-            bg: Some(theme.gray(1)),
-            hover_bg: Some(theme.gray(3)),
-            text: theme.gray(12),
+            bg: Some(theme.surface.into()),
+            hover_bg: Some(theme.hover_bg.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.text_default.into(),
             hover_text: None,
-            border: Some(theme.gray(6)),
+            disabled_text: theme.text_muted.into(),
+            icon: theme.icon.into(),
+            hover_icon: Some(theme.icon_active.into()),
+            border: Some(theme.border.into()),
             hover_border: None,
         },
         ButtonVariant::Ghost => ButtonPaint {
             bg: None,
-            hover_bg: Some(gpui::hsla(0., 0., 1., 0.2)),
-            text: theme.gray(12),
-            hover_text: Some(gpui::white()),
+            hover_bg: Some(theme.hover_bg.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.text_interactive.into(),
+            hover_text: Some(theme.text_hover.into()),
+            disabled_text: theme.text_muted.into(),
+            icon: theme.icon.into(),
+            hover_icon: Some(theme.icon_active.into()),
             border: None,
             hover_border: None,
         },
         ButtonVariant::Gray => ButtonPaint {
-            bg: Some(theme.gray(5)),
-            hover_bg: Some(theme.gray(7)),
-            text: theme.gray(12),
+            bg: Some(theme.surface_subtle.into()),
+            hover_bg: Some(theme.hover_bg.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.text_default.into(),
             hover_text: None,
+            disabled_text: theme.text_muted.into(),
+            icon: theme.icon.into(),
+            hover_icon: Some(theme.icon_active.into()),
             border: None,
             hover_border: None,
         },
         ButtonVariant::Dark => ButtonPaint {
-            bg: Some(theme.gray(12)),
-            hover_bg: Some(theme.gray(11)),
-            text: theme.gray(1),
+            bg: Some(theme.button_fill.into()),
+            hover_bg: Some(theme.button_fill_hover.into()),
+            disabled_bg: Some(theme.disabled_bg.into()),
+            text: theme.button_fill_foreground.into(),
             hover_text: None,
+            disabled_text: theme.text_muted.into(),
+            icon: theme.button_fill_foreground.into(),
+            hover_icon: None,
             border: None,
             hover_border: None,
         },
@@ -416,9 +411,9 @@ impl RenderOnce for Button {
             right_icon,
             size,
             paint,
+            focus_ring,
             radius,
             disabled,
-            dim_disabled,
             gap,
             font_weight,
             width,
@@ -428,10 +423,24 @@ impl RenderOnce for Button {
             on_open,
         } = self;
 
-        let icon_color = paint.text;
+        let group: SharedString = match &id {
+            ElementId::Name(name) => SharedString::from(format!("button-{name}")),
+            other => SharedString::from(format!("button-{other:?}")),
+        };
+        let foreground = if disabled {
+            paint.disabled_text
+        } else {
+            paint.text
+        };
+        let icon_color = if disabled {
+            paint.disabled_text
+        } else {
+            paint.icon
+        };
 
         div()
             .id(id)
+            .group(group.clone())
             .tab_index(0)
             .flex()
             .flex_row()
@@ -446,16 +455,25 @@ impl RenderOnce for Button {
             .when(full_width, |this| this.w_full())
             .map(|this| match radius {
                 Some(radius) => this.rounded(radius),
-                None => this.rounded_full(),
+                None => this.rounded(crate::theme::radius(crate::theme::RadiusToken::Large)),
             })
             .text_size(size.text_size())
             .when_some(font_weight, |this, weight| this.font_weight(weight))
-            .text_color(paint.text)
-            .when_some(paint.bg, |this, bg| this.bg(bg))
-            .when_some(paint.border, |this, border| {
-                this.border_1().border_color(border)
-            })
-            .when(dim_disabled, |this| this.opacity(0.5))
+            .text_color(foreground)
+            .when_some(
+                if disabled {
+                    paint.disabled_bg
+                } else {
+                    paint.bg
+                },
+                |this, bg| this.bg(bg),
+            )
+            .border_1()
+            .border_color(paint.border.unwrap_or(gpui::transparent_black()))
+            .focus_visible(move |style| style.border_color(focus_ring))
+            // No press fill: a second fill flashed over the hover one on every
+            // click. Hover is the only pointer feedback; a click shows itself by
+            // changing the control's state.
             .when(!disabled, |this| {
                 this.hover(move |style| {
                     let style = match paint.hover_bg {
@@ -475,17 +493,25 @@ impl RenderOnce for Button {
             .children(icon.map(|icon| {
                 svg()
                     .path(icon)
+                    .id("button-left-icon")
                     .size(size.icon_size())
                     .flex_shrink_0()
                     .text_color(icon_color)
+                    .when_some(paint.hover_icon.filter(|_| !disabled), |this, color| {
+                        this.group_hover(group.clone(), move |style| style.text_color(color))
+                    })
             }))
             .children(label)
             .children(right_icon.map(|icon| {
                 svg()
                     .path(icon)
+                    .id("button-right-icon")
                     .size(px(14.))
                     .flex_shrink_0()
                     .text_color(icon_color)
+                    .when_some(paint.hover_icon.filter(|_| !disabled), |this, color| {
+                        this.group_hover(group.clone(), move |style| style.text_color(color))
+                    })
             }))
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
@@ -561,10 +587,10 @@ impl IconButton {
     /// hover:bg-gray-12/7 hover:text-gray-12`, active `bg-gray-12/8 text-gray-12`.
     pub fn glass(theme: &Theme, id: impl Into<ElementId>, icon: impl Into<SharedString>) -> Self {
         Self {
-            idle: Hsla::from(theme.gray_9),
-            active_color: Hsla::from(theme.gray_12),
-            hover_bg: Some(Theme::with_alpha(theme.gray_12, 0.07)),
-            active_bg: Some(Theme::with_alpha(theme.gray_12, 0.08)),
+            idle: Hsla::from(theme.text_muted),
+            active_color: Hsla::from(theme.text_primary),
+            hover_bg: Some(Theme::with_alpha(theme.text_primary, 0.07)),
+            active_bg: Some(Theme::with_alpha(theme.text_primary, 0.08)),
             ..Self::new(id, icon)
         }
     }
@@ -666,7 +692,7 @@ impl RenderOnce for IconButton {
             .flex_shrink_0()
             .map(|this| match rounded {
                 Some(radius) => this.rounded(radius),
-                None => this.rounded_full(),
+                None => this.rounded(crate::theme::radius(crate::theme::RadiusToken::Large)),
             })
             .when_some(bg, |this, bg| this.bg(bg))
             .when_some(border, |this, border| this.border_1().border_color(border))

@@ -57,6 +57,7 @@
 		"@biomejs/biome": "2.5.15",
 		"@clack/prompts": "^1.8.1",
 		"@effect/language-service": "^0.87.4",
+		"@hugeicons/core-free-icons": "^4.3.5",
 		"dotenv-cli": "^11.0.0",
 		"jsonc-parser": "^3.3.1",
 		"mysql2": "^3.24.6",

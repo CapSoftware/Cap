@@ -428,11 +428,21 @@ pub(crate) async fn open_file_panel_from_app_async(
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
+/// Recording and screenshot names carry the capture time (`08:14 AM`), and a
+/// colon is not a legal file name character on Windows -- the save dialog
+/// rejects the suggestion outright. Same mapping as the `.cap` bundle names
+/// (`recording::project_bundle_filename`), so the suggested file matches the
+/// bundle it came from.
+pub(crate) fn suggested_file_name(name: &str) -> String {
+    sanitize_filename::sanitize(name.replace([':', '/'], "."))
+}
+
 pub(crate) async fn save_file_panel_async(
     suggested: &str,
     extensions: &[&str],
     _cx: &mut gpui::AsyncWindowContext,
 ) -> Option<std::path::PathBuf> {
+    let suggested = &suggested_file_name(suggested);
     #[cfg(target_os = "linux")]
     {
         let (owner, parent) = _cx
@@ -787,7 +797,7 @@ mod mac {
                 let _: () = msg_send![layer, setMasksToBounds: true];
             }
         };
-        set_clip_radius(16.0);
+        set_clip_radius(radius);
 
         let bounds = content_view.bounds();
 
@@ -1737,6 +1747,7 @@ mod mac {
         use objc2::{class, msg_send};
         use objc2_foundation::{NSArray, NSString};
 
+        let suggested = &super::suggested_file_name(suggested);
         unsafe {
             let panel: *mut AnyObject = msg_send![class!(NSSavePanel), savePanel];
             if panel.is_null() {
@@ -2540,6 +2551,18 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn suggested_file_name_drops_characters_windows_rejects() {
+        assert_eq!(
+            super::suggested_file_name("Aeris Terminal (Window) 2026-10-12 08:14 AM.png"),
+            "Aeris Terminal (Window) 2026-10-12 08.14 AM.png"
+        );
+        assert_eq!(
+            super::suggested_file_name("a/b\\c*d?e\"f<g>h|i.mp4"),
+            "a.bcdefghi.mp4"
+        );
+    }
+
     #[test]
     fn dock_hide_waits_for_the_latest_show_without_extending_on_read() {
         use std::time::{Duration, Instant};

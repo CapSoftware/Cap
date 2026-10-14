@@ -19,9 +19,9 @@ use cap_utils::export_resources::{
     DiskBudget, ExportResources, estimated_working_bytes, is_resource_stop,
 };
 use gpui::{
-    Context, FontWeight, Hsla, InteractiveElement, IntoElement, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, RenderImage, StatefulInteractiveElement, Styled, Window, div, img,
-    prelude::FluentBuilder, px, svg,
+    Animation, AnimationExt, Context, FontWeight, Hsla, InteractiveElement, IntoElement,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, RenderImage,
+    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, svg,
 };
 
 use crate::editor_window::EditorWindow;
@@ -441,10 +441,10 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 impl EditorWindow {
     pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .rounded(px(8.))
-            .bg(Hsla::from(self.theme.blue_3))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+            .bg(Hsla::from(self.theme.primary_subtle))
             .border_1()
-            .border_color(Hsla::from(self.theme.blue_5))
+            .border_color(Hsla::from(self.theme.primary_subtle))
             .child(
                 ui::EditorButton::plain(&self.theme, "editor-reupload")
                     .left_icon("icons/cloud-upload.svg")
@@ -1330,7 +1330,6 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let Some(ui) = self.export.as_ref() else {
             return div().into_any_element();
         };
@@ -1345,7 +1344,7 @@ impl EditorWindow {
             .pl(px(if cfg!(target_os = "macos") { 92. } else { 12. }))
             .pr(px(12.))
             .border_b_1()
-            .border_color(Hsla::from(editor.line))
+            .border_color(Hsla::from(theme.border_subtle))
             .when(cfg!(target_os = "windows"), |header| {
                 header.window_control_area(gpui::WindowControlArea::Drag)
             })
@@ -1371,21 +1370,21 @@ impl EditorWindow {
                         .h(px(28.))
                         .pl(px(8.))
                         .pr(px(10.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .cursor_pointer()
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .hover(move |style| {
                             style
-                                .bg(Hsla::from(editor.ctl))
-                                .text_color(Hsla::from(editor.text_1))
+                                .bg(Hsla::from(theme.surface_subtle))
+                                .text_color(Hsla::from(theme.text_primary))
                         })
                         .child(
                             svg()
-                                .path("icons/move-left.svg")
+                                .path("icons/arrow-left.svg")
                                 .size(px(14.))
-                                .text_color(Hsla::from(editor.text_2)),
+                                .text_color(Hsla::from(theme.text_secondary)),
                         )
                         .child("Back to editor")
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1398,7 +1397,7 @@ impl EditorWindow {
                     .flex_none()
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(editor.text_1))
+                    .text_color(Hsla::from(theme.text_primary))
                     .child("Export"),
             )
             .child(div().flex_1());
@@ -1484,7 +1483,7 @@ impl EditorWindow {
                 div()
                     .w(px(box_w))
                     .h(px(box_h))
-                    .rounded(px(10.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .overflow_hidden()
                     .shadow(crate::theme::preview_shadow())
                     .child(img(image).object_fit(gpui::ObjectFit::Contain).size_full())
@@ -1493,14 +1492,14 @@ impl EditorWindow {
             None => div()
                 .w(px(box_w))
                 .h(px(box_h))
-                .rounded(px(10.))
-                .bg(Hsla::from(editor.ctl))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                .bg(Hsla::from(theme.surface_subtle))
                 .flex()
                 .items_center()
                 .justify_center()
                 .px(px(24.))
                 .text_size(px(12.))
-                .text_color(Hsla::from(editor.text_2))
+                .text_color(Hsla::from(theme.text_secondary))
                 .text_center()
                 .child(
                     ui.preview_error
@@ -1530,7 +1529,7 @@ impl EditorWindow {
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_2))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("Preview"),
                     )
                     .child(
@@ -1538,6 +1537,7 @@ impl EditorWindow {
                             .id("export-preview-info")
                             .flex()
                             .items_center()
+                            .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                             .tooltip(move |_window, cx| {
                                 crate::ui::Tooltip::new(
                                     &theme,
@@ -1550,7 +1550,7 @@ impl EditorWindow {
                                 svg()
                                     .path("icons/info.svg")
                                     .size(px(13.))
-                                    .text_color(Hsla::from(editor.text_3)),
+                                    .text_color(Hsla::from(theme.text_muted)),
                             ),
                     ),
             )
@@ -1572,8 +1572,8 @@ impl EditorWindow {
                         .min_w(px(520.))
                         .flex()
                         .flex_row()
-                        .rounded(px(10.))
-                        .bg(Hsla::from(editor.card))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                        .bg(Hsla::from(theme.surface_raised))
                         .shadow(editor.card_shadow())
                         .child(export_stat(
                             &theme,
@@ -1641,7 +1641,6 @@ impl EditorWindow {
 
     fn render_export_sidebar(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let transparent = has_transparent_background(&self.project);
         let link_disabled = transparent || ui.cursor_only;
         let format_locked = transparent || ui.cursor_only;
@@ -1654,9 +1653,9 @@ impl EditorWindow {
             .h_full()
             .flex()
             .flex_col()
-            .bg(Hsla::from(editor.card))
+            .bg(Hsla::from(theme.surface))
             .border_l_1()
-            .border_color(Hsla::from(editor.line))
+            .border_color(Hsla::from(theme.border))
             .child(
                 div()
                     .id("export-settings")
@@ -1675,7 +1674,12 @@ impl EditorWindow {
                         ui.format == ExportFormatKind::Mp4 && !ui.cursor_only,
                         |this| this.child(self.export_quality_field(ui, cx)),
                     )
-                    .child(div().h(px(1.)).flex_none().bg(Hsla::from(editor.line)))
+                    .child(
+                        div()
+                            .h(px(1.))
+                            .flex_none()
+                            .bg(Hsla::from(theme.border_subtle)),
+                    )
                     .child(self.export_advanced(ui, cx)),
             )
             .child(
@@ -1684,14 +1688,13 @@ impl EditorWindow {
                     .pt(px(12.))
                     .pb(px(16.))
                     .border_t_1()
-                    .border_color(Hsla::from(editor.line))
+                    .border_color(Hsla::from(theme.border_subtle))
                     .child(self.export_cta(ui, cx)),
             )
     }
 
     fn export_cta(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let signed_in = store::auth_snapshot().signed_in();
         let (label, icon, primary) = match ui.destination {
             ExportDestination::File => ("Export to File", Some("icons/folder.svg"), true),
@@ -1713,15 +1716,15 @@ impl EditorWindow {
         let busy = ui.phase.is_busy();
         let (bg, hover_bg, text) = if primary {
             (
-                Hsla::from(editor.accent),
-                Hsla::from(editor.accent_2),
+                Hsla::from(theme.primary),
+                Hsla::from(theme.primary_hover),
                 gpui::white(),
             )
         } else {
             (
-                Hsla::from(editor.ctl),
-                Hsla::from(editor.ctl_hover),
-                Hsla::from(editor.text_1),
+                Hsla::from(theme.surface_subtle),
+                Hsla::from(theme.hover_bg),
+                Hsla::from(theme.text_primary),
             )
         };
 
@@ -1735,7 +1738,7 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .gap(px(8.))
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .bg(bg)
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
@@ -1773,7 +1776,6 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         self.export_section("Destination", "icons/upload-arrow.svg")
             .child(
                 ui::SegmentedControl::editor(
@@ -1823,7 +1825,7 @@ impl EditorWindow {
                 field.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(editor.text_3))
+                        .text_color(Hsla::from(theme.text_muted))
                         .child(if ui.cursor_only {
                             "Cursor-only exports can only be saved to a file or clipboard."
                         } else {
@@ -1840,8 +1842,8 @@ impl EditorWindow {
                     field.child(
                         div()
                             .p(px(12.))
-                            .rounded(px(10.))
-                            .bg(Hsla::from(editor.card_2))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                            .bg(Hsla::from(theme.surface_secondary))
                             .flex()
                             .flex_col()
                             .gap(px(4.))
@@ -1849,21 +1851,21 @@ impl EditorWindow {
                                 div()
                                     .text_size(px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(editor.text_1))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child("Update your existing link"),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.5))
                                     .line_height(px(15.))
-                                    .text_color(Hsla::from(editor.text_3))
+                                    .text_color(Hsla::from(theme.text_muted))
                                     .child("Reupload replaces the video at this link with your latest edit. Everyone with the link will see the updated version."),
                             )
                             .child(
                                 div()
                                     .id("reupload-existing-link")
                                     .text_size(px(11.5))
-                                    .text_color(Hsla::from(editor.accent))
+                                    .text_color(Hsla::from(theme.primary))
                                     .truncate()
                                     .cursor_pointer()
                                     .child(link.clone())
@@ -1897,10 +1899,10 @@ impl EditorWindow {
                             .justify_between()
                             .h(px(30.))
                             .px(px(10.))
-                            .rounded(px(7.))
-                            .bg(Hsla::from(editor.ctl))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .cursor_pointer()
-                            .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                            .hover(move |style| style.bg(Hsla::from(theme.hover_bg)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let orgs = store::auth_snapshot().organizations;
                                 if orgs.is_empty() {
@@ -1924,7 +1926,7 @@ impl EditorWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(editor.text_2))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child("Organization"),
                             )
                             .child(
@@ -1934,13 +1936,13 @@ impl EditorWindow {
                                     .items_center()
                                     .gap(px(4.))
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(editor.text_1))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(label)
                                     .child(
                                         svg()
                                             .path("icons/caret-down.svg")
                                             .size(px(14.))
-                                            .text_color(Hsla::from(editor.text_3)),
+                                            .text_color(Hsla::from(theme.text_muted)),
                                     ),
                             ),
                     )
@@ -2069,7 +2071,6 @@ impl EditorWindow {
 
     fn export_quality_field(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         self.export_section("Quality", "icons/gem.svg")
             .child(
                 ui::SegmentedControl::editor(
@@ -2107,7 +2108,7 @@ impl EditorWindow {
                     .justify_between()
                     .px(px(2.))
                     .text_size(px(10.5))
-                    .text_color(Hsla::from(editor.text_3))
+                    .text_color(Hsla::from(theme.text_muted))
                     .child("Smaller file")
                     .child("Larger file"),
             )
@@ -2122,7 +2123,7 @@ impl EditorWindow {
         checked: bool,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> impl IntoElement {
-        let editor = self.theme.editor;
+        let theme = self.theme;
         div()
             .flex()
             .flex_row()
@@ -2140,14 +2141,14 @@ impl EditorWindow {
                         div()
                             .text_size(px(12.5))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_1))
+                            .text_color(Hsla::from(theme.text_primary))
                             .child(title),
                     )
                     .child(
                         div()
                             .text_size(px(11.))
                             .line_height(px(14.))
-                            .text_color(Hsla::from(editor.text_3))
+                            .text_color(Hsla::from(theme.text_muted))
                             .child(description),
                     ),
             )
@@ -2189,15 +2190,15 @@ impl EditorWindow {
                     .h(px(30.))
                     .mx(px(-6.))
                     .px(px(6.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .cursor_pointer()
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(editor.text_2))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .hover(move |style| {
                         style
-                            .bg(Hsla::from(editor.ctl))
-                            .text_color(Hsla::from(editor.text_1))
+                            .bg(Hsla::from(theme.surface_subtle))
+                            .text_color(Hsla::from(theme.text_primary))
                     })
                     .on_click(cx.listener(|this, _, _window, cx| {
                         if let Some(ui) = this.export.as_mut() {
@@ -2210,7 +2211,7 @@ impl EditorWindow {
                         svg()
                             .path("icons/sliders-horizontal.svg")
                             .size(px(14.))
-                            .text_color(Hsla::from(editor.text_2)),
+                            .text_color(Hsla::from(theme.text_secondary)),
                     )
                     .child("Advanced")
                     .child(
@@ -2222,7 +2223,7 @@ impl EditorWindow {
                             })
                             .size(px(14.))
                             .ml_auto()
-                            .text_color(Hsla::from(editor.text_3)),
+                            .text_color(Hsla::from(theme.text_muted)),
                     ),
             )
             .when(ui.advanced_open, |this| {
@@ -2248,8 +2249,8 @@ impl EditorWindow {
                         div()
                             .mt(px(4.))
                             .p(px(12.))
-                            .rounded(px(10.))
-                            .bg(Hsla::from(editor.card_2))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                            .bg(Hsla::from(theme.surface_secondary))
                             .flex()
                             .flex_row()
                             .items_start()
@@ -2260,13 +2261,13 @@ impl EditorWindow {
                                     .size(px(14.))
                                     .flex_shrink_0()
                                     .mt(px(1.))
-                                    .text_color(Hsla::from(editor.text_2)),
+                                    .text_color(Hsla::from(theme.text_secondary)),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.5))
                                     .line_height(px(15.))
-                                    .text_color(Hsla::from(editor.text_2))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(
                                         "Exports as a transparent MOV. Files are large and best for compositing or editing.",
                                     ),
@@ -2287,7 +2288,7 @@ impl EditorWindow {
                                     .flex_none()
                                     .min_w(px(96.))
                                     .text_size(px(13.))
-                                    .text_color(Hsla::from(editor.text_1))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child("Bits per pixel"),
                             )
                             .child(
@@ -2308,8 +2309,8 @@ impl EditorWindow {
                                         )
                                         .flex()
                                         .row_height(px(28.))
-                                        .track(px(3.), Hsla::from(editor.ctl_active))
-                                        .fill(Hsla::from(editor.accent))
+                                        .track(px(3.), Hsla::from(theme.active_bg))
+                                        .fill(Hsla::from(theme.primary))
                                         .thumb(
                                             px(14.),
                                             Hsla::from(editor.thumb),
@@ -2329,7 +2330,7 @@ impl EditorWindow {
                                     .min_w(px(36.))
                                     .text_right()
                                     .text_size(px(11.))
-                                    .text_color(Hsla::from(editor.text_3))
+                                    .text_color(Hsla::from(theme.text_muted))
                                     .child(format!("{:.2}", ui.bpp())),
                             ),
                     )
@@ -2337,7 +2338,7 @@ impl EditorWindow {
                         this.child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(Hsla::from(editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child("Using a custom bitrate"),
                         )
                     })
@@ -2413,7 +2414,6 @@ impl EditorWindow {
 
     fn render_export_overlay(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let fraction = if ui.phase == ExportPhase::Uploading {
             Some(ui.upload_progress.clamp(0.0, 1.0))
         } else if ui.total_frames == 0 {
@@ -2447,7 +2447,7 @@ impl EditorWindow {
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
 
-        let mut wash: Hsla = editor.window.into();
+        let mut wash: Hsla = theme.surface.into();
         wash.a = 0.94;
 
         div()
@@ -2460,20 +2460,23 @@ impl EditorWindow {
             .justify_center()
             .gap(px(16.))
             .bg(wash)
-            .text_color(Hsla::from(editor.text_1))
-            .child({
+            .text_color(Hsla::from(theme.text_primary))
+            .when(ui.phase == ExportPhase::Done, |this| {
+                this.child(export_success_badge(&theme))
+            })
+            .when(ui.phase != ExportPhase::Done, |this| {
                 let ring = ui::CircularProgress::new(
                     px(80.),
                     px(6.),
-                    Hsla::from(editor.ctl_active),
-                    Hsla::from(editor.accent),
+                    Hsla::from(theme.active_bg),
+                    Hsla::from(theme.primary),
                 )
-                .label(Hsla::from(editor.text_1), px(14.));
-                if let Some(fraction) = fraction {
+                .label(Hsla::from(theme.text_primary), px(14.));
+                this.child(if let Some(fraction) = fraction {
                     ring.progress(fraction)
                 } else {
                     ring.indeterminate()
-                }
+                })
             })
             .child(
                 div()
@@ -2494,7 +2497,7 @@ impl EditorWindow {
                             this.child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(editor.text_2))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(if ui.reuploading {
                                         "Your latest edit is ready at the same link"
                                     } else {
@@ -2508,7 +2511,7 @@ impl EditorWindow {
                 this.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child(format!("{} / {} frames", ui.rendered, ui.total_frames)),
                 )
             })
@@ -2517,7 +2520,7 @@ impl EditorWindow {
                     div()
                         .max_w(px(360.))
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.red_9))
+                        .text_color(Hsla::from(theme.danger))
                         .text_center()
                         .child(error),
                 )
@@ -2578,7 +2581,7 @@ impl EditorWindow {
                     div()
                         .max_w(px(320.))
                         .text_size(px(12.))
-                        .text_color(Hsla::from(editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .text_center()
                         .child(
                             "Use Instant Mode for your next recording if you want a link the moment you stop.",
@@ -2586,7 +2589,15 @@ impl EditorWindow {
                 )
             })
             .when(ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed, |this| {
-                this.when(ui.clipboard_retry_path().is_some(), |this| {
+                this.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                .when(ui.clipboard_retry_path().is_some(), |this| {
                     this.child(
                         ui::Button::plain(
                             &theme,
@@ -2610,9 +2621,10 @@ impl EditorWindow {
                             ui::Button::plain(
                                 &theme,
                                 "export-open-file",
-                                ui::ButtonVariant::Gray,
+                                ui::ButtonVariant::Blue,
                                 ui::ButtonSize::Md,
                             )
+                            .radius(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .label("Open File")
                             .on_click(move |_, _, _| {
                                 if let Some(path) = &path {
@@ -2665,14 +2677,72 @@ impl EditorWindow {
                     ui::Button::plain(
                         &theme,
                         "export-back-done",
-                        ui::ButtonVariant::Gray,
+                        ui::ButtonVariant::Outline,
                         ui::ButtonSize::Md,
                     )
+                    .radius(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .label("Back to editor")
                     .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
+                ),
                 )
             })
     }
+}
+
+const EXPORT_SUCCESS_SIZE: f32 = 80.;
+const EXPORT_SUCCESS_STROKE: f32 = 6.;
+const EXPORT_SUCCESS_CHECK: f32 = 36.;
+const EXPORT_SUCCESS_DURATION: Duration = Duration::from_millis(560);
+
+fn ease_out_back(t: f32) -> f32 {
+    let overshoot = 1.70158;
+    let t = t - 1.;
+    1. + (overshoot + 1.) * t * t * t + overshoot * t * t
+}
+
+/// Takes the progress ring's place once an export finishes: the badge pops in
+/// and the check lands just after it.
+fn export_success_badge(theme: &crate::theme::Theme) -> impl IntoElement {
+    let positive = Hsla::from(theme.positive);
+    div()
+        .size(px(EXPORT_SUCCESS_SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                .bg(Hsla::from(theme.positive_subtle))
+                .border(px(EXPORT_SUCCESS_STROKE))
+                .border_color(positive)
+                .child(
+                    svg()
+                        .path("icons/check.svg")
+                        .text_color(positive)
+                        .with_animation(
+                            "export-success-check",
+                            Animation::new(EXPORT_SUCCESS_DURATION),
+                            |check, t| {
+                                let landed = ease_out_back(((t - 0.35) / 0.65).clamp(0., 1.));
+                                check.size(px(EXPORT_SUCCESS_CHECK * landed.max(0.)))
+                            },
+                        ),
+                )
+                .with_animation(
+                    "export-success-badge",
+                    Animation::new(EXPORT_SUCCESS_DURATION),
+                    |badge, t| {
+                        let popped = ease_out_back((t / 0.6).clamp(0., 1.));
+                        badge
+                            .size(px(EXPORT_SUCCESS_SIZE * (0.6 + 0.4 * popped)))
+                            .opacity((t / 0.3).clamp(0., 1.))
+                    },
+                ),
+        )
 }
 
 /// The largest box of the preview's aspect that fits the stage, so the frame's
@@ -2823,7 +2893,6 @@ fn export_stat(
     value: Option<String>,
     divided: bool,
 ) -> impl IntoElement {
-    let editor = theme.editor;
     div()
         .flex()
         .flex_1()
@@ -2832,20 +2901,21 @@ fn export_stat(
         .px(px(16.))
         .gap(px(1.))
         .when(divided, |this| {
-            this.border_l_1().border_color(Hsla::from(editor.line))
+            this.border_l_1()
+                .border_color(Hsla::from(theme.border_subtle))
         })
         .child(
             div()
                 .text_size(px(10.5))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(Hsla::from(editor.text_3))
+                .text_color(Hsla::from(theme.text_muted))
                 .child(label),
         )
         .child(match value {
             Some(value) => div()
                 .text_size(px(12.5))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(Hsla::from(editor.text_1))
+                .text_color(Hsla::from(theme.text_primary))
                 .whitespace_nowrap()
                 .child(value)
                 .into_any_element(),
@@ -2853,8 +2923,8 @@ fn export_stat(
                 .my(px(3.))
                 .h(px(12.))
                 .w(px(56.))
-                .rounded(px(4.))
-                .bg(Hsla::from(editor.ctl_active))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                .bg(Hsla::from(theme.active_bg))
                 .into_any_element(),
         })
 }

@@ -681,10 +681,10 @@ impl ScreenshotEditorWindow {
                         .relative()
                         .flex()
                         .flex_col()
-                        .rounded(px(20.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                         .border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_1))
+                        .border_color(Hsla::from(theme.surface_subtle))
+                        .bg(Hsla::from(theme.surface))
                         .overflow_hidden()
                         .child(self.render_crop_dialog_header(dialog, cx))
                         .child(self.render_crop_dialog_body(dialog, cx))
@@ -715,7 +715,7 @@ impl ScreenshotEditorWindow {
                 .flex_row()
                 .items_center()
                 .gap(px(12.))
-                .text_color(Hsla::from(theme.gray_11))
+                .text_color(Hsla::from(theme.text_secondary))
                 .child(label)
                 .child(this.render_crop_dialog_field(dialog, a))
                 .child("×")
@@ -759,22 +759,22 @@ impl ScreenshotEditorWindow {
                             .items_center()
                             .justify_center()
                             .size(px(32.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_1()
-                            .border_color(Hsla::from(theme.gray_4))
-                            .bg(Hsla::from(theme.gray_1))
+                            .border_color(Hsla::from(theme.hover_bg))
+                            .bg(Hsla::from(theme.surface))
                             .cursor_pointer()
                             .child(match state.aspect {
                                 Some(ratio) => div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.blue_10))
+                                    .text_color(Hsla::from(theme.primary_hover))
                                     .child(SharedString::from(format!("{}:{}", ratio.0, ratio.1)))
                                     .into_any_element(),
                                 None => svg()
                                     .path("icons/ratio.svg")
                                     .size(px(16.))
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .into_any_element(),
                             })
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
@@ -838,8 +838,8 @@ impl ScreenshotEditorWindow {
         .height(px(32.))
         .radius(px(8.))
         .text_size(px(14.))
-        .bg(Hsla::from(theme.gray_2))
-        .border(Hsla::from(theme.gray_2))
+        .bg(Hsla::from(theme.surface_secondary))
+        .border(Hsla::from(theme.surface_secondary))
         .into_any_element()
     }
 
@@ -852,7 +852,7 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
-        let mut card_bg = Hsla::from(theme.gray_2);
+        let mut card_bg = Hsla::from(theme.surface_secondary);
         card_bg.a = 0.8;
 
         div()
@@ -861,7 +861,7 @@ impl ScreenshotEditorWindow {
             .p(px(16.))
             .border_t_1()
             .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
+            .border_color(Hsla::from(theme.surface_subtle))
             .child(
                 div()
                     .flex()
@@ -870,7 +870,7 @@ impl ScreenshotEditorWindow {
                     .items_center()
                     .child(
                         div()
-                            .rounded(px(20.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                             .p(px(12.))
                             .bg(card_bg)
                             // `ring-1 ring-black/5 shadow-xs`.
@@ -939,7 +939,7 @@ impl ScreenshotEditorWindow {
                                 div()
                                     .h(px(18.))
                                     .w(px(44.))
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -951,7 +951,7 @@ impl ScreenshotEditorWindow {
                                         gpui::hsla(0., 0., 1., 0.5)
                                     })
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(SharedString::from(format!("{}:{}", ratio.0, ratio.1))),
                             )
                     }),
@@ -993,7 +993,7 @@ impl ScreenshotEditorWindow {
             .h(px(box_h))
             // `rounded-sm overflow-visible` -- unlike the video dialog's box
             // there is no hairline border and nothing clips the corner glyphs.
-            .rounded(px(2.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
             .cursor(base_cursor)
             .child(
                 gpui::canvas(
@@ -1023,10 +1023,10 @@ impl ScreenshotEditorWindow {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(Hsla::from(theme.gray_3))
+                        .bg(Hsla::from(theme.surface_subtle))
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child("Loading frame…")
                         .into_any_element(),
                 ),
@@ -1081,7 +1081,7 @@ impl ScreenshotEditorWindow {
         let menu = dialog.state.menu.as_ref()?;
         let items = engine::crop_menu_items(dialog.state.aspect, dialog.snap_to_ratio);
         Some(
-            ui::Menu::plain(&self.theme, "screenshot-crop-menu", items, menu)
+            ui::Menu::new(&self.theme, "screenshot-crop-menu", items, menu)
                 .on_select(cx.listener(|this, index: &usize, window, cx| {
                     this.choose_crop_dialog_menu(*index, window, cx);
                 }))
