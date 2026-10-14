@@ -1,0 +1,285 @@
+use crate::screenshot::mask_filter;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaskFrame {
+    pub revision: u64,
+    pub size: (u32, u32),
+    pub content: [u64; 4],
+    pub padding: u64,
+    pub crop: Option<[u32; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskRequest {
+    pub id: String,
+    pub frame: MaskFrame,
+    pub region: (u32, u32, u32, u32),
+    pub pixelate: bool,
+    pub level: u64,
+}
+
+impl MaskRequest {
+    pub fn filter(&self, rgba: &[u8]) -> Option<image::RgbaImage> {
+        mask_filter(
+            rgba,
+            self.frame.size.0,
+            self.frame.size.1,
+            self.region,
+            self.pixelate,
+            f64::from_bits(self.level),
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct MaskEntry<T> {
+    pub request: MaskRequest,
+    pub value: Option<T>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MaskPlan {
+    pub reuse: Vec<Option<usize>>,
+    pub drop: Vec<usize>,
+}
+
+pub fn plan_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> MaskPlan {
+    let reuse: Vec<_> = requests
+        .iter()
+        .map(|request| previous.iter().position(|entry| entry.request == *request))
+        .collect();
+    let drop = (0..previous.len())
+        .filter(|index| !reuse.contains(&Some(*index)))
+        .collect();
+    MaskPlan { reuse, drop }
+}
+
+pub fn update_masks<T: Clone>(
+    previous: &[MaskEntry<T>],
+    requests: &[MaskRequest],
+    mut compute: impl FnMut(&MaskRequest) -> Option<T>,
+) -> Vec<MaskEntry<T>> {
+    let plan = plan_masks(previous, requests);
+    requests
+        .iter()
+        .zip(plan.reuse)
+        .map(|(request, reuse)| MaskEntry {
+            request: request.clone(),
+            value: match reuse {
+                Some(index) => previous[index].value.clone(),
+                None => compute(request),
+            },
+        })
+        .collect()
+}
+
+pub fn mask_region(
+    mask: [f64; 4],
+    content: [f64; 4],
+    frame: (u32, u32),
+) -> Option<(u32, u32, u32, u32)> {
+    let [x, y, width, height] = mask;
+    let [content_x, content_y, content_width, content_height] = content;
+    let left = content_x.max(x.min(x + width));
+    let top = content_y.max(y.min(y + height));
+    let right = (content_x + content_width).min(x.max(x + width));
+    let bottom = (content_y + content_height).min(y.max(y + height));
+    if right <= left || bottom <= top {
+        return None;
+    }
+    let x0 = (left.round().max(0.) as u32).min(frame.0);
+    let y0 = (top.round().max(0.) as u32).min(frame.1);
+    let x1 = (right.round().max(0.) as u32).min(frame.0);
+    let y1 = (bottom.round().max(0.) as u32).min(frame.1);
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, x1 - x0, y1 - y0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn requests(count: usize) -> Vec<MaskRequest> {
+        (0..count)
+            .map(|index| MaskRequest {
+                id: index.to_string(),
+                frame: MaskFrame {
+                    revision: 1,
+                    size: (64, 48),
+                    content: [0., 0., 64., 48.].map(f64::to_bits),
+                    padding: 0_f64.to_bits(),
+                    crop: None,
+                },
+                region: (index as u32 * 4, 4, 32, 24),
+                pixelate: false,
+                level: 16_f64.to_bits(),
+            })
+            .collect()
+    }
+
+    fn cached(requests: &[MaskRequest]) -> Vec<MaskEntry<Arc<String>>> {
+        update_masks(&[], requests, |request| Some(Arc::new(request.id.clone())))
+    }
+
+    #[test]
+    fn moving_one_mask_reuses_the_other_images() {
+        let mut requests = requests(4);
+        let previous = cached(&requests);
+        requests[1].region.0 += 1;
+        assert_eq!(
+            plan_masks(&previous, &requests),
+            MaskPlan {
+                reuse: vec![Some(0), None, Some(2), Some(3)],
+                drop: vec![1],
+            }
+        );
+        let mut calls = 0;
+        let next = update_masks(&previous, &requests, |request| {
+            calls += 1;
+            Some(Arc::new(request.id.clone()))
+        });
+        assert_eq!(calls, 1);
+        for index in [0, 2, 3] {
+            assert!(Arc::ptr_eq(
+                previous[index].value.as_ref().unwrap(),
+                next[index].value.as_ref().unwrap()
+            ));
+        }
+    }
+
+    #[test]
+    fn deleting_and_reordering_evicts_only_the_deleted_mask() {
+        let mut requests = requests(4);
+        let previous = cached(&requests);
+        requests.remove(1);
+        requests.reverse();
+        assert_eq!(
+            plan_masks(&previous, &requests),
+            MaskPlan {
+                reuse: vec![Some(3), Some(2), Some(0)],
+                drop: vec![1],
+            }
+        );
+        let next = update_masks(&previous, &requests, |_| panic!("unexpected filter"));
+        assert_eq!(
+            next.iter()
+                .map(|entry| entry.request.id.as_str())
+                .collect::<Vec<_>>(),
+            ["3", "2", "0"]
+        );
+        assert_eq!(plan_masks(&next, &[]).drop, [0, 1, 2]);
+    }
+
+    #[test]
+    fn new_and_changed_styles_are_computed() {
+        let mut requests = requests(4);
+        let previous = cached(&requests[..3]);
+        requests[0].pixelate = true;
+        requests[1].level = 20_f64.to_bits();
+        assert_eq!(
+            plan_masks(&previous, &requests),
+            MaskPlan {
+                reuse: vec![None, None, Some(2), None],
+                drop: vec![0, 1],
+            }
+        );
+    }
+
+    #[test]
+    fn frame_and_layout_changes_invalidate_every_mask() {
+        let original = requests(4);
+        let previous = cached(&original);
+        for change in 0..5 {
+            let mut requests = original.clone();
+            for request in &mut requests {
+                match change {
+                    0 => request.frame.revision += 1,
+                    1 => request.frame.size.0 += 1,
+                    2 => request.frame.content[0] = 0.25_f64.to_bits(),
+                    3 => request.frame.padding = 1_f64.to_bits(),
+                    _ => request.frame.crop = Some([1, 0, 64, 48]),
+                }
+            }
+            assert_eq!(
+                plan_masks(&previous, &requests),
+                MaskPlan {
+                    reuse: vec![None; 4],
+                    drop: vec![0, 1, 2, 3],
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn identical_requests_reuse_even_a_failed_filter() {
+        let requests = requests(4);
+        let previous = update_masks::<Arc<String>>(&[], &requests, |_| None);
+        let next = update_masks(&previous, &requests, |_| panic!("unexpected filter"));
+        assert!(next.iter().all(|entry| entry.value.is_none()));
+        assert_eq!(plan_masks(&previous, &requests).drop, []);
+    }
+
+    #[test]
+    fn regions_round_after_clipping_and_normalize_negative_sizes() {
+        let content = [10.25, 8.75, 40.5, 30.5];
+        assert_eq!(
+            mask_region([-2.4, 1.2, 80., 60.], content, (48, 36)),
+            Some((10, 9, 38, 27))
+        );
+        assert_eq!(
+            mask_region([40.4, 30.4, -20.2, -10.2], content, (64, 48)),
+            Some((20, 20, 20, 10))
+        );
+        assert_eq!(mask_region([10.1, 10.1, 0.2, 0.2], content, (64, 48)), None);
+        assert_eq!(mask_region([60., 10., 10., 10.], content, (64, 48)), None);
+        assert_eq!(mask_region([0., 0., 20., 20.], content, (0, 0)), None);
+    }
+
+    #[test]
+    fn fractional_moves_with_the_same_filtered_pixels_reuse() {
+        let mut requests = requests(1);
+        let content = [0., 0., 64., 48.];
+        requests[0].region = mask_region([0.1, 4.1, 32., 24.], content, (64, 48)).unwrap();
+        let previous = cached(&requests);
+        requests[0].region = mask_region([0.2, 4.2, 32., 24.], content, (64, 48)).unwrap();
+        assert_eq!(plan_masks(&previous, &requests).reuse, [Some(0)]);
+        requests[0].region = mask_region([0.6, 4.2, 32., 24.], content, (64, 48)).unwrap();
+        assert_eq!(plan_masks(&previous, &requests).reuse, [None]);
+    }
+
+    #[test]
+    fn overlapping_masks_always_sample_the_unmodified_frame() {
+        let rgba: Vec<u8> = (0..64 * 48 * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let mut requests = requests(4);
+        requests[1].pixelate = true;
+        let previous = update_masks(&[], &requests, |request| {
+            request.filter(&rgba).map(Arc::new)
+        });
+        requests[1].region.0 += 1;
+        requests.reverse();
+        let mut calls = 0;
+        let next = update_masks(&previous, &requests, |request| {
+            calls += 1;
+            request.filter(&rgba).map(Arc::new)
+        });
+        assert_eq!(calls, 1);
+        for entry in next {
+            let expected = mask_filter(
+                &rgba,
+                64,
+                48,
+                entry.request.region,
+                entry.request.pixelate,
+                16.,
+            )
+            .unwrap();
+            assert_eq!(entry.value.unwrap().as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn invalid_buffers_do_not_produce_images() {
+        let request = requests(1).remove(0);
+        assert!(request.filter(&[0; 16]).is_none());
+    }
+}
