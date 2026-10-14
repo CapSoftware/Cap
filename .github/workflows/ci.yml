@@ -8,10 +8,8 @@ on:
 
 concurrency:
   group: ${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
-
-env:
-  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  # A cancelled main run never reaches the cache save, so let main runs finish.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
@@ -21,7 +19,6 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
       rust: ${{ steps.filter.outputs.rust }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
-      branch: ${{ steps.branch.outputs.branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,11 +72,6 @@ jobs:
               - 'bun.lock'
               - 'scripts/check-tauri-plugin-versions*'
               - 'apps/desktop/package.json'
-
-      - name: Output branch name
-        id: branch
-        run: |
-          echo "branch=${{ env.BRANCH_NAME }}" >> $GITHUB_OUTPUT
 
   typecheck:
     name: Typecheck
@@ -226,16 +218,24 @@ jobs:
         shell: bash
         run: node scripts/setup.js
 
+      # tauri-build only checks that the externalBin sidecars exist; Clippy
+      # never runs them, so building them in release here was wasted time.
+      - name: Stub desktop sidecars
+        shell: bash
+        run: |
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          mkdir -p apps/desktop/src-tauri/binaries
+          for name in cap-muxer cap-cli cap-exporter; do
+            touch "apps/desktop/src-tauri/binaries/$name-${{ matrix.settings.target }}$ext"
+          done
+
       - name: Test desktop installation and storage helpers
         shell: bash
-        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
-
-      - name: Build desktop binaries
-        shell: bash
-        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
+        run: cargo test --locked --target ${{ matrix.settings.target }} -p cap-utils -p cap-cli-install --lib
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-features --locked --target ${{ matrix.settings.target }} -- -D warnings
 
   lint-biome:
     name: Lint (Biome)
@@ -286,9 +286,12 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
+      # Linux is left uncached to keep the CI caches inside the 10GB repository
+      # quota; its cold build is still faster than the macOS/Windows jobs.
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
+          save-cache: ${{ github.ref == 'refs/heads/main' && runner.os != 'Linux' }}
 
       - uses: ./.github/actions/setup-js
 
@@ -314,9 +317,11 @@ jobs:
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      # Debug sidecars share the debug tree with the tests and `tauri build --debug`;
+      # desktop-release.yml still builds them in release.
       - name: Build desktop binaries
         shell: bash
-        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }} debug
 
       - name: Test Windows startup logging regressions
         if: runner.os == 'Windows'
@@ -332,11 +337,11 @@ jobs:
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs scripts/finalize-linux-gpui-packages.test.mjs
           bun run --cwd apps/desktop vitest run scripts/prepare.test.js
-          cargo test --locked -p cap-utils -p cap-cli-install --lib
-          cargo test --locked -p cap --bin cap record::tests
-          cargo test --locked -p cap-recording --lib -- --test-threads=1
-          cargo test --locked -p cap-enc-ffmpeg
-          cargo test --locked -p cap-desktop --lib render_frame_event
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap-utils -p cap-cli-install --lib
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap --bin cap record::tests
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap-recording --lib -- --test-threads=1
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap-enc-ffmpeg
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap-desktop --lib render_frame_event
         env:
           LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}
 
@@ -348,15 +353,63 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           fi
-          cargo test --locked -p cap-desktop --test export_estimate_request
+          cargo test --locked --target ${{ matrix.settings.target }} -p cap-desktop --test export_estimate_request
+
+      - name: Test export preview device-loss handling
+        shell: bash
+        run: cargo test --locked --target ${{ matrix.settings.target }} -p cap-desktop --test gpu_device_health
+
+      - name: Build app
+        working-directory: apps/desktop
+        run: bun run tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        env:
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) || '' }}
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+  build-gpui:
+    name: Build GPUI Desktop
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
       - name: Build GPUI desktop
         shell: bash
         run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
-
-      - name: Test export preview device-loss handling
-        shell: bash
-        run: cargo test --locked -p cap-desktop --test gpu_device_health
 
       - name: Test GPUI desktop
         shell: bash
@@ -378,13 +431,6 @@ jobs:
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
 
-      - name: Build app
-        working-directory: apps/desktop
-        run: bun run tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
-        env:
-          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) || '' }}
-          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-
   tauri-plugins:
     name: Verify Tauri plugin versions
     runs-on: ubuntu-latest
@@ -399,56 +445,3 @@ jobs:
       - name: Run verify
         shell: bash
         run: node scripts/check-tauri-plugin-versions.js
-
-  rust-cache:
-    name: Rust cache
-    needs: changes
-    if: needs.changes.outputs.branch == 'main'
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
-    runs-on: ${{ matrix.settings.runner }}
-    env:
-      RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          targets: ${{ matrix.settings.target }}
-          components: clippy
-
-      - uses: ./.github/actions/setup-rust-cache
-        with:
-          target: ${{ matrix.settings.target }}
-          save-cache: true
-
-      - name: Setup node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 24
-
-      - run: node scripts/setup.js
-
-      - name: Build desktop binaries
-        shell: bash
-        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
-
-      - name: Build debug
-        run: cargo build --all --target ${{ matrix.settings.target }}
-
-      - name: Build release
-        run: cargo check --all --release --target ${{ matrix.settings.target }}
-
-      - name: Run Clippy
-        if: ${{ matrix.settings.target == 'aarch64-apple-darwin' || matrix.settings.target == 'x86_64-pc-windows-msvc' }}
-        run: cargo clippy --workspace --all-features --locked --target ${{ matrix.settings.target }} -- -D warnings

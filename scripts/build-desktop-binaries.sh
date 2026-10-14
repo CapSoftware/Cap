@@ -6,6 +6,16 @@ if [[ -z "$TARGET" ]]; then
     TARGET="$(rustc -vV | sed -n 's|host: ||p')"
 fi
 
+PROFILE="${2:-release}"
+case "$PROFILE" in
+    release) CARGO_PROFILE="release" ;;
+    debug) CARGO_PROFILE="dev" ;;
+    *)
+        echo "error: profile must be release or debug" >&2
+        exit 1
+        ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BINARIES_DIR="$REPO_ROOT/apps/desktop/src-tauri/binaries"
 
@@ -23,9 +33,9 @@ build_sidecar() {
     local dest_binaries=("$@")
 
     echo "Building ${dest_binaries[*]} for $TARGET..."
-    cargo build --release -p "$package_name" --target "$TARGET"
+    cargo build --profile "$CARGO_PROFILE" -p "$package_name" --target "$TARGET"
 
-    local src="$REPO_ROOT/target/$TARGET/release/$source_binary$EXT"
+    local src="$REPO_ROOT/target/$TARGET/$PROFILE/$source_binary$EXT"
 
     if [[ ! -f "$src" ]]; then
         echo "error: built binary not found at $src" >&2
