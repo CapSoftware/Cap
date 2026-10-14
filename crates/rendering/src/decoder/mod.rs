@@ -109,20 +109,6 @@ impl SendableD3D11Texture {
         }
     }
 
-    pub fn new_with_yuv_handles(
-        texture: ID3D11Texture2D,
-        shared_handle: Option<HANDLE>,
-        y_handle: Option<HANDLE>,
-        uv_handle: Option<HANDLE>,
-    ) -> Self {
-        Self {
-            texture,
-            shared_handle,
-            y_handle,
-            uv_handle,
-        }
-    }
-
     pub fn inner(&self) -> &ID3D11Texture2D {
         &self.texture
     }
@@ -469,33 +455,6 @@ impl DecodedFrame {
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
                 texture,
                 shared_handle,
-            ))),
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn new_nv12_with_d3d11_texture_and_yuv_handles(
-        width: u32,
-        height: u32,
-        texture: ID3D11Texture2D,
-        shared_handle: Option<HANDLE>,
-        y_handle: Option<HANDLE>,
-        uv_handle: Option<HANDLE>,
-    ) -> Self {
-        Self {
-            data: Arc::new(Vec::new()),
-            width,
-            height,
-            format: PixelFormat::Nv12,
-            y_stride: width,
-            uv_stride: width,
-            #[cfg(target_os = "macos")]
-            image_buf_backing: None,
-            d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_yuv_handles(
-                texture,
-                shared_handle,
-                y_handle,
-                uv_handle,
             ))),
         }
     }

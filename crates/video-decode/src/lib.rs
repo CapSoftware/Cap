@@ -10,5 +10,5 @@ pub use ffmpeg::FFmpegDecoder;
 #[cfg(target_os = "windows")]
 pub use media_foundation::{
     FrameTextures, MFDecodedFrame, MFDecoderCapabilities, MediaFoundationDecoder, NV12Data,
-    get_mf_decoder_capabilities,
+    NV12Sample, get_mf_decoder_capabilities,
 };

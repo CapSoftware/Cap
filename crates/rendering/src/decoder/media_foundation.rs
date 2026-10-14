@@ -3,12 +3,11 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
 use tracing::{info, warn};
-use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
 use super::{DecodedFrame, DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage};
 
@@ -16,7 +15,6 @@ const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 struct DecoderHealthMonitor {
     consecutive_errors: u32,
-    consecutive_texture_read_failures: u32,
     total_frames_decoded: u64,
     total_errors: u64,
     last_successful_decode: Instant,
@@ -31,7 +29,6 @@ impl DecoderHealthMonitor {
     fn new() -> Self {
         Self {
             consecutive_errors: 0,
-            consecutive_texture_read_failures: 0,
             total_frames_decoded: 0,
             total_errors: 0,
             last_successful_decode: Instant::now(),
@@ -49,7 +46,6 @@ impl DecoderHealthMonitor {
 
     fn record_success(&mut self, decode_time: Duration) {
         self.consecutive_errors = 0;
-        self.consecutive_texture_read_failures = 0;
         self.total_frames_decoded += 1;
         self.last_successful_decode = Instant::now();
 
@@ -67,18 +63,11 @@ impl DecoderHealthMonitor {
         self.total_errors += 1;
     }
 
-    fn record_texture_read_failure(&mut self) {
-        self.consecutive_texture_read_failures += 1;
-    }
-
     fn is_healthy(&self) -> bool {
         const MAX_CONSECUTIVE_ERRORS: u32 = 10;
-        const MAX_CONSECUTIVE_TEXTURE_FAILURES: u32 = 5;
         const MAX_TIME_SINCE_SUCCESS: Duration = Duration::from_secs(5);
 
-        if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS
-            || self.consecutive_texture_read_failures >= MAX_CONSECUTIVE_TEXTURE_FAILURES
-        {
+        if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
             return false;
         }
 
@@ -119,63 +108,6 @@ impl DecoderHealthMonitor {
             self.total_errors,
             self.slow_frame_count,
         )
-    }
-}
-
-#[derive(Clone)]
-struct CachedFrame {
-    number: u32,
-    _texture: Option<ID3D11Texture2D>,
-    _shared_handle: Option<HANDLE>,
-    _y_handle: Option<HANDLE>,
-    _uv_handle: Option<HANDLE>,
-    nv12_data: Option<Arc<cap_video_decode::NV12Data>>,
-    width: u32,
-    height: u32,
-}
-
-impl CachedFrame {
-    fn estimated_bytes(&self) -> usize {
-        let texture_bytes = self._texture.as_ref().map_or(0, |_| {
-            (self.width as usize)
-                .saturating_mul(self.height as usize)
-                .saturating_mul(3)
-        });
-        texture_bytes.saturating_add(self.nv12_data.as_ref().map_or(0, |data| data.data.len()))
-    }
-
-    fn to_decoded_frame(&self) -> DecodedFrame {
-        let null_ptr = std::ptr::null_mut();
-        let y_handle = self._y_handle.filter(|h| h.0 != null_ptr);
-        let uv_handle = self._uv_handle.filter(|h| h.0 != null_ptr);
-        if let (Some(texture), Some(y_handle), Some(uv_handle)) =
-            (&self._texture, y_handle, uv_handle)
-        {
-            return DecodedFrame::new_nv12_with_d3d11_texture_and_yuv_handles(
-                self.width,
-                self.height,
-                texture.clone(),
-                self._shared_handle,
-                Some(y_handle),
-                Some(uv_handle),
-            );
-        }
-
-        if let Some(nv12_data) = &self.nv12_data {
-            DecodedFrame::new_nv12_with_arc(
-                Arc::clone(&nv12_data.data),
-                self.width,
-                self.height,
-                nv12_data.y_stride,
-                nv12_data.uv_stride,
-            )
-        } else {
-            warn!(
-                "CachedFrame has no CPU data, creating black frame (D3D11 zero-copy not implemented)"
-            );
-            let black_data = vec![0u8; (self.width * self.height * 3 / 2) as usize];
-            DecodedFrame::new_nv12(black_data, self.width, self.height, self.width, self.width)
-        }
     }
 }
 
@@ -248,7 +180,8 @@ impl MFDecoder {
                 30
             };
             let mut requests = FrameRequests::new(readahead_frames);
-            let answer = |sender: oneshot::Sender<DecodedFrame>, frame: Option<CachedFrame>| {
+            let answer = |sender: oneshot::Sender<DecodedFrame>,
+                          frame: Option<cap_video_decode::NV12Data>| {
                 let _ = sender.send(frame.map_or_else(
                     || {
                         DecodedFrame::new(
@@ -257,7 +190,15 @@ impl MFDecoder {
                             video_height,
                         )
                     },
-                    |frame| frame.to_decoded_frame(),
+                    |data| {
+                        DecodedFrame::new_nv12_with_arc(
+                            data.data,
+                            video_width,
+                            video_height,
+                            data.y_stride,
+                            data.uv_stride,
+                        )
+                    },
                 ));
             };
 
@@ -289,7 +230,6 @@ impl MFDecoder {
                                 warn!(
                                     name = name,
                                     consecutive_errors = health.consecutive_errors,
-                                    texture_failures = health.consecutive_texture_read_failures,
                                     total_decoded = health.total_frames_decoded,
                                     "MediaFoundation decoder unhealthy, performance may degrade"
                                 );
@@ -313,24 +253,22 @@ impl MFDecoder {
                     },
                     Step::Decode => {
                         let decode_start = Instant::now();
-                        match decoder.read_sample() {
-                            Ok(Some(mf_frame)) => {
-                                let cached = cache_sample(
-                                    &mut decoder,
-                                    mf_frame,
-                                    decode_start.elapsed(),
-                                    &mut health,
-                                    fps,
-                                );
-                                let (number, bytes) = (cached.number, cached.estimated_bytes());
-                                requests.decoded(number, cached, bytes)
+                        match decoder.read_nv12() {
+                            Ok(Some(sample)) => {
+                                health.record_success(decode_start.elapsed());
+                                let bytes = sample.data.data.len();
+                                requests.decoded(
+                                    pts_100ns_to_frame(sample.pts, fps),
+                                    sample.data,
+                                    bytes,
+                                )
                             }
                             Ok(None) => requests.stopped(),
                             Err(e) => {
                                 health.record_error();
                                 warn!(
                                     consecutive_errors = health.consecutive_errors,
-                                    "MediaFoundation read_sample error: {e}"
+                                    "MediaFoundation read error: {e}"
                                 );
                                 requests.stopped()
                             }
@@ -356,58 +294,6 @@ fn frame_to_100ns(frame: u32, fps: u32) -> i64 {
 // colliding with the real frame 0 and losing one of them from the cache.
 fn pts_100ns_to_frame(pts_100ns: i64, fps: u32) -> u32 {
     super::pts_to_frame(pts_100ns, ::ffmpeg::Rational::new(1, 10_000_000), fps)
-}
-
-fn cache_sample(
-    decoder: &mut cap_video_decode::MediaFoundationDecoder,
-    mf_frame: cap_video_decode::MFDecodedFrame,
-    decode_time: Duration,
-    health: &mut DecoderHealthMonitor,
-    fps: u32,
-) -> CachedFrame {
-    let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
-
-    let has_valid_zero_copy_handles = {
-        let null_ptr = std::ptr::null_mut();
-        mf_frame.textures.y.handle.0 != null_ptr && mf_frame.textures.uv.handle.0 != null_ptr
-    };
-
-    let nv12_data = if has_valid_zero_copy_handles {
-        health.record_success(decode_time);
-        None
-    } else {
-        match decoder.read_texture_to_cpu(
-            &mf_frame.textures.nv12.texture,
-            mf_frame.width,
-            mf_frame.height,
-        ) {
-            Ok(data) => {
-                health.record_success(decode_time);
-                Some(Arc::new(data))
-            }
-            Err(e) => {
-                health.record_texture_read_failure();
-                warn!("Failed to read texture to CPU for frame {frame_number}: {e}");
-                None
-            }
-        }
-    };
-
-    let cached = CachedFrame {
-        number: frame_number,
-        _texture: has_valid_zero_copy_handles.then(|| mf_frame.textures.nv12.texture.clone()),
-        _shared_handle: has_valid_zero_copy_handles.then_some(mf_frame.textures.nv12.handle),
-        _y_handle: has_valid_zero_copy_handles.then_some(mf_frame.textures.y.handle),
-        _uv_handle: has_valid_zero_copy_handles.then_some(mf_frame.textures.uv.handle),
-        nv12_data,
-        width: mf_frame.width,
-        height: mf_frame.height,
-    };
-
-    if !has_valid_zero_copy_handles {
-        decoder.recycle_textures(mf_frame.textures);
-    }
-    cached
 }
 
 enum Step {
