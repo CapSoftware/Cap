@@ -1661,8 +1661,6 @@ impl ProgressiveTimeline {
         index >= frontier && index < pass_end && index - frontier <= reach
     }
 
-    /// First unclaimed block within `lookahead` of `read` that the primary
-    /// render will not reach soon.
     fn next_hole(&self, read: usize, lookahead: usize, reach: usize) -> Option<usize> {
         let end = read.saturating_add(lookahead).min(self.content_end);
         if read >= end {
@@ -1869,8 +1867,6 @@ pub(crate) fn preparing_audio_output_policy(
     })
 }
 
-/// Keeps one rendered playback timeline alive between plays of the same
-/// audio, so pressing play again reuses it instead of rendering it again.
 #[derive(Clone, Default)]
 pub struct PlaybackAudioCache {
     entry: Arc<Mutex<Option<CachedProgressiveRender>>>,
@@ -1887,8 +1883,6 @@ struct CachedProgressiveRender {
     render: Arc<ProgressiveRender>,
 }
 
-/// Everything that determines the rendered samples. Sources are compared by
-/// identity; the project by the serialized fields the renderer reads.
 struct ProgressiveRenderKey {
     segments: Vec<AudioSegment>,
     music: Vec<(String, Arc<AudioData>)>,
@@ -2130,9 +2124,6 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         )
     }
 
-    /// Reuses the timeline `cache` holds when it was rendered from the same
-    /// audio, and keeps a new one there for the next play.
-    /// `project_updates` releases it as soon as an edit changes the audio.
     #[allow(clippy::too_many_arguments)]
     pub fn new_cached(
         segments: Vec<AudioSegment>,
@@ -2942,9 +2933,6 @@ impl<T: FromSampleBytes> StreamingAudioProducer<T> {
     }
 }
 
-/// Writes resampler output (packed f32 bytes) into the shared buffer,
-/// stopping at `limit` and claiming each block before writing into it.
-/// Returns the next write index.
 fn store_progressive_samples(
     timeline: &ProgressiveTimeline,
     bytes: &[u8],
@@ -3144,8 +3132,6 @@ impl PrimaryRender {
         Some(out_idx)
     }
 
-    /// Parks the render while a retained timeline has no reader, and drops it
-    /// from the cache once an edit changes the audio.
     fn should_continue(&mut self) -> bool {
         loop {
             if self.timeline.stop.load(Ordering::Acquire) {
@@ -3225,9 +3211,6 @@ fn spawn_seek_fill(timeline: Arc<ProgressiveTimeline>, job: ProgressiveRenderJob
     }
 }
 
-/// Renders audio for seeks into regions the primary render has not reached,
-/// from the seek target onwards, paced to stay a short lookahead ahead of
-/// the read position.
 fn run_seek_fills(timeline: &ProgressiveTimeline, job: &ProgressiveRenderJob) {
     let sample_rate = job.render_info.sample_rate;
     let channels = job.render_info.channels;
@@ -3330,8 +3313,6 @@ impl SeekFill {
         })
     }
 
-    /// Renders one chunk exactly like the primary pass and publishes every
-    /// completed block. Returns false once the fill is finished.
     fn step(&mut self, timeline: &ProgressiveTimeline, job: &ProgressiveRenderJob) -> bool {
         let len = timeline.samples.len();
         if self.rendered_source >= self.total_source {
