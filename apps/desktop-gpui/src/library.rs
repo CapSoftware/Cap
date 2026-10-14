@@ -140,13 +140,13 @@ pub fn screenshots_dir() -> PathBuf {
 
 /// `list_recordings`, narrowed to what a Recents card draws.
 ///
-/// The scan itself is [`list_recordings_in`] -- one implementation, so the
+/// The scan itself is [`recording_items_in`] -- one implementation, so the
 /// carousel and the settings page can never disagree about what is in the
 /// library.
-fn scan_recordings(dir: &Path, out: &mut Vec<RecentItem>) {
+fn scan_recordings(dirs: &[PathBuf], out: &mut Vec<RecentItem>) {
     out.extend(
-        list_recordings_in(std::slice::from_ref(&dir.to_path_buf()))
-            .into_iter()
+        recording_items_in(dirs)
+            .take(RECENT_MEDIA_LIMIT)
             .map(|item| RecentItem {
                 kind: match item.mode {
                     RecordingMode::Studio => MediaKind::Studio,
@@ -354,7 +354,11 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
 /// Recordings only: `list_screenshots` is a separate command behind a separate
 /// settings page.
 pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
-    let mut out = Vec::new();
+    recording_items_in(dirs).collect()
+}
+
+fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+    let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
@@ -364,20 +368,26 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
             if !path.is_dir() {
                 continue;
             }
-            let Ok(meta) = RecordingMeta::load_for_project(&path) else {
-                continue;
-            };
             let sort_time_millis = media_sort_time_millis(&path);
-            out.push(recording_item(path, meta, sort_time_millis));
+            paths.push((path, sort_time_millis));
         }
     }
-    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-    out
+    paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+    paths.into_iter().filter_map(|(path, sort_time_millis)| {
+        let meta = RecordingMeta::load_for_project(&path).ok()?;
+        Some(recording_item(path, meta, sort_time_millis))
+    })
 }
 
 /// `list_recordings` against the real library.
 pub fn list_recordings() -> Vec<RecordingItem> {
     list_recordings_in(&known_recordings_dirs())
+}
+
+pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
+    recording_items_in(&known_recordings_dirs())
+        .take(limit)
+        .collect()
 }
 
 pub fn find_incomplete_recordings_in(
@@ -765,11 +775,7 @@ fn newest_first(items: &mut [RecentItem]) {
 /// newer than nine of them.
 pub fn recent_media_in(recording_dirs: &[PathBuf], screenshots_dir: &Path) -> Vec<RecentItem> {
     let mut recordings = Vec::new();
-    for dir in recording_dirs {
-        scan_recordings(dir, &mut recordings);
-    }
-    newest_first(&mut recordings);
-    recordings.truncate(RECENT_MEDIA_LIMIT);
+    scan_recordings(recording_dirs, &mut recordings);
 
     let mut screenshots = Vec::new();
     scan_screenshots(screenshots_dir, &mut screenshots);
@@ -1407,6 +1413,117 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("recording-meta.json"), meta).unwrap();
         bundle
+    }
+
+    #[test]
+    fn bounded_recordings_fill_from_valid_bundles_across_directories() {
+        let root = temp_dir("bounded-recordings");
+        let active = root.join("active");
+        let archived = root.join("archived");
+        std::fs::create_dir_all(&active).unwrap();
+        std::fs::create_dir_all(&archived).unwrap();
+        write_studio_bundle(&active, "old-studio", 1);
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_studio_bundle(&archived, "new-studio", 3);
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &active,
+            "instant",
+            r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::fs::create_dir_all(archived.join("missing-meta")).unwrap();
+        write_bundle(&active, "corrupt-meta", "{ not json ");
+        std::fs::write(archived.join("loose.mp4"), b"").unwrap();
+        let dirs = [active, archived, root.join("missing-directory")];
+
+        let full = list_recordings_in(&dirs);
+        let bounded: Vec<_> = recording_items_in(&dirs).take(2).collect();
+        assert_eq!(bounded, full[..2]);
+        assert_eq!(bounded[0].pretty_name, "Instant");
+        assert_eq!(bounded[1].pretty_name, "new-studio");
+        assert_eq!(bounded[1].clip_count, 3);
+        assert!(recording_items_in(&dirs).take(0).next().is_none());
+        assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "manual filesystem benchmark; set CAP_GPUI_LIBRARY_BENCH_DIR and CAP_GPUI_LIBRARY_BENCH_MODE"]
+    fn recording_scan_benchmark() {
+        fn eager_scan(dirs: &[PathBuf]) -> Vec<RecordingItem> {
+            let mut out = Vec::new();
+            for dir in dirs {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+                        continue;
+                    };
+                    let sort_time_millis = media_sort_time_millis(&path);
+                    out.push(recording_item(path, meta, sort_time_millis));
+                }
+            }
+            out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+            out
+        }
+
+        let dirs = [PathBuf::from(
+            std::env::var("CAP_GPUI_LIBRARY_BENCH_DIR")
+                .expect("Set the benchmark library directory"),
+        )];
+        let eager = match std::env::var("CAP_GPUI_LIBRARY_BENCH_MODE").as_deref() {
+            Ok("eager") => true,
+            Ok("bounded") => false,
+            _ => panic!("CAP_GPUI_LIBRARY_BENCH_MODE must be eager or bounded"),
+        };
+        let limit = std::env::var("CAP_GPUI_LIBRARY_BENCH_LIMIT")
+            .unwrap_or_else(|_| RECENT_MEDIA_LIMIT.to_string())
+            .parse::<usize>()
+            .expect("The benchmark limit must be an integer");
+        let scan = || {
+            if eager {
+                let mut items = eager_scan(&dirs);
+                items.truncate(limit);
+                return items;
+            }
+            recording_items_in(&dirs).take(limit).collect()
+        };
+        let mut expected = eager_scan(&dirs);
+        expected.truncate(limit);
+        assert_eq!(
+            recording_items_in(&dirs).take(limit).collect::<Vec<_>>(),
+            expected
+        );
+
+        for _ in 0..3 {
+            drop(std::hint::black_box(scan()));
+        }
+        let mut samples = Vec::new();
+        for _ in 0..15 {
+            let started = std::time::Instant::now();
+            let items = std::hint::black_box(scan());
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(items, expected);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            serde_json::json!({
+                "mode": if eager { "eager" } else { "bounded" },
+                "limit": limit,
+                "items": expected.len(),
+                "samples": samples.len(),
+                "median_ms": samples[samples.len() / 2],
+                "p95_ms": samples[(samples.len() * 95).div_ceil(100) - 1],
+            })
+        );
     }
 
     /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the

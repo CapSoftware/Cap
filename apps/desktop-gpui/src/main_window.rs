@@ -3686,8 +3686,8 @@ impl MainWindow {
                 .spawn(async move {
                     match kind {
                         LibraryKind::Recordings => {
-                            let mut items = library::list_recordings();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_recordings_limited(library::LIBRARY_PANEL_LIMIT);
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {
