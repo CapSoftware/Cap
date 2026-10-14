@@ -85,7 +85,7 @@ impl GifEncoderWrapper {
         let output_path = path.as_ref().to_path_buf();
         let writer_thread = thread::spawn(move || {
             let file = File::create(output_path).map_err(GifEncodingError::Io)?;
-            write_gif(writer, file)
+            write_gif(writer, BufWriter::new(file))
         });
 
         Ok(Self {
@@ -196,7 +196,10 @@ impl GifEncoderWrapper {
     }
 }
 
-fn write_gif(writer: gifski::Writer, output: impl Write) -> Result<(), GifEncodingError> {
+fn write_gif(
+    writer: gifski::Writer,
+    output: BufWriter<impl Write>,
+) -> Result<(), GifEncodingError> {
     struct CheckedBuffer<W: Write> {
         buffered: BufWriter<W>,
         error: Option<std::io::Error>,
@@ -224,7 +227,7 @@ fn write_gif(writer: gifski::Writer, output: impl Write) -> Result<(), GifEncodi
     }
 
     let mut output = CheckedBuffer {
-        buffered: BufWriter::new(output),
+        buffered: output,
         error: None,
     };
     writer
@@ -286,7 +289,7 @@ mod tests {
         assert_eq!(expected.last(), Some(&0x3b));
 
         let mut actual = Vec::new();
-        write_gif(single_frame_writer(), &mut actual).unwrap();
+        write_gif(single_frame_writer(), BufWriter::new(&mut actual)).unwrap();
         assert_eq!(actual, expected);
     }
 
@@ -304,7 +307,7 @@ mod tests {
             }
         }
 
-        let error = write_gif(single_frame_writer(), FailingOutput).unwrap_err();
+        let error = write_gif(single_frame_writer(), BufWriter::new(FailingOutput)).unwrap_err();
         assert!(matches!(error, GifEncodingError::Io(error) if error.to_string() == "output full"));
     }
 
@@ -344,10 +347,6 @@ mod tests {
         buffer_boundary_writer()
             .write(&mut expected, &mut gifski::progress::NoProgress {})
             .unwrap();
-        assert_eq!(
-            expected.len(),
-            BufWriter::new(Vec::<u8>::new()).capacity() + 1
-        );
         assert_eq!(expected.last(), Some(&0x3b));
         expected
     }
@@ -384,7 +383,10 @@ mod tests {
             first_error: Some(kind),
             max_write: usize::MAX,
         };
-        let result = write_gif(buffer_boundary_writer(), &mut output);
+        let result = write_gif(
+            buffer_boundary_writer(),
+            BufWriter::with_capacity(expected.len() - 1, &mut output),
+        );
         assert!(output.first_error.is_none());
         assert_ne!(output.bytes, expected);
         assert!(matches!(result, Err(GifEncodingError::Io(error)) if error.kind() == kind));
@@ -408,7 +410,11 @@ mod tests {
             first_error: Some(io::ErrorKind::Interrupted),
             max_write: 7,
         };
-        write_gif(buffer_boundary_writer(), &mut output).unwrap();
+        write_gif(
+            buffer_boundary_writer(),
+            BufWriter::with_capacity(expected.len() - 1, &mut output),
+        )
+        .unwrap();
         assert!(output.first_error.is_none());
         assert_eq!(output.bytes, expected);
     }
