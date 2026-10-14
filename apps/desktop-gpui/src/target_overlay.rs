@@ -869,7 +869,7 @@ impl OverlayWindow {
             return;
         }
         let display = self.display_id.clone();
-        let crop = self.crop.map(|crop| crop.scaled(self.capture_scale));
+        let crop = self.crop;
         let epoch = app_windows::camera_picker_epoch(cx);
         cx.defer(move |cx| {
             if app_windows::camera_picker_epoch(cx) == epoch {
