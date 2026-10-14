@@ -7354,6 +7354,11 @@ impl RendererLayers {
         camera_width: Option<u32>,
         camera_height: Option<u32>,
     ) {
+        // macOS converts IOSurface frames into the layer textures; a fallback
+        // conversion grows the converter textures on first use.
+        if cfg!(target_os = "macos") {
+            return;
+        }
         tracing::info!(
             screen_width = screen_width,
             screen_height = screen_height,
