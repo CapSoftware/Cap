@@ -208,11 +208,12 @@ impl Window {
       window.stick();
     }
 
-    // Set initial `preferred_theme` value to current portal color-scheme
     #[cfg(feature = "dbus")]
-    let preferred_theme = super::portal::theme().ok();
+    let preferred_theme = attributes
+      .preferred_theme
+      .or_else(|| super::portal::theme().ok());
     #[cfg(not(feature = "dbus"))]
-    let preferred_theme = None;
+    let preferred_theme = attributes.preferred_theme;
 
     if let Some(theme) = preferred_theme {
       if let Some(settings) = Settings::default() {
