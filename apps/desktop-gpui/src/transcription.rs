@@ -868,28 +868,43 @@ const PARAKEET_IDLE_RELEASE: Duration = Duration::from_secs(60);
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 static PARAKEET_LAST_USE: AtomicU64 = AtomicU64::new(0);
 
-/// Call with the transcription slot held, so a run in flight always bumps the
-/// generation before the release thread can take the slot.
+/// Call with `slot` held, so a run in flight always bumps the generation
+/// before the release thread can take the slot. The thread returns whether it
+/// dropped a cached value.
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-fn schedule_parakeet_release() {
-    let generation = PARAKEET_LAST_USE.fetch_add(1, Ordering::AcqRel) + 1;
-    let spawned = std::thread::Builder::new()
+fn schedule_idle_release<T: Send + 'static>(
+    slot: &'static Mutex<()>,
+    cache: &'static Mutex<Option<T>>,
+    last_use: &'static AtomicU64,
+    delay: Duration,
+) -> std::io::Result<std::thread::JoinHandle<bool>> {
+    let generation = last_use.fetch_add(1, Ordering::AcqRel) + 1;
+    std::thread::Builder::new()
         .name("parakeet-release".into())
         .spawn(move || {
-            std::thread::sleep(PARAKEET_IDLE_RELEASE);
-            let _slot = lock_transcription_worker_slot();
-            if PARAKEET_LAST_USE.load(Ordering::Acquire) != generation {
-                return;
+            std::thread::sleep(delay);
+            let _slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if last_use.load(Ordering::Acquire) != generation {
+                return false;
             }
-            let released = PARAKEET_CONTEXT
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if released.is_some() {
+            let released = cache.lock().unwrap_or_else(PoisonError::into_inner).take();
+            let was_cached = released.is_some();
+            drop(released);
+            if was_cached {
                 tracing::info!("Released idle Parakeet TDT model");
             }
-            drop(released);
-        });
+            was_cached
+        })
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_parakeet_release() {
+    let spawned = schedule_idle_release(
+        &TRANSCRIPTION_LOCK,
+        &PARAKEET_CONTEXT,
+        &PARAKEET_LAST_USE,
+        PARAKEET_IDLE_RELEASE,
+    );
     if let Err(error) = spawned {
         tracing::warn!("Failed to schedule Parakeet release: {error}");
     }
@@ -2192,6 +2207,65 @@ mod tests {
             text: caption_text_from_words(&words),
             words,
         }
+    }
+
+    // -- idle Parakeet release ------------------------------------------------
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_drops_cached_value_after_delay() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let handle = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(10))
+            .expect("spawns");
+
+        assert!(handle.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_is_cancelled_by_a_newer_run() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let slot = SLOT.lock().unwrap();
+        let older =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        let newer = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(50))
+            .expect("spawns");
+        drop(slot);
+
+        assert!(!older.join().expect("joins"));
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+        assert!(newer.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_waits_for_a_run_in_flight() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let run = SLOT.lock().unwrap();
+        let first =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!first.is_finished());
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+        let second = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(50))
+            .expect("spawns");
+        drop(run);
+
+        assert!(!first.join().expect("joins"));
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+        assert!(second.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
     }
 
     // -- captions.rs's own unit tests, carried over --------------------------
