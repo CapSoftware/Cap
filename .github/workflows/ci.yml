@@ -228,7 +228,7 @@ jobs:
   desktop:
     name: Desktop
     needs: changes
-    if: needs.changes.outputs.gpui == 'true'
+    if: needs.changes.outputs.gpui == 'true' || needs.changes.outputs.sync == 'true'
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -245,6 +245,7 @@ jobs:
       # Full debuginfo for the opt-level 2 GPUI dependency tree is most of the
       # target dir and the link time, and nothing in CI reads it.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      RUN_GPUI: ${{ needs.changes.outputs.gpui == 'true' || github.ref == 'refs/heads/main' }}
       RUN_RUST: ${{ needs.changes.outputs.rust == 'true' || github.ref == 'refs/heads/main' }}
       RUN_SYNC: ${{ needs.changes.outputs.sync == 'true' || github.ref == 'refs/heads/main' }}
     steps:
@@ -320,12 +321,14 @@ jobs:
       # The test build compiles every line the binary build does (the app has
       # no cfg(not(test)) code). Release builds still produce the binary.
       - name: Prepare GPUI dependency
+        if: env.RUN_GPUI == 'true'
         shell: bash
         run: |
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
 
       - name: Test GPUI desktop
+        if: env.RUN_GPUI == 'true'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
