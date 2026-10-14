@@ -194,6 +194,12 @@ impl ExporterBuilder {
             (segments, None)
         };
 
+        if reads_recordings_forward(&project_config) {
+            for segment in &segments {
+                segment.decoders.prefer_sequential_access();
+            }
+        }
+
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ExporterBuildError::IO(parent.to_path_buf(), e))?;
@@ -284,6 +290,27 @@ pub fn synthesize_default_timeline(
             camera3d_segments: Vec::new(),
         });
     }
+}
+
+/// Whether export requests every recording's frames front to back: each
+/// recording's timeline segments advance through its source without
+/// overlapping, and no transition renders two timeline segments at once.
+fn reads_recordings_forward(project_config: &ProjectConfiguration) -> bool {
+    let Some(timeline) = &project_config.timeline else {
+        return true;
+    };
+    if !timeline.transitions.is_empty() {
+        return false;
+    }
+    let mut source_ends = std::collections::HashMap::<u32, f64>::new();
+    timeline.segments.iter().all(|segment| {
+        let source_end = source_ends
+            .entry(segment.recording_clip)
+            .or_insert(f64::NEG_INFINITY);
+        let forward = segment.start >= *source_end && segment.end >= segment.start;
+        *source_end = segment.end;
+        forward
+    })
 }
 
 pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
@@ -638,6 +665,41 @@ mod cancellation_tests {
         user.store(true, Ordering::Relaxed);
         assert!(cancellation.user.load(Ordering::Relaxed));
         assert!(!cancellation.stop.load(Ordering::Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod forward_read_tests {
+    use super::*;
+
+    fn project(timeline: serde_json::Value) -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({ "timeline": timeline })).unwrap()
+    }
+
+    fn segment(clip: u32, start: f64, end: f64) -> serde_json::Value {
+        serde_json::json!({ "recordingSegment": clip, "start": start, "end": end, "timescale": 1.0 })
+    }
+
+    #[test]
+    fn forward_reads_require_advancing_segments_without_transitions() {
+        assert!(reads_recordings_forward(&ProjectConfiguration::default()));
+        assert!(reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(0, 4.0, 6.0), segment(1, 0.0, 2.0), segment(0, 9.0, 12.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 5.0, 8.0), segment(0, 2.0, 4.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(0, 3.5, 6.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(1, 0.0, 4.0)],
+            "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 }],
+            "zoomSegments": []
+        }))));
     }
 }
 
