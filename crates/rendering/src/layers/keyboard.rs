@@ -1051,6 +1051,61 @@ mod gpu_tests {
     }
 
     #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layer_follows_font_and_output_size_changes() {
+        type Edit = (&'static str, XY<u32>, fn(&mut KeyboardSettings));
+        let base_size = XY::new(512, 288);
+        let constants = constants(base_size);
+        let segments = [typed_segment("typed", 0.2, "git push origin main", 60.0)];
+        let frames = frames(base_size);
+        let prepare =
+            |layer: &mut KeyboardLayer, size: XY<u32>, edit: fn(&mut KeyboardSettings)| {
+                let mut uniforms = uniforms(&constants, &segments, size);
+                uniforms.frame_number = 96;
+                edit(&mut uniforms.project.keyboard.as_mut().unwrap().settings);
+                layer.prepare(&uniforms, &frames, size, &constants, None);
+                assert!(layer.has_content());
+                render_pixels(&constants, layer, size)
+            };
+        let unchanged: fn(&mut KeyboardSettings) = |_| {};
+        let edits: [Edit; 5] = [
+            ("font size", base_size, |settings| settings.size = 70),
+            ("font family", base_size, |settings| {
+                settings.font = "System Monospace".to_string()
+            }),
+            ("font weight", base_size, |settings| {
+                settings.font_weight = 700
+            }),
+            ("output height", XY::new(512, 216), unchanged),
+            ("output width", XY::new(128, 288), unchanged),
+        ];
+        let base_pixels = prepare(
+            &mut KeyboardLayer::new(&constants.device, &constants.queue),
+            base_size,
+            unchanged,
+        );
+
+        for (name, size, edit) in edits {
+            let expected = prepare(
+                &mut KeyboardLayer::new(&constants.device, &constants.queue),
+                size,
+                edit,
+            );
+            assert!(
+                expected != base_pixels,
+                "{name} edit should change the output"
+            );
+
+            let mut reused = KeyboardLayer::new(&constants.device, &constants.queue);
+            prepare(&mut reused, base_size, unchanged);
+            assert!(
+                prepare(&mut reused, size, edit) == expected,
+                "{name} edit reused a stale layout"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "benchmark; requires a working wgpu adapter"]
     fn benchmark_keyboard_layer_prepare() {
         let size = XY::new(1920, 1080);
