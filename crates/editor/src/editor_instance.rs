@@ -18,6 +18,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
@@ -26,6 +27,32 @@ use tracing::warn;
 pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
+const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+type PreviewRequest = Option<(u32, u32, XY<u32>)>;
+
+// A scrub sends a new request faster than a seek can decode. Abandoning the
+// in-flight frame for every newer request starves the preview until the mouse
+// stops, so a newer request only wins while a frame was presented recently.
+fn preview_frame_overdue(last_presented: Option<Instant>) -> bool {
+    last_presented.is_none_or(|at| at.elapsed() >= PREVIEW_SCRUB_FRAME_INTERVAL)
+}
+
+fn preview_superseded(
+    preview_rx: &watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) -> bool {
+    preview_rx.has_changed().unwrap_or(false) && !preview_frame_overdue(last_presented)
+}
+
+async fn preview_superseded_while_fresh(
+    mut probe: watch::Receiver<PreviewRequest>,
+    last_presented: Option<Instant>,
+) {
+    if probe.changed().await.is_err() || preview_frame_overdue(last_presented) {
+        std::future::pending::<()>().await;
+    }
+}
 
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
@@ -979,10 +1006,11 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
+        mut preview_rx: watch::Receiver<PreviewRequest>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
+            let mut last_presented: Option<Instant> = None;
             let mut cursor_cache = PreviewCursorCache::default();
             let mut project_rx = self.project_config.1.clone();
             let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
@@ -1056,7 +1084,7 @@ impl EditorInstance {
                     tokio::select! {
                         biased;
 
-                        _ = preview_rx.changed() => {
+                        _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
                             continue;
                         }
 
@@ -1066,7 +1094,7 @@ impl EditorInstance {
                             true,
                             clip_offsets,
                         ) => {
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1115,7 +1143,10 @@ impl EditorInstance {
                                     .unwrap_or_default();
                                 let outgoing_frames = tokio::select! {
                                     biased;
-                                    _ = preview_rx.changed() => {
+                                    _ = preview_superseded_while_fresh(
+                                        preview_rx.clone(),
+                                        last_presented,
+                                    ) => {
                                         continue;
                                     }
                                     frames = outgoing_media.decoders.get_frames_initial(
@@ -1145,7 +1176,7 @@ impl EditorInstance {
                                         &outgoing_media.cursor,
                                         &project,
                                     );
-                                    if preview_rx.has_changed().unwrap_or(false) {
+                                    if preview_superseded(&preview_rx, last_presented) {
                                         continue;
                                     }
                                     let outgoing_uniforms = if let Some(cursor_timeline) =
@@ -1190,7 +1221,7 @@ impl EditorInstance {
                                 None
                             };
 
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1199,7 +1230,7 @@ impl EditorInstance {
                                 &segment_medias.cursor,
                                 &project,
                             );
-                            if preview_rx.has_changed().unwrap_or(false) {
+                            if preview_superseded(&preview_rx, last_presented) {
                                 continue;
                             }
 
@@ -1273,6 +1304,7 @@ impl EditorInstance {
                                 };
                                 if render_confirmed {
                                     rendered = true;
+                                    last_presented = Some(Instant::now());
                                     break;
                                 }
 
