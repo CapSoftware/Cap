@@ -62,14 +62,25 @@ impl OcclusionShim {
             return 0;
         };
         let raw = unsafe { original(receiver, selector) };
-        // macOS 27 also reports the undocumented bit for ordered-out windows,
-        // so lending it the visible bit would keep a hidden window's display
-        // link waking the main thread every vsync.
-        if raw != 0 && (!ordered_out_windows_keep_raw_state() || unsafe { is_visible(receiver) }) {
-            raw | 0x2
-        } else {
-            raw
-        }
+        reported_state(raw, ordered_out_windows_keep_raw_state(), || unsafe {
+            is_visible(receiver)
+        })
+    }
+}
+
+/// macOS 27 also reports the undocumented bit for ordered-out windows, so
+/// lending it the visible bit would keep a hidden window's display link
+/// waking the main thread every vsync. `is_visible` is only asked when the
+/// answer matters.
+fn reported_state(
+    raw: usize,
+    ordered_out_keeps_raw_state: bool,
+    is_visible: impl FnOnce() -> bool,
+) -> usize {
+    if raw != 0 && (!ordered_out_keeps_raw_state || is_visible()) {
+        raw | 0x2
+    } else {
+        raw
     }
 }
 
@@ -282,12 +293,8 @@ mod tests {
                 WINDOW_CALLS.set(0);
                 PANEL_CALLS.set(0);
                 let state: usize = unsafe { msg_send![&*instance, occlusionState] };
-                let lends_visible = visible || !ordered_out_windows_keep_raw_state();
-                let expected = if raw != 0 && lends_visible {
-                    raw | 0x2
-                } else {
-                    raw
-                };
+                let expected =
+                    reported_state(raw, ordered_out_windows_keep_raw_state(), || visible);
                 assert_eq!(state, expected);
                 assert_eq!(WINDOW_CALLS.get(), expected_window_calls);
                 assert_eq!(PANEL_CALLS.get(), expected_panel_calls);
@@ -297,18 +304,32 @@ mod tests {
     }
 
     #[test]
-    fn an_ordered_out_window_keeps_the_raw_state() {
-        if !ordered_out_windows_keep_raw_state() {
-            return;
+    fn an_ordered_out_window_keeps_the_raw_state_only_under_the_macos_27_policy() {
+        for raw in [0x2, 0x2000, 0x2002] {
+            assert_eq!(reported_state(raw, true, || false), raw);
+            assert_eq!(reported_state(raw, true, || true), raw | 0x2);
+            assert_eq!(reported_state(raw, false, || false), raw | 0x2);
+            assert_eq!(reported_state(raw, false, || true), raw | 0x2);
         }
-        let instance: Id<NSObject> = unsafe { msg_send_id![classes().window, new] };
-        VISIBLE.set(false);
-        RAW_STATE.set(0x2000);
-        let hidden: usize = unsafe { msg_send![&*instance, occlusionState] };
-        VISIBLE.set(true);
-        let shown: usize = unsafe { msg_send![&*instance, occlusionState] };
-        assert_eq!(hidden, 0x2000);
-        assert_eq!(shown, 0x2002);
+        for keep_raw in [true, false] {
+            for visible in [true, false] {
+                assert_eq!(reported_state(0, keep_raw, || visible), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn visibility_is_only_queried_under_the_macos_27_policy() {
+        let asked = Cell::new(0);
+        let ask = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        reported_state(0x2000, false, ask);
+        reported_state(0, true, ask);
+        assert_eq!(asked.get(), 0);
+        reported_state(0x2000, true, ask);
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
