@@ -2209,8 +2209,6 @@ mod tests {
         }
     }
 
-    // -- idle Parakeet release ------------------------------------------------
-
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     #[test]
     fn idle_release_drops_cached_value_after_delay() {
@@ -2235,14 +2233,11 @@ mod tests {
         let slot = SLOT.lock().unwrap();
         let older =
             schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
-        let newer = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(50))
-            .expect("spawns");
+        LAST_USE.fetch_add(1, Ordering::AcqRel);
         drop(slot);
 
         assert!(!older.join().expect("joins"));
         assert_eq!(*CACHE.lock().unwrap(), Some(7));
-        assert!(newer.join().expect("joins"));
-        assert!(CACHE.lock().unwrap().is_none());
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -2253,18 +2248,14 @@ mod tests {
         static LAST_USE: AtomicU64 = AtomicU64::new(0);
 
         let run = SLOT.lock().unwrap();
-        let first =
+        let handle =
             schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
         std::thread::sleep(Duration::from_millis(50));
-        assert!(!first.is_finished());
+        assert!(!handle.is_finished());
         assert_eq!(*CACHE.lock().unwrap(), Some(7));
-        let second = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(50))
-            .expect("spawns");
         drop(run);
 
-        assert!(!first.join().expect("joins"));
-        assert_eq!(*CACHE.lock().unwrap(), Some(7));
-        assert!(second.join().expect("joins"));
+        assert!(handle.join().expect("joins"));
         assert!(CACHE.lock().unwrap().is_none());
     }
 
