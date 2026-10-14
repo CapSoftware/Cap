@@ -128,10 +128,17 @@ pub fn inspect_overlay_image(encoded: &[u8]) -> Result<(&'static str, u32, u32),
         return Err("Images must have at most 16,777,216 pixels (32,768 per side) and decode to at most 128 MiB".into());
     }
     let orientation = decoder.orientation().map_err(|error| error.to_string())?;
-    let mut decoded = image::DynamicImage::from_decoder(decoder)
+    let decoded = image::DynamicImage::from_decoder(decoder)
         .map_err(|error| format!("Cannot decode image: {error}"))?;
-    decoded.apply_orientation(orientation);
-    Ok((extension, decoded.width(), decoded.height()))
+    use image::metadata::Orientation;
+    let (width, height) = match orientation {
+        Orientation::Rotate90
+        | Orientation::Rotate270
+        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => (decoded.height(), decoded.width()),
+        _ => (decoded.width(), decoded.height()),
+    };
+    Ok((extension, width, height))
 }
 
 pub fn decode_jpeg_to_bgra(bytes: &[u8]) -> Option<image::RgbaImage> {
@@ -218,3 +225,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "codec_overlay_tests.rs"]
+mod overlay_inspection_tests;
