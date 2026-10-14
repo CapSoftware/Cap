@@ -3472,16 +3472,11 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    // Deviation: general.tsx puts an "After a Studio
-                    // recording" select here (Open editor / Show in overlay).
-                    // The post-capture recordings overlay does not exist in
-                    // this app -- a product decision, not a gap -- so a
-                    // one-option select would be noise and the row is omitted.
-                    // The stored `postStudioRecordingBehaviour` is left
-                    // exactly as the Tauri app wrote it (this page never
-                    // writes the key), and the stop flow treats a stored
-                    // `showOverlay` as "reshow the main window"
-                    // (`app_windows.rs`).
+                    // "After a Studio recording" lives on the Shortcuts page,
+                    // next to the shortcuts it shapes. There is no
+                    // post-capture overlay in this app, so a stored
+                    // `showOverlay` means "reshow the main window"
+                    // (`app_windows.rs`) and is labelled "Show Cap".
                     self.setting_row(
                         "After deleting a recording",
                         Some("Whether the recording window should reopen."),
