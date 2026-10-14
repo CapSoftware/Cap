@@ -1803,7 +1803,7 @@ impl EditorWindow {
                 div()
                     .mt(px(8.))
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.editor.playhead))
+                    .text_color(Hsla::from(theme.negative))
                     .child(error.clone())
                     .into_any_element()
             }))
@@ -2471,7 +2471,7 @@ impl EditorWindow {
         let has_audio = self
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
-        let error_color = Hsla::from(gpui::rgb(0xef4444));
+        let error_color = Hsla::from(self.theme.text_negative);
 
         // The `KSelect.Trigger` with label, description and size
         // (`CaptionsTab.tsx:824-860`); the info tooltip carries the engine

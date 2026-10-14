@@ -576,9 +576,9 @@ impl IconButton {
             occlude: cfg!(target_os = "windows"),
             size: px(20.),
             icon_size: px(16.),
-            idle: theme.gray(11),
-            active_color: theme.gray(12),
-            hover_color: Some(theme.gray(12)),
+            idle: gpui::Hsla::from(theme.icon),
+            active_color: gpui::Hsla::from(theme.icon_active),
+            hover_color: Some(gpui::Hsla::from(theme.icon_active)),
             ..Self::new(id, icon)
         }
     }
@@ -599,10 +599,10 @@ impl IconButton {
     /// `bg-gray-5` remaps rather than the raw Radix steps.
     pub fn body(theme: &Theme, id: impl Into<ElementId>, icon: impl Into<SharedString>) -> Self {
         Self {
-            idle: theme.gray(11),
+            idle: gpui::Hsla::from(theme.icon),
             active_color: theme.body_text(),
-            hover_bg: Some(theme.body_hover_fill(4)),
-            active_bg: Some(theme.body_fill(5)),
+            hover_bg: Some(gpui::Hsla::from(theme.hover_bg)),
+            active_bg: Some(gpui::Hsla::from(theme.active_bg)),
             ..Self::new(id, icon)
         }
     }

@@ -408,17 +408,19 @@ impl EditorWindow {
                     .pt(px(14.))
                     .pb(px(12.))
                     .border_b_1()
-                    .border_color(theme.gray(3))
+                    .border_color(theme.border_subtle)
                     .child(
                         div()
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.gray(12))
+                            .text_color(theme.text_primary)
                             .child("Frame"),
                     )
                     .child(
-                        div().text_size(px(11.)).text_color(theme.gray(10)).child(
-                            match &self.frame_controls.style_target {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.text_secondary)
+                            .child(match &self.frame_controls.style_target {
                                 Some(target) if !target.matches(&self.project) => {
                                     "This Style changed. Close and reopen Frame.".to_string()
                                 }
@@ -447,8 +449,7 @@ impl EditorWindow {
                                     "Global frame · Applies wherever Style inherits background."
                                         .to_string()
                                 }
-                            },
-                        ),
+                            }),
                     ),
             )
             .child(div().flex().flex_col().gap(px(2.)).p(px(6.)).children(
@@ -464,8 +465,8 @@ impl EditorWindow {
                             .p(px(8.))
                             .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                             .cursor_pointer()
-                            .hover(|row| row.bg(theme.gray(3)))
-                            .focus_visible(|row| row.bg(theme.gray(3)))
+                            .hover(|row| row.bg(theme.hover_bg))
+                            .focus_visible(|row| row.bg(theme.hover_bg))
                             .child(
                                 div()
                                     .flex()
@@ -479,13 +480,13 @@ impl EditorWindow {
                                     .bg(if selected {
                                         theme.primary.into()
                                     } else {
-                                        theme.gray(3)
+                                        gpui::Hsla::from(theme.surface_raised)
                                     })
                                     .child(svg().path(icon).size(px(16.)).text_color(
                                         if selected {
-                                            gpui::white()
+                                            gpui::Hsla::from(theme.primary_foreground)
                                         } else {
-                                            theme.gray(11)
+                                            gpui::Hsla::from(theme.icon)
                                         },
                                     )),
                             )
@@ -499,13 +500,13 @@ impl EditorWindow {
                                         div()
                                             .text_size(px(13.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.gray(12))
+                                            .text_color(theme.text_primary)
                                             .child(label),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(11.))
-                                            .text_color(theme.gray(10))
+                                            .text_color(theme.text_secondary)
                                             .child(description),
                                     ),
                             )
@@ -532,7 +533,7 @@ impl EditorWindow {
                         .gap(px(12.))
                         .p(px(12.))
                         .border_t_1()
-                        .border_color(theme.gray(3))
+                        .border_color(theme.border_subtle)
                         .child(
                             div()
                                 .flex()
@@ -543,7 +544,7 @@ impl EditorWindow {
                                     div()
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.gray(11))
+                                        .text_color(theme.text_secondary)
                                         .child("Theme"),
                                 )
                                 .child(
@@ -552,7 +553,7 @@ impl EditorWindow {
                                         .w(px(160.))
                                         .h(px(32.))
                                         .border_1()
-                                        .border_color(theme.gray(3))
+                                        .border_color(theme.border)
                                         .rounded(crate::theme::radius(
                                             crate::theme::RadiusToken::Default,
                                         ))
@@ -580,14 +581,14 @@ impl EditorWindow {
                                                         ))
                                                         .text_size(px(12.))
                                                         .text_color(if value == frame_theme {
-                                                            theme.gray(12)
+                                                            gpui::Hsla::from(theme.text_active)
                                                         } else {
-                                                            theme.gray(11)
+                                                            gpui::Hsla::from(theme.text_interactive)
                                                         })
                                                         .when(value == frame_theme, |tab| {
-                                                            tab.bg(theme.gray(3))
+                                                            tab.bg(theme.active_bg)
                                                         })
-                                                        .focus_visible(|tab| tab.bg(theme.gray(4)))
+                                                        .focus_visible(|tab| tab.bg(theme.hover_bg))
                                                         .cursor_pointer()
                                                         .child(label)
                                                         .on_click(cx.listener(
@@ -616,7 +617,7 @@ impl EditorWindow {
                                         div()
                                             .text_size(px(12.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.gray(11))
+                                            .text_color(theme.text_secondary)
                                             .child(field.label()),
                                     )
                                     .child(
@@ -628,7 +629,7 @@ impl EditorWindow {
                                         .width(px(160.))
                                         .height(px(32.))
                                         .radius(px(8.))
-                                        .bg(theme.gray(2)),
+                                        .bg(gpui::Hsla::from(theme.surface_subtle)),
                                     ),
                             )
                         })),

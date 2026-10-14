@@ -229,7 +229,7 @@ impl Render for EditorModal {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::hsla(0., 0., 0., 0.5))
+            .bg(theme.surface_overlay)
             .font_family(crate::theme::ui_font())
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .map(|this| {

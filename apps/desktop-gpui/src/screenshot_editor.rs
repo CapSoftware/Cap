@@ -3959,13 +3959,7 @@ impl ScreenshotEditorWindow {
                         .border_1()
                         .border_color(theme.surface_subtle)
                         .bg(theme.surface)
-                        .shadow(vec![gpui::BoxShadow {
-                            color: Theme::with_alpha(gpui::rgb(0x000000), 0.18),
-                            offset: gpui::point(px(0.), px(10.)),
-                            blur_radius: px(30.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
                         .child(body),
                 )
                 .into_any_element(),
@@ -4190,13 +4184,7 @@ impl ScreenshotEditorWindow {
             } else {
                 theme.surface
             })
-            .shadow(vec![gpui::BoxShadow {
-                color: Theme::with_alpha(gpui::rgb(0x000000), 0.05),
-                offset: gpui::point(px(0.), px(1.)),
-                blur_radius: px(2.),
-                spread_radius: px(0.),
-                inset: false,
-            }])
+            .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
             .child(kbd_tooltip(
                 &theme,
                 "Zoom Out",
@@ -4252,13 +4240,7 @@ impl ScreenshotEditorWindow {
                         .border_1()
                         .border_color(theme.surface_subtle)
                         .bg(theme.surface)
-                        .shadow(vec![gpui::BoxShadow {
-                            color: Theme::with_alpha(gpui::rgb(0x000000), 0.12),
-                            offset: gpui::point(px(0.), px(4.)),
-                            blur_radius: px(14.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
                         .text_size(px(16.))
                         .text_color(match toast.kind {
                             ToastKind::Loading => theme.text_secondary,
@@ -4269,7 +4251,7 @@ impl ScreenshotEditorWindow {
                                 .path("icons/check.svg")
                                 .size(px(16.))
                                 .flex_shrink_0()
-                                .text_color(gpui::rgb(0x22c55e))
+                                .text_color(theme.text_positive)
                                 .into_any_element(),
                             ToastKind::Error => svg()
                                 .path("icons/x.svg")

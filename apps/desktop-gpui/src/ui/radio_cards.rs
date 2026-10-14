@@ -57,30 +57,29 @@ pub struct RadioCards {
     selected_bg: Hsla,
     dot_border: Hsla,
     dot_fill: Hsla,
+    dot_glyph: Hsla,
     title: Hsla,
     description: Hsla,
     on_select: Option<SelectHandler>,
 }
 
 impl RadioCards {
-    /// The editor surface. `data-checked:bg-blue-3/40` is `blue-3` at 40%.
     pub fn plain(
         theme: &Theme,
         id: impl Into<ElementId>,
         items: Vec<RadioCard>,
         selected: Option<usize>,
     ) -> Self {
-        let mut selected_bg = Hsla::from(theme.primary_subtle);
-        selected_bg.a = 0.4;
         Self {
             id: id.into(),
             items,
             selected,
             border: Hsla::from(theme.surface_subtle),
             selected_border: Hsla::from(theme.primary_hover),
-            selected_bg,
+            selected_bg: Hsla::from(theme.primary_subtle),
             dot_border: Hsla::from(theme.border_strong),
             dot_fill: Hsla::from(theme.primary),
+            dot_glyph: Hsla::from(theme.primary_foreground),
             title: Hsla::from(theme.text_primary),
             description: Hsla::from(theme.text_secondary),
             on_select: None,
@@ -104,6 +103,7 @@ impl RenderOnce for RadioCards {
             selected_bg,
             dot_border,
             dot_fill,
+            dot_glyph,
             title,
             description,
             on_select,
@@ -156,7 +156,7 @@ impl RenderOnce for RadioCards {
                                             svg()
                                                 .path("icons/check.svg")
                                                 .size(px(12.))
-                                                .text_color(Hsla::from(gpui::rgb(0xffffff))),
+                                                .text_color(dot_glyph),
                                         )
                                     }),
                             )

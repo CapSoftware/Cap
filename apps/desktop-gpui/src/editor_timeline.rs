@@ -195,43 +195,65 @@ fn muted_clip_color(theme: &Theme) -> Hsla {
     Hsla::from(theme.text_muted)
 }
 
-/// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
-/// tokens are; every track colour in this file is an `Hsla`.
-fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
-    let color = gpui::Rgba::from(color);
-    if selected {
-        theme.editor.seg_fill_selected(color).into()
+/// Track colours are a categorical palette with more hues than the theme's
+/// status tokens, so segments keep them and only blend them toward theme
+/// surfaces and text. These are the blend strengths per appearance.
+struct SegmentBlend {
+    tint: f32,
+    line: f32,
+    label: f32,
+}
+
+fn segment_blend(theme: &Theme) -> SegmentBlend {
+    if theme.is_dark() {
+        SegmentBlend {
+            tint: 0.20,
+            line: 0.42,
+            label: 0.55,
+        }
     } else {
-        theme.editor.seg_fill(color).into()
+        SegmentBlend {
+            tint: 0.13,
+            line: 0.34,
+            label: 0.58,
+        }
     }
 }
 
+fn blend(base: gpui::Rgba, color: Hsla, amount: f32) -> Hsla {
+    crate::theme::mix(base, gpui::Rgba::from(color), amount).into()
+}
+
+fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
+    let tint = segment_blend(theme).tint + if selected { 0.10 } else { 0. };
+    blend(theme.surface, color, tint)
+}
+
 fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
-    let border = theme.editor.seg_border(gpui::Rgba::from(color));
-    Hsla::from(crate::theme::rgba_alpha(
-        border,
-        (border.a + extra_alpha).clamp(0., 1.),
-    ))
+    with_alpha(
+        color,
+        (segment_blend(theme).line + extra_alpha).clamp(0., 1.),
+    )
 }
 
 fn seg_label(theme: &Theme, color: Hsla) -> Hsla {
-    theme.editor.seg_label(gpui::Rgba::from(color)).into()
+    blend(theme.text_primary, color, segment_blend(theme).label)
 }
 
 fn seg_muted(theme: &Theme, color: Hsla) -> Hsla {
-    theme.editor.seg_muted(gpui::Rgba::from(color)).into()
+    blend(theme.text_muted, color, 0.45)
 }
 
 fn seg_handle(theme: &Theme, color: Hsla) -> Hsla {
-    theme.editor.seg_handle(gpui::Rgba::from(color)).into()
+    blend(theme.text_primary, color, 0.70)
 }
 
-pub(crate) fn tile_bg(theme: &Theme, color: Hsla) -> Hsla {
-    theme.editor.tile_bg(gpui::Rgba::from(color)).into()
+pub(crate) fn tile_bg(_theme: &Theme, color: Hsla) -> Hsla {
+    with_alpha(color, 0.16)
 }
 
 pub(crate) fn tile_fg(theme: &Theme, color: Hsla) -> Hsla {
-    theme.editor.tile_fg(gpui::Rgba::from(color)).into()
+    blend(theme.text_primary, color, 0.62)
 }
 
 fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
@@ -2167,18 +2189,18 @@ fn render_track_content(
                 .items_center()
                 .justify_center()
                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
-                .bg(with_alpha(Hsla::from(gpui::rgb(0xef4444)), 0.12));
+                .bg(theme.negative_subtle);
             if width >= 26. {
                 gap = gap.child(
                     div()
                         .px(px(6.))
                         .py(px(2.))
                         .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
-                        .bg(Hsla::from(gpui::rgb(0xef4444)))
+                        .bg(theme.danger)
                         .text_size(px(10.))
                         .line_height(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(gpui::white())
+                        .text_color(theme.danger_foreground)
                         .child(SharedString::from(format!(
                             "{:.1}s",
                             ((gap_end - gap_start).max(0.) * 10.).round() / 10.
@@ -3530,7 +3552,7 @@ pub fn ghost_offset(view: TimelineView, content_width: f32) -> Option<f32> {
 /// knob rather than a dot on the line. gpui has no outline, so the ring is a
 /// wider circle of card painted under the head.
 pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
-    let color = Hsla::from(theme.editor.playhead);
+    let color = Hsla::from(theme.negative);
     render_line(color, x, opacity, Some((12., color, theme.surface.into())))
 }
 

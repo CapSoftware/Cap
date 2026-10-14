@@ -626,7 +626,7 @@ impl PreviewFrameView {
             frame_rect,
             stats: None,
             frame_sequence: 0,
-            shadow: crate::theme::preview_shadow(),
+            shadow: crate::theme::shadow(crate::theme::ShadowToken::Two),
         }
     }
 
@@ -9080,7 +9080,7 @@ impl EditorWindow {
                         .top_0()
                         .left_0()
                         .size_full()
-                        .bg(gpui::hsla(0., 0., 0., 0.5))
+                        .bg(theme.surface_overlay)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.preset_dialog = None;
                             cx.notify();
@@ -9841,7 +9841,6 @@ impl EditorWindow {
     /// centred across the row, split and zoom on the right.
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let player_width = editor_player_width(f32::from(window.viewport_size().width));
         let compact = player_width < 760.;
         let narrow = player_width < 620.;
@@ -10036,8 +10035,8 @@ impl EditorWindow {
                         .fill(Hsla::from(theme.primary))
                         .thumb(
                             px(12.),
-                            Hsla::from(editor.thumb),
-                            Some(gpui::hsla(0., 0., 0., 0.12)),
+                            Hsla::from(theme.primary_foreground),
+                            Some(Hsla::from(theme.border)),
                         )
                         .thumb_shadow()
                         .on_drag_start(cx.listener(
@@ -11302,7 +11301,9 @@ impl Render for EditorWindow {
                                             .border_1()
                                             .border_color(self.card_line())
                                             .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
+                                            .shadow(crate::theme::shadow(
+                                                crate::theme::ShadowToken::One,
+                                            ))
                                             .overflow_hidden()
                                             .child(self.render_player(cx)),
                                     )
@@ -11338,7 +11339,9 @@ impl Render for EditorWindow {
                                             .border_1()
                                             .border_color(self.card_line())
                                             .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
+                                            .shadow(crate::theme::shadow(
+                                                crate::theme::ShadowToken::One,
+                                            ))
                                             .overflow_hidden()
                                             .child(self.timeline_view.clone().cached(
                                                 StyleRefinement::default().w_full().h_full(),

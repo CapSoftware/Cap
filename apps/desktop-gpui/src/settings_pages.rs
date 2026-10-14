@@ -1258,7 +1258,7 @@ impl SettingsWindow {
                     svg()
                         .path("icons/circle-x.svg")
                         .size(px(20.))
-                        .text_color(Hsla::from(rgb(0xef4444))),
+                        .text_color(theme.text_negative),
                 )
                 .hover(|style| style.opacity(0.7))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2947,35 +2947,36 @@ impl SettingsWindow {
     /// Information block's capture-support chip uses.
     fn verdict_chip(&self, verdict: Option<&str>) -> gpui::AnyElement {
         let theme = self.theme;
-        // The same green/red pair the capture-support chip below uses, plus an
-        // amber for `warn`; `inconclusive` and "no sync test at all" are not
-        // failures, so they stay in the muted grey.
+        // `inconclusive` and "no sync test at all" are not failures, so they
+        // stay neutral.
         let (label, fill, text): (&str, Hsla, Hsla) = match verdict {
             Some("pass") => (
                 "PASS",
-                gpui::rgb(0x22c55e).into(),
-                gpui::rgb(0x4ade80).into(),
+                theme.positive_subtle.into(),
+                theme.text_positive.into(),
             ),
             Some("warn") => (
                 "WARN",
-                gpui::rgb(0xf59e0b).into(),
-                gpui::rgb(0xfbbf24).into(),
+                theme.warning_subtle.into(),
+                theme.text_warning.into(),
             ),
-            Some("fail") => ("FAIL", theme.danger.into(), theme.danger.into()),
+            Some("fail") => (
+                "FAIL",
+                theme.negative_subtle.into(),
+                theme.text_negative.into(),
+            ),
             Some("inconclusive") => (
                 "INCONCLUSIVE",
-                theme.settings_muted(),
+                theme.surface_raised.into(),
                 theme.settings_muted(),
             ),
             // No sync test in the report: the environment half still ran.
             _ => (
                 "ENVIRONMENT ONLY",
-                theme.settings_muted(),
+                theme.surface_raised.into(),
                 theme.settings_muted(),
             ),
         };
-        let mut fill = fill;
-        fill.a = 0.2;
         div()
             .flex()
             .flex_row()
@@ -3159,19 +3160,16 @@ impl SettingsWindow {
                                             crate::theme::RadiusToken::Small,
                                         ))
                                         .text_size(px(12.))
-                                        .bg(Theme::with_alpha(
-                                            if capture_supported {
-                                                gpui::rgb(0x22c55e)
-                                            } else {
-                                                theme.danger
-                                            },
-                                            0.2,
-                                        ))
-                                        .text_color(Hsla::from(if capture_supported {
-                                            gpui::rgb(0x4ade80)
+                                        .bg(if capture_supported {
+                                            theme.positive_subtle
                                         } else {
-                                            theme.danger
-                                        }))
+                                            theme.negative_subtle
+                                        })
+                                        .text_color(if capture_supported {
+                                            theme.text_positive
+                                        } else {
+                                            theme.text_negative
+                                        })
                                         .child(format!(
                                             "Screen Capture: {}",
                                             if capture_supported {
@@ -6649,8 +6647,8 @@ impl SettingsWindow {
                     .cursor_pointer()
                     .hover(|style| {
                         style
-                            .text_color(Hsla::from(rgb(0xef4444)))
-                            .bg(Theme::with_alpha(rgb(0xef4444), 0.1))
+                            .text_color(theme.text_danger)
+                            .bg(theme.negative_subtle)
                     })
                     .child(
                         svg()

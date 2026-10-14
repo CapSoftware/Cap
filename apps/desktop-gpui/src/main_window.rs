@@ -170,83 +170,32 @@ impl Mode {
     }
 }
 
-fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
-    if theme.is_dark() {
-        gpui::hsla(0., 0., 1., dark)
-    } else {
-        gpui::hsla(0., 0., 0., light)
-    }
-}
-
 fn glass_hover(theme: Theme) -> Hsla {
-    glass_tint(theme, 0.06, 0.07)
+    theme.hover_bg.into()
 }
 
 fn glass_selected(theme: Theme) -> Hsla {
-    glass_tint(theme, 0.08, 0.1)
+    theme.active_bg.into()
 }
 
-fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::BoxShadow {
-    gpui::BoxShadow {
-        color,
-        offset: gpui::point(px(0.), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(spread),
-        inset,
-    }
-}
-
-/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
-/// would have to track gpui's layout under the Metal layer. Two shadows, one
-/// unblurred, keep it cheap on a window that repaints with the mic meter.
 fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
-    let dark = theme.is_dark();
-    let (top, bottom, rim) = match (selected, dark) {
-        (false, false) => (
-            gpui::hsla(0., 0., 1., 0.7),
-            gpui::hsla(0., 0., 1., 0.58),
-            gpui::hsla(0., 0., 0., 0.08),
-        ),
-        (false, true) => (
-            gpui::hsla(0., 0., 1., 0.085),
-            gpui::hsla(0., 0., 1., 0.06),
-            gpui::hsla(0., 0., 1., 0.07),
-        ),
-        (true, false) => (
-            Theme::with_alpha(theme.primary_subtle, 0.9),
-            Theme::with_alpha(theme.primary_subtle, 0.75),
-            Theme::with_alpha(theme.primary_hover, 0.4),
-        ),
-        (true, true) => (
-            Theme::with_alpha(theme.primary, 0.24),
-            Theme::with_alpha(theme.primary, 0.18),
-            Theme::with_alpha(theme.primary, 0.3),
-        ),
-    };
-    let (highlight, lift) = if dark {
-        (gpui::hsla(0., 0., 1., 0.07), gpui::hsla(0., 0., 0., 0.2))
+    let (fill, border) = if selected {
+        (theme.primary_subtle, theme.primary)
     } else {
-        (gpui::hsla(0., 0., 1., 0.8), gpui::hsla(0., 0., 0., 0.04))
+        (theme.surface_subtle, theme.border)
     };
     element
-        .bg(gpui::linear_gradient(
-            180.,
-            gpui::linear_color_stop(top, 0.),
-            gpui::linear_color_stop(bottom, 1.),
-        ))
+        .bg(fill)
         .border_1()
-        .border_color(rim)
-        .shadow(vec![
-            shadow(highlight, 1., 0., 0., true),
-            shadow(lift, 1., 2., 0., false),
-        ])
+        .border_color(border)
+        .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
 }
 
 fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
     if selected {
-        Theme::with_alpha(theme.primary, 0.06)
+        theme.primary_subtle.into()
     } else {
-        glass_tint(theme, 0.04, 0.05)
+        theme.hover_bg.into()
     }
 }
 
@@ -2679,7 +2628,7 @@ impl MainWindow {
                     .max_w(px(360.))
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
-                    .border_color(theme.body_border(6))
+                    .border_color(gpui::Hsla::from(theme.border))
                     .bg(theme.surface)
                     .p(px(16.))
                     .flex()
@@ -2708,7 +2657,7 @@ impl MainWindow {
                                     .border_1()
                                     .border_color(if checked { theme.primary } else { theme.border_strong })
                                     .bg(if checked { theme.primary } else { theme.surface_secondary })
-                                    .when(checked, |this| this.child(svg().path("icons/check.svg").size(px(14.)).text_color(rgb(0xffffff)))),
+                                    .when(checked, |this| this.child(svg().path("icons/check.svg").size(px(14.)).text_color(theme.primary_foreground))),
                             )
                             .child(div().text_size(px(12.)).text_color(theme.text_secondary).child("Don't show again"))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -3876,7 +3825,7 @@ impl MainWindow {
                         .min_w_0()
                         .h(px(128.))
                         .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-                        .bg(theme.body_fill(3))
+                        .bg(gpui::Hsla::from(theme.surface_subtle))
                         .into_any_element(),
                 );
             }
@@ -3947,13 +3896,13 @@ impl MainWindow {
                 .justify_center()
                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
-                .border_color(theme.body_border(5))
-                .bg(theme.body_fill(3))
+                .border_color(gpui::Hsla::from(theme.border))
+                .bg(gpui::Hsla::from(theme.surface_subtle))
                 .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_primary)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.body_hover_fill(4)))
+                .hover(|style| style.bg(gpui::Hsla::from(theme.hover_bg)))
                 .child(view_all)
                 .on_click(cx.listener(move |_, _, _window, cx| {
                     cx.defer(move |cx| app_windows::open_settings(page, cx));
@@ -4036,8 +3985,12 @@ impl MainWindow {
         let theme = self.theme;
         let converting = entry.stage == crate::import::ImportStage::Converting;
         let ring = {
-            let ring =
-                ui::CircularProgress::new(px(36.), px(3.), theme.gray(4), theme.primary.into());
+            let ring = ui::CircularProgress::new(
+                px(36.),
+                px(3.),
+                gpui::Hsla::from(theme.active_bg),
+                theme.primary.into(),
+            );
             if converting {
                 ring.progress(entry.progress as f32)
                     .label(theme.text_primary.into(), px(9.))
@@ -4054,7 +4007,7 @@ impl MainWindow {
             .min_w_0()
             .overflow_hidden()
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-            .bg(theme.body_fill(3))
+            .bg(gpui::Hsla::from(theme.surface_subtle))
             .child(
                 div()
                     .relative()
@@ -4062,7 +4015,7 @@ impl MainWindow {
                     .h(px(76.))
                     .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .overflow_hidden()
-                    .bg(theme.body_fill(4))
+                    .bg(gpui::Hsla::from(theme.hover_bg))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -4334,7 +4287,7 @@ impl MainWindow {
             .cursor_pointer()
             .hover(|style| {
                 style
-                    .bg(theme.body_hover_fill(5))
+                    .bg(gpui::Hsla::from(theme.hover_bg))
                     .text_color(theme.text_primary)
             })
             .child(
@@ -4374,7 +4327,7 @@ impl MainWindow {
                 .size_full()
                 .items_center()
                 .justify_center()
-                .bg(theme.body_fill(4))
+                .bg(gpui::Hsla::from(theme.hover_bg))
                 .child(
                     svg()
                         .path(fallback)
@@ -4392,8 +4345,8 @@ impl MainWindow {
             .min_w_0()
             .overflow_hidden()
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-            .bg(theme.body_fill(3))
-            .hover(|style| style.bg(theme.body_hover_fill(4)))
+            .bg(gpui::Hsla::from(theme.surface_subtle))
+            .hover(|style| style.bg(gpui::Hsla::from(theme.hover_bg)))
             .child(
                 div()
                     .id("library-card-open")
@@ -4405,7 +4358,7 @@ impl MainWindow {
                             .h(px(76.))
                             .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .overflow_hidden()
-                            .bg(theme.body_fill(4))
+                            .bg(gpui::Hsla::from(theme.hover_bg))
                             .child(thumb)
                             .when(clip_count > 1, |this| {
                                 this.child(
@@ -5210,7 +5163,7 @@ impl MainWindow {
             } else {
                 gpui::transparent_black()
             })
-            .bg(theme.body_fill(3))
+            .bg(gpui::Hsla::from(theme.surface_subtle))
             .child(target_thumbnails::render_thumbnail_slot(thumb, icon, theme))
             .child(
                 div()
@@ -5244,7 +5197,7 @@ impl MainWindow {
                             .child(metadata)
                     })),
             )
-            .hover(|style| style.bg(theme.body_hover_fill(4)))
+            .hover(|style| style.bg(gpui::Hsla::from(theme.hover_bg)))
             .on_click(on_click)
     }
 
@@ -5274,16 +5227,16 @@ impl MainWindow {
                     .border_color(if selected {
                         Hsla::from(theme.primary)
                     } else if theme.is_dark() {
-                        theme.body_border(5)
+                        gpui::Hsla::from(theme.border)
                     } else {
-                        theme.body_border(4)
+                        gpui::Hsla::from(theme.border)
                     })
                     .bg(if selected {
                         theme.tile_selected_bg()
                     } else if theme.is_dark() {
-                        theme.body_fill(3)
+                        gpui::Hsla::from(theme.surface_subtle)
                     } else {
-                        theme.body_fill(2)
+                        gpui::Hsla::from(theme.surface_subtle)
                     })
                     .child(
                         svg()
@@ -5325,7 +5278,7 @@ impl MainWindow {
                                     .child(mode.panel_description()),
                             ),
                     )
-                    .hover(|style| style.bg(theme.body_hover_fill(4)))
+                    .hover(|style| style.bg(gpui::Hsla::from(theme.hover_bg)))
                     .on_click(cx.listener(move |this, _, _window, cx| {
                         this.set_mode(mode, cx);
                         this.close_panel(cx);
@@ -5512,11 +5465,7 @@ impl MainWindow {
                                 .w_full()
                                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                 .overflow_hidden()
-                                .bg(if theme.is_dark() {
-                                    gpui::hsla(0., 0., 1., 0.1)
-                                } else {
-                                    gpui::hsla(0., 0., 0., 0.07)
-                                })
+                                .bg(theme.active_bg)
                                 .child(
                                     div()
                                         .h_full()
@@ -5615,11 +5564,11 @@ impl MainWindow {
         match self.plan {
             PlanBadge::Personal => badge
                 .border_1()
-                .border_color(theme.body_border(5))
-                .bg(theme.body_fill(3))
+                .border_color(gpui::Hsla::from(theme.border))
+                .bg(gpui::Hsla::from(theme.surface_subtle))
                 .text_color(theme.text_primary)
                 .child("Personal")
-                .hover(|style| style.bg(theme.body_hover_fill(5)))
+                .hover(|style| style.bg(gpui::Hsla::from(theme.hover_bg)))
                 .on_click(|_, _, cx| {
                     cx.open_url(crate::auth::PRICING_URL);
                 }),
@@ -5751,7 +5700,7 @@ impl MainWindow {
                 .bg(if selected {
                     Hsla::from(theme.border_strong)
                 } else {
-                    theme.body_fill(3)
+                    gpui::Hsla::from(theme.surface_subtle)
                 })
                 .when(selected, |this| {
                     // `ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-1`.
@@ -5776,7 +5725,7 @@ impl MainWindow {
                         .size(px(mode.icon_size()))
                         .text_color(theme.text_primary),
                 )
-                .hover(|style| style.bg(theme.body_hover_fill(7)))
+                .hover(|style| style.bg(gpui::Hsla::from(theme.active_bg)))
                 .on_click(cx.listener(move |this, _, _window, cx| {
                     if this.session.read(cx).editor_recording_target().is_some() {
                         return;
@@ -5795,8 +5744,8 @@ impl MainWindow {
             .p(px(6.))
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(3))
+            .border_color(gpui::Hsla::from(theme.border))
+            .bg(gpui::Hsla::from(theme.surface_subtle))
             .child(button(Mode::Instant, "mode-instant", 0))
             .child(button(Mode::Studio, "mode-studio", 1))
             .child(button(Mode::Screenshot, "mode-screenshot", 2))
@@ -5816,7 +5765,7 @@ impl MainWindow {
                     .justify_center()
                     .p(px(4.))
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
-                    .bg(theme.body_fill(5))
+                    .bg(gpui::Hsla::from(theme.active_bg))
                     .child(
                         svg()
                             .path("icons/info.svg")
@@ -5905,9 +5854,9 @@ impl MainWindow {
                             .bottom(px(10.))
                             .w(px(1.))
                             .bg(if selected {
-                                Theme::with_alpha(theme.primary, 0.25)
+                                theme.primary
                             } else {
-                                glass_tint(theme, 0.08, 0.1)
+                                theme.border
                             }),
                     )
                     .relative()
@@ -6285,9 +6234,13 @@ impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
             Self::On => (Hsla::from(theme.primary), gpui::white(), "On"),
-            Self::Off => (theme.body_fill(5), Hsla::from(theme.text_secondary), "Off"),
+            Self::Off => (
+                gpui::Hsla::from(theme.active_bg),
+                Hsla::from(theme.text_secondary),
+                "Off",
+            ),
             Self::Disconnected => (
-                theme.body_fill(5),
+                gpui::Hsla::from(theme.active_bg),
                 Hsla::from(theme.text_secondary),
                 "Not connected",
             ),

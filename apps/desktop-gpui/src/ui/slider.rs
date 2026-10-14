@@ -166,7 +166,7 @@ impl Slider {
     /// gets from `0 1px 3px rgba(0,0,0,.25)`.
     pub fn thumb_shadow(mut self) -> Self {
         if let Some(thumb) = self.thumb.as_mut() {
-            thumb.shadow = crate::theme::thumb_shadow();
+            thumb.shadow = crate::theme::shadow(crate::theme::ShadowToken::One);
         }
         self
     }

@@ -18,7 +18,7 @@ use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Pixels, Point, Render, RenderImage, ScrollAnchor,
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, img,
-    prelude::FluentBuilder, px, rgb, svg,
+    prelude::FluentBuilder, px, svg,
 };
 use serde_json::Value;
 
@@ -1884,9 +1884,7 @@ impl SettingsWindow {
                 div()
                     .id("settings-check-updates")
                     .cursor_pointer()
-                    .when(update_ready, |link| {
-                        link.text_color(rgb(Theme::SETTINGS_ACCENT))
-                    })
+                    .when(update_ready, |link| link.text_color(theme.primary))
                     .hover(|style| style.text_color(theme.settings_text()))
                     .on_click(cx.listener(move |_, _, _, cx| {
                         if update_ready {
@@ -3282,7 +3280,6 @@ impl SettingsWindow {
 
     fn radio_dot(&self, checked: bool) -> gpui::Div {
         let theme = self.theme;
-        let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
         div()
             .size(px(16.))
             .flex_none()
@@ -3291,11 +3288,11 @@ impl SettingsWindow {
             .justify_center()
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .when(checked, |this| {
-                this.bg(accent).child(
+                this.bg(theme.primary).child(
                     div()
                         .size(px(6.))
                         .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
-                        .bg(gpui::white()),
+                        .bg(theme.primary_foreground),
                 )
             })
             .when(!checked, |this| {
@@ -3304,18 +3301,8 @@ impl SettingsWindow {
                     .group_hover("studio-quality-option", |style| {
                         style.border_color(theme.settings_muted())
                     })
-                    .bg(if theme.is_dark() {
-                        gpui::hsla(0., 0., 1., 0.1)
-                    } else {
-                        gpui::white()
-                    })
-                    .shadow(vec![gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 0., 0.12),
-                        offset: gpui::point(px(0.), px(0.5)),
-                        blur_radius: px(1.),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
+                    .bg(theme.surface)
+                    .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
             })
     }
 

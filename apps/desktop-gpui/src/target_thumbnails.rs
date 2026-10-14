@@ -300,7 +300,7 @@ pub fn render_thumbnail_slot(
         .h(px(76.))
         .overflow_hidden()
         .rounded_t(px(TOP_RADIUS))
-        .bg(theme.body_fill(4))
+        .bg(gpui::Hsla::from(theme.hover_bg))
         .child(match thumb.image {
             Some(image) => img(image)
                 .size_full()
@@ -313,7 +313,7 @@ pub fn render_thumbnail_slot(
                 .items_center()
                 .justify_center()
                 .rounded_t(px(TOP_RADIUS))
-                .bg(theme.body_fill(4))
+                .bg(gpui::Hsla::from(theme.hover_bg))
                 .child(
                     // `svg()` does not inherit `text_color`; the fallback icon
                     // has to set its own or it paints black.

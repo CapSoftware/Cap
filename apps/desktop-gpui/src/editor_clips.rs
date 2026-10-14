@@ -393,25 +393,12 @@ impl Drop for ClipsState {
     }
 }
 
-/// `hover:bg-red-3 hover:text-red-11` (`ClipsSidebar.tsx:953`): the theme
-/// carries only the red steps the settings pages use, so these two are the
-/// stock Radix values `theme.css` leaves untouched.
 fn red_3(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        gpui::rgb(0x3b1219)
-    } else {
-        gpui::rgb(0xfeebec)
-    }
-    .into()
+    theme.negative_subtle.into()
 }
 
 fn red_11(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        gpui::rgb(0xff9592)
-    } else {
-        gpui::rgb(0xce2c31)
-    }
-    .into()
+    theme.text_danger.into()
 }
 
 /// `bg-gray-2 dark:bg-gray-3` -- the card and the drag ghost (`:877, 1228`).
@@ -774,7 +761,7 @@ impl EditorWindow {
                     .border_1()
                     .border_color(self.card_line())
                     .bg(self.panel_bg())
-                    .shadow(self.theme.editor.card_shadow())
+                    .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
                     .child(self.render_clips_back_header(cx))
                     .child(self.render_clips_body(cx)),
             )

@@ -38,7 +38,6 @@ use crate::editor_crop::{
     HANDLES, ResizeSession, SE_HANDLE, Vec2,
 };
 use crate::screenshot_editor::ScreenshotEditorWindow;
-use crate::theme::Theme;
 use crate::ui;
 
 /// `Dialog.Header` -- `h-14 px-4` (`ui.tsx:224-226`).
@@ -873,16 +872,9 @@ impl ScreenshotEditorWindow {
                             .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                             .p(px(12.))
                             .bg(card_bg)
-                            // `ring-1 ring-black/5 shadow-xs`.
                             .border_1()
-                            .border_color(gpui::hsla(0., 0., 0., 0.05))
-                            .shadow(vec![gpui::BoxShadow {
-                                color: Theme::with_alpha(gpui::rgb(0x000000), 0.05),
-                                offset: gpui::point(px(0.), px(1.)),
-                                blur_radius: px(2.),
-                                spread_radius: px(0.),
-                                inset: false,
-                            }])
+                            .border_color(theme.border)
+                            .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
                             .child(self.render_crop_dialog_area(dialog, cx)),
                     ),
             )

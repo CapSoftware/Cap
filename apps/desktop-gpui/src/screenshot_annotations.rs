@@ -2998,13 +2998,7 @@ impl ScreenshotEditorWindow {
                         } else {
                             theme.surface
                         })
-                        .shadow(vec![gpui::BoxShadow {
-                            color: Theme::with_alpha(gpui::rgb(0x000000), 0.18),
-                            offset: gpui::point(px(0.), px(8.)),
-                            blur_radius: px(24.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
                         .child(
                             // `RgbInput` (`ColorPicker.tsx:47-102`).
                             div()

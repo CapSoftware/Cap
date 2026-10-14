@@ -5,8 +5,11 @@ block below is an exact copy of `platform.css`, formatted by Biome. This is the 
 not an extension of the web or Tauri styles. Read these rules before desktop UI work.
 
 `build.rs` compiles `platform.css` into Rust light/dark colors, radii and shadows. The desktop
-theme and migrated components use these tokens. Legacy editor palettes, material-derived styling
-and literal UI colors still exist in other components; the strict token migration is not complete.
+theme carries only these tokens: the legacy Radix scales and the editor palette are gone, and app
+chrome takes its colors, radii and shadows from them. Literal colors remain only where this theme
+defines nothing: the macOS window materials, overlays drawn over screen or video content (crop,
+target selection, camera preview), platform window controls (traffic lights, the Windows close
+button), illustrations, recording-state reds and user content.
 `scripts/migrate-theme-tokens.ts` migrates legacy field references and literal corner radii, while
 `scripts/sync-hugeicons.ts` regenerates the generic SVG assets from the pinned free icon package.
 

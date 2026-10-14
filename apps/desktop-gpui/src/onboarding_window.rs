@@ -626,19 +626,11 @@ impl OnboardingWindow {
     }
 
     fn success_palette(&self) -> (Hsla, Hsla, Hsla) {
-        if self.theme.is_dark() {
-            (
-                Theme::with_alpha(gpui::rgb(0x46a758), 0.16),
-                Theme::with_alpha(gpui::rgb(0x46a758), 0.38),
-                gpui::rgb(0x63d489).into(),
-            )
-        } else {
-            (
-                gpui::rgb(0xebf9ef).into(),
-                gpui::rgb(0xc9ebd5).into(),
-                gpui::rgb(0x18794e).into(),
-            )
-        }
+        (
+            self.theme.positive_subtle.into(),
+            self.theme.positive.into(),
+            self.theme.text_positive.into(),
+        )
     }
 
     fn render_permission_row(
@@ -704,9 +696,9 @@ impl OnboardingWindow {
             .py(px(12.))
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(theme.body_border(4))
+            .border_color(gpui::Hsla::from(theme.border))
             .bg(if theme.is_dark() {
-                theme.body_fill(2)
+                gpui::Hsla::from(theme.surface_subtle)
             } else {
                 gpui::white()
             })
@@ -795,9 +787,9 @@ impl OnboardingWindow {
         div()
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(self.theme.body_border(4))
+            .border_color(gpui::Hsla::from(self.theme.border))
             .bg(if self.theme.is_dark() {
-                self.theme.body_fill(2)
+                gpui::Hsla::from(self.theme.surface_subtle)
             } else {
                 gpui::white()
             })
@@ -1319,9 +1311,9 @@ impl OnboardingWindow {
                                         theme.active_bg
                                     })
                                     .bg(if active == index {
-                                        theme.body_fill(7)
+                                        gpui::Hsla::from(theme.active_bg)
                                     } else if theme.is_dark() {
-                                        theme.body_fill(3)
+                                        gpui::Hsla::from(theme.surface_subtle)
                                     } else {
                                         gpui::white()
                                     })
@@ -1411,7 +1403,7 @@ impl OnboardingWindow {
                         let open = self.faq_open[index];
                         div()
                             .when(index > 0, |el| {
-                                el.border_t_1().border_color(theme.body_border(4))
+                                el.border_t_1().border_color(gpui::Hsla::from(theme.border))
                             })
                             .child(
                                 div()
@@ -1630,7 +1622,7 @@ impl OnboardingWindow {
                             .bg(if index == active {
                                 Hsla::from(theme.primary_subtle)
                             } else {
-                                theme.body_fill(1)
+                                gpui::Hsla::from(theme.surface)
                             })
                             .child(copy(
                                 format!("{}", index + 1),
@@ -1745,11 +1737,7 @@ impl OnboardingWindow {
         let stopped = self.demo_phase >= 6;
         let time = format!("0:0{}", self.demo_phase.saturating_sub(2).min(3));
         self.card()
-            .bg(if theme.is_dark() {
-                theme.surface.into()
-            } else {
-                gpui::white()
-            })
+            .bg(theme.surface)
             .w_full()
             .min_w(px(280.))
             .h(px(40.))
@@ -1898,7 +1886,7 @@ impl OnboardingWindow {
                     .mt_0()
                     .p(px(8.))
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-                    .bg(theme.body_fill(3))
+                    .bg(gpui::Hsla::from(theme.surface_subtle))
                     .child(
                         copy("cap.so/s/m4k92x", 11., theme.text_secondary)
                             .flex_1()
@@ -1915,7 +1903,7 @@ impl OnboardingWindow {
                             .bg(if copied {
                                 self.success_palette().0
                             } else {
-                                theme.body_fill(1)
+                                gpui::Hsla::from(theme.surface)
                             })
                             .child(glyph(
                                 if copied {
@@ -2070,7 +2058,7 @@ impl OnboardingWindow {
                                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                     .border_1()
                                     .border_color(theme.surface_subtle)
-                                    .bg(theme.body_fill(2)),
+                                    .bg(gpui::Hsla::from(theme.surface_subtle)),
                             )
                             .child(copy("BACKGROUND", 8., theme.text_muted).mt(px(4.)))
                             .child(div().flex().gap(px(4.)).children(
@@ -2309,7 +2297,7 @@ impl OnboardingWindow {
                                     .items_center()
                                     .justify_center()
                                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
-                                    .bg(theme.body_fill(3))
+                                    .bg(gpui::Hsla::from(theme.surface_subtle))
                                     .child(glyph(path, 12., theme.text_secondary))
                             }),
                         ),
@@ -2323,7 +2311,7 @@ impl OnboardingWindow {
                                     .px(px(6.))
                                     .py(px(4.))
                                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
-                                    .bg(theme.body_fill(3)),
+                                    .bg(gpui::Hsla::from(theme.surface_subtle)),
                             )
                             .child(
                                 copy("Save", 9., gpui::white())
@@ -2374,7 +2362,7 @@ impl OnboardingWindow {
                                             .rounded(crate::theme::radius(
                                                 crate::theme::RadiusToken::Large,
                                             ))
-                                            .bg(theme.body_fill(1))
+                                            .bg(gpui::Hsla::from(theme.surface))
                                             .child(glyph(
                                                 "icons/check.svg",
                                                 12.,

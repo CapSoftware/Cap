@@ -1464,7 +1464,6 @@ impl EditorWindow {
         preview_box: (f32, f32),
     ) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let stats = ui.preview_stats.as_ref();
         let duration = stats
             .map(|stats| {
@@ -1485,7 +1484,7 @@ impl EditorWindow {
                     .h(px(box_h))
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .overflow_hidden()
-                    .shadow(crate::theme::preview_shadow())
+                    .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
                     .child(img(image).object_fit(gpui::ObjectFit::Contain).size_full())
                     .into_any_element()
             }
@@ -1514,7 +1513,7 @@ impl EditorWindow {
             .flex_col()
             .flex_1()
             .min_w_0()
-            .bg(Hsla::from(editor.stage))
+            .bg(Hsla::from(theme.surface_secondary))
             .pt(px(16.))
             .px(px(STAGE_PADDING_X))
             .pb(px(20.))
@@ -1574,7 +1573,7 @@ impl EditorWindow {
                         .flex_row()
                         .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                         .bg(Hsla::from(theme.surface_raised))
-                        .shadow(editor.card_shadow())
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
                         .child(export_stat(
                             &theme,
                             "Duration",
@@ -1743,15 +1742,6 @@ impl EditorWindow {
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(text)
-            .when(primary, |this| {
-                this.shadow(vec![gpui::BoxShadow {
-                    color: gpui::hsla(0., 0., 1., 0.18),
-                    offset: gpui::point(px(0.), px(1.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
-                    inset: true,
-                }])
-            })
             .when(busy, |this| this.opacity(0.5))
             .when(!busy, |this| {
                 this.cursor_pointer()
@@ -2174,7 +2164,6 @@ impl EditorWindow {
 
     fn export_advanced(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let editor = theme.editor;
         let show_bpp = ui.format == ExportFormatKind::Mp4 && !ui.cursor_only;
         div()
             .flex()
@@ -2313,8 +2302,8 @@ impl EditorWindow {
                                         .fill(Hsla::from(theme.primary))
                                         .thumb(
                                             px(14.),
-                                            Hsla::from(editor.thumb),
-                                            Some(gpui::hsla(0., 0., 0., 0.12)),
+                                            Hsla::from(theme.primary_foreground),
+                                            Some(Hsla::from(theme.border)),
                                         )
                                         .thumb_shadow()
                                         .on_drag_start(cx.listener(

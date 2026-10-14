@@ -2720,7 +2720,7 @@ impl EditorWindow {
             .justify_center()
             .p(px(16.))
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
-            .bg(Hsla::from(self.theme.editor.stage))
+            .bg(Hsla::from(self.theme.surface_secondary))
             .child(self.render_crop_area(state))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::crop_mouse_down))
             // `onContextMenu={(e) => showCropOptionsMenu(e, true)}` -- anchored
@@ -2836,8 +2836,8 @@ impl EditorWindow {
             .w(px(box_w))
             .h(px(box_h))
             .border_1()
-            .border_color(Hsla::from(theme.editor.stage))
-            .bg(Hsla::from(theme.editor.stage))
+            .border_color(Hsla::from(theme.surface_secondary))
+            .bg(Hsla::from(theme.surface_secondary))
             .cursor(base_cursor)
             // The box's painted origin, so a pointer position can be made
             // container-local. gpui has no `getBoundingClientRect`; this is
@@ -2885,7 +2885,7 @@ impl EditorWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(Hsla::from(theme.editor.stage))
+                    .bg(Hsla::from(theme.surface_secondary))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(theme.text_secondary))
@@ -2902,7 +2902,6 @@ impl EditorWindow {
     /// `latestFrame` the player draws, `object-contain` inside the box.
     fn render_crop_preview(&self, w: Pixels, h: Pixels) -> AnyElement {
         let theme = self.theme;
-        let editor = self.theme.editor;
         let frame_size = self
             .frame_layout
             .map(|layout| (layout.output_size[0] as f32, layout.output_size[1] as f32))
@@ -2918,7 +2917,7 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-            .bg(Hsla::from(editor.stage))
+            .bg(Hsla::from(theme.surface_secondary))
             .overflow_hidden()
             .children(match self.latest_frame.clone() {
                 Some(frame) => Some(

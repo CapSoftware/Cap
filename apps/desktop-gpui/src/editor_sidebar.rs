@@ -2504,7 +2504,7 @@ impl EditorWindow {
                     .bg(self.panel_bg())
                     .border_1()
                     .border_color(self.card_line())
-                    .shadow(theme.editor.card_shadow())
+                    .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
                     .child(rail)
                     .children(self.sidebar.image_import_error.as_ref().map(|error| {
                         div()
@@ -3766,8 +3766,8 @@ impl EditorWindow {
                 }))
                 .thumb(
                     px(14.),
-                    Hsla::from(theme.editor.thumb),
-                    Some(gpui::hsla(0., 0., 0., 0.12)),
+                    Hsla::from(theme.primary_foreground),
+                    Some(Hsla::from(theme.border)),
                 )
                 .thumb_shadow()
                 .when(!disabled, |this| {
