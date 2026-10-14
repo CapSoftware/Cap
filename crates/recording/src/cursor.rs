@@ -9,6 +9,10 @@ use futures::{FutureExt, future::Shared};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -40,6 +44,7 @@ pub struct CursorActor {
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
+#[derive(Clone)]
 pub struct IncrementalCaptureOutputs {
     pub cursor: Option<PathBuf>,
     pub keyboard: Option<PathBuf>,
@@ -170,6 +175,119 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
             output_path.display(),
             e
         );
+    }
+}
+
+struct IncrementalSnapshot {
+    cursor: Option<(Vec<CursorMoveEvent>, Vec<CursorClickEvent>)>,
+    keyboard: Option<Vec<KeyPressEvent>>,
+}
+
+impl IncrementalSnapshot {
+    fn capture(outputs: &IncrementalCaptureOutputs, response: &CursorActorResponse) -> Self {
+        Self {
+            cursor: outputs
+                .cursor
+                .as_ref()
+                .map(|_| (response.moves.clone(), response.clicks.clone())),
+            keyboard: outputs
+                .keyboard
+                .as_ref()
+                .map(|_| response.keyboard_presses.clone()),
+        }
+    }
+
+    fn write(self, outputs: &IncrementalCaptureOutputs) {
+        if let (Some(path), Some((moves, clicks))) = (&outputs.cursor, &self.cursor) {
+            flush_cursor_data(path, moves, clicks);
+        }
+        if let (Some(path), Some(presses)) = (&outputs.keyboard, &self.keyboard) {
+            flush_keyboard_data(path, presses);
+        }
+    }
+}
+
+enum WriterMessage {
+    Image {
+        path: PathBuf,
+        image: image::RgbaImage,
+    },
+    Snapshot(IncrementalSnapshot),
+}
+
+/// Writes cursor images and the incremental cursor and keyboard files on a
+/// separate thread so a slow or stalled output volume cannot pause input
+/// sampling. At most one periodic snapshot waits while another is written; a
+/// flush that finds one already waiting is skipped, since the next one carries
+/// every event.
+struct CursorFileWriter {
+    tx: std::sync::mpsc::Sender<WriterMessage>,
+    snapshot_queued: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl CursorFileWriter {
+    fn spawn(outputs: IncrementalCaptureOutputs) -> std::io::Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMessage>();
+        let snapshot_queued = Arc::new(AtomicBool::new(false));
+        let queued = snapshot_queued.clone();
+        let thread = std::thread::Builder::new()
+            .name("cursor-writer".to_string())
+            .spawn(move || {
+                for message in rx {
+                    match message {
+                        WriterMessage::Image { path, image } => {
+                            save_cursor_image(&path, &image);
+                        }
+                        WriterMessage::Snapshot(snapshot) => {
+                            queued.store(false, Ordering::Release);
+                            snapshot.write(&outputs);
+                        }
+                    }
+                }
+            })?;
+        Ok(Self {
+            tx,
+            snapshot_queued,
+            thread,
+        })
+    }
+
+    fn save_image(&self, path: PathBuf, image: image::RgbaImage) {
+        if let Err(std::sync::mpsc::SendError(WriterMessage::Image { path, image })) =
+            self.tx.send(WriterMessage::Image { path, image })
+        {
+            save_cursor_image(&path, &image);
+        }
+    }
+
+    fn flush(&self, snapshot: impl FnOnce() -> IncrementalSnapshot) {
+        if !self.snapshot_queued.swap(true, Ordering::AcqRel) {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot()));
+        }
+    }
+
+    fn finish(self, snapshot: Option<IncrementalSnapshot>) {
+        if let Some(snapshot) = snapshot {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot));
+        }
+        drop(self.tx);
+        if self.thread.join().is_err() {
+            tracing::error!("Cursor writer thread panicked");
+        }
+    }
+}
+
+fn save_cursor_image(path: &Path, image: &image::RgbaImage) -> bool {
+    match image.save(path) {
+        Ok(()) => {
+            tracing::info!(path = %path.display(), "Saved cursor image");
+            true
+        }
+        Err(e) => {
+            tracing::error!("Failed to save cursor image: {}", e);
+            false
+        }
     }
 }
 
@@ -376,6 +494,11 @@ pub fn spawn_cursor_recorder(
             keyboard_presses: vec![],
         };
 
+        let has_incremental_outputs =
+            incremental_outputs.cursor.is_some() || incremental_outputs.keyboard.is_some();
+        let writer = CursorFileWriter::spawn(incremental_outputs.clone())
+            .inspect_err(|e| error!("Failed to start cursor writer, writing inline: {e}"))
+            .ok();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
@@ -438,10 +561,14 @@ pub fn spawn_cursor_recorder(
                     if let Ok(image) = image::load_from_memory(&data.image) {
                         let rgba_image = image.into_rgba8();
 
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            error!("Failed to save cursor image: {}", e);
-                        } else {
-                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                        let saved = match &writer {
+                            Some(writer) => {
+                                writer.save_image(cursor_path, rgba_image);
+                                true
+                            }
+                            None => save_cursor_image(&cursor_path, &rgba_image),
+                        };
+                        if saved {
                             response.cursors.insert(
                                 id,
                                 Cursor {
@@ -541,12 +668,11 @@ pub fn spawn_cursor_recorder(
 
             last_keys = current_keys;
 
-            if last_flush.elapsed() >= flush_interval {
-                if let Some(ref path) = incremental_outputs.cursor {
-                    flush_cursor_data(path, &response.moves, &response.clicks);
-                }
-                if let Some(ref kb_path) = incremental_outputs.keyboard {
-                    flush_keyboard_data(kb_path, &response.keyboard_presses);
+            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
+                let snapshot = || IncrementalSnapshot::capture(&incremental_outputs, &response);
+                match &writer {
+                    Some(writer) => writer.flush(snapshot),
+                    None => snapshot().write(&incremental_outputs),
                 }
                 last_flush = Instant::now();
             }
@@ -554,12 +680,15 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
-        if let Some(ref path) = incremental_outputs.cursor {
-            flush_cursor_data(path, &response.moves, &response.clicks);
-        }
-
-        if let Some(ref kb_path) = incremental_outputs.keyboard {
-            flush_keyboard_data(kb_path, &response.keyboard_presses);
+        let snapshot = has_incremental_outputs
+            .then(|| IncrementalSnapshot::capture(&incremental_outputs, &response));
+        match writer {
+            Some(writer) => writer.finish(snapshot),
+            None => {
+                if let Some(snapshot) = snapshot {
+                    snapshot.write(&incremental_outputs);
+                }
+            }
         }
 
         let _ = tx.send(response);
@@ -1105,5 +1234,136 @@ mod input_epoch_tests {
             input_epoch(Some(&gate), start_time),
             Some(start_time.instant())
         );
+    }
+}
+
+#[cfg(test)]
+mod incremental_writer_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn response(events: usize) -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 1,
+            moves: (0..events)
+                .map(|i| CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 16.0,
+                    x: i as f64 / events as f64,
+                    y: 0.5,
+                })
+                .collect(),
+            clicks: (0..events / 10)
+                .map(|i| CursorClickEvent {
+                    active_modifiers: vec![],
+                    cursor_num: 0,
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+            keyboard_presses: (0..events / 10)
+                .map(|i| KeyPressEvent {
+                    key: "a".to_string(),
+                    key_code: "KeyA".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn outputs(dir: &Path, name: &str) -> IncrementalCaptureOutputs {
+        IncrementalCaptureOutputs {
+            cursor: Some(dir.join(format!("{name}-cursor.json"))),
+            keyboard: Some(dir.join(format!("{name}-keyboard.bin"))),
+        }
+    }
+
+    #[test]
+    fn writer_thread_produces_the_same_files_as_inline_flushes() {
+        let dir = tempfile::tempdir().unwrap();
+        let full = response(500);
+
+        let inline = outputs(dir.path(), "inline");
+        IncrementalSnapshot::capture(&inline, &full).write(&inline);
+
+        let threaded = outputs(dir.path(), "threaded");
+        let writer = CursorFileWriter::spawn(threaded.clone()).unwrap();
+        writer.flush(|| IncrementalSnapshot::capture(&threaded, &response(10)));
+        writer.finish(Some(IncrementalSnapshot::capture(&threaded, &full)));
+
+        for (a, b) in [
+            (&inline.cursor, &threaded.cursor),
+            (&inline.keyboard, &threaded.keyboard),
+        ] {
+            let (a, b) = (a.as_ref().unwrap(), b.as_ref().unwrap());
+            assert_eq!(std::fs::read(a).unwrap(), std::fs::read(b).unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flushes_do_not_wait_for_a_blocked_writer() {
+        use std::ffi::CString;
+        use std::io::Read;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("cursor.json");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+        let outputs = IncrementalCaptureOutputs {
+            cursor: Some(fifo.clone()),
+            keyboard: None,
+        };
+
+        // Opening a FIFO for writing blocks until a reader arrives, which
+        // stands in for a stalled output volume.
+        let writer = CursorFileWriter::spawn(outputs.clone()).unwrap();
+        let started = Instant::now();
+        for events in [10, 20, 30, 40] {
+            writer.flush(|| IncrementalSnapshot::capture(&outputs, &response(events)));
+        }
+        writer.save_image(
+            dir.path().join("cursor_0.png"),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+
+        let reader = std::thread::spawn(move || {
+            let mut last = Vec::new();
+            loop {
+                let mut contents = Vec::new();
+                std::fs::File::open(&fifo)
+                    .unwrap()
+                    .read_to_end(&mut contents)
+                    .unwrap();
+                if contents.is_empty() {
+                    return last;
+                }
+                last = contents;
+            }
+        });
+
+        let final_response = response(50);
+        writer.finish(Some(IncrementalSnapshot::capture(
+            &outputs,
+            &final_response,
+        )));
+        // Unblock the reader's final open with an empty write.
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(dir.path().join("cursor.json")),
+        );
+        let last = reader.join().unwrap();
+
+        let written: CursorEvents = serde_json::from_slice(&last).unwrap();
+        assert_eq!(written.moves.len(), final_response.moves.len());
+        assert_eq!(written.clicks.len(), final_response.clicks.len());
+        assert!(dir.path().join("cursor_0.png").exists());
     }
 }
