@@ -418,7 +418,6 @@ mod frame {
         /// created (the preview then degrades to unmirrored, logged once).
         flip_session: Option<FlipSession>,
         ring: Vec<arc::R<cv::PixelBuf>>,
-        /// The unflipped conversion when mirroring.
         scratch: Option<arc::R<cv::PixelBuf>>,
         next: usize,
         src_dims: (usize, usize),
