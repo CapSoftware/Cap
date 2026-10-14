@@ -589,8 +589,8 @@ impl IconButton {
         Self {
             idle: Hsla::from(theme.text_muted),
             active_color: Hsla::from(theme.text_primary),
-            hover_bg: Some(Theme::with_alpha(theme.text_primary, 0.07)),
-            active_bg: Some(Theme::with_alpha(theme.text_primary, 0.08)),
+            hover_bg: Some(Hsla::from(theme.hover_bg)),
+            active_bg: Some(Hsla::from(theme.active_bg)),
             ..Self::new(id, icon)
         }
     }

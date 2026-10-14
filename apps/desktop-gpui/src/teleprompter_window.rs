@@ -827,11 +827,11 @@ impl TeleprompterWindow {
                     .flex_shrink_0()
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .border_1()
-                    .border_color(Theme::with_alpha(theme.text_primary, 0.06))
-                    .bg(Theme::with_alpha(theme.text_primary, 0.07))
+                    .border_color(Hsla::from(theme.border_subtle))
+                    .bg(Hsla::from(theme.surface_subtle))
                     .when(!enabled, |this| this.opacity(0.3))
                     .when(enabled, |this| {
-                        this.hover(|style| style.bg(Theme::with_alpha(theme.text_primary, 0.11)))
+                        this.hover(|style| style.bg(Hsla::from(theme.hover_bg)))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_playback(window, cx);
                             }))
@@ -911,8 +911,8 @@ impl TeleprompterWindow {
                             .h(px(32.))
                             .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_1()
-                            .border_color(Theme::with_alpha(theme.text_primary, 0.06))
-                            .bg(Theme::with_alpha(theme.text_primary, 0.05))
+                            .border_color(Hsla::from(theme.border_subtle))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .px(px(2.))
                             .child(self.tool_button(
                                 "font-smaller",

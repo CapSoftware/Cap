@@ -4377,11 +4377,8 @@ impl EditorWindow {
                                         crate::theme::RadiusToken::Compact,
                                     ))
                                     .border_2()
-                                    .border_color(crate::editor_sidebar::with_alpha(
-                                        theme.primary,
-                                        0.6,
-                                    ))
-                                    .bg(crate::editor_sidebar::with_alpha(theme.primary, 0.1)),
+                                    .border_color(Hsla::from(theme.primary))
+                                    .bg(Hsla::from(theme.primary_subtle)),
                             )
                             .child(
                                 div()
@@ -4962,7 +4959,7 @@ impl EditorWindow {
             .font_weight(FontWeight::MEDIUM)
             .when(italic, |this| this.italic())
             .when(selected, |this| {
-                this.bg(with_alpha(theme.primary, 0.12))
+                this.bg(Hsla::from(theme.primary_subtle))
                     .text_color(Hsla::from(theme.primary))
             })
             .when(!selected, |this| {
@@ -5018,12 +5015,12 @@ impl EditorWindow {
                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
                 .border_color(if selected {
-                    with_alpha(theme.primary, 0.4)
+                    Hsla::from(theme.primary)
                 } else {
                     gpui::transparent_black()
                 })
                 .bg(if selected {
-                    with_alpha(theme.primary, 0.12)
+                    Hsla::from(theme.primary_subtle)
                 } else {
                     Hsla::from(theme.surface_subtle)
                 })
@@ -5604,7 +5601,7 @@ impl EditorWindow {
                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
                 .border_color(Hsla::from(theme.border_subtle))
-                .bg(crate::editor_sidebar::with_alpha(theme.surface, 0.8))
+                .bg(Hsla::from(theme.surface))
                 .child(
                     div()
                         .flex()
@@ -5629,10 +5626,7 @@ impl EditorWindow {
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
                     .border_color(Hsla::from(theme.border_subtle))
-                    .bg(crate::editor_sidebar::with_alpha(
-                        theme.surface_secondary,
-                        0.7,
-                    ))
+                    .bg(Hsla::from(theme.surface_secondary))
                     .child(
                         div()
                             .flex()
@@ -5659,7 +5653,7 @@ impl EditorWindow {
                             .px(px(12.))
                             .py(px(8.))
                             .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
-                            .bg(crate::editor_sidebar::with_alpha(theme.surface, 0.7))
+                            .bg(Hsla::from(theme.surface))
                             .text_size(px(12.))
                             .text_color(Hsla::from(theme.text_secondary))
                             .child("Duration")
@@ -6023,12 +6017,7 @@ impl EditorWindow {
                             } else {
                                 Hsla::from(theme.surface_subtle)
                             })
-                            .when(checked, |this| {
-                                this.bg(crate::editor_sidebar::with_alpha(
-                                    theme.primary_subtle,
-                                    0.4,
-                                ))
-                            })
+                            .when(checked, |this| this.bg(Hsla::from(theme.primary_subtle)))
                             .child(
                                 div()
                                     .flex()
@@ -6403,10 +6392,7 @@ impl EditorWindow {
                                 .flex()
                                 .items_center()
                                 .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
-                                .bg(crate::editor_sidebar::with_alpha(
-                                    theme.surface_raised,
-                                    0.85,
-                                ))
+                                .bg(Hsla::from(theme.surface_raised))
                                 .child(
                                     svg()
                                         .path("icons/move-right.svg")

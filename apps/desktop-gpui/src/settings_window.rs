@@ -3309,7 +3309,7 @@ impl SettingsWindow {
             })
             .when(!checked, |this| {
                 this.border_1()
-                    .border_color(theme.settings_muted().opacity(0.55))
+                    .border_color(Hsla::from(theme.border_strong))
                     .group_hover("studio-quality-option", |style| {
                         style.border_color(theme.settings_muted())
                     })
@@ -4078,7 +4078,7 @@ impl SettingsWindow {
                     .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
                     .border_color(Hsla::from(theme.warning))
-                    .bg(Theme::with_alpha(theme.warning_subtle, 0.3))
+                    .bg(Hsla::from(theme.warning_subtle))
                     .child(
                         svg()
                             .path("icons/triangle-alert.svg")
