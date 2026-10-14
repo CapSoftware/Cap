@@ -1301,6 +1301,37 @@ mod tests {
             .map(|active| active.segment)
     }
 
+    #[test]
+    fn optimized_caption_lookup_matches_two_pass_lookup() {
+        let mut segments = vec![
+            segment(4.0, 5.0, vec![]),
+            segment(0.0, 2.0, vec![]),
+            segment(1.5, 4.5, vec![]),
+            segment(7.0, 8.25, vec![word(7.0, 8.25)]),
+            segment(5.5, 6.0, vec![]),
+            segment(2.5, 3.5, vec![]),
+            segment(9.0, 10.0, vec![]),
+        ];
+        for (index, segment) in segments.iter_mut().enumerate() {
+            segment.id = format!("segment-{index}");
+            segment.fade_duration_override = match index % 3 {
+                0 => Some(0.0),
+                1 => Some(0.2),
+                _ => Some(0.8),
+            };
+        }
+
+        // Include boundaries and gaps for overlapping, unsorted segments.
+        for tick in -100..1_200 {
+            let time = tick as f64 / 100.0;
+            let expected = baseline_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
+            let actual = optimized_lookup(time, &segments, 0.35)
+                .map(|segment| segment.id.as_str());
+            assert_eq!(actual, expected, "caption selection differs at t={time}");
+        }
+    }
+
     fn measure_lookup(
         lookup: CaptionLookup,
         segments: &[CaptionTrackSegment],
