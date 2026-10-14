@@ -860,6 +860,44 @@ fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
 
+/// The loaded Parakeet model and its ONNX Runtime arena hold ~1.8 GB for
+/// `best`; keep them only long enough for a quick regenerate.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_IDLE_RELEASE: Duration = Duration::from_secs(60);
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+static PARAKEET_LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+/// Call with the transcription slot held, so a run in flight always bumps the
+/// generation before the release thread can take the slot.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_parakeet_release() {
+    let generation = PARAKEET_LAST_USE.fetch_add(1, Ordering::AcqRel) + 1;
+    let spawned = std::thread::Builder::new()
+        .name("parakeet-release".into())
+        .spawn(move || {
+            std::thread::sleep(PARAKEET_IDLE_RELEASE);
+            let _slot = lock_transcription_worker_slot();
+            if PARAKEET_LAST_USE.load(Ordering::Acquire) != generation {
+                return;
+            }
+            let released = PARAKEET_CONTEXT
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if released.is_some() {
+                tracing::info!("Released idle Parakeet TDT model");
+            }
+            drop(released);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!("Failed to schedule Parakeet release: {error}");
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn schedule_parakeet_release() {}
+
 // ---------------------------------------------------------------------------
 // Audio extraction
 // ---------------------------------------------------------------------------
@@ -1641,7 +1679,9 @@ pub fn transcribe_blocking(
         let _guard = lock_transcription_worker_slot();
         if is_parakeet_model(model) {
             tracing::info!("Using Parakeet TDT engine");
-            process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref())
+            let result = process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref());
+            schedule_parakeet_release();
+            result
         } else {
             tracing::info!("Using Whisper engine");
             let hints = transcription_hints();
