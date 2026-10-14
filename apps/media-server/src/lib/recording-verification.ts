@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { PROCESS_TIMEOUT_MS } from "./media-common";
@@ -730,6 +731,62 @@ export async function verifyRemuxedRecording(
 	};
 }
 
+async function stageRemoteRecording(
+	input: string,
+	abortSignal?: AbortSignal,
+	objectIdentity?: string,
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
+	const directory = await mkdtemp(join(tmpdir(), "cap-recording-"));
+	const path = join(directory, "recording.mp4");
+	const cleanup = () => rm(directory, { force: true, recursive: true });
+	try {
+		abortSignal?.throwIfAborted();
+		const response = await fetchMedia(input, {
+			headers: {
+				Range: "bytes=0-",
+				"X-Cap-Recording-Verification": "1",
+				...(objectIdentity ? { "If-Match": objectIdentity } : {}),
+			},
+			signal: abortSignal,
+		});
+		try {
+			if (
+				response.status === 408 ||
+				response.status === 429 ||
+				response.status >= 500
+			) {
+				throw new RecordingVerificationError(
+					`Recording object read failed: ${response.status}`,
+					true,
+				);
+			}
+			if (!response.body) {
+				throw new Error(`Failed to download recording: ${response.status}`);
+			}
+			const reader = response.body.getReader();
+			const writer = Bun.file(path).writer();
+			try {
+				while (true) {
+					abortSignal?.throwIfAborted();
+					const { done, value } = await reader.read();
+					if (done) break;
+					writer.write(value);
+				}
+				await writer.end();
+			} finally {
+				reader.releaseLock();
+			}
+		} finally {
+			if (!response.body?.locked) await response.body?.cancel().catch(() => {});
+		}
+		return { path, cleanup };
+	} catch (error) {
+		await cleanup();
+		abortSignal?.throwIfAborted();
+		throw error;
+	}
+}
+
 export async function verifyRecording(
 	input: string,
 	options: RecordingVerificationOptions,
@@ -762,13 +819,7 @@ async function decodeRecording(
 	if (options.abortSignal?.aborted) {
 		throw new Error("Recording verification was cancelled");
 	}
-	let remote = false;
-	if (isAbsolute(input)) {
-		const metadata = await lstat(input);
-		if (!metadata.isFile()) {
-			throw new Error("Recording verification requires a regular MP4 file");
-		}
-	} else {
+	if (!isAbsolute(input)) {
 		const url = new URL(input);
 		if (
 			(url.protocol !== "http:" && url.protocol !== "https:") ||
@@ -777,7 +828,42 @@ async function decodeRecording(
 		) {
 			throw new Error("Recording verification requires an HTTP(S) MP4 URL");
 		}
-		remote = true;
+		const deadline = new AbortController();
+		const timeout = setTimeout(() => deadline.abort(), timeoutMs);
+		const signal = options.abortSignal
+			? AbortSignal.any([deadline.signal, options.abortSignal])
+			: deadline.signal;
+		try {
+			const staged = await stageRemoteRecording(input, signal, objectIdentity);
+			try {
+				return await decodeRecording(
+					staged.path,
+					options,
+					undefined,
+					sourceAudioInput,
+					packetProof,
+				);
+			} finally {
+				await staged.cleanup();
+			}
+		} catch (error) {
+			if (options.abortSignal?.aborted) {
+				throw new Error("Recording verification was cancelled");
+			}
+			if (deadline.signal.aborted) {
+				throw new RecordingVerificationError(
+					"Recording verification timed out",
+					true,
+				);
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+	const metadata = await lstat(input);
+	if (!metadata.isFile()) {
+		throw new Error("Recording verification requires a regular MP4 file");
 	}
 	if (sourceAudioInput && !(await lstat(sourceAudioInput)).isFile()) {
 		throw new Error("Recording verification requires a regular MP4 file");
@@ -800,10 +886,6 @@ async function decodeRecording(
 			? AbortSignal.any([deadline.signal, options.abortSignal])
 			: deadline.signal;
 		try {
-			const remoteObject = remote
-				? await readRemoteIdentity(input, signal, objectIdentity)
-				: undefined;
-			objectIdentity = remoteObject?.objectIdentity ?? objectIdentity;
 			const timingBudgetMs = timeoutMs - (performance.now() - startedAt);
 			if (timingBudgetMs <= 0) {
 				throw new RecordingVerificationError(
@@ -812,7 +894,6 @@ async function decodeRecording(
 				);
 			}
 			videoTiming = await readRecordingVideoTiming(input, {
-				remoteObject,
 				abortSignal: signal,
 				timeoutMs: Math.ceil(timingBudgetMs),
 			});
@@ -893,15 +974,9 @@ async function decodeRecording(
 				"-threads",
 				"1",
 				"-protocol_whitelist",
-				remote ? "http,https,tcp,tls" : "file",
+				"file",
 				"-f",
 				"mov",
-				...(objectIdentity
-					? [
-							"-headers",
-							`If-Match: ${objectIdentity}\r\nX-Cap-Recording-Verification: 1\r\n`,
-						]
-					: []),
 				"-i",
 				input,
 				...(sourceAudioInput

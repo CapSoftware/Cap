@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { extractAudio } from "../../lib/media-audio";
 import { probeVideo } from "../../lib/media-probe";
 import { generateThumbnail } from "../../lib/media-video";
+import { verifyRecording } from "../../lib/recording-verification";
 
 const video = readFileSync(
 	join(import.meta.dir, "..", "fixtures", "test-with-audio.mp4"),
@@ -76,6 +77,22 @@ describe("redirects to a private address", () => {
 			await expect(generateThumbnail(target.url, 1)).rejects.toThrow(
 				"private address",
 			);
+			expect(target.secretHits()).toBe(0);
+		} finally {
+			target.server.stop(true);
+		}
+	});
+
+	test("recording verification does not fetch the redirect target", async () => {
+		process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS = "false";
+		const target = privateRedirectServer();
+		try {
+			await expect(
+				verifyRecording(target.url, {
+					allowObservedDuration: true,
+					requireAudio: false,
+				}),
+			).rejects.toThrow("private address");
 			expect(target.secretHits()).toBe(0);
 		} finally {
 			target.server.stop(true);
