@@ -65,6 +65,8 @@ jobs:
         uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+          prefix-key: v1-rust-sync
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install desktop dependencies
         uses: ./.github/actions/install-desktop-deps

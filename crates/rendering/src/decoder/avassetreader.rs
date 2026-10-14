@@ -469,6 +469,7 @@ impl AVAssetReaderDecoder {
         path: PathBuf,
         tokio_handle: TokioHandle,
         keyframe_index: Option<Arc<cap_video_decode::avassetreader::KeyframeIndex>>,
+        requested_time: f32,
     ) -> Result<Self, String> {
         let fps = keyframe_index
             .as_ref()
@@ -488,7 +489,7 @@ impl AVAssetReaderDecoder {
             duration_secs,
         };
 
-        let pool_manager = DecoderPoolManager::new(config);
+        let mut pool_manager = DecoderPoolManager::new(config);
 
         let permit = tokio_handle
             .block_on(async {
@@ -504,10 +505,11 @@ impl AVAssetReaderDecoder {
         let primary_instance = DecoderInstance::new(
             path.clone(),
             tokio_handle.clone(),
-            0.0,
+            requested_time,
             keyframe_index_arc.clone(),
             permit,
         )?;
+        pool_manager.update_decoder_position(0, primary_instance.current_position());
 
         // Linear playback only needs one reader. Additional readers retain
         // AVFoundation state and decoded buffers, so create them only when a
@@ -869,7 +871,12 @@ impl AVAssetReaderDecoder {
                         .ok()
                         .map(Arc::new);
                 }
-                match Self::new(path.clone(), tokio_handle.clone(), keyframe_index.clone()) {
+                match Self::new(
+                    path.clone(),
+                    tokio_handle.clone(),
+                    keyframe_index.clone(),
+                    requested_time,
+                ) {
                     Ok(decoder) => this = Some(decoder),
                     Err(error) => {
                         tracing::warn!(%error, "Failed to initialize video reader on demand");

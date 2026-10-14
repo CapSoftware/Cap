@@ -79,7 +79,7 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 432.;
+const MAIN_WINDOW_HEIGHT: f32 = 435.;
 
 /// The native content clip must match the root shell's `radius-medium`.
 const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 12.;

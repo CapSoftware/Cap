@@ -19,6 +19,10 @@ name = "editor-playback-benchmark"
 path = "examples/editor-playback-benchmark.rs"
 
 [[example]]
+name = "audio-output-idle-benchmark"
+path = "examples/audio-output-idle-benchmark.rs"
+
+[[example]]
 name = "editor-startup-benchmark"
 path = "examples/editor-startup-benchmark.rs"
 

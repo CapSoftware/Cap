@@ -658,9 +658,32 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show in overlay";
+        ShowOverlay = "showOverlay", "Show Cap";
+        DoNothing = "doNothing", "Do nothing";
     }
     default = OpenEditor
+}
+
+settings_enum! {
+    /// What a finished screenshot does next. GPUI-only: the Tauri app always
+    /// opened the editor and never reads this key.
+    PostScreenshotBehaviour {
+        OpenEditor = "openEditor", "Open editor";
+        Copy = "copy", "Copy to clipboard";
+        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
+        Save = "save", "Do nothing";
+    }
+    default = OpenEditor
+}
+
+impl PostScreenshotBehaviour {
+    pub fn copies(self) -> bool {
+        matches!(self, Self::Copy | Self::CopyAndOpenEditor)
+    }
+
+    pub fn opens_editor(self) -> bool {
+        matches!(self, Self::OpenEditor | Self::CopyAndOpenEditor)
+    }
 }
 
 settings_enum! {
@@ -845,6 +868,7 @@ pub struct GeneralSettings {
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
+    pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -1176,6 +1200,7 @@ impl GeneralSettings {
                 "mainWindowRecordingStartBehaviour",
             ),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
+            post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
