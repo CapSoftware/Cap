@@ -470,15 +470,6 @@ impl CameraLayer {
                     );
                 }
                 PixelFormat::Nv12 => {
-                    if let Err(e) = self.yuv_converter.prepare_for_dimensions(
-                        device,
-                        frame_size.x,
-                        frame_size.y,
-                    ) {
-                        tracing::warn!(error = %e, "YUV converter prepare failed");
-                        return;
-                    }
-
                     #[cfg(target_os = "macos")]
                     let converted_into_frame = {
                         frame_source = camera_frame
@@ -499,6 +490,15 @@ impl CameraLayer {
                     let converted_into_frame = false;
 
                     if !converted_into_frame {
+                        if let Err(e) = self.yuv_converter.prepare_for_dimensions(
+                            device,
+                            frame_size.x,
+                            frame_size.y,
+                        ) {
+                            tracing::warn!(error = %e, "YUV converter prepare failed");
+                            return;
+                        }
+
                         // Submitted on its own ahead of `encoder`, so queue order
                         // still has the conversion land before the copy below.
                         #[cfg(target_os = "linux")]
