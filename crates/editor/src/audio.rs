@@ -1934,77 +1934,79 @@ impl PartialEq for ProgressiveRenderKey {
     }
 }
 
-/// Serializes every project field the audio renderer reads. Exhaustive
-/// destructuring makes a new field a compile error here until it is
-/// classified.
+/// Serialized project fields that never reach the audio renderer. The cache
+/// key is the whole serialized project minus these, so any field missing from
+/// this list (including one added later) invalidates the cached render.
+const VISUAL_PROJECT_FIELDS: &[&str] = &[
+    "aspectRatio",
+    "background",
+    "camera",
+    "cursor",
+    "hotkeys",
+    "overlayOrder",
+    "captions",
+    "keyboard",
+    "annotations",
+    "screenMotionBlur",
+    "screenMovementSpring",
+    "colorCorrection",
+    "textSizeVersion",
+    "textAnimVersion",
+];
+/// Text segments reach the audio only through `TimelineConfiguration::hold_windows`,
+/// which the key carries in their place.
+const VISUAL_TIMELINE_FIELDS: &[&str] = &[
+    "zoomSegments",
+    "sceneSegments",
+    "maskSegments",
+    "textSegments",
+    "captionSegments",
+    "keyboardSegments",
+    "styleSegments",
+    "imageSegments",
+    "camera3dSegments",
+];
+const VISUAL_SEGMENT_FIELDS: &[&str] = &["name", "hideCursor"];
+const HOLD_WINDOWS_KEY: &str = "#holdWindows";
+
 fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
-    let ProjectConfiguration {
-        aspect_ratio: _,
-        background: _,
-        camera: _,
-        audio,
-        cursor: _,
-        hotkeys: _,
-        timeline,
-        overlay_order: _,
-        captions: _,
-        keyboard: _,
-        clips,
-        annotations: _,
-        hidden_text_segments: _,
-        screen_motion_blur: _,
-        screen_movement_spring: _,
-        color_correction: _,
-        text_size_version: _,
-        text_anim_version: _,
-    } = project;
-    let timeline = timeline.as_ref().map(|timeline| {
-        let TimelineConfiguration {
-            segments,
-            transitions,
-            zoom_segments: _,
-            scene_segments: _,
-            mask_segments: _,
-            text_segments: _,
-            caption_segments: _,
-            keyboard_segments: _,
-            audio_segments,
-            style_segments: _,
-            image_segments: _,
-            camera3d_segments: _,
-        } = timeline;
-        let segments = segments
-            .iter()
-            .map(
-                |cap_project::TimelineSegment {
-                     recording_clip,
-                     timescale,
-                     start,
-                     end,
-                     name: _,
-                     speed_audio_mode,
-                     volume,
-                     hide_cursor: _,
-                 }| {
-                    (
-                        recording_clip,
-                        timescale,
-                        start,
-                        end,
-                        speed_audio_mode,
-                        volume,
-                    )
-                },
-            )
-            .collect::<Vec<_>>();
-        (
-            segments,
-            transitions,
-            audio_segments,
-            timeline.hold_windows(),
-        )
-    });
-    serde_json::to_vec(&(audio, clips, timeline)).ok()
+    let holds = project
+        .timeline
+        .as_ref()
+        .map(TimelineConfiguration::hold_windows);
+    audio_key_from_value(serde_json::to_value(project).ok()?, holds)
+}
+
+fn audio_key_from_value(
+    mut project: serde_json::Value,
+    holds: Option<Vec<(f64, f64)>>,
+) -> Option<Vec<u8>> {
+    let fields = project.as_object_mut()?;
+    for field in VISUAL_PROJECT_FIELDS {
+        fields.remove(*field);
+    }
+    if let Some(timeline) = fields
+        .get_mut("timeline")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in VISUAL_TIMELINE_FIELDS {
+            timeline.remove(*field);
+        }
+        for segment in timeline
+            .get_mut("segments")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(segment) = segment.as_object_mut() {
+                for field in VISUAL_SEGMENT_FIELDS {
+                    segment.remove(*field);
+                }
+            }
+        }
+        timeline.insert(HOLD_WINDOWS_KEY.into(), serde_json::to_value(holds).ok()?);
+    }
+    serde_json::to_vec(&project).ok()
 }
 
 #[derive(Clone)]
