@@ -1,14 +1,14 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
 import { Organisation } from "@cap/web-domain";
+import { Effect, Layer, Schema } from "effect";
+import { HttpServerResponse } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-	HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer, Schema } from "effect";
+} from "effect/http-api";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { apiToHandler } from "@/lib/server";
 import {
@@ -29,7 +29,9 @@ class Api extends HttpApi.make("CapSlackCallbackApi").add(
 	HttpApiGroup.make("root").add(
 		HttpApiEndpoint.get(
 			"completeSlackInstall",
-		)`/api/integrations/slack/callback`.setUrlParams(CallbackParams),
+			"/api/integrations/slack/callback",
+			{ query: CallbackParams },
+		),
 	),
 ) {}
 
@@ -40,10 +42,10 @@ const redirectToSettings = (result: string) => {
 	return HttpServerResponse.redirect(url, { status: 302 });
 };
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
-			handlers.handle("completeSlackInstall", ({ urlParams }) =>
+			handlers.handle("completeSlackInstall", ({ query: urlParams }) =>
 				Effect.tryPromise(async () => {
 					if (urlParams.error) return redirectToSettings("cancelled");
 					const config = getSlackConfig();
@@ -83,7 +85,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					});
 					return redirectToSettings("connected");
 				}).pipe(
-					Effect.catchAll((error) => {
+					Effect.catch((error) => {
 						console.error(
 							"[slack-oauth] Installation failed",
 							error instanceof Error ? error.message : "Unknown error",

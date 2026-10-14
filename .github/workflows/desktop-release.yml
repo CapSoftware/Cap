@@ -252,7 +252,7 @@ jobs:
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.settings.target }}
 

@@ -54,27 +54,28 @@
 		"check:bun": "node scripts/check-bun-install.mjs"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.2.0",
-		"@clack/prompts": "^0.10.0",
-		"@effect/language-service": "^0.44.0",
-		"dotenv-cli": "latest",
-		"mysql2": "^3.15.2",
-		"react": "19.2.0",
-		"react-dom": "19.2.0",
-		"sharp": "0.35.3",
+		"@biomejs/biome": "2.5.15",
+		"@clack/prompts": "^1.8.1",
+		"@effect/language-service": "^0.87.4",
+		"dotenv-cli": "^11.0.0",
+		"jsonc-parser": "^3.3.1",
+		"mysql2": "^3.24.6",
+		"react": "19.3.0",
+		"react-dom": "19.3.0",
+		"sharp": "0.35.5",
 		"tsc-rs": "0.6.0",
-		"tsdown": "^0.15.6",
-		"turbo": "^2.3.4",
-		"typescript": "^5.8.3"
+		"tsdown": "^0.23.1",
+		"turbo": "^2.11.8",
+		"typescript": "^7.0.2"
 	},
-	"packageManager": "bun@1.4.0",
+	"packageManager": "bun@1.4.3",
 	"name": "cap",
 	"engines": {
-		"node": ">=20",
-		"bun": "1.4.0"
+		"node": ">=20.12",
+		"bun": "1.4.3"
 	},
 	"overrides": {
-		"react-native-worklets": "0.7.4"
+		"react-native-worklets": "0.10.1"
 	},
 	"workspaces": [
 		"apps/*",

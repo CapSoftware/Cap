@@ -14,7 +14,7 @@ vi.mock("expo", () => ({
 
 const moduleRoot = join(process.cwd(), "modules/cap-screen-recorder");
 const readModuleFile = (path: string) =>
-	readFileSync(join(moduleRoot, path), "utf8");
+	readFileSync(join(moduleRoot, path), "utf8").replaceAll("\r\n", "\n");
 
 describe("CapScreenRecorder native ReplayKit capture", () => {
 	it("keeps the record route loadable while a new native binary installs", () => {

@@ -12,11 +12,17 @@ const WorkflowDependencies = Layer.mergeAll(
 const WorkflowRuntime = ManagedRuntime.make(WorkflowDependencies);
 
 export const runWorkflowPromise = <A, E>(
-	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof WorkflowDependencies>>,
+	effect: Effect.Effect<A, E, Layer.Success<typeof WorkflowDependencies>>,
 ) =>
 	WorkflowRuntime.runPromiseExit(effect).then((result) => {
 		if (Exit.isFailure(result)) {
-			if (Cause.isDieType(result.cause)) throw result.cause.defect;
+			const reason = result.cause.reasons[0];
+			if (
+				result.cause.reasons.length === 1 &&
+				reason &&
+				Cause.isDieReason(reason)
+			)
+				throw reason.defect;
 			throw result;
 		}
 

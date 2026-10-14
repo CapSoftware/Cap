@@ -7,12 +7,20 @@ use std::{
   ffi::{c_char, CStr, CString},
 };
 
-use objc2::runtime::{AnyClass as Class, AnyObject as Object, ClassBuilder as ClassDecl, Sel};
+use objc2::{
+  rc::Retained,
+  runtime::{AnyClass as Class, AnyObject as Object, ClassBuilder as ClassDecl, Sel},
+  ClassType, MainThreadMarker,
+};
+use objc2_ui_kit::{
+  UIApplication, UISceneActivationRequestOptions, UISceneConfiguration, UISceneSession,
+  UISceneSessionActivationRequest,
+};
 
 use crate::{
   dpi::PhysicalPosition,
   event::{DeviceId as RootDeviceId, Event, Force, Touch, TouchPhase, WindowEvent},
-  platform::ios::MonitorHandleExtIOS,
+  platform::ios::{operating_system_version, MonitorHandleExtIOS},
   platform_impl::platform::{
     app_state::{self, OSCapabilities},
     event_loop::{self, EventProxy, EventWrapper},
@@ -20,6 +28,7 @@ use crate::{
       id, nil, CGFloat, CGPoint, CGRect, UIForceTouchCapability, UIInterfaceOrientationMask,
       UIRectEdge, UITouchPhase, UITouchType, BOOL, NO, YES,
     },
+    scene::app_supports_multiple_scenes,
     window::PlatformSpecificWindowBuilderAttributes,
     DeviceId,
   },
@@ -126,7 +135,11 @@ unsafe fn get_view_class(root_view_class: &'static Class) -> &'static Class {
         let () = msg_send![super(object, superclass), layoutSubviews];
 
         let window: id = msg_send![object, window];
-        assert!(!window.is_null());
+        // UIKit can lay out a view while it is detached during window and view-controller
+        // transitions. There is no window ID or screen geometry to report until reattachment.
+        if window.is_null() {
+          return;
+        }
         let window_bounds: CGRect = msg_send![window, bounds];
         let screen: id = msg_send![window, screen];
         let screen_space: id = msg_send![screen, coordinateSpace];
@@ -513,7 +526,7 @@ pub unsafe fn create_view_controller(
 // requires main thread
 pub unsafe fn create_window(
   window_attributes: &WindowAttributes,
-  _platform_attributes: &PlatformSpecificWindowBuilderAttributes,
+  platform_attributes: &PlatformSpecificWindowBuilderAttributes,
   frame: CGRect,
   view_controller: id,
 ) -> id {
@@ -526,6 +539,58 @@ pub unsafe fn create_window(
     !window.is_null(),
     "Failed to initialize `UIWindow` instance"
   );
+
+  // on the scene lifecycle a window is only displayed once it belongs to a scene, so we
+  // must always assign one - the app runs on it whenever the system connected a scene,
+  // which it may do even when the Info.plist does not declare a scene manifest
+  if let Some(scene) = app_state::unitialized_scene() {
+    let _: () = msg_send![window, setWindowScene: Retained::as_ptr(&scene)];
+  } else if app_supports_multiple_scenes() {
+    // only request a new scene if the system actually supports it
+    // otherwise it is silently ignored
+    unsafe {
+      let mtm = MainThreadMarker::new().unwrap();
+      let application = UIApplication::sharedApplication(mtm);
+      app_state::register_window_for_scene(window);
+
+      let options = UISceneActivationRequestOptions::new(mtm);
+      if let Some(scene) = platform_attributes
+        .requesting_scene_identifier
+        .as_ref()
+        .and_then(|id| app_state::scene_by_id(id))
+      {
+        options.setRequestingScene(Some(&scene));
+      }
+
+      let error_handler = block2::RcBlock::new(move |error| {
+        log::error!("error activating scene: {error:?}");
+      });
+
+      if operating_system_version().0 >= 17 {
+        let request = UISceneSessionActivationRequest::request();
+        request.setOptions(Some(&options));
+        application.activateSceneSessionForRequest_errorHandler(&request, Some(&error_handler));
+      } else {
+        #[allow(deprecated)]
+        application.requestSceneSessionActivation_userActivity_options_errorHandler(
+          None,
+          None,
+          Some(&options),
+          Some(&error_handler),
+        );
+      }
+    }
+  } else if let Some(scene) = app_state::first_window_scene() {
+    // if there's no unitialized scene and the app does not support multiple scenes
+    // we need to move this window to the main scene, otherwise it won't be visible
+    let _: () = msg_send![window, setWindowScene: Retained::as_ptr(&scene)];
+  } else {
+    // no scene is connected yet, either because the app runs on the legacy lifecycle
+    // - where the system attaches the window to a scene on its own - or because it was
+    // created before the first scene connected, which then adopts it
+    app_state::register_scene_less_window(window);
+  }
+
   let () = msg_send![window, setRootViewController: view_controller];
   match window_attributes.fullscreen {
     Some(Fullscreen::Exclusive(ref video_mode)) => {
@@ -558,6 +623,29 @@ pub fn create_delegate_class() {
     YES
   }
 
+  extern "C" fn configuration_for_connecting_scene_session(
+    _: &Object,
+    _: Sel,
+    _application: id,
+    connecting_scene_session: id,
+    _options: id,
+  ) -> id {
+    unsafe {
+      let mtm = objc2_foundation::MainThreadMarker::new_unchecked();
+      // keep the role of the session that is connecting instead of assuming the
+      // window scene role, so scenes such as external displays still get their own.
+      // a `None` name picks the app's own configuration for that role when its
+      // Info.plist declares one, and the default configuration when it doesn't
+      let session: &UISceneSession = &*connecting_scene_session.cast();
+      let config =
+        UISceneConfiguration::configurationWithName_sessionRole(None, &session.role(), mtm);
+
+      // Dynamically set the delegate class name
+      config.setDelegateClass(Some(super::scene::TaoSceneDelegate::class()));
+      Retained::autorelease_ptr(config) as _
+    }
+  }
+
   fn handle_deep_link(url: id) {
     unsafe {
       let absolute_url: id = msg_send![url, absoluteString];
@@ -574,6 +662,27 @@ pub fn create_delegate_class() {
 
       app_state::handle_nonuser_event(EventWrapper::StaticEvent(Event::Opened { urls: vec![url] }));
     }
+  }
+
+  unsafe fn handle_tao_window_events(event: impl Fn() -> WindowEvent<'static>) {
+    let app: id = msg_send![class!(UIApplication), sharedApplication];
+    let windows: id = msg_send![app, windows];
+    let windows_enum: id = msg_send![windows, objectEnumerator];
+    let mut events = Vec::new();
+    loop {
+      let window: id = msg_send![windows_enum, nextObject];
+      if window == nil {
+        break;
+      }
+      let is_tao_window: bool = msg_send![window, isKindOfClass: class!(TaoUIWindow)];
+      if is_tao_window {
+        events.push(EventWrapper::StaticEvent(Event::WindowEvent {
+          window_id: RootWindowId(window.into()),
+          event: event(),
+        }));
+      }
+    }
+    app_state::handle_nonuser_events(events);
   }
 
   // custom URL schemes
@@ -611,37 +720,29 @@ pub fn create_delegate_class() {
     }
   }
 
-  extern "C" fn did_become_active(_: &Object, _: Sel, _: id) {
-    unsafe { app_state::handle_nonuser_event(EventWrapper::StaticEvent(Event::Resumed)) }
-  }
-
   extern "C" fn will_resign_active(_: &Object, _: Sel, _: id) {
-    unsafe { app_state::handle_nonuser_event(EventWrapper::StaticEvent(Event::Suspended)) }
+    unsafe {
+      if app_state::did_first_scene_connect() {
+        // the scene delegate already emits this event for the windows of its scene
+        return;
+      }
+      handle_tao_window_events(|| WindowEvent::Suspended)
+    }
   }
 
-  extern "C" fn will_enter_foreground(_: &Object, _: Sel, _: id) {}
-  extern "C" fn did_enter_background(_: &Object, _: Sel, _: id) {}
+  extern "C" fn will_enter_foreground(_: &Object, _: Sel, _: id) {
+    unsafe {
+      if app_state::did_first_scene_connect() {
+        // the scene delegate already emits this event for the windows of its scene
+        return;
+      }
+      handle_tao_window_events(|| WindowEvent::Resumed)
+    }
+  }
 
   extern "C" fn will_terminate(_: &Object, _: Sel, _: id) {
     unsafe {
-      let app: id = msg_send![class!(UIApplication), sharedApplication];
-      let windows: id = msg_send![app, windows];
-      let windows_enum: id = msg_send![windows, objectEnumerator];
-      let mut events = Vec::new();
-      loop {
-        let window: id = msg_send![windows_enum, nextObject];
-        if window == nil {
-          break;
-        }
-        let is_tao_window: bool = msg_send![window, isKindOfClass: class!(TaoUIWindow)];
-        if is_tao_window {
-          events.push(EventWrapper::StaticEvent(Event::WindowEvent {
-            window_id: RootWindowId(window.into()),
-            event: WindowEvent::Destroyed,
-          }));
-        }
-      }
-      app_state::handle_nonuser_events(events);
+      handle_tao_window_events(|| WindowEvent::Destroyed);
       app_state::terminated();
     }
   }
@@ -654,9 +755,22 @@ pub fn create_delegate_class() {
   .expect("Failed to declare class `AppDelegate`");
 
   unsafe {
+    // register the scene delegate class in the runtime upfront, the system looks it up by
+    // name when it decodes a scene session that was encoded on a previous launch
+    let _ = super::scene::TaoSceneDelegate::class();
+
     decl.add_method(
       sel!(application:didFinishLaunchingWithOptions:),
       did_finish_launching as extern "C" fn(_, _, _, _) -> _,
+    );
+
+    // always answer the scene configuration request, even when the Info.plist does not
+    // declare a scene manifest: UIKit only asks for it when the app runs on the scene
+    // lifecycle, and answering it is the only way to get our scene delegate installed
+    // there. Apps that never run on scenes simply never receive this callback.
+    decl.add_method(
+      sel!(application:configurationForConnectingSceneSession:options:),
+      configuration_for_connecting_scene_session as extern "C" fn(_, _, _, _, _) -> _,
     );
 
     decl.add_method(
@@ -670,20 +784,12 @@ pub fn create_delegate_class() {
     );
 
     decl.add_method(
-      sel!(applicationDidBecomeActive:),
-      did_become_active as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
       sel!(applicationWillResignActive:),
       will_resign_active as extern "C" fn(_, _, _),
     );
     decl.add_method(
       sel!(applicationWillEnterForeground:),
       will_enter_foreground as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(applicationDidEnterBackground:),
-      did_enter_background as extern "C" fn(_, _, _),
     );
 
     decl.add_method(

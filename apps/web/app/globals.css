@@ -5,9 +5,8 @@
 @import "@radix-ui/colors/gray-dark.css";
 @import "@radix-ui/colors/blue.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 :root {
 	--primary: #005cb1;
@@ -245,8 +244,6 @@ a.bg-primary:hover {
 	0% {
 		stroke-dasharray: 100;
 		stroke-dashoffset: 100;
-	}
-	50% {
 	}
 	100% {
 		stroke-dashoffset: 0;
@@ -518,7 +515,7 @@ label {
 	@apply absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2;
 }
 
-.fade-in-down {
+@utility fade-in-down {
 	animation: fadeInDown 1s forwards;
 	opacity: 0;
 }
@@ -563,7 +560,7 @@ label {
 	}
 }
 
-.animate-delay-1 {
+@utility animate-delay-1 {
 	animation-delay: 0.3s;
 }
 
@@ -780,7 +777,7 @@ footer ul {
 }
 
 footer h3 {
-	@apply text-xl font-semibold !important;
+	@apply text-xl! font-semibold!;
 }
 
 footer a {
@@ -820,12 +817,12 @@ footer a {
 .prose:not(.prose-sm) p,
 .prose:not(.prose-sm) li,
 .prose:not(.prose-sm) a {
-	@apply tracking-normal font-normal text-[1.125rem] leading-[1.75rem] !important;
+	@apply tracking-normal! font-normal! text-[1.125rem]! leading-[1.75rem]!;
 }
 
 .prose:not(.prose-sm) p,
 .prose:not(.prose-sm) li {
-	@apply text-gray-12 !important;
+	@apply text-gray-12!;
 }
 
 .prose .not-prose p,
@@ -948,7 +945,7 @@ footer a {
 }
 
 /* Safari-specific styles using CSS hacks */
-@media screen and (-webkit-min-device-pixel-ratio: 0) {
+@supports (-webkit-appearance: none) {
 	_::-webkit-full-page-media,
 	_:future,
 	:root #video-container {

@@ -2,8 +2,11 @@
 // Copyright 2021-2023 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::window::WindowId;
+use crossbeam_channel::Sender;
 pub use jni::{
   self,
+  errors::Result as JniResult,
   objects::{GlobalRef, JClass, JMap, JObject, JString},
   sys::jobject,
   JNIEnv,
@@ -14,20 +17,41 @@ use ndk::{
   input_queue::InputQueue,
   looper::{FdEvent, ForeignLooper, ThreadLooper},
 };
-use once_cell::sync::{Lazy, OnceCell};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use std::{
-  cell::RefCell,
-  ffi::{CStr, CString},
+  collections::{BTreeMap, HashSet},
+  ffi::{c_void, CStr, CString},
   fs::File,
   io::{BufRead, BufReader},
   os::unix::prelude::*,
-  sync::{Arc, Condvar, Mutex, RwLock, RwLockReadGuard},
+  sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, RwLock, RwLockReadGuard},
   thread,
+  time::Duration,
 };
 
 /// Android pacakge name that could be used to reference classes
 /// in the android project.
-pub static PACKAGE: OnceCell<&str> = OnceCell::new();
+pub static PACKAGE: OnceLock<&str> = OnceLock::new();
+
+/// Character set for encoding text content in data URLs.
+/// Encodes all control characters and special characters that might cause issues in URLs.
+const DATA_URL_ENCODING_SET: &AsciiSet = &CONTROLS
+  .add(b' ')
+  .add(b'"')
+  .add(b'#')
+  .add(b'%')
+  .add(b'&')
+  .add(b'<')
+  .add(b'>')
+  .add(b'?')
+  .add(b'[')
+  .add(b'\\')
+  .add(b']')
+  .add(b'^')
+  .add(b'`')
+  .add(b'{')
+  .add(b'|')
+  .add(b'}');
 
 /// Generate JNI compilant functions that are necessary for
 /// building android apps with tao.
@@ -36,24 +60,25 @@ pub static PACKAGE: OnceCell<&str> = OnceCell::new();
 /// 1. android app domain name in reverse snake_case as an ident (for ex: com_example)
 /// 2. android package anme (for ex: wryapp)
 /// 3. the android activity that has external linking for the following functions and calls them:
-///       - `private external fun create(activity: WryActivity)``
-///       - `private external fun start()`
-///       - `private external fun resume()`
-///       - `private external fun pause()`
-///       - `private external fun stop()`
-///       - `private external fun save()`
-///       - `private external fun destroy()`
-///       - `private external fun memory()`
-///       - `private external fun focus(focus: Boolean)`
-/// 4. a one time setup function that will be ran once after tao has created its event loop in the `create` function above.
-/// 5. the main entry point of your android application.
+///       - `private external fun onFirstActivityCreate()`
+///       - `private external fun onCreate(activity: WryActivity)`
+///       - `private external fun onStart(activity: WryActivity)`
+///       - `private external fun onResume(activity: WryActivity)`
+///       - `private external fun onPause(activity: WryActivity)`
+///       - `private external fun onStop(activity: WryActivity)`
+///       - `private external fun onDestroy(activity: WryActivity)`
+///       - `private external fun onWindowFocusChanged(activity: WryActivity, focus: Boolean)`
+///       - `private external fun onLowMemory()`
+///       - `private external fun onNewIntent(intent: Intent)`
+/// 4. an on_activity_create function that will be ran once after the `onCreate` function above.
+/// 5. the main entry point of your android application that runs in `onFirstActivityCreate` after `onCreate` and `on_activity_create`.
 #[rustfmt::skip]
 #[macro_export]
 macro_rules! android_binding {
-  ($domain:ident, $package:ident, $activity:ident, $setup:path, $main:ident) => {
-    ::tao::android_binding!($domain, $package, $activity, $setup, $main, ::tao)
+  ($domain:ident, $package:ident, $activity:ident, $on_activity_create:path, $main:ident) => {
+    ::tao::android_binding!($domain, $package, $activity, $on_activity_create, $main, ::tao)
   };
-  ($domain:ident, $package:ident, $activity:ident, $setup:path, $main:ident, $tao:path) => {{
+  ($domain:ident, $package:ident, $activity:ident, $on_activity_create:path, $main:ident, $tao:path) => {{
     // NOTE: be careful when changing how this use statement is written
     use $tao::{platform::android::prelude::android_fn, platform::android::prelude::*};
     fn _____tao_store_package_name__() {
@@ -64,20 +89,29 @@ macro_rules! android_binding {
       $domain,
       $package,
       $activity,
-      create,
+      onFirstActivityCreate,
+      [],
+      __VOID__,
+      [$main],
+    );
+    android_fn!(
+      $domain,
+      $package,
+      $activity,
+      onCreate,
       [JObject],
       __VOID__,
-      [$setup, $main],
+      [$on_activity_create],
       _____tao_store_package_name__,
     );
-    android_fn!($domain, $package, $activity, start, [JObject]);
-    android_fn!($domain, $package, $activity, stop, [JObject]);
-    android_fn!($domain, $package, $activity, resume, [JObject]);
-    android_fn!($domain, $package, $activity, pause, [JObject]);
-    android_fn!($domain, $package, $activity, save, [JObject]);
-    android_fn!($domain, $package, $activity, destroy, [JObject]);
-    android_fn!($domain, $package, $activity, memory, [JObject]);
-    android_fn!($domain, $package, $activity, focus, [i32]);
+    android_fn!($domain, $package, $activity, onStart, [JObject]);
+    android_fn!($domain, $package, $activity, onStop, [JObject]);
+    android_fn!($domain, $package, $activity, onResume, [JObject]);
+    android_fn!($domain, $package, $activity, onPause, [JObject]);
+    android_fn!($domain, $package, $activity, onDestroy, [JObject]);
+    android_fn!($domain, $package, $activity, onWindowFocusChanged, [JObject, i32]);
+    android_fn!($domain, $package, $activity, onLowMemory, []);
+    android_fn!($domain, $package, $activity, onNewIntent, [JObject]);
   }};
 }
 
@@ -106,26 +140,98 @@ pub fn android_log(level: Level, tag: &CStr, msg: &CStr) {
   }
 }
 
-pub(crate) struct StaticCell<T>(RefCell<T>);
+fn find_class<'a>(
+  env: &mut JNIEnv<'a>,
+  activity: &JObject<'_>,
+  name: String,
+) -> Result<JClass<'a>, super::JniCallError> {
+  let class_name = env.new_string(name.replace('/', "."))?;
+  let my_class = jni_call_method!(
+    env,
+    activity,
+    "getAppClass",
+    "(Ljava/lang/String;)Ljava/lang/Class;",
+    &[(&class_name).into()],
+    l
+  )?;
+  Ok(my_class.into())
+}
 
-unsafe impl<T> Send for StaticCell<T> {}
-unsafe impl<T> Sync for StaticCell<T> {}
+#[derive(Clone, Debug)]
+pub struct AndroidContext {
+  pub java_vm: *mut c_void,
+  pub context_jobject: *mut c_void,
+  pub activity_name: String,
+  pub window_created: bool,
+}
 
-impl<T> std::ops::Deref for StaticCell<T> {
-  type Target = RefCell<T>;
+impl AndroidContext {
+  pub fn create_activity(&self, activity_name: &str) -> Result<ActivityId, super::JniCallError> {
+    let vm = unsafe { jni::JavaVM::from_raw(self.java_vm.cast()) }?;
+    let mut env = vm.attach_current_thread_as_daemon()?;
+    let main_activity = unsafe { JObject::from_raw(self.context_jobject.cast()) };
 
-  fn deref(&self) -> &Self::Target {
-    &self.0
+    let activity_class = find_class(
+      &mut env,
+      &main_activity,
+      format!("{}/{activity_name}", PACKAGE.get().unwrap()),
+    )?;
+
+    let activity_id = jni_call_method!(
+      env,
+      &main_activity,
+      "startActivity",
+      "(Ljava/lang/Class;)I",
+      &[(&activity_class).into()],
+      i
+    )?;
+
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    ACTIVITY_CREATED_SENDERS
+      .lock()
+      .unwrap()
+      .insert(activity_id, tx);
+    rx.recv_timeout(Duration::from_secs(5)).map_err(|e| {
+      log::error!("failed to create activity {activity_name}: {e}");
+      super::JniCallError::new(
+        jni::errors::Error::JniCall(jni::errors::JniError::Unknown),
+        Some(e.to_string()),
+      )
+    })?;
+
+    Ok(activity_id)
   }
 }
 
-static WINDOW_MANAGER: StaticCell<Option<GlobalRef>> = StaticCell(RefCell::new(None));
-static INPUT_QUEUE: Lazy<RwLock<Option<InputQueue>>> = Lazy::new(|| Default::default());
-static CONTENT_RECT: Lazy<RwLock<Rect>> = Lazy::new(|| Default::default());
-static LOOPER: Lazy<Mutex<Option<ForeignLooper>>> = Lazy::new(|| Default::default());
+unsafe impl Send for AndroidContext {}
+unsafe impl Sync for AndroidContext {}
 
-pub fn window_manager() -> std::cell::Ref<'static, Option<GlobalRef>> {
-  WINDOW_MANAGER.0.borrow()
+pub type ActivityId = i32;
+
+pub(crate) static CONTEXTS: LazyLock<Mutex<BTreeMap<ActivityId, AndroidContext>>> =
+  LazyLock::new(Default::default);
+// Keeping a reference so we can store it in ndk-context
+static APPLICATION_CONTEXT: OnceLock<GlobalRef> = OnceLock::new();
+static WINDOW_MANAGER: LazyLock<Mutex<BTreeMap<ActivityId, GlobalRef>>> =
+  LazyLock::new(Default::default);
+pub(crate) static ACTIVITY_CREATED_SENDERS: LazyLock<Mutex<BTreeMap<ActivityId, Sender<()>>>> =
+  LazyLock::new(Default::default);
+static INTENT_URLS: LazyLock<Mutex<Vec<url::Url>>> = LazyLock::new(Default::default);
+static INPUT_QUEUE: LazyLock<RwLock<Option<InputQueue>>> = LazyLock::new(Default::default);
+static CONTENT_RECT: LazyLock<RwLock<Rect>> = LazyLock::new(Default::default);
+static LOOPER: LazyLock<Mutex<Option<ForeignLooper>>> = LazyLock::new(Default::default);
+static RESUMED_ACTIVITIES: LazyLock<Mutex<HashSet<ActivityId>>> = LazyLock::new(Default::default);
+
+pub fn main_window_manager() -> Option<GlobalRef> {
+  WINDOW_MANAGER.lock().unwrap().values().next().cloned()
+}
+
+pub fn activity_window_manager(activity_id: ActivityId) -> Option<GlobalRef> {
+  WINDOW_MANAGER.lock().unwrap().get(&activity_id).cloned()
+}
+
+pub fn window_manager(activity_id: ActivityId) -> Option<GlobalRef> {
+  WINDOW_MANAGER.lock().unwrap().get(&activity_id).cloned()
 }
 
 pub fn input_queue() -> RwLockReadGuard<'static, Option<InputQueue>> {
@@ -136,7 +242,29 @@ pub fn content_rect() -> Rect {
   CONTENT_RECT.read().unwrap().clone()
 }
 
-pub static PIPE: Lazy<[OwnedFd; 2]> = Lazy::new(|| {
+fn activity_id(env: &mut JNIEnv<'_>, activity: &JObject<'_>) -> ActivityId {
+  env
+    .call_method(activity, "getId", "()I", &[])
+    .unwrap()
+    .i()
+    .unwrap()
+}
+
+pub fn main_android_context() -> Option<AndroidContext> {
+  CONTEXTS.lock().unwrap().values().next().cloned()
+}
+
+pub fn next_available_activity() -> Option<(ActivityId, AndroidContext)> {
+  CONTEXTS
+    .lock()
+    .unwrap()
+    .iter()
+    .filter(|(_, ctx)| !ctx.window_created)
+    .next()
+    .map(|(id, ctx)| (*id, ctx.clone()))
+}
+
+pub static PIPE: LazyLock<[OwnedFd; 2]> = LazyLock::new(|| {
   let mut pipe: [RawFd; 2] = Default::default();
   unsafe { libc::pipe(pipe.as_mut_ptr()) };
   pipe.map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
@@ -145,7 +273,7 @@ pub static PIPE: Lazy<[OwnedFd; 2]> = Lazy::new(|| {
 pub fn poll_events() -> Option<Event> {
   unsafe {
     let size = std::mem::size_of::<Event>();
-    let mut event = Event::Start;
+    let mut event = Event::LowMemory;
     if libc::read(PIPE[0].as_raw_fd(), &mut event as *mut _ as *mut _, size)
       == size as libc::ssize_t
     {
@@ -154,6 +282,10 @@ pub fn poll_events() -> Option<Event> {
       None
     }
   }
+}
+
+pub fn take_intent_urls() -> Vec<url::Url> {
+  INTENT_URLS.lock().unwrap().drain(..).collect()
 }
 
 unsafe fn wake(event: Event) {
@@ -171,60 +303,32 @@ pub struct Rect {
   pub bottom: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+// event must be copyable to be used in the event loop
+#[derive(Clone, Debug, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Event {
-  Start,
-  Resume,
-  SaveInstanceState,
-  Pause,
-  Stop,
-  Destroy,
-  ConfigChanged,
+  Resume { id: WindowId },
+  Pause { id: WindowId },
   LowMemory,
-  WindowLostFocus,
-  WindowHasFocus,
-  WindowCreated,
-  WindowResized,
-  WindowRedrawNeeded,
-  WindowDestroyed,
-  InputQueueCreated,
-  InputQueueDestroyed,
+  WindowEvent { id: WindowId, event: WindowEvent },
   ContentRectChanged,
+  Opened,
 }
 
-pub unsafe fn create(
-  mut env: JNIEnv,
-  _jclass: JClass,
-  jobject: JObject,
-  setup: unsafe fn(&str, JNIEnv, &ThreadLooper, GlobalRef),
-  main: fn(),
-) {
-  //-> jobjectArray {
-  // Initialize global context
-  let window_manager = env
-    .call_method(
-      &jobject,
-      "getWindowManager",
-      "()Landroid/view/WindowManager;",
-      &[],
-    )
-    .unwrap()
-    .l()
-    .unwrap();
-  let window_manager = env.new_global_ref(window_manager).unwrap();
-  WINDOW_MANAGER.replace(Some(window_manager));
-  let activity = env.new_global_ref(jobject).unwrap();
-  let vm = env.get_java_vm().unwrap();
-  let env = vm.attach_current_thread_as_daemon().unwrap();
-  ndk_context::initialize_android_context(
-    vm.get_java_vm_pointer() as *mut _,
-    activity.as_obj().as_raw() as *mut _,
-  );
+#[derive(Clone, Debug, Eq, PartialEq, Copy)]
+#[repr(u8)]
+pub enum WindowEvent {
+  Focused(bool),
+  Created,
+  Started,
+  Resized,
+  RedrawNeeded,
+  Stopped,
+  Destroyed,
+}
 
-  let looper = ThreadLooper::for_thread().unwrap();
-  setup(PACKAGE.get().unwrap(), env, &looper, activity);
-
+#[allow(non_snake_case)]
+pub unsafe fn onFirstActivityCreate(_env: JNIEnv, _: JClass, main: fn()) {
   let logpipe = {
     let mut logpipe: [RawFd; 2] = Default::default();
     libc::pipe(logpipe.as_mut_ptr());
@@ -271,67 +375,387 @@ pub unsafe fn create(
       signal_looper_ready.notify_one();
     }
 
-    main()
+    main();
   });
 
   // Don't return from this function (`ANativeActivity_onCreate`) until the thread
-  // has created its `ThreadLooper` and assigned it to the static `LOOPER`
-  // variable. It will be used from `on_input_queue_created` as soon as this
-  // function returns.
+  // has created its `ThreadLooper` and assigned it to the static `LOOPER` variable.
   let locked_looper = LOOPER.lock().unwrap();
   let _mutex_guard = looper_ready
     .wait_while(locked_looper, |looper| looper.is_none())
     .unwrap();
 }
 
-pub unsafe fn resume(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::Resume);
+#[allow(non_snake_case)]
+pub unsafe fn onCreate(
+  mut env: JNIEnv,
+  _jclass: JClass,
+  activity: JObject,
+  setup: unsafe fn(&str, JNIEnv, &ThreadLooper, GlobalRef),
+) {
+  let intent =
+    jni_call_method!(env, &activity, "getIntent", "()Landroid/content/Intent;", l).unwrap();
+
+  let vm = env.get_java_vm().unwrap();
+
+  APPLICATION_CONTEXT.get_or_init(|| {
+    let application = jni_call_method!(
+      env,
+      &activity,
+      "getApplicationContext",
+      "()Landroid/content/Context;",
+      l
+    )
+    .unwrap();
+    let application = env.new_global_ref(application).unwrap();
+    ndk_context::initialize_android_context(
+      vm.get_java_vm_pointer() as *mut _,
+      application.as_obj().as_raw() as *mut _,
+    );
+    application
+  });
+
+  let activity_id = jni_call_method!(env, &activity, "getId", "()I", i).unwrap();
+
+  let activity_name: JString = jni_call_method!(
+    env,
+    &activity,
+    "getLocalClassName",
+    "()Ljava/lang/String;",
+    l
+  )
+  .unwrap()
+  .into();
+  let activity_name = env
+    .get_string(&activity_name)
+    .unwrap()
+    .to_string_lossy()
+    .to_string();
+
+  // Initialize global context
+  let window_manager = jni_call_method!(
+    env,
+    &activity,
+    "getWindowManager",
+    "()Landroid/view/WindowManager;",
+    l
+  )
+  .unwrap();
+  let window_manager = env.new_global_ref(window_manager).unwrap();
+  WINDOW_MANAGER
+    .lock()
+    .unwrap()
+    .insert(activity_id, window_manager);
+  let activity = env.new_global_ref(activity).unwrap();
+  let thread_env = vm.attach_current_thread_as_daemon().unwrap();
+
+  CONTEXTS.lock().unwrap().insert(
+    activity_id,
+    AndroidContext {
+      java_vm: vm.get_java_vm_pointer() as *mut _,
+      context_jobject: activity.as_obj().as_raw() as *mut _,
+      activity_name,
+      window_created: false,
+    },
+  );
+  let looper = ThreadLooper::for_thread().unwrap();
+  setup(PACKAGE.get().unwrap(), thread_env, &looper, activity);
+
+  if let Some(tx) = ACTIVITY_CREATED_SENDERS
+    .lock()
+    .unwrap()
+    .remove(&activity_id)
+  {
+    let _ = tx.send(());
+  }
+
+  handle_intent(env, intent);
 }
 
-pub unsafe fn pause(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::Pause);
+#[allow(non_snake_case)]
+pub unsafe fn onResume(mut env: JNIEnv, _: JClass, activity: JObject) {
+  let activity_id = activity_id(&mut env, &activity);
+  let did_resume = !RESUMED_ACTIVITIES.lock().unwrap().insert(activity_id);
+  // first Activity onResume() is called even after onCreate()
+  // to match the iOS implementation, we ignore the first resume event
+  if did_resume {
+    wake(Event::Resume {
+      id: WindowId(super::WindowId(activity_id)),
+    });
+  }
 }
 
-pub unsafe fn focus(_: JNIEnv, _: JClass, has_focus: libc::c_int) {
-  let event = if has_focus == 0 {
-    Event::WindowLostFocus
-  } else {
-    Event::WindowHasFocus
+#[allow(non_snake_case)]
+pub unsafe fn onPause(mut env: JNIEnv, _: JClass, activity: JObject) {
+  let activity_id = activity_id(&mut env, &activity);
+  wake(Event::Pause {
+    id: WindowId(super::WindowId(activity_id)),
+  });
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn onWindowFocusChanged(
+  mut env: JNIEnv,
+  _: JClass,
+  activity: JObject,
+  has_focus: libc::c_int,
+) {
+  let activity_id = env
+    .call_method(&activity, "getId", "()I", &[])
+    .unwrap()
+    .i()
+    .unwrap();
+  let event = Event::WindowEvent {
+    id: WindowId(super::WindowId(activity_id)),
+    event: WindowEvent::Focused(has_focus != 0),
   };
   wake(event);
 }
 
-pub unsafe fn start(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::Start);
+#[allow(non_snake_case)]
+pub unsafe fn onNewIntent(env: JNIEnv, _: JClass, intent: JObject) {
+  handle_intent(env, intent);
 }
 
-pub unsafe fn stop(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::Stop);
+pub unsafe fn handle_intent(mut env: JNIEnv, intent: JObject) {
+  let action = jni_call_method!(env, &intent, "getAction", "()Ljava/lang/String;", l)
+    .unwrap()
+    .into();
+  let action = env
+    .get_string(&action)
+    .map(|action| action.to_string_lossy().to_string());
+
+  let Ok(action) = action else {
+    return;
+  };
+
+  // Only handle SEND, SEND_MULTIPLE, and VIEW actions
+  if action != "android.intent.action.SEND"
+    && action != "android.intent.action.VIEW"
+    && action != "android.intent.action.SEND_MULTIPLE"
+  {
+    return;
+  }
+
+  let mut urls = HashSet::new();
+
+  // Get intent type (may be null)
+  let intent_type = jni_call_method!(env, &intent, "getType", "()Ljava/lang/String;", l)
+    .ok()
+    .filter(|jstr| !jstr.is_null())
+    .map(|jstr| jstr.into())
+    .and_then(|intent_type: JString| {
+      env
+        .get_string(&intent_type)
+        .ok()
+        .map(|s| s.to_string_lossy().to_string())
+    });
+
+  // Handle text/plain intents (EXTRA_TEXT)
+  if intent_type.as_deref() == Some("text/plain") {
+    let extra_text_key = env.new_string("android.intent.extra.TEXT").unwrap();
+    let extra_text = jni_call_method!(
+      env,
+      &intent,
+      "getStringExtra",
+      "(Ljava/lang/String;)Ljava/lang/String;",
+      &[(&extra_text_key).into()],
+      l
+    )
+    .ok()
+    .and_then(|jstr| {
+      let jstr: JString = jstr.into();
+      env
+        .get_string(&jstr)
+        .ok()
+        .map(|s| s.to_string_lossy().to_string())
+    });
+
+    if let Some(text) = extra_text {
+      if !text.is_empty() {
+        // Check if it's a valid URL
+        if let Ok(url) = url::Url::parse(&text) {
+          urls.insert(url);
+        } else {
+          // If not a URL, create a data URL for plain text
+          // Use percent encoding for the text content
+          let encoded = utf8_percent_encode(&text, DATA_URL_ENCODING_SET).to_string();
+          if let Ok(url) = url::Url::parse(&format!("data:text/plain,{}", encoded)) {
+            urls.insert(url);
+          }
+        }
+      }
+    }
+  }
+
+  // Handle ClipData (API >= KITKAT, which is API 19)
+  // We'll try to get clip data, and if it fails, we'll continue
+  let clip_data = jni_call_method!(
+    env,
+    &intent,
+    "getClipData",
+    "()Landroid/content/ClipData;",
+    l
+  )
+  .ok()
+  .filter(|clip_data| !clip_data.is_null());
+
+  if let Some(clip_data) = clip_data {
+    // getItemCount may return null if the intent has only a single uri in which case the uri can be received by getData|String instead.
+    if let Ok(item_count) = jni_call_method!(env, &clip_data, "getItemCount", "()I", i) {
+      for i in 0..item_count {
+        let clip_item = jni_call_method!(
+          env,
+          &clip_data,
+          "getItemAt",
+          "(I)Landroid/content/ClipData$Item;",
+          &[i.into()],
+          l
+        )
+        .unwrap();
+
+        let uri = jni_call_method!(env, &clip_item, "getUri", "()Landroid/net/Uri;", l)
+          .ok()
+          .filter(|uri| !uri.is_null());
+
+        if let Some(uri) = uri {
+          let uri_string: JString =
+            jni_call_method!(env, &uri, "toString", "()Ljava/lang/String;", l)
+              .unwrap()
+              .into();
+          let uri_str = env
+            .get_string(&uri_string)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+          if let Ok(url) = url::Url::parse(&uri_str) {
+            urls.insert(url);
+          } else {
+            log::error!("failed to parse URI: {}", uri_str);
+          }
+        }
+      }
+    }
+  }
+
+  // Handle EXTRA_STREAM (for file sharing)
+  let extras = jni_call_method!(env, &intent, "getExtras", "()Landroid/os/Bundle;", l)
+    .ok()
+    .filter(|extras| !extras.is_null());
+
+  if let Some(extras) = extras {
+    let extra_stream_key = env.new_string("android.intent.extra.STREAM").unwrap();
+    let extra_stream = jni_call_method!(
+      env,
+      &extras,
+      "get",
+      "(Ljava/lang/String;)Ljava/lang/Object;",
+      &[(&extra_stream_key).into()],
+      l
+    )
+    .ok()
+    .filter(|extra_stream| !extra_stream.is_null());
+
+    if let Some(stream_uri) = extra_stream {
+      let uri_string: JString =
+        jni_call_method!(env, &stream_uri, "toString", "()Ljava/lang/String;", l)
+          .unwrap()
+          .into();
+      let uri_str = env
+        .get_string(&uri_string)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+      if let Ok(url) = url::Url::parse(&uri_str) {
+        urls.insert(url);
+      } else {
+        log::error!("failed to parse URI: {}", uri_str);
+      }
+    }
+  }
+
+  // Handle getDataString() for VIEW intents (deeplinks)
+  if action == "android.intent.action.VIEW" {
+    let data_string = jni_call_method!(env, &intent, "getDataString", "()Ljava/lang/String;", l)
+      .ok()
+      .filter(|data_string| !data_string.is_null())
+      .and_then(|jstr| {
+        let jstr: JString = jstr.into();
+        env
+          .get_string(&jstr)
+          .ok()
+          .map(|s| s.to_string_lossy().to_string())
+      });
+
+    if let Some(data_str) = data_string {
+      if let Ok(url) = url::Url::parse(&data_str) {
+        urls.insert(url);
+      } else {
+        log::error!("failed to parse data string: {}", data_str);
+      }
+    } else {
+      log::error!("Intent data string is null");
+    }
+  }
+
+  if !urls.is_empty() {
+    INTENT_URLS.lock().unwrap().extend(urls);
+    wake(Event::Opened);
+  }
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn onStart(mut env: JNIEnv, _: JClass, activity: JObject) {
+  let activity_id = activity_id(&mut env, &activity);
+  wake(Event::WindowEvent {
+    id: WindowId(super::WindowId(activity_id)),
+    event: WindowEvent::Started,
+  });
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn onStop(mut env: JNIEnv, _: JClass, activity: JObject) {
+  let activity_id = activity_id(&mut env, &activity);
+  wake(Event::WindowEvent {
+    id: WindowId(super::WindowId(activity_id)),
+    event: WindowEvent::Stopped,
+  });
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn onDestroy(mut env: JNIEnv, _: JClass, activity: JObject) {
+  let activity_id = env
+    .call_method(&activity, "getId", "()I", &[])
+    .unwrap()
+    .i()
+    .unwrap();
+
+  let is_changing_configurations =
+    jni_call_method!(env, &activity, "isChangingConfigurations", "()Z", z).unwrap();
+
+  // keep our Rust window references alive when the activity is going to be recreated due to configuration changes
+  // e.g. rotation, multi window mode change etc
+  if !is_changing_configurations {
+    wake(Event::WindowEvent {
+      id: WindowId(super::WindowId(activity_id)),
+      event: WindowEvent::Destroyed,
+    });
+    CONTEXTS.lock().unwrap().remove(&activity_id);
+    WINDOW_MANAGER.lock().unwrap().remove(&activity_id);
+    RESUMED_ACTIVITIES.lock().unwrap().remove(&activity_id);
+  }
 }
 
 ///////////////////////////////////////////////
 // Events below are not used by event loop yet.
 ///////////////////////////////////////////////
 
-pub unsafe fn save(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::SaveInstanceState);
-}
-
-pub unsafe fn destroy(_: JNIEnv, _: JClass, _: JObject) {
-  wake(Event::Destroy);
-  ndk_context::release_android_context();
-  WINDOW_MANAGER.take();
-}
-
-pub unsafe fn memory(_: JNIEnv, _: JClass, _: JObject) {
+#[allow(non_snake_case)]
+pub unsafe fn onLowMemory(_: JNIEnv, _: JClass) {
   wake(Event::LowMemory);
 }
 
 /*
-unsafe extern "C" fn on_configuration_changed(activity: *mut ANativeActivity) {
-  wake(activity, Event::ConfigChanged);
-}
-
 unsafe extern "C" fn on_window_resized(
   activity: *mut ANativeActivity,
   _window: *mut ANativeWindow,

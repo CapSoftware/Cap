@@ -45,35 +45,32 @@ pub fn spawn(device_tx: glib::Sender<DeviceEvent>) {
       }
 
       let event_type = event.get_type();
-      match event_type {
-        xlib::GenericEvent => {
-          let mut xev = event.generic_event_cookie;
-          if (xlib.XGetEventData)(display, &mut xev) == xlib::True {
-            match xev.evtype {
-              xinput2::XI_RawKeyPress | xinput2::XI_RawKeyRelease => {
-                let xev: &xinput2::XIRawEvent = &*(xev.data as *const _);
-                let physical_key = keycode_from_scancode(xev.detail as u32);
-                let state = match xev.evtype {
-                  xinput2::XI_RawKeyPress => ElementState::Pressed,
-                  xinput2::XI_RawKeyRelease => ElementState::Released,
-                  _ => unreachable!(),
-                };
+      if event_type == xlib::GenericEvent {
+        let mut xev = event.generic_event_cookie;
+        if (xlib.XGetEventData)(display, &mut xev) == xlib::True {
+          match xev.evtype {
+            xinput2::XI_RawKeyPress | xinput2::XI_RawKeyRelease => {
+              let xev: &xinput2::XIRawEvent = &*(xev.data as *const _);
+              let physical_key = keycode_from_scancode(xev.detail as u32);
+              let state = match xev.evtype {
+                xinput2::XI_RawKeyPress => ElementState::Pressed,
+                xinput2::XI_RawKeyRelease => ElementState::Released,
+                _ => unreachable!(),
+              };
 
-                let event = RawKeyEvent {
-                  physical_key,
-                  state,
-                };
+              let event = RawKeyEvent {
+                physical_key,
+                state,
+              };
 
-                if let Err(e) = device_tx.send(DeviceEvent::Key(event)) {
-                  log::info!("Failed to send device event {} since receiver is closed. Closing x11 thread along with it", e);
-                  break;
-                }
+              if let Err(e) = device_tx.send(DeviceEvent::Key(event)) {
+                log::info!("Failed to send device event {} since receiver is closed. Closing x11 thread along with it", e);
+                break;
               }
-              _ => {}
             }
+            _ => {}
           }
         }
-        _ => {}
       }
     }
   });

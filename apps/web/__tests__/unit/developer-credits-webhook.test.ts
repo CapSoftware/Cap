@@ -14,7 +14,7 @@ const mockDbChain = {
 function resetDbChain() {
 	for (const key of Object.keys(mockDbChain)) {
 		const fn = mockDbChain[key as keyof typeof mockDbChain];
-		fn.mockClear();
+		fn.mockReset();
 	}
 	mockDbChain.select.mockReturnValue(mockDbChain);
 	mockDbChain.from.mockReturnValue(mockDbChain);

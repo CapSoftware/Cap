@@ -1,6 +1,6 @@
 import { HttpLive } from "@cap/web-backend";
-import { HttpApiScalar } from "@effect/platform";
 import { Layer } from "effect";
+import { HttpApiScalar } from "effect/http-api";
 import { apiToHandler } from "@/lib/server";
 
 const handler = apiToHandler(

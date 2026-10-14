@@ -20,7 +20,7 @@ use std::{
   cell::{RefCell, RefMut},
   ffi::{CStr, CString},
   os::raw::c_void,
-  sync::Mutex,
+  sync::{LazyLock, Mutex},
   time::Instant,
 };
 
@@ -43,51 +43,49 @@ pub struct AppDelegateClass(pub *const Class);
 unsafe impl Send for AppDelegateClass {}
 unsafe impl Sync for AppDelegateClass {}
 
-lazy_static! {
-  pub static ref APP_DELEGATE_CLASS: AppDelegateClass = unsafe {
-    let superclass = class!(NSResponder);
-    let mut decl = ClassDecl::new(
-      CStr::from_bytes_with_nul(b"TaoAppDelegateParent\0").unwrap(),
-      superclass,
-    )
-    .unwrap();
+pub static APP_DELEGATE_CLASS: LazyLock<AppDelegateClass> = LazyLock::new(|| unsafe {
+  let superclass = class!(NSResponder);
+  let mut decl = ClassDecl::new(
+    CStr::from_bytes_with_nul(b"TaoAppDelegateParent\0").unwrap(),
+    superclass,
+  )
+  .unwrap();
 
-    decl.add_class_method(sel!(new), new as extern "C" fn(_, _) -> _);
-    decl.add_method(sel!(dealloc), dealloc as extern "C" fn(_, _));
+  decl.add_class_method(sel!(new), new as extern "C" fn(_, _) -> _);
+  decl.add_method(sel!(dealloc), dealloc as extern "C" fn(_, _));
 
-    decl.add_method(
-      sel!(applicationDidFinishLaunching:),
-      did_finish_launching as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(applicationWillTerminate:),
-      application_will_terminate as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(application:openURLs:),
-      application_open_urls as extern "C" fn(_, _, _, _),
-    );
-    decl.add_method(
-      sel!(application:willContinueUserActivityWithType:),
-      application_will_continue_user_activity_with_type as extern "C" fn(_, _, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(application:continueUserActivity:restorationHandler:),
-      application_continue_user_activity as extern "C" fn(_, _, _, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(applicationShouldHandleReopen:hasVisibleWindows:),
-      application_should_handle_reopen as extern "C" fn(_, _, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(applicationSupportsSecureRestorableState:),
-      application_supports_secure_restorable_state as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_ivar::<*mut c_void>(&CString::new(AUX_DELEGATE_STATE_NAME).unwrap());
+  decl.add_method(
+    sel!(applicationDidFinishLaunching:),
+    did_finish_launching as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(applicationWillTerminate:),
+    application_will_terminate as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(application:openURLs:),
+    application_open_urls as extern "C" fn(_, _, _, _),
+  );
+  decl.add_method(
+    sel!(application:willContinueUserActivityWithType:),
+    application_will_continue_user_activity_with_type as extern "C" fn(_, _, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(application:continueUserActivity:restorationHandler:),
+    application_continue_user_activity as extern "C" fn(_, _, _, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+    application_should_handle_reopen as extern "C" fn(_, _, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(applicationSupportsSecureRestorableState:),
+    application_supports_secure_restorable_state as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_ivar::<*mut c_void>(&CString::new(AUX_DELEGATE_STATE_NAME).unwrap());
 
-    AppDelegateClass(decl.register())
-  };
-}
+  AppDelegateClass(decl.register())
+});
 
 /// Safety: Assumes that Object is an instance of APP_DELEGATE_CLASS
 #[allow(deprecated)] // TODO: Use define_class!

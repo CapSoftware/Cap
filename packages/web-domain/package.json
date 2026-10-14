@@ -12,11 +12,9 @@
 		"generate-openapi": "node scripts/generate-openapi.ts"
 	},
 	"dependencies": {
-		"@effect/platform": "^0.92.1",
-		"@effect/rpc": "^0.71.0",
-		"effect": "^3.18.4"
+		"effect": "^4.0.4"
 	},
 	"devDependencies": {
-		"@effect/platform-node": "^0.98.3"
+		"@effect/platform-node": "^4.0.4"
 	}
 }

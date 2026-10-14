@@ -51,7 +51,7 @@ describe("agent write safety", () => {
 			"utf8",
 		);
 		expect(source).toContain('return { state: "pending" as const }');
-		expect(source).toContain("Effect.tapErrorCause");
+		expect(source).toContain("Effect.tapCause");
 		expect(source).toContain(".delete(Db.agentApiIdempotency)");
 		expect(source).toContain("record.expiresAt.getTime() <= Date.now()");
 		expect(source).toContain('Schedule.exponential("25 millis")');

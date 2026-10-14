@@ -69,18 +69,18 @@ const storageVideo = (snapshot: CapSnapshot) =>
 		name: snapshot.name,
 		public: snapshot.public,
 		source: snapshot.source,
-		metadata: Option.fromNullable(snapshot.metadata),
-		bucketId: Option.fromNullable(snapshot.bucket).pipe(
+		metadata: Option.fromNullishOr(snapshot.metadata),
+		bucketId: Option.fromNullishOr(snapshot.bucket).pipe(
 			Option.map(S3Bucket.S3BucketId.make),
 		),
-		storageIntegrationId: Option.fromNullable(
+		storageIntegrationId: Option.fromNullishOr(
 			snapshot.storageIntegrationId,
 		).pipe(Option.map(StorageDomain.StorageIntegrationId.make)),
 		folderId: Option.none(),
 		transcriptionStatus: Option.none(),
-		width: Option.fromNullable(snapshot.width),
-		height: Option.fromNullable(snapshot.height),
-		duration: Option.fromNullable(snapshot.duration),
+		width: Option.fromNullishOr(snapshot.width),
+		height: Option.fromNullishOr(snapshot.height),
+		duration: Option.fromNullishOr(snapshot.duration),
 		createdAt: new Date(0),
 		updatedAt: new Date(0),
 	});
@@ -296,7 +296,7 @@ async function deleteOrganization(
 			activeOrganizationId: Organisation.OrganisationId.make(
 				user.activeOrganizationId ?? "",
 			),
-			iconUrlOrKey: Option.fromNullable(user.image),
+			iconUrlOrKey: Option.fromNullishOr(user.image),
 		}),
 	).pipe(runWorkflowPromise);
 	const [remainingOrganization] = await db()

@@ -3,10 +3,10 @@ import { Schema } from "effect";
 export const CommentId = Schema.String.pipe(Schema.brand("CommentId"));
 export type CommentId = typeof CommentId.Type;
 
-export const CommentType = Schema.Literal("emoji", "text", "video", "audio");
+export const CommentType = Schema.Literals(["emoji", "text", "video", "audio"]);
 export type CommentType = typeof CommentType.Type;
 
-export const MediaKind = Schema.Literal("video", "audio");
+export const MediaKind = Schema.Literals(["video", "audio"]);
 export type MediaKind = typeof MediaKind.Type;
 
 export const MediaMeta = Schema.Struct({

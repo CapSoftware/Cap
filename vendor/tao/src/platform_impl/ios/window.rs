@@ -7,7 +7,14 @@ use std::{
   ops::{Deref, DerefMut},
 };
 
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{
+  rc::Retained,
+  runtime::{AnyClass, AnyObject},
+  MainThreadMarker,
+};
+use objc2_ui_kit::{
+  UIApplication, UISceneActivationState, UISceneSessionActivationRequest, UIWindow,
+};
 
 use crate::{
   dpi::{self, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size},
@@ -15,7 +22,7 @@ use crate::{
   event::{Event, WindowEvent},
   icon::Icon,
   monitor::MonitorHandle as RootMonitorHandle,
-  platform::ios::{MonitorHandleExtIOS, ScreenEdge, ValidOrientations},
+  platform::ios::{operating_system_version, MonitorHandleExtIOS, ScreenEdge, ValidOrientations},
   platform_impl::platform::{
     app_state,
     event_loop::{self, EventProxy, EventWrapper},
@@ -41,9 +48,28 @@ pub struct Inner {
 impl Drop for Inner {
   fn drop(&mut self) {
     unsafe {
+      let window = self.window();
+      if let Some(scene) = window.windowScene() {
+        // our windows are tied to scenes - so when this is the last window of the scene,
+        // request the scene to be destroyed
+        if scene.windows().count() == 1 {
+          let mtm = MainThreadMarker::new().unwrap();
+          let application = UIApplication::sharedApplication(mtm);
+          application.requestSceneSessionDestruction_options_errorHandler(
+            &scene.session(),
+            None,
+            None,
+          );
+        }
+      }
       let () = msg_send![self.view, release];
       let () = msg_send![self.view_controller, release];
       let () = msg_send![self.window, release];
+
+      app_state::handle_nonuser_event(EventWrapper::StaticEvent(Event::WindowEvent {
+        window_id: RootWindowId(self.window.into()),
+        event: WindowEvent::Focused(false),
+      }));
     }
   }
 }
@@ -68,8 +94,40 @@ impl Inner {
   }
 
   pub fn set_focus(&self) {
-    //FIXME: implementation goes here
-    warn!("set_focus not yet implemented on iOS");
+    unsafe {
+      let window = self.window();
+      // only call makeKeyAndVisible() when Info.plist was not set up to support scenes
+      let Some(scene) = window.windowScene() else {
+        window.makeKeyAndVisible();
+        return;
+      };
+      let mtm = MainThreadMarker::new().unwrap();
+      let application = UIApplication::sharedApplication(mtm);
+
+      let error_handler = block2::RcBlock::new(move |error| {
+        log::error!("error activating scene: {error:?}");
+      });
+
+      // when we support multiple scenes, request the activation of this window's scene
+      if application.supportsMultipleScenes() {
+        if operating_system_version().0 >= 17 {
+          application.activateSceneSessionForRequest_errorHandler(
+            &UISceneSessionActivationRequest::request(),
+            Some(&error_handler),
+          );
+        } else {
+          #[allow(deprecated)]
+          application.requestSceneSessionActivation_userActivity_options_errorHandler(
+            Some(&scene.session()),
+            None,
+            None,
+            Some(&error_handler),
+          );
+        }
+      } else {
+        window.makeKeyAndVisible();
+      }
+    }
   }
 
   pub fn set_focusable(&self, _focusable: bool) {
@@ -77,8 +135,13 @@ impl Inner {
   }
 
   pub fn is_focused(&self) -> bool {
-    warn!("`Window::is_focused` is ignored on iOS");
-    false
+    unsafe {
+      self
+        .window()
+        .windowScene()
+        .map(|scene| scene.activationState() == UISceneActivationState::ForegroundActive)
+        .unwrap_or_default()
+    }
   }
 
   pub fn is_always_on_top(&self) -> bool {
@@ -258,8 +321,7 @@ impl Inner {
   }
 
   pub fn is_visible(&self) -> bool {
-    log::warn!("`Window::is_visible` is ignored on iOS");
-    false
+    !self.window().isHidden()
   }
 
   pub fn is_resizable(&self) -> bool {
@@ -449,6 +511,18 @@ impl Inner {
   pub fn set_badge_count(&self, count: i32) {
     set_badge_count(count);
   }
+
+  // instead of returning an Option here, we default to an empty string
+  // scene lifecycle will be enforced anyway soon (iOS 27)
+  pub fn scene_identifier(&self) -> String {
+    unsafe {
+      let window = self.window();
+      let Some(scene) = window.windowScene() else {
+        return "".into();
+      };
+      scene.session().persistentIdentifier().to_string()
+    }
+  }
 }
 
 pub struct Window {
@@ -596,6 +670,9 @@ impl Inner {
   }
   pub fn ui_view(&self) -> id {
     self.view
+  }
+  pub fn window(&self) -> Retained<UIWindow> {
+    unsafe { Retained::<UIWindow>::retain(self.window as _).unwrap() }
   }
 
   pub fn set_scale_factor(&self, scale_factor: f64) {
@@ -766,6 +843,14 @@ impl From<id> for WindowId {
   }
 }
 
+impl From<Retained<UIWindow>> for WindowId {
+  fn from(window: Retained<UIWindow>) -> WindowId {
+    WindowId {
+      window: Retained::as_ptr(&window) as _,
+    }
+  }
+}
+
 #[derive(Clone)]
 pub struct PlatformSpecificWindowBuilderAttributes {
   pub root_view_class: &'static AnyClass,
@@ -774,6 +859,7 @@ pub struct PlatformSpecificWindowBuilderAttributes {
   pub prefers_home_indicator_hidden: bool,
   pub prefers_status_bar_hidden: bool,
   pub preferred_screen_edges_deferring_system_gestures: ScreenEdge,
+  pub requesting_scene_identifier: Option<String>,
 }
 
 impl Default for PlatformSpecificWindowBuilderAttributes {
@@ -785,6 +871,7 @@ impl Default for PlatformSpecificWindowBuilderAttributes {
       prefers_home_indicator_hidden: false,
       prefers_status_bar_hidden: false,
       preferred_screen_edges_deferring_system_gestures: Default::default(),
+      requesting_scene_identifier: None,
     }
   }
 }

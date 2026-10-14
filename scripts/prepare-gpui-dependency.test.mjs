@@ -146,7 +146,7 @@ test("dependency verification handles overlapping patches without changing the c
 			path.join(repositoryRoot, "scripts/prepare-gpui-dependency.sh"),
 			"utf8",
 		)
-			.replace("5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", base)
+			.replace("f8d8a90d914d26b68fb126040386fb08c2ada78a", base)
 			.replace("https://github.com/wingleeio/zed.git", upstream),
 	);
 

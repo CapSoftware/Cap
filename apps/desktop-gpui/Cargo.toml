@@ -29,14 +29,14 @@ cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
-gpui = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
-gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d", features = [
+gpui = { git = "https://github.com/wingleeio/zed", rev = "f8d8a90d914d26b68fb126040386fb08c2ada78a" }
+gpui_platform = { git = "https://github.com/wingleeio/zed", rev = "f8d8a90d914d26b68fb126040386fb08c2ada78a", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "5d1f83d9f27a19bec1fb241dc33b42238af9cf8d" }
+gpui_tokio = { git = "https://github.com/wingleeio/zed", rev = "f8d8a90d914d26b68fb126040386fb08c2ada78a" }
 
 # Device enumeration reuses the same crates the Tauri app records with, so the
 # device identities here are byte-identical to the ones cap-recording expects.
@@ -239,9 +239,8 @@ parakeet-rs = "0.3.4"
 [patch.crates-io]
 wgpu-hal = { path = "../../vendor/wgpu-hal" }
 
-# Local checkout of the pinned wingleeio/zed rev plus one commit: paint_surface
-# accepts 32BGRA CVPixelBuffers, which the editor preview's zero-copy path
-# hands it (see cap-rendering's RgbaToBgraSurfaceConverter).
+# The local checkout prepared by scripts/prepare-gpui-dependency.sh carries
+# platform fixes, including 32BGRA CVPixelBuffers for the zero-copy editor preview.
 [patch."https://github.com/wingleeio/zed"]
 gpui = { path = "../../../zed-cap/crates/gpui" }
 gpui_platform = { path = "../../../zed-cap/crates/gpui_platform" }

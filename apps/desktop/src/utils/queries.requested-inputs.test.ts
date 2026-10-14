@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import ts from "typescript";
+import { parse } from "@babel/parser";
+import { transformSync } from "esbuild";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
@@ -237,53 +238,54 @@ type PausedMutations = {
 	};
 };
 
-const pausedRoute = ts.createSourceFile(
-	"in-progress-recording.tsx",
-	readFileSync(
-		new URL("../routes/in-progress-recording.tsx", import.meta.url),
-		"utf8",
-	),
-	ts.ScriptTarget.ESNext,
-	true,
-	ts.ScriptKind.TSX,
+const pausedSource = readFileSync(
+	new URL("../routes/in-progress-recording.tsx", import.meta.url),
+	"utf8",
 );
-const pausedComponent = pausedRoute.statements.find(
-	(statement): statement is ts.FunctionDeclaration =>
-		ts.isFunctionDeclaration(statement) &&
-		statement.name?.text === "InProgressRecordingInner",
-);
+const pausedRoute = parse(pausedSource, {
+	sourceType: "module",
+	plugins: ["typescript", "jsx"],
+});
+const pausedComponent = pausedRoute.program.body
+	.filter((statement) => statement.type === "FunctionDeclaration")
+	.find((statement) => statement.id?.name === "InProgressRecordingInner");
 const pausedMutationNames = new Set([
 	"pauseRecordingForDeviceChange",
 	"updateMicInput",
 	"updateCameraInput",
 ]);
-const pausedStatements = pausedComponent?.body?.statements.filter(
+const pausedStatements = pausedComponent?.body?.body.filter(
 	(statement) =>
-		ts.isVariableStatement(statement) &&
-		statement.declarationList.declarations.some(
+		statement.type === "VariableDeclaration" &&
+		statement.declarations.some(
 			(declaration) =>
-				ts.isIdentifier(declaration.name) &&
-				pausedMutationNames.has(declaration.name.text),
+				declaration.id.type === "Identifier" &&
+				pausedMutationNames.has(declaration.id.name),
 		),
 );
 if (pausedStatements?.length !== 3) {
 	throw new Error("Paused device mutation source was not found");
 }
-const pausedHelpers = pausedRoute.statements.filter(
+const pausedHelpers = pausedRoute.program.body.filter(
 	(statement) =>
-		ts.isFunctionDeclaration(statement) &&
+		statement.type === "FunctionDeclaration" &&
 		[
 			"cameraInfoToId",
 			"cameraMatchesSelection",
 			"cloneDeviceOrModelId",
-		].includes(statement.name?.text ?? ""),
+		].includes(statement.id?.name ?? ""),
 );
-const pausedMutationCode = ts.transpileModule(
+const pausedMutationCode = transformSync(
 	[...pausedStatements, ...pausedHelpers]
-		.map((statement) => statement.getText(pausedRoute))
+		.map((statement) => {
+			if (statement.start == null || statement.end == null) {
+				throw new Error("Paused device mutation source has no location");
+			}
+			return pausedSource.slice(statement.start, statement.end);
+		})
 		.join("\n"),
-	{ compilerOptions: { target: ts.ScriptTarget.ES2022 } },
-).outputText;
+	{ loader: "ts", target: "es2022" },
+).code;
 const createPausedMutations = new Function(
 	"createMutation",
 	"optionsQuery",

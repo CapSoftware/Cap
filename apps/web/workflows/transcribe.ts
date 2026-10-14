@@ -19,7 +19,7 @@ import {
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { Either, Option, Schema } from "effect";
+import { Option, Result, Schema } from "effect";
 import { FatalError } from "workflow";
 import { start } from "workflow/api";
 import { getAssemblyAITranscriptionOptions } from "@/lib/assemblyai";
@@ -700,14 +700,14 @@ async function extractAudioFromSegmentsImpl(
 			return { status: "unavailable", reason: "invalid segment manifest JSON" };
 		}
 
-		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(parsed);
-		if (Either.isLeft(decoded)) {
+		const decoded = Schema.decodeUnknownResult(Video.SegmentManifest)(parsed);
+		if (Result.isFailure(decoded)) {
 			return {
 				status: "unavailable",
 				reason: "invalid segment manifest format",
 			};
 		}
-		const manifest = decoded.right;
+		const manifest = decoded.success;
 
 		const plan = planSegmentsAudioExtraction(manifest);
 		if (plan.status !== "ok") return plan;

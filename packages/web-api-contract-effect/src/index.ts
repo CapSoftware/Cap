@@ -1,22 +1,23 @@
+import { Context, Data } from "effect";
 import {
 	HttpApi,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
 	HttpApiMiddleware,
-} from "@effect/platform";
-import { Context, Data } from "effect";
+	HttpApiSchema,
+} from "effect/http-api";
 import * as Schema from "effect/Schema";
 
-const TranscriptionStatus = Schema.Literal(
+const TranscriptionStatus = Schema.Literals([
 	"PROCESSING",
 	"COMPLETE",
 	"ERROR",
 	"SKIPPED",
 	"NO_AUDIO",
-);
-const OSType = Schema.Literal("macos", "windows", "linux");
-const LicenseType = Schema.Literal("yearly", "lifetime");
+]);
+const OSType = Schema.Literals(["macos", "windows", "linux"]);
+const LicenseType = Schema.Literals(["yearly", "lifetime"]);
 
 const MessageResponse = Schema.Struct({
 	message: Schema.String,
@@ -45,7 +46,7 @@ const ManagedOrganizationStorage = Schema.NullOr(
 
 const S3ConfigResponse = Schema.Struct({
 	config: S3Config,
-	source: Schema.Literal("default", "user", "organization"),
+	source: Schema.Literals(["default", "user", "organization"]),
 	managedByOrganization: ManagedOrganizationStorage,
 });
 
@@ -63,6 +64,10 @@ const AuthHeaders = Schema.Struct({
 	authorization: Schema.String,
 });
 
+const UnauthorizedResponse = Schema.Struct({
+	error: Schema.Union([Schema.String, Schema.Boolean]),
+}).pipe(HttpApiSchema.status(401));
+
 export class User extends Data.Class<{
 	id: string;
 	email: string;
@@ -72,192 +77,203 @@ export class User extends Data.Class<{
 	stripeCustomerId: string | null;
 }> {}
 
-export class Authentication extends Context.Tag("Authentication")<
+export class Authentication extends Context.Service<
 	Authentication,
 	{ user: User }
->() {}
+>()("Authentication") {}
 
-export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()(
-	"Authentication",
-	{ provides: Authentication },
-) {}
+export class AuthMiddleware extends HttpApiMiddleware.Service<
+	AuthMiddleware,
+	{ provides: Authentication }
+>()("Authentication") {}
 
 export class ApiContract extends HttpApi.make("cap-web-api")
 	.add(
 		HttpApiGroup.make("video")
 			.add(
-				HttpApiEndpoint.get("getTranscribeStatus", "/video/transcribe/status")
-					.setUrlParams(Schema.Struct({ videoId: Schema.String }))
-					.addSuccess(
-						Schema.Struct({
-							transcriptionStatus: Schema.NullOr(TranscriptionStatus),
-						}),
-					),
+				HttpApiEndpoint.get("getTranscribeStatus", "/video/transcribe/status", {
+					query: Schema.Struct({ videoId: Schema.String }),
+					success: Schema.Struct({
+						transcriptionStatus: Schema.NullOr(TranscriptionStatus),
+					}),
+					error: HttpApiError.InternalServerError,
+				}),
 			)
 			.add(
-				HttpApiEndpoint.del("delete", "/video/delete")
-					.setUrlParams(Schema.Struct({ videoId: Schema.String }))
-					.addSuccess(Schema.Unknown),
+				HttpApiEndpoint.delete("delete", "/video/delete", {
+					query: Schema.Struct({ videoId: Schema.String }),
+					success: Schema.Unknown,
+					error: HttpApiError.InternalServerError,
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getAnalytics", "/video/analytics")
-					.setUrlParams(Schema.Struct({ videoId: Schema.String }))
-					.addSuccess(Schema.Struct({ count: Schema.Number })),
+				HttpApiEndpoint.get("getAnalytics", "/video/analytics", {
+					query: Schema.Struct({ videoId: Schema.String }),
+					success: Schema.Struct({ count: Schema.Number }),
+					error: HttpApiError.InternalServerError,
+				}),
 			),
 	)
 	.add(
 		HttpApiGroup.make("desktop-public")
 			.add(
-				HttpApiEndpoint.get("getChangelogPosts", "/changelog")
-					.setUrlParams(Schema.Struct({ origin: Schema.String }))
-					.addSuccess(Schema.Array(ChangelogResponse)),
+				HttpApiEndpoint.get("getChangelogPosts", "/changelog", {
+					query: Schema.Struct({ origin: Schema.String }),
+					success: Schema.Array(ChangelogResponse),
+					error: HttpApiError.InternalServerError,
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getChangelogStatus", "/changelog/status")
-					.setUrlParams(Schema.Struct({ version: Schema.String }))
-					.addSuccess(Schema.Struct({ hasUpdate: Schema.Boolean })),
+				HttpApiEndpoint.get("getChangelogStatus", "/changelog/status", {
+					query: Schema.Struct({ version: Schema.String }),
+					success: Schema.Struct({ hasUpdate: Schema.Boolean }),
+					error: HttpApiError.InternalServerError,
+				}),
 			),
 	)
 	.add(
 		HttpApiGroup.make("desktop-protected")
-			.addError(
-				Schema.Struct({
-					error: Schema.Union(Schema.String, Schema.Boolean),
+			.add(
+				HttpApiEndpoint.post("submitFeedback", "/desktop/feedback", {
+					headers: AuthHeaders,
+					payload: Schema.Struct({
+						feedback: Schema.String,
+						os: OSType,
+						version: Schema.String,
+					}),
+					success: Schema.Struct({ success: Schema.Boolean }),
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
 				}),
-				{ status: 401 },
 			)
 			.add(
-				HttpApiEndpoint.post("submitFeedback", "/desktop/feedback")
-					.setHeaders(AuthHeaders)
-					.setPayload(
-						Schema.Struct({
-							feedback: Schema.String,
-							os: OSType,
-							version: Schema.String,
-						}),
-					)
-					.addSuccess(Schema.Struct({ success: Schema.Boolean })),
+				HttpApiEndpoint.get("getUserPlan", "/desktop/plan", {
+					headers: AuthHeaders,
+					success: Schema.Struct({
+						upgraded: Schema.Boolean,
+						stripeSubscriptionStatus: Schema.NullOr(Schema.String),
+					}),
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getUserPlan", "/desktop/plan")
-					.setHeaders(AuthHeaders)
-					.addSuccess(
-						Schema.Struct({
-							upgraded: Schema.Boolean,
-							stripeSubscriptionStatus: Schema.NullOr(Schema.String),
-						}),
-					),
+				HttpApiEndpoint.get("getUserProfile", "/desktop/user/profile", {
+					headers: AuthHeaders,
+					success: Schema.Struct({
+						name: Schema.NullOr(Schema.String),
+						email: Schema.NullOr(Schema.String),
+						imageUrl: Schema.NullOr(Schema.String),
+					}),
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getUserProfile", "/desktop/user/profile")
-					.setHeaders(AuthHeaders)
-					.addSuccess(
-						Schema.Struct({
-							name: Schema.NullOr(Schema.String),
-							email: Schema.NullOr(Schema.String),
-							imageUrl: Schema.NullOr(Schema.String),
-						}),
-					),
+				HttpApiEndpoint.get("getS3Config", "/desktop/s3/config/get", {
+					headers: AuthHeaders,
+					success: S3ConfigResponse,
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getS3Config", "/desktop/s3/config/get")
-					.setHeaders(AuthHeaders)
-					.addSuccess(S3ConfigResponse),
+				HttpApiEndpoint.post("setS3Config", "/desktop/s3/config", {
+					headers: AuthHeaders,
+					payload: S3Config,
+					success: SuccessResponse,
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.post("setS3Config", "/desktop/s3/config")
-					.setHeaders(AuthHeaders)
-					.setPayload(S3Config)
-					.addSuccess(SuccessResponse),
+				HttpApiEndpoint.delete("deleteS3Config", "/desktop/s3/config/delete", {
+					headers: AuthHeaders,
+					success: SuccessResponse,
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.del("deleteS3Config", "/desktop/s3/config/delete")
-					.setHeaders(AuthHeaders)
-					.addSuccess(SuccessResponse),
+				HttpApiEndpoint.post("testS3Config", "/desktop/s3/config/test", {
+					headers: AuthHeaders,
+					payload: S3Config,
+					success: SuccessResponse,
+					error: [UnauthorizedResponse, HttpApiError.InternalServerError],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.post("testS3Config", "/desktop/s3/config/test")
-					.setHeaders(AuthHeaders)
-					.setPayload(S3Config)
-					.addSuccess(SuccessResponse),
-			)
-			.add(
-				HttpApiEndpoint.post("getProSubscribeURL", "/desktop/subscribe")
-					.setHeaders(AuthHeaders)
-					.setPayload(Schema.Struct({ priceId: Schema.String }))
-					.addSuccess(Schema.Struct({ url: Schema.String }))
-					.addError(
+				HttpApiEndpoint.post("getProSubscribeURL", "/desktop/subscribe", {
+					headers: AuthHeaders,
+					payload: Schema.Struct({ priceId: Schema.String }),
+					success: Schema.Struct({ url: Schema.String }),
+					error: [
 						Schema.Struct({
 							error: Schema.Literal(true),
 							subscription: Schema.optional(Schema.Literal(true)),
-						}),
-						{ status: 400 },
-					)
-					.addError(
+						}).pipe(HttpApiSchema.status(400)),
 						Schema.Struct({
 							error: Schema.Literal(true),
 							auth: Schema.Literal(false),
-						}),
-						{ status: 401 },
-					),
+						}).pipe(HttpApiSchema.status(401)),
+						UnauthorizedResponse,
+						HttpApiError.InternalServerError,
+					],
+				}),
 			)
 			.add(
-				HttpApiEndpoint.get("getOrgCustomDomain", "/org-custom-domain")
-					.setHeaders(AuthHeaders)
-					.addSuccess(
-						Schema.Struct({
-							custom_domain: Schema.NullOr(Schema.String),
-							domain_verified: Schema.NullOr(Schema.Boolean),
-						}),
-					)
-					.addError(Schema.Struct({ message: Schema.String }), { status: 500 }),
+				HttpApiEndpoint.get("getOrgCustomDomain", "/org-custom-domain", {
+					headers: AuthHeaders,
+					success: Schema.Struct({
+						custom_domain: Schema.NullOr(Schema.String),
+						domain_verified: Schema.NullOr(Schema.Boolean),
+					}),
+					error: [
+						Schema.Struct({ message: Schema.String }).pipe(
+							HttpApiSchema.status(500),
+						),
+						UnauthorizedResponse,
+						HttpApiError.InternalServerError,
+					],
+				}),
 			),
 	)
-	.addError(HttpApiError.InternalServerError)
 	.prefix("/api") {}
 
 export class LicenseApiContract extends HttpApi.make("cap-license-api").add(
 	HttpApiGroup.make("license")
 		.add(
-			HttpApiEndpoint.post("activateCommercialLicense", "/commercial/activate")
-				.setHeaders(
-					Schema.Struct({
+			HttpApiEndpoint.post(
+				"activateCommercialLicense",
+				"/commercial/activate",
+				{
+					headers: Schema.Struct({
 						licensekey: Schema.String,
 						instanceid: Schema.String,
 					}),
-				)
-				.setPayload(
-					Schema.Struct({
+					payload: Schema.Struct({
 						reset: Schema.optional(Schema.Boolean),
 					}),
-				)
-				.addSuccess(
-					Schema.Struct({
+					success: Schema.Struct({
 						message: Schema.String,
 						expiryDate: Schema.optional(Schema.Number),
 						refresh: Schema.Number,
 					}),
-				)
-				.addError(MessageResponse, { status: 403 }),
+					error: MessageResponse.pipe(HttpApiSchema.status(403)),
+				},
+			),
 		)
 		.add(
 			HttpApiEndpoint.post(
 				"createCommercialCheckoutUrl",
 				"/commercial/checkout",
-			)
-				.setPayload(
-					Schema.Struct({
+				{
+					payload: Schema.Struct({
 						type: LicenseType,
 						quantity: Schema.optional(
-							Schema.Number.pipe(
-								Schema.int(),
-								Schema.greaterThanOrEqualTo(1),
-								Schema.lessThanOrEqualTo(100),
+							Schema.Int.check(
+								Schema.isGreaterThanOrEqualTo(1),
+								Schema.isLessThanOrEqualTo(100),
 							),
 						),
 					}),
-				)
-				.addSuccess(Schema.Struct({ url: Schema.String }))
-				.addError(MessageResponse, { status: 500 }),
+					success: Schema.Struct({ url: Schema.String }),
+					error: MessageResponse.pipe(HttpApiSchema.status(500)),
+				},
+			),
 		),
 ) {}

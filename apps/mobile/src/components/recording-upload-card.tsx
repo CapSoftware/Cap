@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
 		backgroundColor: "rgba(18,18,20,0.92)",
 	},
 	border: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		borderRadius: radius.lg,
 		borderWidth: StyleSheet.hairlineWidth,
 		borderColor: "rgba(255,255,255,0.14)",

@@ -6,7 +6,7 @@ use crate::{
   dpi::PhysicalPosition,
   icon::Icon,
   keyboard::ModifiersState,
-  platform_impl::platform::{event_loop, minimal_ime::MinimalIme, util},
+  platform_impl::platform::{event_loop, util},
   window::{CursorIcon, Fullscreen, Theme, WindowAttributes, WindowSizeConstraints, RGBA},
 };
 use parking_lot::MutexGuard;
@@ -38,8 +38,6 @@ pub struct WindowState {
   pub fullscreen: Option<Fullscreen>,
   pub current_theme: Theme,
   pub preferred_theme: Option<Theme>,
-
-  pub ime_handler: MinimalIme,
 
   pub window_flags: WindowFlags,
 
@@ -156,7 +154,6 @@ impl WindowState {
       fullscreen: None,
       current_theme,
       preferred_theme,
-      ime_handler: MinimalIme::default(),
       window_flags: WindowFlags::empty(),
       is_active: false,
       is_focused: false,
@@ -312,28 +309,14 @@ impl WindowFlags {
   }
 
   /// Adjust the window client rectangle to the return value, if present.
-  fn apply_diff(mut self, window: HWND, mut new: WindowFlags) {
-    self = self.mask();
-    new = new.mask();
+  fn apply_diff(self, window: HWND, new: WindowFlags) {
+    let old = self.mask();
+    let new = new.mask();
 
-    let mut diff = self ^ new;
+    let mut diff = old ^ new;
 
     if diff == WindowFlags::empty() {
       return;
-    }
-
-    if new.contains(WindowFlags::VISIBLE) {
-      unsafe {
-        let _ = ShowWindow(
-          window,
-          if self.contains(WindowFlags::MARKER_DONT_FOCUS) {
-            self.set(WindowFlags::MARKER_DONT_FOCUS, false);
-            SW_SHOWNOACTIVATE
-          } else {
-            SW_SHOW
-          },
-        );
-      }
     }
 
     if diff.contains(WindowFlags::ALWAYS_ON_TOP) {
@@ -374,7 +357,10 @@ impl WindowFlags {
       }
     }
 
-    if diff.contains(WindowFlags::MAXIMIZED) || new.contains(WindowFlags::MAXIMIZED) {
+    if (diff.contains(WindowFlags::MAXIMIZED) || new.contains(WindowFlags::MAXIMIZED))
+      // This is to avoid the window from flashing
+      && !(new.contains(WindowFlags::MAXIMIZED) && !new.contains(WindowFlags::VISIBLE))
+    {
       unsafe {
         let _ = ShowWindow(
           window,
@@ -424,7 +410,11 @@ impl WindowFlags {
     }
 
     if diff != WindowFlags::empty() {
-      let (style, style_ex) = new.to_window_styles();
+      let (mut style, style_ex) = new.to_window_styles();
+      // Remove `WS_VISIBLE` if we were hidden, this is required for the `ShowWindow` below to work
+      if !old.contains(WindowFlags::VISIBLE) {
+        style &= !WS_VISIBLE;
+      }
 
       unsafe {
         SendMessageW(
@@ -458,6 +448,21 @@ impl WindowFlags {
           *event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID,
           Some(WPARAM(0)),
           Some(LPARAM(0)),
+        );
+      }
+    }
+
+    // This needs to be after the `SetWindowPos` above or there will be
+    // a title bar flicker on undecorated windows's creation
+    if new.contains(WindowFlags::VISIBLE) {
+      unsafe {
+        let _ = ShowWindow(
+          window,
+          if old.contains(WindowFlags::MARKER_DONT_FOCUS) {
+            SW_SHOWNOACTIVATE
+          } else {
+            SW_SHOW
+          },
         );
       }
     }

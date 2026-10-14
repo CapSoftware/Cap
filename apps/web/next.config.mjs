@@ -1,11 +1,12 @@
-import("dotenv").then(({ config }) => config({ path: "../../.env" }));
-
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withSentryConfig } from "@sentry/nextjs/config";
 import ffmpegStaticPath from "ffmpeg-static";
 import workflowNext from "workflow/next";
+
+const workspaceEnvPath = "../../.env";
+if (fs.existsSync(workspaceEnvPath)) process.loadEnvFile(workspaceEnvPath);
 
 const { withWorkflow } = workflowNext;
 
@@ -25,6 +26,7 @@ const ffmpegTracingIncludes = ffmpegStaticPath
 	: [];
 
 const nextConfig = {
+	distDir: process.env.CAP_NEXT_DIST_DIR ?? ".next",
 	outputFileTracingRoot: path.resolve(appDirectory, "../.."),
 	reactStrictMode: true,
 	serverExternalPackages: ["ffmpeg-static", "prettier"],

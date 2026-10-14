@@ -17,7 +17,8 @@ use objc2::{
 use objc2_app_kit::{
   self as appkit, NSApplicationPresentationOptions, NSPasteboard, NSView, NSWindow,
 };
-use objc2_foundation::{NSArray, NSAutoreleasePool, NSString, NSUInteger};
+use objc2_foundation::{ns_string, NSArray, NSAutoreleasePool, NSString, NSUInteger};
+use std::sync::LazyLock;
 
 use crate::{
   dpi::{LogicalPosition, LogicalSize},
@@ -28,7 +29,7 @@ use crate::{
     event::{EventProxy, EventWrapper},
     ffi::{id, nil, BOOL, NO, YES},
     util::{self, IdRef},
-    view::ViewState,
+    view::{reapply_traffic_light_inset, ViewState},
     window::{get_ns_theme, get_window_id, UnownedWindow},
   },
   window::{Fullscreen, WindowId},
@@ -158,116 +159,114 @@ struct WindowDelegateClass(*const Class);
 unsafe impl Send for WindowDelegateClass {}
 unsafe impl Sync for WindowDelegateClass {}
 
-lazy_static! {
-  static ref WINDOW_DELEGATE_CLASS: WindowDelegateClass = unsafe {
-    let superclass = class!(NSResponder);
-    let mut decl = ClassDecl::new(
-      CStr::from_bytes_with_nul(b"TaoWindowDelegate\0").unwrap(),
-      superclass,
-    )
-    .unwrap();
+static WINDOW_DELEGATE_CLASS: LazyLock<WindowDelegateClass> = LazyLock::new(|| unsafe {
+  let superclass = class!(NSResponder);
+  let mut decl = ClassDecl::new(
+    CStr::from_bytes_with_nul(b"TaoWindowDelegate\0").unwrap(),
+    superclass,
+  )
+  .unwrap();
 
-    decl.add_method(sel!(dealloc), dealloc as extern "C" fn(_, _));
-    decl.add_method(
-      sel!(initWithTao:),
-      init_with_tao as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(markIsCheckingZoomedIn),
-      mark_is_checking_zoomed_in as extern "C" fn(_, _),
-    );
-    decl.add_method(
-      sel!(clearIsCheckingZoomedIn),
-      clear_is_checking_zoomed_in as extern "C" fn(_, _),
-    );
+  decl.add_method(sel!(dealloc), dealloc as extern "C" fn(_, _));
+  decl.add_method(
+    sel!(initWithTao:),
+    init_with_tao as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(markIsCheckingZoomedIn),
+    mark_is_checking_zoomed_in as extern "C" fn(_, _),
+  );
+  decl.add_method(
+    sel!(clearIsCheckingZoomedIn),
+    clear_is_checking_zoomed_in as extern "C" fn(_, _),
+  );
 
-    decl.add_method(
-      sel!(windowShouldClose:),
-      window_should_close as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(windowWillClose:),
-      window_will_close as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidResize:),
-      window_did_resize as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidMove:),
-      window_did_move as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidChangeBackingProperties:),
-      window_did_change_backing_properties as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidBecomeKey:),
-      window_did_become_key as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidResignKey:),
-      window_did_resign_key as extern "C" fn(_, _, _),
-    );
+  decl.add_method(
+    sel!(windowShouldClose:),
+    window_should_close as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(windowWillClose:),
+    window_will_close as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidResize:),
+    window_did_resize as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidMove:),
+    window_did_move as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidChangeBackingProperties:),
+    window_did_change_backing_properties as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidBecomeKey:),
+    window_did_become_key as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidResignKey:),
+    window_did_resign_key as extern "C" fn(_, _, _),
+  );
 
-    decl.add_method(
-      sel!(draggingEntered:),
-      dragging_entered as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(prepareForDragOperation:),
-      prepare_for_drag_operation as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(performDragOperation:),
-      perform_drag_operation as extern "C" fn(_, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(concludeDragOperation:),
-      conclude_drag_operation as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(draggingExited:),
-      dragging_exited as extern "C" fn(_, _, _),
-    );
+  decl.add_method(
+    sel!(draggingEntered:),
+    dragging_entered as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(prepareForDragOperation:),
+    prepare_for_drag_operation as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(performDragOperation:),
+    perform_drag_operation as extern "C" fn(_, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(concludeDragOperation:),
+    conclude_drag_operation as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(draggingExited:),
+    dragging_exited as extern "C" fn(_, _, _),
+  );
 
-    decl.add_method(
-      sel!(window:willUseFullScreenPresentationOptions:),
-      window_will_use_fullscreen_presentation_options as extern "C" fn(_, _, _, _) -> _,
-    );
-    decl.add_method(
-      sel!(windowDidEnterFullScreen:),
-      window_did_enter_fullscreen as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowWillEnterFullScreen:),
-      window_will_enter_fullscreen as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidExitFullScreen:),
-      window_did_exit_fullscreen as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowWillExitFullScreen:),
-      window_will_exit_fullscreen as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(windowDidFailToEnterFullScreen:),
-      window_did_fail_to_enter_fullscreen as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(effectiveAppearanceDidChange:),
-      effective_appearance_did_change as extern "C" fn(_, _, _),
-    );
-    decl.add_method(
-      sel!(effectiveAppearanceDidChangedOnMainThread:),
-      effective_appearance_did_changed_on_main_thread as extern "C" fn(_, _, _),
-    );
+  decl.add_method(
+    sel!(window:willUseFullScreenPresentationOptions:),
+    window_will_use_fullscreen_presentation_options as extern "C" fn(_, _, _, _) -> _,
+  );
+  decl.add_method(
+    sel!(windowDidEnterFullScreen:),
+    window_did_enter_fullscreen as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowWillEnterFullScreen:),
+    window_will_enter_fullscreen as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidExitFullScreen:),
+    window_did_exit_fullscreen as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowWillExitFullScreen:),
+    window_will_exit_fullscreen as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(windowDidFailToEnterFullScreen:),
+    window_did_fail_to_enter_fullscreen as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(effectiveAppearanceDidChange:),
+    effective_appearance_did_change as extern "C" fn(_, _, _),
+  );
+  decl.add_method(
+    sel!(effectiveAppearanceDidChangedOnMainThread:),
+    effective_appearance_did_changed_on_main_thread as extern "C" fn(_, _, _),
+  );
 
-    decl.add_ivar::<*mut c_void>(CStr::from_bytes_with_nul(b"taoState\0").unwrap());
-    WindowDelegateClass(decl.register())
-  };
-}
+  decl.add_ivar::<*mut c_void>(CStr::from_bytes_with_nul(b"taoState\0").unwrap());
+  WindowDelegateClass(decl.register())
+});
 
 // This function is definitely unsafe, but labeling that would increase
 // boilerplate and wouldn't really clarify anything...
@@ -312,7 +311,7 @@ extern "C" fn init_with_tao(this: &Object, _sel: Sel, state: *mut c_void) -> id 
 
     let notification_center: &Object =
       msg_send![class!(NSDistributedNotificationCenter), defaultCenter];
-    let notification_name = NSString::from_str("AppleInterfaceThemeChangedNotification");
+    let notification_name = ns_string!("AppleInterfaceThemeChangedNotification");
     let _: () = msg_send![
         notification_center,
         addObserver: this
@@ -627,6 +626,9 @@ extern "C" fn window_did_exit_fullscreen(this: &Object, _: Sel, _: id) {
       if let Some(target_fullscreen) = target_fullscreen {
         window.set_fullscreen(target_fullscreen);
       }
+      // Leaving fullscreen resets the traffic light buttons to their default
+      // position without a `drawRect:`, so re-apply the custom inset (#15451).
+      unsafe { reapply_traffic_light_inset(&window.ns_window, &window.ns_view) };
     });
     state.emit_resize_event();
     state.emit_move_event();

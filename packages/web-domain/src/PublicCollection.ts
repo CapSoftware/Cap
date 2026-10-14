@@ -6,12 +6,12 @@ import { Schema } from "effect";
  * inside the `settings` JSON column of both `folders` and `spaces`.
  */
 
-export const PublicCollectionLayout = Schema.Literal("grid", "list");
+export const PublicCollectionLayout = Schema.Literals(["grid", "list"]);
 export type PublicCollectionLayout = Schema.Schema.Type<
 	typeof PublicCollectionLayout
 >;
 
-export const PublicCollectionGridColumns = Schema.Literal(2, 3, 4, 5);
+export const PublicCollectionGridColumns = Schema.Literals([2, 3, 4, 5]);
 export type PublicCollectionGridColumns = Schema.Schema.Type<
 	typeof PublicCollectionGridColumns
 >;
@@ -23,12 +23,12 @@ export type PublicCollectionGridColumns = Schema.Schema.Type<
  * - `custom`: a logo uploaded specifically for this collection (`logoUrl`)
  * - `none`: no logo (and no "Powered by Cap" footer)
  */
-export const PublicCollectionLogoMode = Schema.Literal(
+export const PublicCollectionLogoMode = Schema.Literals([
 	"cap",
 	"organization",
 	"custom",
 	"none",
-);
+]);
 export type PublicCollectionLogoMode = Schema.Schema.Type<
 	typeof PublicCollectionLogoMode
 >;
@@ -46,19 +46,19 @@ export const PublicPageSettings = Schema.Struct({
 	hideCopyLink: Schema.optional(Schema.Boolean),
 	logoMode: Schema.optional(PublicCollectionLogoMode),
 	logoUrl: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(PUBLIC_PAGE_LOGO_URL_MAX_LENGTH)),
+		Schema.String.check(Schema.isMaxLength(PUBLIC_PAGE_LOGO_URL_MAX_LENGTH)),
 	),
 	title: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(PUBLIC_PAGE_TITLE_MAX_LENGTH)),
+		Schema.String.check(Schema.isMaxLength(PUBLIC_PAGE_TITLE_MAX_LENGTH)),
 	),
 	subtitle: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(PUBLIC_PAGE_SUBTITLE_MAX_LENGTH)),
+		Schema.String.check(Schema.isMaxLength(PUBLIC_PAGE_SUBTITLE_MAX_LENGTH)),
 	),
 	ctaLabel: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(PUBLIC_PAGE_CTA_LABEL_MAX_LENGTH)),
+		Schema.String.check(Schema.isMaxLength(PUBLIC_PAGE_CTA_LABEL_MAX_LENGTH)),
 	),
 	ctaUrl: Schema.optional(
-		Schema.String.pipe(Schema.maxLength(PUBLIC_PAGE_CTA_URL_MAX_LENGTH)),
+		Schema.String.check(Schema.isMaxLength(PUBLIC_PAGE_CTA_URL_MAX_LENGTH)),
 	),
 	layout: Schema.optional(PublicCollectionLayout),
 	gridColumns: Schema.optional(PublicCollectionGridColumns),
@@ -70,7 +70,11 @@ export type PublicPageSettings = Schema.Schema.Type<typeof PublicPageSettings>;
  * patch merged into the stored value. `logoUrl` is excluded: it is owned by
  * the logo upload action, which is the only writer of collection logo keys.
  */
-export const PublicPageSettingsUpdate = PublicPageSettings.omit("logoUrl");
+const { logoUrl: _logoUrl, ...publicPageSettingsUpdateFields } =
+	PublicPageSettings.fields;
+export const PublicPageSettingsUpdate = Schema.Struct(
+	publicPageSettingsUpdateFields,
+);
 export type PublicPageSettingsUpdate = Schema.Schema.Type<
 	typeof PublicPageSettingsUpdate
 >;

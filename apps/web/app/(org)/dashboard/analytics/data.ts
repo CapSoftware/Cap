@@ -149,7 +149,7 @@ const withTinybirdFallback = <Row>(
 	effect: Effect.Effect<unknown, unknown, never>,
 ) =>
 	effect.pipe(
-		Effect.catchAll((e: unknown) => {
+		Effect.catch((e: unknown) => {
 			console.error("tinybird query error", e);
 			return Effect.succeed<{ data: Row[] }>({ data: [] as Row[] });
 		}),

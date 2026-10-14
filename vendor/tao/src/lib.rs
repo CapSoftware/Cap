@@ -157,9 +157,6 @@ pub use rwh_06;
 
 #[allow(unused_imports)]
 #[macro_use]
-extern crate lazy_static;
-#[allow(unused_imports)]
-#[macro_use]
 extern crate log;
 #[cfg(feature = "serde")]
 #[macro_use]

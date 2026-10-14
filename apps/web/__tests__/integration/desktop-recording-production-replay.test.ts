@@ -104,7 +104,7 @@ function replay(sample: Sample) {
 			checked(() => {
 				if (!name.endsWith(".json"))
 					throw new Error("Media bytes entered the control plane");
-				return Option.fromNullable(objects.get(name)?.body.toString("utf8"));
+				return Option.fromNullishOr(objects.get(name)?.body.toString("utf8"));
 			}),
 		putObject: (name: string, body: string) =>
 			checked(() => {

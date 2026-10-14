@@ -1,48 +1,47 @@
 import { videoProcessingJobs, videos } from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
 import { CurrentUser, HttpAuthMiddleware, Video } from "@cap/web-domain";
+import { and, eq } from "drizzle-orm";
+import { Effect, Layer, Schema } from "effect";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-} from "@effect/platform";
-import { and, eq } from "drizzle-orm";
-import { Effect, Layer, Schema } from "effect";
+} from "effect/http-api";
 import { prepareDesktopRecordingSegments } from "@/lib/desktop-recording-source";
 import { apiToHandler } from "@/lib/server";
 
 const Segment = Schema.Struct({
-	track: Schema.Literal("video", "audio"),
-	index: Schema.Int.pipe(Schema.between(1, 50_000)),
+	track: Schema.Literals(["video", "audio"]),
+	index: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50_000 })),
 });
 
 class Api extends HttpApi.make("RecordingPreparationApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.post("prepare")`/api/recording/prepare`
-			.setPayload(
-				Schema.Struct({
-					videoId: Video.VideoId,
-					segments: Schema.Array(Segment).pipe(
-						Schema.minItems(1),
-						Schema.maxItems(32),
-					),
-				}),
-			)
-			.addSuccess(
-				Schema.Struct({
-					version: Schema.Literal(1),
-					prepared: Schema.Array(Segment),
-				}),
-			)
-			.addError(HttpApiError.NotFound)
-			.addError(HttpApiError.InternalServerError)
-			.middleware(HttpAuthMiddleware),
+		HttpApiEndpoint.post("prepare", "/api/recording/prepare", {
+			payload: Schema.Struct({
+				videoId: Video.VideoId,
+				segments: Schema.Array(Segment).check(
+					Schema.isMinLength(1),
+					Schema.isMaxLength(32),
+				),
+			}),
+			success: Schema.Struct({
+				version: Schema.Literal(1),
+				prepared: Schema.Array(Segment),
+			}),
+			error: [
+				HttpApiError.NotFound,
+				HttpApiError.InternalServerError,
+				HttpApiError.Unauthorized,
+			],
+		}).middleware(HttpAuthMiddleware),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("prepare", ({ payload }) =>
@@ -93,10 +92,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					if (prepared === null) return yield* new HttpApiError.NotFound();
 					return { version: 1 as const, prepared };
 				}).pipe(
-					Effect.timeoutFail({
-						duration: "20 seconds",
-						onTimeout: () => new HttpApiError.InternalServerError(),
-					}),
+					Effect.timeout("20 seconds"),
+					Effect.catchTag(
+						"TimeoutError",
+						() => new HttpApiError.InternalServerError(),
+					),
 				),
 			),
 		),

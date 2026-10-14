@@ -1,51 +1,50 @@
 import type { Video } from "@cap/web-domain";
-import { dataLoader } from "@effect/experimental/RequestResolver";
-import { Effect, Exit, Request, RequestResolver } from "effect";
-import type { NonEmptyArray } from "effect/Array";
+import { Context, Effect, Layer, Request, RequestResolver } from "effect";
 import { Rpc } from "@/lib/Rpcs";
 
 export namespace AnalyticsRequest {
 	export class AnalyticsRequest extends Request.Class<
+		{ videoId: Video.VideoId },
 		{ count: number },
-		unknown,
-		{ videoId: Video.VideoId }
+		unknown
 	> {}
 
-	export class DataLoaderResolver extends Effect.Service<DataLoaderResolver>()(
-		"AnalyticsRequest/DataLoaderResolver",
-		{
-			scoped: Effect.gen(function* () {
+	export class DataLoaderResolver extends Context.Service<
+		DataLoaderResolver,
+		RequestResolver.RequestResolver<AnalyticsRequest>
+	>()("AnalyticsRequest/DataLoaderResolver") {
+		static readonly layer = Layer.effect(
+			this,
+			Effect.gen(function* () {
 				const rpc = yield* Rpc;
-
-				const requestResolver = RequestResolver.makeBatched(
-					(requests: NonEmptyArray<AnalyticsRequest>) =>
-						rpc.VideosGetAnalytics(requests.map((r) => r.videoId)).pipe(
-							Effect.flatMap(
-								// biome-ignore lint/suspicious/useIterableCallbackReturn: effect
-								Effect.forEach((result, index) =>
-									Exit.matchEffect(result, {
-										onSuccess: (v) => Request.succeed(requests[index]!, v),
-										onFailure: (e) => Request.fail(requests[index]!, e),
-									}),
+				return RequestResolver.make<AnalyticsRequest>((entries) =>
+					rpc
+						.VideosGetAnalytics(entries.map((entry) => entry.request.videoId))
+						.pipe(
+							Effect.flatMap((results) =>
+								Effect.forEach(
+									entries,
+									(entry, index) => {
+										const result = results[index];
+										return result
+											? Request.complete(entry, result)
+											: Request.fail(
+													entry,
+													new Error("Missing analytics result"),
+												);
+									},
+									{ discard: true },
 								),
 							),
-							Effect.catchAll((error) =>
-								Effect.forEach(
-									requests,
-									(request) => Request.fail(request, error),
-									{
-										discard: true,
-									},
-								),
+							Effect.catch((error) =>
+								Effect.forEach(entries, (entry) => Request.fail(entry, error), {
+									discard: true,
+								}),
 							),
 						),
-				);
-
-				return yield* dataLoader(requestResolver, {
-					window: "10 millis",
-				});
+				).pipe(RequestResolver.setDelayEffect(Effect.sleep("10 millis")));
 			}),
-			dependencies: [Rpc.Default],
-		},
-	) {}
+		);
+		static readonly Default = this.layer.pipe(Layer.provide(Rpc.Default));
+	}
 }

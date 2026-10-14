@@ -1,5 +1,5 @@
-import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
@@ -16,7 +16,7 @@ export const UserUpdate = Schema.Struct({
 });
 export type UserUpdate = Schema.Schema.Type<typeof UserUpdate>;
 
-export const OnboardingStepPayload = Schema.Union(
+export const OnboardingStepPayload = Schema.Union([
 	Schema.Struct({
 		step: Schema.Literal("welcome"),
 		data: Schema.Struct({
@@ -49,9 +49,9 @@ export const OnboardingStepPayload = Schema.Union(
 		step: Schema.Literal("skipToDashboard"),
 		data: Schema.Void,
 	}),
-);
+]);
 
-export const OnboardingStepResult = Schema.Union(
+export const OnboardingStepResult = Schema.Union([
 	Schema.Struct({
 		step: Schema.Literal("welcome"),
 		data: Schema.Void,
@@ -74,7 +74,7 @@ export const OnboardingStepResult = Schema.Union(
 		step: Schema.Literal("skipToDashboard"),
 		data: Schema.Void,
 	}),
-);
+]);
 
 export class UserRpcs extends RpcGroup.make(
 	Rpc.make("UserCompleteOnboardingStep", {
@@ -84,6 +84,6 @@ export class UserRpcs extends RpcGroup.make(
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("UserUpdate", {
 		payload: UserUpdate,
-		error: Schema.Union(InternalError, PolicyDeniedError),
+		error: Schema.Union([InternalError, PolicyDeniedError]),
 	}).middleware(RpcAuthMiddleware),
 ) {}

@@ -285,15 +285,15 @@ async function hasExistingLoomUpload(
 			...video,
 			bucketId: video.bucket,
 			storageIntegrationId: video.storageIntegrationId,
-			createdAt: video.createdAt.toISOString(),
-			updatedAt: video.updatedAt.toISOString(),
+			createdAt: video.createdAt,
+			updatedAt: video.updatedAt,
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 		const object = yield* bucket.headObject(payload.rawFileKey);
 		return (object.ContentLength ?? 0) >= MINIMUM_VIDEO_SIZE;
 	}).pipe(
-		Effect.catchAll(() => Effect.succeed(false)),
+		Effect.catch(() => Effect.succeed(false)),
 		runWorkflowPromise,
 	);
 }
@@ -411,8 +411,8 @@ async function processVideoOnMediaServer(
 			...video,
 			bucketId: video.bucket,
 			storageIntegrationId: video.storageIntegrationId,
-			createdAt: video.createdAt.toISOString(),
-			updatedAt: video.updatedAt.toISOString(),
+			createdAt: video.createdAt,
+			updatedAt: video.updatedAt,
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);

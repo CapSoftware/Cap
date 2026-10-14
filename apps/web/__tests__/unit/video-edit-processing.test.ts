@@ -57,7 +57,7 @@ const database = vi.hoisted(() => {
 	return { state, select, remove, insert: vi.fn(), update: vi.fn() };
 });
 
-const viewPolicy = Context.GenericTag<{
+const viewPolicy = Context.Service<{
 	canViewLoaded: () => Effect.Effect<void>;
 }>("EditNavigationViewPolicy");
 

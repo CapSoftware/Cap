@@ -67,7 +67,7 @@ export const NewFolderDialog: React.FC<Props> = ({
 				name: data.name,
 				color: data.color,
 				public: data.public,
-				spaceId: Option.fromNullable(spaceId),
+				spaceId: Option.fromNullishOr(spaceId),
 				parentId: Option.none(),
 			}),
 		onSuccess: () => {

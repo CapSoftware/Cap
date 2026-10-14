@@ -10,7 +10,7 @@ use objc2::{
   AllocAnyThread,
 };
 use objc2_app_kit::NSImage;
-use objc2_foundation::{NSDictionary, NSPoint, NSString};
+use objc2_foundation::{ns_string, NSDictionary, NSPoint, NSString};
 use std::{
   cell::RefCell,
   ffi::{c_void, CString},
@@ -111,15 +111,15 @@ impl Cursor {
 // instead you'll just get them all in a column.
 pub unsafe fn load_webkit_cursor(cursor_name: &str) -> id {
   const CURSOR_ROOT: &str = "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/Frameworks/HIServices.framework/Versions/A/Resources/cursors";
-  let cursor_root = NSString::from_str(CURSOR_ROOT);
+  let cursor_root = ns_string!(CURSOR_ROOT);
   let cursor_name = NSString::from_str(cursor_name);
-  let cursor_pdf = NSString::from_str("cursor.pdf");
-  let cursor_plist = NSString::from_str("info.plist");
-  let key_x = NSString::from_str("hotx");
-  let key_y = NSString::from_str("hoty");
+  let cursor_pdf = ns_string!("cursor.pdf");
+  let cursor_plist = ns_string!("info.plist");
+  let key_x = ns_string!("hotx");
+  let key_y = ns_string!("hoty");
 
   let cursor_path: Retained<NSString> =
-    msg_send![&cursor_root, stringByAppendingPathComponent: &*cursor_name];
+    msg_send![cursor_root, stringByAppendingPathComponent: &*cursor_name];
   let pdf_path: Retained<NSString> =
     msg_send![&cursor_path, stringByAppendingPathComponent: &*cursor_pdf];
   let info_path: Retained<NSString> =

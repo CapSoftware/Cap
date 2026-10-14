@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v3";
 import { c } from "./util";
 
 export const OrganizationHexColor = z.string().regex(/^#[0-9A-Fa-f]{6}$/);

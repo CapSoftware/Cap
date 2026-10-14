@@ -483,12 +483,7 @@ export default function RecordScreen() {
 		void requestPermissions().catch(() => {
 			setPermissionRequestFinished(true);
 		});
-	}, [
-		isPhysicalDevice,
-		permissionStateLoaded,
-		permissionsGranted,
-		requestPermissions,
-	]);
+	}, [permissionStateLoaded, permissionsGranted, requestPermissions]);
 
 	useEffect(() => {
 		if (!isPhysicalDevice) return;
@@ -499,7 +494,7 @@ export default function RecordScreen() {
 				.finally(() => setPermissionRequestFinished(true));
 		});
 		return () => subscription.remove();
-	}, [getCameraPermission, getMicrophonePermission, isPhysicalDevice]);
+	}, [getCameraPermission, getMicrophonePermission]);
 
 	useEffect(() => {
 		void loadRecordingDurationLimit();
@@ -523,7 +518,7 @@ export default function RecordScreen() {
 					reason: "Screen recording is unavailable in this build.",
 				}),
 			);
-	}, [isPhysicalDevice]);
+	}, []);
 
 	const startRecording = useCallback(async () => {
 		if (!cameraRef.current || !cameraReady || phase !== "ready") return;
@@ -1480,7 +1475,7 @@ const styles = StyleSheet.create({
 		backgroundColor: "#ff3b30",
 	},
 	screenSystemPicker: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		zIndex: 1,
 	},
 	screenCaptureGlyph: {
@@ -1536,7 +1531,7 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 34,
 	},
 	inlinePermissionContent: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
 		paddingHorizontal: 34,
@@ -1587,7 +1582,7 @@ const styles = StyleSheet.create({
 		color: colors.gray12,
 	},
 	screenCanvas: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
 		paddingHorizontal: 34,

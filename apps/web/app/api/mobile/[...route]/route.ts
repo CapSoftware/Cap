@@ -30,12 +30,6 @@ import {
 	Video,
 } from "@cap/web-domain";
 import {
-	HttpApiBuilder,
-	HttpApiError,
-	HttpServerResponse,
-} from "@effect/platform";
-import type * as HttpServerRequest from "@effect/platform/HttpServerRequest";
-import {
 	and,
 	count,
 	desc,
@@ -48,6 +42,8 @@ import {
 	sql,
 } from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
+import { type HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder, HttpApiError } from "effect/http-api";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import { downloadLoomVideo } from "@/actions/loom";
@@ -370,7 +366,7 @@ const withMappedErrors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
 		Effect.catchTags({
 			DatabaseError: () => Effect.fail(new HttpApiError.InternalServerError()),
-			NoSuchElementException: () => Effect.fail(new HttpApiError.NotFound()),
+			NoSuchElementError: () => Effect.fail(new HttpApiError.NotFound()),
 			PolicyDenied: () => Effect.fail(new HttpApiError.Forbidden()),
 			S3Error: () => Effect.fail(new HttpApiError.InternalServerError()),
 			StorageError: () => Effect.fail(new HttpApiError.InternalServerError()),
@@ -1237,8 +1233,8 @@ const updateOrganizationIcon = Effect.fn("Mobile.updateOrganizationIcon")(
 		}
 
 		yield* imageUploads.applyUpdate({
-			payload: Option.fromNullable(image),
-			existing: Option.fromNullable(organization.iconUrl),
+			payload: Option.fromNullishOr(image),
+			existing: Option.fromNullishOr(organization.iconUrl),
 			keyPrefix: `organizations/${settings.id}`,
 			update: (db, iconUrl) =>
 				db
@@ -1319,7 +1315,7 @@ const updateProfileImage = Effect.fn("Mobile.updateProfileImage")(function* (
 
 	const imageUploads = yield* ImageUploads;
 	yield* imageUploads.applyUpdate({
-		payload: Option.fromNullable(image),
+		payload: Option.fromNullishOr(image),
 		existing: user.iconUrlOrKey,
 		keyPrefix: `users/${user.id}`,
 		update: (db, imageUrl) =>
@@ -1654,7 +1650,7 @@ const getCapsList = Effect.fn("Mobile.getCapsList")(function* (
 			ownedRows.map((row) => row.id),
 			user.id,
 		)
-		.pipe(Effect.catchAll(() => Effect.succeed([])));
+		.pipe(Effect.catch(() => Effect.succeed([])));
 	const viewCounts = new Map<Video.VideoId, number>();
 
 	ownedRows.forEach((row, index) => {
@@ -1941,7 +1937,7 @@ const getCapById = Effect.fn("Mobile.getCapById")(function* (
 					videos.getAnalytics(capRow.id),
 				).pipe(
 					Effect.map((result) => result.count),
-					Effect.catchAll(() => Effect.succeed(0)),
+					Effect.catch(() => Effect.succeed(0)),
 				)
 			: 0;
 
@@ -2015,7 +2011,7 @@ const getComments = Effect.fn("Mobile.getComments")(function* (
 		(image) =>
 			imageUploads
 				.resolveImageUrl(image)
-				.pipe(Effect.catchAll(() => Effect.succeed(null))),
+				.pipe(Effect.catch(() => Effect.succeed(null))),
 		{ concurrency: 5 },
 	);
 	const imageUrlByKey = new Map(
@@ -2139,7 +2135,7 @@ const createMobileComment = Effect.fn("Mobile.createComment")(function* ({
 			comment: { id, content: trimmedContent },
 			parentCommentId: parentCommentId ?? undefined,
 		}),
-	).pipe(Effect.catchAll(() => Effect.void));
+	).pipe(Effect.catch(() => Effect.void));
 
 	const comments = yield* getComments(videoId, id);
 	const created = comments.find((comment) => comment.id === id);
@@ -2170,7 +2166,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 		Effect.map((url) =>
 			resolveMobileWebResourceUrl(url, serverEnv().WEB_URL, publicOrigin),
 		),
-		Effect.catchAll(() => Effect.succeed(null)),
+		Effect.catch(() => Effect.succeed(null)),
 	);
 
 	if (source instanceof Video.Mp4Source) {
@@ -2482,10 +2478,10 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		source: { type: "webMP4" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
-		width: Option.fromNullable(input.width),
-		height: Option.fromNullable(input.height),
-		duration: Option.fromNullable(input.durationSeconds),
+		folderId: Option.fromNullishOr(folderId),
+		width: Option.fromNullishOr(input.width),
+		height: Option.fromNullishOr(input.height),
+		duration: Option.fromNullishOr(input.durationSeconds),
 		metadata: Option.none(),
 		transcriptionStatus: Option.none(),
 	});
@@ -2577,7 +2573,7 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		source: { type: "desktopSegments" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
-		folderId: Option.fromNullable(folderId),
+		folderId: Option.fromNullishOr(folderId),
 		width: Option.some(input.width),
 		height: Option.some(input.height),
 		duration: Option.none(),
@@ -2759,7 +2755,7 @@ const completeRecording = Effect.fn("Mobile.completeRecording")(function* (
 	return { success: true as const };
 });
 
-const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
+const ApiLive = HttpApiBuilder.layer(Mobile.MobileApiContract).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Mobile.MobileApiContract, "mobile", (handlers) =>
 			Effect.gen(function* () {
@@ -2778,7 +2774,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							),
 						}),
 					)
-					.handle("requestSession", ({ request, urlParams }) =>
+					.handle("requestSession", ({ request, query: urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* getCurrentUser;
@@ -2864,7 +2860,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("removeProfileImage", () =>
 						withMappedErrors(updateProfileImage(null)),
 					)
-					.handle("listCaps", ({ request, urlParams }) =>
+					.handle("listCaps", ({ request, query: urlParams }) =>
 						withMappedErrors(
 							getCapsList(urlParams, getMobilePublicOrigin(request)),
 						),
@@ -2875,12 +2871,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("createFolder", ({ payload }) =>
 						withMappedErrors(createMobileFolder(payload)),
 					)
-					.handle("getCap", ({ path, request }) =>
+					.handle("getCap", ({ params: path, request }) =>
 						withMappedErrors(
 							getCapDetail(path.id, getMobilePublicOrigin(request)),
 						),
 					)
-					.handle("reportCap", ({ path, payload, request }) =>
+					.handle("reportCap", ({ params: path, payload, request }) =>
 						withMappedErrors(
 							reportMobileCap(
 								path.id,
@@ -2889,7 +2885,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							),
 						),
 					)
-					.handle("getCapThumbnail", ({ path }) =>
+					.handle("getCapThumbnail", ({ params: path }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								yield* assertMobileVideoAccess(path.id);
@@ -2905,7 +2901,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("updateCapSharing", ({ path, payload, request }) =>
+					.handle("updateCapSharing", ({ params: path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const publicOrigin = getMobilePublicOrigin(request);
@@ -2927,7 +2923,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("updateCapTitle", ({ path, payload, request }) =>
+					.handle("updateCapTitle", ({ params: path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const publicOrigin = getMobilePublicOrigin(request);
@@ -2965,7 +2961,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("updateCapPassword", ({ path, payload, request }) =>
+					.handle("updateCapPassword", ({ params: path, payload, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const publicOrigin = getMobilePublicOrigin(request);
@@ -2995,19 +2991,19 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("deleteCap", ({ path }) =>
+					.handle("deleteCap", ({ params: path }) =>
 						withMappedErrors(
 							videos
 								.delete(path.id)
 								.pipe(Effect.map(() => ({ success: true as const }))),
 						),
 					)
-					.handle("getPlayback", ({ path, request }) =>
+					.handle("getPlayback", ({ params: path, request }) =>
 						withMappedErrors(
 							getPlayback(path.id, getMobilePublicOrigin(request)),
 						),
 					)
-					.handle("getDownload", ({ path, request }) =>
+					.handle("getDownload", ({ params: path, request }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const publicOrigin = getMobilePublicOrigin(request);
@@ -3041,7 +3037,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("getCapAnalytics", ({ path, urlParams }) =>
+					.handle("getCapAnalytics", ({ params: path, query: urlParams }) =>
 						withMappedErrors(getCapAnalytics(path.id, urlParams.range ?? "7d")),
 					)
 					.handle("getOrganizationSettings", () =>
@@ -3059,7 +3055,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 					.handle("importLoom", ({ payload, request }) =>
 						withMappedErrors(importLoom(payload.loomUrl, request)),
 					)
-					.handle("createComment", ({ path, payload }) =>
+					.handle("createComment", ({ params: path, payload }) =>
 						withMappedErrors(
 							createMobileComment({
 								videoId: path.id,
@@ -3070,7 +3066,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("deleteComment", ({ path }) =>
+					.handle("deleteComment", ({ params: path }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* CurrentUser;
@@ -3092,7 +3088,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("createReaction", ({ path, payload }) =>
+					.handle("createReaction", ({ params: path, payload }) =>
 						withMappedErrors(
 							createMobileComment({
 								videoId: path.id,
@@ -3108,7 +3104,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							createUpload(payload, getMobilePublicOrigin(request)),
 						),
 					)
-					.handle("updateUploadProgress", ({ path, payload }) =>
+					.handle("updateUploadProgress", ({ params: path, payload }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* CurrentUser;
@@ -3136,7 +3132,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							}),
 						),
 					)
-					.handle("completeUpload", ({ path, payload }) =>
+					.handle("completeUpload", ({ params: path, payload }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* CurrentUser;
@@ -3188,7 +3184,7 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 										mode: "singlepart",
 									}),
 								).pipe(
-									Effect.catchAll((error) =>
+									Effect.catch((error) =>
 										Effect.logError(error).pipe(
 											Effect.flatMap(() =>
 												Effect.fail(new HttpApiError.InternalServerError()),
@@ -3206,12 +3202,12 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 							createRecording(payload, getMobilePublicOrigin(request)),
 						),
 					)
-					.handle("createRecordingUploadTargets", ({ path, payload }) =>
+					.handle("createRecordingUploadTargets", ({ params: path, payload }) =>
 						withMappedErrors(
 							createRecordingUploadTargets(path.id, payload.subpaths),
 						),
 					)
-					.handle("completeRecording", ({ path, payload }) =>
+					.handle("completeRecording", ({ params: path, payload }) =>
 						withMappedErrors(completeRecording(path.id, payload)),
 					);
 			}),

@@ -8,7 +8,7 @@ use std::{
   rc::Rc,
   sync::{
     atomic::{AtomicBool, AtomicI32, Ordering},
-    Arc,
+    RwLock,
   },
 };
 
@@ -16,7 +16,7 @@ use gtk::{
   gdk::WindowState,
   glib::{self, translate::ToGlibPtr},
   prelude::*,
-  CssProvider, Settings,
+  CssProvider, EventBox, Settings,
 };
 
 use crate::{
@@ -24,7 +24,6 @@ use crate::{
   error::{ExternalError, NotSupportedError, OsError as RootOsError},
   icon::Icon,
   monitor::MonitorHandle as RootMonitorHandle,
-  platform_impl::wayland::header::WlHeader,
   window::{
     CursorIcon, Fullscreen, ProgressBarState, ResizeDirection, Theme, UserAttentionType,
     WindowAttributes, WindowSizeConstraints, RGBA,
@@ -46,10 +45,6 @@ impl WindowId {
   }
 }
 
-// Currently GTK doesn't provide feature for detect theme, so we need to check theme manually.
-// ref: https://github.com/WebKit/WebKit/blob/e44ffaa0d999a9807f76f1805943eea204cfdfbc/Source/WebKit/UIProcess/API/gtk/PageClientImpl.cpp#L587
-const GTK_THEME_SUFFIX_LIST: [&'static str; 3] = ["-dark", "-Dark", "-Darker"];
-
 pub struct Window {
   /// Window id.
   pub(crate) window_id: WindowId,
@@ -66,11 +61,17 @@ pub struct Window {
   maximized: Rc<AtomicBool>,
   is_always_on_top: Rc<AtomicBool>,
   minimized: Rc<AtomicBool>,
-  fullscreen: RefCell<Option<Fullscreen>>,
-  inner_size_constraints: RefCell<WindowSizeConstraints>,
+  // `Window` is `Send` and `Sync`, need a `RwLock` not a `RefCell`
+  // otherwise unsynchronized &RefCell from multiple threads
+  fullscreen: RwLock<Option<Fullscreen>>,
+  // `Window` is `Send` and `Sync`, need a `RwLock` not a `RefCell`
+  // otherwise unsynchronized &RefCell from multiple threads
+  inner_size_constraints: RwLock<WindowSizeConstraints>,
   /// Draw event Sender
   draw_tx: crossbeam_channel::Sender<WindowId>,
-  preferred_theme: RefCell<Option<Theme>>,
+  // `Window` is `Send` and `Sync`, need a `RwLock` not a `RefCell`
+  // otherwise unsynchronized &RefCell from multiple threads
+  preferred_theme: RwLock<Option<Theme>>,
   css_provider: CssProvider,
 }
 
@@ -83,7 +84,6 @@ impl Window {
     let app = &event_loop_window_target.app;
     let window_requests_tx = event_loop_window_target.window_requests_tx.clone();
     let draw_tx = event_loop_window_target.draw_tx.clone();
-    let is_wayland = event_loop_window_target.is_wayland();
 
     let mut window_builder = gtk::ApplicationWindow::builder()
       .application(app)
@@ -93,10 +93,6 @@ impl Window {
     }
 
     let window = window_builder.build();
-
-    if is_wayland {
-      WlHeader::setup(&window, &attributes.title);
-    }
 
     let window_id = WindowId(window.id());
     event_loop_window_target
@@ -110,18 +106,25 @@ impl Window {
       .inner_size
       .map(|size| size.to_logical::<f64>(win_scale_factor as f64).into())
       .unwrap_or((800, 600));
-    window.set_default_size(1, 1);
-    window.resize(width, height);
 
-    if attributes.maximized {
-      let maximize_process = util::WindowMaximizeProcess::new(window.clone(), attributes.resizable);
-      glib::idle_add_local_full(glib::Priority::HIGH_IDLE, move || {
-        let mut maximize_process = maximize_process.borrow_mut();
-        maximize_process.next_step()
-      });
-    } else {
-      window.set_resizable(attributes.resizable);
-    }
+    window.set_default_size(width, height);
+
+    // Trying to prevent Wayland Protocol Error about mismatched xdg_surface_buffer sizes
+    let maximized = attributes.maximized;
+    let resizable = attributes.resizable;
+    let configure_handler_id = Rc::new(RefCell::new(None));
+    let configure_handler_id_ = configure_handler_id.clone();
+    let id = window.connect_configure_event(move |window, _| {
+      if let Some(id) = configure_handler_id_.take() {
+        window.disconnect(id);
+        if maximized {
+          window.maximize();
+        }
+        window.set_resizable(resizable);
+      }
+      false
+    });
+    configure_handler_id.borrow_mut().replace(id);
 
     window.set_deletable(attributes.closable);
 
@@ -187,6 +190,11 @@ impl Window {
     }
     window.set_visible(attributes.visible);
     window.set_decorated(attributes.decorations);
+    if window.display().backend().is_wayland() && !attributes.decorations {
+      // Enable CSD to prevent compositor from rendering server-side decorations
+      let event_box = EventBox::new();
+      window.set_titlebar(Some(&event_box));
+    }
 
     if attributes.always_on_bottom {
       window.set_keep_below(attributes.always_on_bottom);
@@ -200,29 +208,17 @@ impl Window {
       window.stick();
     }
 
-    let preferred_theme = if let Some(settings) = Settings::default() {
-      if let Some(preferred_theme) = attributes.preferred_theme {
-        match preferred_theme {
-          Theme::Dark => settings.set_gtk_application_prefer_dark_theme(true),
-          Theme::Light => {
-            if let Some(theme) = settings.gtk_theme_name() {
-              let theme = theme.as_str();
-              // Remove dark variant.
-              if let Some(theme) = GTK_THEME_SUFFIX_LIST
-                .iter()
-                .find(|t| theme.ends_with(*t))
-                .map(|v| theme.strip_suffix(v))
-              {
-                settings.set_gtk_theme_name(theme);
-              }
-            }
-          }
-        }
+    // Set initial `preferred_theme` value to current portal color-scheme
+    #[cfg(feature = "dbus")]
+    let preferred_theme = super::portal::theme().ok();
+    #[cfg(not(feature = "dbus"))]
+    let preferred_theme = None;
+
+    if let Some(theme) = preferred_theme {
+      if let Some(settings) = Settings::default() {
+        settings.set_gtk_application_prefer_dark_theme(theme == Theme::Dark);
       }
-      attributes.preferred_theme
-    } else {
-      None
-    };
+    }
 
     if attributes.visible {
       window.show_all();
@@ -233,7 +229,7 @@ impl Window {
     // restore accept-focus after the window has been drawn
     // if the window was initially created without focus and is supposed to be focusable
     if attributes.focusable && !attributes.focused {
-      let signal_id = Arc::new(RefCell::new(None));
+      let signal_id = Rc::new(RefCell::new(None));
       let signal_id_ = signal_id.clone();
       let id = window.connect_draw(move |window, _| {
         if let Some(id) = signal_id_.take() {
@@ -291,9 +287,9 @@ impl Window {
       maximized,
       minimized,
       is_always_on_top,
-      fullscreen: RefCell::new(attributes.fullscreen),
-      inner_size_constraints: RefCell::new(attributes.inner_size_constraints),
-      preferred_theme: RefCell::new(preferred_theme),
+      fullscreen: RwLock::new(attributes.fullscreen),
+      inner_size_constraints: RwLock::new(attributes.inner_size_constraints),
+      preferred_theme: RwLock::new(preferred_theme),
       css_provider: CssProvider::new(),
     };
 
@@ -434,9 +430,9 @@ impl Window {
       maximized,
       minimized,
       is_always_on_top,
-      fullscreen: RefCell::new(None),
-      inner_size_constraints: RefCell::new(WindowSizeConstraints::default()),
-      preferred_theme: RefCell::new(None),
+      fullscreen: RwLock::new(None),
+      inner_size_constraints: RwLock::new(WindowSizeConstraints::default()),
+      preferred_theme: RwLock::new(None),
       css_provider: CssProvider::new(),
     };
 
@@ -538,7 +534,7 @@ impl Window {
 
   pub fn set_min_inner_size(&self, size: Option<Size>) {
     let (width, height) = size.map(crate::extract_width_height).unzip();
-    let mut size_constraints = self.inner_size_constraints.borrow_mut();
+    let mut size_constraints = self.inner_size_constraints.write().unwrap();
     size_constraints.min_width = width;
     size_constraints.min_height = height;
     self.set_size_constraints(*size_constraints)
@@ -546,14 +542,14 @@ impl Window {
 
   pub fn set_max_inner_size(&self, size: Option<Size>) {
     let (width, height) = size.map(crate::extract_width_height).unzip();
-    let mut size_constraints = self.inner_size_constraints.borrow_mut();
+    let mut size_constraints = self.inner_size_constraints.write().unwrap();
     size_constraints.max_width = width;
     size_constraints.max_height = height;
     self.set_size_constraints(*size_constraints)
   }
 
   pub fn set_inner_size_constraints(&self, constraints: WindowSizeConstraints) {
-    *self.inner_size_constraints.borrow_mut() = constraints;
+    *self.inner_size_constraints.write().unwrap() = constraints;
     self.set_size_constraints(constraints)
   }
 
@@ -701,7 +697,7 @@ impl Window {
   }
 
   pub fn set_fullscreen(&self, fullscreen: Option<Fullscreen>) {
-    self.fullscreen.replace(fullscreen.clone());
+    *self.fullscreen.write().unwrap() = fullscreen.clone();
     if let Err(e) = self
       .window_requests_tx
       .send((self.window_id, WindowRequest::Fullscreen(fullscreen)))
@@ -711,7 +707,7 @@ impl Window {
   }
 
   pub fn fullscreen(&self) -> Option<Fullscreen> {
-    self.fullscreen.borrow().clone()
+    self.fullscreen.read().unwrap().clone()
   }
 
   pub fn set_decorations(&self, decorations: bool) {
@@ -1028,22 +1024,20 @@ impl Window {
   }
 
   pub fn theme(&self) -> Theme {
-    if let Some(theme) = *self.preferred_theme.borrow() {
+    if let Some(theme) = *self.preferred_theme.read().unwrap() {
       return theme;
     }
 
-    if let Some(theme) = Settings::default().and_then(|s| s.gtk_theme_name()) {
-      let theme = theme.as_str();
-      if GTK_THEME_SUFFIX_LIST.iter().any(|t| theme.ends_with(t)) {
-        return Theme::Dark;
-      }
+    #[cfg(feature = "dbus")]
+    if let Ok(portal_theme) = super::portal::theme() {
+      return portal_theme;
     }
 
     Theme::Light
   }
 
   pub fn set_theme(&self, theme: Option<Theme>) {
-    *self.preferred_theme.borrow_mut() = theme;
+    *self.preferred_theme.write().unwrap() = theme;
     if let Err(e) = self
       .window_requests_tx
       .send((WindowId::dummy(), WindowRequest::SetTheme(theme)))

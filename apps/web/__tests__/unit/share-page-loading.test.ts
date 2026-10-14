@@ -27,12 +27,12 @@ vi.mock("@cap/env", () => ({
 vi.mock("@cap/ui", () => ({ Logo: () => null }));
 vi.mock("@cap/utils", () => ({ userIsPro: () => mocks.ownerIsPro }));
 vi.mock("@cap/web-backend", () => ({
-	Database: Context.GenericTag("ShareTestDatabase"),
-	ImageUploads: Context.GenericTag("ShareTestImages"),
-	Videos: Context.GenericTag("ShareTestVideos"),
+	Database: Context.Service("ShareTestDatabase"),
+	ImageUploads: Context.Service("ShareTestImages"),
+	Videos: Context.Service("ShareTestVideos"),
 	provideOptionalAuth: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		mocks.authenticated
-			? Effect.provideService(Context.GenericTag("CurrentUser"), {
+			? Effect.provideService(Context.Service("CurrentUser"), {
 					id: "owner",
 				})(effect)
 			: effect,
@@ -44,21 +44,21 @@ vi.mock("@cap/web-backend", () => ({
 	}),
 }));
 vi.mock("@cap/web-backend/src/Videos/VideosPolicy", () => ({
-	VideosPolicy: Context.GenericTag("ShareTestPolicy"),
+	VideosPolicy: Context.Service("ShareTestPolicy"),
 }));
 vi.mock("@/lib/server", () => ({
 	runPromise: <A, E>(effect: Effect.Effect<A, E, unknown>) =>
 		effect.pipe(
-			Effect.provideService(Context.GenericTag("ShareTestPolicy"), {
+			Effect.provideService(Context.Service("ShareTestPolicy"), {
 				canViewLoaded: mocks.policy,
 			}),
-			Effect.provideService(Context.GenericTag("ShareTestDatabase"), {
+			Effect.provideService(Context.Service("ShareTestDatabase"), {
 				use: () => Effect.succeed([]),
 			}),
-			Effect.provideService(Context.GenericTag("ShareTestImages"), {
+			Effect.provideService(Context.Service("ShareTestImages"), {
 				resolveImageUrl: (url: string) => Effect.succeed(url),
 			}),
-			Effect.provideService(Context.GenericTag("ShareTestVideos"), {
+			Effect.provideService(Context.Service("ShareTestVideos"), {
 				getThumbnailURL: mocks.thumbnailUrl,
 			}),
 			Effect.runPromise,
@@ -317,7 +317,7 @@ describe("share page loading", () => {
 		mocks.thumbnailUrl.mockImplementation(() =>
 			Effect.flatMap(Effect.context<never>(), (context) =>
 				Option.isSome(
-					Context.getOption(context, Context.GenericTag("CurrentUser")),
+					Context.getOption(context, Context.Service("CurrentUser")),
 				)
 					? Effect.succeed(Option.some("https://media.example.com/image.jpg"))
 					: Effect.fail({ _tag: "PolicyDenied" }),

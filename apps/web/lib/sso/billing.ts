@@ -178,7 +178,8 @@ async function invoicePaidThrough(
 ) {
 	if (
 		invoice.status !== "paid" ||
-		stripeId(invoice.subscription) !== subscription.id ||
+		stripeId(invoice.parent?.subscription_details?.subscription) !==
+			subscription.id ||
 		stripeId(invoice.customer) !== stripeId(subscription.customer)
 	)
 		return null;
@@ -190,19 +191,20 @@ async function invoicePaidThrough(
 	const periodEnds = lines
 		.filter(
 			(line) =>
-				line.type === "subscription" &&
-				!line.proration &&
+				line.parent?.type === "subscription_item_details" &&
+				!line.parent.subscription_item_details?.proration &&
 				line.amount >= 0 &&
-				line.price?.id === item.price.id &&
-				stripeId(line.subscription) === subscription.id &&
-				stripeId(line.subscription_item) === item.id,
+				stripeId(line.pricing?.price_details?.price) === item.price.id &&
+				line.parent.subscription_item_details?.subscription ===
+					subscription.id &&
+				line.parent.subscription_item_details?.subscription_item === item.id,
 		)
 		.map((line) => line.period.end)
 		.filter(Number.isFinite);
 	if (periodEnds.length === 0) return null;
 	const paidThrough = Math.min(
 		Math.max(...periodEnds),
-		subscription.current_period_end,
+		item.current_period_end,
 	);
 	return paidThrough > 0 ? new Date(paidThrough * 1000) : null;
 }
@@ -382,7 +384,9 @@ export async function syncSsoSubscription(
 				stripePriceId: subscription.items.data[0]?.price.id ?? null,
 				status: item ? subscription.status : "unpaid",
 				paidThrough: confirmedThrough,
-				currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+				currentPeriodEnd: item
+					? new Date(item.current_period_end * 1000)
+					: (current?.currentPeriodEnd ?? null),
 				cancelAtPeriodEnd: subscription.cancel_at_period_end,
 			};
 			if (current) {
@@ -908,7 +912,8 @@ export async function listSsoInvoices(
 		result.data.some(
 			(invoice) =>
 				stripeId(invoice.customer) !== customerId ||
-				stripeId(invoice.subscription) !== subscriptionId,
+				stripeId(invoice.parent?.subscription_details?.subscription) !==
+					subscriptionId,
 		)
 	) {
 		throw new Error("The SAML SSO invoices do not match its billing account.");

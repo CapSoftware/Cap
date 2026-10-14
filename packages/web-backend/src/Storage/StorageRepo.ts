@@ -9,7 +9,7 @@ import {
 	type Video,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 
 import { Database } from "../Database.ts";
 
@@ -75,562 +75,559 @@ const getAffectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
-	effect: Effect.gen(function* () {
-		const db = yield* Database;
+const makeStorageRepo = Effect.gen(function* () {
+	const db = yield* Database;
 
-		const decodeGoogleDriveAccessTokenCache = Effect.fn(
-			"StorageRepo.decodeGoogleDriveAccessTokenCache",
-		)(
-			(input: {
-				googleDriveAccessToken: string | null;
-				googleDriveAccessTokenExpiresAt: Date | null;
-			}) =>
-				Effect.gen(function* () {
-					if (
-						!input.googleDriveAccessToken ||
-						!input.googleDriveAccessTokenExpiresAt
-					) {
-						return Option.none<GoogleDriveAccessTokenCache>();
-					}
-
-					const accessToken = yield* Effect.tryPromise({
-						try: () => decrypt(input.googleDriveAccessToken as string),
-						catch: (cause) => new Storage.StorageError({ cause }),
-					});
-
-					return Option.some({
-						accessToken,
-						expiresAt: input.googleDriveAccessTokenExpiresAt,
-					});
-				}),
-		);
-
-		const getActiveIntegrationForUser = Effect.fn(
-			"StorageRepo.getActiveIntegrationForUser",
-		)((userId: User.UserId) =>
+	const decodeGoogleDriveAccessTokenCache = Effect.fn(
+		"StorageRepo.decodeGoogleDriveAccessTokenCache",
+	)(
+		(input: {
+			googleDriveAccessToken: string | null;
+			googleDriveAccessTokenExpiresAt: Date | null;
+		}) =>
 			Effect.gen(function* () {
-				const [integration] = yield* db.use((db) =>
-					db
-						.select()
-						.from(Db.storageIntegrations)
-						.where(
-							Dz.and(
-								Dz.eq(Db.storageIntegrations.ownerId, userId),
-								Dz.isNull(Db.storageIntegrations.organizationId),
-								Dz.eq(Db.storageIntegrations.active, true),
-								Dz.eq(Db.storageIntegrations.status, "active"),
-							),
-						),
-				);
+				if (
+					!input.googleDriveAccessToken ||
+					!input.googleDriveAccessTokenExpiresAt
+				) {
+					return Option.none<GoogleDriveAccessTokenCache>();
+				}
 
-				return Option.fromNullable(integration);
-			}),
-		);
-
-		const getActiveIntegrationForOrganization = Effect.fn(
-			"StorageRepo.getActiveIntegrationForOrganization",
-		)((organizationId: Organisation.OrganisationId) =>
-			Effect.gen(function* () {
-				const [integration] = yield* db.use((db) =>
-					db
-						.select()
-						.from(Db.storageIntegrations)
-						.where(
-							Dz.and(
-								Dz.eq(Db.storageIntegrations.organizationId, organizationId),
-								Dz.eq(Db.storageIntegrations.active, true),
-								Dz.eq(Db.storageIntegrations.status, "active"),
-							),
-						),
-				);
-
-				return Option.fromNullable(integration);
-			}),
-		);
-
-		const getIntegrationById = Effect.fn("StorageRepo.getIntegrationById")(
-			(id: Storage.StorageIntegrationId) =>
-				Effect.gen(function* () {
-					const [integration] = yield* db.use((db) =>
-						db
-							.select()
-							.from(Db.storageIntegrations)
-							.where(Dz.eq(Db.storageIntegrations.id, id)),
-					);
-
-					return Option.fromNullable(integration);
-				}),
-		);
-
-		const getGoogleDriveConfig = Effect.fn("StorageRepo.getGoogleDriveConfig")(
-			(integration: typeof Db.storageIntegrations.$inferSelect) =>
-				Effect.tryPromise({
-					try: async () =>
-						JSON.parse(
-							await decrypt(integration.encryptedConfig),
-						) as GoogleDriveIntegrationConfig,
+				const accessToken = yield* Effect.tryPromise({
+					try: () => decrypt(input.googleDriveAccessToken as string),
 					catch: (cause) => new Storage.StorageError({ cause }),
-				}),
-		);
+				});
 
-		const getGoogleDriveAccessTokenCache = Effect.fn(
-			"StorageRepo.getGoogleDriveAccessTokenCache",
-		)((integration: typeof Db.storageIntegrations.$inferSelect) =>
-			decodeGoogleDriveAccessTokenCache({
-				googleDriveAccessToken: integration.googleDriveAccessToken,
-				googleDriveAccessTokenExpiresAt:
-					integration.googleDriveAccessTokenExpiresAt,
+				return Option.some({
+					accessToken,
+					expiresAt: input.googleDriveAccessTokenExpiresAt,
+				});
 			}),
-		);
+	);
 
-		const getGoogleDriveAccessTokenCacheById = Effect.fn(
-			"StorageRepo.getGoogleDriveAccessTokenCacheById",
-		)((id: Storage.StorageIntegrationId) =>
+	const getActiveIntegrationForUser = Effect.fn(
+		"StorageRepo.getActiveIntegrationForUser",
+	)((userId: User.UserId) =>
+		Effect.gen(function* () {
+			const [integration] = yield* db.use((db) =>
+				db
+					.select()
+					.from(Db.storageIntegrations)
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageIntegrations.ownerId, userId),
+							Dz.isNull(Db.storageIntegrations.organizationId),
+							Dz.eq(Db.storageIntegrations.active, true),
+							Dz.eq(Db.storageIntegrations.status, "active"),
+						),
+					),
+			);
+
+			return Option.fromNullishOr(integration);
+		}),
+	);
+
+	const getActiveIntegrationForOrganization = Effect.fn(
+		"StorageRepo.getActiveIntegrationForOrganization",
+	)((organizationId: Organisation.OrganisationId) =>
+		Effect.gen(function* () {
+			const [integration] = yield* db.use((db) =>
+				db
+					.select()
+					.from(Db.storageIntegrations)
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageIntegrations.organizationId, organizationId),
+							Dz.eq(Db.storageIntegrations.active, true),
+							Dz.eq(Db.storageIntegrations.status, "active"),
+						),
+					),
+			);
+
+			return Option.fromNullishOr(integration);
+		}),
+	);
+
+	const getIntegrationById = Effect.fn("StorageRepo.getIntegrationById")(
+		(id: Storage.StorageIntegrationId) =>
 			Effect.gen(function* () {
 				const [integration] = yield* db.use((db) =>
 					db
-						.select({
-							googleDriveAccessToken:
-								Db.storageIntegrations.googleDriveAccessToken,
-							googleDriveAccessTokenExpiresAt:
-								Db.storageIntegrations.googleDriveAccessTokenExpiresAt,
-						})
+						.select()
 						.from(Db.storageIntegrations)
-						.where(Dz.eq(Db.storageIntegrations.id, id))
-						.limit(1),
+						.where(Dz.eq(Db.storageIntegrations.id, id)),
 				);
 
-				if (!integration) return Option.none<GoogleDriveAccessTokenCache>();
-				return yield* decodeGoogleDriveAccessTokenCache(integration);
+				return Option.fromNullishOr(integration);
 			}),
-		);
+	);
 
-		const claimGoogleDriveTokenRefreshLease = Effect.fn(
-			"StorageRepo.claimGoogleDriveTokenRefreshLease",
-		)(
-			(
-				id: Storage.StorageIntegrationId,
-				leaseId: string,
-				leaseExpiresAt: Date,
-			) =>
-				Effect.gen(function* () {
-					const result = yield* db.use((db) =>
-						db
-							.update(Db.storageIntegrations)
-							.set({
-								googleDriveTokenRefreshLeaseId: leaseId,
-								googleDriveTokenRefreshLeaseExpiresAt: leaseExpiresAt,
-								updatedAt: new Date(),
-							})
-							.where(
-								Dz.and(
-									Dz.eq(Db.storageIntegrations.id, id),
-									Dz.or(
-										Dz.isNull(
-											Db.storageIntegrations
-												.googleDriveTokenRefreshLeaseExpiresAt,
-										),
-										Dz.lt(
-											Db.storageIntegrations
-												.googleDriveTokenRefreshLeaseExpiresAt,
-											new Date(),
-										),
-									),
-								),
-							),
-					);
+	const getGoogleDriveConfig = Effect.fn("StorageRepo.getGoogleDriveConfig")(
+		(integration: typeof Db.storageIntegrations.$inferSelect) =>
+			Effect.tryPromise({
+				try: async () =>
+					JSON.parse(
+						await decrypt(integration.encryptedConfig),
+					) as GoogleDriveIntegrationConfig,
+				catch: (cause) => new Storage.StorageError({ cause }),
+			}),
+	);
 
-					return getAffectedRows(result) > 0;
-				}),
-		);
+	const getGoogleDriveAccessTokenCache = Effect.fn(
+		"StorageRepo.getGoogleDriveAccessTokenCache",
+	)((integration: typeof Db.storageIntegrations.$inferSelect) =>
+		decodeGoogleDriveAccessTokenCache({
+			googleDriveAccessToken: integration.googleDriveAccessToken,
+			googleDriveAccessTokenExpiresAt:
+				integration.googleDriveAccessTokenExpiresAt,
+		}),
+	);
 
-		const saveGoogleDriveAccessTokenCache = Effect.fn(
-			"StorageRepo.saveGoogleDriveAccessTokenCache",
-		)(
-			(
-				id: Storage.StorageIntegrationId,
-				leaseId: string,
-				cache: GoogleDriveAccessTokenCache,
-			) =>
-				Effect.gen(function* () {
-					const googleDriveAccessToken = yield* Effect.tryPromise({
-						try: () => encrypt(cache.accessToken),
-						catch: (cause) => new Storage.StorageError({ cause }),
-					});
+	const getGoogleDriveAccessTokenCacheById = Effect.fn(
+		"StorageRepo.getGoogleDriveAccessTokenCacheById",
+	)((id: Storage.StorageIntegrationId) =>
+		Effect.gen(function* () {
+			const [integration] = yield* db.use((db) =>
+				db
+					.select({
+						googleDriveAccessToken:
+							Db.storageIntegrations.googleDriveAccessToken,
+						googleDriveAccessTokenExpiresAt:
+							Db.storageIntegrations.googleDriveAccessTokenExpiresAt,
+					})
+					.from(Db.storageIntegrations)
+					.where(Dz.eq(Db.storageIntegrations.id, id))
+					.limit(1),
+			);
 
-					const result = yield* db.use((db) =>
-						db
-							.update(Db.storageIntegrations)
-							.set({
-								googleDriveAccessToken,
-								googleDriveAccessTokenExpiresAt: cache.expiresAt,
-								googleDriveTokenRefreshLeaseId: null,
-								googleDriveTokenRefreshLeaseExpiresAt: null,
-								updatedAt: new Date(),
-							})
-							.where(
-								Dz.and(
-									Dz.eq(Db.storageIntegrations.id, id),
-									Dz.eq(
-										Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
-										leaseId,
-									),
-								),
-							),
-					);
+			if (!integration) return Option.none<GoogleDriveAccessTokenCache>();
+			return yield* decodeGoogleDriveAccessTokenCache(integration);
+		}),
+	);
 
-					return getAffectedRows(result) > 0;
-				}),
-		);
-
-		const releaseGoogleDriveTokenRefreshLease = Effect.fn(
-			"StorageRepo.releaseGoogleDriveTokenRefreshLease",
-		)((id: Storage.StorageIntegrationId, leaseId: string) =>
-			db.use((db) =>
+	const claimGoogleDriveTokenRefreshLease = Effect.fn(
+		"StorageRepo.claimGoogleDriveTokenRefreshLease",
+	)((id: Storage.StorageIntegrationId, leaseId: string, leaseExpiresAt: Date) =>
+		Effect.gen(function* () {
+			const result = yield* db.use((db) =>
 				db
 					.update(Db.storageIntegrations)
 					.set({
-						googleDriveTokenRefreshLeaseId: null,
-						googleDriveTokenRefreshLeaseExpiresAt: null,
+						googleDriveTokenRefreshLeaseId: leaseId,
+						googleDriveTokenRefreshLeaseExpiresAt: leaseExpiresAt,
 						updatedAt: new Date(),
 					})
 					.where(
 						Dz.and(
 							Dz.eq(Db.storageIntegrations.id, id),
-							Dz.eq(
-								Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
-								leaseId,
+							Dz.or(
+								Dz.isNull(
+									Db.storageIntegrations.googleDriveTokenRefreshLeaseExpiresAt,
+								),
+								Dz.lt(
+									Db.storageIntegrations.googleDriveTokenRefreshLeaseExpiresAt,
+									new Date(),
+								),
 							),
 						),
 					),
-			),
-		);
+			);
 
-		const upsertObject = Effect.fn("StorageRepo.upsertObject")(
-			(input: StorageObjectInput) =>
-				Effect.gen(function* () {
-					const objectKeyHash = getObjectKeyHash(input.objectKey);
-					const uploadSessionUrl = input.uploadSessionUrl
-						? yield* Effect.tryPromise({
-								try: () => encrypt(input.uploadSessionUrl as string),
-								catch: (cause) => new Storage.StorageError({ cause }),
-							})
-						: null;
+			return getAffectedRows(result) > 0;
+		}),
+	);
 
-					const value = {
-						id: Storage.StorageObjectId.make(nanoId()),
-						integrationId: input.integrationId,
-						ownerId: input.ownerId,
-						videoId: input.videoId,
-						objectKey: input.objectKey,
-						objectKeyHash,
-						providerObjectId: input.providerObjectId,
-						uploadSessionUrl,
-						uploadStatus: input.uploadStatus ?? "pending",
-						contentType: input.contentType ?? null,
-						contentLength: input.contentLength ?? null,
-						metadata: input.metadata ?? null,
-					};
+	const saveGoogleDriveAccessTokenCache = Effect.fn(
+		"StorageRepo.saveGoogleDriveAccessTokenCache",
+	)(
+		(
+			id: Storage.StorageIntegrationId,
+			leaseId: string,
+			cache: GoogleDriveAccessTokenCache,
+		) =>
+			Effect.gen(function* () {
+				const googleDriveAccessToken = yield* Effect.tryPromise({
+					try: () => encrypt(cache.accessToken),
+					catch: (cause) => new Storage.StorageError({ cause }),
+				});
 
-					yield* db.use((db) =>
-						db
-							.insert(Db.storageObjects)
-							.values(value)
-							.onDuplicateKeyUpdate({
-								set: {
-									providerObjectId: value.providerObjectId,
-									uploadSessionUrl: value.uploadSessionUrl,
-									uploadStatus: value.uploadStatus,
-									contentType: value.contentType,
-									contentLength: value.contentLength,
-									metadata: input.preserveMetadata
-										? Dz.sql`${Db.storageObjects.metadata}`
-										: value.metadata,
-									updatedAt: new Date(),
-								},
-							}),
-					);
-				}),
-		);
+				const result = yield* db.use((db) =>
+					db
+						.update(Db.storageIntegrations)
+						.set({
+							googleDriveAccessToken,
+							googleDriveAccessTokenExpiresAt: cache.expiresAt,
+							googleDriveTokenRefreshLeaseId: null,
+							googleDriveTokenRefreshLeaseExpiresAt: null,
+							updatedAt: new Date(),
+						})
+						.where(
+							Dz.and(
+								Dz.eq(Db.storageIntegrations.id, id),
+								Dz.eq(
+									Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
+									leaseId,
+								),
+							),
+						),
+				);
 
-		const updateObjectIfCurrent = Effect.fn(
-			"StorageRepo.updateObjectIfCurrent",
-		)(
-			(
-				object: typeof Db.storageObjects.$inferSelect,
-				input: StorageObjectUpdate,
-			) =>
-				Effect.gen(function* () {
-					const uploadSessionUrl = input.uploadSessionUrl
-						? yield* Effect.tryPromise({
-								try: () => encrypt(input.uploadSessionUrl as string),
-								catch: (cause) => new Storage.StorageError({ cause }),
-							})
-						: null;
+				return getAffectedRows(result) > 0;
+			}),
+	);
 
-					const result = yield* db.use((db) =>
-						db
-							.update(Db.storageObjects)
-							.set({
-								providerObjectId: input.providerObjectId,
-								uploadSessionUrl,
-								uploadStatus: input.uploadStatus ?? "pending",
-								contentType: input.contentType ?? null,
-								contentLength: input.contentLength ?? null,
+	const releaseGoogleDriveTokenRefreshLease = Effect.fn(
+		"StorageRepo.releaseGoogleDriveTokenRefreshLease",
+	)((id: Storage.StorageIntegrationId, leaseId: string) =>
+		db.use((db) =>
+			db
+				.update(Db.storageIntegrations)
+				.set({
+					googleDriveTokenRefreshLeaseId: null,
+					googleDriveTokenRefreshLeaseExpiresAt: null,
+					updatedAt: new Date(),
+				})
+				.where(
+					Dz.and(
+						Dz.eq(Db.storageIntegrations.id, id),
+						Dz.eq(
+							Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
+							leaseId,
+						),
+					),
+				),
+		),
+	);
+
+	const upsertObject = Effect.fn("StorageRepo.upsertObject")(
+		(input: StorageObjectInput) =>
+			Effect.gen(function* () {
+				const objectKeyHash = getObjectKeyHash(input.objectKey);
+				const uploadSessionUrl = input.uploadSessionUrl
+					? yield* Effect.tryPromise({
+							try: () => encrypt(input.uploadSessionUrl as string),
+							catch: (cause) => new Storage.StorageError({ cause }),
+						})
+					: null;
+
+				const value = {
+					id: Storage.StorageObjectId.make(nanoId()),
+					integrationId: input.integrationId,
+					ownerId: input.ownerId,
+					videoId: input.videoId,
+					objectKey: input.objectKey,
+					objectKeyHash,
+					providerObjectId: input.providerObjectId,
+					uploadSessionUrl,
+					uploadStatus: input.uploadStatus ?? "pending",
+					contentType: input.contentType ?? null,
+					contentLength: input.contentLength ?? null,
+					metadata: input.metadata ?? null,
+				};
+
+				yield* db.use((db) =>
+					db
+						.insert(Db.storageObjects)
+						.values(value)
+						.onDuplicateKeyUpdate({
+							set: {
+								providerObjectId: value.providerObjectId,
+								uploadSessionUrl: value.uploadSessionUrl,
+								uploadStatus: value.uploadStatus,
+								contentType: value.contentType,
+								contentLength: value.contentLength,
 								metadata: input.preserveMetadata
 									? Dz.sql`${Db.storageObjects.metadata}`
-									: (input.metadata ?? null),
+									: value.metadata,
 								updatedAt: new Date(),
-							})
-							.where(
-								Dz.and(
-									Dz.eq(Db.storageObjects.id, object.id),
-									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
-									Dz.eq(
-										Db.storageObjects.objectKeyHash,
-										getObjectKeyHash(object.objectKey),
-									),
-									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
-									Dz.eq(
-										Db.storageObjects.providerObjectId,
-										object.providerObjectId,
-									),
-									Dz.eq(Db.storageObjects.uploadStatus, object.uploadStatus),
+							},
+						}),
+				);
+			}),
+	);
+
+	const updateObjectIfCurrent = Effect.fn("StorageRepo.updateObjectIfCurrent")(
+		(
+			object: typeof Db.storageObjects.$inferSelect,
+			input: StorageObjectUpdate,
+		) =>
+			Effect.gen(function* () {
+				const uploadSessionUrl = input.uploadSessionUrl
+					? yield* Effect.tryPromise({
+							try: () => encrypt(input.uploadSessionUrl as string),
+							catch: (cause) => new Storage.StorageError({ cause }),
+						})
+					: null;
+
+				const result = yield* db.use((db) =>
+					db
+						.update(Db.storageObjects)
+						.set({
+							providerObjectId: input.providerObjectId,
+							uploadSessionUrl,
+							uploadStatus: input.uploadStatus ?? "pending",
+							contentType: input.contentType ?? null,
+							contentLength: input.contentLength ?? null,
+							metadata: input.preserveMetadata
+								? Dz.sql`${Db.storageObjects.metadata}`
+								: (input.metadata ?? null),
+							updatedAt: new Date(),
+						})
+						.where(
+							Dz.and(
+								Dz.eq(Db.storageObjects.id, object.id),
+								Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+								Dz.eq(
+									Db.storageObjects.objectKeyHash,
+									getObjectKeyHash(object.objectKey),
 								),
+								Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+								Dz.eq(
+									Db.storageObjects.providerObjectId,
+									object.providerObjectId,
+								),
+								Dz.eq(Db.storageObjects.uploadStatus, object.uploadStatus),
 							),
-					);
+						),
+				);
 
-					return getAffectedRows(result) > 0;
-				}),
-		);
+				return getAffectedRows(result) > 0;
+			}),
+	);
 
-		const reserveObject = Effect.fn("StorageRepo.reserveObject")(
-			(input: StorageObjectInput) =>
-				Effect.gen(function* () {
-					const objectKeyHash = getObjectKeyHash(input.objectKey);
-					const uploadSessionUrl = input.uploadSessionUrl
-						? yield* Effect.tryPromise({
-								try: () => encrypt(input.uploadSessionUrl as string),
-								catch: (cause) => new Storage.StorageError({ cause }),
-							})
-						: null;
+	const reserveObject = Effect.fn("StorageRepo.reserveObject")(
+		(input: StorageObjectInput) =>
+			Effect.gen(function* () {
+				const objectKeyHash = getObjectKeyHash(input.objectKey);
+				const uploadSessionUrl = input.uploadSessionUrl
+					? yield* Effect.tryPromise({
+							try: () => encrypt(input.uploadSessionUrl as string),
+							catch: (cause) => new Storage.StorageError({ cause }),
+						})
+					: null;
 
-					yield* db.use((db) =>
-						db
-							.insert(Db.storageObjects)
-							.values({
-								id: Storage.StorageObjectId.make(nanoId()),
-								integrationId: input.integrationId,
-								ownerId: input.ownerId,
-								videoId: input.videoId,
-								objectKey: input.objectKey,
-								objectKeyHash,
-								providerObjectId: input.providerObjectId,
-								uploadSessionUrl,
-								uploadStatus: input.uploadStatus ?? "pending",
-								contentType: input.contentType ?? null,
-								contentLength: input.contentLength ?? null,
-								metadata: input.metadata ?? null,
-							})
-							.onDuplicateKeyUpdate({
-								set: {
-									id: Dz.sql`${Db.storageObjects.id}`,
-								},
+				yield* db.use((db) =>
+					db
+						.insert(Db.storageObjects)
+						.values({
+							id: Storage.StorageObjectId.make(nanoId()),
+							integrationId: input.integrationId,
+							ownerId: input.ownerId,
+							videoId: input.videoId,
+							objectKey: input.objectKey,
+							objectKeyHash,
+							providerObjectId: input.providerObjectId,
+							uploadSessionUrl,
+							uploadStatus: input.uploadStatus ?? "pending",
+							contentType: input.contentType ?? null,
+							contentLength: input.contentLength ?? null,
+							metadata: input.metadata ?? null,
+						})
+						.onDuplicateKeyUpdate({
+							set: {
+								id: Dz.sql`${Db.storageObjects.id}`,
+							},
+						}),
+				);
+
+				const object = yield* getObjectByKey(
+					input.integrationId,
+					input.objectKey,
+				);
+				return yield* Option.match(object, {
+					onNone: () =>
+						Effect.fail(
+							new Storage.StorageError({
+								cause: new Error("Storage object reservation failed"),
 							}),
-					);
+						),
+					onSome: Effect.succeed,
+				});
+			}),
+	);
 
-					const object = yield* getObjectByKey(
-						input.integrationId,
-						input.objectKey,
-					);
-					return yield* Option.match(object, {
-						onNone: () =>
-							Effect.fail(
-								new Storage.StorageError({
-									cause: new Error("Storage object reservation failed"),
-								}),
-							),
-						onSome: Effect.succeed,
-					});
-				}),
-		);
-
-		const getObjectByKey = Effect.fn("StorageRepo.getObjectByKey")(
-			(integrationId: Storage.StorageIntegrationId, key: string) =>
-				Effect.gen(function* () {
-					const [object] = yield* db.use((db) =>
-						db
-							.select()
-							.from(Db.storageObjects)
-							.where(
-								Dz.and(
-									Dz.eq(Db.storageObjects.integrationId, integrationId),
-									Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
-								),
-							),
-					);
-
-					return Option.fromNullable(object).pipe(
-						Option.filter((object) => object.objectKey === key),
-					);
-				}),
-		);
-
-		const getVideoForNameSync = Effect.fn("StorageRepo.getVideoForNameSync")(
-			(videoId: Video.VideoId) =>
-				db
-					.use((db) =>
-						db
-							.select({
-								id: Db.videos.id,
-								name: Db.videos.name,
-								ownerId: Db.videos.ownerId,
-								storageIntegrationId: Db.videos.storageIntegrationId,
-							})
-							.from(Db.videos)
-							.where(Dz.eq(Db.videos.id, videoId))
-							.limit(1),
-					)
-					.pipe(Effect.map((rows) => Option.fromNullable(rows[0]))),
-		);
-
-		const updateObjectFileName = Effect.fn("StorageRepo.updateObjectFileName")(
-			(object: typeof Db.storageObjects.$inferSelect, fileName: string) =>
-				db
-					.use((db) =>
-						db
-							.update(Db.storageObjects)
-							.set({
-								metadata: Dz.sql`JSON_SET(COALESCE(${Db.storageObjects.metadata}, JSON_OBJECT()), '$.fileName', ${fileName})`,
-								updatedAt: new Date(),
-							})
-							.where(
-								Dz.and(
-									Dz.eq(Db.storageObjects.id, object.id),
-									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
-									Dz.eq(
-										Db.storageObjects.objectKeyHash,
-										getObjectKeyHash(object.objectKey),
-									),
-									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
-									Dz.eq(
-										Db.storageObjects.providerObjectId,
-										object.providerObjectId,
-									),
-								),
-							),
-					)
-					.pipe(Effect.map((result) => getAffectedRows(result) > 0)),
-		);
-
-		const listObjectsByPrefix = Effect.fn("StorageRepo.listObjectsByPrefix")(
-			(
-				integrationId: Storage.StorageIntegrationId,
-				prefix: string | undefined,
-				maxKeys: number | undefined,
-				continuationToken: string | undefined,
-			) =>
-				db.use(async (db) => {
-					const pageSize = Math.min(Math.max(maxKeys ?? 1_000, 1), 1_000);
-					const prefixPattern = prefix
-						? `${escapeLikePattern(prefix)}%`
-						: undefined;
-					const objects = await db
+	const getObjectByKey = Effect.fn("StorageRepo.getObjectByKey")(
+		(integrationId: Storage.StorageIntegrationId, key: string) =>
+			Effect.gen(function* () {
+				const [object] = yield* db.use((db) =>
+					db
 						.select()
 						.from(Db.storageObjects)
 						.where(
 							Dz.and(
 								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								// The collation-aware LIKE is a superset of the BINARY match and is
-								// what lets MySQL range-scan integration_object_key_prefix_idx;
-								// the BINARY LIKE keeps the result case-sensitive.
-								prefixPattern
-									? Dz.like(Db.storageObjects.objectKey, prefixPattern)
-									: undefined,
-								prefixPattern
-									? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${prefixPattern}`
-									: undefined,
-								continuationToken
-									? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`
-									: undefined,
+								Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
 							),
-						)
-						.orderBy(Dz.sql`BINARY ${Db.storageObjects.objectKey}`)
-						.limit(pageSize + 1);
-					const page = objects.slice(0, pageSize);
-					return {
-						objects: page,
-						nextContinuationToken:
-							objects.length > pageSize ? page.at(-1)?.objectKey : undefined,
-					};
-				}),
-		);
+						),
+				);
 
-		const markObjectComplete = Effect.fn("StorageRepo.markObjectComplete")(
-			(
-				integrationId: Storage.StorageIntegrationId,
-				key: string,
-				contentLength?: number | null,
-			) =>
-				db.use((db) =>
+				return Option.fromNullishOr(object).pipe(
+					Option.filter((object) => object.objectKey === key),
+				);
+			}),
+	);
+
+	const getVideoForNameSync = Effect.fn("StorageRepo.getVideoForNameSync")(
+		(videoId: Video.VideoId) =>
+			db
+				.use((db) =>
+					db
+						.select({
+							id: Db.videos.id,
+							name: Db.videos.name,
+							ownerId: Db.videos.ownerId,
+							storageIntegrationId: Db.videos.storageIntegrationId,
+						})
+						.from(Db.videos)
+						.where(Dz.eq(Db.videos.id, videoId))
+						.limit(1),
+				)
+				.pipe(Effect.map((rows) => Option.fromNullishOr(rows[0]))),
+	);
+
+	const updateObjectFileName = Effect.fn("StorageRepo.updateObjectFileName")(
+		(object: typeof Db.storageObjects.$inferSelect, fileName: string) =>
+			db
+				.use((db) =>
 					db
 						.update(Db.storageObjects)
 						.set({
-							uploadStatus: "complete",
-							contentLength: contentLength ?? undefined,
+							metadata: Dz.sql`JSON_SET(COALESCE(${Db.storageObjects.metadata}, JSON_OBJECT()), '$.fileName', ${fileName})`,
 							updatedAt: new Date(),
 						})
 						.where(
 							Dz.and(
-								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
+								Dz.eq(Db.storageObjects.id, object.id),
+								Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+								Dz.eq(
+									Db.storageObjects.objectKeyHash,
+									getObjectKeyHash(object.objectKey),
+								),
+								Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+								Dz.eq(
+									Db.storageObjects.providerObjectId,
+									object.providerObjectId,
+								),
 							),
 						),
-				),
-		);
+				)
+				.pipe(Effect.map((result) => getAffectedRows(result) > 0)),
+	);
 
-		const deleteObjectByKey = Effect.fn("StorageRepo.deleteObjectByKey")(
-			(
-				integrationId: Storage.StorageIntegrationId,
-				key: string,
-				providerObjectId?: string,
-			) =>
-				db.use((db) =>
-					db
-						.delete(Db.storageObjects)
-						.where(
-							Dz.and(
-								Dz.eq(Db.storageObjects.integrationId, integrationId),
-								Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
-								providerObjectId
-									? Dz.eq(Db.storageObjects.providerObjectId, providerObjectId)
-									: undefined,
-							),
+	const listObjectsByPrefix = Effect.fn("StorageRepo.listObjectsByPrefix")(
+		(
+			integrationId: Storage.StorageIntegrationId,
+			prefix: string | undefined,
+			maxKeys: number | undefined,
+			continuationToken: string | undefined,
+		) =>
+			db.use(async (db) => {
+				const pageSize = Math.min(Math.max(maxKeys ?? 1_000, 1), 1_000);
+				const prefixPattern = prefix
+					? `${escapeLikePattern(prefix)}%`
+					: undefined;
+				const objects = await db
+					.select()
+					.from(Db.storageObjects)
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageObjects.integrationId, integrationId),
+							// The collation-aware LIKE is a superset of the BINARY match and is
+							// what lets MySQL range-scan integration_object_key_prefix_idx;
+							// the BINARY LIKE keeps the result case-sensitive.
+							prefixPattern
+								? Dz.like(Db.storageObjects.objectKey, prefixPattern)
+								: undefined,
+							prefixPattern
+								? Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${prefixPattern}`
+								: undefined,
+							continuationToken
+								? Dz.sql`BINARY ${Db.storageObjects.objectKey} > BINARY ${continuationToken}`
+								: undefined,
 						),
-				),
-		);
+					)
+					.orderBy(Dz.sql`BINARY ${Db.storageObjects.objectKey}`)
+					.limit(pageSize + 1);
+				const page = objects.slice(0, pageSize);
+				return {
+					objects: page,
+					nextContinuationToken:
+						objects.length > pageSize ? page.at(-1)?.objectKey : undefined,
+				};
+			}),
+	);
 
-		return {
-			getActiveIntegrationForUser,
-			getActiveIntegrationForOrganization,
-			getIntegrationById,
-			getGoogleDriveConfig,
-			getGoogleDriveAccessTokenCache,
-			getGoogleDriveAccessTokenCacheById,
-			claimGoogleDriveTokenRefreshLease,
-			saveGoogleDriveAccessTokenCache,
-			releaseGoogleDriveTokenRefreshLease,
-			upsertObject,
-			updateObjectIfCurrent,
-			reserveObject,
-			getObjectByKey,
-			getVideoForNameSync,
-			updateObjectFileName,
-			listObjectsByPrefix,
-			markObjectComplete,
-			deleteObjectByKey,
-		};
-	}),
-	dependencies: [Database.Default],
-}) {}
+	const markObjectComplete = Effect.fn("StorageRepo.markObjectComplete")(
+		(
+			integrationId: Storage.StorageIntegrationId,
+			key: string,
+			contentLength?: number | null,
+		) =>
+			db.use((db) =>
+				db
+					.update(Db.storageObjects)
+					.set({
+						uploadStatus: "complete",
+						contentLength: contentLength ?? undefined,
+						updatedAt: new Date(),
+					})
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageObjects.integrationId, integrationId),
+							Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
+						),
+					),
+			),
+	);
+
+	const deleteObjectByKey = Effect.fn("StorageRepo.deleteObjectByKey")(
+		(
+			integrationId: Storage.StorageIntegrationId,
+			key: string,
+			providerObjectId?: string,
+		) =>
+			db.use((db) =>
+				db
+					.delete(Db.storageObjects)
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageObjects.integrationId, integrationId),
+							Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
+							providerObjectId
+								? Dz.eq(Db.storageObjects.providerObjectId, providerObjectId)
+								: undefined,
+						),
+					),
+			),
+	);
+
+	return {
+		getActiveIntegrationForUser,
+		getActiveIntegrationForOrganization,
+		getIntegrationById,
+		getGoogleDriveConfig,
+		getGoogleDriveAccessTokenCache,
+		getGoogleDriveAccessTokenCacheById,
+		claimGoogleDriveTokenRefreshLease,
+		saveGoogleDriveAccessTokenCache,
+		releaseGoogleDriveTokenRefreshLease,
+		upsertObject,
+		updateObjectIfCurrent,
+		reserveObject,
+		getObjectByKey,
+		getVideoForNameSync,
+		updateObjectFileName,
+		listObjectsByPrefix,
+		markObjectComplete,
+		deleteObjectByKey,
+	};
+});
+
+export class StorageRepo extends Context.Service<
+	StorageRepo,
+	Effect.Success<typeof makeStorageRepo>
+>()("StorageRepo") {
+	static readonly Default = Layer.effect(this, makeStorageRepo).pipe(
+		Layer.provide(Layer.mergeAll(Database.Default)),
+	);
+}

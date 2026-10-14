@@ -114,12 +114,13 @@ const getTokenVideo = (videoId: Video.VideoId) =>
 const getPolicyVideo = (videoId: Video.VideoId) =>
 	Effect.gen(function* () {
 		const videos = yield* Videos;
-		const maybeVideo = yield* videos.getByIdForViewing(videoId).pipe(
-			Effect.flatten,
-			Effect.catchTag("NoSuchElementException", () =>
-				Effect.fail("not-found" as const),
-			),
-		);
+		const maybeVideo = yield* videos
+			.getByIdForViewing(videoId)
+			.pipe(
+				Effect.flatMap((video) =>
+					Effect.fromOption(video, () => "not-found" as const),
+				),
+			);
 		return maybeVideo[0];
 	});
 
@@ -255,7 +256,7 @@ export async function GET(request: NextRequest) {
 		});
 	}).pipe(
 		provideOptionalAuth,
-		Effect.catchAll((error) => Effect.succeed(toProxyErrorResponse(error))),
+		Effect.catch((error) => Effect.succeed(toProxyErrorResponse(error))),
 	);
 
 	try {

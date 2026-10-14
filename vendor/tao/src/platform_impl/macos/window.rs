@@ -57,9 +57,10 @@ use objc2_app_kit::{
   NSWindowOrderingMode, NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_foundation::{
-  MainThreadMarker, NSArray, NSAutoreleasePool, NSDictionary, NSInteger, NSPoint, NSRect, NSSize,
-  NSString, NSTimeInterval, NSUInteger,
+  ns_string, MainThreadMarker, NSArray, NSAutoreleasePool, NSDictionary, NSInteger, NSPoint,
+  NSRect, NSSize, NSString, NSTimeInterval, NSUInteger,
 };
+use std::sync::LazyLock;
 
 use super::{
   ffi::{id, nil, NO},
@@ -401,31 +402,27 @@ pub(super) fn set_ns_theme(theme: Option<Theme>) {
 }
 
 struct WindowClass(&'static Class);
-unsafe impl Send for WindowClass {}
-unsafe impl Sync for WindowClass {}
 
-lazy_static! {
-  static ref WINDOW_CLASS: WindowClass = unsafe {
-    let window_superclass = class!(NSWindow);
-    let mut decl = ClassDecl::new(
-      CStr::from_bytes_with_nul(b"TaoWindow\0").unwrap(),
-      window_superclass,
-    )
-    .unwrap();
-    decl.add_method(
-      sel!(canBecomeMainWindow),
-      is_focusable as extern "C" fn(_, _) -> _,
-    );
-    decl.add_method(
-      sel!(canBecomeKeyWindow),
-      is_focusable as extern "C" fn(_, _) -> _,
-    );
-    decl.add_method(sel!(sendEvent:), send_event as extern "C" fn(_, _, _));
-    // progress bar states, follows ProgressState
-    decl.add_ivar::<Bool>(CStr::from_bytes_with_nul(b"focusable\0").unwrap());
-    WindowClass(decl.register())
-  };
-}
+static WINDOW_CLASS: LazyLock<WindowClass> = LazyLock::new(|| unsafe {
+  let window_superclass = class!(NSWindow);
+  let mut decl = ClassDecl::new(
+    CStr::from_bytes_with_nul(b"TaoWindow\0").unwrap(),
+    window_superclass,
+  )
+  .unwrap();
+  decl.add_method(
+    sel!(canBecomeMainWindow),
+    is_focusable as extern "C" fn(_, _) -> _,
+  );
+  decl.add_method(
+    sel!(canBecomeKeyWindow),
+    is_focusable as extern "C" fn(_, _) -> _,
+  );
+  decl.add_method(sel!(sendEvent:), send_event as extern "C" fn(_, _, _));
+  // progress bar states, follows ProgressState
+  decl.add_ivar::<Bool>(CStr::from_bytes_with_nul(b"focusable\0").unwrap());
+  WindowClass(decl.register())
+});
 
 extern "C" fn is_focusable(this: &Object, _: Sel) -> Bool {
   #[allow(deprecated)] // TODO: Use define_class!
@@ -660,7 +657,7 @@ impl UnownedWindow {
 
   pub fn set_title(&self, title: &str) {
     unsafe {
-      util::set_title_async(&self.ns_window, title.to_string());
+      util::set_title_async(&self.ns_window, &self.ns_view, title.to_string());
     }
   }
 
@@ -977,24 +974,30 @@ impl UnownedWindow {
   }
 
   pub(crate) fn is_zoomed(&self) -> bool {
-    // because `isZoomed` doesn't work if the window's borderless,
-    // we make it resizable temporalily.
-    let curr_mask = unsafe { self.ns_window.styleMask() };
+    // Previously, is_zoomed temporarily mutated the window's styleMask(or resizable)
+    // to force macOS to return a valid result for borderless windows.
+    // This synchronous mutation could trigger unnecessary layout passes or state inconsistencies.
+    // Related issue: https://github.com/rust-windowing/winit/issues/4071 and https://github.com/tauri-apps/plugins-workspace/issues/3240
 
-    let required = NSWindowStyleMask::Titled | NSWindowStyleMask::Resizable;
-    let needs_temp_mask = !curr_mask.contains(required);
-    if needs_temp_mask {
-      self.set_style_mask_sync(required);
+    unsafe {
+      let curr_mask = self.ns_window.styleMask();
+
+      let required = NSWindowStyleMask::Titled | NSWindowStyleMask::Resizable;
+      if curr_mask.contains(required) {
+        return self.ns_window.isZoomed();
+      }
+
+      if let Some(screen) = self.ns_window.screen() {
+        let frame = self.ns_window.frame();
+        let visible_frame = screen.visibleFrame();
+
+        return (frame.size.width - visible_frame.size.width).abs() < 1.0
+          && (frame.size.height - visible_frame.size.height).abs() < 1.0;
+      }
+
+      // Fallback to original `isZoomed` check
+      self.ns_window.isZoomed()
     }
-
-    let is_zoomed: bool = unsafe { self.ns_window.isZoomed() };
-
-    // Roll back temp styles
-    if needs_temp_mask {
-      self.set_style_mask_sync(curr_mask);
-    }
-
-    is_zoomed
   }
 
   fn saved_style(&self, shared_state: &mut SharedState) -> NSWindowStyleMask {
@@ -1440,7 +1443,7 @@ impl UnownedWindow {
     unsafe {
       let screen: Retained<NSScreen> = self.ns_window.screen()?;
       let desc = NSScreen::deviceDescription(&screen);
-      let key = NSString::from_str("NSScreenNumber");
+      let key = ns_string!("NSScreenNumber");
       let value = NSDictionary::objectForKey(&desc, &key).unwrap();
       let display_id: NSUInteger = msg_send![&value, unsignedIntegerValue];
       Some(RootMonitorHandle {

@@ -26,7 +26,8 @@ describe("Slack Events route contract", () => {
 		expect(jsonParse).toBeGreaterThan(signatureCheck);
 		expect(queuedWork).toBeGreaterThan(jsonParse);
 		expect(acknowledgement).toBeGreaterThan(queuedWork);
-		expect(route).toContain("HttpServerRequest.withMaxBodySize");
+		expect(route).toContain("HttpServerRequest.MaxBodySize");
+		expect(route).toContain("ByteSize.bytes(MAX_BODY_BYTES)");
 		expect(route).toContain(
 			'return jsonResponse({ error: "Could not queue Slack event" }, 503)',
 		);

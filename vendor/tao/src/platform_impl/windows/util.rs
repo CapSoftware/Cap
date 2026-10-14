@@ -17,11 +17,11 @@ use crate::{
   window::CursorIcon,
 };
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use windows::{
   core::{BOOL, HRESULT, PCSTR, PCWSTR},
   Win32::{
-    Foundation::{COLORREF, FARPROC, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{COLORREF, FARPROC, HWND, LPARAM, POINT, RECT, WPARAM},
     Globalization::lstrlenW,
     Graphics::Gdi::{ClientToScreen, InvalidateRgn, HMONITOR},
     System::LibraryLoader::*,
@@ -54,14 +54,6 @@ pub fn encode_wide(string: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
   string.as_ref().encode_wide().chain(once(0)).collect()
 }
 
-fn win_to_err<F: FnOnce() -> BOOL>(f: F) -> Result<(), io::Error> {
-  if f().as_bool() {
-    Ok(())
-  } else {
-    Err(io::Error::last_os_error())
-  }
-}
-
 pub unsafe fn get_window_rect(hwnd: HWND) -> Option<RECT> {
   let mut rect = std::mem::zeroed();
   GetWindowRect(hwnd, &mut rect).ok().map(|_| rect)
@@ -72,7 +64,7 @@ pub fn get_client_rect(hwnd: HWND) -> Result<RECT, io::Error> {
   let mut top_left = POINT::default();
 
   unsafe {
-    win_to_err(|| ClientToScreen(hwnd, &mut top_left))?;
+    ClientToScreen(hwnd, &mut top_left).ok()?;
     GetClientRect(hwnd, &mut rect)?;
   }
 
@@ -300,24 +292,22 @@ pub type AdjustWindowRectExForDpi = unsafe extern "system" fn(
   dpi: u32,
 ) -> BOOL;
 
-lazy_static! {
-  pub static ref GET_DPI_FOR_WINDOW: Option<GetDpiForWindow> =
-    get_function!("user32.dll", GetDpiForWindow);
-  pub static ref ADJUST_WINDOW_RECT_EX_FOR_DPI: Option<AdjustWindowRectExForDpi> =
-    get_function!("user32.dll", AdjustWindowRectExForDpi);
-  pub static ref GET_DPI_FOR_MONITOR: Option<GetDpiForMonitor> =
-    get_function!("shcore.dll", GetDpiForMonitor);
-  pub static ref GET_SYSTEM_METRICS_FOR_DPI: Option<GetSystemMetricsForDpi> =
-    get_function!("user32.dll", GetSystemMetricsForDpi);
-  pub static ref ENABLE_NON_CLIENT_DPI_SCALING: Option<EnableNonClientDpiScaling> =
-    get_function!("user32.dll", EnableNonClientDpiScaling);
-  pub static ref SET_PROCESS_DPI_AWARENESS_CONTEXT: Option<SetProcessDpiAwarenessContext> =
-    get_function!("user32.dll", SetProcessDpiAwarenessContext);
-  pub static ref SET_PROCESS_DPI_AWARENESS: Option<SetProcessDpiAwareness> =
-    get_function!("shcore.dll", SetProcessDpiAwareness);
-  pub static ref SET_PROCESS_DPI_AWARE: Option<SetProcessDPIAware> =
-    get_function!("user32.dll", SetProcessDPIAware);
-}
+pub static GET_DPI_FOR_WINDOW: LazyLock<Option<GetDpiForWindow>> =
+  LazyLock::new(|| get_function!("user32.dll", GetDpiForWindow));
+pub static ADJUST_WINDOW_RECT_EX_FOR_DPI: LazyLock<Option<AdjustWindowRectExForDpi>> =
+  LazyLock::new(|| get_function!("user32.dll", AdjustWindowRectExForDpi));
+pub static GET_DPI_FOR_MONITOR: LazyLock<Option<GetDpiForMonitor>> =
+  LazyLock::new(|| get_function!("shcore.dll", GetDpiForMonitor));
+pub static GET_SYSTEM_METRICS_FOR_DPI: LazyLock<Option<GetSystemMetricsForDpi>> =
+  LazyLock::new(|| get_function!("user32.dll", GetSystemMetricsForDpi));
+pub static ENABLE_NON_CLIENT_DPI_SCALING: LazyLock<Option<EnableNonClientDpiScaling>> =
+  LazyLock::new(|| get_function!("user32.dll", EnableNonClientDpiScaling));
+pub static SET_PROCESS_DPI_AWARENESS_CONTEXT: LazyLock<Option<SetProcessDpiAwarenessContext>> =
+  LazyLock::new(|| get_function!("user32.dll", SetProcessDpiAwarenessContext));
+pub static SET_PROCESS_DPI_AWARENESS: LazyLock<Option<SetProcessDpiAwareness>> =
+  LazyLock::new(|| get_function!("shcore.dll", SetProcessDpiAwareness));
+pub static SET_PROCESS_DPI_AWARE: LazyLock<Option<SetProcessDPIAware>> =
+  LazyLock::new(|| get_function!("user32.dll", SetProcessDPIAware));
 
 #[allow(non_snake_case)]
 #[cfg(target_pointer_width = "32")]
@@ -408,16 +398,7 @@ pub fn RGB<T: Into<u32>>(r: T, g: T, b: T) -> COLORREF {
   COLORREF(r.into() | (g.into() << 8) | (b.into() << 16))
 }
 
-pub unsafe extern "system" fn call_default_window_proc(
-  hwnd: HWND,
-  msg: u32,
-  wparam: WPARAM,
-  lparam: LPARAM,
-) -> LRESULT {
-  DefWindowProcW(hwnd, msg, wparam, lparam)
-}
-
-pub fn get_instance_handle() -> windows::Win32::Foundation::HMODULE {
+pub fn get_instance_handle() -> windows::Win32::Foundation::HINSTANCE {
   // Gets the instance handle by taking the address of the
   // pseudo-variable created by the microsoft linker:
   // https://devblogs.microsoft.com/oldnewthing/20041025-00/?p=37483
@@ -429,11 +410,11 @@ pub fn get_instance_handle() -> windows::Win32::Foundation::HMODULE {
     static __ImageBase: windows::Win32::System::SystemServices::IMAGE_DOS_HEADER;
   }
 
-  windows::Win32::Foundation::HMODULE(unsafe { &__ImageBase as *const _ as _ })
+  windows::Win32::Foundation::HINSTANCE(unsafe { &__ImageBase as *const _ as _ })
 }
 
-pub static WIN_VERSION: Lazy<windows_version::OsVersion> =
-  Lazy::new(windows_version::OsVersion::current);
+pub static WIN_VERSION: LazyLock<windows_version::OsVersion> =
+  LazyLock::new(windows_version::OsVersion::current);
 
 pub fn get_frame_thickness(dpi: u32) -> i32 {
   let resize_frame_thickness = unsafe { get_system_metrics_for_dpi(SM_CXSIZEFRAME, dpi) };

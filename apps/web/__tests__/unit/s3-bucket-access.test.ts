@@ -1,6 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
-import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import { Effect } from "effect";
+import { HttpServerRequest } from "effect/http";
 import { describe, expect, it } from "vitest";
 
 import {

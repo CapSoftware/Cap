@@ -36,7 +36,7 @@ export const OrganisationsRpcsLive = Organisation.OrganisationRpcs.toLayer(
 				orgs
 					.softDelete(data.id)
 					.pipe(
-						Effect.catchAll((error) => Effect.fail(mapSoftDeleteError(error))),
+						Effect.catch((error) => Effect.fail(mapSoftDeleteError(error))),
 					),
 		};
 	}),

@@ -6,6 +6,7 @@ use std::{collections::VecDeque, ffi::CStr};
 
 use objc2::runtime::{AnyClass as Class, ClassBuilder as ClassDecl, Sel};
 use objc2_app_kit::{self as appkit, NSApplication, NSEvent, NSEventType};
+use std::sync::LazyLock;
 
 use super::{app_state::AppState, event::EventWrapper, util, DEVICE_ID};
 use crate::event::{DeviceEvent, ElementState, Event};
@@ -14,17 +15,15 @@ pub struct AppClass(pub *const Class);
 unsafe impl Send for AppClass {}
 unsafe impl Sync for AppClass {}
 
-lazy_static! {
-  pub static ref APP_CLASS: AppClass = unsafe {
-    let superclass = class!(NSApplication);
-    let mut decl =
-      ClassDecl::new(CStr::from_bytes_with_nul(b"TaoApp\0").unwrap(), superclass).unwrap();
+pub static APP_CLASS: LazyLock<AppClass> = LazyLock::new(|| unsafe {
+  let superclass = class!(NSApplication);
+  let mut decl =
+    ClassDecl::new(CStr::from_bytes_with_nul(b"TaoApp\0").unwrap(), superclass).unwrap();
 
-    decl.add_method(sel!(sendEvent:), send_event as extern "C" fn(_, _, _));
+  decl.add_method(sel!(sendEvent:), send_event as extern "C" fn(_, _, _));
 
-    AppClass(decl.register())
-  };
-}
+  AppClass(decl.register())
+});
 
 // Normally, holding Cmd + any key never sends us a `keyUp` event for that key.
 // Overriding `sendEvent:` like this fixes that. (https://stackoverflow.com/a/15294196)

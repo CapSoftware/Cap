@@ -20,14 +20,13 @@ import {
 	VideosRepo,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import {
 	FetchHttpClient,
-	type HttpApi,
-	HttpApiBuilder,
 	HttpMiddleware,
+	HttpRouter,
 	HttpServer,
-} from "@effect/platform";
-import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
+} from "effect/http";
 import { allowedOrigins } from "@/utils/cors";
 import { getVerifiedPasswordHashes } from "./password-cookie";
 import { layerTracer } from "./tracing";
@@ -65,13 +64,15 @@ export const Dependencies = Layer.mergeAll(
 const EffectRuntime = ManagedRuntime.make(Dependencies);
 
 export const runPromise = <A, E>(
-	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>,
+	effect: Effect.Effect<A, E, Layer.Success<typeof Dependencies>>,
 ) =>
 	EffectRuntime.runPromiseExit(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
 		if (Exit.isFailure(res)) {
-			if (Cause.isDieType(res.cause)) throw res.cause.defect;
+			const reason = res.cause.reasons[0];
+			if (res.cause.reasons.length === 1 && reason && Cause.isDieReason(reason))
+				throw reason.defect;
 			throw res;
 		}
 
@@ -79,17 +80,20 @@ export const runPromise = <A, E>(
 	});
 
 export const runPromiseExit = <A, E>(
-	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>,
+	effect: Effect.Effect<A, E, Layer.Success<typeof Dependencies>>,
 ) =>
 	EffectRuntime.runPromiseExit(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
-		if (Exit.isFailure(res) && Cause.isDieType(res.cause))
-			throw res.cause.defect;
+		if (Exit.isFailure(res)) {
+			const reason = res.cause.reasons[0];
+			if (res.cause.reasons.length === 1 && reason && Cause.isDieReason(reason))
+				throw reason.defect;
+		}
 		return res;
 	});
 
-const cors = HttpApiBuilder.middlewareCors({
+const cors = HttpRouter.cors({
 	allowedOrigins,
 	credentials: true,
 	allowedMethods: ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
@@ -98,21 +102,41 @@ const cors = HttpApiBuilder.middlewareCors({
 
 export const apiToHandler = (
 	api: Layer.Layer<
-		HttpApi.Api,
 		never,
-		Layer.Layer.Success<typeof Dependencies> | HttpAuthMiddleware
+		never,
+		| Layer.Success<typeof Dependencies>
+		| HttpAuthMiddleware
+		| HttpRouter.HttpRouter
+		| HttpRouter.Request<
+				"Requires",
+				Layer.Success<typeof Dependencies> | Video.VideoPasswordAttachment
+		  >
+		| Layer.Success<typeof HttpServer.layerServices>
 	>,
-) =>
-	api.pipe(
-		HttpMiddleware.withSpanNameGenerator((req) => `${req.method} ${req.url}`),
-		Layer.provideMerge(HttpAuthMiddlewareLive),
-		Layer.merge(HttpServer.layerContext),
-		Layer.provide(cors),
+) => {
+	const routes = Layer.mergeAll(api, cors).pipe(
+		Layer.provide(HttpAuthMiddlewareLive),
+		Layer.provide(Dependencies),
+		Layer.provide(HttpServer.layerServices),
 		Layer.provide(
-			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
+			Layer.succeed(
+				HttpMiddleware.SpanNameGenerator,
+				(req) => `${req.method} ${req.url}`,
+			),
 		),
-		Layer.provide(layerTracer),
-		Layer.provideMerge(Dependencies),
-		HttpApiBuilder.toWebHandler,
-		(v) => (req: Request) => v.handler(req),
 	);
+	const { handler } = HttpRouter.toWebHandler(routes);
+	return async (req: Request) => {
+		const passwords = await Effect.runPromise(
+			Video.VideoPasswordAttachment.pipe(
+				Effect.provide(CookiePasswordAttachmentLive),
+			),
+		);
+		const context = Context.add(
+			await EffectRuntime.context(),
+			Video.VideoPasswordAttachment,
+			passwords,
+		);
+		return handler(req, context);
+	};
+};

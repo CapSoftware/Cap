@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.99.0
 
       - name: Rust cache
         uses: ./.github/actions/setup-rust-cache

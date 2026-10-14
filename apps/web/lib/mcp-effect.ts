@@ -1,22 +1,25 @@
 import "server-only";
 
+import { Effect, Layer, Stream } from "effect";
 import {
-	type HttpApi,
-	HttpApiBuilder,
+	HttpRouter,
 	HttpServer,
 	HttpServerRequest,
 	HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer, Stream } from "effect";
+} from "effect/http";
 
-export const mcpApiToHandler = (api: Layer.Layer<HttpApi.Api>) =>
-	api.pipe(
-		Layer.merge(HttpServer.layerContext),
-		HttpApiBuilder.toWebHandler,
-		({ handler }) =>
-			(request: Request) =>
-				handler(request),
+export const mcpApiToHandler = (
+	api: Layer.Layer<
+		never,
+		never,
+		HttpRouter.HttpRouter | Layer.Success<typeof HttpServer.layerServices>
+	>,
+) => {
+	const { handler } = HttpRouter.toWebHandler(
+		api.pipe(Layer.provide(HttpServer.layerServices)),
 	);
+	return (request: Request) => handler(request);
+};
 
 export const mcpResponse = (response: Response) => {
 	const options = {
@@ -27,10 +30,10 @@ export const mcpResponse = (response: Response) => {
 	const body = response.body;
 	if (!body) return HttpServerResponse.empty(options);
 	return HttpServerResponse.stream(
-		Stream.fromReadableStream(
-			() => body,
-			(error) => error,
-		),
+		Stream.fromReadableStream({
+			evaluate: () => body,
+			onError: (error) => error,
+		}),
 		options,
 	);
 };

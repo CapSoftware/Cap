@@ -30,7 +30,7 @@ fn main() {
 
       if let Event::WindowEvent { event, .. } = &event {
         // Print only Window events to reduce noise
-        println!("{:?}", event);
+        println!("{event:?}");
       }
 
       match event {
