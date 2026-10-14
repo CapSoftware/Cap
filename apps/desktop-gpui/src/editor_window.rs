@@ -3750,9 +3750,11 @@ impl EditorWindow {
         // scene-mode pane gates on it too. Notifying the parent here would
         // rebuild every cached section -- header, toolbar, sidebar included --
         // at the 60Hz playhead rate, which is the same class of rebuild that
-        // measured 40ms/frame on the text-panel sidebar. Paused paths (hover,
-        // seeks) keep the full invalidation: the overlay's element boxes
-        // appear and disappear as the playhead crosses segments.
+        // measured 40ms/frame on the text-panel sidebar. A paused playhead
+        // change keeps the full invalidation: the overlay's element boxes
+        // appear and disappear as the playhead crosses segments. Pointer hover
+        // goes through `invalidate_hover_chrome` instead, and an arriving
+        // paused frame whose layout changed still notifies the whole editor.
         if !self.playing {
             cx.notify();
         }
