@@ -298,9 +298,16 @@ pub fn load() -> PersistedState {
         .unwrap_or_default()
 }
 
+static UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read-modify-write on the caller's thread; callers hand this to the
-/// background executor.
+/// background executor. Writers are serialized and the file is replaced by
+/// rename, because [`load`] treats a half-written file as empty and the next
+/// update would then persist defaults over every other preference.
 pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
+    let _guard = UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = state_path();
     let mut state = load();
     mutate(&mut state);
@@ -309,7 +316,10 @@ pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
     }
     match serde_json::to_vec_pretty(&state) {
         Ok(bytes) => {
-            if let Err(error) = std::fs::write(&path, bytes) {
+            let temp = path.with_extension("json.tmp");
+            if let Err(error) =
+                std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &path))
+            {
                 tracing::warn!("persisting gpui state: {error}");
             }
         }
