@@ -98,6 +98,28 @@ pub struct PersistedState {
     /// also `localStorage` over there.
     #[serde(default)]
     pub screenshot_crop_snap_to_ratio: Option<bool>,
+    #[serde(default)]
+    pub editor_window: Option<EditorWindowMemory>,
+}
+
+/// Where the editor window last sat on each display, keyed by display UUID.
+/// Offsets are measured from the display's top-left corner, so they survive
+/// the display being moved around in the arrangement.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditorWindowMemory {
+    #[serde(default)]
+    pub last_display: Option<String>,
+    #[serde(default)]
+    pub displays: Vec<RememberedEditorFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RememberedEditorFrame {
+    pub display: String,
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// `export_settings` in the Tauri editor (`ExportPage.tsx` localStorage).
