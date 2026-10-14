@@ -1944,17 +1944,13 @@ pub struct RenderSession {
     export_deadlines: bool,
 }
 
-/// The blur result cache copies into session textures, so only render hosts
-/// that enable it need them to be copy destinations.
+/// The blurred-background cache copies its result into the current session
+/// texture.
 fn session_texture_usage() -> wgpu::TextureUsages {
-    let usage = wgpu::TextureUsages::TEXTURE_BINDING
+    wgpu::TextureUsages::TEXTURE_BINDING
         | wgpu::TextureUsages::RENDER_ATTACHMENT
-        | wgpu::TextureUsages::COPY_SRC;
-    if crate::blur_result_cache_enabled() {
-        usage | wgpu::TextureUsages::COPY_DST
-    } else {
-        usage
-    }
+        | wgpu::TextureUsages::COPY_SRC
+        | wgpu::TextureUsages::COPY_DST
 }
 
 impl RenderSession {

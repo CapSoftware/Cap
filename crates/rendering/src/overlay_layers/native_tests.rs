@@ -366,3 +366,65 @@ async fn restricted_late_uniforms_fail_before_prepare_or_direct_render_work() {
     }
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[tokio::test]
+async fn cached_background_blur_matches_a_fresh_blur_and_follows_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let blurred = |blur: f64, from: [u16; 3]| {
+        let mut project = project();
+        project.background.source = serde_json::from_value(serde_json::json!({
+            "type": "gradient", "from": from, "to": [16, 32, 200], "angle": 90
+        }))
+        .unwrap();
+        project.background.blur = blur;
+        project
+    };
+    let fresh_layers = || {
+        RendererLayers::new_with_options(
+            &constants.device,
+            &constants.queue,
+            constants.is_software_adapter,
+        )
+    };
+    let mut cached = fresh_layers();
+
+    let heavy = blurred(40.0, [255, 96, 32]);
+    render(&constants, &heavy, &mut cached, 0).await;
+    let reused = pixels(&render(&constants, &heavy, &mut cached, 1).await.0);
+    let expected = pixels(&render(&constants, &heavy, &mut fresh_layers(), 1).await.0);
+    assert_eq!(reused, expected);
+
+    let light = blurred(10.0, [255, 96, 32]);
+    let after_blur_edit = pixels(&render(&constants, &light, &mut cached, 2).await.0);
+    assert_ne!(after_blur_edit, reused);
+    assert_eq!(
+        after_blur_edit,
+        pixels(&render(&constants, &light, &mut fresh_layers(), 2).await.0)
+    );
+
+    let recolored = blurred(10.0, [32, 200, 96]);
+    let after_background_edit = pixels(&render(&constants, &recolored, &mut cached, 3).await.0);
+    assert_ne!(after_background_edit, after_blur_edit);
+    assert_eq!(
+        after_background_edit,
+        pixels(
+            &render(&constants, &recolored, &mut fresh_layers(), 3)
+                .await
+                .0
+        )
+    );
+
+    assert!(cached.background_blur.has_cached_result());
+    let unblurred = blurred(0.0, [32, 200, 96]);
+    let after_blur_off = pixels(&render(&constants, &unblurred, &mut cached, 6).await.0);
+    assert_eq!(
+        after_blur_off,
+        pixels(
+            &render(&constants, &unblurred, &mut fresh_layers(), 6)
+                .await
+                .0
+        )
+    );
+    assert!(!cached.background_blur.has_cached_result());
+}

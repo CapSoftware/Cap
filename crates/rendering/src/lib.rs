@@ -1263,19 +1263,6 @@ pub mod loop_stats {
     }
 }
 
-/// A blurred static background is identical on every frame. Render hosts
-/// reuse the first frame's result; editor and desktop exports keep blurring
-/// every frame until this has been verified there.
-static BLUR_RESULT_CACHE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn enable_blur_result_cache() {
-    BLUR_RESULT_CACHE.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn blur_result_cache_enabled() -> bool {
-    BLUR_RESULT_CACHE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Layer pipelines take ~0.25-0.5 s to build per render. A process that
 /// renders many ranges of the same project (a render-farm engine) can set a
 /// key naming that project; successful renders then hand their layers to the
@@ -7995,9 +7982,7 @@ impl RendererLayers {
             )
             .await?;
 
-        if uniforms.project.background.blur > 0.0 {
-            self.background_blur.prepare(&constants.queue, uniforms);
-        }
+        self.background_blur.prepare(&constants.queue, uniforms);
 
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
@@ -8151,9 +8136,7 @@ impl RendererLayers {
         timings.background_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if uniforms.project.background.blur > 0.0 {
-            self.background_blur.prepare(&constants.queue, uniforms);
-        }
+        self.background_blur.prepare(&constants.queue, uniforms);
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
         timings.background_blur_prepare_duration = start.elapsed();
@@ -8314,7 +8297,7 @@ impl RendererLayers {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
 
-        let blur_key = (blur_result_cache_enabled() && self.background_blur.blur_amount > 0.0)
+        let blur_key = (self.background_blur.blur_amount > 0.0)
             .then(|| self.background.static_generation())
             .flatten()
             .map(|background_generation| {
@@ -8326,6 +8309,9 @@ impl RendererLayers {
                     texture_size: (size.width, size.height),
                 }
             });
+        if blur_key.is_none() {
+            self.background_blur.clear_result();
+        }
         if let Some(cached) = blur_key.and_then(|key| self.background_blur.cached_result(key)) {
             passes.encoder().copy_texture_to_texture(
                 cached.as_image_copy(),
