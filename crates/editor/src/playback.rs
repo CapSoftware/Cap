@@ -906,6 +906,11 @@ impl Playback {
                 elapsed: audio_wait_start.elapsed(),
             });
         }
+        // Restarts an idle-paused output stream while the video warms up, so
+        // the play request after warmup finds it already running.
+        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            self.audio_output.prewarm();
+        }
 
         diagnostic.field(Field::number(
             "audio_decode_wait_ms",
