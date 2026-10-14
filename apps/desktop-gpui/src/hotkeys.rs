@@ -708,10 +708,8 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
 
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
 /// (`hotkeys.rs:158-177`, `lib.rs:5529-5551` over there): confirm a start
-/// without a working microphone, then record the store's
-/// `recording_settings.target` -- whatever either app recorded last -- with
-/// the primary display as the fallback. Mic/camera come off the main window's
-/// current selections through its ordinary start path.
+/// without a working microphone, then record. Mic/camera come off the main
+/// window's current selections through its ordinary start path.
 ///
 /// The mode is set through [`app_windows::set_recording_mode`] first, so the
 /// pill, the tray tick and the shared store all follow the hotkey; the Tauri
@@ -721,31 +719,41 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
 /// worse mismatch.
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
     app_windows::set_recording_mode(mode, cx);
-    let target = stored_target().unwrap_or_else(|| ScreenCaptureTarget::Display {
-        id: scap_targets::Display::primary().id(),
-    });
     let main = cx.global::<app_windows::AppWindows>().main;
+    let armed = main.read(cx).ok().and_then(|view| view.armed_target());
+    let stored = stored_target();
 
     // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
     // active session skips the confirm -- the re-start is a no-op either way,
     // `start_recording_with_target`'s phase check here and `start_recording`'s
     // over there.
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    let confirm_enabled = store::GeneralSettings::load().confirm_without_microphone;
-    if !idle || !confirm_enabled {
-        start_now(main, target, cx);
-        return;
-    }
+    let confirm = idle && store::GeneralSettings::load().confirm_without_microphone;
     let mic_name = main.read(cx).ok().and_then(|view| {
         view.microphone_selection()
             .map(|microphone| microphone.name.clone())
     });
 
     cx.spawn(async move |cx| {
+        // Window and display lookups enumerate the system, so they run off
+        // the main thread along with the microphone probe below.
+        let target = cx
+            .background_executor()
+            .spawn(async move {
+                pick_hotkey_target(armed, stored, target_is_live, || {
+                    scap_targets::Display::get_containing_cursor()
+                        .unwrap_or_else(scap_targets::Display::primary)
+                        .id()
+                })
+            })
+            .await;
+        if !confirm {
+            cx.update(|cx| start_now(main, target, cx));
+            return;
+        }
         // `MicrophoneFeed::list().contains_key(name)` -- the exact
         // availability probe the Tauri confirm runs (`hotkeys.rs:126-135`
-        // over there), on the background executor because it enumerates
-        // CoreAudio devices. No selection means no microphone, which needs no
+        // over there). No selection means no microphone, which needs no
         // enumeration to know.
         let available = match mic_name {
             Some(name) => {
@@ -791,6 +799,42 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// What a Start shortcut records: the target selected in the main window,
+/// else the last recorded target, else the display under the pointer -- and
+/// only a candidate that still exists. The stored target can be whatever was
+/// recorded last, possibly by the Tauri app long ago, and a closed window or
+/// unplugged display used to fail the start with "target_display_crop:
+/// Display not found". A stored camera-only target is skipped: without a
+/// camera selected it cannot start, so only an explicit choice records it.
+fn pick_hotkey_target(
+    armed: Option<ScreenCaptureTarget>,
+    stored: Option<ScreenCaptureTarget>,
+    is_live: impl Fn(&ScreenCaptureTarget) -> bool,
+    fallback_display: impl FnOnce() -> scap_targets::DisplayId,
+) -> ScreenCaptureTarget {
+    let stored = stored.filter(|target| !matches!(target, ScreenCaptureTarget::CameraOnly));
+    [armed, stored]
+        .into_iter()
+        .flatten()
+        .find(|target| is_live(target))
+        .unwrap_or_else(|| ScreenCaptureTarget::Display {
+            id: fallback_display(),
+        })
+}
+
+fn target_is_live(target: &ScreenCaptureTarget) -> bool {
+    match target {
+        ScreenCaptureTarget::Display { id } => scap_targets::Display::from_id(id).is_some(),
+        ScreenCaptureTarget::Window { id } => {
+            scap_targets::Window::from_id(id).is_some_and(|window| window.display().is_some())
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            scap_targets::Display::from_id(screen).is_some()
+        }
+        ScreenCaptureTarget::CameraOnly => true,
+    }
 }
 
 fn start_now(
@@ -918,6 +962,93 @@ mod tests {
             );
         }
         assert_eq!(HotkeyAction::from_store_key("someFutureAction"), None);
+    }
+
+    fn window(id: &str) -> ScreenCaptureTarget {
+        serde_json::from_value(serde_json::json!({ "variant": "window", "id": id })).unwrap()
+    }
+
+    fn display(id: &str) -> ScreenCaptureTarget {
+        serde_json::from_value(serde_json::json!({ "variant": "display", "id": id })).unwrap()
+    }
+
+    fn display_id(id: &str) -> scap_targets::DisplayId {
+        id.parse().unwrap()
+    }
+
+    fn same(a: &ScreenCaptureTarget, b: &ScreenCaptureTarget) -> bool {
+        serde_json::to_value(a).unwrap() == serde_json::to_value(b).unwrap()
+    }
+
+    /// The store shape from the report: a Tauri-era window that no longer
+    /// exists. The start must fall through to the pointer's display.
+    #[test]
+    fn a_stale_stored_window_falls_back_to_the_pointer_display() {
+        let stored: ScreenCaptureTarget =
+            serde_json::from_str(r#"{ "id": "7022", "variant": "window" }"#).unwrap();
+        let picked = pick_hotkey_target(None, Some(stored), |_| false, || display_id("2"));
+        assert!(same(&picked, &display("2")));
+    }
+
+    #[test]
+    fn the_main_window_selection_wins_when_it_exists() {
+        let picked = pick_hotkey_target(
+            Some(window("11")),
+            Some(window("22")),
+            |_| true,
+            || display_id("1"),
+        );
+        assert!(same(&picked, &window("11")));
+
+        let picked = pick_hotkey_target(
+            Some(window("11")),
+            Some(window("22")),
+            |target| same(target, &window("22")),
+            || display_id("1"),
+        );
+        assert!(same(&picked, &window("22")));
+    }
+
+    #[test]
+    fn the_last_target_is_used_when_nothing_is_selected() {
+        let picked = pick_hotkey_target(None, Some(display("5")), |_| true, || display_id("1"));
+        assert!(same(&picked, &display("5")));
+    }
+
+    #[test]
+    fn a_stored_camera_only_target_never_starts_a_shortcut_recording() {
+        let picked = pick_hotkey_target(
+            None,
+            Some(ScreenCaptureTarget::CameraOnly),
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(same(&picked, &display("3")));
+        let picked = pick_hotkey_target(
+            Some(ScreenCaptureTarget::CameraOnly),
+            None,
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(matches!(picked, ScreenCaptureTarget::CameraOnly));
+    }
+
+    /// What the main window writes on every start is what the shortcut reads
+    /// back.
+    #[test]
+    fn the_saved_target_round_trips_through_the_store_shape() {
+        for target in [window("7022"), display("1")] {
+            let value = serde_json::to_value(&target).unwrap();
+            let back: ScreenCaptureTarget = serde_json::from_value(value).unwrap();
+            assert!(same(&back, &target));
+        }
+    }
+
+    /// Against the real system: a window id that cannot exist is never
+    /// treated as recordable.
+    #[test]
+    fn a_missing_window_is_not_live() {
+        assert!(!target_is_live(&window("4294967294")));
     }
 
     /// Two actions on the same combo both fire on one press -- the Tauri
