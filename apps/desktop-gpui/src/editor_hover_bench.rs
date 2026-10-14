@@ -64,6 +64,9 @@ pub async fn run(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
                 .await;
         } else {
             next_move = now;
+            // An overloaded loop must still give the preview pump and the run
+            // loop a turn between moves, as real event dispatch does.
+            tokio::task::yield_now().await;
         }
         let elapsed = started.elapsed();
         if elapsed >= WARMUP + MEASURED {
