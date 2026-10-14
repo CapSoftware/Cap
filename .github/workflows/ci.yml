@@ -276,9 +276,6 @@ jobs:
       - name: Run setup
         run: node scripts/setup.js
 
-      - name: Build sidecars
-        run: cargo build --locked -p cap-muxer -p cap
-
       - name: Test desktop regressions
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
@@ -339,9 +336,14 @@ jobs:
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
-      - name: Build GPUI desktop
+      # The test build compiles every line the binary build does (the app has
+      # no cfg(not(test)) code), so a separate binary build only repeated the
+      # app crate's compile and link. Release builds still produce the binary.
+      - name: Prepare GPUI dependency
         shell: bash
-        run: ./scripts/build-gpui-binary.sh debug ${{ matrix.settings.target }}
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
 
       - name: Test GPUI desktop
         shell: bash
