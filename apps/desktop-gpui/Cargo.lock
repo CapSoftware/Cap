@@ -1756,8 +1756,11 @@ version = "0.1.0"
 dependencies = [
  "cap-audio",
  "cap-project",
+ "crc32fast",
+ "flate2",
  "image 0.25.10",
  "md-5",
+ "simd-adler32",
  "tracing",
 ]
 

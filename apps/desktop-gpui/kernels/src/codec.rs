@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::path::Path;
 
 use ::md5::{Digest as _, Md5};
@@ -42,6 +43,14 @@ pub fn write_png_file(
     compression: image::codecs::png::CompressionType,
     filter: image::codecs::png::FilterType,
 ) -> image::ImageResult<()> {
+    if compression == image::codecs::png::CompressionType::Default
+        && filter == image::codecs::png::FilterType::Adaptive
+    {
+        let png = crate::png::encode(data, width, height, color)?;
+        let mut file = file;
+        file.write_all(&png)?;
+        return Ok(());
+    }
     let encoder = image::codecs::png::PngEncoder::new_with_quality(
         std::io::BufWriter::new(file),
         compression,
