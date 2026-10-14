@@ -2240,7 +2240,7 @@ mod tests {
                     std::fs::write(path, dump).expect("write words");
                 }
             }
-            Err(error) => println!("parakeet_seconds={seconds:.2} error={error}"),
+            Err(error) => panic!("parakeet_seconds={seconds:.2} error={error}"),
         }
     }
 
