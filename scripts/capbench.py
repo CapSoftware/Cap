@@ -347,6 +347,20 @@ def example_bench(name, args, parse, better, timeout=600, env=None):
     return {"argv": argv, "parse": parse, "timeout": timeout, "env": env or {}, "better": better}
 
 
+class InvalidRun(Exception):
+    pass
+
+
+def validated_video(stdout, returncode):
+    try:
+        report = json.loads(stdout)
+    except json.JSONDecodeError:
+        raise InvalidRun(f"cap-test validate exited {returncode} without a JSON report")
+    if returncode != 0 or not report.get("valid"):
+        raise InvalidRun("invalid recording: " + "; ".join(report.get("errors") or ["no errors reported"]))
+    return report.get("video_info") or {}
+
+
 def record_bench(mode, fps, seconds):
     def argv(ctx, out_dir):
         return [
@@ -360,10 +374,7 @@ def record_bench(mode, fps, seconds):
             [str(ctx.bin("cap-test")), "validate", str(project), "--json"],
             capture_output=True, text=True,
         )
-        try:
-            video = json.loads(validation.stdout).get("video_info") or {}
-        except json.JSONDecodeError:
-            video = {}
+        video = validated_video(validation.stdout, validation.returncode)
         frames = video.get("frame_count")
         captured = video.get("duration_secs")
         if frames and captured:
@@ -497,11 +508,16 @@ def run_once(name, spec, ctx, out_dir, keep_log):
     metrics = {key: value for key, value in measured.items() if key != "exit"}
     metrics.update(spec["parse"](lines))
     artifact = None
-    if measured["exit"] == 0 and spec.get("post"):
-        artifact = spec["post"](ctx, out_dir, metrics)
-    if keep_log or measured["exit"] != 0:
+    code = measured["exit"]
+    if code == 0 and spec.get("post"):
+        try:
+            artifact = spec["post"](ctx, out_dir, metrics)
+        except InvalidRun as error:
+            code = "invalid"
+            lines.append((measured["wall_s"], f"capbench: {error}"))
+    if keep_log or code != 0:
         (out_dir / "output.log").write_text("\n".join(line for _, line in lines), encoding="utf-8")
-    return measured["exit"], metrics, artifact
+    return code, metrics, artifact
 
 
 def build_info(bin_dir):
@@ -600,7 +616,10 @@ def cmd_run(args):
                 if phase == "warmup":
                     continue
                 if code != 0:
-                    results["benches"][name]["failures"].append({"rep": rep, "exit": code, "log": str(out_dir / "output.log")})
+                    log = out_root / "failures" / label / name / f"{phase}{rep}.log"
+                    log.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(out_dir / "output.log", log)
+                    results["benches"][name]["failures"].append({"rep": rep, "exit": code, "log": str(log)})
                     continue
                 results["benches"][name]["runs"].append(metrics)
                 if artifact and args.keep_outputs:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -116,6 +117,14 @@ class CapbenchTests(unittest.TestCase):
         self.assertEqual(slower[0]["verdict"], "WORSE")
         noise = capbench.compare(results([10.0, 12.0, 8.0, 11.0, 9.0]), results([10.5, 8.5, 11.5, 9.5, 12.5]))
         self.assertEqual(noise[0]["verdict"], "same")
+
+    def test_invalid_recordings_fail_the_run(self):
+        video = {"frame_count": 300, "duration_secs": 10.0}
+        self.assertEqual(capbench.validated_video(json.dumps({"valid": True, "video_info": video}), 0), video)
+        with self.assertRaisesRegex(capbench.InvalidRun, "Missing content directory"):
+            capbench.validated_video(json.dumps({"valid": False, "errors": ["Missing content directory"]}), 0)
+        with self.assertRaises(capbench.InvalidRun):
+            capbench.validated_video("thread 'main' panicked", 101)
 
     def test_variant_env_is_scoped_per_label(self):
         env = capbench.parse_variant_env(["base", "t4"], ["t4:CAP_EXP_DECODE_THREADS=4", "t4:X=a=b"])
