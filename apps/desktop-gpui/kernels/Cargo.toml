@@ -15,3 +15,7 @@ tracing = "0.1"
 [[bench]]
 name = "screenshot_blit"
 harness = false
+
+[[bench]]
+name = "thumbnail_fit"
+harness = false
