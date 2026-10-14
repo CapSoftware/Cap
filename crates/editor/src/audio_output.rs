@@ -7,10 +7,10 @@
 //! rather than after a device wake that could take seconds. The stream is
 //! rebuilt only when the default output device changes or the stream errors.
 //!
-//! On local hardware outputs that restart instantly (built-in speakers, USB
-//! and similar), a stream left without a source for [`IDLE_PAUSE_AFTER`] is
-//! paused rather than rendering silence indefinitely, and the next play or
-//! prewarm restarts it in place. Wireless and display outputs keep running.
+//! On the built-in output, which restarts instantly, a stream left without a
+//! source for [`IDLE_PAUSE_AFTER`] is paused rather than rendering silence
+//! indefinitely, and the next play or prewarm restarts it in place. External,
+//! wireless and display outputs keep running.
 
 use std::{
     sync::{
