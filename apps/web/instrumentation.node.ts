@@ -16,6 +16,7 @@ import {
 	REQUIRED_SELF_HOST_SECRETS,
 	serverEnv,
 } from "@cap/env";
+import { logMediaServerUrlCheck } from "./lib/media-server-startup-check";
 
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
@@ -57,6 +58,11 @@ export async function register() {
 	// Add a timeout to trigger migrations after 5 seconds on server start
 	setTimeout(() => triggerMigrations(), 5000);
 	setTimeout(() => createS3Bucket(), 5000);
+	setTimeout(() => {
+		void logMediaServerUrlCheck().catch((error) => {
+			console.warn("⚠️  Media server check failed:", error);
+		});
+	}, 5000);
 }
 
 async function createS3Bucket() {
