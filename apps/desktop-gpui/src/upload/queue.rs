@@ -11,6 +11,8 @@ const STATE_FILE: &str = "instant-upload.json";
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+const PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+const FAST_PENDING_RECHECKS: u32 = 12;
 const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -533,6 +535,7 @@ struct Manager<B> {
     stopping: AtomicBool,
     wake: tokio::sync::Notify,
     confirmation_timeout: Duration,
+    pending_rechecks: Mutex<HashMap<String, u32>>,
 }
 
 impl<B: UploadBackend> Manager<B> {
@@ -543,7 +546,39 @@ impl<B: UploadBackend> Manager<B> {
             stopping: AtomicBool::new(false),
             wake: tokio::sync::Notify::new(),
             confirmation_timeout,
+            pending_rechecks: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn pending_recheck_delay(&self, video_id: &str) -> Duration {
+        let mut rechecks = self
+            .pending_rechecks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let count = rechecks.entry(video_id.to_string()).or_default();
+        *count = count.saturating_add(1);
+        if *count <= FAST_PENDING_RECHECKS {
+            PENDING_RECHECK_INTERVAL
+        } else {
+            RECONCILE_INTERVAL
+        }
+    }
+
+    fn forget_pending_rechecks(&self, video_id: &str) {
+        self.pending_rechecks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(video_id);
+    }
+
+    fn wake_after(self: &Arc<Self>, delay: Duration) {
+        let manager = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            if let Some(manager) = manager.upgrade() {
+                manager.wake.notify_one();
+            }
+        });
     }
 
     async fn admit(
@@ -655,6 +690,10 @@ impl<B: UploadBackend> Manager<B> {
         })).catch_unwind().await.unwrap_or_else(|_| Err("The upload worker failed; the local recording is preserved".into()));
         let paused = *cancelled.borrow() || upload.cancel.load(Ordering::Acquire);
         upload.abort_segments().await;
+        match &result {
+            Ok(Some(delay)) => self.wake_after(*delay),
+            _ => self.forget_pending_rechecks(&state.video_id),
+        }
         match result {
             Err(error) if paused => {
                 tracing::info!(path = %project.display(), %error, "Instant upload paused");
@@ -667,7 +706,7 @@ impl<B: UploadBackend> Manager<B> {
                 }
                 tracing::warn!(path = %project.display(), %error, "Instant upload remains local");
             }
-            Ok(()) => {}
+            Ok(_) => {}
         }
         self.wake.notify_one();
     }
@@ -677,7 +716,7 @@ impl<B: UploadBackend> Manager<B> {
         project: &Path,
         upload: &mut InstantUpload,
         state: &mut UploadState,
-    ) -> Result<(), String> {
+    ) -> Result<Option<Duration>, String> {
         validate_local(project, state)?;
         self.backend.check_account(state)?;
         if state
@@ -717,11 +756,11 @@ impl<B: UploadBackend> Manager<B> {
         })??;
         match confirmation {
             Confirmation::Pending => {
+                let delay = self.pending_recheck_delay(&state.video_id);
                 state.attempt_count = 0;
-                state.next_retry_at =
-                    Some(now().saturating_add(RECONCILE_INTERVAL.as_secs() as i64));
+                state.next_retry_at = Some(now().saturating_add(delay.as_secs() as i64));
                 write_state(project, state)?;
-                return Ok(());
+                return Ok(Some(delay));
             }
             Confirmation::ReuploadRequired => {
                 state.verification = None;
@@ -779,7 +818,7 @@ impl<B: UploadBackend> Manager<B> {
                 tracing::warn!(path = %project.display(), %error, "Verified upload kept locally because cleanup failed");
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     async fn reap(&self) {
@@ -1064,6 +1103,7 @@ pub(crate) async fn delete_recording(project: PathBuf) -> Result<(), String> {
     manager().cancel(&canonical).await;
     let _ownership = UploadLock::acquire(&canonical).map_err(|error| error.to_string())?;
     if let Some(mut state) = read_state(&canonical)? {
+        manager().forget_pending_rechecks(&state.video_id);
         state.phase = UploadPhase::Cancelled;
         write_state(&canonical, &state)?;
     }
@@ -1457,6 +1497,101 @@ mod tests {
         assert!(state.verification.is_some());
         assert!(state.next_retry_at.is_some());
         fixture.assert_retained();
+    }
+
+    async fn confirm_pending(
+        fixture: &Fixture,
+        manager: &Arc<Manager<FakeBackend>>,
+        delay: Duration,
+    ) {
+        let before = now();
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(manager).await;
+        let after = now();
+        let state = fixture.state();
+        assert_eq!(state.phase, UploadPhase::Processing);
+        let delay = delay.as_secs() as i64;
+        assert!((before + delay..=after + delay).contains(&state.next_retry_at.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn pending_cloud_verification_rechecks_quickly_then_backs_off() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        for _ in 0..FAST_PENDING_RECHECKS {
+            confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
+        }
+        confirm_pending(&fixture, &manager, RECONCILE_INTERVAL).await;
+        confirm_pending(&fixture, &manager, RECONCILE_INTERVAL).await;
+        assert_eq!(
+            manager.backend.confirmations.load(Ordering::Acquire),
+            FAST_PENDING_RECHECKS as usize + 2
+        );
+        assert_eq!(manager.backend.transfers.load(Ordering::Acquire), 0);
+        fixture.assert_retained();
+    }
+
+    #[tokio::test]
+    async fn verification_resets_the_fast_recheck_budget() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        for _ in 0..3 {
+            confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
+        }
+        manager.backend.verified.store(true, Ordering::Release);
+        manager
+            .admit(fixture.project(), fixture.upload(), true)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(fixture.state().phase, UploadPhase::Verified);
+        assert!(manager.pending_rechecks.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_confirmation_resets_the_fast_recheck_budget() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        confirm_pending(&fixture, &manager, PENDING_RECHECK_INTERVAL).await;
+        manager
+            .backend
+            .fail_confirmation
+            .store(true, Ordering::Release);
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(fixture.state().phase, UploadPhase::Retrying);
+        assert!(manager.pending_rechecks.lock().unwrap().is_empty());
+        fixture.assert_retained();
+    }
+
+    #[tokio::test]
+    async fn pending_cloud_verification_wakes_the_queue_for_its_recheck() {
+        let fixture = Fixture::new();
+        fixture.cache_receipt();
+        let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
+        manager
+            .admit(fixture.project(), fixture.upload(), false)
+            .await
+            .unwrap();
+        joined(&manager).await;
+        assert_eq!(fixture.state().phase, UploadPhase::Processing);
+        manager.wake.notified().await;
+        let started = tokio::time::Instant::now();
+        tokio::time::timeout(RECONCILE_INTERVAL, manager.wake.notified())
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() >= PENDING_RECHECK_INTERVAL.saturating_sub(Duration::from_millis(50))
+        );
     }
 
     #[tokio::test]

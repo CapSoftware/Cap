@@ -562,6 +562,13 @@ impl RecordingSegmentDecoders {
             .map(AsyncVideoDecoderHandle::decoder_status)
     }
 
+    pub fn prefer_sequential_access(&self) {
+        self.screen.prefer_sequential_access();
+        if let Some(camera) = &self.camera {
+            camera.prefer_sequential_access();
+        }
+    }
+
     pub fn screen_video_dimensions(&self) -> (u32, u32) {
         self.screen.video_dimensions()
     }

@@ -19,7 +19,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
@@ -205,14 +205,33 @@ impl PrefetchedFrame {
     }
 }
 
+struct PrefetchReceiver {
+    frames: std_mpsc::Receiver<PrefetchedFrame>,
+    capacity: Arc<Notify>,
+}
+
+fn prefetch_channel(bound: usize) -> (std_mpsc::SyncSender<PrefetchedFrame>, PrefetchReceiver) {
+    let (sender, frames) = std_mpsc::sync_channel(bound);
+    (
+        sender,
+        PrefetchReceiver {
+            frames,
+            capacity: Arc::new(Notify::new()),
+        },
+    )
+}
+
 fn receive_prefetched_frame(
-    receiver: &std_mpsc::Receiver<PrefetchedFrame>,
+    receiver: &PrefetchReceiver,
     seek_generation: u64,
     timeout: Duration,
 ) -> Result<PrefetchedFrame, std_mpsc::RecvTimeoutError> {
     let deadline = Instant::now() + timeout;
     loop {
-        let frame = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        let frame = receiver
+            .frames
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        receiver.capacity.notify_one();
         // A completed decode can already be queued when the producer observes a seek.
         if frame.seek_generation == seek_generation {
             return Ok(frame);
@@ -613,11 +632,13 @@ impl Playback {
             adopted: adopted.clone(),
         };
 
-        let (prefetch_tx, prefetch_rx) =
-            std_mpsc::sync_channel::<PrefetchedFrame>(PREFETCH_CHANNEL_SIZE);
+        let (prefetch_tx, prefetch_rx) = prefetch_channel(PREFETCH_CHANNEL_SIZE);
+        let prefetch_capacity = Arc::clone(&prefetch_rx.capacity);
+        let prefetch_fallback_wait = Duration::from_secs_f64(1.0 / fps_f64);
         let (frame_request_tx, mut frame_request_rx) =
             watch::channel((0u64, self.start_frame_number));
-        let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
+        let (playback_position_tx, mut playback_position_rx) =
+            watch::channel(self.start_frame_number);
         let prefetch_frame_limit = Arc::new(AtomicUsize::new(INITIAL_PREFETCH_BUFFER_SIZE));
 
         let output_size = ProjectUniforms::get_output_size(
@@ -729,7 +750,8 @@ impl Playback {
                                     }
                                     request_changed = true;
                                 }
-                                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                _ = prefetch_capacity.notified() => {}
+                                _ = tokio::time::sleep(prefetch_fallback_wait) => {}
                             }
                             continue;
                         }
@@ -737,7 +759,7 @@ impl Playback {
                     }
                 }
 
-                let current_playback_frame = *playback_position_rx.borrow();
+                let current_playback_frame = *playback_position_rx.borrow_and_update();
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
@@ -863,7 +885,12 @@ impl Playback {
                         }
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                    result = playback_position_rx.changed(), if in_flight.is_empty() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(prefetch_fallback_wait), if in_flight.is_empty() => {}
                 }
             }
         });
@@ -878,6 +905,11 @@ impl Playback {
             telemetry.emit(PlaybackTelemetryEvent::AudioSegmentsResolved {
                 elapsed: audio_wait_start.elapsed(),
             });
+        }
+        // Restarts an idle-paused output stream while the video warms up, so
+        // the play request after warmup finds it already running.
+        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            self.audio_output.prewarm();
         }
 
         diagnostic.field(Field::number(
@@ -2111,7 +2143,7 @@ mod tests {
 
     #[test]
     fn backward_seek_discards_queued_frames_from_the_previous_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(4);
+        let (sender, receiver) = prefetch_channel(4);
         for (generation, frame) in [(1, 3000), (1, 480), (2, 480), (2, 481)] {
             assert!(sender.send(prefetched_frame(generation, frame)).is_ok());
         }
@@ -2125,7 +2157,7 @@ mod tests {
 
     #[test]
     fn repeated_seeks_to_the_same_frame_require_the_latest_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(3);
+        let (sender, receiver) = prefetch_channel(3);
         for generation in 0..3 {
             assert!(sender.send(prefetched_frame(generation, 480)).is_ok());
         }
@@ -2137,7 +2169,7 @@ mod tests {
 
     #[test]
     fn stale_prefetch_frames_do_not_hide_timeout_or_disconnection() {
-        let (sender, receiver) = std_mpsc::sync_channel(1);
+        let (sender, receiver) = prefetch_channel(1);
         assert!(sender.send(prefetched_frame(1, 3000)).is_ok());
         assert!(matches!(
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
@@ -2150,6 +2182,45 @@ mod tests {
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
             Err(std_mpsc::RecvTimeoutError::Disconnected)
         ));
+    }
+
+    #[tokio::test]
+    async fn draining_the_prefetch_channel_wakes_a_blocked_producer() {
+        let (sender, receiver) = prefetch_channel(1);
+        let capacity = Arc::clone(&receiver.capacity);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(matches!(
+            sender.try_send(prefetched_frame(1, 11)),
+            Err(std_mpsc::TrySendError::Full(_))
+        ));
+
+        let consumer = std::thread::spawn(move || {
+            let frame = receive_prefetched_frame(&receiver, 1, Duration::from_secs(5));
+            (frame.map(|frame| frame.frame_number), receiver)
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), capacity.notified())
+            .await
+            .expect("consumer drain should wake the producer");
+        assert!(sender.try_send(prefetched_frame(1, 11)).is_ok());
+        let (frame, _receiver) = consumer.join().unwrap();
+        assert_eq!(frame.ok(), Some(10));
+    }
+
+    #[test]
+    fn discarding_stale_prefetch_frames_signals_capacity() {
+        use futures::FutureExt;
+
+        let (sender, receiver) = prefetch_channel(1);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(receiver.capacity.notified().now_or_never().is_none());
+
+        assert!(matches!(
+            receive_prefetched_frame(&receiver, 2, Duration::ZERO),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(receiver.capacity.notified().now_or_never().is_some());
+        assert!(sender.try_send(prefetched_frame(2, 10)).is_ok());
     }
 
     #[tokio::test]

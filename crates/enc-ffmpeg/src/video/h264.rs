@@ -1261,6 +1261,7 @@ fn get_codec_and_options(
                     options.set("realtime", "false");
                     options.set("profile", "main");
                     options.set("allow_sw", "0");
+                    options.set("g", &keyframe_interval_str);
                 } else {
                     options.set("realtime", "true");
                     options.set("prio_speed", "true");
@@ -1689,6 +1690,36 @@ mod self_test_tests {
         let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
         hardware_encoder_self_test(codec, options, &config, 160, 120, 0.3, None)
             .expect("healthy encoder passes the round trip");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn videotoolbox_export_uses_the_default_keyframe_interval() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().ok();
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, 60);
+        let videotoolbox_options = |is_export| {
+            get_codec_and_options(
+                &config,
+                H264Preset::Medium,
+                Some(&["h264_videotoolbox"]),
+                is_export,
+                None,
+            )
+            .into_iter()
+            .find(|(codec, _)| codec.name() == "h264_videotoolbox")
+            .expect("VideoToolbox encoder is available on macOS")
+            .1
+        };
+
+        let export = videotoolbox_options(true);
+        let expected = (DEFAULT_KEYFRAME_INTERVAL_SECS * 60).to_string();
+        assert_eq!(export.get("g"), Some(expected.as_str()));
+
+        let realtime = videotoolbox_options(false);
+        assert_eq!(realtime.get("g"), None);
     }
 
     #[cfg(target_os = "linux")]
