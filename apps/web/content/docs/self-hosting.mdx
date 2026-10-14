@@ -114,6 +114,15 @@ Email is optional. Without it, login codes are printed to the cap-web logs, the 
    ```
 3. Verify the domain in Resend. Login emails are sent from `auth@RESEND_FROM_DOMAIN`.
 
+## Media Server Tuning
+
+The media server converts uploads in parallel based on the CPUs it can use: half the available CPUs, at least 1 and at most 4. It still turns work away when CPU or memory pressure is high. Override this with:
+
+```bash
+MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS=2   # direct /video/convert requests
+MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES=4      # all video jobs
+```
+
 ## Optional Features
 
 ### AI Features

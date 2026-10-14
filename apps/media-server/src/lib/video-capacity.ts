@@ -1,3 +1,6 @@
+import os from "node:os";
+import { getContainerCpuLimit } from "./container-cpu";
+
 export interface VideoProcessSlot {
 	release: () => void;
 }
@@ -7,7 +10,19 @@ const configuredMaxDirectVideoProcesses =
 		process.env.MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS ?? "0",
 		10,
 	) || 0;
-const DEFAULT_MAX_CONCURRENT_DIRECT_VIDEO_PROCESSES = 1;
+const MAX_DEFAULT_DIRECT_VIDEO_PROCESSES = 4;
+
+export function getDefaultMaxConcurrentDirectVideoProcesses(
+	cpuCapacity: number = getContainerCpuLimit() || os.availableParallelism(),
+): number {
+	return Math.max(
+		1,
+		Math.min(MAX_DEFAULT_DIRECT_VIDEO_PROCESSES, Math.floor(cpuCapacity / 2)),
+	);
+}
+
+const defaultMaxDirectVideoProcesses =
+	getDefaultMaxConcurrentDirectVideoProcesses();
 
 let activeDirectVideoProcessCount = 0;
 
@@ -18,7 +33,7 @@ export function getActiveDirectVideoProcessCount(): number {
 export function getMaxConcurrentDirectVideoProcesses(): number {
 	return configuredMaxDirectVideoProcesses > 0
 		? configuredMaxDirectVideoProcesses
-		: DEFAULT_MAX_CONCURRENT_DIRECT_VIDEO_PROCESSES;
+		: defaultMaxDirectVideoProcesses;
 }
 
 export function tryAcquireDirectVideoProcessSlot(
