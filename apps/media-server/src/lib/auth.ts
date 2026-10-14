@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 type MediaServerContext = {
 	req: { header: (name: string) => string | undefined };
 };
@@ -10,5 +12,9 @@ export function validateMediaServerSecret(c: MediaServerContext): boolean {
 		);
 		return false;
 	}
-	return c.req.header("x-media-server-secret") === secret;
+	const provided = c.req.header("x-media-server-secret");
+	if (!provided) return false;
+	const expectedDigest = createHash("sha256").update(secret).digest();
+	const providedDigest = createHash("sha256").update(provided).digest();
+	return timingSafeEqual(expectedDigest, providedDigest);
 }

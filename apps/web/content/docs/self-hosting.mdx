@@ -123,6 +123,17 @@ MEDIA_SERVER_MAX_CONCURRENT_DIRECT_CONVERSIONS=2   # direct /video/convert reque
 MEDIA_SERVER_MAX_CONCURRENT_VIDEO_PROCESSES=4      # all video jobs
 ```
 
+### Media server URL policy
+
+The media server only fetches the URLs cap-web sends it, and it checks each one first:
+
+- Only `http` and `https` URLs are accepted.
+- Hosts that resolve to loopback, private, link-local (including cloud metadata at `169.254.169.254`), CGNAT or IPv6 ULA addresses are rejected, unless the host is trusted.
+- Trusted hosts are those in `S3_INTERNAL_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `CAP_AWS_ENDPOINT`, `MEDIA_SERVER_WEBHOOK_URL` and `WEB_URL` (set them on the media server too), plus anything in `MEDIA_SERVER_ALLOWED_HOSTS`.
+- When `MEDIA_SERVER_ALLOWED_HOSTS` is set, it becomes a strict allow-list: every URL must use one of those hosts or the trusted hosts above. Entries are comma-separated and may use a `*.` prefix, e.g. `minio.railway.internal,*.r2.cloudflarestorage.com`.
+
+If your storage lives on a private network (MinIO in Docker or on Railway's private network), set `S3_INTERNAL_ENDPOINT` on the media server or add its host to `MEDIA_SERVER_ALLOWED_HOSTS`. Otherwise processing fails with `URL_NOT_ALLOWED`. `MEDIA_SERVER_ALLOW_PRIVATE_URLS=true` turns the private-address check off and also allows `file:` URLs; it's meant for local development and tests only.
+
 ## Optional Features
 
 ### AI Features

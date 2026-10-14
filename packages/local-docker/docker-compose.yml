@@ -31,6 +31,7 @@ services:
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-local-media-server-secret}
       MEDIA_SERVER_ALLOW_INSECURE_SECRET: "true"
+      MEDIA_SERVER_ALLOW_PRIVATE_URLS: "true"
 
   # Local S3 Strorage
   minio:

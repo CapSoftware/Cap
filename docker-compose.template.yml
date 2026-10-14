@@ -56,6 +56,8 @@ services:
       dockerfile: Dockerfile.standalone
     restart: unless-stopped
     environment:
+      S3_INTERNAL_ENDPOINT: http://minio:3902
+      MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
       PORT: 3456
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET (run: openssl rand -hex 32)}
     ports:

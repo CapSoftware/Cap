@@ -52,6 +52,9 @@ services:
     stop_grace_period: 30s
     environment:
       PORT: 3456
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_URL:-http://localhost:9000}
+      MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
       MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3456/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
