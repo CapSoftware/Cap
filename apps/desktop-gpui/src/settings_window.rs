@@ -807,6 +807,7 @@ impl SettingsWindow {
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.shortcuts_cancel(cx);
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
@@ -1273,7 +1274,12 @@ impl SettingsWindow {
         self.write(key, Value::from(value), cx);
     }
 
-    fn write_enum<T: SettingsEnum>(&mut self, key: &'static str, value: T, cx: &mut Context<Self>) {
+    pub(crate) fn write_enum<T: SettingsEnum>(
+        &mut self,
+        key: &'static str,
+        value: T,
+        cx: &mut Context<Self>,
+    ) {
         self.write(key, Value::String(value.as_json().to_string()), cx);
     }
 
@@ -1563,6 +1569,11 @@ impl Render for SettingsWindow {
                     cx.defer(crate::app_windows::close_settings);
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _window, cx| {
+                    this.shortcuts_modifiers_changed(event.modifiers, cx);
+                },
+            ))
             .size_full()
             .flex()
             .flex_row()

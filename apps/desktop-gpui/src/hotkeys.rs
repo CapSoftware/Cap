@@ -51,26 +51,47 @@ pub enum HotkeyAction {
     ScreenshotArea,
 }
 
+const ACTION_KEYS: [(&str, HotkeyAction); 13] = [
+    ("startStudioRecording", HotkeyAction::StartStudioRecording),
+    ("startInstantRecording", HotkeyAction::StartInstantRecording),
+    ("stopRecording", HotkeyAction::StopRecording),
+    ("restartRecording", HotkeyAction::RestartRecording),
+    ("togglePauseRecording", HotkeyAction::TogglePauseRecording),
+    ("cycleRecordingMode", HotkeyAction::CycleRecordingMode),
+    ("openRecordingPicker", HotkeyAction::OpenRecordingPicker),
+    (
+        "openRecordingPickerDisplay",
+        HotkeyAction::OpenRecordingPickerDisplay,
+    ),
+    (
+        "openRecordingPickerWindow",
+        HotkeyAction::OpenRecordingPickerWindow,
+    ),
+    (
+        "openRecordingPickerArea",
+        HotkeyAction::OpenRecordingPickerArea,
+    ),
+    ("screenshotDisplay", HotkeyAction::ScreenshotDisplay),
+    ("screenshotWindow", HotkeyAction::ScreenshotWindow),
+    ("screenshotArea", HotkeyAction::ScreenshotArea),
+];
+
 impl HotkeyAction {
+    /// `#[serde(other)] Other` over there: a newer app's action survives in
+    /// the store and registers nothing here.
     fn from_store_key(key: &str) -> Option<Self> {
-        Some(match key {
-            "startStudioRecording" => Self::StartStudioRecording,
-            "startInstantRecording" => Self::StartInstantRecording,
-            "stopRecording" => Self::StopRecording,
-            "restartRecording" => Self::RestartRecording,
-            "togglePauseRecording" => Self::TogglePauseRecording,
-            "cycleRecordingMode" => Self::CycleRecordingMode,
-            "openRecordingPicker" => Self::OpenRecordingPicker,
-            "openRecordingPickerDisplay" => Self::OpenRecordingPickerDisplay,
-            "openRecordingPickerWindow" => Self::OpenRecordingPickerWindow,
-            "openRecordingPickerArea" => Self::OpenRecordingPickerArea,
-            "screenshotDisplay" => Self::ScreenshotDisplay,
-            "screenshotWindow" => Self::ScreenshotWindow,
-            "screenshotArea" => Self::ScreenshotArea,
-            // `#[serde(other)] Other` over there: a newer app's action
-            // survives in the store and registers nothing here.
-            _ => return None,
-        })
+        ACTION_KEYS
+            .iter()
+            .find(|(stored, _)| *stored == key)
+            .map(|(_, action)| *action)
+    }
+
+    fn store_key(self) -> &'static str {
+        ACTION_KEYS
+            .iter()
+            .find(|(_, action)| *action == self)
+            .map(|(key, _)| *key)
+            .unwrap_or_default()
     }
 }
 
@@ -80,6 +101,12 @@ struct Hotkeys {
     /// grabbed.
     manager: Option<GlobalHotKeyManager>,
     bindings: Vec<(HotKey, HotkeyAction)>,
+    /// Bindings the OS refused, usually because macOS or another app already
+    /// owns the combo. The Shortcuts page flags these rows.
+    unavailable: Vec<HotkeyAction>,
+    /// Set while the Shortcuts page records a new combo: a registered combo
+    /// would otherwise fire its action instead of reaching the page.
+    paused: bool,
     #[cfg(target_os = "linux")]
     capture_stop: Option<HotKey>,
 }
@@ -119,6 +146,8 @@ pub fn init(cx: &mut App) {
     cx.set_global(Hotkeys {
         manager: None,
         bindings: Vec::new(),
+        unavailable: Vec::new(),
+        paused: false,
         #[cfg(target_os = "linux")]
         capture_stop: None,
     });
@@ -157,13 +186,59 @@ pub fn init(cx: &mut App) {
 /// Re-read the store and swap every OS registration -- the settings page's
 /// commit seam (`commands.setHotkey` re-registers over there).
 pub fn reload(cx: &mut App) {
-    if !cx.has_global::<Hotkeys>() {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
         return;
     }
     #[cfg(target_os = "linux")]
     if cx.global::<Hotkeys>().capture_stop.is_some() {
         return;
     }
+    unregister_all(cx);
+    register_from_store(cx);
+}
+
+/// Drop every OS registration while the Shortcuts page records a combo, so
+/// pressing an already-bound combo reaches the page instead of firing.
+pub fn pause(cx: &mut App) {
+    if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if cx.global::<Hotkeys>().capture_stop.is_some() {
+        return;
+    }
+    unregister_all(cx);
+    let hotkeys = cx.global_mut::<Hotkeys>();
+    hotkeys.paused = true;
+    hotkeys.release_idle_manager();
+    tracing::info!("global hotkeys paused while a shortcut is recorded");
+}
+
+/// End a [`pause`] and register the store's bindings again. Returns whether
+/// anything was paused; without a pause the registrations are left alone.
+pub fn resume(cx: &mut App) -> bool {
+    if !cx.has_global::<Hotkeys>() || !cx.global::<Hotkeys>().paused {
+        return false;
+    }
+    cx.global_mut::<Hotkeys>().paused = false;
+    reload(cx);
+    true
+}
+
+/// Store keys of the bindings the OS refused at the last registration.
+pub fn unavailable_actions(cx: &App) -> Vec<&'static str> {
+    cx.try_global::<Hotkeys>()
+        .map(|hotkeys| {
+            hotkeys
+                .unavailable
+                .iter()
+                .map(|action| action.store_key())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unregister_all(cx: &mut App) {
     let hotkeys = cx.global_mut::<Hotkeys>();
     // Two actions on one combo share one OS registration, so unregister each
     // combo once.
@@ -179,7 +254,7 @@ pub fn reload(cx: &mut App) {
         tracing::warn!("unregistering global hotkeys failed: {error}");
     }
     hotkeys.bindings.clear();
-    register_from_store(cx);
+    hotkeys.unavailable.clear();
 }
 
 #[cfg(target_os = "linux")]
@@ -598,7 +673,8 @@ fn register_from_store(cx: &mut App) {
         match registered {
             Ok(()) => hotkeys.bindings.push((hotkey, action)),
             Err(error) => {
-                tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}")
+                tracing::warn!(?action, code = %binding.code, "registering global hotkey failed: {error}");
+                hotkeys.unavailable.push(action);
             }
         }
     }
@@ -865,6 +941,8 @@ mod tests {
         let mut hotkeys = Hotkeys {
             manager: None,
             bindings: Vec::new(),
+            unavailable: Vec::new(),
+            paused: false,
             #[cfg(target_os = "linux")]
             capture_stop: None,
         };
@@ -962,6 +1040,9 @@ mod tests {
             );
         }
         assert_eq!(HotkeyAction::from_store_key("someFutureAction"), None);
+        for (key, action) in ACTION_KEYS {
+            assert_eq!(action.store_key(), key);
+        }
     }
 
     fn window(id: &str) -> ScreenCaptureTarget {

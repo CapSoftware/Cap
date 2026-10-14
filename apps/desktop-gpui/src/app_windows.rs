@@ -1448,6 +1448,8 @@ pub fn onboarding_is_open(cx: &App) -> bool {
 }
 
 fn restore_after_settings(cx: &mut App) {
+    // A Shortcuts row may have been recording when the window went away.
+    crate::hotkeys::resume(cx);
     // Not while recording: the main window is deliberately hidden then, and
     // the session observer brings it back when the recording ends.
     if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
