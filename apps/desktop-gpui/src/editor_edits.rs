@@ -1976,6 +1976,17 @@ pub fn generate_zoom_segments_for_timeline(
     timeline: &TimelineConfiguration,
     zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
+    let ordered_clicks: Vec<_> = clicks_by_clip
+        .iter()
+        .map(|clicks| {
+            let mut ordered: Vec<_> = clicks
+                .iter()
+                .filter(|click| click.time_ms.is_finite())
+                .collect();
+            ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+            ordered
+        })
+        .collect();
     let holds = timeline.hold_windows();
     let offsets = crate::editor_timeline::clip_timeline_offsets(timeline);
     let mut mapped = Vec::new();
@@ -1988,17 +1999,15 @@ pub fn generate_zoom_segments_for_timeline(
         {
             continue;
         }
-        let Some(clicks) = clicks_by_clip.get(segment.recording_clip as usize) else {
+        let Some(clicks) = ordered_clicks.get(segment.recording_clip as usize) else {
             continue;
         };
-        for click in clicks {
+        let start = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.start);
+        let end = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.end);
+        for click in &clicks[start..end] {
             let source_time = click.time_ms / 1000.0;
-            if !source_time.is_finite() || source_time < segment.start || source_time >= segment.end
-            {
-                continue;
-            }
             let effective = offset + (source_time - segment.start) / segment.timescale;
-            let mut click = click.clone();
+            let mut click = (**click).clone();
             click.time_ms = effective_to_output(&holds, effective) * 1000.0;
             mapped.push(click);
         }
@@ -3299,9 +3308,11 @@ mod tests {
         }));
         let zooms = generate_zoom_segments_for_timeline(
             &[vec![
-                click(2000.0),
+                click(f64::NAN),
                 click(26000.0),
+                click(2000.0),
                 click(29000.0),
+                click(f64::INFINITY),
                 click(30000.0),
             ]],
             project.timeline.as_ref().unwrap(),
