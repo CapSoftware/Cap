@@ -834,6 +834,10 @@ fn h264_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
     (area * frame_rate_multiplier * 0.3) as usize
 }
 
+fn import_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+}
+
 pub(crate) fn transcode_editor_video(
     source_path: &Path,
     output_path: &Path,
@@ -964,10 +968,15 @@ fn transcode_video(
             .ok_or("No video stream found in file")?
             .parameters(),
     )
-    .map_err(|e| format!("Failed to create decoder: {e}"))?
-    .decoder()
-    .video()
     .map_err(|e| format!("Failed to create decoder: {e}"))?;
+    video_decoder.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::Frame,
+        count: import_decode_threads(),
+    });
+    let mut video_decoder = video_decoder
+        .decoder()
+        .video()
+        .map_err(|e| format!("Failed to create decoder: {e}"))?;
     if strict {
         video_decoder.check(ffmpeg::codec::decoder::Check::EXPLODE);
     }
@@ -2081,6 +2090,93 @@ mod tests {
         assert_eq!(converted.height(), 12);
         assert_eq!(converted.pts(), Some(819));
         assert_ne!(converted.data(0).as_ptr(), original.data(0).as_ptr());
+    }
+
+    fn count_video_packets(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count()
+    }
+
+    #[test]
+    fn a_completed_conversion_keeps_every_source_frame_and_the_audio() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("complete-conversion");
+        let source = root.join("source.mp4");
+        std::fs::write(
+            &source,
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        let audio = root.join("audio.ogg");
+
+        let (fps, sample_rate) =
+            transcode_video(&source, &output, Some(&audio), &root, &|_| {}, None).unwrap();
+
+        assert_eq!(fps, 25);
+        assert!(sample_rate.is_some());
+        assert_eq!(count_video_packets(&source), 25);
+        assert_eq!(count_video_packets(&output), 25);
+        assert!(std::fs::metadata(&audio).unwrap().len() > 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: transcodes the videos named by CAP_IMPORT_BENCH_SOURCES"]
+    fn benchmark_video_import() {
+        ffmpeg::init().unwrap();
+        let sources = std::env::var("CAP_IMPORT_BENCH_SOURCES")
+            .expect("CAP_IMPORT_BENCH_SOURCES must list the videos to import");
+        let runs = std::env::var("CAP_IMPORT_BENCH_RUNS")
+            .ok()
+            .and_then(|runs| runs.parse::<usize>().ok())
+            .unwrap_or(3)
+            .max(1);
+
+        println!("| source | duration | median import | slowest | realtime |");
+        println!("| --- | ---: | ---: | ---: | ---: |");
+        for source in sources.split(',').map(PathBuf::from) {
+            let duration = media_duration(&source)
+                .expect("benchmark source has a duration")
+                .as_secs_f64();
+            let mut seconds = (0..runs)
+                .map(|_| {
+                    let root = temp_dir("bench");
+                    std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+                    let started = std::time::Instant::now();
+                    transcode_video(
+                        &source,
+                        &root.join("display.mp4"),
+                        Some(&root.join("audio.ogg")),
+                        &root,
+                        &|_| {},
+                        None,
+                    )
+                    .unwrap();
+                    let elapsed = started.elapsed().as_secs_f64();
+                    std::fs::remove_dir_all(root).unwrap();
+                    elapsed
+                })
+                .collect::<Vec<_>>();
+            seconds.sort_by(f64::total_cmp);
+            let median = seconds[seconds.len() / 2];
+            println!(
+                "| {} | {duration:.1} s | {median:.2} s | {:.2} s | {:.2}x |",
+                source.file_name().unwrap().to_string_lossy(),
+                seconds[seconds.len() - 1],
+                duration / median,
+            );
+        }
     }
 }
 
