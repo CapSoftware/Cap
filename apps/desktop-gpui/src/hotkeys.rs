@@ -824,7 +824,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             })
             .await;
         if !confirm {
-            cx.update(|cx| start_now(main, target, cx));
+            cx.update(|cx| start_now(main, mode, target, cx));
             return;
         }
         // `MicrophoneFeed::list().contains_key(name)` -- the exact
@@ -842,7 +842,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             None => false,
         };
         if available {
-            cx.update(|cx| start_now(main, target, cx));
+            cx.update(|cx| start_now(main, mode, target, cx));
             return;
         }
         // The Tauri dialog, word for word
@@ -871,7 +871,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
         // `receiver.await.unwrap_or(false)`: a dismissed sheet records
         // nothing.
         if receiver.await == Ok(0) {
-            cx.update(|cx| start_now(main, target, cx));
+            cx.update(|cx| start_now(main, mode, target, cx));
         }
     })
     .detach();
@@ -915,9 +915,16 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
 
 fn start_now(
     main: gpui::WindowHandle<crate::main_window::MainWindow>,
+    mode: Mode,
     target: ScreenCaptureTarget,
     cx: &mut App,
 ) {
+    // The start waited on the target lookup (and maybe the microphone
+    // prompt); another Start or Cycle shortcut can change the mode meanwhile,
+    // and the start path reads the window's mode.
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        app_windows::set_recording_mode(mode, cx);
+    }
     main.update(cx, |view, window, cx| {
         view.start_recording_with_target(target, Vec::new(), window, cx)
     })
