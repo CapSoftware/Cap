@@ -55,6 +55,7 @@ services:
       context: ./apps/media-server
       dockerfile: Dockerfile.standalone
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       S3_INTERNAL_ENDPOINT: http://minio:3902
       MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000

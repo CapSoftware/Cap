@@ -12,9 +12,9 @@ import {
 	withMediaOperation,
 } from "./media-operations";
 import { materializeMedia } from "./media-transfer";
+import { fetchAllowed, resolveAllowedUrl } from "./url-policy";
 
 const PROBE_TIMEOUT_MS = 30_000;
-const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 export { canAcceptNewProbeOperation, getActiveProbeOperationCount };
 
@@ -48,7 +48,7 @@ function isHttpUrl(path: string): boolean {
 
 async function hasHttpNetworkFailure(path: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(path, {
+		const response = await fetchAllowed(path, {
 			headers: { Range: "bytes=0-0" },
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -126,8 +126,9 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 		throw new Error("Server is busy, please try again later");
 	}
 
+	const allowedUrl = await resolveAllowedUrl(videoUrl);
 	return await withMediaOperation("probe", () =>
-		withTimeout(probeMedia(videoUrl), PROBE_TIMEOUT_MS),
+		withTimeout(probeMedia(allowedUrl), PROBE_TIMEOUT_MS),
 	);
 }
 
@@ -143,7 +144,7 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(videoUrl, {
+		const response = await fetchAllowed(videoUrl, {
 			method: "HEAD",
 			signal: AbortSignal.timeout(10_000),
 		});

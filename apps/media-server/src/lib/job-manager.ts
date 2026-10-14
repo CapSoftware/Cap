@@ -335,6 +335,10 @@ export function beginDraining() {
 	draining = true;
 }
 
+export function endDraining() {
+	draining = false;
+}
+
 export function isDraining(): boolean {
 	return draining;
 }

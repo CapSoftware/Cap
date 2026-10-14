@@ -42,7 +42,7 @@ health.get("/", (c) => {
 				processUptimeSeconds: Math.round(process.uptime()),
 			},
 		},
-		draining ? 503 : 200,
+		200,
 	);
 });
 

@@ -3,9 +3,12 @@ import {
 	abortAllJobs,
 	beginDraining,
 	getActiveVideoProcessCount,
-	waitForActiveVideoProcesses,
 } from "./lib/job-manager";
-import { cancelAllMediaOperations } from "./lib/media-operations";
+import {
+	cancelAllMediaOperations,
+	getActiveAudioOperationCount,
+	getActiveProbeOperationCount,
+} from "./lib/media-operations";
 import { cleanupMediaTransferCache } from "./lib/media-transfer";
 import { assertSecureStartup } from "./lib/startup-checks";
 
@@ -26,12 +29,20 @@ const shutdown = async () => {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	beginDraining();
-	const active = getActiveVideoProcessCount();
-	if (active > 0 && shutdownGraceMs > 0) {
+	const active = () =>
+		getActiveVideoProcessCount() +
+		getActiveAudioOperationCount() +
+		getActiveProbeOperationCount();
+	const inflight = active();
+	if (inflight > 0 && shutdownGraceMs > 0) {
 		console.log(
-			`[media-server] Draining: waiting up to ${Math.round(shutdownGraceMs / 1000)}s for ${active} active video job(s); new work is rejected with SERVER_BUSY`,
+			`[media-server] Draining: waiting up to ${Math.round(shutdownGraceMs / 1000)}s for ${inflight} active media operation(s); new work is rejected with SERVER_BUSY`,
 		);
-		const remaining = await waitForActiveVideoProcesses(shutdownGraceMs);
+		const deadline = Date.now() + shutdownGraceMs;
+		while (active() > 0 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+		const remaining = active();
 		console.log(
 			remaining === 0
 				? "[media-server] All active jobs finished"

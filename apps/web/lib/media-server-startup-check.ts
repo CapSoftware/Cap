@@ -64,10 +64,23 @@ export async function checkMediaServerUrl(
 	}
 }
 
+const MEDIA_SERVER_CHECK_ATTEMPTS = 5;
+const MEDIA_SERVER_CHECK_RETRY_MS = 2_000;
+
 export async function logMediaServerUrlCheck(
 	raw: string | undefined = process.env.MEDIA_SERVER_URL,
 ) {
-	const result = await checkMediaServerUrl(raw);
+	let result = await checkMediaServerUrl(raw);
+	for (
+		let attempt = 1;
+		result.status === "unreachable" && attempt < MEDIA_SERVER_CHECK_ATTEMPTS;
+		attempt++
+	) {
+		await new Promise((resolve) =>
+			setTimeout(resolve, MEDIA_SERVER_CHECK_RETRY_MS),
+		);
+		result = await checkMediaServerUrl(raw);
+	}
 	switch (result.status) {
 		case "unset":
 			console.warn(

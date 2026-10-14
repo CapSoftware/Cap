@@ -40,10 +40,21 @@ export function isPrivateAddress(address: string): boolean {
 	return true;
 }
 
-function hostOf(value: string | undefined): string | null {
+function defaultPort(protocol: string): string {
+	if (protocol === "http:") return "80";
+	if (protocol === "https:") return "443";
+	return "";
+}
+
+function originOf(value: string | undefined): TrustedOrigin | null {
 	if (!value?.trim()) return null;
 	try {
-		return new URL(value.trim()).hostname.toLowerCase();
+		const url = new URL(value.trim());
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		return {
+			host: normalizeHost(url.hostname),
+			port: url.port || defaultPort(url.protocol),
+		};
 	} catch {
 		return null;
 	}
@@ -56,9 +67,12 @@ function normalizeHost(host: string): string {
 		.replace(/^\[|\]$/g, "");
 }
 
+export type TrustedOrigin = { host: string; port: string };
+
 export type UrlPolicy = {
 	strictHosts: boolean;
 	allowedHosts: string[];
+	trustedOrigins: TrustedOrigin[];
 	allowPrivate: boolean;
 };
 
@@ -69,18 +83,25 @@ export function getUrlPolicy(
 		.split(",")
 		.map(normalizeHost)
 		.filter(Boolean);
-	const implicit = [
+	const trustedOrigins = [
 		env.S3_INTERNAL_ENDPOINT,
 		env.S3_PUBLIC_ENDPOINT,
 		env.CAP_AWS_ENDPOINT,
 		env.MEDIA_SERVER_WEBHOOK_URL,
 		env.WEB_URL,
 	]
-		.map(hostOf)
-		.filter((host): host is string => Boolean(host));
+		.map(originOf)
+		.filter((origin): origin is TrustedOrigin => Boolean(origin));
+	const seen = new Set<string>();
 	return {
 		strictHosts: explicit.length > 0,
-		allowedHosts: [...new Set([...explicit, ...implicit])],
+		allowedHosts: [...new Set(explicit)],
+		trustedOrigins: trustedOrigins.filter((origin) => {
+			const key = `${origin.host}\0${origin.port}`;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		}),
 		allowPrivate: env.MEDIA_SERVER_ALLOW_PRIVATE_URLS === "true",
 	};
 }
@@ -101,6 +122,17 @@ export class BlockedUrlError extends Error {
 		super(`URL not allowed (${reason}): ${redactUrl(url)}`);
 		this.name = "BlockedUrlError";
 	}
+}
+
+export function blockedUrlPayload(
+	error: unknown,
+): { error: string; code: "URL_NOT_ALLOWED"; details: string } | null {
+	if (!(error instanceof BlockedUrlError)) return null;
+	return {
+		error: "URL not allowed",
+		code: "URL_NOT_ALLOWED",
+		details: error.message,
+	};
 }
 
 function redactUrl(value: string): string {
@@ -130,21 +162,24 @@ export async function assertUrlAllowed(
 	} catch {
 		throw new BlockedUrlError(value, "invalid URL");
 	}
-	if (url.protocol === "file:" && policy.allowPrivate) return;
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
 		throw new BlockedUrlError(value, `scheme ${url.protocol} is not allowed`);
 	}
 	const host = normalizeHost(url.hostname);
+	const port = url.port || defaultPort(url.protocol);
 	const explicitlyAllowed = policy.allowedHosts.some((pattern) =>
 		hostMatches(host, pattern),
 	);
-	if (policy.strictHosts && !explicitlyAllowed) {
+	const trustedOrigin = policy.trustedOrigins.some(
+		(origin) => origin.host === host && origin.port === port,
+	);
+	if (explicitlyAllowed || trustedOrigin || policy.allowPrivate) return;
+	if (policy.strictHosts) {
 		throw new BlockedUrlError(
 			value,
 			`host ${host} is not in MEDIA_SERVER_ALLOWED_HOSTS`,
 		);
 	}
-	if (explicitlyAllowed || policy.allowPrivate) return;
 
 	let addresses: string[];
 	try {
@@ -180,12 +215,73 @@ export function collectUrls(input: unknown, key = ""): string[] {
 	return [];
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 3;
+
+type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+
+async function redirectTarget(
+	response: Response,
+	current: string,
+): Promise<string | null> {
+	if (!REDIRECT_STATUSES.has(response.status)) return null;
+	const location = response.headers.get("location");
+	if (!location) return null;
+	return new URL(location, current).toString();
+}
+
+export async function resolveAllowedUrl(
+	input: string,
+	policy: UrlPolicy = getUrlPolicy(),
+	resolve: Resolver = defaultResolver,
+	fetcher: Fetcher = fetch,
+): Promise<string> {
+	let current = input;
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		await assertUrlAllowed(current, policy, resolve);
+		let response = await fetcher(current, {
+			method: "HEAD",
+			redirect: "manual",
+		});
+		if (response.status === 405 || response.status === 501) {
+			await response.body?.cancel();
+			response = await fetcher(current, { method: "GET", redirect: "manual" });
+		}
+		const next = await redirectTarget(response, current);
+		await response.body?.cancel();
+		if (!next) return current;
+		if (hop === MAX_REDIRECTS) {
+			throw new BlockedUrlError(current, "too many redirects");
+		}
+		current = next;
+	}
+	throw new BlockedUrlError(current, "too many redirects");
+}
+
+export async function fetchAllowed(
+	input: string,
+	init: RequestInit = {},
+	policy: UrlPolicy = getUrlPolicy(),
+	resolve: Resolver = defaultResolver,
+	fetcher: Fetcher = fetch,
+): Promise<Response> {
+	let current = input;
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		await assertUrlAllowed(current, policy, resolve);
+		const response = await fetcher(current, { ...init, redirect: "manual" });
+		const next = await redirectTarget(response, current);
+		if (!next) return response;
+		await response.body?.cancel();
+		if (hop === MAX_REDIRECTS) {
+			throw new BlockedUrlError(current, "too many redirects");
+		}
+		current = next;
+	}
+	throw new BlockedUrlError(current, "too many redirects");
+}
+
 export const urlPolicyMiddleware: MiddlewareHandler = async (c, next) => {
-	if (
-		c.req.method !== "POST" ||
-		!c.req.header("content-type")?.includes("application/json") ||
-		!validateMediaServerSecret(c)
-	) {
+	if (c.req.method !== "POST" || !validateMediaServerSecret(c)) {
 		return next();
 	}
 	let body: unknown;

@@ -13,6 +13,7 @@ import {
 import { materializeStreamingInput } from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";
+import { resolveAllowedUrl } from "./url-policy";
 
 export interface AudioExtractionOptions {
 	format?: "mp3";
@@ -168,7 +169,10 @@ async function prepareAudioProbeInput(
 	abortSignal: AbortSignal,
 ): Promise<{ inputPath: string; cleanup: () => Promise<void> }> {
 	if (!isRemoteStreamingUrl(videoUrl)) {
-		return { inputPath: videoUrl, cleanup: async () => {} };
+		const inputPath = /^https?:/i.test(videoUrl)
+			? await resolveAllowedUrl(videoUrl)
+			: videoUrl;
+		return { inputPath, cleanup: async () => {} };
 	}
 
 	await ensureTempDir();

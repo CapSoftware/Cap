@@ -33,6 +33,7 @@ import {
 	getTempDir,
 	type TempFileHandle,
 } from "./temp-files";
+import { assertUrlAllowed, fetchAllowed } from "./url-policy";
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
@@ -286,7 +287,7 @@ export async function materializeHlsPlaylist(
 	const cached = cache.get(playlistUrl);
 	if (cached) return cached;
 
-	const response = await fetch(playlistUrl, {
+	const response = await fetchAllowed(playlistUrl, {
 		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
@@ -312,9 +313,16 @@ export async function materializeHlsPlaylist(
 
 			if (!trimmed.startsWith("#")) {
 				const resolved = resolveResourceUrl(trimmed, baseUrl, query);
-				return isHlsUrl(resolved)
-					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
-					: resolved;
+				if (isHlsUrl(resolved)) {
+					return await materializeHlsPlaylist(
+						resolved,
+						dirPath,
+						cache,
+						abortSignal,
+					);
+				}
+				await assertUrlAllowed(resolved);
+				return resolved;
 			}
 
 			if (!line.includes('URI="')) return line;
@@ -330,6 +338,7 @@ export async function materializeHlsPlaylist(
 				const replacement = isHlsUrl(resolved)
 					? await materializeHlsPlaylist(resolved, dirPath, cache, abortSignal)
 					: resolved;
+				if (!isHlsUrl(resolved)) await assertUrlAllowed(resolved);
 
 				rewritten = rewritten.replace(
 					`URI="${original}"`,
@@ -350,7 +359,7 @@ export async function materializeMpdManifest(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<string> {
-	const response = await fetch(manifestUrl, {
+	const response = await fetchAllowed(manifestUrl, {
 		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
@@ -365,6 +374,7 @@ export async function materializeMpdManifest(
 	const baseUrl = new URL(".", parsedUrl).toString();
 	const query = parsedUrl.search;
 	const filePath = join(dirPath, `${randomUUID()}.mpd`);
+	const resolvedUrls: string[] = [];
 	const rewrittenElements = content.replace(
 		/<(BaseURL|Location)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
 		(_, tag: string, attributes: string, resource: string) => {
@@ -373,6 +383,7 @@ export async function materializeMpdManifest(
 				baseUrl,
 				query,
 			);
+			resolvedUrls.push(resolved);
 			return `<${tag}${attributes}>${escapeXmlAttribute(resolved)}</${tag}>`;
 		},
 	);
@@ -385,9 +396,11 @@ export async function materializeMpdManifest(
 				baseUrl,
 				query,
 			);
+			resolvedUrls.push(resolved);
 			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
+	await Promise.all(resolvedUrls.map((url) => assertUrlAllowed(url)));
 
 	await writeFile(filePath, rewritten);
 	return filePath;
@@ -729,7 +742,7 @@ export async function materializeMpdAsHlsPlaylist(
 	dirPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<string> {
-	const response = await fetch(manifestUrl, {
+	const response = await fetchAllowed(manifestUrl, {
 		signal: getFetchSignal(DOWNLOAD_TIMEOUT_MS, abortSignal),
 	});
 
@@ -821,6 +834,10 @@ export async function materializeMpdAsHlsPlaylist(
 				resourceBaseUrl,
 				query,
 				presentationDuration,
+			);
+			await assertUrlAllowed(initUrl);
+			await Promise.all(
+				segments.map((segment) => assertUrlAllowed(segment.url)),
 			);
 			const path = await writeDashRepresentationPlaylist(
 				dirPath,

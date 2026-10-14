@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
 	assertUrlAllowed,
 	collectUrls,
+	fetchAllowed,
 	getUrlPolicy,
 	isPrivateAddress,
+	resolveAllowedUrl,
 } from "../../lib/url-policy";
 
 const resolveTo =
@@ -78,6 +80,37 @@ describe("assertUrlAllowed", () => {
 		).resolves.toBeUndefined();
 	});
 
+	test("does not treat a trusted host as allowed on every port", async () => {
+		const policy = getUrlPolicy({
+			S3_PUBLIC_ENDPOINT: "http://localhost:9000",
+			MEDIA_SERVER_WEBHOOK_URL: "http://cap-web:3000",
+		});
+		await expect(
+			assertUrlAllowed(
+				"http://minio:445/cap/v.mp4",
+				policy,
+				resolveTo("10.0.0.2"),
+			),
+		).rejects.toThrow("private address");
+		await expect(
+			assertUrlAllowed(
+				"http://localhost:6379/",
+				policy,
+				resolveTo("127.0.0.1"),
+			),
+		).rejects.toThrow("private address");
+		await expect(
+			assertUrlAllowed("http://localhost:9000/bucket/v.mp4", policy),
+		).resolves.toBeUndefined();
+	});
+
+	test("blocks file URLs even when private URLs are allowed", async () => {
+		const policy = getUrlPolicy({ MEDIA_SERVER_ALLOW_PRIVATE_URLS: "true" });
+		await expect(
+			assertUrlAllowed("file:///etc/passwd", policy),
+		).rejects.toThrow("scheme");
+	});
+
 	test("enforces MEDIA_SERVER_ALLOWED_HOSTS when set", async () => {
 		const policy = getUrlPolicy({
 			MEDIA_SERVER_ALLOWED_HOSTS: "*.r2.cloudflarestorage.com",
@@ -100,6 +133,38 @@ describe("assertUrlAllowed", () => {
 				resolveTo("1.1.1.1"),
 			),
 		).rejects.toThrow("MEDIA_SERVER_ALLOWED_HOSTS");
+	});
+});
+
+describe("redirect checks", () => {
+	test("does not follow a redirect to a private address", async () => {
+		const policy = getUrlPolicy({});
+		const fetcher = async (input: string) => {
+			if (input === "https://cdn.example/v.mp4") {
+				return new Response(null, {
+					status: 302,
+					headers: { location: "http://169.254.169.254/latest/meta-data/" },
+				});
+			}
+			return new Response("ok");
+		};
+		await expect(
+			fetchAllowed(
+				"https://cdn.example/v.mp4",
+				{},
+				policy,
+				resolveTo("93.184.216.34"),
+				fetcher,
+			),
+		).rejects.toThrow("private address");
+		await expect(
+			resolveAllowedUrl(
+				"https://cdn.example/v.mp4",
+				policy,
+				resolveTo("93.184.216.34"),
+				fetcher,
+			),
+		).rejects.toThrow("private address");
 	});
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import app from "../../app";
+import { beginDraining, endDraining } from "../../lib/job-manager";
 
 describe("GET /health", () => {
 	test("returns status ok with media engine info", async () => {
@@ -21,5 +22,17 @@ describe("GET /health", () => {
 		expect(typeof data.system.memoryUsagePercent).toBe("number");
 		expect(typeof data.system.uptimeSeconds).toBe("number");
 		expect(typeof data.system.processUptimeSeconds).toBe("number");
+	});
+
+	test("stays HTTP 200 while draining so the healthcheck can finish the drain", async () => {
+		beginDraining();
+		try {
+			const response = await app.fetch(new Request("http://localhost/health"));
+			expect(response.status).toBe(200);
+			const data = await response.json();
+			expect(data.status).toBe("draining");
+		} finally {
+			endDraining();
+		}
 	});
 });
