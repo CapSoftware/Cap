@@ -1540,6 +1540,128 @@ mod gpu_tests {
     }
 
     #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layer_follows_style_and_output_size_changes() {
+        let base_size = XY::new(512, 288);
+        let constants = constants(base_size);
+        let segments = spoken_segments(&["Ship it today"]);
+        let frames = frames(base_size);
+        let render = |layer: &mut CaptionsLayer, settings: &CaptionSettings, size: XY<u32>| {
+            let mut uniforms = uniforms(&constants, settings.clone(), &segments, size);
+            uniforms.frame_number = 45;
+            layer.prepare(&uniforms, &frames, size, &constants);
+            assert!(layer.has_caption);
+            render_pixels(&constants, layer, size)
+        };
+        let plain = CaptionSettings {
+            enabled: true,
+            size: 60,
+            ..Default::default()
+        };
+        let color_highlight = CaptionSettings {
+            active_word_highlight: true,
+            highlight_color: "#FF0000".to_string(),
+            ..plain.clone()
+        };
+        let cases = [
+            (
+                "font size",
+                plain.clone(),
+                CaptionSettings {
+                    size: 80,
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "font family",
+                plain.clone(),
+                CaptionSettings {
+                    font: "System Monospace".to_string(),
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "font weight",
+                plain.clone(),
+                CaptionSettings {
+                    font_weight: 400,
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "text color",
+                plain.clone(),
+                CaptionSettings {
+                    color: "#FF0000".to_string(),
+                    ..plain.clone()
+                },
+                base_size,
+            ),
+            (
+                "output height",
+                plain.clone(),
+                plain.clone(),
+                XY::new(512, 216),
+            ),
+            (
+                "output width",
+                plain.clone(),
+                plain.clone(),
+                XY::new(384, 288),
+            ),
+            (
+                "plain to color highlight",
+                plain.clone(),
+                color_highlight.clone(),
+                base_size,
+            ),
+            (
+                "color highlight to plain",
+                color_highlight.clone(),
+                plain.clone(),
+                base_size,
+            ),
+        ];
+
+        for (name, before, after, size) in cases {
+            let expected = render(
+                &mut CaptionsLayer::new(&constants.device, &constants.queue),
+                &after,
+                size,
+            );
+            let previous = render(
+                &mut CaptionsLayer::new(&constants.device, &constants.queue),
+                &before,
+                base_size,
+            );
+            assert!(expected != previous, "{name} edit should change the output");
+
+            let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+            render(&mut reused, &before, base_size);
+            assert!(
+                render(&mut reused, &after, size) == expected,
+                "{name} edit reused a stale layout"
+            );
+        }
+
+        let mut reused = CaptionsLayer::new(&constants.device, &constants.queue);
+        render(&mut reused, &plain, base_size);
+        render(&mut reused, &color_highlight, base_size);
+        let expected = render(
+            &mut CaptionsLayer::new(&constants.device, &constants.queue),
+            &plain,
+            base_size,
+        );
+        assert!(
+            render(&mut reused, &plain, base_size) == expected,
+            "returning to plain text reused the highlighted layout"
+        );
+    }
+
+    #[test]
     #[ignore = "benchmark; requires a working wgpu adapter"]
     fn benchmark_captions_layer_prepare() {
         let size = XY::new(1920, 1080);
