@@ -199,19 +199,22 @@ pub fn reload(cx: &mut App) {
 
 /// Drop every OS registration while the Shortcuts page records a combo, so
 /// pressing an already-bound combo reaches the page instead of firing.
-pub fn pause(cx: &mut App) {
+/// Returns false when the bindings cannot be released: on Linux a recording's
+/// temporary stop key holds the registrations until the recording ends.
+pub fn pause(cx: &mut App) -> bool {
     if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
-        return;
+        return true;
     }
     #[cfg(target_os = "linux")]
     if cx.global::<Hotkeys>().capture_stop.is_some() {
-        return;
+        return false;
     }
     unregister_all(cx);
     let hotkeys = cx.global_mut::<Hotkeys>();
     hotkeys.paused = true;
     hotkeys.release_idle_manager();
     tracing::info!("global hotkeys paused while a shortcut is recorded");
+    true
 }
 
 /// End a [`pause`] and register the store's bindings again. Returns whether

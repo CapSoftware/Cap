@@ -294,6 +294,7 @@ pub(crate) struct PagesState {
     listening: Option<ListeningHotkey>,
     shortcut_saved: Option<SavedShortcut>,
     shortcut_saved_reset: Option<gpui::Task<()>>,
+    shortcut_blocked: Option<&'static str>,
 
     // CLI (cli.tsx). `None` while the status fetch is in flight.
     cli_status: Option<Result<cli_install::CliInstallStatus, String>>,
@@ -425,6 +426,7 @@ impl PagesState {
             listening: None,
             shortcut_saved: None,
             shortcut_saved_reset: None,
+            shortcut_blocked: None,
             cli_status: None,
             cli_installing: false,
             cli_uninstalling: false,
@@ -505,6 +507,7 @@ impl SettingsWindow {
                 self.pages.hotkeys = store::hotkeys_raw();
                 self.pages.shortcut_saved = None;
                 self.pages.shortcut_saved_reset = None;
+                self.pages.shortcut_blocked = None;
             }
             Page::Cli => self.cli_refresh(window, cx),
             Page::Transcription => {
@@ -1200,6 +1203,9 @@ const UNSUPPORTED_KEY: &str =
 
 const RECORDING_HINT: &str = "Press the keys you want to use. Esc cancels, Delete removes it.";
 
+const BLOCKED_WHILE_RECORDING: &str =
+    "Shortcuts can't be changed while this recording holds its stop key. Stop recording first.";
+
 const UNAVAILABLE: &str =
     "Another app or the system already uses this shortcut. Click to choose a different one.";
 
@@ -1310,14 +1316,19 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pages.shortcut_saved = None;
+        self.pages.shortcut_saved_reset = None;
+        if !crate::hotkeys::pause(cx) {
+            self.pages.shortcut_blocked = Some(action);
+            cx.notify();
+            return;
+        }
+        self.pages.shortcut_blocked = None;
         self.pages.listening = Some(ListeningHotkey {
             action,
             modifiers: window.modifiers(),
             error: None,
         });
-        self.pages.shortcut_saved = None;
-        self.pages.shortcut_saved_reset = None;
-        crate::hotkeys::pause(cx);
         // Keys must reach the root's on_key_down, not a focused field.
         self.focus_root(window, cx);
         cx.notify();
@@ -1717,30 +1728,32 @@ impl SettingsWindow {
         let red: Hsla = theme.red_11.into();
         let amber: Hsla = theme.amber_11.into();
 
-        let (detail, detail_color, detail_icon): (String, Hsla, Option<(&str, Hsla)>) =
-            if let Some(listening) = listening {
-                match listening.error {
-                    Some(error) => (error.into(), red, None),
-                    None => (RECORDING_HINT.into(), theme.settings_muted(), None),
-                }
-            } else if unavailable && binding.is_some() {
-                (UNAVAILABLE.into(), amber, None)
-            } else if let (Some(saved), Some(binding)) = (saved, binding.as_ref()) {
-                let mut text = format!(
-                    "Saved. Press {} in any app to {effect}.",
-                    hotkey_inline_text(binding)
-                );
-                if let Some(from) = saved.moved_from {
-                    text.push_str(&format!(" Removed from {}.", shortcut_label(from)));
-                }
-                (
-                    text,
-                    theme.settings_text(),
-                    Some(("icons/circle-check.svg", theme.settings_text())),
-                )
-            } else {
-                (capitalized_sentence(&effect), theme.settings_muted(), None)
-            };
+        let blocked = self.pages.shortcut_blocked == Some(action);
+        let (detail, detail_color, detail_icon): (String, Hsla, Option<(&str, Hsla)>) = if blocked {
+            (BLOCKED_WHILE_RECORDING.into(), red, None)
+        } else if let Some(listening) = listening {
+            match listening.error {
+                Some(error) => (error.into(), red, None),
+                None => (RECORDING_HINT.into(), theme.settings_muted(), None),
+            }
+        } else if unavailable && binding.is_some() {
+            (UNAVAILABLE.into(), amber, None)
+        } else if let (Some(saved), Some(binding)) = (saved, binding.as_ref()) {
+            let mut text = format!(
+                "Saved. Press {} in any app to {effect}.",
+                hotkey_inline_text(binding)
+            );
+            if let Some(from) = saved.moved_from {
+                text.push_str(&format!(" Removed from {}.", shortcut_label(from)));
+            }
+            (
+                text,
+                theme.settings_text(),
+                Some(("icons/circle-check.svg", theme.settings_text())),
+            )
+        } else {
+            (capitalized_sentence(&effect), theme.settings_muted(), None)
+        };
 
         let group: SharedString = format!("shortcut-row-{action}").into();
 
