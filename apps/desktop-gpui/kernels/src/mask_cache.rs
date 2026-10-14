@@ -38,6 +38,42 @@ pub struct MaskEntry<T> {
     pub value: Option<T>,
 }
 
+pub fn should_cancel_mask_build(previous: &[MaskRequest], requests: &[MaskRequest]) -> bool {
+    let Some(first) = previous.first() else {
+        return true;
+    };
+    if previous
+        .iter()
+        .chain(requests)
+        .any(|request| request.frame != first.frame)
+    {
+        return true;
+    }
+    let mut used = vec![false; requests.len()];
+    previous.iter().any(|request| {
+        let duplicated = previous
+            .iter()
+            .filter(|other| other.id == request.id)
+            .count()
+            > 1
+            || requests
+                .iter()
+                .filter(|other| other.id == request.id)
+                .count()
+                > 1;
+        let matched = requests.iter().enumerate().position(|(index, next)| {
+            !used[index] && next.id == request.id && (!duplicated || next == request)
+        });
+        match matched {
+            Some(index) => {
+                used[index] = true;
+                false
+            }
+            None => true,
+        }
+    })
+}
+
 pub fn plan_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> Vec<Option<usize>> {
     let mut used = vec![false; previous.len()];
     requests
@@ -53,10 +89,7 @@ pub fn plan_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> Vec
         .collect()
 }
 
-pub fn retain_masks<T: Clone>(
-    previous: &[MaskEntry<T>],
-    requests: &[MaskRequest],
-) -> Vec<MaskEntry<T>> {
+fn match_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> Vec<Option<usize>> {
     let mut matches = plan_masks(previous, requests);
     let mut used = vec![false; previous.len()];
     for index in matches.iter().flatten() {
@@ -74,9 +107,35 @@ pub fn retain_masks<T: Clone>(
         }
     }
     matches
+}
+
+pub fn retain_masks<T: Clone>(
+    previous: &[MaskEntry<T>],
+    requests: &[MaskRequest],
+) -> Vec<MaskEntry<T>> {
+    match_masks(previous, requests)
         .into_iter()
         .flatten()
         .map(|index| previous[index].clone())
+        .collect()
+}
+
+pub fn finish_mask_build<T: Clone>(
+    current: &[MaskEntry<T>],
+    completed: Vec<MaskEntry<T>>,
+) -> Vec<MaskEntry<T>> {
+    let requests: Vec<_> = completed
+        .iter()
+        .map(|entry| entry.request.clone())
+        .collect();
+    let matches = match_masks(current, &requests);
+    completed
+        .into_iter()
+        .zip(matches)
+        .map(|(entry, matched)| match matched {
+            Some(index) if current[index].request == entry.request => current[index].clone(),
+            _ => entry,
+        })
         .collect()
 }
 
@@ -162,6 +221,123 @@ mod tests {
 
     fn cached(requests: &[MaskRequest]) -> Vec<MaskEntry<Arc<String>>> {
         update_masks(&[], requests, |request| Some(Arc::new(request.id.clone())))
+    }
+
+    #[test]
+    fn mask_build_keeps_moves_styles_additions_and_reorders() {
+        let original = requests(3);
+        for change in 0..5 {
+            let mut next = original.clone();
+            match change {
+                0 => next[0].region.0 += 1,
+                1 => next[0].level = 20_f64.to_bits(),
+                2 => next[0].pixelate = true,
+                3 => next.push(requests(4).pop().unwrap()),
+                _ => next.reverse(),
+            }
+            assert!(!should_cancel_mask_build(&original, &next));
+        }
+        assert!(!should_cancel_mask_build(&original, &original));
+    }
+
+    #[test]
+    fn mask_build_cancels_removals_even_when_another_mask_is_added() {
+        let original = requests(3);
+        assert!(should_cancel_mask_build(&original, &[]));
+        assert!(should_cancel_mask_build(&original, &original[1..]));
+        let mut next = original[1..].to_vec();
+        next.push(requests(4).pop().unwrap());
+        assert!(should_cancel_mask_build(&original, &next));
+    }
+
+    #[test]
+    fn mask_build_cancels_frame_and_layout_changes() {
+        let original = requests(2);
+        for change in 0..5 {
+            let mut next = original.clone();
+            for request in &mut next {
+                match change {
+                    0 => request.frame.revision += 1,
+                    1 => request.frame.size.0 += 1,
+                    2 => request.frame.content[0] = 0.25_f64.to_bits(),
+                    3 => request.frame.padding = 8_f64.to_bits(),
+                    _ => request.frame.crop = Some([0, 0, 32, 24]),
+                }
+            }
+            assert!(should_cancel_mask_build(&original, &next));
+        }
+    }
+
+    #[test]
+    fn mask_build_cancels_ambiguous_duplicate_changes_and_removals() {
+        let mut original = requests(2);
+        original[1].id = original[0].id.clone();
+        let mut next = original.clone();
+        next.reverse();
+        assert!(!should_cancel_mask_build(&original, &next));
+        next[0].region.0 += 1;
+        assert!(should_cancel_mask_build(&original, &next));
+        assert!(should_cancel_mask_build(&original, &original[..1]));
+        next[0] = requests(3).pop().unwrap();
+        assert!(should_cancel_mask_build(&original, &next));
+        let identical = vec![original[0].clone(); 2];
+        assert!(!should_cancel_mask_build(&identical, &identical));
+        assert!(should_cancel_mask_build(&identical, &identical[..1]));
+    }
+
+    #[test]
+    fn mask_build_checks_removal_against_the_latest_coalesced_request() {
+        let initial = requests(1);
+        let added = requests(2);
+        assert!(!should_cancel_mask_build(&initial, &added));
+        assert!(should_cancel_mask_build(&added, &initial));
+        assert!(!should_cancel_mask_build(&initial, &added));
+    }
+
+    #[test]
+    fn mask_build_cancels_inconsistent_frames_and_empty_builds() {
+        let original = requests(2);
+        let mut inconsistent = original.clone();
+        inconsistent[1].frame.revision += 1;
+        assert!(should_cancel_mask_build(&original, &inconsistent));
+        assert!(should_cancel_mask_build(&inconsistent, &original));
+        assert!(should_cancel_mask_build(&[], &original));
+    }
+
+    #[test]
+    fn completed_mask_build_matches_current_duplicates_before_retiring_images() {
+        let mut requests = requests(2);
+        requests[1].id = requests[0].id.clone();
+        let snapshot = cached(&requests);
+        let mut current = cached(&requests);
+        current.reverse();
+        let mut built_requests = requests.clone();
+        built_requests[0].region.0 += 1;
+        let completed = update_masks(&snapshot, &built_requests, |request| {
+            Some(Arc::new(request.id.clone()))
+        });
+        let changed = completed[0].value.clone().unwrap();
+        let installed = finish_mask_build(&current, completed);
+        assert!(Arc::ptr_eq(installed[0].value.as_ref().unwrap(), &changed));
+        assert!(Arc::ptr_eq(
+            installed[1].value.as_ref().unwrap(),
+            current[0].value.as_ref().unwrap()
+        ));
+        let retired = retired_mask_values(&current, &installed, Arc::as_ptr);
+        assert_eq!(retired.len(), 1);
+        assert!(Arc::ptr_eq(retired[0], current[1].value.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn completed_mask_build_does_not_retire_shared_current_images() {
+        let requests = requests(2);
+        let image = Arc::new("shared".to_string());
+        let current = update_masks(&[], &requests, |_| Some(image.clone()));
+        let mut built_requests = requests.clone();
+        built_requests[0].region.0 += 1;
+        let installed = finish_mask_build(&current, cached(&built_requests));
+        assert!(retired_mask_values(&current, &installed, Arc::as_ptr).is_empty());
+        assert!(Arc::ptr_eq(installed[1].value.as_ref().unwrap(), &image));
     }
 
     #[test]

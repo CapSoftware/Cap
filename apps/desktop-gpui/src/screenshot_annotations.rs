@@ -29,7 +29,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use cap_gpui_kernels::mask_cache::{
-    MaskEntry, MaskFrame, MaskRequest, retain_masks, retired_mask_values, update_masks,
+    MaskEntry, MaskFrame, MaskRequest, finish_mask_build, retain_masks, retired_mask_values,
+    should_cancel_mask_build, update_masks,
 };
 use cap_project::{Annotation, AnnotationType, AspectRatio, Crop, MaskType};
 use gpui::{
@@ -2276,8 +2277,18 @@ impl ScreenshotEditorWindow {
         if self.annotation_state.mask_pending.as_ref() == Some(&requests) {
             return;
         }
-        self.annotation_state.mask_task = None;
-        self.annotation_state.mask_pending = None;
+        let keep_build = self
+            .annotation_state
+            .mask_pending
+            .as_ref()
+            .is_some_and(|pending| !should_cancel_mask_build(pending, &requests));
+        if keep_build {
+            // Cancelling on each drag tick can starve installation even when filtering is fast.
+            self.annotation_state.mask_pending = Some(requests.clone());
+        } else {
+            self.annotation_state.mask_task = None;
+            self.annotation_state.mask_pending = None;
+        }
 
         let retained = retain_masks(&self.annotation_state.masks, &requests);
         if !retained.iter().map(|entry| &entry.request).eq(self
@@ -2289,12 +2300,13 @@ impl ScreenshotEditorWindow {
             self.install_mask_overlays(retained, window);
             cx.notify();
         }
-        if self
-            .annotation_state
-            .masks
-            .iter()
-            .map(|entry| &entry.request)
-            .eq(requests.iter())
+        if keep_build
+            || self
+                .annotation_state
+                .masks
+                .iter()
+                .map(|entry| &entry.request)
+                .eq(requests.iter())
         {
             return;
         }
@@ -2310,6 +2322,7 @@ impl ScreenshotEditorWindow {
                 .spawn(async move { build_mask_overlays(&rgba, &previous, &requests) })
                 .await;
             this.update_in(cx, |this, window, cx| {
+                let overlays = finish_mask_build(&this.annotation_state.masks, overlays);
                 this.install_mask_overlays(overlays, window);
                 this.annotation_state.mask_pending = None;
                 cx.notify();
@@ -4626,6 +4639,72 @@ mod tests {
                 .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn coalesced_mask_build_installs_progress_then_catches_up_without_retiring_reused_images() {
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = shape(AnnotationType::Mask, 0., 0., 16., 16.);
+        let b = shape(AnnotationType::Mask, 32., 24., 16., 16.);
+        let mut moving = shape(AnnotationType::Mask, 40., 0., 16., 16.);
+        moving.id = "moving".into();
+        let original: Vec<_> = [a, b, moving]
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect();
+        let rgba = vec![128; 64 * 48 * 4];
+        let previous = build_mask_overlays(&rgba, &[], &original);
+        let mut started = original.clone();
+        started[2].region.0 += 1;
+        let mut latest = started.clone();
+        for _ in 0..8 {
+            let mut next = latest.clone();
+            next[2].region.0 -= 1;
+            assert!(!should_cancel_mask_build(&latest, &next));
+            latest = next;
+        }
+        latest.reverse();
+        assert!(!should_cancel_mask_build(&started, &latest));
+        let current = retain_masks(&previous, &latest);
+        let completed = build_mask_overlays(&rgba, &previous, &started);
+        let installed = finish_mask_build(&current, completed);
+        assert_eq!(installed[2].request, started[2]);
+        let retired =
+            retired_mask_values(&current, &installed, |overlay| Arc::as_ptr(&overlay.image));
+        assert_eq!(retired.len(), 1);
+        assert!(Arc::ptr_eq(
+            &retired[0].image,
+            &previous[2].value.as_ref().unwrap().image
+        ));
+        for index in 0..2 {
+            assert!(Arc::ptr_eq(
+                &installed[index].value.as_ref().unwrap().image,
+                &previous[index].value.as_ref().unwrap().image
+            ));
+        }
+        let retained = retain_masks(&installed, &latest);
+        assert!(
+            retired_mask_values(&installed, &retained, |overlay| Arc::as_ptr(&overlay.image))
+                .is_empty()
+        );
+        let completed = build_mask_overlays(&rgba, &retained, &latest);
+        let caught_up = finish_mask_build(&retained, completed);
+        assert!(
+            caught_up
+                .iter()
+                .map(|entry| &entry.request)
+                .eq(latest.iter())
+        );
+        assert_eq!(
+            retired_mask_values(&retained, &caught_up, |overlay| Arc::as_ptr(&overlay.image)).len(),
+            1
+        );
     }
 
     /// A finished stroke stores fractions of its own box, so a later resize
