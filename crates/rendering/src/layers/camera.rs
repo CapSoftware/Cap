@@ -56,8 +56,8 @@ impl CameraLayer {
         yuv_pipelines: Arc<YuvConverterPipelines>,
         composite_pipeline: Arc<CompositeVideoFramePipeline>,
     ) -> Self {
-        let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
-        let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1, 1);
+        let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1, 1);
         let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
         let frame_texture_view_1 = frame_texture_1.create_view(&Default::default());
 
@@ -646,6 +646,240 @@ impl CameraLayer {
                 error = ?e,
                 "Failed to pre-allocate camera YUV converter textures"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        CursorEvents, DecodedSegmentFrames, FrameRenderer, ProjectConfiguration, ProjectUniforms,
+        RecordingMeta, RenderOptions, RenderVideoConstants, RendererLayers, ZoomTransformTimeline,
+    };
+
+    async fn constants() -> RenderVideoConstants {
+        let metadata: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "camera texture boundary",
+            "display": { "path": "unused.mp4", "fps": 60 },
+            "camera": { "path": "unused-camera.mp4", "fps": 60 },
+            "audio": null, "cursor": null
+        }))
+        .unwrap();
+        let studio = metadata.studio_meta().unwrap().clone();
+        RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: XY::new(320, 180),
+                camera_size: Some(XY::new(1920, 1080)),
+                preserve_screen_alpha: false,
+            },
+            metadata,
+            studio,
+        )
+        .await
+        .expect("A working native WGPU adapter is required")
+    }
+
+    fn legacy_layers(constants: &RenderVideoConstants) -> RendererLayers {
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        for camera in [&mut layers.camera, &mut layers.camera_only] {
+            for index in 0..2 {
+                camera.frame_textures[index] = CompositeVideoFramePipeline::create_frame_texture(
+                    &constants.device,
+                    1920,
+                    1080,
+                );
+                camera.frame_texture_views[index] =
+                    camera.frame_textures[index].create_view(&Default::default());
+                camera.bind_groups[index] = Some(camera.pipeline.bind_group(
+                    &constants.device,
+                    &camera.uniforms_buffer,
+                    &camera.frame_texture_views[index],
+                ));
+            }
+        }
+        layers
+    }
+
+    fn frames(camera: Option<DecodedFrame>, number: u32) -> DecodedSegmentFrames {
+        DecodedSegmentFrames {
+            screen_size: XY::new(320, 180),
+            screen_frame: Some(DecodedFrame::new(
+                [17, 43, 89, 255].repeat(320 * 180),
+                320,
+                180,
+            )),
+            camera_frame: camera,
+            segment_time: number as f32 / 60.0,
+            recording_time: number as f32 / 60.0,
+            segment_has_camera: true,
+        }
+    }
+
+    async fn pixels(
+        constants: &RenderVideoConstants,
+        project: &ProjectConfiguration,
+        frames: DecodedSegmentFrames,
+        layers: &mut RendererLayers,
+        ordinary_prepare: bool,
+    ) -> Vec<u8> {
+        let cursor = CursorEvents::default();
+        let size = XY::new(320, 180);
+        let zoom = ZoomTransformTimeline::from_project(project, &cursor, 6.0, size);
+        let uniforms = ProjectUniforms::new(
+            constants,
+            project,
+            (frames.segment_time * 60.0).round() as u32,
+            60,
+            size,
+            &cursor,
+            &frames,
+            6.0,
+            &zoom,
+        );
+        if ordinary_prepare {
+            layers
+                .prepare(constants, &uniforms, &frames, &cursor, true)
+                .await
+                .unwrap();
+        }
+        let mut renderer = FrameRenderer::new(constants);
+        let output = renderer
+            .render_immediate(frames, uniforms, &cursor, true, layers)
+            .await
+            .unwrap();
+        output
+            .data
+            .chunks_exact(output.padded_bytes_per_row as usize)
+            .flat_map(|row| row[..output.width as usize * 4].iter().copied())
+            .collect()
+    }
+
+    fn matches_color(pixel: &[u8], expected: [u8; 4]) -> bool {
+        pixel
+            .iter()
+            .zip(expected)
+            .all(|(&value, expected)| value.abs_diff(expected) <= 2)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a working native WGPU adapter"]
+    async fn camera_placeholders_preserve_pixels_through_frame_state_changes() {
+        let constants = constants().await;
+        for camera_only in [false, true] {
+            for ordinary_prepare in [false, true] {
+                let mut current = RendererLayers::new(&constants.device, &constants.queue);
+                let mut legacy = legacy_layers(&constants);
+                let mut project = ProjectConfiguration::default();
+                project.background.source = cap_project::BackgroundSource::Color {
+                    value: [0, 255, 0],
+                    alpha: 255,
+                };
+                project.background.shadow = 0.0;
+                project.camera.shadow = 0.0;
+                if camera_only {
+                    project.timeline = Some(
+                        serde_json::from_value(serde_json::json!({
+                            "segments": [], "zoomSegments": [],
+                            "sceneSegments": [{
+                                "start": 2.0, "end": 5.0, "mode": "cameraOnly",
+                                "transitionIn": 0.0, "transitionOut": 0.0
+                            }]
+                        }))
+                        .unwrap(),
+                    );
+                }
+                let red = || DecodedFrame::new([255, 0, 0, 255].repeat(1920 * 1080), 1920, 1080);
+                let blue = || DecodedFrame::new([0, 0, 255, 255].repeat(1920 * 1080), 1920, 1080);
+                let mut nv12 = vec![81; 640 * 360];
+                nv12.extend([90, 240].repeat(640 * 360 / 4));
+                let mut yuv420p = vec![41; 160 * 90];
+                yuv420p.extend(vec![240; 160 * 90 / 4]);
+                yuv420p.extend(vec![110; 160 * 90 / 4]);
+                let steps = [
+                    (None, None, false, false),
+                    (Some(red()), Some([255, 0, 0, 255]), false, false),
+                    (Some(blue()), Some([0, 0, 255, 255]), false, false),
+                    (None, Some([0, 0, 255, 255]), false, false),
+                    (None, None, true, false),
+                    (None, Some([0, 0, 255, 255]), false, false),
+                    (
+                        Some(DecodedFrame::new(
+                            [255, 0, 0, 255].repeat(160 * 90),
+                            160,
+                            90,
+                        )),
+                        Some([255, 0, 0, 255]),
+                        false,
+                        false,
+                    ),
+                    (Some(blue()), Some([0, 0, 255, 255]), false, false),
+                    (
+                        Some(DecodedFrame::new(
+                            [255, 0, 0, 255].repeat(640 * 360),
+                            640,
+                            360,
+                        )),
+                        Some([255, 0, 0, 255]),
+                        false,
+                        false,
+                    ),
+                    (None, None, false, true),
+                    (
+                        Some(DecodedFrame::new_nv12(nv12, 640, 360, 640, 640)),
+                        Some([255, 0, 0, 255]),
+                        false,
+                        false,
+                    ),
+                    (
+                        Some(DecodedFrame::new_yuv420p(yuv420p, 160, 90, 160, 80)),
+                        Some([1, 0, 255, 255]),
+                        false,
+                        false,
+                    ),
+                    (Some(blue()), Some([0, 0, 255, 255]), false, false),
+                ];
+                for (index, (camera, color, hidden, reset)) in steps.into_iter().enumerate() {
+                    project.camera.hide = hidden;
+                    if reset {
+                        current.reset_frame_state();
+                        legacy.reset_frame_state();
+                    }
+                    let frames = frames(camera, 180 + index as u32);
+                    let actual = pixels(
+                        &constants,
+                        &project,
+                        frames.clone(),
+                        &mut current,
+                        ordinary_prepare,
+                    )
+                    .await;
+                    let expected =
+                        pixels(&constants, &project, frames, &mut legacy, ordinary_prepare).await;
+                    assert_eq!(
+                        actual, expected,
+                        "step {index}, cameraOnly={camera_only}, ordinary={ordinary_prepare}"
+                    );
+                    if let Some(color) = color {
+                        assert!(
+                            actual
+                                .chunks_exact(4)
+                                .filter(|pixel| matches_color(pixel, color))
+                                .count()
+                                > 100,
+                            "The camera must visibly draw the expected frame at step {index}"
+                        );
+                    } else {
+                        assert!(!actual.chunks_exact(4).any(|pixel| matches_color(
+                            pixel,
+                            [255, 0, 0, 255]
+                        ) || matches_color(
+                            pixel,
+                            [0, 0, 255, 255]
+                        )));
+                    }
+                }
+            }
         }
     }
 }
