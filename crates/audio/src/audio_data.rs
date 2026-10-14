@@ -89,6 +89,7 @@ impl AudioData {
             stream_start_time
         };
         let stream_time_base = f64::from(stream_time_base);
+        let stream_duration = input_stream.duration();
         let source_start_sample = range.as_ref().map_or(0, |window| window.start);
         let covered_source_end_sample = range.as_ref().map_or(usize::MAX, |window| window.end);
         let mut sought = false;
@@ -105,6 +106,12 @@ impl AudioData {
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
         let mut resampler_output = ResamplerOutput::new();
         let mut samples = Vec::new();
+        samples.reserve(decoded_sample_capacity(
+            stream_duration,
+            stream_time_base,
+            target_channels,
+            range.as_ref(),
+        ));
         let mut resampled_samples = Vec::new();
         let mut next_source_sample = if sought { None } else { Some(0usize) };
         let mut complete = source_start_sample == covered_source_end_sample;
@@ -307,6 +314,31 @@ fn append_sample_window(
 
 fn target_channels_for_source(channels: u16) -> u16 {
     if channels <= 1 { 1 } else { 2 }
+}
+
+fn decoded_sample_capacity(
+    duration: i64,
+    stream_time_base: f64,
+    target_channels: u16,
+    range: Option<&Range<usize>>,
+) -> usize {
+    let channels = usize::from(target_channels);
+    if let Some(window) = range {
+        return window
+            .end
+            .saturating_sub(window.start)
+            .saturating_mul(channels);
+    }
+    if duration <= 0 || !stream_time_base.is_finite() || stream_time_base <= 0.0 {
+        return 0;
+    }
+    let frames = duration as f64 * stream_time_base * f64::from(AudioData::SAMPLE_RATE);
+    if !frames.is_finite() || frames <= 0.0 {
+        return 0;
+    }
+    (frames.ceil() as usize)
+        .saturating_add(64)
+        .saturating_mul(channels)
 }
 
 pub(crate) struct ResamplerOutput {
@@ -780,5 +812,41 @@ mod tests {
         assert_eq!(data.source_start_sample(), 1_000);
         assert_eq!(data.sample_count(), 0);
         assert!(data.covers_source_range(1_000, 1_000));
+    }
+
+    #[test]
+    fn decoded_sample_capacity_uses_range_or_duration() {
+        assert_eq!(
+            decoded_sample_capacity(0, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
+            500
+        );
+        assert_eq!(decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, None), 0);
+        assert_eq!(
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, None),
+            (48_000 + 64) * 2
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_from_file_decode() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stereo_60s.wav");
+        let frames = AudioData::SAMPLE_RATE as usize * 60;
+        write_pcm_wav(&path, AudioData::SAMPLE_RATE, frames, &[2_000, -2_000]);
+        let mut runs = Vec::new();
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            let data = AudioData::from_file(&path).unwrap();
+            runs.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(data.sample_count(), frames);
+        }
+        runs.sort_by(f64::total_cmp);
+        println!(
+            "from_file_60s_stereo_wav median_ms={:.1} min_ms={:.1}",
+            runs[runs.len() / 2],
+            runs[0]
+        );
     }
 }
