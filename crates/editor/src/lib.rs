@@ -14,7 +14,7 @@ mod segments;
 mod telemetry;
 mod thumbnail;
 
-pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
+pub use audio::{AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches};
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
 };

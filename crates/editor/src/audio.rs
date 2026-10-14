@@ -21,7 +21,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak,
-        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering, fence},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence},
     },
 };
 use tokio::sync::watch;
@@ -1522,6 +1522,8 @@ struct ProgressiveTimeline {
     progress: Mutex<()>,
     progress_changed: Condvar,
     progress_waiters: AtomicUsize,
+    created: std::time::Instant,
+    paused_at_nanos: AtomicU64,
 }
 
 #[derive(Clone, Copy)]
@@ -1563,6 +1565,8 @@ impl ProgressiveTimeline {
             progress: Mutex::new(()),
             progress_changed: Condvar::new(),
             progress_waiters: AtomicUsize::new(0),
+            created: std::time::Instant::now(),
+            paused_at_nanos: AtomicU64::new(0),
         }
     }
 
@@ -1771,6 +1775,21 @@ impl ProgressiveTimeline {
         self.notify_progress();
     }
 
+    fn detach_reader(&self) {
+        if self.readers.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.paused_at_nanos
+                .store(self.created.elapsed().as_nanos() as u64, Ordering::Release);
+        }
+    }
+
+    fn paused_for(&self) -> std::time::Duration {
+        self.created
+            .elapsed()
+            .saturating_sub(std::time::Duration::from_nanos(
+                self.paused_at_nanos.load(Ordering::Acquire),
+            ))
+    }
+
     fn shut_down(&self) {
         self.stop.store(true, Ordering::Release);
         self.resume.notify_one();
@@ -1867,14 +1886,107 @@ pub(crate) fn preparing_audio_output_policy(
     })
 }
 
-#[derive(Clone, Default)]
+const PLAYBACK_AUDIO_IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(120);
+
+type CacheEntry = Arc<Mutex<Option<CachedProgressiveRender>>>;
+
+static PLAYBACK_AUDIO_CACHES: Mutex<Vec<Weak<Mutex<Option<CachedProgressiveRender>>>>> =
+    Mutex::new(Vec::new());
+
+/// Drops every cached playback render in the process, so memory returns to
+/// what it is on main while paused. Called before exports and on memory
+/// pressure.
+pub fn release_playback_audio_caches() {
+    let caches = lock(&PLAYBACK_AUDIO_CACHES)
+        .iter()
+        .filter_map(Weak::upgrade)
+        .collect::<Vec<_>>();
+    for cache in caches {
+        *lock(&cache) = None;
+    }
+}
+
+#[derive(Clone)]
 pub struct PlaybackAudioCache {
-    entry: Arc<Mutex<Option<CachedProgressiveRender>>>,
+    entry: CacheEntry,
+    idle_release: std::time::Duration,
+}
+
+impl Default for PlaybackAudioCache {
+    fn default() -> Self {
+        Self::with_idle_release(PLAYBACK_AUDIO_IDLE_RELEASE)
+    }
 }
 
 impl PlaybackAudioCache {
+    fn with_idle_release(idle_release: std::time::Duration) -> Self {
+        #[cfg(target_os = "macos")]
+        memory_pressure::watch();
+        let entry = CacheEntry::default();
+        let mut caches = lock(&PLAYBACK_AUDIO_CACHES);
+        caches.retain(|cache| cache.strong_count() > 0);
+        caches.push(Arc::downgrade(&entry));
+        Self {
+            entry,
+            idle_release,
+        }
+    }
+
     pub fn clear(&self) {
         *lock(&self.entry) = None;
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod memory_pressure {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct DispatchSourceType {
+        _private: [u8; 0],
+    }
+
+    const DISPATCH_MEMORYPRESSURE_WARN: usize = 0x02;
+    const DISPATCH_MEMORYPRESSURE_CRITICAL: usize = 0x04;
+    const QOS_CLASS_UTILITY: isize = 0x11;
+
+    unsafe extern "C" {
+        static _dispatch_source_type_memorypressure: DispatchSourceType;
+        fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
+        fn dispatch_source_create(
+            kind: *const DispatchSourceType,
+            handle: usize,
+            mask: usize,
+            queue: *mut c_void,
+        ) -> *mut c_void;
+        fn dispatch_source_set_event_handler_f(
+            source: *mut c_void,
+            handler: extern "C" fn(*mut c_void),
+        );
+        fn dispatch_resume(object: *mut c_void);
+    }
+
+    pub(super) extern "C" fn on_memory_pressure(_context: *mut c_void) {
+        super::release_playback_audio_caches();
+    }
+
+    /// Installs one process-wide memory pressure source. It lives for the
+    /// rest of the process, so it is never released.
+    pub(super) fn watch() {
+        static WATCH: std::sync::Once = std::sync::Once::new();
+        WATCH.call_once(|| unsafe {
+            let source = dispatch_source_create(
+                &_dispatch_source_type_memorypressure,
+                0,
+                DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                dispatch_get_global_queue(QOS_CLASS_UTILITY, 0),
+            );
+            if source.is_null() {
+                return;
+            }
+            dispatch_source_set_event_handler_f(source, on_memory_pressure);
+            dispatch_resume(source);
+        });
     }
 }
 
@@ -2039,6 +2151,7 @@ struct ProjectWatch {
 struct CacheRelease {
     cache: Weak<Mutex<Option<CachedProgressiveRender>>>,
     project: Option<ProjectWatch>,
+    idle_release: std::time::Duration,
 }
 
 impl CacheRelease {
@@ -2101,7 +2214,7 @@ struct ProgressiveAudioBuffer<T: FromSampleBytes> {
 
 impl<T: FromSampleBytes> Drop for ProgressiveAudioBuffer<T> {
     fn drop(&mut self) {
-        self.render.timeline.readers.fetch_sub(1, Ordering::AcqRel);
+        self.render.timeline.detach_reader();
     }
 }
 
@@ -2351,6 +2464,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                 key: key.project.clone(),
                 unchecked: false,
             }),
+            idle_release: cache.idle_release,
         };
         let buffer = Self::spawn(
             job,
@@ -2973,6 +3087,7 @@ fn spawn_primary_render(
                 timeline,
                 job,
                 release,
+                waiter: None,
             }
             .run(pass1_start_secs);
         });
@@ -2993,6 +3108,7 @@ struct PrimaryRender {
     timeline: Arc<ProgressiveTimeline>,
     job: ProgressiveRenderJob,
     release: Option<CacheRelease>,
+    waiter: Option<tokio::runtime::Runtime>,
 }
 
 impl PrimaryRender {
@@ -3139,11 +3255,7 @@ impl PrimaryRender {
             if self.timeline.stop.load(Ordering::Acquire) {
                 return false;
             }
-            if let Some(release) = self.release.as_mut()
-                && !release.still_valid()
-                && let Some(release) = self.release.take()
-            {
-                release.release(&self.timeline);
+            if self.release_if_stale() {
                 continue;
             }
             if !self.timeline.retained.load(Ordering::Acquire)
@@ -3156,39 +3268,79 @@ impl PrimaryRender {
     }
 
     fn hold_until_released(&mut self) {
-        while self
-            .release
-            .as_ref()
-            .is_some_and(|release| release.project.is_some())
-            && !self.timeline.stop.load(Ordering::Acquire)
-        {
-            if let Some(release) = self.release.as_mut()
-                && !release.still_valid()
-                && let Some(release) = self.release.take()
-            {
-                release.release(&self.timeline);
+        while self.release.is_some() && !self.timeline.stop.load(Ordering::Acquire) {
+            if self.release_if_stale() {
                 return;
             }
             self.wait_for_wake();
         }
     }
 
+    /// Drops the cached render once an edit changes the audio or the editor
+    /// has stayed paused for the idle timeout.
+    fn release_if_stale(&mut self) -> bool {
+        let Some(release) = self.release.as_mut() else {
+            return false;
+        };
+        let idle = self.timeline.readers.load(Ordering::Acquire) == 0
+            && self.timeline.paused_for() >= release.idle_release;
+        if (idle || !release.still_valid())
+            && let Some(release) = self.release.take()
+        {
+            release.release(&self.timeline);
+            return true;
+        }
+        false
+    }
+
     fn wait_for_wake(&mut self) {
+        let timeout = self.release.as_ref().map(|release| {
+            if self.timeline.readers.load(Ordering::Acquire) > 0 {
+                release.idle_release
+            } else {
+                release
+                    .idle_release
+                    .saturating_sub(self.timeline.paused_for())
+            }
+        });
+        if self.waiter.is_none() {
+            self.waiter = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .ok();
+        }
+        let timeout = timeout.filter(|_| self.waiter.is_some());
         let resumed = self.timeline.resume.notified();
-        match self
+        let mut project = self
             .release
             .as_mut()
-            .and_then(|release| release.project.as_mut())
-        {
-            Some(project) => {
-                let changed = project.updates.changed();
-                let _ = futures::executor::block_on(futures::future::select(
-                    std::pin::pin!(resumed),
-                    std::pin::pin!(changed),
-                ));
-                project.unchecked = true;
+            .and_then(|release| release.project.as_mut());
+        let changed = async {
+            match project.as_mut() {
+                Some(project) => {
+                    let _ = project.updates.changed().await;
+                }
+                None => std::future::pending().await,
             }
-            None => futures::executor::block_on(resumed),
+        };
+        let wait = async {
+            tokio::select! {
+                _ = resumed => {}
+                _ = changed => {}
+                _ = async {
+                    match timeout {
+                        Some(timeout) => tokio::time::sleep(timeout).await,
+                        None => std::future::pending().await,
+                    }
+                } => {}
+            }
+        };
+        match &self.waiter {
+            Some(waiter) => waiter.block_on(wait),
+            None => futures::executor::block_on(wait),
+        }
+        if let Some(project) = project {
+            project.unchecked = true;
         }
     }
 
