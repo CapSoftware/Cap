@@ -79,10 +79,13 @@ impl Toggle {
     pub fn settings(theme: &Theme, id: impl Into<ElementId>, checked: bool) -> Self {
         Self {
             size: ToggleSize::Sm,
-            off_fill: theme
-                .material
-                .map(|material| Hsla::from(material.control_fill))
-                .unwrap_or_else(|| Hsla::from(theme.gray_6)),
+            // The material's control fill is near-white in light mode, so an
+            // off toggle read as a blank pill on the white settings cards.
+            off_fill: if theme.is_dark() {
+                gpui::hsla(0., 0., 1., 0.16)
+            } else {
+                gpui::hsla(0., 0., 0., 0.13)
+            },
             on_fill: gpui::rgb(Theme::SETTINGS_ACCENT).into(),
             ..Self::plain(theme, id, checked)
         }

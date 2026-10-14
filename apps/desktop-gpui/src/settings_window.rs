@@ -807,6 +807,7 @@ impl SettingsWindow {
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.shortcuts_cancel(cx);
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
@@ -1273,7 +1274,12 @@ impl SettingsWindow {
         self.write(key, Value::from(value), cx);
     }
 
-    fn write_enum<T: SettingsEnum>(&mut self, key: &'static str, value: T, cx: &mut Context<Self>) {
+    pub(crate) fn write_enum<T: SettingsEnum>(
+        &mut self,
+        key: &'static str,
+        value: T,
+        cx: &mut Context<Self>,
+    ) {
         self.write(key, Value::String(value.as_json().to_string()), cx);
     }
 
@@ -1563,6 +1569,11 @@ impl Render for SettingsWindow {
                     cx.defer(crate::app_windows::close_settings);
                 }
             }))
+            .on_modifiers_changed(cx.listener(
+                |this, event: &gpui::ModifiersChangedEvent, _window, cx| {
+                    this.shortcuts_modifiers_changed(event.modifiers, cx);
+                },
+            ))
             .size_full()
             .flex()
             .flex_row()
@@ -3268,7 +3279,7 @@ impl SettingsWindow {
             })
             .when(!checked, |this| {
                 this.border_1()
-                    .border_color(theme.settings_border())
+                    .border_color(theme.settings_muted().opacity(0.55))
                     .group_hover("studio-quality-option", |style| {
                         style.border_color(theme.settings_muted())
                     })
@@ -3472,16 +3483,11 @@ impl SettingsWindow {
                         )
                         .into_any_element(),
                     ),
-                    // Deviation: general.tsx puts an "After a Studio
-                    // recording" select here (Open editor / Show in overlay).
-                    // The post-capture recordings overlay does not exist in
-                    // this app -- a product decision, not a gap -- so a
-                    // one-option select would be noise and the row is omitted.
-                    // The stored `postStudioRecordingBehaviour` is left
-                    // exactly as the Tauri app wrote it (this page never
-                    // writes the key), and the stop flow treats a stored
-                    // `showOverlay` as "reshow the main window"
-                    // (`app_windows.rs`).
+                    // "After a Studio recording" lives on the Shortcuts page,
+                    // next to the shortcuts it shapes. There is no
+                    // post-capture overlay in this app, so a stored
+                    // `showOverlay` means "reshow the main window"
+                    // (`app_windows.rs`) and is labelled "Show Cap".
                     self.setting_row(
                         "After deleting a recording",
                         Some("Whether the recording window should reopen."),
