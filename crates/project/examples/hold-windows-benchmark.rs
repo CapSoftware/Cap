@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 })
                 .collect();
             let timeline: TimelineConfiguration = serde_json::from_value(json!({
-                "segments": [{"start": 0.0, "end": 3600.0, "timescale": 1.0, "recordingClip": 0}],
+                "segments": [{"start": 0.0, "end": 3600.0, "timescale": 1.0, "recordingSegment": 0}],
                 "zoomSegments": [],
                 "textSegments": text_segments
             }))?;
