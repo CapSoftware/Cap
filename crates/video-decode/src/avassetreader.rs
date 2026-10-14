@@ -14,6 +14,7 @@ use tokio::runtime::Handle as TokioHandle;
 #[derive(Clone)]
 pub struct KeyframeIndex {
     keyframes: Vec<(u32, f64)>,
+    time_base: ffmpeg::Rational,
     fps: f64,
     duration_secs: f64,
     pixel_format: Option<cv::PixelFormat>,
@@ -271,6 +272,7 @@ impl KeyframeIndex {
 
         Ok(Self {
             keyframes,
+            time_base,
             fps,
             duration_secs,
             pixel_format,
@@ -374,20 +376,44 @@ impl KeyframeIndex {
     pub fn cached_video_info(&self) -> Option<(cv::PixelFormat, u32, u32)> {
         self.pixel_format.map(|pf| (pf, self.width, self.height))
     }
+
+    // The reader decodes from the sync sample at or before its start time, so
+    // a start rounded to just below a keyframe decodes the whole previous GOP
+    // and vends its last frame retimed to the start. Starting on the exact
+    // stream tick keeps the decode on the requested keyframe.
+    fn exact_time(&self, secs: f64) -> cm::Time {
+        let numerator = i64::from(self.time_base.numerator());
+        let denominator = self.time_base.denominator();
+        if numerator <= 0 || denominator <= 0 {
+            return cm::Time::with_secs(secs, 100);
+        }
+        let ticks = (secs * f64::from(denominator) / numerator as f64).round() as i64;
+        cm::Time::new(ticks * numerator, denominator)
+    }
+}
+
+fn seek_keyframe_time(keyframe_index: &KeyframeIndex, requested_time: f32) -> Option<f64> {
+    let keyframes = keyframe_index.keyframes();
+    // Rounded frame numbers can alias keyframes across a VFR gap and seek
+    // past the image that should still be held at the requested time.
+    let after_request = keyframes.partition_point(|(_, time)| *time <= f64::from(requested_time));
+    keyframes
+        .get(after_request.saturating_sub(1))
+        .map(|(_, time)| *time)
 }
 
 fn compute_seek_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> f32 {
-    if let Some(kf_index) = keyframe_index {
-        let keyframes = kf_index.keyframes();
-        // Rounded frame numbers can alias keyframes across a VFR gap and seek
-        // past the image that should still be held at the requested time.
-        let after_request =
-            keyframes.partition_point(|(_, time)| *time <= f64::from(requested_time));
-        if let Some((_, keyframe_time)) = keyframes.get(after_request.saturating_sub(1)) {
-            return *keyframe_time as f32;
-        }
-    }
-    requested_time
+    keyframe_index
+        .and_then(|index| seek_keyframe_time(index, requested_time))
+        .map_or(requested_time, |time| time as f32)
+}
+
+fn reader_start_time(keyframe_index: Option<&Arc<KeyframeIndex>>, requested_time: f32) -> cm::Time {
+    keyframe_index
+        .and_then(|index| {
+            seek_keyframe_time(index, requested_time).map(|time| index.exact_time(time))
+        })
+        .unwrap_or_else(|| cm::Time::with_secs(requested_time as f64, 100))
 }
 
 pub struct AVAssetReaderDecoder {
@@ -464,7 +490,7 @@ impl AVAssetReaderDecoder {
 
         let (track_output, reader) = Self::get_reader_track_output(
             &path,
-            seek_time,
+            reader_start_time(keyframe_index.as_ref(), start_time),
             &tokio_handle,
             pixel_format,
             width,
@@ -491,7 +517,7 @@ impl AVAssetReaderDecoder {
 
         (self.track_output, self.reader) = Self::get_reader_track_output(
             &self.path,
-            seek_time,
+            reader_start_time(self.keyframe_index.as_ref(), requested_time),
             &self.tokio_handle,
             self.pixel_format,
             self.width,
@@ -533,7 +559,7 @@ impl AVAssetReaderDecoder {
 
     fn get_reader_track_output(
         path: &Path,
-        time: f32,
+        start: cm::Time,
         handle: &TokioHandle,
         pixel_format: cv::PixelFormat,
         width: u32,
@@ -553,7 +579,7 @@ impl AVAssetReaderDecoder {
             .map_err(|e| format!("AssetReader::with_asset: {e}"))?;
 
         let time_range = cm::TimeRange {
-            start: cm::Time::with_secs(time as f64, 100),
+            start,
             duration: cm::Time::infinity(),
         };
 
@@ -664,6 +690,7 @@ mod tests {
     fn seek_index(keyframes: Keyframes) -> Arc<KeyframeIndex> {
         Arc::new(KeyframeIndex {
             keyframes,
+            time_base: ffmpeg::Rational::new(1, 600),
             fps: 2.0,
             duration_secs: 8.0,
             pixel_format: None,
@@ -694,6 +721,17 @@ mod tests {
         assert_eq!(compute_seek_time(Some(&index), 8.0), 1.0);
         assert_eq!(compute_seek_time(Some(&seek_index(Vec::new())), 3.0), 3.0);
         assert_eq!(compute_seek_time(None, 3.0), 3.0);
+    }
+
+    #[test]
+    fn reader_starts_on_the_exact_keyframe_tick() {
+        let index = seek_index(vec![(0, 0.0), (1, 577.0 / 600.0), (3, 1147.0 / 600.0)]);
+        let start = reader_start_time(Some(&index), 1.5);
+        assert_eq!((start.value, start.scale), (577, 600));
+        let start = reader_start_time(Some(&index), 1.92);
+        assert_eq!((start.value, start.scale), (1147, 600));
+        let start = reader_start_time(None, 1.5);
+        assert_eq!((start.value, start.scale), (150, 100));
     }
 
     fn both_indexes(path: &Path) -> Option<(Option<Keyframes>, Keyframes)> {
