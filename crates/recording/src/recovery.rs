@@ -2023,16 +2023,23 @@ impl RecoveryManager {
                             .ok()
                     })
                     .flatten();
-                let video = Self::validate_required_video_reporting_normalization(
-                    &merged_output,
-                    "display",
-                    video_validation,
-                );
+                let video = Self::check_required_video(&merged_output, "display", video_validation);
                 (video, audio.and_then(|handle| handle.join().ok()))
             });
-            let normalized = video?;
+            let audio = match video? {
+                Ok(()) => audio,
+                Err(seek_error) => {
+                    Self::normalize_required_video(
+                        &merged_output,
+                        "display",
+                        video_validation,
+                        &seek_error,
+                    )?;
+                    None
+                }
+            };
             replace_file(&merged_output, output)?;
-            Ok(audio.filter(|_| !normalized))
+            Ok(audio)
         })();
 
         for path in [&video_output, &audio_output, &merged_output] {
@@ -2208,15 +2215,17 @@ impl RecoveryManager {
         label: &str,
         video_validation: VideoValidation,
     ) -> Result<(), RecoveryError> {
-        Self::validate_required_video_reporting_normalization(path, label, video_validation)
-            .map(|_| ())
+        if let Err(seek_error) = Self::check_required_video(path, label, video_validation)? {
+            Self::normalize_required_video(path, label, video_validation, &seek_error)?;
+        }
+        Ok(())
     }
 
-    fn validate_required_video_reporting_normalization(
+    fn check_required_video(
         path: &Path,
         label: &str,
         video_validation: VideoValidation,
-    ) -> Result<bool, RecoveryError> {
+    ) -> Result<Result<(), String>, RecoveryError> {
         finalization_info!("Validating finalized {} video: {:?}", label, path);
 
         if video_validation == VideoValidation::Full {
@@ -2245,21 +2254,28 @@ impl RecoveryManager {
                 if let Some(track_result) = track_result {
                     track_result?;
                 }
-                Ok(false)
+                Ok(Ok(()))
             }
-            Err(seek_error) => {
-                finalization_info!(
-                    "Finalized {} video failed seek validation, normalizing via remux: {}",
-                    label,
-                    seek_error
-                );
-                Self::normalize_recovered_video(path, label)?;
-                if video_validation == VideoValidation::Bounded {
-                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
-                }
-                Ok(true)
-            }
+            Err(seek_error) => Ok(Err(seek_error)),
         }
+    }
+
+    fn normalize_required_video(
+        path: &Path,
+        label: &str,
+        video_validation: VideoValidation,
+        seek_error: &str,
+    ) -> Result<(), RecoveryError> {
+        finalization_info!(
+            "Finalized {} video failed seek validation, normalizing via remux: {}",
+            label,
+            seek_error
+        );
+        Self::normalize_recovered_video(path, label)?;
+        if video_validation == VideoValidation::Bounded {
+            validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+        }
+        Ok(())
     }
 
     fn ensure_video_decodes(path: &Path, label: &str) -> Result<(), RecoveryError> {
