@@ -1263,28 +1263,39 @@ const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 300;
 /// hiccups) into audible silence. 2048 twenty-millisecond frames is ~40 s.
 pub(crate) const AUDIO_SOURCE_CHANNEL_CAPACITY: usize = 2048;
 
+fn audio_source_channel() -> (mpsc::Sender<AudioFrame>, mpsc::Receiver<AudioFrame>) {
+    mpsc::channel(AUDIO_SOURCE_CHANNEL_CAPACITY)
+}
+
 #[cfg(test)]
 mod audio_channel_capacity_tests {
-    use super::AUDIO_SOURCE_CHANNEL_CAPACITY;
+    use super::*;
 
-    /// Recording to slow storage can stall the consumer of an audio channel
-    /// for many seconds. The channel has to absorb that stall, otherwise the
-    /// source sheds frames and the muxer fills the hole with silence.
     #[test]
-    fn audio_channel_absorbs_multi_second_consumer_stalls() {
-        let frame_secs = 0.02;
-        let buffered_secs = AUDIO_SOURCE_CHANNEL_CAPACITY as f64 * frame_secs;
-        assert!(
-            buffered_secs >= 30.0,
-            "audio channel buffers only {buffered_secs:.1} s, too little for multi-second stalls"
-        );
-
-        // 20 s of frames queued with nothing draining: every send must fit.
-        let (tx, _rx) = tokio::sync::mpsc::channel::<u8>(AUDIO_SOURCE_CHANNEL_CAPACITY);
-        for _ in 0..1000 {
-            tx.try_send(0)
-                .expect("audio channel shed a frame during a 20 s stall");
+    fn audio_channel_absorbs_thirty_second_consumer_stalls() {
+        let timestamps = Timestamps::now();
+        // 30 s of 20 ms frames, matching the microphone silence chunk size.
+        let frames = 1500usize;
+        let (mut tx, mut rx) = audio_source_channel();
+        for _ in 0..frames {
+            let mut frame = ffmpeg::frame::Audio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                960,
+                ffmpeg::ChannelLayout::STEREO,
+            );
+            frame.set_rate(48_000);
+            tx.try_send(AudioFrame::new(
+                frame,
+                Timestamp::Instant(timestamps.instant()),
+            ))
+            .expect("audio channel shed a frame during a 30 s stall");
         }
+
+        let mut recovered = 0usize;
+        while matches!(rx.try_next(), Ok(Some(_))) {
+            recovered += 1;
+        }
+        assert_eq!(recovered, frames);
     }
 }
 
@@ -3496,7 +3507,7 @@ impl PreparedAudioSources {
 
                 if was_cancelled && !audio_degraded {
                     let drain_start = std::time::Instant::now();
-                    let max_drain_frames = 500u64;
+                    let max_drain_frames = AUDIO_SOURCE_CHANNEL_CAPACITY as u64;
                     let mut drained = 0u64;
                     let mut skipped = 0u64;
                     let mut degraded_during_drain = false;
@@ -4101,7 +4112,7 @@ async fn setup_audio_sources(
     }
 
     let mut erased_audio_sources = vec![];
-    let (audio_tx, audio_rx) = mpsc::channel(AUDIO_SOURCE_CHANNEL_CAPACITY);
+    let (audio_tx, audio_rx) = audio_source_channel();
 
     let audio_info = if audio_sources.len() == 1 {
         let source = (audio_sources.swap_remove(0))(audio_tx, setup_ctx).await?;
@@ -4122,7 +4133,7 @@ async fn setup_audio_sources(
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         for audio_source_setup in audio_sources {
-            let (tx, rx) = mpsc::channel(AUDIO_SOURCE_CHANNEL_CAPACITY);
+            let (tx, rx) = audio_source_channel();
             let source = (audio_source_setup)(tx, setup_ctx).await?;
 
             audio_mixer.add_source(source.audio_info, rx);
