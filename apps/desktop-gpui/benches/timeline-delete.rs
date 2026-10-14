@@ -1,38 +1,57 @@
-use std::{hint::black_box, time::Duration, time::Instant};
+use cap_project::{ImageSegment, TextSegment, ZoomMode, ZoomSegment};
+use serde::Serialize;
+use std::{
+    fs::File,
+    hint::black_box,
+    io::{BufWriter, Write},
+    time::{Duration, Instant},
+};
 
 #[path = "../src/editor_edits/indices.rs"]
 mod indices;
 
-#[derive(Clone, PartialEq, Debug)]
-struct ModeledTextSegment {
-    strings: [String; 4],
-    optional_strings: [Option<String>; 2],
-    geometry_and_timing: [f64; 10],
-    styling: [f32; 8],
-    track: u32,
-    flags: [u8; 8],
-}
-
-fn fixture(count: usize) -> Vec<ModeledTextSegment> {
+fn text_fixture(count: usize) -> Vec<TextSegment> {
     (0..count)
-        .map(|index| ModeledTextSegment {
-            strings: [
-                format!("Text overlay {index}: {}", "recorded content ".repeat(8)),
-                String::from("Inter"),
-                String::from("#FFFFFF"),
-                String::from("#000000"),
-            ],
-            optional_strings: [Some(String::from("#121212")), Some(String::from("#AA88FF"))],
-            geometry_and_timing: [index as f64; 10],
-            styling: [1.; 8],
-            track: 0,
-            flags: [0; 8],
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "start": index as f64 * 3.,
+                "end": index as f64 * 3. + 2.,
+                "content": format!("Text overlay {index}"),
+            }))
+            .expect("valid text segment")
         })
         .collect()
 }
 
-fn remove_one_at_a_time<T>(segments: &mut Vec<T>, indices: &[usize]) -> bool {
-    let sorted = indices::descending_indices(indices, segments.len());
+fn image_fixture(count: usize) -> Vec<ImageSegment> {
+    (0..count)
+        .map(|index| ImageSegment {
+            start: index as f64 * 3.,
+            end: index as f64 * 3. + 2.,
+            path: format!("content/images/image-{index}.png"),
+            name: format!("Image {index}"),
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn zoom_fixture(count: usize) -> Vec<ZoomSegment> {
+    (0..count)
+        .map(|index| ZoomSegment {
+            start: index as f64 * 3.,
+            end: index as f64 * 3. + 2.,
+            amount: 2.,
+            mode: ZoomMode::Auto,
+            glide_direction: Default::default(),
+            glide_speed: 0.5,
+            instant_animation: false,
+            edge_snap_ratio: 0.25,
+        })
+        .collect()
+}
+
+fn remove_one_at_a_time<T>(segments: &mut Vec<T>, selected: &[usize]) -> bool {
+    let sorted = indices::descending_indices(selected, segments.len());
     if sorted.is_empty() {
         return false;
     }
@@ -42,89 +61,143 @@ fn remove_one_at_a_time<T>(segments: &mut Vec<T>, indices: &[usize]) -> bool {
     true
 }
 
-fn sample(
-    source: &[ModeledTextSegment],
+fn sample<T: Clone>(
+    source: &[T],
     selected: &[usize],
-    delete: fn(&mut Vec<ModeledTextSegment>, &[usize]) -> bool,
+    delete: fn(&mut Vec<T>, &[usize]) -> bool,
+    batch: usize,
 ) -> Duration {
-    let mut segments = source.to_vec();
+    let mut inputs: Vec<Vec<T>> = (0..batch).map(|_| source.to_vec()).collect();
+    let expected_change = selected.iter().any(|index| *index < source.len());
     let started = Instant::now();
-    let changed = black_box(delete(black_box(&mut segments), black_box(selected)));
+    let mut changed = false;
+    for segments in &mut inputs {
+        changed |= black_box(delete(black_box(segments), black_box(selected)));
+    }
     let elapsed = started.elapsed();
-    assert!(changed);
-    black_box(&segments);
+    assert_eq!(changed, expected_change);
+    black_box(&inputs);
     elapsed
 }
 
-fn run_case(name: &str, count: usize, selected: Vec<usize>, iterations: usize) {
-    let source = fixture(count);
-    let mut before = source.clone();
-    let mut after = source.clone();
+fn run_case<T: Clone + Serialize>(
+    segment_type: &str,
+    name: &str,
+    source: &[T],
+    selected: &[usize],
+    csv: &mut Option<BufWriter<File>>,
+) {
+    let mut before = source.to_vec();
+    let mut after = source.to_vec();
     assert_eq!(
-        remove_one_at_a_time(&mut before, &selected),
-        indices::delete_indices(&mut after, &selected)
+        remove_one_at_a_time(&mut before, selected),
+        indices::delete_indices(&mut after, selected)
     );
-    assert_eq!(before, after);
+    assert_eq!(
+        serde_json::to_vec(&before).unwrap(),
+        serde_json::to_vec(&after).unwrap()
+    );
     drop(before);
     drop(after);
 
+    let batch = if selected.len() <= 2 {
+        if source.len() <= 512 { 64 } else { 8 }
+    } else {
+        1
+    };
+    let iterations = 101;
     for _ in 0..10 {
-        sample(&source, &selected, remove_one_at_a_time);
-        sample(&source, &selected, indices::delete_indices);
+        sample(source, selected, remove_one_at_a_time, batch);
+        sample(source, selected, indices::delete_indices, batch);
     }
 
     let mut before = Vec::with_capacity(iterations);
     let mut after = Vec::with_capacity(iterations);
     for iteration in 0..iterations {
-        if iteration % 2 == 0 {
-            before.push(sample(&source, &selected, remove_one_at_a_time));
-            after.push(sample(&source, &selected, indices::delete_indices));
+        let (old, new) = if iteration % 2 == 0 {
+            let old = sample(source, selected, remove_one_at_a_time, batch);
+            (
+                old,
+                sample(source, selected, indices::delete_indices, batch),
+            )
         } else {
-            after.push(sample(&source, &selected, indices::delete_indices));
-            before.push(sample(&source, &selected, remove_one_at_a_time));
+            let new = sample(source, selected, indices::delete_indices, batch);
+            (sample(source, selected, remove_one_at_a_time, batch), new)
+        };
+        if let Some(csv) = csv.as_mut() {
+            writeln!(
+                csv,
+                "{segment_type},{},{name},{},{},{batch},{iteration},{},{}",
+                std::mem::size_of::<T>(),
+                source.len(),
+                selected.len(),
+                old.as_nanos(),
+                new.as_nanos()
+            )
+            .unwrap();
         }
+        before.push(old);
+        after.push(new);
     }
     before.sort_unstable();
     after.sort_unstable();
-    let before = before[iterations / 2].as_secs_f64() * 1_000_000.;
-    let after = after[iterations / 2].as_secs_f64() * 1_000_000.;
+    let micros = |duration: Duration| duration.as_secs_f64() * 1_000_000. / batch as f64;
+    let old_p50 = micros(before[iterations / 2]);
+    let new_p50 = micros(after[iterations / 2]);
+    let old_p95 = micros(before[iterations * 95 / 100]);
+    let new_p95 = micros(after[iterations * 95 / 100]);
     println!(
-        "{name:<24} segments={count:<5} deleted={:<5} before_us={before:>10.3} after_us={after:>10.3} speedup={:>7.2}x",
+        "{segment_type:<5} {name:<24} segments={:<5} selected={:<5} batch={batch:<2} before_p50_us={old_p50:>10.3} after_p50_us={new_p50:>10.3} before_p95_us={old_p95:>10.3} after_p95_us={new_p95:>10.3} speedup={:>7.2}x",
+        source.len(),
         selected.len(),
-        before / after
+        old_p50 / new_p50
     );
+}
+
+fn run_suite<T: Clone + Serialize>(
+    segment_type: &str,
+    fixture: fn(usize) -> Vec<T>,
+    csv: &mut Option<BufWriter<File>>,
+) {
+    println!(
+        "{segment_type}: actual cap-project type, {} inline bytes",
+        std::mem::size_of::<T>()
+    );
+    for count in [64, 512, 5000] {
+        let source = fixture(count);
+        for (name, selected) in [
+            ("empty-selection", vec![]),
+            ("invalid-selection", vec![count, usize::MAX]),
+            ("single-middle", vec![count / 2]),
+            ("single-tail", vec![count - 1]),
+            ("pair-head-tail", vec![0, count - 1]),
+            ("pair-middle-tail", vec![count / 2, count - 1]),
+            ("pair-near-tail", vec![count - 3, count - 1]),
+            ("contiguous-middle", (count / 4..count / 2).collect()),
+            ("prefix-half", (0..count / 2).collect()),
+            ("trailing-half", (count / 2..count).collect()),
+            ("alternating-half", (0..count).step_by(2).collect()),
+            ("sparse-five-percent", (0..count).step_by(20).collect()),
+            ("all", (0..count).collect()),
+        ] {
+            run_case(segment_type, name, &source, &selected, csv);
+        }
+    }
 }
 
 fn main() {
     println!(
-        "Timeline deletion helper; modeled text segments: {} inline bytes, six owned strings. Setup/cloning and survivor destruction excluded; deletion and removed-value destruction included. Median of alternating runs, after equality checks.",
-        std::mem::size_of::<ModeledTextSegment>()
+        "Actual cap-project segment deletion helper. Setup/cloning and final survivor destruction excluded; normalization, deletion and removed-value destruction included. Serialized output equality checked for every case. Ten warmups; 101 alternating samples; batched small selections; p50/p95 of per-operation batch averages. 5,000 segments is a stress workload."
     );
-    run_case("single-middle-small", 64, vec![32], 2000);
-    run_case("single-tail-small", 64, vec![63], 2000);
-    run_case("pair-middle-small", 64, vec![16, 32], 2000);
-    run_case("single-middle-large", 5000, vec![2500], 500);
-    run_case("single-tail-large", 5000, vec![4999], 500);
-    run_case("trailing-pair-large", 5000, vec![4998, 4999], 500);
-    run_case("sparse-near-tail-large", 5000, vec![4997, 4999], 500);
-    run_case("trailing-half-large", 5000, (2500..5000).collect(), 100);
-    run_case(
-        "alternating-half-small",
-        512,
-        (0..512).step_by(2).collect(),
-        500,
-    );
-    run_case(
-        "alternating-half-large",
-        5000,
-        (0..5000).step_by(2).collect(),
-        100,
-    );
-    run_case("prefix-half-large", 5000, (0..2500).collect(), 100);
-    run_case(
-        "sparse-five-percent",
-        5000,
-        (0..5000).step_by(20).collect(),
-        100,
-    );
+    let mut csv = std::env::var_os("CAP_TIMELINE_BENCH_CSV")
+        .map(|path| BufWriter::new(File::create(path).expect("create benchmark CSV")));
+    if let Some(csv) = csv.as_mut() {
+        writeln!(csv, "segment_type,inline_bytes,workload,segments,selected,batch,sample,before_total_ns,after_total_ns").unwrap();
+    }
+    run_suite("text", text_fixture, &mut csv);
+    run_suite("image", image_fixture, &mut csv);
+    run_suite("zoom", zoom_fixture, &mut csv);
+    if let Some(csv) = csv.as_mut() {
+        csv.flush().unwrap();
+    }
 }

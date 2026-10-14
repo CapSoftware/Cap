@@ -36,6 +36,9 @@ use crate::editor_timeline::{self, Segment, TrackKind};
 
 mod indices;
 
+#[cfg(test)]
+mod indices_tests;
+
 use indices::{delete_indices, descending_indices};
 
 // ---------------------------------------------------------------------------
