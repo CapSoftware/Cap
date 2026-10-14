@@ -71,6 +71,9 @@ enum LinuxInputConfig {
     Wayland(WaylandInputConfig),
 }
 
+// Public only so `examples/x11-capture-benchmark.rs` and
+// `tests/x11_shm_capture.rs` can drive the grabber directly; not a supported API.
+#[doc(hidden)]
 pub struct X11InputConfig {
     pub display_name: String,
     pub window_id: Option<u32>,
@@ -2033,6 +2036,10 @@ fn capture_x11(
 /// FFmpeg (spacedrive native-deps) is built without. Capturing with `x11rb`
 /// keeps us off any system FFmpeg/libavdevice and adds no new runtime
 /// shared-library dependency (`x11rb` speaks the X11 protocol over a socket).
+///
+/// Public (but hidden) only for the X11 capture benchmark and integration
+/// tests; not a supported API.
+#[doc(hidden)]
 pub struct X11Grabber {
     conn: Arc<RustConnection>,
     root: x11rb::protocol::xproto::Window,
