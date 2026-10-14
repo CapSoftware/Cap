@@ -19,8 +19,8 @@ struct Cli {
     fps: u32,
     #[arg(long, default_value = "10")]
     duration: u32,
-    #[arg(long, default_value = "5")]
-    runs: usize,
+    #[arg(long, default_value = "5", value_parser = clap::value_parser!(u16).range(1..))]
+    runs: u16,
 }
 
 fn generate_test_video(path: &Path, cli: &Cli) {
@@ -104,7 +104,7 @@ async fn export_once(dir: &Path, cli: &Cli) -> (Duration, u32, u64) {
     let elapsed = start.elapsed();
     let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     if let Ok(keep) = std::env::var("MOV_BENCH_KEEP") {
-        fs::copy(&path, keep).ok();
+        fs::copy(&path, &keep).unwrap_or_else(|err| panic!("keep {keep}: {err}"));
     }
     fs::remove_file(&path).ok();
     (
@@ -120,7 +120,7 @@ async fn main() {
     let temp = tempfile::TempDir::new().unwrap();
     create_project(temp.path(), &cli);
 
-    let mut fps_samples = Vec::with_capacity(cli.runs);
+    let mut fps_samples = Vec::with_capacity(usize::from(cli.runs));
     for run in 0..cli.runs {
         let (elapsed, frames, bytes) = export_once(temp.path(), &cli).await;
         let fps = frames as f64 / elapsed.as_secs_f64();
