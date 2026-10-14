@@ -10,30 +10,14 @@ name: A/V Sync Tests
 #      GPU required, so results are deterministic on hosted runners.
 #
 # Findings are published as a job-summary table and a JSON artifact per OS.
+#
+# PRs and main run the same steps inside CI's Desktop job. This is the nightly
+# run, with a larger randomized matrix.
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 5 * * *"
-  pull_request:
-    paths:
-      - "crates/recording/**"
-      - "crates/enc-ffmpeg/**"
-      - "crates/enc-avfoundation/**"
-      - "crates/enc-mediafoundation/**"
-      - "crates/timestamp/**"
-      - "crates/rendering/**"
-      - "crates/render-farm/**"
-      - "crates/editor/**"
-      - "crates/export/**"
-      - "crates/audio/**"
-      - "crates/rnnoise/**"
-      - "crates/media-info/**"
-      - "crates/project/**"
-      - "scripts/recording-reliability.py"
-      - "scripts/recording-reliability-owned-process.cs"
-      - "scripts/test-recording-reliability.py"
-      - ".github/workflows/sync-tests.yml"
 
 concurrency:
   group: sync-tests-${{ github.head_ref || github.ref_name }}
