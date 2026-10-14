@@ -437,6 +437,56 @@ fn export_rejects_duplicate_output() {
 }
 
 #[test]
+fn export_several_projects_requires_output_directory() {
+    let output = run(&["export", "/tmp/whatever.cap", "/tmp/also.cap"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("output directory"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn export_batch_reports_every_failed_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "export",
+        "/tmp/whatever.cap",
+        "/tmp/also.cap",
+        "-o",
+        dir.path().to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert_eq!(
+        text.matches("Failed to export ").count(),
+        2,
+        "stderr: {text}"
+    );
+}
+
+#[test]
+fn export_batch_json_streams_file_events_and_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "export",
+        "/tmp/whatever.cap",
+        "/tmp/also.cap",
+        "-o",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(!output.status.success());
+    let text = stdout(&output);
+    for event in ["\"FileStarted\"", "\"FileFailed\"", "\"BatchCompleted\""] {
+        assert!(text.contains(event), "stdout missing {event}: {text}");
+    }
+    let last = text.lines().last().unwrap_or_default();
+    assert!(last.contains("\"Error\""), "last line: {last}");
+}
+
+#[test]
 fn targets_mics_json_is_parseable() {
     let output = run(&["targets", "mics", "--format", "json"]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
