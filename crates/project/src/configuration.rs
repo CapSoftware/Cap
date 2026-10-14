@@ -596,7 +596,7 @@ impl Default for Camera {
             size: 30.0,
             zoom_size: Some(Self::default_zoom_size()),
             rounding: Self::default_rounding(),
-            shadow: 62.5,
+            shadow: 0.0,
             advanced_shadow: Some(ShadowConfiguration {
                 size: 33.9,
                 opacity: 44.2,
