@@ -46,6 +46,8 @@ jobs:
               - 'apps/desktop-gpui/**'
               - 'apps/desktop/src/assets/**'
               - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
+              - 'apps/media-server/src/__tests__/fixtures/**'
+              - 'packages/ui-solid/icons/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
               - 'scripts/build-linux-packages.mjs'
