@@ -100,7 +100,7 @@ fn run_case<T: Clone + Serialize>(
     drop(before);
     drop(after);
 
-    let batch = if selected.len() <= 2 {
+    let batch = if selected.len() <= 3 {
         if source.len() <= 512 { 64 } else { 8 }
     } else {
         1
@@ -173,6 +173,9 @@ fn run_suite<T: Clone + Serialize>(
             ("pair-head-tail", vec![0, count - 1]),
             ("pair-middle-tail", vec![count / 2, count - 1]),
             ("pair-near-tail", vec![count - 3, count - 1]),
+            ("head-tail-suffix", vec![0, count - 2, count - 1]),
+            ("head-near-tail", vec![0, count - 3, count - 1]),
+            ("middle-tail-suffix", vec![count / 2, count - 2, count - 1]),
             ("contiguous-middle", (count / 4..count / 2).collect()),
             ("prefix-half", (0..count / 2).collect()),
             ("trailing-half", (count / 2..count).collect()),
