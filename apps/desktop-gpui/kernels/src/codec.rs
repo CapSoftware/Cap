@@ -17,9 +17,35 @@ pub fn read_cursor_events(
 }
 
 pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
-        .flat_map(|px| [px[0], px[1], px[2]])
-        .collect()
+    let len = rgba.len() / 4 * 3;
+    let mut rgb = vec![0u8; len];
+    for (src, dst) in rgba.chunks_exact(4).zip(rgb.chunks_exact_mut(3)) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+    }
+    rgb
+}
+
+pub fn flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    for px in rgba.chunks_exact(4) {
+        let alpha = px[3];
+        if alpha == 255 {
+            rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+        } else if alpha == 0 {
+            rgb.extend_from_slice(&[255, 255, 255]);
+        } else {
+            let a = u32::from(alpha);
+            let inv = 255 - a;
+            rgb.extend_from_slice(&[
+                ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8,
+                ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8,
+                ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8,
+            ]);
+        }
+    }
+    rgb
 }
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
@@ -184,6 +210,27 @@ mod tests {
         assert_eq!(
             rgba_to_rgb(&[1, 2, 3, 4, 5, 6, 7, 8]),
             vec![1, 2, 3, 5, 6, 7]
+        );
+    }
+
+    #[test]
+    fn fused_flatten_to_rgb_matches_two_step() {
+        let rgba: Vec<u8> = (0..=255u8)
+            .flat_map(|alpha| {
+                (0..=255u8).flat_map(move |channel| {
+                    [channel, 255 - channel, channel.wrapping_mul(17), alpha]
+                })
+            })
+            .collect();
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&rgba),
+            rgba_to_rgb(&crate::screenshot::flatten_onto_white(&rgba))
+        );
+        assert_eq!(flatten_rgba_to_rgb_over_white(&[]), Vec::<u8>::new());
+        let trailing: [u8; 7] = [10, 20, 30, 40, 50, 60, 70];
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&trailing),
+            rgba_to_rgb(&crate::screenshot::flatten_onto_white(&trailing))
         );
     }
 

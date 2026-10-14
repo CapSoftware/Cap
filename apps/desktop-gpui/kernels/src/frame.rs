@@ -44,8 +44,10 @@ pub fn unpad_rgba_to_bgra(
 }
 
 pub fn swap_red_blue(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+    for chunk in pixels.chunks_exact_mut(4) {
+        let v = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let swapped = (v & 0xFF00_FF00) | ((v & 0x00FF_0000) >> 16) | ((v & 0x0000_00FF) << 16);
+        chunk.copy_from_slice(&swapped.to_le_bytes());
     }
 }
 
