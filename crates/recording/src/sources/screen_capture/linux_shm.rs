@@ -1,5 +1,15 @@
 //! MIT-SHM image transfer for X11 capture. All `unsafe` for the SysV segment
 //! lifecycle lives here behind a safe API.
+//!
+//! [`ShmSegment`] creates a private SysV segment, maps it into this process,
+//! asks the X server to attach it, then immediately marks it for removal
+//! (`IPC_RMID`). The kernel frees it once both sides detach, so a crash
+//! cannot leak it. Each `ShmGetImage` has the server write a frame into the
+//! segment, and the caller reads it after the reply arrives.
+//!
+//! `X11Grabber` decides when to use this module: it falls back to plain
+//! `GetImage` when the extension is missing, the server can't attach the
+//! segment (remote/TCP displays), or [`DISABLE_SHM_ENV`] is set.
 
 use anyhow::{Context as _, anyhow, bail};
 use std::{ptr::NonNull, sync::Arc};
@@ -9,6 +19,7 @@ use x11rb::protocol::xproto::{Drawable, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
+/// Set to `1`/`true`/`yes`/`on` to force X11 capture onto `GetImage`.
 pub(crate) const DISABLE_SHM_ENV: &str = "CAP_X11_DISABLE_SHM";
 
 pub(crate) fn shm_disabled_by_env() -> bool {
@@ -22,6 +33,8 @@ fn is_truthy(value: &str) -> bool {
     )
 }
 
+/// Bytes per row of a Z-pixmap image, padded to `scanline_pad` bits as the
+/// server lays it out. `None` for invalid formats or overflow.
 pub(crate) fn image_stride(width: u16, bits_per_pixel: u8, scanline_pad: u8) -> Option<usize> {
     if bits_per_pixel == 0 || scanline_pad == 0 || scanline_pad % 8 != 0 {
         return None;
@@ -31,6 +44,7 @@ pub(crate) fn image_stride(width: u16, bits_per_pixel: u8, scanline_pad: u8) -> 
     row_bits.div_ceil(8).checked_next_multiple_of(pad_bytes)
 }
 
+/// Total bytes of a `width` x `height` Z-pixmap image; see [`image_stride`].
 pub(crate) fn image_size(
     width: u16,
     height: u16,
@@ -40,6 +54,7 @@ pub(crate) fn image_size(
     image_stride(width, bits_per_pixel, scanline_pad)?.checked_mul(usize::from(height))
 }
 
+/// Errors unless the server offers MIT-SHM 1.1 or newer.
 pub(crate) fn query_shm_support(conn: &RustConnection) -> anyhow::Result<()> {
     if conn
         .extension_information(shm::X11_EXTENSION_NAME)
@@ -145,6 +160,9 @@ impl Drop for SysvMapping {
     }
 }
 
+/// A shared-memory segment attached to both this process and the X server.
+/// Dropping it detaches from the server, waits for the server to let go, then
+/// unmaps it locally.
 pub(crate) struct ShmSegment {
     conn: Arc<RustConnection>,
     seg: shm::Seg,
@@ -152,6 +170,8 @@ pub(crate) struct ShmSegment {
 }
 
 impl ShmSegment {
+    /// Create a `size`-byte segment and attach it to the server on `conn`.
+    /// Fails if the server can't attach it, e.g. over a remote connection.
     pub(crate) fn new(conn: &Arc<RustConnection>, size: usize) -> anyhow::Result<Self> {
         let mapping = SysvMapping::new(size)?;
         let shmid =
@@ -174,6 +194,8 @@ impl ShmSegment {
         self.mapping.size
     }
 
+    /// Have the server write a Z-pixmap of the given area into the segment,
+    /// and return the bytes it wrote.
     pub(crate) fn get_image(
         &mut self,
         drawable: Drawable,

@@ -2066,8 +2066,15 @@ impl X11Grabber {
         Self::with_shm(config, true)
     }
 
-    /// Like [`Self::new`], but `allow_shm: false` forces the `GetImage`
-    /// backend, the same as setting `CAP_X11_DISABLE_SHM=1`.
+    /// Like [`Self::new`], but lets the caller choose whether MIT-SHM may be
+    /// used. `allow_shm: false` forces the `GetImage` backend, the same as
+    /// setting `CAP_X11_DISABLE_SHM=1`. `allow_shm: true` still falls back to
+    /// `GetImage` when SHM is unavailable, so check [`Self::uses_shm`] to see
+    /// which backend was picked.
+    ///
+    /// If an SHM grab later fails, that frame is retried with `GetImage`. The
+    /// grabber logs one warning and stays on `GetImage` only if the retry
+    /// succeeds.
     pub fn with_shm(config: &X11InputConfig, allow_shm: bool) -> anyhow::Result<Self> {
         ffmpeg::init().context("initialize FFmpeg")?;
 
@@ -2251,6 +2258,7 @@ impl X11Grabber {
         })
     }
 
+    /// Whether frames are currently captured through MIT-SHM.
     pub fn uses_shm(&self) -> bool {
         matches!(self.backend, GrabBackend::Shm(_))
     }
