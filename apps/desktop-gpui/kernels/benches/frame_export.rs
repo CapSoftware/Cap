@@ -76,10 +76,9 @@ fn run_swap(name: &str, rgba: &[u8]) {
                 timed_swap(candidate_frame::swap_red_blue, rgba),
             )
         } else {
-            (
-                timed_swap(candidate_frame::swap_red_blue, rgba),
-                timed_swap(baseline::swap_red_blue, rgba),
-            )
+            let new = timed_swap(candidate_frame::swap_red_blue, rgba);
+            let old = timed_swap(baseline::swap_red_blue, rgba);
+            (old, new)
         };
         if sample >= 5 {
             println!("{name},{},{old},{new}", sample - 5);
@@ -117,7 +116,9 @@ where
         let (old, new) = if sample % 2 == 0 {
             (timed(before, input), timed(after, input))
         } else {
-            (timed(after, input), timed(before, input))
+            let new = timed(after, input);
+            let old = timed(before, input);
+            (old, new)
         };
         if sample >= 5 {
             println!("{name},{},{old},{new}", sample - 5);

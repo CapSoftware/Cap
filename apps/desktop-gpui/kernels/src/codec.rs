@@ -214,6 +214,27 @@ mod tests {
     }
 
     #[test]
+    fn fused_flatten_to_rgb_matches_two_step() {
+        let rgba: Vec<u8> = (0..=255u8)
+            .flat_map(|alpha| {
+                (0..=255u8).flat_map(move |channel| {
+                    [channel, 255 - channel, channel.wrapping_mul(17), alpha]
+                })
+            })
+            .collect();
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&rgba),
+            rgba_to_rgb(&crate::screenshot::flatten_onto_white(&rgba))
+        );
+        assert_eq!(flatten_rgba_to_rgb_over_white(&[]), Vec::new());
+        let trailing: [u8; 7] = [10, 20, 30, 40, 50, 60, 70];
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&trailing),
+            rgba_to_rgb(&crate::screenshot::flatten_onto_white(&trailing))
+        );
+    }
+
+    #[test]
     fn png_round_trips_rgba() {
         let rgba = [10, 20, 30, 40, 50, 60, 70, 255];
         let png = encode_png_rgba(&rgba, 2, 1).unwrap();
