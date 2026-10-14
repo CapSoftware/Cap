@@ -117,6 +117,7 @@ fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
         duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,
         playhead_rx,
+        project_updates: None,
     }
 }
 
@@ -310,6 +311,7 @@ async fn preparing_dropped_acknowledgement_wakes_and_cancels_without_waiting_for
         AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
         false,
         &source_tx,
+        &crate::audio::PlaybackAudioCache::default(),
     )
     .unwrap();
     drop(source_rx.recv().unwrap());
@@ -337,6 +339,7 @@ fn preparing_callback_silences_active_cancelled_source_without_a_remove_command(
         AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
         false,
         &source_tx,
+        &crate::audio::PlaybackAudioCache::default(),
     )
     .unwrap();
     let SourceCommand::Install(mut source) = source_rx.recv().unwrap() else {
@@ -366,6 +369,7 @@ fn preparing_expired_install_does_not_replace_an_active_ordinary_source() {
         AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
         false,
         &source_tx,
+        &crate::audio::PlaybackAudioCache::default(),
     )
     .unwrap();
     request.cancel();
