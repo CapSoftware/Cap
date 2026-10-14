@@ -102,7 +102,15 @@ fn upload_plane_with_stride(
 const MAX_TEXTURE_WIDTH: u32 = 7680;
 const MAX_TEXTURE_HEIGHT: u32 = 4320;
 
+// On macOS, IOSurface frames convert straight into the layer textures, so the
+// converter's own textures start minimal and only grow for a fallback path.
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_WIDTH: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_HEIGHT: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_WIDTH: u32 = 1920;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
