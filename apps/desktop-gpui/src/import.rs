@@ -2109,6 +2109,32 @@ mod tests {
             .count()
     }
 
+    fn decoded_audio_seconds(path: &Path) -> f64 {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Audio::empty();
+        let mut samples = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    samples += frame.samples();
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            samples += frame.samples();
+        }
+        samples as f64 / f64::from(decoder.rate())
+    }
+
     #[test]
     fn a_completed_conversion_keeps_every_source_frame_and_the_audio() {
         ffmpeg::init().unwrap();
@@ -2130,7 +2156,8 @@ mod tests {
         assert!(sample_rate.is_some());
         assert_eq!(count_video_packets(&source), 25);
         assert_eq!(count_video_packets(&output), 25);
-        assert!(std::fs::metadata(&audio).unwrap().len() > 0);
+        let audio_seconds = decoded_audio_seconds(&audio);
+        assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2173,7 +2200,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             seconds.sort_by(f64::total_cmp);
-            let median = seconds[seconds.len() / 2];
+            let middle = seconds.len() / 2;
+            let median = if seconds.len() % 2 == 0 {
+                (seconds[middle - 1] + seconds[middle]) / 2.0
+            } else {
+                seconds[middle]
+            };
             println!(
                 "| {} | {duration:.1} s | {median:.2} s | {:.2} s | {:.2}x |",
                 source.file_name().unwrap().to_string_lossy(),
