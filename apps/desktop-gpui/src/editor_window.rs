@@ -3773,10 +3773,16 @@ impl EditorWindow {
         );
     }
 
+    pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
+        self.stats
+            .as_ref()
+            .map(|stats| stats.presented.load(Ordering::Relaxed))
+    }
+
     /// `onMouseMove` on the timeline container (`TL/index.tsx:1170-1188`):
     /// while paused, the pointer's time becomes `previewTime`; outside the
     /// content column, and at all times while playing, it is cleared.
-    fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
         // `if (editorState.playing) return;` -- the handler bails *before* it
         // writes, so a preview time set while paused survives a play rather
         // than being cleared. The ghost is hidden by the render's own
@@ -3789,17 +3795,28 @@ impl EditorWindow {
         if next != self.view.preview_time {
             self.view.preview_time = next;
             self.emit_preview_frame();
-            self.invalidate_playback_chrome(window, cx);
+            self.invalidate_hover_chrome(cx);
         }
     }
 
-    fn timeline_hover_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn timeline_hover_leave(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.playing || self.view.preview_time.is_none() {
             return;
         }
         self.view.preview_time = None;
         self.emit_preview_frame();
-        self.invalidate_playback_chrome(window, cx);
+        self.invalidate_hover_chrome(cx);
+    }
+
+    /// Pointer-hover state that only the timeline, the transport and the
+    /// canvas overlay read. Notifying `self` would rebuild the header, toolbar
+    /// and sidebar on every pointer move, because each section observes the
+    /// editor. Notifying a child view marks its ancestors dirty instead, so
+    /// this window and its canvas overlay still re-render while the untouched
+    /// sections are reused from their cache.
+    fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
     }
 
     fn set_hovered_track(
@@ -5889,7 +5906,7 @@ impl EditorWindow {
             changed = true;
         }
         if changed {
-            cx.notify();
+            self.invalidate_hover_chrome(cx);
         }
     }
 
