@@ -6524,10 +6524,11 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             .update(cx, |_, window, _| platform::native_window(window))
             .ok()
             .flatten();
-        cx.spawn(async move |_| {
+        cx.spawn(async move |cx| {
             if let Some(native) = &native {
                 platform::show_native(native);
             }
+            cx.update(|cx| bring_screenshot_editor_forward(handle, cx));
         })
         .detach();
         hide_main_window(cx);
@@ -6594,8 +6595,23 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         .ok();
 
     hide_main_window(cx);
+    // A global shortcut fires while another app is frontmost, and a window
+    // opened by an inactive app lands behind that app's windows: the editor
+    // only showed up once Cap was clicked.
+    cx.defer(move |cx| bring_screenshot_editor_forward(handle, cx));
     prewarm_shared_wgpu_device(cx);
     screenshot_editor::load_screenshot_project(key, handle, cx);
+}
+
+fn bring_screenshot_editor_forward(handle: WindowHandle<ScreenshotEditorWindow>, cx: &mut App) {
+    cx.activate(true);
+    handle
+        .update(cx, |_, window, cx| {
+            window.activate_window();
+            platform::kick_display_link(window);
+            cx.notify();
+        })
+        .ok();
 }
 
 /// The screenshot editor's Delete finished: drop the window (its pending
