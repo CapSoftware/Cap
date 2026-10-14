@@ -13,6 +13,7 @@ mod camera_bench;
 mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
+mod camera_loading;
 mod camera_window;
 mod controls_window;
 mod deeplink;
