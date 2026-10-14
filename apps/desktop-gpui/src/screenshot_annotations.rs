@@ -28,7 +28,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use cap_gpui_kernels::mask_cache::{MaskEntry, MaskFrame, MaskRequest, update_masks};
+use cap_gpui_kernels::mask_cache::{
+    MaskEntry, MaskFrame, MaskRequest, retain_masks, retired_mask_values, update_masks,
+};
 use cap_project::{Annotation, AnnotationType, AspectRatio, Crop, MaskType};
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Corners, CursorStyle, Entity, FontWeight,
@@ -2277,21 +2279,12 @@ impl ScreenshotEditorWindow {
         self.annotation_state.mask_task = None;
         self.annotation_state.mask_pending = None;
 
-        let retained: Vec<_> = requests
-            .iter()
-            .filter_map(|request| {
-                self.annotation_state
-                    .masks
-                    .iter()
-                    .find(|entry| entry.request.id == request.id)
-                    .cloned()
-            })
-            .collect();
-        if !retained.iter().map(|entry| &entry.request.id).eq(self
+        let retained = retain_masks(&self.annotation_state.masks, &requests);
+        if !retained.iter().map(|entry| &entry.request).eq(self
             .annotation_state
             .masks
             .iter()
-            .map(|entry| &entry.request.id))
+            .map(|entry| &entry.request))
         {
             self.install_mask_overlays(retained, window);
             cx.notify();
@@ -2332,15 +2325,10 @@ impl ScreenshotEditorWindow {
         overlays: Vec<MaskEntry<MaskOverlay>>,
         window: &mut Window,
     ) {
-        for previous in &self.annotation_state.masks {
-            if let Some(previous) = &previous.value
-                && !overlays
-                    .iter()
-                    .filter_map(|entry| entry.value.as_ref())
-                    .any(|next| Arc::ptr_eq(&previous.image, &next.image))
-            {
-                let _ = window.drop_image(previous.image.clone());
-            }
+        for previous in retired_mask_values(&self.annotation_state.masks, &overlays, |overlay| {
+            Arc::as_ptr(&overlay.image)
+        }) {
+            let _ = window.drop_image(previous.image.clone());
         }
         self.annotation_state.masks = overlays;
     }
@@ -4587,6 +4575,56 @@ mod tests {
                 &previous.value.as_ref().unwrap().image,
                 &next.value.as_ref().unwrap().image
             ));
+        }
+    }
+
+    #[test]
+    fn duplicate_mask_ids_keep_both_regions_when_another_mask_is_deleted() {
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = shape(AnnotationType::Mask, 0., 0., 16., 16.);
+        let b = shape(AnnotationType::Mask, 32., 24., 16., 16.);
+        let mut c = shape(AnnotationType::Mask, 48., 0., 16., 16.);
+        c.id = "unique".into();
+        assert_eq!(a.id, b.id);
+        let mut requests: Vec<_> = [a, b, c]
+            .iter()
+            .filter_map(|mask| mask_request(mask, frame))
+            .collect();
+        let rgba = vec![128; 64 * 48 * 4];
+        let previous = build_mask_overlays(&rgba, &[], &requests);
+        requests.pop();
+        for reorder in [false, true] {
+            if reorder {
+                requests.reverse();
+            }
+            let retained = retain_masks(&previous, &requests);
+            assert_eq!(retained.len(), 2);
+            for (entry, request) in retained.iter().zip(&requests) {
+                assert_eq!(&entry.request, request);
+                let overlay = entry.value.as_ref().unwrap();
+                assert_eq!(overlay.rect.x, f64::from(request.region.0));
+                assert_eq!(overlay.rect.y, f64::from(request.region.1));
+            }
+            let retired =
+                retired_mask_values(&previous, &retained, |overlay| Arc::as_ptr(&overlay.image));
+            assert_eq!(retired.len(), 1);
+            assert!(Arc::ptr_eq(
+                &retired[0].image,
+                &previous[2].value.as_ref().unwrap().image
+            ));
+            let rebuilt = build_mask_overlays(&rgba, &retained, &requests);
+            assert!(
+                retired_mask_values(&retained, &rebuilt, |overlay| {
+                    Arc::as_ptr(&overlay.image)
+                })
+                .is_empty()
+            );
         }
     }
 

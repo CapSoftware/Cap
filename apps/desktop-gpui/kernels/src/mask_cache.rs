@@ -1,4 +1,5 @@
 use crate::screenshot::mask_filter;
+use std::{collections::HashSet, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaskFrame {
@@ -37,21 +38,63 @@ pub struct MaskEntry<T> {
     pub value: Option<T>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct MaskPlan {
-    pub reuse: Vec<Option<usize>>,
-    pub drop: Vec<usize>,
+pub fn plan_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> Vec<Option<usize>> {
+    let mut used = vec![false; previous.len()];
+    requests
+        .iter()
+        .map(|request| {
+            let index = previous
+                .iter()
+                .enumerate()
+                .position(|(index, entry)| !used[index] && entry.request == *request)?;
+            used[index] = true;
+            Some(index)
+        })
+        .collect()
 }
 
-pub fn plan_masks<T>(previous: &[MaskEntry<T>], requests: &[MaskRequest]) -> MaskPlan {
-    let reuse: Vec<_> = requests
+pub fn retain_masks<T: Clone>(
+    previous: &[MaskEntry<T>],
+    requests: &[MaskRequest],
+) -> Vec<MaskEntry<T>> {
+    let mut matches = plan_masks(previous, requests);
+    let mut used = vec![false; previous.len()];
+    for index in matches.iter().flatten() {
+        used[*index] = true;
+    }
+    for (request, matched) in requests.iter().zip(&mut matches) {
+        if matched.is_none()
+            && let Some(index) = previous
+                .iter()
+                .enumerate()
+                .position(|(index, entry)| !used[index] && entry.request.id == request.id)
+        {
+            used[index] = true;
+            *matched = Some(index);
+        }
+    }
+    matches
+        .into_iter()
+        .flatten()
+        .map(|index| previous[index].clone())
+        .collect()
+}
+
+pub fn retired_mask_values<'a, T, K: Eq + Hash>(
+    previous: &'a [MaskEntry<T>],
+    next: &[MaskEntry<T>],
+    key: impl Fn(&T) -> K,
+) -> Vec<&'a T> {
+    let mut referenced: HashSet<_> = next
         .iter()
-        .map(|request| previous.iter().position(|entry| entry.request == *request))
+        .filter_map(|entry| entry.value.as_ref())
+        .map(&key)
         .collect();
-    let drop = (0..previous.len())
-        .filter(|index| !reuse.contains(&Some(*index)))
-        .collect();
-    MaskPlan { reuse, drop }
+    previous
+        .iter()
+        .filter_map(|entry| entry.value.as_ref())
+        .filter(|value| referenced.insert(key(value)))
+        .collect()
 }
 
 pub fn update_masks<T: Clone>(
@@ -62,7 +105,7 @@ pub fn update_masks<T: Clone>(
     let plan = plan_masks(previous, requests);
     requests
         .iter()
-        .zip(plan.reuse)
+        .zip(plan)
         .map(|(request, reuse)| MaskEntry {
             request: request.clone(),
             value: match reuse {
@@ -128,10 +171,7 @@ mod tests {
         requests[1].region.0 += 1;
         assert_eq!(
             plan_masks(&previous, &requests),
-            MaskPlan {
-                reuse: vec![Some(0), None, Some(2), Some(3)],
-                drop: vec![1],
-            }
+            vec![Some(0), None, Some(2), Some(3)]
         );
         let mut calls = 0;
         let next = update_masks(&previous, &requests, |request| {
@@ -155,10 +195,7 @@ mod tests {
         requests.reverse();
         assert_eq!(
             plan_masks(&previous, &requests),
-            MaskPlan {
-                reuse: vec![Some(3), Some(2), Some(0)],
-                drop: vec![1],
-            }
+            vec![Some(3), Some(2), Some(0)]
         );
         let next = update_masks(&previous, &requests, |_| panic!("unexpected filter"));
         assert_eq!(
@@ -167,7 +204,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["3", "2", "0"]
         );
-        assert_eq!(plan_masks(&next, &[]).drop, [0, 1, 2]);
+        assert_eq!(retired_mask_values(&next, &[], Arc::as_ptr).len(), 3);
     }
 
     #[test]
@@ -178,10 +215,7 @@ mod tests {
         requests[1].level = 20_f64.to_bits();
         assert_eq!(
             plan_masks(&previous, &requests),
-            MaskPlan {
-                reuse: vec![None, None, Some(2), None],
-                drop: vec![0, 1],
-            }
+            vec![None, None, Some(2), None]
         );
     }
 
@@ -200,13 +234,7 @@ mod tests {
                     _ => request.frame.crop = Some([1, 0, 64, 48]),
                 }
             }
-            assert_eq!(
-                plan_masks(&previous, &requests),
-                MaskPlan {
-                    reuse: vec![None; 4],
-                    drop: vec![0, 1, 2, 3],
-                }
-            );
+            assert_eq!(plan_masks(&previous, &requests), vec![None; 4]);
         }
     }
 
@@ -216,7 +244,43 @@ mod tests {
         let previous = update_masks::<Arc<String>>(&[], &requests, |_| None);
         let next = update_masks(&previous, &requests, |_| panic!("unexpected filter"));
         assert!(next.iter().all(|entry| entry.value.is_none()));
-        assert_eq!(plan_masks(&previous, &requests).drop, []);
+        assert!(retired_mask_values(&previous, &next, Arc::as_ptr).is_empty());
+    }
+
+    #[test]
+    fn duplicate_ids_reserve_exact_matches_before_retaining_changed_masks() {
+        let mut requests = requests(3);
+        requests[1].id = requests[0].id.clone();
+        let previous = cached(&requests);
+        requests.swap(0, 1);
+        requests[0].region.0 += 1;
+        requests.pop();
+        let retained = retain_masks(&previous, &requests);
+        assert_eq!(retained[0].request, previous[1].request);
+        assert_eq!(retained[1].request, previous[0].request);
+        let retired = retired_mask_values(&previous, &retained, Arc::as_ptr);
+        assert_eq!(retired.len(), 1);
+        assert!(Arc::ptr_eq(retired[0], previous[2].value.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn identical_duplicate_requests_use_each_previous_entry_once() {
+        let request = requests(1).remove(0);
+        let requests = vec![request; 3];
+        let previous = cached(&requests[..2]);
+        assert_eq!(plan_masks(&previous, &requests), [Some(0), Some(1), None]);
+        assert_eq!(retain_masks(&previous, &requests).len(), 2);
+    }
+
+    #[test]
+    fn retirement_preserves_shared_images_and_retires_them_only_once() {
+        let requests = requests(2);
+        let image = Arc::new("shared".to_string());
+        let previous = update_masks(&[], &requests, |_| Some(image.clone()));
+        assert!(retired_mask_values(&previous, &previous[1..], Arc::as_ptr).is_empty());
+        let retired = retired_mask_values(&previous, &[], Arc::as_ptr);
+        assert_eq!(retired.len(), 1);
+        assert!(Arc::ptr_eq(retired[0], &image));
     }
 
     #[test]
@@ -242,9 +306,9 @@ mod tests {
         requests[0].region = mask_region([0.1, 4.1, 32., 24.], content, (64, 48)).unwrap();
         let previous = cached(&requests);
         requests[0].region = mask_region([0.2, 4.2, 32., 24.], content, (64, 48)).unwrap();
-        assert_eq!(plan_masks(&previous, &requests).reuse, [Some(0)]);
+        assert_eq!(plan_masks(&previous, &requests), [Some(0)]);
         requests[0].region = mask_region([0.6, 4.2, 32., 24.], content, (64, 48)).unwrap();
-        assert_eq!(plan_masks(&previous, &requests).reuse, [None]);
+        assert_eq!(plan_masks(&previous, &requests), [None]);
     }
 
     #[test]

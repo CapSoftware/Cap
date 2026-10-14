@@ -4,7 +4,26 @@ use std::{hint::black_box, sync::Arc, time::Instant};
 const SIZE: (u32, u32) = (3840, 2160);
 const WARMUP: usize = 12;
 const EVENTS: usize = 120;
-type Overlay = MaskEntry<Arc<image::RgbaImage>>;
+#[derive(Clone)]
+struct Overlay {
+    rect: [f64; 4],
+    image: Arc<image::RgbaImage>,
+}
+
+type CachedOverlay = MaskEntry<Overlay>;
+
+fn overlay(request: &MaskRequest, rgba: &[u8]) -> Option<Overlay> {
+    let processed = request.filter(rgba)?;
+    Some(Overlay {
+        rect: [
+            f64::from(request.region.0),
+            f64::from(request.region.1),
+            f64::from(processed.width()),
+            f64::from(processed.height()),
+        ],
+        image: Arc::new(processed),
+    })
+}
 
 fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
     let content = [0., 0., f64::from(SIZE.0), f64::from(SIZE.1)];
@@ -30,27 +49,25 @@ fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
 }
 
 fn rebuild_all(requests: &[MaskRequest], rgba: &[u8], calls: &mut usize) -> Vec<Overlay> {
-    requests
-        .iter()
-        .map(|request| {
-            *calls += 1;
-            MaskEntry {
-                request: request.clone(),
-                value: request.filter(rgba).map(Arc::new),
-            }
-        })
-        .collect()
+    let mut overlays = Vec::new();
+    for request in requests {
+        *calls += 1;
+        if let Some(overlay) = overlay(request, rgba) {
+            overlays.push(overlay);
+        }
+    }
+    overlays
 }
 
 fn cached(
-    previous: &[Overlay],
+    previous: &[CachedOverlay],
     requests: &[MaskRequest],
     rgba: &[u8],
     calls: &mut usize,
-) -> Vec<Overlay> {
+) -> Vec<CachedOverlay> {
     update_masks(previous, requests, |request| {
         *calls += 1;
-        request.filter(rgba).map(Arc::new)
+        overlay(request, rgba)
     })
 }
 
@@ -84,7 +101,7 @@ fn main() {
         "3840x2160 RGBA; 640x360 masks; level 16; {WARMUP} warmup pairs; {EVENTS} measured drag events"
     );
     println!(
-        "Alternating old/new execution order; warm cache; byte comparison after every event outside timing."
+        "Alternating old/new execution order; warm cache; geometry and byte comparison after every event outside timing."
     );
     println!(
         "Includes cache diff, filtering, Arc allocation and retired CPU image release. Excludes GPUI conversion, scheduling, atlas and painting."
@@ -129,12 +146,20 @@ fn main() {
                 assert_eq!(old.len(), count);
                 assert_eq!(new.len(), count);
                 for (old, new) in old.iter().zip(&new) {
-                    assert_eq!(old.request, new.request);
+                    let expected_rect = [
+                        f64::from(new.request.region.0),
+                        f64::from(new.request.region.1),
+                        f64::from(new.request.region.2),
+                        f64::from(new.request.region.3),
+                    ];
+                    assert_eq!(old.rect, expected_rect);
+                    let new_overlay = new.value.as_ref().unwrap();
+                    assert_eq!(old.rect, new_overlay.rect);
                     assert_eq!(
-                        old.value.as_ref().unwrap().as_raw(),
-                        new.value.as_ref().unwrap().as_raw(),
+                        old.image.as_raw(),
+                        new_overlay.image.as_raw(),
                         "event {event}, mask {}",
-                        old.request.id
+                        new.request.id
                     );
                 }
                 if event <= WARMUP {
@@ -156,5 +181,5 @@ fn main() {
             );
         }
     }
-    println!("All overlay bytes matched at every warmup and measured event.");
+    println!("All overlay geometry and bytes matched at every warmup and measured event.");
 }
