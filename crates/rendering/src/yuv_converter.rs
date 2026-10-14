@@ -410,6 +410,18 @@ impl YuvConverterPipelines {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct RetainedImageBuf {
+    _image_buf: cidre::arc::R<cv::ImageBuf>,
+}
+
+// SAFETY: the buffer is only retained and released, never read, and
+// CoreVideo reference counting is thread-safe.
+#[cfg(target_os = "macos")]
+unsafe impl Send for RetainedImageBuf {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for RetainedImageBuf {}
+
 pub struct YuvToRgbaConverter {
     pipelines: Arc<YuvConverterPipelines>,
     y_texture: wgpu::Texture,
@@ -429,6 +441,8 @@ pub struct YuvToRgbaConverter {
     bind_group_cache: BindGroupCache,
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
+    #[cfg(target_os = "macos")]
+    iosurface_sources: [Option<RetainedImageBuf>; 2],
     #[cfg(target_os = "windows")]
     d3d11_staging_texture: Option<ID3D11Texture2D>,
     #[cfg(target_os = "windows")]
@@ -489,6 +503,8 @@ impl YuvToRgbaConverter {
             bind_group_cache: BindGroupCache::new(),
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
+            #[cfg(target_os = "macos")]
+            iosurface_sources: [None, None],
             #[cfg(target_os = "windows")]
             d3d11_staging_texture: None,
             #[cfg(target_os = "windows")]
@@ -1098,6 +1114,14 @@ impl YuvToRgbaConverter {
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
+
+        // The Metal textures alias the IOSurface without retaining the pixel
+        // buffer, and the decoder recycles released buffers for new pictures.
+        // Hold the source until this output slot is reused, by which point
+        // the caller has waited for the GPU work that sampled it.
+        self.iosurface_sources[self.current_output] = Some(RetainedImageBuf {
+            _image_buf: image_buf.retained(),
+        });
 
         Ok(self.current_output_view())
     }
