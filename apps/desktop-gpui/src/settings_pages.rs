@@ -1716,7 +1716,8 @@ impl SettingsWindow {
         let red: Hsla = theme.red_11.into();
         let amber: Hsla = theme.amber_11.into();
 
-        let blocked = self.pages.shortcut_blocked == Some(action);
+        let blocked =
+            self.pages.shortcut_blocked == Some(action) && crate::hotkeys::editing_blocked(cx);
         let (detail, detail_color, detail_icon): (String, Hsla, Option<(&str, Hsla)>) = if blocked {
             (BLOCKED_WHILE_RECORDING.into(), red, None)
         } else if let Some(listening) = listening {

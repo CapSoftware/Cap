@@ -205,8 +205,7 @@ pub fn pause(cx: &mut App) -> bool {
     if !cx.has_global::<Hotkeys>() || cx.global::<Hotkeys>().paused {
         return true;
     }
-    #[cfg(target_os = "linux")]
-    if cx.global::<Hotkeys>().capture_stop.is_some() {
+    if editing_blocked(cx) {
         return false;
     }
     unregister_all(cx);
@@ -215,6 +214,19 @@ pub fn pause(cx: &mut App) -> bool {
     hotkeys.release_idle_manager();
     tracing::info!("global hotkeys paused while a shortcut is recorded");
     true
+}
+
+pub fn editing_blocked(cx: &App) -> bool {
+    #[cfg(target_os = "linux")]
+    if cx
+        .try_global::<Hotkeys>()
+        .is_some_and(|hotkeys| hotkeys.capture_stop.is_some())
+    {
+        return true;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cx;
+    false
 }
 
 /// End a [`pause`] and register the store's bindings again. Returns whether
