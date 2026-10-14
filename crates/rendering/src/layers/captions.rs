@@ -1321,7 +1321,6 @@ mod tests {
             };
         }
 
-        // Include boundaries and gaps for overlapping, unsorted segments.
         for tick in -100..1_200 {
             let time = tick as f64 / 100.0;
             let expected = baseline_lookup(time, &segments, 0.35)
