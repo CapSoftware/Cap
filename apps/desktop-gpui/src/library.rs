@@ -817,8 +817,10 @@ const MAX_DECODE_WORKERS: usize = 8;
 /// results come back over the receiver in completion order.
 ///
 /// Callers keep the returned tasks alive while draining the receiver --
-/// dropping them cancels whatever has not started, the same cancel-on-reassign
-/// contract the sequential await-per-item loops this replaced had.
+/// dropping them cancels whatever has not started, and dropping the receiver
+/// stops each running worker after its current decode, the same
+/// cancel-on-reassign contract the sequential await-per-item loops this
+/// replaced had.
 pub fn spawn_decode_pool<J, R>(
     executor: &gpui::BackgroundExecutor,
     jobs: Vec<J>,
@@ -857,16 +859,24 @@ where
             let job_rx = job_rx.clone();
             let result_tx = result_tx.clone();
             let decode = decode.clone();
-            executor.spawn(async move {
-                while let Ok(job) = job_rx.try_recv() {
-                    if let Some(result) = decode(job) {
-                        let _ = result_tx.send(result);
-                    }
-                }
-            })
+            executor.spawn(async move { drain_decode_jobs(&job_rx, &result_tx, decode) })
         })
         .collect();
     (tasks, result_rx)
+}
+
+fn drain_decode_jobs<J, R>(
+    jobs: &flume::Receiver<J>,
+    results: &flume::Sender<R>,
+    decode: impl Fn(J) -> Option<R>,
+) {
+    while !results.is_disconnected()
+        && let Ok(job) = jobs.try_recv()
+    {
+        if let Some(result) = decode(job) {
+            let _ = results.send(result);
+        }
+    }
 }
 
 /// Where the shared downscaled-thumbnail cache lives: the OS cache dir under
@@ -1216,6 +1226,28 @@ pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_jobs_stop_once_nobody_takes_the_results() {
+        let (job_tx, job_rx) = flume::unbounded();
+        for job in 0..6_u32 {
+            job_tx.send(job).unwrap();
+        }
+        let (result_tx, result_rx) = flume::unbounded();
+        let receiver = std::cell::RefCell::new(Some(result_rx));
+        let decoded = std::cell::RefCell::new(Vec::new());
+
+        drain_decode_jobs(&job_rx, &result_tx, |job| {
+            decoded.borrow_mut().push(job);
+            if job == 2 {
+                receiver.borrow_mut().take();
+            }
+            (job != 1).then_some(job)
+        });
+
+        assert_eq!(*decoded.borrow(), [0, 1, 2]);
+        assert_eq!(job_rx.len(), 3);
+    }
 
     /// A `.cap` bundle with a `recording-meta.json` the real parser accepts.
     /// `filetime` is not a dependency here, so the sort key -- the directory's

@@ -868,7 +868,7 @@ impl SettingsWindow {
     }
 
     /// The `recordings` query: scan the library on the background executor,
-    /// then decode each thumbnail there too.
+    /// then decode the thumbnails there through [`library::spawn_decode_pool`].
     ///
     /// Same two-stage shape as the main window's Recents (`refresh_recents`):
     /// the list lands first so the rows can paint with their grey placeholder,
@@ -894,36 +894,36 @@ impl SettingsWindow {
                 return;
             };
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
-
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .recordings
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        // A refresh may have landed while this decode was in
-                        // flight, and the row at this index may now be a
-                        // different recording.
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .recordings
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            // A refresh may have landed while this decode was in
+                            // flight, and the row at this index may now be a
+                            // different recording.
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
+                            row.thumbnail_stale = false;
                         }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
-                        }
-                        row.thumbnail_stale = false;
                         cx.notify();
                         // An unfocused window only repaints when asked.
                         window.refresh();
@@ -1082,30 +1082,31 @@ impl SettingsWindow {
                 return;
             };
 
-            for (index, path) in thumbnails {
-                let image = cx
-                    .background_executor()
-                    .spawn({
-                        let path = path.clone();
-                        async move { library::decode_thumbnail(&path) }
-                    })
-                    .await;
-                let Some(image) = image else { continue };
+            let (_decodes, results) = library::spawn_decode_pool(
+                cx.background_executor(),
+                thumbnails,
+                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, path, image)),
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
                 if this
                     .update_in(cx, |this, window, cx| {
-                        let Some(row) = this
-                            .screenshots
-                            .items
-                            .as_mut()
-                            .and_then(|rows| rows.get_mut(index))
-                        else {
-                            return;
-                        };
-                        if row.item.thumbnail.as_deref() != Some(path.as_path()) {
-                            return;
-                        }
-                        if let Some(old) = row.thumbnail.replace(image) {
-                            let _ = window.drop_image(old);
+                        for (index, path, image) in batch {
+                            let Some(row) = this
+                                .screenshots
+                                .items
+                                .as_mut()
+                                .and_then(|rows| rows.get_mut(index))
+                            else {
+                                continue;
+                            };
+                            if row.item.thumbnail.as_deref() != Some(path.as_path()) {
+                                continue;
+                            }
+                            if let Some(old) = row.thumbnail.replace(image) {
+                                let _ = window.drop_image(old);
+                            }
                         }
                         cx.notify();
                         window.refresh();
