@@ -159,12 +159,10 @@ fn repro_command(id: &str) -> String {
     )
 }
 
-/// Whether a case id is selected by `CAP_VERIFY_CASE` (glob, default all).
+/// Whether a case runs: `CAP_VERIFY_CASE`, `CAP_VERIFY_SKIP` and
+/// `CAP_VERIFY_SHARD` (see `cap_verify_expect::case_selected`).
 pub fn selected(id: &str) -> bool {
-    match std::env::var("CAP_VERIFY_CASE") {
-        Ok(pattern) if !pattern.is_empty() => pattern.split(',').any(|p| glob_match(p, id)),
-        _ => true,
-    }
+    cap_verify_expect::case_selected(id)
 }
 
 fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {

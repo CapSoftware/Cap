@@ -109,6 +109,53 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     rest.ends_with(parts[last])
 }
 
+/// Case selection shared by every suite:
+/// - `CAP_VERIFY_CASE`: comma-separated globs; only matching cases run.
+/// - `CAP_VERIFY_SKIP`: comma-separated globs; matching cases are skipped
+///   (the per-platform FAST tier trims in `scripts/verify/suites.json`).
+/// - `CAP_VERIFY_SHARD=i/n`: only cases whose id hashes to shard `i` (1-based)
+///   of `n` run, so one suite can be split across CI jobs case by case.
+pub fn case_selected(id: &str) -> bool {
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let globs = |value: String| -> Vec<String> {
+        value
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect()
+    };
+    if let Some(only) = env("CAP_VERIFY_CASE")
+        && !globs(only).iter().any(|p| glob_match(p, id))
+    {
+        return false;
+    }
+    if let Some(skip) = env("CAP_VERIFY_SKIP")
+        && globs(skip).iter().any(|p| glob_match(p, id))
+    {
+        return false;
+    }
+    match env("CAP_VERIFY_SHARD").and_then(|v| parse_shard(&v)) {
+        Some((index, count)) => shard_of(id, count) == index,
+        None => true,
+    }
+}
+
+fn parse_shard(value: &str) -> Option<(u64, u64)> {
+    let (index, count) = value.trim().split_once('/')?;
+    let (index, count) = (index.parse().ok()?, count.parse().ok()?);
+    (count >= 1 && (1..=count).contains(&index)).then_some((index, count))
+}
+
+/// 1-based shard of a case id (FNV-1a, stable across platforms and runs).
+pub fn shard_of(id: &str, count: u64) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in id.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash % count.max(1) + 1
+}
+
 pub fn parse_seeds(text: &str) -> Result<BTreeSet<u64>, String> {
     let mut seeds = BTreeSet::new();
     for item in text.split_whitespace() {
@@ -656,6 +703,21 @@ mod tests {
         assert!(!glob_match("a*b*c", "acb"));
         assert!(glob_match("a", "a"));
         assert!(!glob_match("a", "ab"));
+    }
+
+    #[test]
+    fn shards_partition_cases() {
+        let ids: Vec<String> = (0..200).map(|i| format!("export/case-{i}/avf")).collect();
+        let mut counts = [0usize; 3];
+        for id in &ids {
+            let shard = shard_of(id, 3);
+            assert!((1..=3).contains(&shard));
+            counts[(shard - 1) as usize] += 1;
+        }
+        assert!(counts.iter().all(|&n| n > 40), "{counts:?}");
+        assert_eq!(parse_shard("2/3"), Some((2, 3)));
+        assert_eq!(parse_shard("4/3"), None);
+        assert_eq!(parse_shard("0/3"), None);
     }
 
     #[test]

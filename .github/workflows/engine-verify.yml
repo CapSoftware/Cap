@@ -158,6 +158,7 @@ jobs:
       suites: ${{ matrix.suites }}
       shards: ${{ matrix.shards }}
       shard-list: ${{ matrix.shard_list }}
+      archive: ${{ matrix.archive }}
       save-cache: ${{ needs.plan.outputs.save-cache == 'true' }}
       cargo-config: ${{ inputs.cargo-config || '' }}
 

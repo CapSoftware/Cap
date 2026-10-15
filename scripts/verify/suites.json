@@ -1,5 +1,5 @@
 {
-  "_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite).",
+  "_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them.",
   "suites": [
     {
       "name": "verify-self",
@@ -60,7 +60,20 @@
       ],
       "own": [
         "crates/verify/tests/export.rs"
-      ]
+      ],
+      "skip": {
+        "fast": {
+          "macos": [
+            "export/*/ffmpeg",
+            "export/backward-hold/*/mp430/*"
+          ],
+          "windows": [
+            "export/*/mp460/*",
+            "export/backward-hold/*",
+            "export/jitter-camera-*"
+          ]
+        }
+      }
     },
     {
       "name": "playback",
@@ -90,7 +103,14 @@
       ],
       "own": [
         "crates/verify/tests/playback.rs"
-      ]
+      ],
+      "skip": {
+        "fast": {
+          "macos": [
+            "playback/*/ffmpeg"
+          ]
+        }
+      }
     },
     {
       "name": "seek",
@@ -120,7 +140,14 @@
       ],
       "own": [
         "crates/verify/tests/seek.rs"
-      ]
+      ],
+      "skip": {
+        "fast": {
+          "macos": [
+            "seek/*/ffmpeg"
+          ]
+        }
+      }
     },
     {
       "name": "audio",
@@ -154,7 +181,16 @@
         "crates/verify/tests/audio_support/**",
         "crates/verify/src/audio_model.rs",
         "crates/verify/src/audio_fixture.rs"
-      ]
+      ],
+      "skip": {
+        "fast": {
+          "windows": [
+            "audio/*/mp4-plain30",
+            "audio/*/gif30",
+            "audio/*/mov30"
+          ]
+        }
+      }
     },
     {
       "name": "decoder-model-ffmpeg",
@@ -223,17 +259,20 @@
     "linux": {
       "runner": "ubuntu-24.04",
       "target": "x86_64-unknown-linux-gnu",
-      "shards": 1
+      "shards": 1,
+      "archive": false
     },
     "macos": {
       "runner": "macos-15",
       "target": "aarch64-apple-darwin",
-      "shards": 1
+      "shards": 2,
+      "archive": false
     },
     "windows": {
       "runner": "windows-2022",
       "target": "x86_64-pc-windows-msvc",
-      "shards": 1
+      "shards": 2,
+      "archive": false
     }
   }
 }

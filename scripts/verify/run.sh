@@ -62,6 +62,10 @@ plan="$("$py" scripts/verify/plan.py select --tier "$tier" --platform "$platform
 suite_names="$(sed -n 1p <<<"$plan")"
 read -r -a cargo_args <<<"$(sed -n 2p <<<"$plan")"
 filter="$(sed -n 3p <<<"$plan")"
+skip="$(sed -n 4p <<<"$plan")"
+if [[ -n "$skip" ]]; then
+  export CAP_VERIFY_SKIP="${CAP_VERIFY_SKIP:+$CAP_VERIFY_SKIP,}$skip"
+fi
 
 if [[ -z "$suite_names" ]]; then
   echo "no $tier suites for $platform${suites:+ in $suites}"
@@ -85,10 +89,11 @@ nextest_profile="${CAP_VERIFY_NEXTEST_PROFILE:-default}"
 export CAP_VERIFY_TIER="$tier"
 export CAP_VERIFY_REPORT_DIR="${CAP_VERIFY_REPORT_DIR:-$root/target/verify-report/$platform-$tier}"
 
-echo "engine verify: $tier tier on $platform: $suite_names"
+echo "engine verify: $tier tier on $platform: $suite_names${CAP_VERIFY_SHARD:+ (case shard $CAP_VERIFY_SHARD)}"
 if [[ "$mode" == list ]]; then
   echo "cargo: ${cargo_args[*]}"
   echo "filter: $filter"
+  echo "skip: ${CAP_VERIFY_SKIP:-}"
   exit 0
 fi
 

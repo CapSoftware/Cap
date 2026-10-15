@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Plans engine verification runs from scripts/verify/suites.json.
 
-  plan.py select --tier fast --platform linux [--suites a,b]
-      Prints three lines for run.sh: the suite names, the cargo target
-      selection and the nextest filter expression.
+  plan.py select --tier fast --platform linux [--suites a,b] [--local]
+      Prints four lines for run.sh: the suite names, the cargo target
+      selection, the nextest filter expression and the case globs to skip.
 
   plan.py changes --tier fast [--files FILE | --all] [--metadata FILE]
       Maps changed paths to suites through the workspace dependency graph
@@ -95,6 +95,12 @@ def cmd_select(args):
     print(" ".join(s["name"] for s in suites))
     print(" ".join(cargo_args(suites)))
     print(" or ".join(f"({suite_filter(s)})" for s in suites))
+    skips = []
+    for suite in suites:
+        for glob in suite.get("skip", {}).get(args.tier, {}).get(args.platform, []):
+            if glob not in skips:
+                skips.append(glob)
+    print(",".join(skips))
 
 
 def workspace_graph(metadata):
@@ -181,6 +187,7 @@ def matrix(config, names, tier):
             "target": runner["target"],
             "shards": runner["shards"],
             "shard_list": json.dumps(list(range(1, runner["shards"] + 1))),
+            "archive": runner.get("archive", False),
             "suites": ",".join(suites),
         })
     return {"include": include}

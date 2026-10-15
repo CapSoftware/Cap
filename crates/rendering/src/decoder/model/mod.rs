@@ -814,6 +814,7 @@ fn run_suite(decoder: Decoder) {
                 .as_ref()
                 .is_none_or(|filter| case_name(decoder, family).contains(filter.as_str()))
         })
+        .filter(|family| cap_verify_expect::case_selected(&case_name(decoder, family)))
         .collect();
     let jobs: Vec<(usize, u64)> = families
         .iter()
