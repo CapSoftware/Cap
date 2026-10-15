@@ -54,6 +54,7 @@ const CAMERA_SIZE: (usize, usize) = (640, 360);
 const AUDIO_PERIOD: f64 = 0.5;
 const WINDOW_TITLE: &str = "Cap Verify Stimulus";
 const SYSTEM_AUDIO_STARTUP: f64 = 1.0;
+const START_CUE_MS: u64 = 400;
 /// Frames a track may lose while its encoder starts (the capture pool is full
 /// until VideoToolbox is ready; #2573 measured 0-6 per run).
 const STARTUP_SECS: f64 = 1.0;
@@ -83,6 +84,14 @@ struct Spec {
     /// Pairs of consecutive camera frames dropped this many seconds after
     /// the recording started (the start-up drops #2573 fixed).
     camera_drops_at: Vec<f64>,
+    /// The app's start sequence: the recording is built behind a
+    /// `RecordingStartGate` that the start cue arms a moment later.
+    gated: bool,
+    /// The microphone delivers its first sample this long after the
+    /// recording started (a device that wakes late).
+    mic_delay: f64,
+    mic: bool,
+    system_audio: bool,
 }
 
 fn specs() -> Vec<Spec> {
@@ -95,9 +104,13 @@ fn specs() -> Vec<Spec> {
                 camera: false,
             },
             seconds: 8.0,
-            stimulus_fps: 30.0,
+            stimulus_fps: 20.0,
             holds: vec![],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/studio-camera/startup-drops",
@@ -110,6 +123,10 @@ fn specs() -> Vec<Spec> {
             stimulus_fps: 20.0,
             holds: vec![],
             camera_drops_at: vec![0.3, 1.1],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/instant/screen-mic-system",
@@ -119,15 +136,94 @@ fn specs() -> Vec<Spec> {
             stimulus_fps: 20.0,
             holds: vec![],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/studio-screen/gated",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: true,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/instant/gated",
+            tier: Tier::Fast,
+            mode: Mode::Instant,
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: true,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/instant/late-mic",
+            tier: Tier::Fast,
+            mode: Mode::Instant,
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 1.0,
+            mic: true,
+            system_audio: false,
+        },
+        Spec {
+            id: "recording/instant/system-only",
+            tier: Tier::Fast,
+            mode: Mode::Instant,
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: false,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/studio-screen/late-mic",
+            tier: Tier::Full,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.3,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/studio-recovery/sigkill",
             tier: Tier::Fast,
             mode: Mode::StudioKilled,
             seconds: 8.0,
-            stimulus_fps: 30.0,
+            stimulus_fps: 20.0,
             holds: vec![],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/studio-screen/mp4-holds",
@@ -137,9 +233,13 @@ fn specs() -> Vec<Spec> {
                 camera: false,
             },
             seconds: 30.0,
-            stimulus_fps: 30.0,
+            stimulus_fps: 20.0,
             holds: vec![(5.0, 2.0), (12.0, 0.5), (20.0, 4.0)],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/studio-camera/long",
@@ -152,6 +252,10 @@ fn specs() -> Vec<Spec> {
             stimulus_fps: 20.0,
             holds: vec![(10.0, 3.0)],
             camera_drops_at: vec![0.5, 1.5, 12.0],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
         Spec {
             id: "recording/instant/long-holds",
@@ -161,6 +265,10 @@ fn specs() -> Vec<Spec> {
             stimulus_fps: 20.0,
             holds: vec![(6.0, 2.0), (18.0, 5.0)],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         },
     ]
 }
@@ -253,9 +361,13 @@ fn real_capture() {
                 camera: false,
             },
             seconds: 2.0,
-            stimulus_fps: 30.0,
+            stimulus_fps: 20.0,
             holds: vec![],
             camera_drops_at: vec![],
+            gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
         };
         let mut case = Case::new(warmup.id);
         let started = std::time::Instant::now();
@@ -327,7 +439,13 @@ async fn sleep_until_host(host: u64) {
     }
 }
 
-fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) -> Feeds {
+fn start_feeds(
+    reference: u64,
+    max_secs: f64,
+    camera: bool,
+    drops_at: Vec<f64>,
+    mic_delay: f64,
+) -> Feeds {
     let stop = Arc::new(AtomicBool::new(false));
     let started = Arc::new(AtomicU64::new(0));
     let mic = Arc::new(SyntheticMicrophone::spawn(
@@ -356,6 +474,7 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
     let mic_task = {
         let mic = mic.clone();
         let stop = stop.clone();
+        let started = started.clone();
         tokio::spawn(async move {
             let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
             audio_code::render_markers(
@@ -374,6 +493,12 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
                 let delivered =
                     host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
                 sleep_until_host(delivered).await;
+                if mic_delay > 0.0 {
+                    let start = started.load(Ordering::Acquire);
+                    if start == 0 || host_secs(capture, start) < mic_delay {
+                        continue;
+                    }
+                }
                 mic.push(
                     chunk,
                     Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
@@ -523,11 +648,12 @@ fn studio_builder(
     excluded: Vec<scap_targets::WindowId>,
     fragmented: bool,
     camera: bool,
+    system_audio: bool,
 ) -> (studio_recording::ActorBuilder, u32) {
     let defaults = RecordingDefaults::default();
     let builder = defaults
         .apply_to_studio_builder(
-            studio_recording::Actor::builder(project, target).with_system_audio(true),
+            studio_recording::Actor::builder(project, target).with_system_audio(system_audio),
             camera,
             None,
         )
@@ -566,7 +692,7 @@ fn recording_child() {
             CaptureMode::Display
         };
         let (target, excluded, shareable) = capture_setup(capture).await.expect("capture");
-        let feeds = start_feeds(spec.reference, spec.max_secs, false, vec![]);
+        let feeds = start_feeds(spec.reference, spec.max_secs, false, vec![], 0.0);
         std::fs::write(
             &spec.truth,
             serde_json::to_string(&feeds.mic_truth).expect("truth"),
@@ -574,13 +700,24 @@ fn recording_child() {
         .expect("write truth");
         let mic_lock = Arc::new(feeds.mic.lock().await.expect("mic lock"));
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let (builder, max_fps) = studio_builder(spec.project, target, excluded, true, false);
+        let init = spec
+            .project
+            .join("content/segments/segment-0/display/init.mp4");
+        let (builder, max_fps) = studio_builder(spec.project, target, excluded, true, false, true);
         let handle = builder
             .with_mic_feed(mic_lock)
             .build(Some(shareable))
             .await
             .expect("studio recording");
-        std::fs::write(&spec.ready, format!("{} {max_fps}\n", host_now())).expect("ready");
+        let started = host_now();
+        // The parent only starts the stimulus once the screen track is
+        // demonstrably being written.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !init.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let state = if init.exists() { "ok" } else { "nostart" };
+        std::fs::write(&spec.ready, format!("{state} {started} {max_fps}\n")).expect("ready");
         tokio::time::sleep(Duration::from_secs_f64(spec.max_secs)).await;
         drop(handle);
     });
@@ -607,6 +744,7 @@ struct Recorded {
     mic_truth: Truth,
     camera: Option<(Truth, Vec<u32>)>,
     max_fps: u32,
+    mic_delay: f64,
     /// Recovery after a kill may lose at most this many seconds before the
     /// kill (the in-flight fragment).
     loss_budget: Option<f64>,
@@ -618,11 +756,29 @@ async fn run_case(
     shareable: &SendableShareableContent,
     case: &mut Case,
 ) -> anyhow::Result<()> {
-    let scratch = scratch_root().join(spec.id.replace('/', "-"));
-    let _ = std::fs::remove_dir_all(&scratch);
-    std::fs::create_dir_all(&scratch)?;
-    let reference = host_now();
-    let recorded = record(spec, capture, shareable, &scratch, reference, case).await?;
+    let scratch = scratch_root().join(format!(
+        "{}-r{}",
+        spec.id.replace('/', "-"),
+        ATTEMPT.load(Ordering::Relaxed)
+    ));
+    let mut tries = 0;
+    let (recorded, reference) = loop {
+        tries += 1;
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch)?;
+        let reference = host_now();
+        let recorded = record(spec, capture, shareable, &scratch, reference, case).await?;
+        match starved(spec, &recorded.stimulus) {
+            Some(reason) if tries < 2 => {
+                case.note(format!("inconclusive, retrying: {reason}"));
+            }
+            Some(reason) => {
+                case.problem("environment", format!("stimulus starved twice: {reason}"));
+                return Ok(());
+            }
+            None => break (recorded, reference),
+        }
+    };
     analyze(&recorded, reference, case)?;
     if !case.failed() && !env_flag("CAP_VERIFY_KEEP") {
         let _ = std::fs::remove_dir_all(&scratch);
@@ -630,6 +786,41 @@ async fn run_case(
         case.note(format!("artifacts kept at {}", scratch.display()));
     }
     Ok(())
+}
+
+/// The stimulus is the truth source: when the host starves it (it skipped
+/// frames or stalled outside the scripted holds) a run cannot tell capture
+/// problems from harness problems, so it is retried once.
+fn starved(spec: &Spec, events: &[StimulusEvent]) -> Option<String> {
+    let go = events.iter().find_map(|e| match e {
+        StimulusEvent::Go { host } => Some(*host),
+        _ => None,
+    })?;
+    let frames: Vec<(u32, f64)> = events
+        .iter()
+        .filter_map(|e| match e {
+            StimulusEvent::Frame { index, host } if *index > 0 => {
+                Some((*index, host_secs(*host, go)))
+            }
+            _ => None,
+        })
+        .collect();
+    let expected = (spec.seconds * spec.stimulus_fps).round() as usize;
+    if frames.len() * 10 < expected * 9 {
+        return Some(format!("presented {} of {expected} frames", frames.len()));
+    }
+    let period = 1.0 / spec.stimulus_fps;
+    let held = |t: f64| {
+        spec.holds
+            .iter()
+            .any(|&(s, l)| t > s - period && t < s + l + period)
+    };
+    let stall = frames
+        .windows(2)
+        .filter(|w| !held(w[0].1) && !held(w[1].1))
+        .map(|w| w[1].1 - w[0].1)
+        .fold(0.0f64, f64::max);
+    (stall > 4.0 * period).then(|| format!("stalled {:.0} ms between frames", stall * 1000.0))
 }
 
 fn scratch_root() -> PathBuf {
@@ -651,11 +842,11 @@ async fn record(
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
+        audio: spec.system_audio,
         warmup: match capture {
             CaptureMode::Display => 2.0,
             CaptureMode::Window => 2.0,
         },
-        audio: true,
         audio_period: AUDIO_PERIOD,
         audio_origin: reference,
         window: match capture {
@@ -682,6 +873,7 @@ async fn record(
         spec.seconds + 30.0,
         camera,
         spec.camera_drops_at.clone(),
+        spec.mic_delay,
     );
     let mic_lock = Arc::new(feeds.mic.lock().await?);
     let camera_lock = match &feeds.camera {
@@ -694,11 +886,24 @@ async fn record(
 
     let project = scratch.join("recording.cap");
     let defaults = RecordingDefaults::default();
+    let gate = spec.gated.then(cap_recording::RecordingStartGate::new);
     let (handle, max_fps) = match spec.mode {
         Mode::Studio { fragmented, .. } => {
-            let (builder, max_fps) =
-                studio_builder(project.clone(), target, excluded, fragmented, camera);
-            let mut builder = builder.with_mic_feed(mic_lock.clone());
+            let (builder, max_fps) = studio_builder(
+                project.clone(),
+                target,
+                excluded,
+                fragmented,
+                camera,
+                spec.system_audio,
+            );
+            let mut builder = builder;
+            if spec.mic {
+                builder = builder.with_mic_feed(mic_lock.clone());
+            }
+            if let Some(gate) = &gate {
+                builder = builder.with_start_gate(gate.clone());
+            }
             if let Some(lock) = &camera_lock {
                 builder = builder.with_camera_feed(lock.clone());
             }
@@ -709,10 +914,18 @@ async fn record(
         }
         Mode::Instant => {
             let builder = instant_recording::Actor::builder(project.clone(), target)
-                .with_system_audio(true)
+                .with_system_audio(spec.system_audio)
                 .with_max_output_size(defaults.instant_mode_max_resolution)
-                .with_excluded_windows(excluded)
-                .with_mic_feed(mic_lock.clone());
+                .with_excluded_windows(excluded);
+            let builder = if spec.mic {
+                builder.with_mic_feed(mic_lock.clone())
+            } else {
+                builder
+            };
+            let builder = match &gate {
+                Some(gate) => builder.with_start_gate(gate.clone()),
+                None => builder,
+            };
             (
                 Handle::Instant(builder.build(Some(shareable.clone())).await?),
                 cap_recording::DEFAULT_INSTANT_MODE_FPS,
@@ -720,7 +933,16 @@ async fn record(
         }
         Mode::StudioKilled => unreachable!("recorded by record_killed"),
     };
-    let started_host = host_now();
+    let started_host = match &gate {
+        Some(gate) => {
+            // The app arms the gate when its start cue finishes playing.
+            tokio::time::sleep(Duration::from_millis(START_CUE_MS)).await;
+            let at = host_now();
+            gate.arm();
+            at
+        }
+        None => host_now(),
+    };
     feeds.started.store(started_host, Ordering::Release);
     tokio::task::block_in_place(|| stimulus.send("go"))?;
     let waited = tokio::task::block_in_place(|| {
@@ -760,7 +982,11 @@ async fn record(
     drop(mic_lock);
     drop(camera_lock);
     feeds.mic_task.await?;
-    let mic_truth = feeds.mic_truth;
+    let mic_truth = if spec.mic {
+        feeds.mic_truth
+    } else {
+        Truth::new()
+    };
     let camera_truth = match feeds.camera_task {
         Some(task) => Some(task.await?),
         None => None,
@@ -776,6 +1002,7 @@ async fn record(
         mic_truth,
         camera: camera_truth,
         max_fps,
+        mic_delay: spec.mic_delay,
         loss_budget: None,
     })
 }
@@ -845,6 +1072,14 @@ async fn record_killed(
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     let mut fields = ready.split_whitespace();
+    if fields.next() != Some("ok") {
+        let log = std::fs::read_to_string(scratch.join("child.log")).unwrap_or_default();
+        let tail: Vec<&str> = log.lines().rev().take(12).collect();
+        anyhow::bail!(
+            "recording child wrote no screen track within 10 s; child log tail:\n{}",
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
+    }
     let started_host: u64 = fields.next().unwrap_or_default().parse()?;
     let max_fps: u32 = fields.next().unwrap_or_default().parse()?;
     tokio::task::block_in_place(|| stimulus.send("go"))?;
@@ -893,6 +1128,7 @@ async fn record_killed(
         mic_truth,
         camera: None,
         max_fps,
+        mic_delay: 0.0,
         loss_budget: Some(KILL_LOSS_BUDGET),
     })
 }
@@ -1571,6 +1807,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
     // ScreenCaptureKit starts delivering system audio some time after the
     // stream starts (measured 0.2-0.6 s); Cap fills that span with silence.
     let system_window = (rec.started + SYSTEM_AUDIO_STARTUP, window.1);
+    let mic_window = (window.0 + rec.mic_delay, window.1);
     let system_truth: Truth = rec
         .stimulus
         .iter()
@@ -1594,17 +1831,19 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
     }
     let (mic, system) = if layout.muxed_audio {
         let decoded = media::decode_audio(&layout.display.path, Some(48_000))?;
-        let mic = check_audio(
-            case,
-            &decoded,
-            0.0,
-            AudioCheck {
-                name: "mic",
-                source: AudioSource::Mic,
-                truth: &rec.mic_truth,
-                window,
-            },
-        );
+        let mic = (!rec.mic_truth.is_empty()).then(|| {
+            check_audio(
+                case,
+                &decoded,
+                0.0,
+                AudioCheck {
+                    name: "mic",
+                    source: AudioSource::Mic,
+                    truth: &rec.mic_truth,
+                    window: mic_window,
+                },
+            )
+        });
         let system = (!system_truth.is_empty()).then(|| {
             check_audio(
                 case,
@@ -1618,7 +1857,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                 },
             )
         });
-        (Some(mic), system)
+        (mic, system)
     } else {
         let mic = match &layout.mic {
             Some(track) => {
@@ -1631,10 +1870,11 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                         name: "mic",
                         source: AudioSource::Mic,
                         truth: &rec.mic_truth,
-                        window,
+                        window: mic_window,
                     },
                 ))
             }
+            None if rec.mic_truth.is_empty() => None,
             None => {
                 case.problem("missing", "no mic track recorded");
                 None
@@ -1705,7 +1945,10 @@ fn sync_checks(
     } else {
         (-0.010, 0.060)
     };
-    const SYSTEM_VS_SCREEN: f64 = 0.080;
+    const SYSTEM_VS_MIC: f64 = 0.020;
+    // System audio truth adds the output device's latency (measured 0 to
+    // 10 ms against the microphone).
+    let slack = |name: &str| if name == "mic" { 0.0 } else { 0.015 };
 
     let ms = |s: f64| s * 1000.0;
     if let Some(mic) = mic
@@ -1720,21 +1963,24 @@ fn sync_checks(
     if let Some(camera) = camera
         && let Some(median) = camera.median()
     {
-        // Camera frames carry exact capture times. The muxer may re-pin a
-        // late-processed frame toward the wall clock (scheduling jitter on a
-        // loaded host), but a frame further than two periods off, or three
-        // consecutive frames more than half a period off (a ladder that
-        // froze a lag, #2573), put the wrong picture on screen.
+        // Camera frames carry exact capture times, but past the 2 s drift
+        // anchor the muxer stamps frames from the processing wall clock, so
+        // a loaded host shifts single frames (measured up to 73 ms on hosted
+        // runners) and can freeze the anchor's processing delay into the
+        // rest of the track (measured 25 ms). A frame more than three periods
+        // off, or three consecutive frames more than a period off (a ladder
+        // that froze a whole-slot lag, #2573: 66.7 ms for 22 frames), shows
+        // the wrong picture.
         let period = 1.0 / f64::from(CAMERA_FPS);
         let mut run = 0;
         let mut worst_run = (0, 0.0f64, 0.0f64);
         let mut isolated = Vec::new();
         for &(truth, offset) in &camera.0 {
             let d = offset - median;
-            if d.abs() > 2.0 * period {
+            if d.abs() > 3.0 * period {
                 isolated.push(format!("{:.2}s {:+.1} ms", truth, ms(d)));
             }
-            if d.abs() > period / 2.0 {
+            if d.abs() > period {
                 run += 1;
                 if run > worst_run.0 {
                     worst_run = (run, truth, d);
@@ -1747,7 +1993,7 @@ fn sync_checks(
             case.problem(
                 "timestamps",
                 format!(
-                    "camera: {} consecutive frames off the steady offset by more than half a frame (until {:.2}s, {:+.1} ms)",
+                    "camera: {} consecutive frames off the steady offset by more than a frame period (until {:.2}s, {:+.1} ms)",
                     worst_run.0,
                     worst_run.1,
                     ms(worst_run.2)
@@ -1758,7 +2004,7 @@ fn sync_checks(
             case.problem(
                 "timestamps",
                 format!(
-                    "camera: {} frames more than two periods off the steady offset: {}",
+                    "camera: {} frames more than three periods off the steady offset: {}",
                     isolated.len(),
                     isolated
                         .iter()
@@ -1770,10 +2016,10 @@ fn sync_checks(
             );
         }
     }
-    let (Some(mic_m), screen_m) = (mic.and_then(Offsets::median), screen.median()) else {
-        return;
-    };
-    if let Some(camera_m) = camera.and_then(Offsets::median) {
+    let mic_m = mic.and_then(Offsets::median);
+    let screen_m = screen.median();
+    let system_m = system.and_then(Offsets::median);
+    if let (Some(camera_m), Some(mic_m)) = (camera.and_then(Offsets::median), mic_m) {
         let d = camera_m - mic_m;
         case.note(format!("sync camera-mic {:+.1} ms", ms(d)));
         if d.abs() > CAMERA_VS_MIC {
@@ -1787,30 +2033,45 @@ fn sync_checks(
             );
         }
     }
-    if let Some(screen_m) = screen_m {
-        let d = screen_m - mic_m;
-        case.note(format!("sync screen-mic {:+.1} ms", ms(d)));
-        if d < screen_latency.0 || d > screen_latency.1 {
-            case.problem("sync", format!(
-                "screen vs mic out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
-                ms(d),
-                ms(screen_latency.0),
-                ms(screen_latency.1)
-            ));
+    if let (Some(system_m), Some(mic_m)) = (system_m, mic_m) {
+        // Both carry host-clock truth: the microphone's exactly, system
+        // audio from the output callback's host time.
+        let d = system_m - mic_m;
+        case.note(format!("sync system-mic {:+.1} ms", ms(d)));
+        if d.abs() > SYSTEM_VS_MIC {
+            case.problem(
+                "sync",
+                format!(
+                    "system audio vs mic out of sync: {:+.1} ms (limit +-{:.0})",
+                    ms(d),
+                    ms(SYSTEM_VS_MIC)
+                ),
+            );
         }
-        if let Some(system_m) = system.and_then(Offsets::median) {
-            let d = system_m - screen_m;
-            case.note(format!("sync system-screen {:+.1} ms", ms(d)));
-            if d.abs() > SYSTEM_VS_SCREEN {
-                case.problem(
-                    "sync",
-                    format!(
-                        "system audio vs screen out of sync: {:+.1} ms (limit +-{:.0})",
-                        ms(d),
-                        ms(SYSTEM_VS_SCREEN)
-                    ),
-                );
-            }
+    }
+    let Some(screen_m) = screen_m else {
+        return;
+    };
+    for (name, audio_m) in [("mic", mic_m), ("system audio", system_m)] {
+        let Some(audio_m) = audio_m else {
+            continue;
+        };
+        let d = screen_m - audio_m;
+        case.note(format!(
+            "sync screen-{} {:+.1} ms",
+            name.split(' ').next().unwrap_or(name),
+            ms(d)
+        ));
+        if d < screen_latency.0 - slack(name) || d > screen_latency.1 + slack(name) {
+            case.problem(
+                "sync",
+                format!(
+                    "screen vs {name} out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
+                    ms(d),
+                    ms(screen_latency.0 - slack(name)),
+                    ms(screen_latency.1 + slack(name))
+                ),
+            );
         }
     }
 }
