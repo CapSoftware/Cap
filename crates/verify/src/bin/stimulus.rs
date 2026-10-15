@@ -253,9 +253,8 @@ mod app {
                 .with_title("Cap Verify Stimulus")
                 .with_window_level(WindowLevel::AlwaysOnTop);
             attrs = match self.spec.window {
-                None => attrs.with_fullscreen(Some(Fullscreen::Borderless(
-                    event_loop.primary_monitor(),
-                ))),
+                None => attrs
+                    .with_fullscreen(Some(Fullscreen::Borderless(event_loop.primary_monitor()))),
                 Some((x, y, w, h)) => attrs
                     .with_decorations(false)
                     .with_resizable(false)
@@ -368,10 +367,12 @@ mod app {
         sample_rate: u32,
         channels: usize,
         epoch: Arc<AtomicU64>,
+        schedule_origin: u64,
         lead_secs: f64,
+        seconds: f64,
         markers: Vec<(MarkerPlacement, Vec<f32>)>,
         written: u64,
-        epoch_sample: Option<u64>,
+        anchor: Option<(i64, u64)>,
         events: mpsc::Sender<StimulusEvent>,
     }
 
@@ -379,21 +380,24 @@ mod app {
         fn fill(&mut self, data: &mut [f32], callback_host: u64) {
             data.fill(0.0);
             let frames = data.len() / self.channels.max(1);
-            let start = self.written;
+            let start = self.written as i64;
             self.written += frames as u64;
-            let epoch = self.epoch.load(Ordering::Acquire);
-            if epoch == 0 {
+            let go = self.epoch.load(Ordering::Acquire);
+            if go == 0 {
                 return;
             }
             let rate = f64::from(self.sample_rate);
-            let epoch_sample = *self.epoch_sample.get_or_insert_with(|| {
-                let ahead = host_secs(epoch, callback_host) + self.lead_secs;
-                (start as f64 + (ahead * rate).round()).max(start as f64) as u64
-            });
+            let (anchor_sample, anchor_host) = *self.anchor.get_or_insert((start, callback_host));
+            let end = start + frames as i64;
             for (placement, wave) in &self.markers {
-                let first = epoch_sample + (placement.time_secs * rate).round() as u64;
-                let last = first + wave.len() as u64;
-                if last <= start || first >= start + frames as u64 {
+                let host = host_add_secs(self.schedule_origin, placement.time_secs);
+                let after_go = host_secs(host, go);
+                if after_go < self.lead_secs || after_go > self.seconds {
+                    continue;
+                }
+                let first = anchor_sample + (host_secs(host, anchor_host) * rate).round() as i64;
+                let last = first + wave.len() as i64;
+                if last <= start || first >= end {
                     continue;
                 }
                 if first >= start {
@@ -404,7 +408,7 @@ mod app {
                     });
                 }
                 for i in 0..frames {
-                    let at = start + i as u64;
+                    let at = start + i as i64;
                     if at < first || at >= last {
                         continue;
                     }
@@ -436,23 +440,24 @@ mod app {
         }
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
-        let lead_secs = 0.25;
+        let schedule_origin = if spec.audio_origin == 0 {
+            host_now()
+        } else {
+            spec.audio_origin
+        };
+        // The schedule shares its origin with the other marker sources of
+        // the case, so the per-source phases keep markers from overlapping.
+        let horizon = host_secs(host_now(), schedule_origin).max(0.0) + 120.0 + spec.seconds;
         let markers = audio_code::standard_schedule(
             AudioSource::System,
-            lead_secs,
-            spec.seconds - lead_secs,
+            0.0,
+            horizon.min(f64::from(audio_code::MAX_AUDIO_INDEX) * spec.audio_period),
             spec.audio_period,
         )
         .into_iter()
         .map(|p| {
             let wave = audio_code::marker_waveform(AudioSource::System, p.index, sample_rate);
-            (
-                MarkerPlacement {
-                    index: p.index,
-                    time_secs: p.time_secs - lead_secs,
-                },
-                wave,
-            )
+            (p, wave)
         })
         .collect();
         let (tx, rx) = mpsc::channel::<StimulusEvent>();
@@ -468,10 +473,12 @@ mod app {
             sample_rate,
             channels: usize::from(channels),
             epoch,
-            lead_secs,
+            schedule_origin,
+            lead_secs: 0.25,
+            seconds: spec.seconds,
             markers,
             written: 0,
-            epoch_sample: None,
+            anchor: None,
             events: tx,
         };
         let stream = device
