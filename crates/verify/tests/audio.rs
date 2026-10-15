@@ -174,8 +174,9 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
                     Err(e) => case.problem("error", e),
                     Ok(mono) => {
                         let report = audio_support::check_pcm(&mut case, "export", &model, &mono);
-                        let frames = common::read_output(&out);
                         let video = project.model(&config);
+                        let frames =
+                            common::read_output(&out, Some(&|i| video.expect(i as u32, FPS)));
                         common::check_sequence(&mut case, &video, &frames, FPS, true);
                         audio_support::check_av(&mut case, &project.meta, &report, &frames, FPS);
                     }
