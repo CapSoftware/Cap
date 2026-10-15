@@ -1561,6 +1561,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "gpui_tokio",
+ "hound",
  "image 0.25.10",
  "jpeg-decoder",
  "kameo",
