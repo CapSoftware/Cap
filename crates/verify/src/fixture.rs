@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// Bump when generated output changes so cached fixtures are rebuilt.
-pub const GENERATOR_VERSION: u32 = 1;
+pub const GENERATOR_VERSION: u32 = 2;
 
 /// splitmix64: tiny deterministic PRNG; every fixture prints its seed.
 #[derive(Clone)]

@@ -123,6 +123,7 @@ pub fn add_transition(config: &mut ProjectConfiguration, segment_index: u32, dur
 pub enum Format {
     Mp4,
     Gif,
+    Mov,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +188,15 @@ pub async fn export(
             .export(base, |_| true)
             .await
         }
+        Format::Mov => {
+            cap_export::mov::MovExportSettings {
+                fps: run.fps,
+                resolution_base,
+                cursor_only: false,
+            }
+            .export(base, |_| true)
+            .await
+        }
         Format::Gif => {
             cap_export::gif::GifExportSettings {
                 fps: run.fps,
@@ -232,17 +242,37 @@ fn picture_hash(frame: &ffmpeg::frame::Video) -> u64 {
     hash
 }
 
-pub fn read_output(path: &Path) -> Vec<OutputFrame> {
+/// Decodes an output and reads every frame, using the model's expectation
+/// for frame `i` (when given) to verify transition blends.
+pub fn read_output(
+    path: &Path,
+    expect: Option<&dyn Fn(usize) -> cap_verify::model::FrameExpectation>,
+) -> Vec<OutputFrame> {
     let mut frames = Vec::new();
     media::decode_video(path, |picture| {
+        let view = picture.view();
+        let readout = match expect {
+            Some(expect) => read_expecting(&view, &expect(frames.len())),
+            None => video_code::read_frame(&view),
+        };
         frames.push(OutputFrame {
             pts_secs: picture.pts_secs,
-            readout: video_code::read_frame(&picture.view()),
+            readout,
             hash: picture_hash(&picture.frame),
         })
     })
     .unwrap_or_else(|e| panic!("decode {path:?}: {e:?}"));
     frames
+}
+
+pub fn read_expecting(
+    img: &impl video_code::PixelSource,
+    expectation: &cap_verify::model::FrameExpectation,
+) -> FrameReadout {
+    FrameReadout {
+        screen: oracle::read_expecting(img, StreamKind::Screen, &expectation.screen),
+        camera: oracle::read_expecting(img, StreamKind::Camera, &expectation.camera),
+    }
 }
 
 /// Checks a sequential output (export or sequential playback) frame by frame
@@ -318,6 +348,7 @@ pub struct Player {
     renderer: Option<cap_rendering::FrameRenderer<'static>>,
     layers: cap_rendering::RendererLayers,
     zooms: Vec<cap_rendering::ZoomTransformTimeline>,
+    outgoing_zooms: std::collections::HashMap<u32, cap_rendering::ZoomTransformTimeline>,
     config: ProjectConfiguration,
     duration: f64,
     resolution: XY<u32>,
@@ -379,6 +410,7 @@ impl Player {
             segments,
             layers,
             zooms,
+            outgoing_zooms: Default::default(),
             config,
             duration,
             resolution: XY::new(resolution.0, resolution.1),
@@ -398,13 +430,147 @@ impl Player {
         frame: u32,
         fps: u32,
         seek: bool,
+        expectation: Option<&cap_verify::model::FrameExpectation>,
     ) -> Result<FrameReadout, String> {
         let t = f64::from(frame) / f64::from(fps);
-        let (segment_time, segment) = self
+        let mapping = self
             .config
-            .get_segment_time(t)
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.get_frame_mapping(t))
             .ok_or_else(|| format!("no timeline segment at {t:.3}s"))?;
-        let clip = segment.recording_clip;
+        let (incoming, outgoing) = match mapping {
+            cap_project::TimelineFrameMapping::Single { source, .. }
+            | cap_project::TimelineFrameMapping::Hold { source, .. } => {
+                ((source.segment.recording_clip, source.source_time), None)
+            }
+            cap_project::TimelineFrameMapping::Transition {
+                outgoing,
+                incoming,
+                kind,
+                progress,
+                ..
+            } => (
+                (incoming.segment.recording_clip, incoming.source_time),
+                Some((
+                    outgoing.segment.recording_clip,
+                    outgoing.source_time,
+                    kind,
+                    progress,
+                )),
+            ),
+        };
+        let incoming_frames = self.fetch(incoming.0, incoming.1, seek).await?;
+        let rendered = if let Some((clip, time, kind, progress)) = outgoing {
+            let outgoing_frames = self.fetch(clip, time, seek).await?;
+            let screen_size = self.constants.options.screen_size;
+            let outgoing_zoom = self.outgoing_zooms.entry(clip).or_insert_with(|| {
+                cap_rendering::ZoomTransformTimeline::from_project_for_outgoing_clip(
+                    &self.config,
+                    &self.segments[clip as usize].cursor,
+                    self.duration,
+                    screen_size,
+                    clip,
+                )
+            });
+            outgoing_zoom.ensure_precomputed_until((frame as f32 + 1.0) / fps as f32);
+            let outgoing_uniforms = cap_rendering::ProjectUniforms::new(
+                &self.constants,
+                &self.config,
+                frame,
+                fps,
+                self.resolution,
+                &self.segments[clip as usize].cursor,
+                &outgoing_frames,
+                self.duration,
+                outgoing_zoom,
+            );
+            let zoom = &mut self.zooms[incoming.0 as usize];
+            zoom.ensure_precomputed_until((frame as f32 + 1.0) / fps as f32);
+            let incoming_uniforms = cap_rendering::ProjectUniforms::new(
+                &self.constants,
+                &self.config,
+                frame,
+                fps,
+                self.resolution,
+                &self.segments[incoming.0 as usize].cursor,
+                &incoming_frames,
+                self.duration,
+                zoom,
+            );
+            self.renderer
+                .as_mut()
+                .expect("renderer")
+                .render_transition_immediate(
+                    cap_rendering::TransitionRenderInput {
+                        segment_frames: outgoing_frames,
+                        uniforms: outgoing_uniforms,
+                        cursor: &self.segments[clip as usize].cursor,
+                        render_display: true,
+                    },
+                    cap_rendering::TransitionRenderInput {
+                        segment_frames: incoming_frames,
+                        uniforms: incoming_uniforms,
+                        cursor: &self.segments[incoming.0 as usize].cursor,
+                        render_display: true,
+                    },
+                    kind,
+                    progress as f32,
+                    &mut self.layers,
+                )
+                .await
+                .map_err(|e| format!("render transition: {e}"))?
+        } else {
+            let media = &self.segments[incoming.0 as usize];
+            let zoom = &mut self.zooms[incoming.0 as usize];
+            zoom.ensure_precomputed_until((frame as f32 + 1.0) / fps as f32);
+            let uniforms = cap_rendering::ProjectUniforms::new(
+                &self.constants,
+                &self.config,
+                frame,
+                fps,
+                self.resolution,
+                &media.cursor,
+                &incoming_frames,
+                self.duration,
+                zoom,
+            );
+            self.renderer
+                .as_mut()
+                .expect("renderer")
+                .render_immediate(
+                    incoming_frames,
+                    uniforms,
+                    &media.cursor,
+                    true,
+                    &mut self.layers,
+                )
+                .await
+                .map_err(|e| format!("render: {e}"))?
+        };
+        let view = video_code::PackedFrame {
+            data: &rendered.data,
+            width: rendered.width as usize,
+            height: rendered.height as usize,
+            stride: rendered.padded_bytes_per_row as usize,
+            order: video_code::PixelOrder::Rgba,
+        };
+        Ok(match expectation {
+            Some(expectation) => read_expecting(&view, expectation),
+            None => video_code::read_frame(&view),
+        })
+    }
+}
+
+impl Player {
+    /// Decodes the frames for recording `clip` at recording `time`, as a
+    /// seek (`get_frames_initial`) or as playback (`get_frames`).
+    async fn fetch(
+        &self,
+        clip: u32,
+        time: f64,
+        seek: bool,
+    ) -> Result<cap_rendering::DecodedSegmentFrames, String> {
         let media = &self.segments[clip as usize];
         let offsets = self
             .config
@@ -414,46 +580,18 @@ impl Player {
             .map(|c| c.offsets)
             .unwrap_or_default();
         let needs_camera = !self.config.camera.hide;
-        let frames = if seek {
+        if seek {
             media
                 .decoders
-                .get_frames_initial(segment_time as f32, needs_camera, true, offsets)
+                .get_frames_initial(time as f32, needs_camera, true, offsets)
                 .await
         } else {
             media
                 .decoders
-                .get_frames(segment_time as f32, needs_camera, true, offsets)
+                .get_frames(time as f32, needs_camera, true, offsets)
                 .await
         }
-        .ok_or_else(|| format!("decoders returned no frame at {t:.3}s"))?;
-        let zoom = &mut self.zooms[clip as usize];
-        zoom.ensure_precomputed_until((frame as f32 + 1.0) / fps as f32);
-        let uniforms = cap_rendering::ProjectUniforms::new(
-            &self.constants,
-            &self.config,
-            frame,
-            fps,
-            self.resolution,
-            &media.cursor,
-            &frames,
-            self.duration,
-            zoom,
-        );
-        let rendered = self
-            .renderer
-            .as_mut()
-            .expect("renderer")
-            .render_immediate(frames, uniforms, &media.cursor, true, &mut self.layers)
-            .await
-            .map_err(|e| format!("render: {e}"))?;
-        let view = video_code::PackedFrame {
-            data: &rendered.data,
-            width: rendered.width as usize,
-            height: rendered.height as usize,
-            stride: rendered.padded_bytes_per_row as usize,
-            order: video_code::PixelOrder::Rgba,
-        };
-        Ok(video_code::read_frame(&view))
+        .ok_or_else(|| format!("decoders returned no frame for clip {clip} at {time:.3}s"))
     }
 }
 

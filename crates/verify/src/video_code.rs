@@ -368,6 +368,13 @@ pub enum Readout {
         margin: f64,
         mirrored: bool,
     },
+    /// A cross-fade of two codes (`progress` 0 = all outgoing).
+    Blend {
+        outgoing: FrameMarker,
+        incoming: FrameMarker,
+        progress: f64,
+        residual: f64,
+    },
 }
 
 impl Readout {
@@ -547,35 +554,31 @@ const MIN_CELL_MARGIN: f64 = 0.18;
 
 /// Reads the code of one stream from a picture, locating it by key colour.
 pub fn read_stream(img: &impl PixelSource, kind: StreamKind) -> Readout {
-    let Some(region) = locate_region(img, kind) else {
-        return Readout::Absent;
-    };
-    let height = region.y1 - region.y0;
-    let width = region.x1 - region.x0;
-    let side = kind.code_side_fraction() * height;
-    let side = side.min(width);
-    if side < 12.0 {
-        return Readout::Unreadable {
-            reason: format!("{} region too small ({width:.0}x{height:.0})", kind.name()),
-        };
+    match stream_square(img, kind) {
+        Ok((cx, cy, side)) => read_code_near(img, kind, cx, cy, side),
+        Err(readout) => readout,
     }
-    let cx = (region.x0 + region.x1) / 2.0;
-    let cy = (region.y0 + region.y1) / 2.0;
-    read_code_near(img, kind, cx, cy, side)
 }
 
-/// Reads a code whose square is approximately centred at (cx, cy) with the
-/// given side, refining position and scale against the pilot ring.
-pub fn read_code_near(
+/// Cell levels of a located code, normalised so the pilot black level is 0
+/// and white is 1.
+#[derive(Clone, Debug)]
+pub struct CodeCells {
+    pub levels: [[f64; GRID]; GRID],
+    pub contrast: f64,
+}
+
+/// Finds the code square near (cx, cy) with the given side, refining
+/// position and scale against the pilot ring.
+fn locate_cells(
     img: &impl PixelSource,
-    kind: StreamKind,
     cx: f64,
     cy: f64,
     side: f64,
-) -> Readout {
+) -> Result<(PilotFit, CellSample), Readout> {
     let cell = side / GRID as f64;
     let shift_step = (cell / 6.0).max(0.5);
-    let mut best: Option<(PilotFit, CellSample, CodeGeometry)> = None;
+    let mut best: Option<(PilotFit, CellSample)> = None;
     for scale in [1.0, 0.97, 1.03, 0.94, 1.06] {
         for dy in -2..=2 {
             for dx in -2..=2 {
@@ -589,31 +592,122 @@ pub fn read_code_near(
                     continue;
                 };
                 let fit = pilot_fit(&sample);
-                if best.as_ref().is_none_or(|(b, _, _)| fit.margin > b.margin) {
-                    best = Some((fit, sample, geometry));
+                if best.as_ref().is_none_or(|(b, _)| fit.margin > b.margin) {
+                    best = Some((fit, sample));
                 }
             }
         }
     }
-    let Some((fit, sample, _geometry)) = best else {
-        return Readout::Unreadable {
+    let Some((fit, sample)) = best else {
+        return Err(Readout::Unreadable {
             reason: "code square falls outside the picture".into(),
-        };
+        });
     };
     let contrast = fit.white - fit.black;
     if contrast < MIN_CONTRAST {
-        return Readout::Unreadable {
+        return Err(Readout::Unreadable {
             reason: format!("pilot contrast {contrast:.0} too low"),
-        };
+        });
     }
     if fit.margin < contrast * 0.3 {
-        return Readout::Unreadable {
+        return Err(Readout::Unreadable {
             reason: format!(
                 "pilot ring not resolved (margin {:.2})",
                 fit.margin / contrast
             ),
-        };
+        });
     }
+    Ok((fit, sample))
+}
+
+/// Locates the stream's code square from its key-coloured region.
+fn stream_square(img: &impl PixelSource, kind: StreamKind) -> Result<(f64, f64, f64), Readout> {
+    let Some(region) = locate_region(img, kind) else {
+        return Err(Readout::Absent);
+    };
+    let height = region.y1 - region.y0;
+    let width = region.x1 - region.x0;
+    let side = (kind.code_side_fraction() * height).min(width);
+    if side < 12.0 {
+        return Err(Readout::Unreadable {
+            reason: format!("{} region too small ({width:.0}x{height:.0})", kind.name()),
+        });
+    }
+    Ok((
+        (region.x0 + region.x1) / 2.0,
+        (region.y0 + region.y1) / 2.0,
+        side,
+    ))
+}
+
+/// Normalised cell levels of the stream's code (for blend checks).
+pub fn read_cells(img: &impl PixelSource, kind: StreamKind) -> Result<CodeCells, Readout> {
+    let (cx, cy, side) = stream_square(img, kind)?;
+    let (fit, sample) = locate_cells(img, cx, cy, side)?;
+    let contrast = fit.white - fit.black;
+    let mut levels = [[0.0; GRID]; GRID];
+    for (row, row_levels) in levels.iter_mut().enumerate() {
+        for (col, level) in row_levels.iter_mut().enumerate() {
+            *level = (sample.levels[row][col] - fit.black) / contrast;
+        }
+    }
+    Ok(CodeCells { levels, contrast })
+}
+
+/// How well a cross-fade of `outgoing` into `incoming` explains the cells:
+/// fits the mix `progress` over the cells whose bits differ and returns
+/// (progress, worst residual over all data cells).
+pub fn blend_fit(cells: &CodeCells, outgoing: FrameMarker, incoming: FrameMarker) -> (f64, f64) {
+    let (a, b) = (outgoing.bits(), incoming.bits());
+    let bit =
+        |bits: u64, row: usize, col: usize| f64::from(u8::from(cell_is_white(bits, row, col)));
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (row, row_levels) in cells.levels.iter().enumerate() {
+        for (col, &v) in row_levels.iter().enumerate() {
+            let (x, y) = (bit(a, row, col), bit(b, row, col));
+            if x != y {
+                // v = x + p (y - x)
+                num += (v - x) * (y - x);
+                den += (y - x) * (y - x);
+            }
+        }
+    }
+    let p = if den > 0.0 {
+        (num / den).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let mut worst: f64 = 0.0;
+    for (row, row_levels) in cells.levels.iter().enumerate() {
+        for (col, &v) in row_levels.iter().enumerate() {
+            if is_pilot(row, col) {
+                continue;
+            }
+            let (x, y) = (bit(a, row, col), bit(b, row, col));
+            worst = worst.max((v - (x + p * (y - x))).abs());
+        }
+    }
+    (p, worst)
+}
+
+/// Largest per-cell residual a blend may leave and still count as a match.
+pub const BLEND_TOLERANCE: f64 = 0.3;
+
+/// Reads a code whose square is approximately centred at (cx, cy) with the
+/// given side, refining position and scale against the pilot ring.
+pub fn read_code_near(
+    img: &impl PixelSource,
+    kind: StreamKind,
+    cx: f64,
+    cy: f64,
+    side: f64,
+) -> Readout {
+    let (fit, sample) = match locate_cells(img, cx, cy, side) {
+        Ok(found) => found,
+        Err(readout) => return readout,
+    };
+    let contrast = fit.white - fit.black;
     let threshold = (fit.white + fit.black) / 2.0;
     let mut worst = f64::MAX;
     let mut bits = 0u64;

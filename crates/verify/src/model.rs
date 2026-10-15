@@ -7,8 +7,10 @@
 //! - Timeline segments play back to back; segment `k` covers
 //!   `(end - start) / timescale` output seconds and maps output time `u`
 //!   inside it to recording time `start + u * timescale`. A clip transition
-//!   into segment `k` overlaps the two segments by its (clamped) duration;
-//!   frames inside a transition are a blend and are not checked.
+//!   into segment `k` overlaps the two segments by its (clamped) duration:
+//!   a cross-fade frame must be a blend of the outgoing segment's frame (at
+//!   its last `duration` seconds) and the incoming one's; fades through black
+//!   are not checked.
 //! - Every track of a recording segment is aligned to the latest track start
 //!   (`latest_start_time - track.start_time` is added to the request). The
 //!   camera additionally takes the clip's camera offset when the user set it;
@@ -45,6 +47,9 @@ struct ModelSegment {
     end: f64,
     timescale: f64,
     transition_in: f64,
+    /// The incoming transition is a cross-fade (fades through black are not
+    /// checked).
+    crossfade: bool,
 }
 
 impl ModelSegment {
@@ -99,8 +104,15 @@ impl FrameExpectation {
 }
 
 enum Mapping {
-    Single { segment: usize, source_time: f64 },
-    Transition,
+    Single {
+        segment: usize,
+        source_time: f64,
+    },
+    Transition {
+        outgoing: (usize, f64),
+        incoming: (usize, f64),
+        crossfade: bool,
+    },
 }
 
 pub struct ReferenceModel {
@@ -184,6 +196,7 @@ impl ReferenceModel {
                 end: s.end,
                 timescale: s.timescale,
                 transition_in: 0.0,
+                crossfade: false,
             })
             .collect();
         for transition in &timeline.transitions {
@@ -195,6 +208,8 @@ impl ReferenceModel {
             if transition.duration.is_finite() && transition.duration > 0.0 && max >= MIN_TRANSITION
             {
                 segments[k].transition_in = transition.duration.clamp(MIN_TRANSITION, max);
+                segments[k].crossfade =
+                    matches!(transition.kind, cap_project::ClipTransitionType::CrossFade);
             }
         }
         let mut output_starts = Vec::with_capacity(segments.len());
@@ -254,7 +269,14 @@ impl ReferenceModel {
             let start = self.output_starts[k];
             let next_in = self.segments.get(k + 1).map_or(0.0, |n| n.transition_in);
             if t >= start && t < start + segment.transition_in {
-                return Some(Mapping::Transition);
+                let elapsed = t - start;
+                let prev = &self.segments[k - 1];
+                let out_tick = prev.duration() - segment.transition_in + elapsed;
+                return Some(Mapping::Transition {
+                    outgoing: (k - 1, prev.start + out_tick * prev.timescale),
+                    incoming: (k, segment.start + elapsed * segment.timescale),
+                    crossfade: segment.crossfade,
+                });
             }
             if t >= start + segment.transition_in && t < start + segment.duration() - next_in {
                 let elapsed = t - start;
@@ -361,22 +383,70 @@ impl ReferenceModel {
         if self.near_boundary(t) {
             return unchecked("on a timeline segment boundary");
         }
-        let (segment, source_time) = match self.map(t) {
+        let (clip, source_time, mut screen, mut camera) = match self.map(t) {
             Some(Mapping::Single {
                 segment,
                 source_time,
-            }) => (segment, source_time),
-            Some(Mapping::Transition) => return unchecked("clip transition"),
+            }) => {
+                let clip = self.segments[segment].clip;
+                let camera = if self.camera_hidden {
+                    StreamExpectation::Absent
+                } else {
+                    self.answer(clip, StreamKind::Camera, source_time)
+                };
+                (
+                    clip,
+                    source_time,
+                    self.answer(clip, StreamKind::Screen, source_time),
+                    camera,
+                )
+            }
+            Some(Mapping::Transition {
+                outgoing,
+                incoming,
+                crossfade,
+            }) => {
+                if !crossfade {
+                    return unchecked("fade-through-black transition");
+                }
+                let (out_clip, in_clip) = (
+                    self.segments[outgoing.0].clip,
+                    self.segments[incoming.0].clip,
+                );
+                let blend = |kind: StreamKind| {
+                    let a = self.answer(out_clip, kind, outgoing.1);
+                    let b = self.answer(in_clip, kind, incoming.1);
+                    match (a, b) {
+                        (
+                            StreamExpectation::Frame {
+                                segment: sa,
+                                allowed: aa,
+                            },
+                            StreamExpectation::Frame {
+                                segment: sb,
+                                allowed: ab,
+                            },
+                        ) => StreamExpectation::Blend {
+                            outgoing: (sa, aa),
+                            incoming: (sb, ab),
+                        },
+                        (StreamExpectation::Absent, StreamExpectation::Absent) => {
+                            StreamExpectation::Absent
+                        }
+                        _ => StreamExpectation::Unchecked {
+                            reason: "transition between camera and no camera".into(),
+                        },
+                    }
+                };
+                let camera = if self.camera_hidden {
+                    StreamExpectation::Absent
+                } else {
+                    blend(StreamKind::Camera)
+                };
+                (in_clip, incoming.1, blend(StreamKind::Screen), camera)
+            }
             None => return unchecked("past the end of the timeline"),
         };
-        let clip = self.segments[segment].clip;
-        let screen = self.answer(clip, StreamKind::Screen, source_time);
-        let mut camera = if self.camera_hidden {
-            StreamExpectation::Absent
-        } else {
-            self.answer(clip, StreamKind::Camera, source_time)
-        };
-        let mut screen = screen;
         match self.scene_rule(t) {
             Some((_, true)) => {
                 camera = StreamExpectation::Unchecked {

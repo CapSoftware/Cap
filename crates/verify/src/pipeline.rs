@@ -419,3 +419,276 @@ pub async fn record_studio(spec: &RecordedSpec, dir: &Path) -> anyhow::Result<()
     write_project_files(dir, &spec.name, segments)?;
     Ok(())
 }
+
+/// An Instant recording: segmented screen video and one mixed audio track
+/// (microphone and system audio) through the Instant muxers, finalised into
+/// `content/output.mp4` by the product's `finalize_instant_output`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InstantSpec {
+    pub name: String,
+    pub duration: f64,
+    pub screen: RecordedVideo,
+    pub mic_delay: Option<f64>,
+    pub system_audio: bool,
+    /// System audio delivered continuously from the start (macOS capture)
+    /// instead of loopback-style packets only while a marker plays.
+    #[serde(default)]
+    pub system_continuous: bool,
+    /// Arm a recording start gate this many seconds after the sources start
+    /// (the app's start cue); `None` records from the first frame.
+    #[serde(default)]
+    pub arm_at: Option<f64>,
+}
+
+impl InstantSpec {
+    pub fn cache_key(&self) -> String {
+        crate::fixture::cache_key(&format!("instant-{}", self.name), self)
+    }
+}
+
+/// Where each marker was emitted, on the recording clock (seconds after the
+/// pipeline epoch). Written next to the project as `verify-emitted.json`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Emitted {
+    /// (slot, emit time) of every screen frame.
+    pub screen: Vec<(u32, f64)>,
+    pub fps: u32,
+    /// (source, marker index, chirp time) of every audio marker.
+    pub audio: Vec<(AudioSource, u32, f64)>,
+}
+
+pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()> {
+    use cap_recording::{DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig};
+    crate::media::init();
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    let content = dir.join("content");
+    std::fs::create_dir_all(&content)?;
+    let timestamps = Timestamps::now();
+    let base = timestamps.instant();
+    let gate = spec
+        .arm_at
+        .map(|_| cap_recording::RecordingStartGate::new());
+    let mut emitted = Emitted {
+        fps: spec.screen.fps,
+        ..Default::default()
+    };
+
+    let video = &spec.screen;
+    let info = VideoInfo::from_raw(RawVideoFormat::Bgra, video.width, video.height, video.fps);
+    let (tx, rx) = flume::bounded::<FFmpegVideoFrame>(32);
+    let slots = video
+        .delivery
+        .slots(video.fps, spec.duration - video.start_delay);
+    for &slot in &slots {
+        emitted.screen.push((
+            slot,
+            video.start_delay + f64::from(slot) / f64::from(video.fps),
+        ));
+    }
+    let (fps, width, height, delay) = (video.fps, video.width, video.height, video.start_delay);
+    let video_emit = tokio::spawn(async move {
+        for slot in slots {
+            let t = delay + f64::from(slot) / f64::from(fps);
+            let at = base + Duration::from_secs_f64(t);
+            tokio::time::sleep_until(at.into()).await;
+            let frame = FFmpegVideoFrame {
+                inner: bgra_frame(FrameMarker::new(StreamKind::Screen, 0, slot), width, height),
+                timestamp: Timestamp::Instant(at),
+            };
+            if tx.send_async(frame).await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut video_builder = OutputPipeline::builder(content.join("display"))
+        .with_video::<ChannelVideoSource<FFmpegVideoFrame>>(ChannelVideoSourceConfig::new(info, rx))
+        .with_timestamps(timestamps);
+    if let Some(gate) = &gate {
+        video_builder = video_builder.with_start_gate(Some(gate.clone()));
+    }
+    let video_pipeline = video_builder
+        .build::<cap_recording::ffmpeg::SegmentedVideoMuxer>(
+            cap_recording::ffmpeg::SegmentedVideoMuxerConfig {
+                segment_duration: Duration::from_secs(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| anyhow!("instant video pipeline: {e}"))?;
+
+    let mono_info = AudioInfo::new(Sample::F32(Type::Packed), AUDIO_RATE, 1)
+        .map_err(|e| anyhow!("audio info: {e:?}"))?;
+    let stereo_info = AudioInfo::new(Sample::F32(Type::Packed), AUDIO_RATE, 2)
+        .map_err(|e| anyhow!("audio info: {e:?}"))?;
+    let mut audio_emits: Vec<AudioEmit> = Vec::new();
+    let mut builder = OutputPipeline::builder(content.join("audio")).with_timestamps(timestamps);
+    if let Some(gate) = &gate {
+        builder = builder.with_start_gate(Some(gate.clone()));
+    }
+    // Mirrors the product's Instant audio pipeline, which anchors at the
+    // recording epoch on Linux only.
+    if cfg!(target_os = "linux") {
+        builder = builder.with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch);
+    }
+    let has_audio = spec.mic_delay.is_some() || spec.system_audio;
+    if spec.system_audio {
+        let track = marker_track(AudioSource::System, spec.duration);
+        let schedule =
+            audio_code::standard_schedule(AudioSource::System, 0.1, spec.duration - 0.1, 0.5);
+        emitted.audio.extend(
+            schedule
+                .iter()
+                .map(|p| (AudioSource::System, p.index, p.time_secs)),
+        );
+        let (mut tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+        let continuous = spec.system_continuous;
+        let duration = spec.duration;
+        audio_emits.push(tokio::spawn(async move {
+            use futures::SinkExt;
+            if continuous {
+                for k in 0..(duration / AUDIO_CHUNK_SECS) as usize {
+                    let t = k as f64 * AUDIO_CHUNK_SECS;
+                    let at = base + Duration::from_secs_f64(t);
+                    tokio::time::sleep_until(at.into()).await;
+                    let frame = AudioFrame::new(
+                        audio_chunk(&track, t, &stereo_info),
+                        Timestamp::Instant(at),
+                    );
+                    if tx.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+                return tx;
+            }
+            for placement in schedule {
+                let first = (placement.time_secs / AUDIO_CHUNK_SECS).floor() as usize;
+                let last = ((placement.time_secs + audio_code::MARKER_SECS) / AUDIO_CHUNK_SECS)
+                    .ceil() as usize;
+                for k in first..last {
+                    let t = k as f64 * AUDIO_CHUNK_SECS;
+                    let at = base + Duration::from_secs_f64(t);
+                    tokio::time::sleep_until(at.into()).await;
+                    let frame = AudioFrame::new(
+                        audio_chunk(&track, t, &stereo_info),
+                        Timestamp::Instant(at),
+                    );
+                    if tx.send(frame).await.is_err() {
+                        return tx;
+                    }
+                }
+            }
+            tx
+        }));
+        builder = builder.with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+            stereo_info,
+            rx,
+        ));
+    }
+    if let Some(delay) = spec.mic_delay {
+        let track = marker_track(AudioSource::Mic, spec.duration);
+        let schedule =
+            audio_code::standard_schedule(AudioSource::Mic, 0.1, spec.duration - 0.1, 0.5);
+        emitted.audio.extend(
+            schedule
+                .iter()
+                .filter(|p| p.time_secs >= delay)
+                .map(|p| (AudioSource::Mic, p.index, p.time_secs)),
+        );
+        let (mut tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+        let duration = spec.duration;
+        audio_emits.push(tokio::spawn(async move {
+            use futures::SinkExt;
+            let first = (delay / AUDIO_CHUNK_SECS).ceil() as usize;
+            let last = (duration / AUDIO_CHUNK_SECS) as usize;
+            for k in first..last {
+                let t = k as f64 * AUDIO_CHUNK_SECS;
+                let at = base + Duration::from_secs_f64(t);
+                tokio::time::sleep_until(at.into()).await;
+                let frame =
+                    AudioFrame::new(audio_chunk(&track, t, &mono_info), Timestamp::Instant(at));
+                if tx.send(frame).await.is_err() {
+                    break;
+                }
+            }
+            tx
+        }));
+        builder = builder
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(mono_info, rx));
+    }
+    let audio_pipeline = if has_audio {
+        Some(
+            builder
+                .build::<DashSegmentedAudioMuxer>(DashSegmentedAudioMuxerConfig::default())
+                .await
+                .map_err(|e| anyhow!("instant audio pipeline: {e}"))?,
+        )
+    } else {
+        None
+    };
+
+    if let (Some(gate), Some(arm_at)) = (&gate, spec.arm_at) {
+        tokio::time::sleep_until((base + Duration::from_secs_f64(arm_at)).into()).await;
+        gate.arm();
+    }
+    video_emit.await.context("video emit")?;
+    let mut held = Vec::new();
+    for emit in audio_emits {
+        held.push(emit.await.context("audio emit")?);
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    video_pipeline
+        .stop()
+        .await
+        .map_err(|e| anyhow!("instant video stop: {e}"))?;
+    if let Some(audio) = audio_pipeline {
+        audio
+            .stop()
+            .await
+            .map_err(|e| anyhow!("instant audio stop: {e}"))?;
+    }
+    drop(held);
+    let output = content.join("output.mp4");
+    let display_dir = content.join("display");
+    let audio_dir = content.join("audio");
+    if !audio_dir.exists() {
+        std::fs::create_dir_all(&audio_dir)?;
+    }
+    tokio::task::spawn_blocking(move || {
+        cap_recording::recovery::RecoveryManager::finalize_instant_output(
+            &display_dir,
+            &audio_dir,
+            &output,
+        )
+    })
+    .await?
+    .map_err(|e| anyhow!("finalize instant output: {e}"))?;
+    let meta = cap_project::RecordingMeta {
+        platform: Some(cap_project::Platform::default()),
+        project_path: dir.to_path_buf(),
+        pretty_name: spec.name.clone(),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Instant(
+            cap_project::InstantRecordingMeta::Complete {
+                fps: spec.screen.fps,
+                sample_rate: has_audio.then_some(AUDIO_RATE),
+            },
+        ),
+        upload: None,
+    };
+    meta.save_for_project()
+        .map_err(|e| anyhow!("save instant meta: {e:?}"))?;
+    if let Some(arm_at) = spec.arm_at {
+        // Frames and markers within a frame of the arm instant may land on
+        // either side of it.
+        let margin = 0.05;
+        emitted.screen.retain(|e| e.1 >= arm_at + margin);
+        emitted.audio.retain(|e| e.2 >= arm_at + margin);
+    }
+    std::fs::write(
+        dir.join("verify-emitted.json"),
+        serde_json::to_string(&emitted)?,
+    )?;
+    Ok(())
+}

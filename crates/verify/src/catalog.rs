@@ -108,10 +108,10 @@ pub fn seek_gop(_tier: Tier) -> FixtureSpec {
     }
 }
 
-/// The seek fixture written by the product's macOS encoder (AVAssetWriter
-/// + VideoToolbox, its own GOP structure, 1/600 time base). Keyframes at
-/// k/30 s are off the 10 ms grid for most k. Identical to `seek_gop`
-/// elsewhere.
+/// The seek fixture written by the product's macOS encoder: AVAssetWriter
+/// with VideoToolbox, its own GOP structure and a 1/600 time base.
+/// Keyframes at k/30 s are off the 10 ms grid for most k. Identical to
+/// `seek_gop` elsewhere.
 pub fn seek_gop_native(_tier: Tier) -> FixtureSpec {
     let duration = 12.0;
     let native = |mut track: VideoTrackSpec| {
@@ -268,4 +268,69 @@ pub fn recorded_studio(_tier: Tier) -> crate::pipeline::RecordedSpec {
             },
         ],
     }
+}
+
+/// Instant recording through the real Instant muxers, started like the app
+/// does (sources warm up, then the start gate opens at 0.517 s, between two frames): steady 30 fps
+/// screen with a static hold, a mic that becomes ready at 0.2 s,
+/// loopback-style system audio.
+pub fn recorded_instant(_tier: Tier) -> crate::pipeline::InstantSpec {
+    use crate::pipeline::{Delivery, InstantSpec, RecordedVideo};
+    InstantSpec {
+        name: "instant".into(),
+        duration: 6.0,
+        screen: RecordedVideo {
+            width: SCREEN_W,
+            height: SCREEN_H,
+            fps: 30,
+            delivery: Delivery::Holds(vec![(2.5, 1.2)]),
+            start_delay: 0.0,
+        },
+        mic_delay: Some(0.2),
+        system_audio: true,
+        system_continuous: false,
+        arm_at: Some(0.517),
+    }
+}
+
+/// Instant variants isolating each audio source's start behaviour: no start
+/// gate, so a source that delivers its first sample after the screen does.
+pub fn instant_variants(tier: Tier) -> Vec<crate::pipeline::InstantSpec> {
+    let base = recorded_instant(tier);
+    vec![
+        crate::pipeline::InstantSpec {
+            name: "instant-ungated-mic-late".into(),
+            system_audio: false,
+            arm_at: None,
+            ..base.clone()
+        },
+        crate::pipeline::InstantSpec {
+            name: "instant-ungated-system-loopback".into(),
+            mic_delay: None,
+            arm_at: None,
+            ..base.clone()
+        },
+        crate::pipeline::InstantSpec {
+            name: "instant-ungated-system-continuous-mic-late".into(),
+            system_continuous: true,
+            arm_at: None,
+            ..base.clone()
+        },
+        crate::pipeline::InstantSpec {
+            name: "instant-gated-system-only".into(),
+            mic_delay: None,
+            ..base.clone()
+        },
+        crate::pipeline::InstantSpec {
+            name: "instant-gated-system-continuous-mic-late".into(),
+            system_continuous: true,
+            ..base.clone()
+        },
+        crate::pipeline::InstantSpec {
+            name: "instant-gated-mic-only".into(),
+            system_audio: false,
+            ..base.clone()
+        },
+        base,
+    ]
 }

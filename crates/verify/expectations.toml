@@ -25,7 +25,13 @@
 case = "export/jitter-camera-*/full/mp460/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames)"
+reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames; full tier 120 s: 5146 frames, up to 2232 source frames = 74 s ahead)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "export/jitter-camera-120s/full/mp460/ffmpeg"
+class = "stale"
+reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
@@ -102,4 +108,70 @@ link = ""
 case = "seek/*/storm*/ffmpeg"
 class = "stale"
 reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1-4 source frames old, and seeks near the start show frame 0 (up to 67 source frames stale)"
+link = ""
+
+# Instant mode (fixtures recorded through the real Instant muxers and
+# finalize_instant_output). Needs confirmation with real capture devices
+# (recording track); the product anchors the Instant audio track at the
+# recording epoch on Linux only.
+
+[[xfail]]
+case = "export/instant-ungated-mic-late/output/mp4/native"
+class = "sync"
+platforms = ["macos", "windows"]
+reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4"
+link = ""
+
+[[xfail]]
+case = "export/instant-ungated-system-loopback/output/mp4/native"
+class = "sync"
+platforms = ["macos", "windows"]
+reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-*/output/mp4/native"
+class = "sync"
+reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (13 ms with the gate opening between frames; 30-33 ms when it opens on a frame)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-system-only/output/mp4/native"
+class = "audio"
+flaky = true
+reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early)"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "audio"
+reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings)"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync"
+reason = "NEW: see instant-gated-*: audio up to one frame late after the start gate"
+link = ""
+
+[[xfail]]
+case = "*/basic/transition/*60*/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "NEW: during a cross-fade both clips read the same AVAssetReader decoder at two positions; at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Same frame in export and in offline playback, deterministic (3 of 3)"
+link = ""
+
+[[xfail]]
+case = "seek/seek-native/keyframes60/avf"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "On the macos-15 runner (paravirtual VideoToolbox) the wrong-GOP seek also produced one answer a frame ahead (1 of 66); not seen on Apple silicon hardware"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/seek-*/keyframes60/ffmpeg"
+class = "stale"
+platforms = ["linux", "windows"]
+reason = "NEW: FFmpeg decoder seeks near the start show frame 0 (frame 124 at 60 fps shows source 0 instead of 61) and one keyframe seek answers one frame stale (linux runner; the x264 fallback fixture)"
 link = ""

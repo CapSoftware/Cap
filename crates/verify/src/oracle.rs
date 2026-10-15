@@ -16,7 +16,13 @@ pub enum StreamExpectation {
     Frame { segment: u8, allowed: Vec<u32> },
     /// The stream must not be visible.
     Absent,
-    /// Not checked (blends such as transitions), with the reason.
+    /// A cross-fade between two source frames (a clip transition). Each side
+    /// lists its allowed indices like `Frame`.
+    Blend {
+        outgoing: (u8, Vec<u32>),
+        incoming: (u8, Vec<u32>),
+    },
+    /// Not checked, with the reason.
     Unchecked { reason: String },
 }
 
@@ -32,6 +38,9 @@ impl StreamExpectation {
         match self {
             StreamExpectation::Frame { segment, allowed } => {
                 allowed.first().map(|&i| (*segment, i))
+            }
+            StreamExpectation::Blend { outgoing, .. } => {
+                outgoing.1.first().map(|&i| (outgoing.0, i))
             }
             _ => None,
         }
@@ -234,6 +243,90 @@ pub fn check_stream_at(
                             Some(reason.clone()),
                         );
                     }
+                    Readout::Blend { incoming, .. } => {
+                        report.unexpected += 1;
+                        push(
+                            &mut report,
+                            MismatchKind::Unexpected,
+                            Some((incoming.segment, incoming.index)),
+                            None,
+                            Some("blend".into()),
+                        );
+                    }
+                }
+            }
+            StreamExpectation::Blend { outgoing, incoming } => {
+                report.checked += 1;
+                let sides: Vec<(u8, u32)> = match readout {
+                    Readout::Blend {
+                        outgoing: o,
+                        incoming: i,
+                        ..
+                    } => vec![(o.segment, o.index), (i.segment, i.index)],
+                    Readout::Marker { marker, .. } => vec![(marker.segment, marker.index)],
+                    Readout::Absent => {
+                        report.missing += 1;
+                        push(&mut report, MismatchKind::Missing, None, None, None);
+                        continue;
+                    }
+                    Readout::Unreadable { reason } => {
+                        report.unreadable += 1;
+                        push(
+                            &mut report,
+                            MismatchKind::Unreadable,
+                            None,
+                            None,
+                            Some(reason.clone()),
+                        );
+                        continue;
+                    }
+                };
+                let fits = |got: (u8, u32), side: &(u8, Vec<u32>)| {
+                    got.0 == side.0 && side.1.contains(&got.1)
+                };
+                let ok = match sides.as_slice() {
+                    [o, i] => fits(*o, outgoing) && fits(*i, incoming),
+                    [one] => fits(*one, outgoing) || fits(*one, incoming),
+                    _ => false,
+                };
+                if !ok {
+                    let (got, side) = match sides.as_slice() {
+                        [o, _] if !fits(*o, outgoing) => (*o, outgoing),
+                        [_, i] => (*i, incoming),
+                        [one] => (*one, incoming),
+                        _ => continue,
+                    };
+                    let reference = i64::from(*side.1.first().unwrap_or(&0));
+                    let delta = i64::from(got.1) - reference;
+                    let kind = if got.0 != side.0 {
+                        report.wrong_segment += 1;
+                        MismatchKind::WrongSegment
+                    } else if delta < 0 {
+                        report.stale += 1;
+                        report.max_stale = report.max_stale.max(-delta);
+                        MismatchKind::Stale
+                    } else {
+                        report.ahead += 1;
+                        report.max_ahead = report.max_ahead.max(delta);
+                        MismatchKind::Ahead
+                    };
+                    report.mismatches.push(Mismatch {
+                        position,
+                        output_frame: frame,
+                        time_secs,
+                        kind,
+                        expected: Some((side.0, reference as u32)),
+                        observed: Some(got),
+                        delta: Some(delta),
+                        detail: Some(
+                            if std::ptr::eq(side, incoming) {
+                                "transition, incoming side"
+                            } else {
+                                "transition, outgoing side"
+                            }
+                            .into(),
+                        ),
+                    });
                 }
             }
             StreamExpectation::Frame { segment, allowed } => {
@@ -244,6 +337,16 @@ pub fn check_stream_at(
                     Readout::Absent => {
                         report.missing += 1;
                         push(&mut report, MismatchKind::Missing, None, None, None);
+                    }
+                    Readout::Blend { .. } => {
+                        report.unreadable += 1;
+                        push(
+                            &mut report,
+                            MismatchKind::Unreadable,
+                            None,
+                            None,
+                            Some("blend where a single frame was expected".into()),
+                        );
                     }
                     Readout::Unreadable { reason } => {
                         report.unreadable += 1;
@@ -313,4 +416,81 @@ pub fn check_stream_at(
         .map(|((_, index), _)| *index)
         .collect();
     report
+}
+
+/// Reads one stream of a picture knowing what the model expects there: a
+/// plain decode, or for a cross-fade the best-fitting blend of the expected
+/// outgoing and incoming codes (searching nearby frames when none fits, so
+/// a wrong answer is reported as such rather than as unreadable).
+pub fn read_expecting(
+    img: &impl crate::video_code::PixelSource,
+    kind: StreamKind,
+    expectation: &StreamExpectation,
+) -> Readout {
+    use crate::video_code::{self, BLEND_TOLERANCE, FrameMarker};
+    let StreamExpectation::Blend { outgoing, incoming } = expectation else {
+        return video_code::read_stream(img, kind);
+    };
+    let cells = match video_code::read_cells(img, kind) {
+        Ok(cells) => cells,
+        Err(readout) => return readout,
+    };
+    let best_of = |pairs: &mut dyn Iterator<Item = (FrameMarker, FrameMarker)>| {
+        pairs
+            .map(|(o, i)| {
+                let (p, residual) = video_code::blend_fit(&cells, o, i);
+                (o, i, p, residual)
+            })
+            .min_by(|a, b| a.3.total_cmp(&b.3))
+    };
+    let marker = |seg: u8, index: i64| {
+        (0..=i64::from(video_code::MAX_INDEX))
+            .contains(&index)
+            .then(|| FrameMarker::new(kind, seg, index as u32))
+    };
+    let expected = best_of(&mut outgoing.1.iter().flat_map(|&o| {
+        incoming.1.iter().filter_map(move |&i| {
+            Some((
+                marker(outgoing.0, i64::from(o))?,
+                marker(incoming.0, i64::from(i))?,
+            ))
+        })
+    }));
+    if let Some((o, i, p, residual)) = expected
+        && residual <= BLEND_TOLERANCE
+    {
+        return Readout::Blend {
+            outgoing: o,
+            incoming: i,
+            progress: p,
+            residual,
+        };
+    }
+    let single = video_code::read_stream(img, kind);
+    if single.marker().is_some() {
+        return single;
+    }
+    let (o0, i0) = (
+        i64::from(*outgoing.1.first().unwrap_or(&0)),
+        i64::from(*incoming.1.first().unwrap_or(&0)),
+    );
+    let nearby = best_of(&mut (-12i64..=12).flat_map(|d_o| {
+        (-12i64..=12).filter_map(move |d_i| {
+            Some((marker(outgoing.0, o0 + d_o)?, marker(incoming.0, i0 + d_i)?))
+        })
+    }));
+    match nearby {
+        Some((o, i, p, residual)) if residual <= BLEND_TOLERANCE => Readout::Blend {
+            outgoing: o,
+            incoming: i,
+            progress: p,
+            residual,
+        },
+        _ => Readout::Unreadable {
+            reason: format!(
+                "transition blend matches no expected pair (best residual {:.2})",
+                expected.map_or(f64::NAN, |e| e.3)
+            ),
+        },
+    }
 }
