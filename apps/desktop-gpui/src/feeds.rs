@@ -1338,21 +1338,23 @@ impl Feeds {
         // Port of `audio_meter.rs`. The windowing runs off the main thread so
         // an audio callback (50-100/s) only wakes the UI when the level it
         // would draw has changed.
-        let (level_tx, level_rx) = flume::bounded::<f64>(1);
-        let shown = self.mic_level_shown.clone();
+        let (wake, wakes) = flume::bounded::<()>(1);
+        let latest = Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits()));
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: self.mic_level_shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
         let meter = cx.background_executor().spawn(async move {
-            let mut window = MeterWindow::default();
             while let Ok(samples) = meter_rx.recv_async().await {
-                if let Some(level) = window.push(Instant::now(), db_fs(&samples))
-                    && level.to_bits() != shown.load(Ordering::Acquire)
-                {
-                    let _ = level_tx.try_send(level);
-                }
+                sender.push(Instant::now(), db_fs(&samples));
             }
         });
         let pump = cx.spawn(async move |this, cx| {
             let _meter = meter;
-            while let Ok(level) = level_rx.recv_async().await {
+            while wakes.recv_async().await.is_ok() {
+                let level = f64::from_bits(latest.load(Ordering::Acquire));
                 let changed = this.update(cx, |this: &mut Feeds, cx| {
                     if this.mic_level_db == level {
                         return false;
@@ -1467,6 +1469,27 @@ impl MeterWindow {
             .map(|(_, db)| *db)
             .fold(f64::MIN, f64::max);
         Some((max * 2.0).round() / 2.0)
+    }
+}
+
+/// Only the newest level is kept, so a UI thread that falls behind draws the
+/// current level rather than a queued one.
+struct MeterSender {
+    window: MeterWindow,
+    shown: Arc<std::sync::atomic::AtomicU64>,
+    latest: Arc<std::sync::atomic::AtomicU64>,
+    wake: flume::Sender<()>,
+}
+
+impl MeterSender {
+    fn push(&mut self, now: Instant, db: f64) {
+        let Some(level) = self.window.push(now, db) else {
+            return;
+        };
+        self.latest.store(level.to_bits(), Ordering::Release);
+        if level.to_bits() != self.shown.load(Ordering::Acquire) {
+            let _ = self.wake.try_send(());
+        }
     }
 }
 
@@ -1630,21 +1653,36 @@ mod tests {
     }
 
     #[test]
-    fn a_steady_level_produces_no_main_thread_updates_after_the_first() {
+    fn the_meter_wakes_the_ui_for_new_levels_only_and_keeps_the_newest() {
+        use std::sync::atomic::AtomicU64;
+
+        let shown = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let latest = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let (wake, wakes) = flume::bounded(1);
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
         let start = Instant::now();
-        let mut window = MeterWindow::default();
-        let mut shown = -96.0f64;
-        let mut ui_wakeups = 0;
-        for callback in 0..1000u64 {
-            let now = start + Duration::from_micros(callback * 10_667);
-            if let Some(level) = window.push(now, -96.0)
-                && level != shown
-            {
-                shown = level;
-                ui_wakeups += 1;
-            }
+        let at = |callback: u64| start + Duration::from_micros(callback * 10_667);
+
+        for callback in 0..10 {
+            sender.push(at(callback), -20.0);
         }
-        assert_eq!(ui_wakeups, 0);
+        for callback in 40..50 {
+            sender.push(at(callback), -30.0);
+        }
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert!(wakes.try_recv().is_err());
+        assert_eq!(f64::from_bits(latest.load(Ordering::Acquire)), -30.0);
+
+        shown.store((-30.0f64).to_bits(), Ordering::Release);
+        for callback in 50..150 {
+            sender.push(at(callback), -30.0);
+        }
+        assert!(wakes.try_recv().is_err());
     }
 
     #[test]
