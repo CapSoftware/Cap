@@ -69,8 +69,7 @@ pub(crate) fn display_work_area(
         let bounds = scap_targets::Display::from_id(&id)
             .as_ref()
             .and_then(capture_display_bounds)?;
-        let primary_height = cx.primary_display()?.bounds().size.height;
-        Some(global_macos_work_area(available, bounds, primary_height))
+        Some(global_macos_work_area(available, bounds))
     }
     #[cfg(not(target_os = "macos"))]
     Some(available)
@@ -144,16 +143,12 @@ fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixe
 }
 
 #[cfg(target_os = "macos")]
-fn global_macos_work_area(
-    mut available: Bounds<Pixels>,
-    display: Bounds<Pixels>,
-    primary_height: Pixels,
-) -> Bounds<Pixels> {
-    // GPUI's macOS work area uses local x but includes the AppKit screen y.
-    // Windows opened without a display ID need primary-display coordinates.
-    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
-    available.origin.x += display.origin.x;
-    available.origin.y += display.origin.y - appkit_origin_y;
+fn global_macos_work_area(mut available: Bounds<Pixels>, display: Bounds<Pixels>) -> Bounds<Pixels> {
+    // GPUI's macOS work area is relative to its own display's top-left corner
+    // (`visible_bounds` in gpui_macos). Windows opened without a display ID need
+    // primary-display coordinates, so a display above or below the primary one
+    // has to carry its global origin across.
+    available.origin += display.origin;
     available
 }
 
@@ -6866,11 +6861,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
-        for (display_origin, appkit_y) in [
-            (point(px(-1440.), px(0.)), 180.),
-            (point(px(1920.), px(0.)), 180.),
-            (point(px(0.), px(-900.)), 1080.),
-            (point(px(0.), px(1080.)), -900.),
+        for display_origin in [
+            point(px(-1440.), px(0.)),
+            point(px(1920.), px(0.)),
+            point(px(0.), px(-900.)),
+            point(px(0.), px(1080.)),
+            point(px(1691.), px(-1080.)),
         ] {
             let display = Bounds {
                 origin: display_origin,
@@ -6878,11 +6874,10 @@ mod tests {
             };
             let available = global_macos_work_area(
                 Bounds {
-                    origin: point(px(0.), px(appkit_y + 25.)),
+                    origin: point(px(0.), px(25.)),
                     size: size(px(1440.), px(825.)),
                 },
                 display,
-                px(1080.),
             );
             assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
             assert_eq!(available.size, size(px(1440.), px(825.)));
