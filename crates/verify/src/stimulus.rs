@@ -66,6 +66,8 @@ pub enum StimulusEvent {
         index: u32,
         /// Host time right after the frame was handed to the window server.
         host: u64,
+        #[serde(default)]
+        render_started: Option<u64>,
     },
     AudioStarted {
         device: String,

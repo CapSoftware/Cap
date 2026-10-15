@@ -14,6 +14,13 @@ on:
       tier:
         description: "fast or full"
         default: "fast"
+      case_filter:
+        description: "Case globs, comma-separated (empty runs all)"
+        default: ""
+      keep_artifacts:
+        description: "Preserve recordings and raw crash snapshots for passing cases"
+        type: boolean
+        default: false
   push:
     branches:
       - ci/verify-recording
@@ -42,6 +49,8 @@ jobs:
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
       CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump

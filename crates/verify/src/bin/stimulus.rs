@@ -198,6 +198,7 @@ mod app {
         }
 
         fn draw(&mut self, index: u32, salt: u64) {
+            let render_started = host_now();
             let (w, h) = self.size;
             let Some(surface) = self.surface.as_mut() else {
                 return;
@@ -244,7 +245,11 @@ mod app {
             if buffer.present().is_ok() {
                 let host = host_now();
                 if self.shown != Some(index) {
-                    self.log.write(&StimulusEvent::Frame { index, host });
+                    self.log.write(&StimulusEvent::Frame {
+                        index,
+                        host,
+                        render_started: Some(render_started),
+                    });
                 }
                 self.shown = Some(index);
             }

@@ -711,19 +711,21 @@ async fn run_case(
         spec.id.replace('/', "-"),
         ATTEMPT.load(Ordering::Relaxed)
     ));
+    let _ = std::fs::remove_dir_all(&scratch);
     let mut tries = 0;
     let (recorded, reference) = loop {
         tries += 1;
-        let _ = std::fs::remove_dir_all(&scratch);
-        std::fs::create_dir_all(&scratch)?;
+        let attempt_scratch = scratch.join(format!("attempt-{tries}"));
+        std::fs::create_dir_all(&attempt_scratch)?;
         let reference = host_now();
-        let recorded = record(spec, capture, shareable, &scratch, reference, case).await?;
+        let recorded = record(spec, capture, shareable, &attempt_scratch, reference, case).await?;
         match starved(spec, &recorded.stimulus) {
             Some(reason) if tries < 2 => {
                 case.note(format!("inconclusive, retrying: {reason}"));
             }
             Some(reason) => {
                 case.problem("environment", format!("stimulus starved twice: {reason}"));
+                case.note(format!("artifacts kept at {}", scratch.display()));
                 return Ok(());
             }
             None => break (recorded, reference),
@@ -749,15 +751,38 @@ fn starved(spec: &Spec, events: &[StimulusEvent]) -> Option<String> {
     let frames: Vec<(u32, f64)> = events
         .iter()
         .filter_map(|e| match e {
-            StimulusEvent::Frame { index, host } if *index > 0 => {
+            StimulusEvent::Frame { index, host, .. } if *index > 0 => {
                 Some((*index, host_secs(*host, go)))
             }
             _ => None,
         })
         .collect();
-    let expected = (spec.seconds * spec.stimulus_fps).round() as usize;
+    let expected = (1..=(spec.seconds * spec.stimulus_fps).round() as u32)
+        .filter(|index| {
+            let time = f64::from(index - 1) / spec.stimulus_fps;
+            !spec
+                .holds
+                .iter()
+                .any(|&(start, length)| time > start && time < start + length)
+        })
+        .count();
+    let longest_draw = events
+        .iter()
+        .filter_map(|event| match event {
+            StimulusEvent::Frame {
+                host,
+                render_started: Some(start),
+                ..
+            } => Some(host_secs(*host, *start)),
+            _ => None,
+        })
+        .fold(0.0f64, f64::max);
+    let draw_note = format!("longest draw {:.0} ms", longest_draw * 1000.0);
     if frames.len() * 10 < expected * 9 {
-        return Some(format!("presented {} of {expected} frames", frames.len()));
+        return Some(format!(
+            "presented {} of {expected} frames; {draw_note}",
+            frames.len()
+        ));
     }
     let period = 1.0 / spec.stimulus_fps;
     let held = |t: f64| {
@@ -770,7 +795,49 @@ fn starved(spec: &Spec, events: &[StimulusEvent]) -> Option<String> {
         .filter(|w| !held(w[0].1) && !held(w[1].1))
         .map(|w| w[1].1 - w[0].1)
         .fold(0.0f64, f64::max);
-    (stall > 4.0 * period).then(|| format!("stalled {:.0} ms between frames", stall * 1000.0))
+    (stall > 4.0 * period).then(|| {
+        format!(
+            "stalled {:.0} ms between frames; {draw_note}",
+            stall * 1000.0
+        )
+    })
+}
+
+#[test]
+fn scripted_holds_do_not_count_as_stimulus_starvation() {
+    let mut spec = specs().remove(0);
+    spec.seconds = 2.0;
+    spec.holds = vec![(0.5, 0.5)];
+    let reference = host_now();
+    let mut events = vec![StimulusEvent::Go { host: reference }];
+    for index in (1..=11).chain(21..=40) {
+        events.push(StimulusEvent::Frame {
+            index,
+            host: host_add_secs(reference, f64::from(index - 1) / spec.stimulus_fps),
+            render_started: None,
+        });
+    }
+    assert_eq!(starved(&spec, &events), None);
+}
+
+#[test]
+fn unscripted_stimulus_stalls_remain_failures() {
+    let spec = &specs()[0];
+    let reference = host_now();
+    let mut events = vec![StimulusEvent::Go { host: reference }];
+    for index in 1..=(spec.seconds * spec.stimulus_fps).round() as u32 {
+        if (80..85).contains(&index) {
+            continue;
+        }
+        events.push(StimulusEvent::Frame {
+            index,
+            host: host_add_secs(reference, f64::from(index - 1) / spec.stimulus_fps),
+            render_started: None,
+        });
+    }
+    assert!(starved(spec, &events).is_some_and(|reason| reason.starts_with("stalled")));
+    events.retain(|event| !matches!(event, StimulusEvent::Frame { index: 90..110, .. }));
+    assert!(starved(spec, &events).is_some_and(|reason| reason.starts_with("presented")));
 }
 
 fn scratch_root() -> PathBuf {
@@ -912,13 +979,19 @@ async fn record(
     tokio::time::sleep(Duration::from_millis(400)).await;
     let stopped_host = host_now();
     let crashed = if spec.mode == Mode::StudioCrashed {
-        let snapshot = scratch.join("crashed.cap");
+        let snapshot = scratch.join("crash-snapshot.cap");
+        let snapshot_started = host_now();
         let status = std::process::Command::new("cp")
             .arg("-cR")
             .arg(&project)
             .arg(&snapshot)
             .status()?;
         anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        case.note(format!(
+            "crash snapshot at {:.3}s, cloned in {:.3}s",
+            host_secs(snapshot_started, reference),
+            host_secs(host_now(), snapshot_started)
+        ));
         Some(snapshot)
     } else {
         None
@@ -969,9 +1042,19 @@ async fn record(
     waited?;
     let (project_path, loss_budget) = match crashed {
         Some(snapshot) => {
+            let recovery_copy = scratch.join("crashed.cap");
+            let status = std::process::Command::new("cp")
+                .arg("-cR")
+                .arg(&snapshot)
+                .arg(&recovery_copy)
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "copy of the preserved crash snapshot failed"
+            );
             let started = std::time::Instant::now();
             let recovered = tokio::task::spawn_blocking(move || {
-                let incomplete = RecoveryManager::inspect_recording(&snapshot)
+                let incomplete = RecoveryManager::inspect_recording(&recovery_copy)
                     .ok_or_else(|| anyhow::anyhow!("crash snapshot is not recoverable"))?;
                 RecoveryManager::recover(&incomplete).map_err(|e| anyhow::anyhow!("recover: {e}"))
             })
@@ -1198,7 +1281,7 @@ impl Offsets {
 fn first_presented(events: &[StimulusEvent], reference: u64) -> Truth {
     let mut truth = Truth::new();
     for event in events {
-        if let StimulusEvent::Frame { index, host } = event {
+        if let StimulusEvent::Frame { index, host, .. } = event {
             truth.entry(*index).or_insert(host_secs(*host, reference));
         }
     }
