@@ -1081,6 +1081,7 @@ async fn send_silence_frames<TMuxer: AudioMuxer>(
             .lock()
             .await
             .send_audio_frame(AudioFrame::new(silence, frame_ts), elapsed)?;
+        crate::diag!("ASILENCE dur={:.6} samples={n}", elapsed.as_secs_f64());
         sent += n;
     }
     Ok(())
@@ -3006,6 +3007,11 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
 
                     let mut timestamp = frame.timestamp();
+                    crate::diag!(
+                        "VIN mux={} src_ns={} released={released_at_arm}",
+                        std::any::type_name::<TMutex>(),
+                        crate::diag::ts_ns(&timestamp)
+                    );
 
                     if let Some(gate) = &start_gate {
                         if released_at_arm {
@@ -3125,6 +3131,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
+                    crate::diag!(
+                        "VOUT mux={} n={frame_count} src_ns={} dur={:.6} raw={:.6} wall={:.6}",
+                        std::any::type_name::<TMutex>(),
+                        crate::diag::ts_ns(&timestamp),
+                        duration.as_secs_f64(),
+                        raw_duration.as_secs_f64(),
+                        wall_clock_elapsed.as_secs_f64()
+                    );
                     let duplicate = frame.duplicate();
                     if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
                         return Err(video_mux_send_error(frame_count, e));
@@ -4050,6 +4064,13 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         );
     }
 
+    crate::diag!(
+        "AOUT mux={} src_ns={} dur={:.6} samples={}",
+        std::any::type_name::<TMutex>(),
+        crate::diag::ts_ns(&frame.timestamp),
+        timestamp.as_secs_f64(),
+        frame.inner.samples()
+    );
     if let Err(e) = ctx.muxer.lock().await.send_audio_frame(frame, timestamp) {
         if ctx.allow_audio_degradation {
             warn!(

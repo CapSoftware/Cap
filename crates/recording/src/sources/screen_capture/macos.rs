@@ -395,7 +395,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                             video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
-                            match output_pipeline::send_with_stall_budget_flume(
+                            let diag_outcome = output_pipeline::send_with_stall_budget_flume(
                                 &video_tx,
                                 VideoFrame {
                                     sample_buf: final_sample_buf,
@@ -403,7 +403,12 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 },
                                 "screen-video",
                                 &stall_health_tx,
-                            ) {
+                            );
+                            crate::diag!(
+                                "SCRCB host={mach_timestamp} sent={}",
+                                matches!(diag_outcome, output_pipeline::StallSendOutcome::Sent)
+                            );
+                            match diag_outcome {
                                 output_pipeline::StallSendOutcome::Sent => {}
                                 output_pipeline::StallSendOutcome::StalledAndDropped { .. }
                                 | output_pipeline::StallSendOutcome::Disconnected => {
