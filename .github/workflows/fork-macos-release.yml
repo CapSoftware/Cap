@@ -5,11 +5,16 @@ name: "fork-macos-release"
 # so.cap.desktop identity, so it installs over the official Cap and reuses its
 # recordings and settings. It is ad-hoc signed, so macOS asks once to allow it.
 #
-# Run it from the Actions tab, or push a tag named fw-v<anything>.
+# Every merge to main builds and publishes a release tagged
+# fw-v<version>-build.<run>. It also runs from the Actions tab, or when a tag
+# named fw-v<anything> is pushed. The tag the release step creates is pushed
+# with GITHUB_TOKEN, which does not start another run.
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "fw-v*"
 
