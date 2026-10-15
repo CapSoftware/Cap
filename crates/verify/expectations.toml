@@ -87,8 +87,15 @@ case = "seek/vfr-holds/into-holds60/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "Camera one frame stale after a seek into a hold, 3 of 4 runs on main"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "NEW: AVAssetReader camera answers one frame stale when a region is revisited after other seeks (see seek/vfr-holds/revisit60/avf for the deterministic sequence). This longer sequence fails 12 of 13 runs on main; it passed once under parallel load, probably because the decoder's wall-clock paths (250 ms idle reader drop, 100 ms scrub cooldown) change which branch answers"
+link = ""
+
+[[xfail]]
+case = "seek/vfr-holds/revisit60/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "NEW: seeks to 2.0 s, 3.5 s, 1.2 s, 2.3 s (each + 29 playback frames, 60 fps): the camera request at 2.483 s (slot 74, CFR camera) is answered with slot 73. Deterministic: 3 of 3 on main and 3 of 3 with #2603; FFmpeg is correct. Repro: CAP_VERIFY_SEEK_SCRIPT='vfr-holds@60:2.0+29,3.5+29,1.2+29,2.3+29' cargo test -p cap-verify --test seek script -- --nocapture"
+link = ""
 
 [[xfail]]
 case = "seek/*/storm*/ffmpeg"

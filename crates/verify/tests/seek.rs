@@ -242,6 +242,26 @@ fn seek_into_holds() {
         no_edit,
         &into_holds,
     ));
+    // Minimal deterministic sequence for the AVAssetReader camera answering
+    // one frame stale after revisiting a region (found by into-holds).
+    let revisit = |total: u32, _: &common::Project| {
+        let mut out = Vec::new();
+        for t in [2.0, 3.5, 1.2, 2.3] {
+            let f = (t * 60.0) as u32;
+            if f + 30 < total {
+                out.push((f, true));
+                out.extend((1..30).map(|k| (f + k, false)));
+            }
+        }
+        out
+    };
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        "revisit",
+        60,
+        no_edit,
+        &revisit,
+    ));
     common::assert_passed(failures);
 }
 
