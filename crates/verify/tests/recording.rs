@@ -55,8 +55,14 @@ const SYSTEM_AUDIO_STARTUP: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    Studio { fragmented: bool, camera: bool },
+    Studio {
+        fragmented: bool,
+        camera: bool,
+    },
     Instant,
+    /// Fragmented Studio recorded by a child process that is SIGKILLed
+    /// mid-recording, then recovered the way the app recovers it.
+    StudioKilled,
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +110,15 @@ fn specs() -> Vec<Spec> {
             mode: Mode::Instant,
             seconds: 8.0,
             stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+        },
+        Spec {
+            id: "recording/studio-recovery/sigkill",
+            tier: Tier::Fast,
+            mode: Mode::StudioKilled,
+            seconds: 8.0,
+            stimulus_fps: 30.0,
             holds: vec![],
             camera_drops_at: vec![],
         },
@@ -235,7 +250,8 @@ struct Feeds {
     camera: Option<Arc<SyntheticCamera>>,
     stop: Arc<AtomicBool>,
     started: Arc<AtomicU64>,
-    mic_task: tokio::task::JoinHandle<Truth>,
+    mic_truth: Truth,
+    mic_task: tokio::task::JoinHandle<()>,
     camera_task: Option<tokio::task::JoinHandle<(Truth, Vec<u32>)>>,
 }
 
@@ -254,23 +270,28 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
         MIC_RATE,
         1,
     ));
+    let origin = host_now();
+    // Marker times count from the case reference, like the system audio
+    // stimulus, so the two sources' phases never overlap.
+    let base = host_secs(origin, reference);
+    let schedule: Vec<MarkerPlacement> =
+        audio_code::standard_schedule(AudioSource::Mic, 0.0, base + max_secs, AUDIO_PERIOD)
+            .into_iter()
+            .filter(|p| p.time_secs >= base + 0.3)
+            .map(|p| MarkerPlacement {
+                index: p.index,
+                time_secs: p.time_secs - base,
+            })
+            .collect();
+    let rate = f64::from(MIC_RATE);
+    let mic_truth: Truth = schedule
+        .iter()
+        .map(|p| (p.index, base + (p.time_secs * rate).round() / rate))
+        .collect();
     let mic_task = {
         let mic = mic.clone();
         let stop = stop.clone();
         tokio::spawn(async move {
-            let origin = host_now();
-            // Marker times count from the case reference, like the system
-            // audio stimulus, so the two sources' phases never overlap.
-            let base = host_secs(origin, reference);
-            let schedule: Vec<MarkerPlacement> =
-                audio_code::standard_schedule(AudioSource::Mic, 0.0, base + max_secs, AUDIO_PERIOD)
-                    .into_iter()
-                    .filter(|p| p.time_secs >= base + 0.3)
-                    .map(|p| MarkerPlacement {
-                        index: p.index,
-                        time_secs: p.time_secs - base,
-                    })
-                    .collect();
             let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
             audio_code::render_markers(
                 &mut signal,
@@ -279,11 +300,6 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
                 &schedule,
                 audio_code::DEFAULT_AMPLITUDE,
             );
-            let rate = f64::from(MIC_RATE);
-            let truth: Truth = schedule
-                .iter()
-                .map(|p| (p.index, base + (p.time_secs * rate).round() / rate))
-                .collect();
             for (n, chunk) in signal.chunks(MIC_CHUNK).enumerate() {
                 if stop.load(Ordering::Acquire) {
                     break;
@@ -299,7 +315,6 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
                 )
                 .await;
             }
-            truth
         })
     };
     let (camera, camera_task) = if camera {
@@ -359,6 +374,7 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
     };
     Feeds {
         mic,
+        mic_truth,
         camera,
         stop,
         started,
@@ -402,6 +418,109 @@ enum Handle {
     Instant(instant_recording::ActorHandle),
 }
 
+/// Capture target plus every window except the stimulus, which is excluded
+/// from the capture filter so system prompts and the developer's apps never
+/// reach the recording.
+async fn capture_setup(
+    capture: CaptureMode,
+) -> anyhow::Result<(
+    ScreenCaptureTarget,
+    Vec<scap_targets::WindowId>,
+    SendableShareableContent,
+)> {
+    let stimulus_window = find_window(WINDOW_TITLE);
+    let excluded = scap_targets::Window::list()
+        .into_iter()
+        .map(|w| w.id())
+        .filter(|id| Some(id) != stimulus_window.as_ref())
+        .collect();
+    let shareable = cidre::sc::ShareableContent::current()
+        .await
+        .map_err(|e| anyhow::anyhow!("shareable content: {e:?}"))?
+        .into();
+    let target = match capture {
+        CaptureMode::Display => ScreenCaptureTarget::Display {
+            id: scap_targets::Display::primary().id(),
+        },
+        CaptureMode::Window => ScreenCaptureTarget::Window {
+            id: stimulus_window.ok_or_else(|| anyhow::anyhow!("stimulus window not found"))?,
+        },
+    };
+    Ok((target, excluded, shareable))
+}
+
+/// The app's Studio builder (`RecordingDefaults::apply_to_studio_builder`)
+/// with the capture-independent settings pinned: no keyboard capture (it
+/// would prompt for Input Monitoring) and Balanced quality on every host.
+fn studio_builder(
+    project: PathBuf,
+    target: ScreenCaptureTarget,
+    excluded: Vec<scap_targets::WindowId>,
+    fragmented: bool,
+    camera: bool,
+) -> (studio_recording::ActorBuilder, u32) {
+    let defaults = RecordingDefaults::default();
+    let builder = defaults
+        .apply_to_studio_builder(
+            studio_recording::Actor::builder(project, target).with_system_audio(true),
+            camera,
+            None,
+        )
+        .with_excluded_windows(excluded)
+        .with_keyboard_capture(false)
+        .with_fragmented(fragmented)
+        .with_quality(StudioQuality::Balanced);
+    (builder, defaults.studio_max_fps(camera, None))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ChildSpec {
+    project: PathBuf,
+    truth: PathBuf,
+    reference: u64,
+    max_secs: f64,
+    window: bool,
+}
+
+const CHILD_ENV: &str = "CAP_VERIFY_RECORD_CHILD";
+const CHILD_READY: &str = "CAP-VERIFY-RECORDING";
+
+/// Child half of `studio-recovery/sigkill`: records until killed.
+#[test]
+fn recording_child() {
+    let Ok(spec) = std::env::var(CHILD_ENV) else {
+        return;
+    };
+    media::init();
+    let spec: ChildSpec = serde_json::from_str(&spec).expect("child spec");
+    let rt = runtime();
+    rt.block_on(async move {
+        let capture = if spec.window {
+            CaptureMode::Window
+        } else {
+            CaptureMode::Display
+        };
+        let (target, excluded, shareable) = capture_setup(capture).await.expect("capture");
+        let feeds = start_feeds(spec.reference, spec.max_secs, false, vec![]);
+        std::fs::write(
+            &spec.truth,
+            serde_json::to_string(&feeds.mic_truth).expect("truth"),
+        )
+        .expect("write truth");
+        let mic_lock = Arc::new(feeds.mic.lock().await.expect("mic lock"));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (builder, max_fps) = studio_builder(spec.project, target, excluded, true, false);
+        let handle = builder
+            .with_mic_feed(mic_lock)
+            .build(Some(shareable))
+            .await
+            .expect("studio recording");
+        println!("{CHILD_READY} {} {max_fps}", host_now());
+        tokio::time::sleep(Duration::from_secs_f64(spec.max_secs)).await;
+        drop(handle);
+    });
+}
+
 fn stimulus_binary() -> PathBuf {
     std::env::var_os("CAP_VERIFY_STIMULUS_BIN")
         .map(PathBuf::from)
@@ -423,6 +542,9 @@ struct Recorded {
     mic_truth: Truth,
     camera: Option<(Truth, Vec<u32>)>,
     max_fps: u32,
+    /// Recovery after a kill may lose at most this many seconds before the
+    /// kill (the in-flight fragment).
+    loss_budget: Option<f64>,
 }
 
 async fn run_case(
@@ -487,29 +609,10 @@ async fn record(
         CaptureMode::Window => 300,
     }))
     .await;
-    // Only the stimulus may reach the recording: other windows (system
-    // prompts, the developer's apps) are excluded from the capture filter.
-    let stimulus_window = find_window(WINDOW_TITLE);
-    let excluded: Vec<scap_targets::WindowId> = scap_targets::Window::list()
-        .into_iter()
-        .map(|w| w.id())
-        .filter(|id| Some(id) != stimulus_window.as_ref())
-        .collect();
-    let shareable: SendableShareableContent = cidre::sc::ShareableContent::current()
-        .await
-        .map_err(|e| anyhow::anyhow!("shareable content: {e:?}"))?
-        .into();
-    let shareable = &shareable;
-    let target = match capture {
-        CaptureMode::Display => ScreenCaptureTarget::Display {
-            id: scap_targets::Display::primary().id(),
-        },
-        CaptureMode::Window => ScreenCaptureTarget::Window {
-            id: stimulus_window
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("stimulus window not found"))?,
-        },
-    };
+    if spec.mode == Mode::StudioKilled {
+        return record_killed(spec, capture, scratch, reference, stimulus, case).await;
+    }
+    let (target, excluded, shareable) = capture_setup(capture).await?;
 
     let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
     let feeds = start_feeds(
@@ -531,21 +634,12 @@ async fn record(
     let defaults = RecordingDefaults::default();
     let (handle, max_fps) = match spec.mode {
         Mode::Studio { fragmented, .. } => {
-            let mut builder = defaults.apply_to_studio_builder(
-                studio_recording::Actor::builder(project.clone(), target).with_system_audio(true),
-                camera,
-                None,
-            );
-            builder = builder
-                .with_excluded_windows(excluded.clone())
-                .with_keyboard_capture(false)
-                .with_fragmented(fragmented)
-                .with_quality(StudioQuality::Balanced)
-                .with_mic_feed(mic_lock.clone());
+            let (builder, max_fps) =
+                studio_builder(project.clone(), target, excluded, fragmented, camera);
+            let mut builder = builder.with_mic_feed(mic_lock.clone());
             if let Some(lock) = &camera_lock {
                 builder = builder.with_camera_feed(lock.clone());
             }
-            let max_fps = defaults.studio_max_fps(camera, None);
             (
                 Handle::Studio(builder.build(Some(shareable.clone())).await?),
                 max_fps,
@@ -555,13 +649,14 @@ async fn record(
             let builder = instant_recording::Actor::builder(project.clone(), target)
                 .with_system_audio(true)
                 .with_max_output_size(defaults.instant_mode_max_resolution)
-                .with_excluded_windows(excluded.clone())
+                .with_excluded_windows(excluded)
                 .with_mic_feed(mic_lock.clone());
             (
                 Handle::Instant(builder.build(Some(shareable.clone())).await?),
                 cap_recording::DEFAULT_INSTANT_MODE_FPS,
             )
         }
+        Mode::StudioKilled => unreachable!("recorded by record_killed"),
     };
     let started_host = host_now();
     feeds.started.store(started_host, Ordering::Release);
@@ -602,7 +697,8 @@ async fn record(
     feeds.stop.store(true, Ordering::Release);
     drop(mic_lock);
     drop(camera_lock);
-    let mic_truth = feeds.mic_task.await?;
+    feeds.mic_task.await?;
+    let mic_truth = feeds.mic_truth;
     let camera_truth = match feeds.camera_task {
         Some(task) => Some(task.await?),
         None => None,
@@ -618,6 +714,121 @@ async fn record(
         mic_truth,
         camera: camera_truth,
         max_fps,
+        loss_budget: None,
+    })
+}
+
+/// Seconds of capture a SIGKILL may cost: the fragment being written (Studio
+/// fragments are 2 s, see `MacOSFragmentedM4SMuxerConfig`) plus the encoder
+/// pipeline still in flight.
+const KILL_LOSS_BUDGET: f64 = 3.0;
+
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+async fn record_killed(
+    spec: &Spec,
+    capture: CaptureMode,
+    scratch: &Path,
+    reference: u64,
+    mut stimulus: StimulusProcess,
+    case: &mut Case,
+) -> anyhow::Result<Recorded> {
+    use std::io::BufRead;
+
+    let project = scratch.join("recording.cap");
+    let truth_path = scratch.join("mic-truth.json");
+    let child_spec = ChildSpec {
+        project: project.clone(),
+        truth: truth_path.clone(),
+        reference,
+        max_secs: spec.seconds + 60.0,
+        window: capture == CaptureMode::Window,
+    };
+    let mut child = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "recording_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_ENV, serde_json::to_string(&child_spec)?)
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take();
+    let mut child = ChildGuard(child);
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    if let Some(stdout) = stdout {
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let ready = tokio::task::block_in_place(|| {
+        loop {
+            match rx.recv_timeout(Duration::from_secs(60)) {
+                Ok(line) => {
+                    if let Some(at) = line.find(CHILD_READY) {
+                        break Ok(line[at + CHILD_READY.len()..].trim().to_string());
+                    }
+                }
+                Err(e) => break Err(anyhow::anyhow!("recording child never started: {e}")),
+            }
+        }
+    })?;
+    let mut fields = ready.split_whitespace();
+    let started_host: u64 = fields.next().unwrap_or_default().parse()?;
+    let max_fps: u32 = fields.next().unwrap_or_default().parse()?;
+    tokio::task::block_in_place(|| stimulus.send("go"))?;
+    let waited = tokio::task::block_in_place(|| {
+        stimulus.wait_for("done", Duration::from_secs_f64(spec.seconds + 20.0))
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let killed_host = host_now();
+    child.0.kill()?;
+    child.0.wait()?;
+    let events = tokio::task::block_in_place(|| stimulus.finish())?;
+    waited?;
+    let mic_truth: Truth = serde_json::from_str(&std::fs::read_to_string(&truth_path)?)?;
+
+    let recover_started = std::time::Instant::now();
+    let recover_path = project.clone();
+    let recovered = tokio::task::spawn_blocking(move || {
+        let incomplete = RecoveryManager::inspect_recording(&recover_path)
+            .ok_or_else(|| anyhow::anyhow!("killed recording is not recoverable"))?;
+        let estimated = incomplete.estimated_duration;
+        let recovered =
+            RecoveryManager::recover(&incomplete).map_err(|e| anyhow::anyhow!("recover: {e}"))?;
+        anyhow::Ok((recovered, estimated))
+    })
+    .await??;
+    case.note(format!(
+        "recovered in {:.2}s (estimated {:.2}s of {:.2}s recorded before the kill)",
+        recover_started.elapsed().as_secs_f64(),
+        recovered.1.as_secs_f64(),
+        host_secs(killed_host, started_host)
+    ));
+    Ok(Recorded {
+        project: recovered.0.project_path,
+        started: host_secs(started_host, reference),
+        stopped: host_secs(killed_host, reference),
+        stimulus: events,
+        mic_truth,
+        camera: None,
+        max_fps,
+        loss_budget: Some(KILL_LOSS_BUDGET),
     })
 }
 
@@ -770,6 +981,13 @@ impl Offsets {
         }
         v.sort_by(f64::total_cmp);
         Some(v[v.len() / 2])
+    }
+
+    fn last_truth(&self) -> Option<f64> {
+        self.0
+            .iter()
+            .map(|(t, _)| *t)
+            .fold(None, |m, t| Some(m.map_or(t, |m: f64| m.max(t))))
     }
 
     fn spread(&self) -> f64 {
@@ -980,12 +1198,10 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         // The documented cadence rule (#2573): after a source gap the first
         // frame may stay on the skipped slot, so it can land up to the gap
         // early. It is reported, and excluded from the steady-state offsets.
-        let gap = index.checked_sub(1).map_or(0, |prev| {
-            (0..prev)
-                .rev()
-                .take_while(|i| check.not_sent.contains(i))
-                .count()
-        });
+        let gap = (0..index)
+            .rev()
+            .take_while(|i| check.not_sent.contains(i))
+            .count();
         if gap > 0 {
             snapped.push((index, pts + track.start - truth));
             continue;
@@ -1144,14 +1360,16 @@ fn check_audio(
             offsets.0.push((truth, at - truth));
         }
     }
+    let peak = mono.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     case.note(format!(
-        "{name}: {} markers ({} expected in window), offset {}",
+        "{name}: {} markers ({} expected in window), {:.2}s at peak {peak:.3}, offset {}",
         found.len(),
         check
             .truth
             .values()
             .filter(|t| **t > check.window.0 && **t < check.window.1)
             .count(),
+        mono.len() as f64 / f64::from(decoded.sample_rate),
         offsets.describe()
     ));
     offsets
@@ -1211,7 +1429,24 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
         }
         _ => None,
     };
-    let window = (rec.started + 0.3, rec.stopped - 0.3);
+    let end = rec.stopped - rec.loss_budget.unwrap_or(0.3);
+    let window = (rec.started + 0.3, end);
+    if rec.loss_budget.is_some() {
+        let last_presented = screen_truth.range(1..).next_back().map(|(_, t)| *t);
+        match (screen.last_truth(), last_presented) {
+            (Some(last), Some(presented)) if last < end.min(presented) => {
+                case.problem(
+                    "missing",
+                    format!(
+                        "screen: recovery kept frames up to {:.2}s before the kill, budget {:.1}s",
+                        rec.stopped - last,
+                        rec.loss_budget.unwrap_or_default()
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
     // ScreenCaptureKit starts delivering system audio some time after the
     // stream starts (measured 0.2-0.6 s); Cap fills that span with silence.
     let system_window = (rec.started + SYSTEM_AUDIO_STARTUP, window.1);
