@@ -26,7 +26,9 @@ pub fn spawn_event_emitter(
 
             let db = db_fs(floats);
 
-            time_window.push(samples.info.timestamp().capture, db);
+            if let Some(info) = &samples.info {
+                time_window.push(info.timestamp().capture, db);
+            }
 
             let max = time_window.max();
 

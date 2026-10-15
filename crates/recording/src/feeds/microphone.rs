@@ -3,7 +3,7 @@ use cap_audio::estimate_input_latency;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
-    BufferSize, Device, SampleFormat, StreamError, SupportedStreamConfig,
+    BufferSize, Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
     SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
@@ -159,6 +159,9 @@ pub struct MicrophoneSamples {
     pub format: SampleFormat,
     pub sample_rate: u32,
     pub channels: u16,
+    /// The device callback's info; `None` only for test-utils synthetic
+    /// devices.
+    pub info: Option<InputCallbackInfo>,
     pub timestamp: Timestamp,
 }
 
@@ -1418,6 +1421,7 @@ impl MicrophoneFeed {
                                 format: data.sample_format(),
                                 sample_rate: effective_sample_rate.sample_rate,
                                 channels: callback_channels,
+                                info: Some(info.clone()),
                                 timestamp: timestamp - capture_latency,
                             };
 
@@ -3139,6 +3143,7 @@ pub mod synthetic {
                     format: SampleFormat::F32,
                     sample_rate: self.sample_rate,
                     channels: self.channels,
+                    info: None,
                     timestamp,
                 })
                 .await;
