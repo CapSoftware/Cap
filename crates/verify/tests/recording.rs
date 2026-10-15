@@ -732,6 +732,9 @@ async fn run_case(
         }
     };
     analyze(&recorded, reference, case)?;
+    if self_check_enabled() {
+        self_check(&recorded, reference, case)?;
+    }
     if !case.failed() && !env_flag("CAP_VERIFY_KEEP") {
         let _ = std::fs::remove_dir_all(&scratch);
     } else {
@@ -1278,6 +1281,183 @@ impl Offsets {
     }
 }
 
+/// Capture faults injected into a finished real recording's decoded screen
+/// frames, after the fact, to prove on this very host and capture that the
+/// oracle still reports them: what a pipeline that drops, freezes, re-emits
+/// or delays frames would have written. Thresholds are the production ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Injection {
+    /// Three consecutive presented frames never reach the file.
+    DropRun,
+    /// The frame before them is repeated in their place (a frozen capture).
+    Freeze,
+    /// An already written frame is emitted again five frames later.
+    Stale,
+    /// The whole screen track lands 100 ms late against the audio.
+    Late,
+}
+
+thread_local! {
+    static INJECTION: std::cell::Cell<Option<Injection>> = const { std::cell::Cell::new(None) };
+}
+
+const INJECTIONS: [Injection; 4] = [
+    Injection::DropRun,
+    Injection::Freeze,
+    Injection::Stale,
+    Injection::Late,
+];
+const INJECTED_LATENESS: f64 = 0.1;
+
+impl Injection {
+    fn label(self) -> &'static str {
+        match self {
+            Injection::DropRun => "drop 3 consecutive frames",
+            Injection::Freeze => "freeze over 3 frames",
+            Injection::Stale => "re-emit a stale frame",
+            Injection::Late => "screen 100 ms late",
+        }
+    }
+
+    /// Class and problem prefix the oracle must report for this fault.
+    fn expected(self) -> (&'static str, &'static str) {
+        match self {
+            Injection::DropRun | Injection::Freeze => ("missing", "screen:"),
+            Injection::Stale => ("timestamps", "screen:"),
+            Injection::Late => ("sync", "screen vs"),
+        }
+    }
+
+    /// First of three consecutive presented indices, around 60 % of the
+    /// recording, that were all captured and each stayed on screen long
+    /// enough that the capture rate guarantees a sample.
+    fn target(frames: &[(f64, Readout)], check: &VideoCheck) -> Option<u32> {
+        let mut seen: Vec<u32> = Vec::new();
+        for (_, readout) in frames {
+            if let Readout::Marker { marker, .. } = readout
+                && marker.kind == StreamKind::Screen
+                && seen.last() != Some(&marker.index)
+            {
+                seen.push(marker.index);
+            }
+        }
+        let captured: std::collections::BTreeSet<u32> = seen.iter().copied().collect();
+        let start = seen.len() * 3 / 5;
+        seen[start.min(seen.len())..].iter().copied().find(|&i| {
+            i > 1
+                && captured.contains(&(i - 1))
+                && (i..i + 3).all(|j| {
+                    captured.contains(&j) && check.truth.contains_key(&j) && !(check.may_skip)(j)
+                })
+        })
+    }
+
+    fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
+        let index_of = |r: &Readout| match r {
+            Readout::Marker { marker, .. } => Some(marker.index),
+            _ => None,
+        };
+        match self {
+            Injection::Late => {
+                for (pts, _) in frames.iter_mut() {
+                    *pts += INJECTED_LATENESS;
+                }
+            }
+            Injection::DropRun | Injection::Freeze => {
+                let Some(first) = Self::target(frames, check) else {
+                    return;
+                };
+                let run = first..first + 3;
+                if self == Injection::DropRun {
+                    frames.retain(|(_, r)| !index_of(r).is_some_and(|i| run.contains(&i)));
+                } else if let Some(before) = frames
+                    .iter()
+                    .rev()
+                    .find(|(_, r)| index_of(r) == Some(first - 1))
+                    .map(|(_, r)| r.clone())
+                {
+                    for (_, r) in frames.iter_mut() {
+                        if index_of(r).is_some_and(|i| run.contains(&i)) {
+                            *r = before.clone();
+                        }
+                    }
+                }
+            }
+            Injection::Stale => {
+                let Some(first) = Self::target(frames, check) else {
+                    return;
+                };
+                let Some(stale) = frames
+                    .iter()
+                    .find(|(_, r)| index_of(r) == Some(first))
+                    .map(|(_, r)| r.clone())
+                else {
+                    return;
+                };
+                let Some(after) = frames
+                    .iter()
+                    .position(|(_, r)| index_of(r).is_some_and(|i| i >= first + 5))
+                else {
+                    return;
+                };
+                if after + 1 < frames.len() {
+                    let pts = (frames[after].0 + frames[after + 1].0) / 2.0;
+                    frames.insert(after + 1, (pts, stale));
+                }
+            }
+        }
+    }
+}
+
+fn self_check_enabled() -> bool {
+    match std::env::var("CAP_VERIFY_SELF_CHECK").as_deref() {
+        Ok("0") | Ok("false") => false,
+        Ok(_) => true,
+        Err(_) => std::env::var_os("CI").is_some(),
+    }
+}
+
+/// Re-analyzes the real recording with each injected fault and fails the
+/// case when the oracle does not report one: proof, per run, that a starved
+/// or otherwise unusual capture has not blinded the checks.
+fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
+    let mut caught = Vec::new();
+    for injection in INJECTIONS {
+        let (class, prefix) = injection.expected();
+        if injection == Injection::Late && case.classes.contains("sync") {
+            caught.push(format!("{}: n/a (already out of sync)", injection.label()));
+            continue;
+        }
+        let mut probe = Case::new(format!("{} (self-check: {})", case.id, injection.label()));
+        INJECTION.set(Some(injection));
+        let result = analyze(rec, reference, &mut probe);
+        INJECTION.set(None);
+        result?;
+        let new: Vec<&String> = probe
+            .problems
+            .iter()
+            .filter(|p| p.starts_with(prefix) && !case.problems.contains(p))
+            .collect();
+        if probe.classes.contains(class) && !new.is_empty() {
+            caught.push(format!(
+                "{}: caught ({class}: {})",
+                injection.label(),
+                new[0].chars().take(110).collect::<String>()
+            ));
+        } else {
+            case.problem(
+                "oracle",
+                format!(
+                    "self-check: injected fault '{}' was not reported (expected class {class})",
+                    injection.label()
+                ),
+            );
+        }
+    }
+    case.note(format!("self-check: {}", caught.join("; ")));
+    Ok(())
+}
+
 fn first_presented(events: &[StimulusEvent], reference: u64) -> Truth {
     let mut truth = Truth::new();
     for event in events {
@@ -1306,6 +1486,11 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         let readout = video_code::read_stream(&picture.view(), check.kind);
         frames.push((picture.pts_secs, readout));
     })?;
+    if check.kind == StreamKind::Screen
+        && let Some(injection) = INJECTION.get()
+    {
+        injection.apply(&mut frames, &check);
+    }
     let name = check.name;
     if frames.is_empty() {
         case.problem("missing", format!("{name}: no frames"));
@@ -1466,7 +1651,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             skipped
         ));
     }
-    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
+    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP").filter(|_| INJECTION.get().is_none()) {
         let rows: Vec<String> = indices
             .iter()
             .map(|(pts, i)| {
@@ -1629,7 +1814,7 @@ fn check_audio(
     if order.windows(2).any(|w| w[1].0 < w[0].0) {
         case.problem("timestamps", format!("{name}: markers out of order"));
     }
-    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
+    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP").filter(|_| INJECTION.get().is_none()) {
         let rows: Vec<String> = located
             .iter()
             .map(|m| {
