@@ -1,0 +1,76 @@
+name: cap-verify Instant timing experiment (temporary)
+
+on:
+  push:
+    branches:
+      - ci/verify-platforms-warp
+
+concurrency:
+  group: verify-platforms-warp
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  instant:
+    name: ${{ matrix.variant }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - baseline-isolated
+          - timer-isolated
+          - timer-loaded
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      OUT: ${{ github.workspace }}/instant-out
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(matrix.variant, 'baseline') && 'ci/verify-platforms' || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: node scripts/setup.js
+      - name: FFmpeg DLLs on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p "$OUT"
+          git log --oneline -1
+          grep -c timeBeginPeriod crates/verify/src/pipeline.rs || true
+          cargo test --locked -p cap-verify --test export --no-run 2>&1 | tail -3
+      - name: Run 3x with fresh fixtures
+        shell: bash
+        run: |
+          set +e
+          for run in 1 2 3; do
+            export CAP_VERIFY_FIXTURE_DIR="$OUT/fx$run"
+            if [[ "${{ matrix.variant }}" == *loaded ]]; then
+              cargo test --locked -p cap-verify --test export -- --nocapture > "$OUT/run$run.log" 2>&1
+            else
+              cargo test --locked -p cap-verify --test export instant_output -- --nocapture > "$OUT/run$run.log" 2>&1
+            fi
+            echo "run$run exit=$?"
+            grep -E "^\[cap-verify\] (pass|xfail|FAIL|XPASS|unsupported) export/instant|instant (mic|system):|drift|off the screen|video timing spread" "$OUT/run$run.log"
+          done
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: instant-${{ matrix.variant }}
+          path: ${{ github.workspace }}/instant-out/*.log
+          if-no-files-found: warn
