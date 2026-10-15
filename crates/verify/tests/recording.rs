@@ -38,12 +38,10 @@ use cap_recording::{
 };
 use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
 use cap_verify::{
-    audio_code::{self, AudioSource},
+    audio_code::{self, AudioSource, MarkerPlacement},
     fixture_avf, media,
     report::{self, Case, Tier},
-    stimulus::{
-        StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs, host_now, host_secs,
-    },
+    stimulus::{StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs, host_now, host_secs},
     video_code::{self, FrameMarker, Readout, StreamKind},
 };
 
@@ -215,7 +213,7 @@ fn real_capture() {
                 case.note(format!("repeat {}/{repeat}", attempt + 1));
             }
             if let Err(e) = rt.block_on(run_case(&spec, capture, &shareable, &mut case)) {
-                case.problem(format!("{e:#}"));
+                case.problem("error", format!("{e:#}"));
             }
             for note in &case.notes {
                 eprintln!("  note: {note}");
@@ -261,8 +259,18 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
         let stop = stop.clone();
         tokio::spawn(async move {
             let origin = host_now();
-            let schedule =
-                audio_code::standard_schedule(AudioSource::Mic, 0.3, max_secs - 0.3, AUDIO_PERIOD);
+            // Marker times count from the case reference, like the system
+            // audio stimulus, so the two sources' phases never overlap.
+            let base = host_secs(origin, reference);
+            let schedule: Vec<MarkerPlacement> =
+                audio_code::standard_schedule(AudioSource::Mic, 0.0, base + max_secs, AUDIO_PERIOD)
+                    .into_iter()
+                    .filter(|p| p.time_secs >= base + 0.3)
+                    .map(|p| MarkerPlacement {
+                        index: p.index,
+                        time_secs: p.time_secs - base,
+                    })
+                    .collect();
             let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
             audio_code::render_markers(
                 &mut signal,
@@ -271,10 +279,10 @@ fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) 
                 &schedule,
                 audio_code::DEFAULT_AMPLITUDE,
             );
-            let base = host_secs(origin, reference);
+            let rate = f64::from(MIC_RATE);
             let truth: Truth = schedule
                 .iter()
-                .map(|p| (p.index, base + p.time_secs))
+                .map(|p| (p.index, base + (p.time_secs * rate).round() / rate))
                 .collect();
             for (n, chunk) in signal.chunks(MIC_CHUNK).enumerate() {
                 if stop.load(Ordering::Acquire) {
@@ -458,13 +466,18 @@ async fn record(
         busy: true,
         audio: true,
         audio_period: AUDIO_PERIOD,
+        audio_origin: reference,
         window: match capture {
             CaptureMode::Display => None,
             CaptureMode::Window => Some((80, 120, 640, 400)),
         },
     };
     let mut stimulus = tokio::task::block_in_place(|| {
-        StimulusProcess::spawn(&stimulus_binary(), &stimulus_spec, &scratch.join("stimulus.jsonl"))
+        StimulusProcess::spawn(
+            &stimulus_binary(),
+            &stimulus_spec,
+            &scratch.join("stimulus.jsonl"),
+        )
     })?;
     tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
     // A fullscreen window lands in its own Space; let the transition finish
@@ -670,7 +683,10 @@ fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
     match &meta.inner {
         RecordingMetaInner::Instant(instant) => {
             if !matches!(instant, InstantRecordingMeta::Complete { .. }) {
-                case.problem(format!("instant meta is not complete: {instant:?}"));
+                case.problem(
+                    "finalize",
+                    format!("instant meta is not complete: {instant:?}"),
+                );
             }
             Ok(Layout {
                 display: Track {
@@ -691,10 +707,16 @@ fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
                 studio.status(),
                 cap_project::StudioRecordingStatus::Complete
             ) {
-                case.problem(format!("studio status after finalize: {:?}", studio.status()));
+                case.problem(
+                    "finalize",
+                    format!("studio status after finalize: {:?}", studio.status()),
+                );
             }
             if inner.segments.len() != 1 {
-                case.problem(format!("{} segments, expected 1", inner.segments.len()));
+                case.problem(
+                    "finalize",
+                    format!("{} segments, expected 1", inner.segments.len()),
+                );
             }
             let segment = inner
                 .segments
@@ -702,10 +724,13 @@ fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
                 .ok_or_else(|| anyhow::anyhow!("no segments"))?;
             let mut display = meta.path(&segment.display.path);
             if display.is_dir() {
-                case.problem(format!(
-                    "display path still points at fragments after finalize: {}",
-                    display.display()
-                ));
+                case.problem(
+                    "finalize",
+                    format!(
+                        "display path still points at fragments after finalize: {}",
+                        display.display()
+                    ),
+                );
                 display = display.with_extension("mp4");
             }
             let track = |path: &relative_path::RelativePathBuf, start: Option<f64>| Track {
@@ -764,7 +789,11 @@ impl Offsets {
         let my = self.0.iter().map(|(_, d)| d).sum::<f64>() / n;
         let sxy: f64 = self.0.iter().map(|(t, d)| (t - mx) * (d - my)).sum();
         let sxx: f64 = self.0.iter().map(|(t, _)| (t - mx).powi(2)).sum();
-        if sxx == 0.0 { 0.0 } else { sxy / sxx * 60_000.0 }
+        if sxx == 0.0 {
+            0.0
+        } else {
+            sxy / sxx * 60_000.0
+        }
     }
 
     fn describe(&self) -> String {
@@ -808,7 +837,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     })?;
     let name = check.name;
     if frames.is_empty() {
-        case.problem(format!("{name}: no frames"));
+        case.problem("missing", format!("{name}: no frames"));
         return Ok(Offsets::default());
     }
     let mut bad = Vec::new();
@@ -822,12 +851,15 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
     }
     if !bad.is_empty() {
-        case.problem(format!(
-            "{name}: {} of {} frames carry no valid marker, first: {}",
-            bad.len(),
-            frames.len(),
-            bad.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
-        ));
+        case.problem(
+            "unreadable",
+            format!(
+                "{name}: {} of {} frames carry no valid marker, first: {}",
+                bad.len(),
+                frames.len(),
+                bad.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+            ),
+        );
     }
     let mut backwards = Vec::new();
     let mut duplicates = 0;
@@ -844,21 +876,40 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
     }
     if !pts_problems.is_empty() {
-        case.problem(format!(
-            "{name}: non-increasing pts x{}: {}",
-            pts_problems.len(),
-            pts_problems.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
-        ));
+        case.problem(
+            "timestamps",
+            format!(
+                "{name}: non-increasing pts x{}: {}",
+                pts_problems.len(),
+                pts_problems
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
     }
     if !backwards.is_empty() {
-        case.problem(format!(
-            "{name}: frame index went backwards x{}: {}",
-            backwards.len(),
-            backwards.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
-        ));
+        case.problem(
+            "timestamps",
+            format!(
+                "{name}: frame index went backwards x{}: {}",
+                backwards.len(),
+                backwards
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
     }
     if duplicates > 0 && !check.allow_duplicates {
-        case.problem(format!("{name}: {duplicates} duplicated frames"));
+        case.problem(
+            "timestamps",
+            format!("{name}: {duplicates} duplicated frames"),
+        );
     }
     let mut first_seen: BTreeMap<u32, f64> = BTreeMap::new();
     for &(pts, index) in &indices {
@@ -870,11 +921,14 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         .copied()
         .collect();
     if !unknown.is_empty() {
-        case.problem(format!(
-            "{name}: {} recorded indices were never produced: {:?}",
-            unknown.len(),
-            &unknown[..unknown.len().min(8)]
-        ));
+        case.problem(
+            "unexpected",
+            format!(
+                "{name}: {} recorded indices were never produced: {:?}",
+                unknown.len(),
+                &unknown[..unknown.len().min(8)]
+            ),
+        );
     }
     let (Some(&lo), Some(&hi)) = (first_seen.keys().next(), first_seen.keys().next_back()) else {
         return Ok(Offsets::default());
@@ -892,11 +946,14 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
     }
     if !skipped.is_empty() {
-        case.problem(format!(
-            "{name}: {} produced frames missing from the recording: {:?}",
-            skipped.len(),
-            &skipped[..skipped.len().min(12)]
-        ));
+        case.problem(
+            "missing",
+            format!(
+                "{name}: {} produced frames missing from the recording: {:?}",
+                skipped.len(),
+                &skipped[..skipped.len().min(12)]
+            ),
+        );
     }
     if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
         let rows: Vec<String> = indices
@@ -944,7 +1001,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
                 .take_while(|i| check.not_sent.contains(i))
                 .count() as f64;
             if early < -0.004 || early > gap * period + 0.004 {
-                case.problem(format!(
+                case.problem("timestamps", format!(
                     "{name}: frame {index} after a {gap}-frame source gap is {:+.1} ms off the steady offset (allowed 0..{:.1} early)",
                     -early * 1000.0,
                     gap * period * 1000.0
@@ -996,7 +1053,9 @@ fn check_audio(
         let at = marker.time_secs + decoded.start_secs + start;
         let Some(index) = marker.index else {
             let track_secs = mono.len() as f64 / f64::from(decoded.sample_rate);
-            if marker.time_secs > 0.15 && marker.time_secs + audio_code::MARKER_SECS < track_secs - 0.15 {
+            if marker.time_secs > 0.15
+                && marker.time_secs + audio_code::MARKER_SECS < track_secs - 0.15
+            {
                 damaged += 1;
             }
             continue;
@@ -1006,12 +1065,16 @@ fn check_audio(
         }
     }
     if damaged > 0 {
-        case.problem(format!(
-            "{name}: {damaged} markers inside the track located but undecodable"
-        ));
+        case.problem(
+            "unreadable",
+            format!("{name}: {damaged} markers inside the track located but undecodable"),
+        );
     }
     if !repeated.is_empty() {
-        case.problem(format!("{name}: markers repeated {repeated:?}"));
+        case.problem(
+            "timestamps",
+            format!("{name}: markers repeated {repeated:?}"),
+        );
     }
     let unknown: Vec<u32> = found
         .keys()
@@ -1019,7 +1082,10 @@ fn check_audio(
         .copied()
         .collect();
     if !unknown.is_empty() {
-        case.problem(format!("{name}: unexpected marker indices {unknown:?}"));
+        case.problem(
+            "unexpected",
+            format!("{name}: unexpected marker indices {unknown:?}"),
+        );
     }
     let missing: Vec<u32> = check
         .truth
@@ -1028,16 +1094,19 @@ fn check_audio(
         .map(|(i, _)| *i)
         .collect();
     if !missing.is_empty() {
-        case.problem(format!(
-            "{name}: {} markers inside the recording window are missing: {:?}",
-            missing.len(),
-            &missing[..missing.len().min(12)]
-        ));
+        case.problem(
+            "missing",
+            format!(
+                "{name}: {} markers inside the recording window are missing: {:?}",
+                missing.len(),
+                &missing[..missing.len().min(12)]
+            ),
+        );
     }
     let mut order = found.iter().collect::<Vec<_>>();
     order.sort_by(|a, b| a.1.total_cmp(b.1));
     if order.windows(2).any(|w| w[1].0 < w[0].0) {
-        case.problem(format!("{name}: markers out of order"));
+        case.problem("timestamps", format!("{name}: markers out of order"));
     }
     if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
         let rows: Vec<String> = located
@@ -1134,7 +1203,10 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
             )?)
         }
         (None, Some(_)) => {
-            case.problem("camera feed attached but no camera track recorded");
+            case.problem(
+                "missing",
+                "camera feed attached but no camera track recorded",
+            );
             None
         }
         _ => None,
@@ -1158,7 +1230,10 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
     if let Some(reason) = &audio_unavailable {
         case.note(format!("system audio stimulus unavailable: {reason}"));
         if env_flag("CAP_VERIFY_REQUIRE_SYSTEM_AUDIO") {
-            case.problem(format!("system audio required but unavailable: {reason}"));
+            case.problem(
+                "missing",
+                format!("system audio required but unavailable: {reason}"),
+            );
         }
     }
     let (mic, system) = if layout.muxed_audio {
@@ -1205,7 +1280,7 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
                 ))
             }
             None => {
-                case.problem("no mic track recorded");
+                case.problem("missing", "no mic track recorded");
                 None
             }
         };
@@ -1225,14 +1300,24 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
                 ))
             }
             (None, false) => {
-                case.problem("system audio was playing but no system audio track was recorded");
+                case.problem(
+                    "missing",
+                    "system audio was playing but no system audio track was recorded",
+                );
                 None
             }
             _ => None,
         };
         (mic, system)
     };
-    sync_checks(spec, case, &screen, camera.as_ref(), mic.as_ref(), system.as_ref());
+    sync_checks(
+        spec,
+        case,
+        &screen,
+        camera.as_ref(),
+        mic.as_ref(),
+        system.as_ref(),
+    );
     Ok(())
 }
 
@@ -1262,7 +1347,7 @@ fn sync_checks(
     if let Some(mic) = mic
         && mic.spread() > EXACT_SPREAD
     {
-        case.problem(format!(
+        case.problem("timestamps", format!(
             "mic: marker offsets vary by {:.1} ms (limit {:.1}): audio timing is not continuous",
             ms(mic.spread()),
             ms(EXACT_SPREAD)
@@ -1271,11 +1356,14 @@ fn sync_checks(
     if let Some(camera) = camera
         && camera.spread() > CAMERA_SPREAD
     {
-        case.problem(format!(
-            "camera: frame offsets vary by {:.1} ms (limit {:.1})",
-            ms(camera.spread()),
-            ms(CAMERA_SPREAD)
-        ));
+        case.problem(
+            "timestamps",
+            format!(
+                "camera: frame offsets vary by {:.1} ms (limit {:.1})",
+                ms(camera.spread()),
+                ms(CAMERA_SPREAD)
+            ),
+        );
     }
     let (Some(mic_m), screen_m) = (mic.and_then(Offsets::median), screen.median()) else {
         return;
@@ -1284,18 +1372,21 @@ fn sync_checks(
         let d = camera_m - mic_m;
         case.note(format!("sync camera-mic {:+.1} ms", ms(d)));
         if d.abs() > CAMERA_VS_MIC {
-            case.problem(format!(
-                "camera vs mic out of sync: {:+.1} ms (limit +-{:.0})",
-                ms(d),
-                ms(CAMERA_VS_MIC)
-            ));
+            case.problem(
+                "sync",
+                format!(
+                    "camera vs mic out of sync: {:+.1} ms (limit +-{:.0})",
+                    ms(d),
+                    ms(CAMERA_VS_MIC)
+                ),
+            );
         }
     }
     if let Some(screen_m) = screen_m {
         let d = screen_m - mic_m;
         case.note(format!("sync screen-mic {:+.1} ms", ms(d)));
         if d < SCREEN_LATENCY.0 || d > SCREEN_LATENCY.1 {
-            case.problem(format!(
+            case.problem("sync", format!(
                 "screen vs mic out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
                 ms(d),
                 ms(SCREEN_LATENCY.0),
@@ -1306,11 +1397,14 @@ fn sync_checks(
             let d = system_m - screen_m;
             case.note(format!("sync system-screen {:+.1} ms", ms(d)));
             if d.abs() > SYSTEM_VS_SCREEN {
-                case.problem(format!(
-                    "system audio vs screen out of sync: {:+.1} ms (limit +-{:.0})",
-                    ms(d),
-                    ms(SYSTEM_VS_SCREEN)
-                ));
+                case.problem(
+                    "sync",
+                    format!(
+                        "system audio vs screen out of sync: {:+.1} ms (limit +-{:.0})",
+                        ms(d),
+                        ms(SYSTEM_VS_SCREEN)
+                    ),
+                );
             }
         }
     }

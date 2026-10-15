@@ -25,6 +25,9 @@ pub struct StimulusSpec {
     pub busy: bool,
     pub audio: bool,
     pub audio_period: f64,
+    /// Host time the system-audio marker schedule counts from (0 = helper
+    /// start). Share it with the other marker sources of a case.
+    pub audio_origin: u64,
     /// `None` = borderless fullscreen on the primary display; otherwise a
     /// window at (x, y, width, height) in points.
     pub window: Option<(i32, i32, u32, u32)>,
