@@ -24,7 +24,13 @@
 case = "export/jitter-camera-*/full/mp460/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames)"
+reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames; full tier 120 s: 5146 frames, up to 2232 source frames = 74 s ahead)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "export/jitter-camera-120s/full/mp460/ffmpeg"
+class = "stale"
+reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
