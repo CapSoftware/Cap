@@ -356,14 +356,21 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 fn prepare_streaming_output(
     output: &std::path::Path,
     eligible: bool,
-) -> Option<mp4::TemporaryMp4Output> {
-    if !eligible
-        || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
-        || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+) -> Option<mp4::TemporaryExportOutput> {
+    if !eligible || output.extension().and_then(|extension| extension.to_str()) != Some("mp4") {
+        return None;
+    }
+    prepare_new_output(output)
+}
+
+/// Stages a new export beside its destination so a failed or cancelled export
+/// never leaves a partial file there. Existing destinations are written in place.
+fn prepare_new_output(output: &std::path::Path) -> Option<mp4::TemporaryExportOutput> {
+    if !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
     {
         return None;
     }
-    mp4::temporary_mp4_output(output).ok()
+    mp4::temporary_export_output(output).ok()
 }
 
 struct ExportAudioCancellation {
@@ -408,7 +415,7 @@ pub struct ExporterBase {
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
     streaming_audio: Option<ExportAudioRenderer>,
-    streaming_output: Option<mp4::TemporaryMp4Output>,
+    streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
