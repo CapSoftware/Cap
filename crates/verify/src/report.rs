@@ -1,11 +1,17 @@
 //! Case results, the strict expected-failure list and the JSON report.
 //!
-//! Every case ends in [`finish`]: a failing case listed in
-//! `crates/verify/expectations.txt` passes as XFAIL, a listed case that
-//! passes fails ("remove this xfail"), and any other failure fails with the
-//! exact mismatches and a one-line local repro command.
+//! Every case ends in [`settle`]: its failure classes are judged against
+//! `crates/verify/expectations.toml` with the shared strict rules of
+//! `cap-verify-expect` (a listed class passes as XFAIL, a listed class that
+//! no longer occurs fails with "remove this xfail", any other failure fails
+//! with the exact mismatches and a one-line local repro command), and the
+//! result is written as a JSON record to `CAP_VERIFY_REPORT_DIR`.
 
-use std::{io::Write, path::PathBuf, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +63,9 @@ pub struct Case {
     pub streams: Vec<StreamReport>,
     pub problems: Vec<String>,
     /// Failure classes seen (see `expectations.toml`).
-    pub classes: std::collections::BTreeSet<String>,
+    pub classes: BTreeSet<String>,
+    /// First problem per class (the draft reason when blessing).
+    class_problems: BTreeMap<String, String>,
     pub notes: Vec<String>,
 }
 
@@ -71,6 +79,7 @@ impl Case {
             streams: Vec::new(),
             problems: Vec::new(),
             classes: Default::default(),
+            class_problems: Default::default(),
             notes: Vec::new(),
         }
     }
@@ -78,8 +87,12 @@ impl Case {
     /// Records a failure of the given class (`error`, `frame-count`,
     /// `nondeterministic`, ...).
     pub fn problem(&mut self, class: &str, text: impl Into<String>) {
+        let text = text.into();
         self.classes.insert(class.to_string());
-        self.problems.push(text.into());
+        self.class_problems
+            .entry(class.to_string())
+            .or_insert_with(|| text.clone());
+        self.problems.push(text);
     }
 
     pub fn note(&mut self, text: impl Into<String>) {
@@ -98,6 +111,9 @@ impl Case {
             ] {
                 if n > 0 {
                     self.classes.insert(class.to_string());
+                    self.class_problems
+                        .entry(class.to_string())
+                        .or_insert_with(|| report.summary());
                 }
             }
             self.problems.push(report.summary());
@@ -110,67 +126,17 @@ impl Case {
     }
 }
 
-/// One `[[xfail]]` entry of `crates/verify/expectations.toml` (the same
-/// shape as the decoder model's expectations file).
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Xfail {
-    /// Case id, `*` globs allowed.
-    pub case: String,
-    /// Failure class that must still occur.
-    pub class: String,
-    pub reason: String,
-    #[serde(default)]
-    pub link: String,
-    /// Platforms the entry applies to (`macos`, `linux`, `windows`); empty
-    /// means all.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub platforms: Vec<String>,
-    /// Timing-dependent: the case may pass or fail with this class. Use only
-    /// with a measured flake rate in the reason.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub flaky: bool,
-}
+pub use cap_verify_expect::{Xfail, glob_match};
 
-#[derive(Deserialize)]
-struct ExpectationsFile {
-    #[serde(default)]
-    xfail: Vec<Xfail>,
-}
-
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == text;
-    }
-    let mut rest = text;
-    for (i, part) in parts.iter().enumerate() {
-        if i == 0 {
-            let Some(stripped) = rest.strip_prefix(part) else {
-                return false;
-            };
-            rest = stripped;
-        } else if i == parts.len() - 1 {
-            return rest.ends_with(part);
-        } else {
-            let Some(at) = rest.find(part) else {
-                return false;
-            };
-            rest = &rest[at + part.len()..];
-        }
-    }
-    true
-}
+/// Expectations file, relative to the repository root.
+const EXPECTATIONS: &str = "crates/verify/expectations.toml";
 
 pub fn expectations_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expectations.toml")
 }
 
 pub fn load_expectations() -> Vec<Xfail> {
-    let text = std::fs::read_to_string(expectations_path()).unwrap_or_default();
-    match toml::from_str::<ExpectationsFile>(&text) {
-        Ok(file) => file.xfail,
-        Err(error) => panic!("{}: {error}", expectations_path().display()),
-    }
+    cap_verify_expect::load(&expectations_path())
 }
 
 /// Entries that apply to `id` on this platform.
@@ -178,10 +144,7 @@ pub fn xfails_for(id: &str) -> Vec<Xfail> {
     let platform = platform();
     load_expectations()
         .into_iter()
-        .filter(|x| {
-            glob_match(&x.case, id)
-                && (x.platforms.is_empty() || x.platforms.iter().any(|p| p == platform))
-        })
+        .filter(|x| x.matches(id, platform))
         .collect()
 }
 
@@ -204,21 +167,38 @@ pub fn selected(id: &str) -> bool {
     }
 }
 
-fn write_result(result: &CaseResult) {
-    let Some(dir) = std::env::var_os("CAP_VERIFY_REPORT_DIR") else {
-        return;
+fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {
+    use cap_verify_expect::{Outcome, Record};
+    let record = Record {
+        suite: "cap-verify".into(),
+        expectations: EXPECTATIONS.into(),
+        case: result.id.clone(),
+        platform: result.platform.clone(),
+        tier: match result.tier {
+            Tier::Fast => "fast".into(),
+            Tier::Full => "full".into(),
+        },
+        outcome: match result.outcome.as_str() {
+            "pass" => Outcome::Pass,
+            "xfail" => Outcome::Xfail,
+            "XPASS" => Outcome::Xpass,
+            _ => Outcome::Fail,
+        },
+        failures: classes
+            .keys()
+            .map(|class| (class.clone(), Default::default()))
+            .collect(),
+        seeds_ran: None,
+        problems: classes.clone(),
+        summary: result.summary.clone(),
+        repro: result.repro.clone(),
+        seconds: result.seconds,
     };
-    let dir = PathBuf::from(dir);
-    let _ = std::fs::create_dir_all(&dir);
-    let file = dir.join(format!("{}.jsonl", std::process::id()));
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file)
-        && let Ok(line) = serde_json::to_string(result)
-    {
-        let _ = writeln!(f, "{line}");
-    }
+    let extra = serde_json::json!({
+        "streams": result.streams,
+        "notes": result.notes,
+    });
+    cap_verify_expect::write_records(&[(record, extra)]);
 }
 
 /// Settles a case against the expectations file. Returns an error message
@@ -227,15 +207,16 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
     let xfails = xfails_for(&case.id);
     let failed = case.failed();
     let repro = repro_command(&case.id);
-    let unexpected: Vec<&String> = case
+    let platform = platform();
+    let ran = cap_verify_expect::Ran::from([(case.id.clone(), None)]);
+    let observed: cap_verify_expect::Observed = case
         .classes
         .iter()
-        .filter(|class| !xfails.iter().any(|x| &x.class == *class))
+        .map(|class| ((case.id.clone(), class.clone()), Default::default()))
         .collect();
-    let fixed: Vec<&Xfail> = xfails
-        .iter()
-        .filter(|x| !x.flaky && !case.classes.contains(&x.class))
-        .collect();
+    let verdict = cap_verify_expect::judge(&xfails, platform, &ran, &observed);
+    let unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
+    let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
     let outcome = if !unexpected.is_empty() {
         "FAIL"
     } else if !fixed.is_empty() {
@@ -264,15 +245,11 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
             x.link
         ));
     }
-    let blessing = std::env::var_os("CAP_VERIFY_BLESS").is_some();
-    if blessing && failed {
-        bless(&case);
-    }
     let result = CaseResult {
         id: case.id.clone(),
-        platform: platform().to_string(),
+        platform: platform.to_string(),
         tier: tier(),
-        passed: blessing || matches!(outcome, "pass" | "xfail"),
+        passed: matches!(outcome, "pass" | "xfail"),
         summary: summary.clone(),
         streams: case.streams,
         notes: case.notes,
@@ -280,14 +257,11 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
         repro: repro.clone(),
         outcome: outcome.to_string(),
     };
-    write_result(&result);
+    write_result(&result, &case.class_problems);
     eprintln!(
         "[cap-verify] {outcome} {} in {:.1}s\n  {summary}",
         result.id, result.seconds
     );
-    if blessing {
-        return Ok(result);
-    }
     match outcome {
         "FAIL" => Err(format!(
             "case {} failed ({}):\n  {summary}\n  repro: {repro}",
@@ -309,51 +283,5 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
             expectations_path().display()
         )),
         _ => Ok(result),
-    }
-}
-
-/// `CAP_VERIFY_BLESS=<dir>`: record every failing case's classes as draft
-/// `[[xfail]]` entries (one file per process) instead of failing.
-fn bless(case: &Case) {
-    let Some(dir) = std::env::var_os("CAP_VERIFY_BLESS") else {
-        return;
-    };
-    let dir = PathBuf::from(dir);
-    let _ = std::fs::create_dir_all(&dir);
-    let file = dir.join(format!("bless-{}-{}.toml", platform(), std::process::id()));
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file)
-    else {
-        return;
-    };
-    let reason = case.problems.first().cloned().unwrap_or_default();
-    for class in &case.classes {
-        let entry = Xfail {
-            case: case.id.clone(),
-            class: class.clone(),
-            reason: reason.clone(),
-            link: String::new(),
-            platforms: vec![platform().to_string()],
-            flaky: false,
-        };
-        if let Ok(text) = toml::to_string(&entry) {
-            let _ = writeln!(f, "[[xfail]]\n{text}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::glob_match;
-
-    #[test]
-    fn globs() {
-        assert!(glob_match("export/*", "export/basic/mp4"));
-        assert!(glob_match("export/*/avf", "export/jitter/avf"));
-        assert!(!glob_match("export/*/avf", "export/jitter/ffmpeg"));
-        assert!(glob_match("a", "a"));
-        assert!(!glob_match("a", "ab"));
     }
 }

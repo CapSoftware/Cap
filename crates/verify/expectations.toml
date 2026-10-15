@@ -1,6 +1,6 @@
 # Strict expected failures for the engine verification suite
-# (`cargo test -p cap-verify`), same shape as the decoder model's
-# crates/rendering/src/decoder/model/expectations.toml:
+# (`cargo test -p cap-verify`), in the shared format of crates/verify-expect
+# (also used by crates/rendering/src/decoder/model/expectations.toml):
 #
 #   [[xfail]]
 #   case = "<case id as printed by the suite, * globs allowed>"
@@ -14,8 +14,9 @@
 #
 # A listed class that no longer occurs fails the run with "remove this
 # xfail", so fixes stay locked in. A class that occurs and is not listed
-# fails the run. CAP_VERIFY_BLESS=<dir> writes draft entries for every
-# failing case instead of failing; review them before pasting here.
+# fails the run. scripts/verify/bless.sh rewrites this file from a local run
+# or from a CI run's report artifacts (`--run <id>`, every platform), keeping
+# reasons and links; new entries get a TODO reason. Review the diff.
 #
 # Recorded on origin/main 5705ee851. "NEW:" marks bugs the suite found that
 # no open PR fixes.

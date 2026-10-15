@@ -2019,6 +2019,7 @@ dependencies = [
  "cap-flags",
  "cap-media-info",
  "cap-project",
+ "cap-verify-expect",
  "cap-video-decode",
  "cidre",
  "clap",
@@ -2163,6 +2164,7 @@ dependencies = [
  "cap-recording",
  "cap-rendering",
  "cap-timestamp",
+ "cap-verify-expect",
  "cidre",
  "ffmpeg-next",
  "flume",
@@ -2173,8 +2175,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml 0.8.2",
  "workspace-hack",
+]
+
+[[package]]
+name = "cap-verify-expect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
 ]
 
 [[package]]

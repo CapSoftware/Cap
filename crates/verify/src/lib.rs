@@ -2,6 +2,8 @@
 //! timeline model and oracle checkers.
 
 pub mod audio_code;
+pub mod audio_fixture;
+pub mod audio_model;
 pub mod catalog;
 pub mod fixture;
 #[cfg(target_os = "macos")]
