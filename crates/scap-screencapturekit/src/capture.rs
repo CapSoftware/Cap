@@ -1,5 +1,5 @@
 use cidre::{
-    arc, cm, cv, define_obj_type, dispatch, ns, objc,
+    arc, cf, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
 
@@ -61,6 +61,7 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
                 let sample_buf = sample_buf.retained();
                 let frame = match kind {
                     sc::OutputType::Screen => {
+                        diag_screen_buffer(&sample_buf);
                         if sample_buf.image_buf().is_none() {
                             return;
                         }
@@ -310,5 +311,45 @@ mod deallocation_tests {
             drop(outer);
             assert_eq!(drops.load(Ordering::SeqCst), (cycle + 1) * 2);
         }
+    }
+}
+
+/// Diagnostic (scratch branch only): every screen sample buffer with its host
+/// time and SCStreamFrameInfoStatus, appended to `$CAP_DIAG_DIR/scap.log`.
+fn diag_screen_buffer(sample_buf: &cm::SampleBuf) {
+    use std::{fs::File, io::Write, sync::Mutex, sync::OnceLock};
+    static FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+    let Some(file) = FILE.get_or_init(|| {
+        let dir = std::env::var_os("CAP_DIAG_DIR")?;
+        std::fs::create_dir_all(&dir).ok()?;
+        File::options()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&dir).join("scap.log"))
+            .ok()
+            .map(Mutex::new)
+    }) else {
+        return;
+    };
+    let host = cm::Clock::convert_host_time_to_sys_units(sample_buf.pts());
+    let key: &cf::String = sc::FrameInfo::status().as_cf();
+    let status = sample_buf
+        .attaches(false)
+        .filter(|a| !a.is_empty())
+        .and_then(|a| {
+            a[0].get(key).map(|v| {
+                unsafe { std::mem::transmute::<&cf::Plist, &cf::Number>(v) }
+                    .to_i64()
+                    .unwrap_or(-2)
+            })
+        })
+        .unwrap_or(-1);
+    if let Ok(mut f) = file.lock() {
+        let _ = writeln!(
+            f,
+            "{} SCK host={host} status={status} image={}",
+            cidre::mach::abs_time(),
+            sample_buf.image_buf().is_some()
+        );
     }
 }

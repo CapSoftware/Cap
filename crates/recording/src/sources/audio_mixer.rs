@@ -331,6 +331,7 @@ impl MixerBufferingTracker {
     }
 
     pub fn record_forced_ignore(&mut self, source: &'static str) {
+        crate::diag!("MIXIGNORE src={source}");
         self.total_ignored_tick_events += 1;
         warn!(
             source = source,
@@ -563,6 +564,12 @@ impl AudioMixer {
                 }
 
                 let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
+                crate::diag!(
+                    "MIXIN src={index} raw_ns={} remap={:.6} outcome={:?} samples={frame_samples}",
+                    crate::diag::ts_ns(&raw_timestamp),
+                    remap.duration().as_secs_f64(),
+                    remap.outcome
+                );
 
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
@@ -577,6 +584,7 @@ impl AudioMixer {
                             .filter(|&diff| diff >= buffer_timeout)
                         {
                             debug!(?gap, "Gap between last buffer frame, inserting silence");
+                            crate::diag!("MIXGAP src={index} gap={:.6}", gap.as_secs_f64());
 
                             let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
                             let silence_samples_count = silence_samples_needed.ceil() as usize;

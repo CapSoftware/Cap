@@ -54,6 +54,7 @@ jobs:
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
       CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_DIAG_DIR: ${{ github.workspace }}/verify-dump/diag
       CAP_VERIFY_AUDIO_OUTPUT: ${{ matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
     steps:
       - uses: actions/checkout@v4
