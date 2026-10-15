@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [main, retain]
+        variant: [main]
         copy: [a, b]
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +44,9 @@ jobs:
         run: |
           set +e
           mkdir -p "$RUNNER_TEMP/probe"
-          for i in $(seq 1 12); do
+          for i in $(seq 1 10); do
             export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/report-$i"
+            export CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/probe/fx-$i"
             cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
               -E 'binary_id(cap-verify::export) and (test(=backward_hold) or test(=jitter_camera))' > "$RUNNER_TEMP/probe/log-$i.txt" 2>&1
             grep -h '"case"' "$CAP_VERIFY_REPORT_DIR"/*.jsonl | python3 -c '
@@ -54,11 +55,14 @@ jobs:
               r = json.loads(l)
               bad = [(s.get("stream"), m["output_frame"], m["kind"]) for s in r.get("streams", []) for m in (s.get("mismatches") or []) if m["kind"] != "ahead"]
               print(sys.argv[1], r["outcome"], r["case"].split("/")[1], sorted(r["failures"]), bad[:4])' "$i"
+            for f in "$CAP_VERIFY_FIXTURE_DIR"/*/content/segments/segment-0/*.mp4; do
+              echo "fixture $i $(shasum -a 256 "$f" | cut -c1-16) $(stat -f %z "$f") ${f#"$CAP_VERIFY_FIXTURE_DIR"/}"
+            done
           done
           true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: avf-flake-${{ matrix.variant }}-${{ matrix.copy }}
-          path: ${{ runner.temp }}/probe/report-*
+          path: ${{ runner.temp }}/probe
           retention-days: 7
