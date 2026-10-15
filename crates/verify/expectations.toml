@@ -206,3 +206,27 @@ case = "editing/export/multi-segment/seed-7"
 class = "stale"
 reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the 10 frames after the transition show source frame 0 instead of 20-29 (deterministic). Same mechanism as the seek/*/storm*/ffmpeg xfail: backward seeks near the start answer frame 0"
 link = ""
+
+[[xfail]]
+case = "editing/export/same-clip-transition/forward/ffmpeg"
+class = "stale"
+reason = "NEW: FFmpeg decoder, cross-fade between two parts of the same recording clip (0-2 s, then 3-5.5 s, 0.8 s transition): the export reads one decoder at two positions interleaved and every third blend frame takes the far side from the near position (frame 37: incoming should be source 90, shows 35; up to 55 source frames stale). Deterministic; AVAssetReader passes this case (its 60 fps variant is the */basic/transition/*60*/avf xfail)"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-5"
+class = "stale"
+reason = "FFmpeg decoder, same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frame 53 one source frame stale"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-23"
+class = "stale"
+reason = "FFmpeg decoder (full tier), same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frames up to 70 source frames stale"
+link = ""
+
+[[xfail]]
+case = "editing/export/multi-segment/seed-7"
+class = "unreadable"
+reason = "FFmpeg decoder (full tier): one blend frame of the transition back into clip 0 mixes two stale frames and its marker is unreadable (same bug as the stale entry above)"
+link = ""

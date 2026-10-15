@@ -353,7 +353,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         )) {
             Err(e) => case.problem("error", format!("export failed: {e}")),
             Ok(out) => {
-                let frames = common::read_output(&out);
+                let frames = common::read_output(&out, Some(&|i| model.expect(i as u32, fps)));
                 common::check_sequence(&mut case, &model, &frames, fps, true);
             }
         }
@@ -373,6 +373,57 @@ fn export_multi_clip() {
         catalog::multi_segment(report::tier()),
         seeds(6, 30),
     ));
+}
+
+/// A cross-fade between two parts of the same recording clip: the export
+/// reads one decoder at two positions, interleaved, for the whole
+/// transition. Forward (later part incoming) and backward.
+#[test]
+fn same_clip_transition_export() {
+    let project = common::project(&catalog::basic(report::tier()));
+    let rt = common::runtime();
+    let fps = 30;
+    let mut failures = Vec::new();
+    for (name, cuts) in [
+        ("forward", [(0.0, 2.0, 1.0), (3.0, 5.5, 1.0)]),
+        ("backward", [(3.0, 5.5, 1.0), (0.5, 2.5, 1.0)]),
+    ] {
+        for decoder in Decoder::all() {
+            let id = format!(
+                "editing/export/same-clip-transition/{name}/{}",
+                decoder.label()
+            );
+            if !report::selected(&id) {
+                continue;
+            }
+            let mut config = project.config();
+            common::set_cuts(&mut config, &cuts);
+            common::add_transition(&mut config, 1, 0.8);
+            let model = project.model(&config);
+            let mut case = Case::new(&id);
+            let dir = common::scratch_dir(&id);
+            let run = ExportRun {
+                fps,
+                resolution: (320, 180),
+                format: Format::Mp4,
+                decoder,
+            };
+            match rt.block_on(common::export(
+                &project,
+                config,
+                &run,
+                &dir.path().join("out.mp4"),
+            )) {
+                Err(e) => case.problem("error", format!("export failed: {e}")),
+                Ok(out) => {
+                    let frames = common::read_output(&out, Some(&|i| model.expect(i as u32, fps)));
+                    common::check_sequence(&mut case, &model, &frames, fps, true);
+                }
+            }
+            failures.extend(settle(case));
+        }
+    }
+    common::assert_passed(failures);
 }
 
 /// Deterministic repro for `editing/mapping/duration-covered`: a 1 s
@@ -409,7 +460,7 @@ fn hold_past_end_export() {
     )) {
         Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok(out) => {
-            let frames = common::read_output(&out).len();
+            let frames = common::read_output(&out, None).len();
             let expected = (duration * f64::from(fps)).ceil() as usize;
             if frames == expected {
                 case.note(format!("{frames} frames for the {duration:.3}s timeline"));
