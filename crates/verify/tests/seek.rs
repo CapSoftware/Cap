@@ -183,6 +183,42 @@ fn scrub() {
     common::assert_passed(failures);
 }
 
+/// Ad-hoc repro runner: `CAP_VERIFY_SEEK_SCRIPT="<fixture>@<fps>:<secs>+<follow>,..."`
+/// seeks to each time and plays `follow` frames after it (fixtures:
+/// seek-gop, seek-native, vfr-holds). Ignored without the variable.
+#[test]
+fn script() {
+    let Ok(script) = std::env::var("CAP_VERIFY_SEEK_SCRIPT") else {
+        return;
+    };
+    let (head, steps) = script.split_once(':').expect("<fixture>@<fps>:<steps>");
+    let (fixture, fps) = head.split_once('@').expect("<fixture>@<fps>");
+    let fps: u32 = fps.parse().expect("fps");
+    let spec = match fixture {
+        "seek-gop" => catalog::seek_gop(report::tier()),
+        "seek-native" => catalog::seek_gop_native(report::tier()),
+        "vfr-holds" => catalog::vfr_holds(report::tier()),
+        other => panic!("unknown fixture {other}"),
+    };
+    let steps: Vec<(f64, u32)> = steps
+        .split(',')
+        .map(|step| {
+            let (t, n) = step.split_once('+').unwrap_or((step, "0"));
+            (t.parse().expect("secs"), n.parse().expect("follow"))
+        })
+        .collect();
+    let make = move |total: u32, _: &common::Project| {
+        let mut out = Vec::new();
+        for &(t, n) in &steps {
+            let f = ((t * f64::from(fps)) as u32).min(total - 1);
+            out.push((f, true));
+            out.extend((1..=n).map(|k| (f + k, false)).filter(|&(f, _)| f < total));
+        }
+        out
+    };
+    common::assert_passed(run(spec, "script", fps, no_edit, &make));
+}
+
 /// Seeks into the middle of static holds and across them, then playback
 /// out of the hold.
 #[test]
