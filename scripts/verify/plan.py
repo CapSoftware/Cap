@@ -162,6 +162,8 @@ def affected(config, files, metadata, tier):
     """Returns (suite names, reason)."""
     all_names = [s["name"] for s in config["suites"]]
     for path in files:
+        if path.startswith("apps/desktop-gpui/"):
+            return all_names, f"{path} changes the standalone GPUI application"
         for pattern in config["always"]:
             if match(path, pattern):
                 return all_names, f"{path} affects every suite"
@@ -266,7 +268,11 @@ def cmd_test(_args):
         (["crates/video-decode/src/ffmpeg.rs"], [s["name"] for s in config["suites"]]),
         (["Cargo.lock"], [s["name"] for s in config["suites"]]),
         (["scripts/verify/run.sh"], [s["name"] for s in config["suites"]]),
-        (["apps/desktop-gpui/src/main.rs"], []),
+        (["apps/desktop-gpui/src/main.rs"], [s["name"] for s in config["suites"]]),
+        (["apps/desktop-gpui/src/editor.rs"], [s["name"] for s in config["suites"]]),
+        (["apps/desktop-gpui/src/recording.rs"], [s["name"] for s in config["suites"]]),
+        (["apps/desktop-gpui/src/upload/verify_tests.rs"], [s["name"] for s in config["suites"]]),
+        (["apps/desktop-gpui/Cargo.toml"], [s["name"] for s in config["suites"]]),
     ]
     failed = 0
     for files, expected in cases:

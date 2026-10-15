@@ -107,9 +107,11 @@ blessed failure is a bug that the suite keeps checking.
 `.github/workflows/engine-verify.yml`:
 
 - **Plan.** `scripts/verify/plan.py` maps the changed paths to suites through
-  the workspace dependency graph (`cargo metadata`). A PR that changes only
-  docs, the web app or GPUI UI code runs no suite, and the job finishes in
-  seconds.
+  the root workspace dependency graph (`cargo metadata`). The standalone
+  GPUI app is outside that graph, so any change under `apps/desktop-gpui/`
+  conservatively selects every engine suite. This selection does not replace
+  the app's own tests or prove coverage of its orchestration. A PR that changes
+  only docs or the web app runs no engine suite.
 - **Tiers.** FAST runs on every PR push. FULL runs when the PR has the
   `verify-full` label, in the merge queue, and nightly.
 - **Jobs.** One job per platform builds the selected tests with the
