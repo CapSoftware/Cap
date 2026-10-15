@@ -172,6 +172,30 @@ fn keyframe_seeks() {
     common::assert_passed(failures);
 }
 
+/// The editor's "jump to start" after watching later in the file, then a
+/// click 2 s in and playback: seek 6.1 s, seek 0, seek 2.0 s and play 4 s.
+#[test]
+fn home_then_play() {
+    let mut failures: Vec<String> = Vec::new();
+    let home = |total: u32, _: &common::Project| {
+        let fps = 30.0;
+        let mut out: Vec<Request> = vec![((6.1 * fps) as u32, true), (0, true)];
+        let start = (2.0 * fps) as u32;
+        out.push((start, true));
+        out.extend((1..=120).map(|k| (start + k, false)));
+        out.retain(|&(f, _)| f < total);
+        out
+    };
+    failures.extend(run(
+        catalog::seek_gop(report::tier()),
+        "home-then-play",
+        30,
+        no_edit,
+        &home,
+    ));
+    common::assert_passed(failures);
+}
+
 /// Scrubbing: seek every 0.25 s forwards, then backwards.
 #[test]
 fn scrub() {
