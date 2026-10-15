@@ -5086,11 +5086,11 @@ mod tests {
             }
             let (output, _) = run(&frames);
             assert_on_capture_time(&frames[..120], &output[..120]);
-            let bridge = output[120] - output[119];
+            let bridge = output[120].saturating_sub(output[119]);
             assert!(bridge.abs_diff(secs(2.5)) <= EXACT, "bridge {bridge:?}");
             for k in 121..180 {
                 assert!(
-                    (output[k] - output[k - 1]).abs_diff(capture(1)) <= EXACT,
+                    output[k].saturating_sub(output[k - 1]).abs_diff(capture(1)) <= EXACT,
                     "frame {k} keeps the capture cadence after the reset"
                 );
             }
@@ -5111,10 +5111,10 @@ mod tests {
             for (f, out) in frames.iter().zip(&output) {
                 assert!(*out <= f.wall + secs(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
             }
-            let step = output[150] - output[149];
+            let step = output[150].saturating_sub(output[149]);
             assert!(step <= capture(1) + EXACT, "glitch absorbed, step {step:?}");
             for k in 151..240 {
-                assert!((output[k] - output[k - 1]).abs_diff(capture(1)) <= EXACT);
+                assert!(output[k].saturating_sub(output[k - 1]).abs_diff(capture(1)) <= EXACT);
             }
             assert!(tracker.capped_frame_count() > 0);
         }
@@ -5173,7 +5173,7 @@ mod tests {
                 .iter()
                 .position(|f| f.capture == capture(180))
                 .unwrap();
-            frames[first_after].capture = capture(180) - Duration::from_millis(1830);
+            frames[first_after].capture = capture(180).saturating_sub(Duration::from_millis(1830));
             let (output, _) = run(&frames);
             assert!(
                 output[first_after].abs_diff(capture(180)) <= EXACT,
@@ -5226,7 +5226,7 @@ mod tests {
                 })
                 .collect();
             assert!(frames[151..190].iter().all(|f| !f.waited));
-            assert!(frames[151].wall - frames[151].capture > secs(1.4));
+            assert!(frames[151].wall.saturating_sub(frames[151].capture) > secs(1.4));
             let (output, _) = run(&frames);
             assert_on_capture_time(&frames, &output);
         }
@@ -5235,7 +5235,10 @@ mod tests {
         fn backward_capture_time_is_clamped_to_the_previous_frame() {
             let mut frames = processed(120, |_| Duration::from_millis(10));
             let last = frames.last().unwrap();
-            let (capture_back, wall) = (last.capture - Duration::from_millis(5), last.wall);
+            let (capture_back, wall) = (
+                last.capture.saturating_sub(Duration::from_millis(5)),
+                last.wall,
+            );
             frames.push(frame(capture_back, wall + Duration::from_millis(33)));
             let (output, _) = run(&frames);
             assert_eq!(output[120], output[119]);
