@@ -1,14 +1,7 @@
-//! The watch preview: the player's enlarge control lifts the composited frame
-//! out of the stage into a centred, rounded card over a dimmed editor, and
-//! puts it back on Escape, a click on the wash, or the control itself.
-//!
-//! The card is a FLIP from the stage's own letterboxed rect, so the picture
-//! grows out of where it already was. While the overlay is mounted the stage
-//! keeps measuring its rect but stops painting, so there is never a second
-//! copy of the frame on screen.
-//!
-//! The wash is a plain dim: this gpui rev has no backdrop blur.
+//! This gpui rev has no backdrop blur, so the wash is a dim. The stage keeps
+//! measuring its rect while hidden so the card can animate back to it.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -18,7 +11,7 @@ use gpui::{
 };
 
 use crate::{
-    editor_window::{EditorPreviewFrame, EditorWindow, PREVIEW_RADIUS, ease_out_quint},
+    editor_window::{EditorPreviewFrame, EditorWindow, PREVIEW_RADIUS, PumpStats, ease_out_quint},
     ui,
 };
 
@@ -65,7 +58,6 @@ fn phase_duration(phase: WatchPhase) -> Duration {
     }
 }
 
-/// How far the card is from the stage (0) to its watch position (1).
 fn watch_progress(phase: WatchPhase, elapsed: Duration, reduce_motion: bool) -> f32 {
     match phase {
         WatchPhase::Opening => {
@@ -86,8 +78,6 @@ fn watch_progress(phase: WatchPhase, elapsed: Duration, reduce_motion: bool) -> 
     }
 }
 
-/// The card's resting rect: the frame fitted, aspect intact, inside the window
-/// less [`WATCH_PADDING`] on every side, and centred.
 fn watch_target(viewport: (f32, f32), frame: (f32, f32)) -> Bounds<Pixels> {
     let available = (
         (viewport.0 - WATCH_PADDING * 2.).max(0.),
@@ -137,14 +127,13 @@ fn lerp_bounds(from: Bounds<Pixels>, to: Bounds<Pixels>, t: f32) -> Bounds<Pixel
     }
 }
 
-/// The overlay's own view. It is fed every frame the stage gets while it is
-/// mounted, so playback keeps moving inside the card without re-rendering the
-/// rest of the editor.
 pub(crate) struct WatchView {
     editor: WeakEntity<EditorWindow>,
     frame: Option<EditorPreviewFrame>,
     frame_size: (f32, f32),
     motion: Option<WatchMotion>,
+    stats: Option<Arc<PumpStats>>,
+    frame_sequence: u64,
 }
 
 impl WatchView {
@@ -154,6 +143,8 @@ impl WatchView {
             frame: None,
             frame_size: (1920., 1080.),
             motion: None,
+            stats: None,
+            frame_sequence: 0,
         }
     }
 
@@ -162,10 +153,14 @@ impl WatchView {
         frame: EditorPreviewFrame,
         frame_size: (f32, f32),
         origin: Option<Bounds<Pixels>>,
+        stats: Option<Arc<PumpStats>>,
+        frame_sequence: u64,
         cx: &mut Context<Self>,
     ) {
         self.frame = Some(frame);
         self.frame_size = frame_size;
+        self.stats = stats;
+        self.frame_sequence = frame_sequence;
         self.motion = Some(WatchMotion {
             phase: WatchPhase::Opening,
             started: Instant::now(),
@@ -174,7 +169,6 @@ impl WatchView {
         cx.notify();
     }
 
-    /// Starts the return to the stage and reports how long it will take.
     fn close(
         &mut self,
         origin: Option<Bounds<Pixels>>,
@@ -203,16 +197,21 @@ impl WatchView {
         &mut self,
         frame: EditorPreviewFrame,
         frame_size: (f32, f32),
+        stats: Option<Arc<PumpStats>>,
+        frame_sequence: u64,
         cx: &mut Context<Self>,
     ) {
         self.frame = Some(frame);
         self.frame_size = frame_size;
+        self.stats = stats;
+        self.frame_sequence = frame_sequence;
         cx.notify();
     }
 
     fn clear(&mut self, cx: &mut Context<Self>) {
         self.frame = None;
         self.motion = None;
+        self.stats = None;
         cx.notify();
     }
 }
@@ -243,6 +242,8 @@ impl Render for WatchView {
         let radius = px(lerp(PREVIEW_RADIUS, WATCH_RADIUS, progress));
         let shadow = crate::theme::preview_shadow();
         let editor = self.editor.clone();
+        let painted = self.stats.clone();
+        let frame_sequence = self.frame_sequence;
 
         div()
             .absolute()
@@ -290,6 +291,9 @@ impl Render for WatchView {
                                     gpui::hsla(0., 0., 1., 0.08),
                                     gpui::BorderStyle::Solid,
                                 ));
+                                if let Some(stats) = &painted {
+                                    stats.record_paint(frame_sequence);
+                                }
                             },
                         )
                         .size_full(),
@@ -332,8 +336,10 @@ impl EditorWindow {
         window.focus(&self.focus, cx);
 
         self.watch_preview_open = true;
-        self.watch_preview
-            .update(cx, |watch, cx| watch.open(frame, frame_size, origin, cx));
+        let (stats, frame_sequence) = self.watch_paint_counters(cx);
+        self.watch_preview.update(cx, |watch, cx| {
+            watch.open(frame, frame_size, origin, stats, frame_sequence, cx)
+        });
         self.set_stage_frame_hidden(true, cx);
         cx.notify();
     }
@@ -357,8 +363,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// Unmounts the overlay without the return motion, for surfaces that
-    /// replace the player outright.
     pub(crate) fn dismiss_watch_preview(&mut self, cx: &mut Context<Self>) {
         if self.watch_preview_open {
             self.finish_watch_preview(cx);
@@ -373,7 +377,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// The transport's icon-only toggle, next to Split.
     pub(crate) fn render_watch_preview_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let expanded = self.watch_preview_expanded();

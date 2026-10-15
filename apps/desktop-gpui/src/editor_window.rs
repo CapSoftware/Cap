@@ -649,6 +649,10 @@ impl PreviewFrameView {
         cx.notify();
         previous
     }
+
+    fn paint_counters(&self) -> (Option<Arc<PumpStats>>, u64) {
+        (self.stats.clone(), self.frame_sequence)
+    }
 }
 
 impl Render for PreviewFrameView {
@@ -844,7 +848,7 @@ pub struct StatsSnapshot {
 }
 
 impl PumpStats {
-    fn record_paint(&self, frame_sequence: u64) {
+    pub(crate) fn record_paint(&self, frame_sequence: u64) {
         self.painted.fetch_add(1, Ordering::Relaxed);
         if self
             .last_painted_sequence
@@ -2661,6 +2665,10 @@ impl EditorWindow {
     pub(crate) fn set_stage_frame_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
         self.preview
             .update(cx, |preview, cx| preview.set_hidden(hidden, cx));
+    }
+
+    pub(crate) fn watch_paint_counters(&self, cx: &Context<Self>) -> (Option<Arc<PumpStats>>, u64) {
+        self.preview.read(cx).paint_counters()
     }
 
     /// Popovers that would otherwise stay open underneath a full-window
@@ -6393,8 +6401,9 @@ impl EditorWindow {
             preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
         });
         if let Some(watch_frame) = watch_frame {
+            let (stats, frame_sequence) = self.watch_paint_counters(cx);
             self.watch_preview.update(cx, |watch, cx| {
-                watch.set_frame(watch_frame, frame_size, cx);
+                watch.set_frame(watch_frame, frame_size, stats, frame_sequence, cx);
             });
         }
         if let Some(EditorPreviewFrame::Image(previous)) = previous {
