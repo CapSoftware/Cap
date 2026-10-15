@@ -109,7 +109,7 @@ impl GifExportSettings {
             })
             .unwrap_or_default();
 
-        let temporary_output = prepare_new_output(&gif_output_path);
+        let temporary_output = prepare_new_output(&gif_output_path)?;
         let mut gif_encoder = cap_enc_gif::GifEncoderWrapper::new_with_quality(
             temporary_output
                 .as_ref()
