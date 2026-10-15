@@ -47,7 +47,11 @@ pub fn judge(case: &mut Case, label: &str, report: &AudioReport) {
     if report.passed() {
         case.note(format!("{label}: {}", report.summary()));
     } else {
-        case.problem(format!("{label}: {}", report.summary()));
+        let classes = report.classes();
+        for class in &classes[1..] {
+            case.classes.insert((*class).to_string());
+        }
+        case.problem(classes[0], format!("{label}: {}", report.summary()));
     }
 }
 
@@ -391,10 +395,13 @@ pub fn check_av(
     if bad.is_empty() {
         case.note(summary);
     } else {
-        case.problem(format!(
-            "{summary}, {} out of sync (first: {})",
-            bad.len(),
-            bad.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
-        ));
+        case.problem(
+            "av-sync",
+            format!(
+                "{summary}, {} out of sync (first: {})",
+                bad.len(),
+                bad.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+            ),
+        );
     }
 }

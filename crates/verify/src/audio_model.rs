@@ -639,6 +639,22 @@ impl AudioReport {
             && self.damaged.is_empty()
     }
 
+    /// Failure classes for `expectations.toml` (empty when passed).
+    pub fn classes(&self) -> Vec<&'static str> {
+        [
+            ("audio-missing", &self.missing),
+            ("audio-doubled", &self.doubled),
+            ("audio-unexpected", &self.unexpected),
+            ("audio-timing", &self.mistimed),
+            ("audio-level", &self.level),
+            ("audio-undecodable", &self.damaged),
+        ]
+        .into_iter()
+        .filter(|(_, list)| !list.is_empty())
+        .map(|(class, _)| class)
+        .collect()
+    }
+
     pub fn summary(&self) -> String {
         let mut parts = vec![format!(
             "audio {}/{} required markers matched, max time error {:.3} ms, max level error {:.0}%, min correlation {:.2}",

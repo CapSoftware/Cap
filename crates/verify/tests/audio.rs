@@ -156,11 +156,11 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
         RES,
         dir.path(),
     )) {
-        Err(e) => case.problem(format!("export failed: {e}")),
+        Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok(out) => match path {
             ExportPath::Gif => {
                 if audio_support::has_audio_stream(&out) {
-                    case.problem("GIF export has an audio stream");
+                    case.problem("audio-unexpected", "GIF export has an audio stream");
                 }
             }
             ExportPath::Mov if !audio_support::has_audio_stream(&out) => {
@@ -171,7 +171,7 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
             _ => {
                 let model = audio_support::audio_model(&project, &config);
                 match audio_support::exported_mono(&out) {
-                    Err(e) => case.problem(e),
+                    Err(e) => case.problem("error", e),
                     Ok(mono) => {
                         let report = audio_support::check_pcm(&mut case, "export", &model, &mono);
                         let frames = common::read_output(&out);
@@ -260,10 +260,10 @@ fn playback_case(spec: &FixtureSpec, variant: &Variant) -> Option<String> {
         &audio_support::mono(&pcm),
     );
     if player.starved > 0 {
-        case.problem(format!(
-            "{} pulls starved (samples never rendered)",
-            player.starved
-        ));
+        case.problem(
+            "audio-starved",
+            format!("{} pulls starved (samples never rendered)", player.starved),
+        );
     }
     report::settle(case).err()
 }
@@ -423,14 +423,14 @@ fn transport_case(
         };
         match audio_model::pcm_difference(pcm, &reference) {
             None => case.note(format!("{label}: PCM identical to a fresh output")),
-            Some((db, at)) => case.problem(format!(
+            Some((db, at)) => case.problem("pcm-mismatch", format!(
                 "{label}: PCM differs from a fresh output (peak difference {db:.1} dBFS, first at {:.4}s into the span)",
                 (at / audio_support::CHANNELS) as f64 / f64::from(audio_support::RATE)
             )),
         }
     }
     if player.starved > 0 {
-        case.problem(format!("{} pulls starved", player.starved));
+        case.problem("audio-starved", format!("{} pulls starved", player.starved));
     }
     report::settle(case).err()
 }
