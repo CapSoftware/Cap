@@ -8,10 +8,21 @@ publish = false
 [dependencies]
 cap-audio = { path = "../../../crates/audio" }
 cap-project = { path = "../../../crates/project" }
+crc32fast = "1.5"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
 md-5 = "0.10"
+simd-adler32 = "0.3"
 tracing = "0.1"
 
 [[bench]]
 name = "screenshot_blit"
+harness = false
+
+[[bench]]
+name = "thumbnail_fit"
+harness = false
+
+[[bench]]
+name = "png_encode"
 harness = false

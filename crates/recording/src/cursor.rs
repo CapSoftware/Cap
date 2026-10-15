@@ -9,6 +9,10 @@ use futures::{FutureExt, future::Shared};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -40,6 +44,7 @@ pub struct CursorActor {
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
+#[derive(Clone)]
 pub struct IncrementalCaptureOutputs {
     pub cursor: Option<PathBuf>,
     pub keyboard: Option<PathBuf>,
@@ -170,6 +175,146 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
             output_path.display(),
             e
         );
+    }
+}
+
+struct IncrementalSnapshot {
+    cursor: Option<(Vec<CursorMoveEvent>, Vec<CursorClickEvent>)>,
+    keyboard: Option<Vec<KeyPressEvent>>,
+}
+
+impl IncrementalSnapshot {
+    fn capture(outputs: &IncrementalCaptureOutputs, response: &CursorActorResponse) -> Self {
+        Self {
+            cursor: outputs
+                .cursor
+                .as_ref()
+                .map(|_| (response.moves.clone(), response.clicks.clone())),
+            keyboard: outputs
+                .keyboard
+                .as_ref()
+                .map(|_| response.keyboard_presses.clone()),
+        }
+    }
+
+    fn write(self, outputs: &IncrementalCaptureOutputs) {
+        if let (Some(path), Some((moves, clicks))) = (&outputs.cursor, &self.cursor) {
+            flush_cursor_data(path, moves, clicks);
+        }
+        if let (Some(path), Some(presses)) = (&outputs.keyboard, &self.keyboard) {
+            flush_keyboard_data(path, presses);
+        }
+    }
+}
+
+enum WriterMessage {
+    Image {
+        path: PathBuf,
+        image: image::RgbaImage,
+    },
+    Snapshot(IncrementalSnapshot),
+}
+
+/// Writes cursor images and the incremental cursor and keyboard files on a
+/// separate thread so a slow or stalled output volume cannot pause input
+/// sampling. At most one periodic snapshot waits while another is written; a
+/// flush that finds one already waiting is skipped, since the next one carries
+/// every event. Cursor images that fail to save are retried, and any still
+/// missing at the end are reported so the recorder can drop them, matching the
+/// old inline behaviour of only registering images that reached disk.
+struct CursorFileWriter {
+    tx: std::sync::mpsc::Sender<WriterMessage>,
+    snapshot_queued: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<Vec<PathBuf>>,
+}
+
+const CURSOR_IMAGE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl CursorFileWriter {
+    fn spawn(outputs: IncrementalCaptureOutputs) -> std::io::Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMessage>();
+        let snapshot_queued = Arc::new(AtomicBool::new(false));
+        let queued = snapshot_queued.clone();
+        let thread = std::thread::Builder::new()
+            .name("cursor-writer".to_string())
+            .spawn(move || {
+                let mut failed_images: Vec<(PathBuf, image::RgbaImage)> = Vec::new();
+                loop {
+                    let message = if failed_images.is_empty() {
+                        rx.recv().ok()
+                    } else {
+                        match rx.recv_timeout(CURSOR_IMAGE_RETRY_INTERVAL) {
+                            Ok(message) => Some(message),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    };
+                    let had_failures = !failed_images.is_empty();
+                    match message {
+                        Some(WriterMessage::Image { path, image }) => {
+                            if !save_cursor_image(&path, &image) {
+                                failed_images.push((path, image));
+                            }
+                        }
+                        Some(WriterMessage::Snapshot(snapshot)) => {
+                            queued.store(false, Ordering::Release);
+                            snapshot.write(&outputs);
+                        }
+                        None if !had_failures => break,
+                        None => {}
+                    }
+                    if had_failures {
+                        failed_images.retain(|(path, image)| !save_cursor_image(path, image));
+                    }
+                }
+                failed_images.retain(|(path, image)| !save_cursor_image(path, image));
+                failed_images.into_iter().map(|(path, _)| path).collect()
+            })?;
+        Ok(Self {
+            tx,
+            snapshot_queued,
+            thread,
+        })
+    }
+
+    fn save_image(&self, path: PathBuf, image: image::RgbaImage) -> bool {
+        match self.tx.send(WriterMessage::Image { path, image }) {
+            Ok(()) => true,
+            Err(std::sync::mpsc::SendError(WriterMessage::Image { path, image })) => {
+                save_cursor_image(&path, &image)
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn flush(&self, snapshot: impl FnOnce() -> IncrementalSnapshot) {
+        if !self.snapshot_queued.swap(true, Ordering::AcqRel) {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot()));
+        }
+    }
+
+    fn finish(self, snapshot: Option<IncrementalSnapshot>) -> Vec<PathBuf> {
+        if let Some(snapshot) = snapshot {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot));
+        }
+        drop(self.tx);
+        self.thread.join().unwrap_or_else(|_| {
+            tracing::error!("Cursor writer thread panicked");
+            Vec::new()
+        })
+    }
+}
+
+fn save_cursor_image(path: &Path, image: &image::RgbaImage) -> bool {
+    match image.save(path) {
+        Ok(()) => {
+            tracing::info!(path = %path.display(), "Saved cursor image");
+            true
+        }
+        Err(e) => {
+            tracing::error!("Failed to save cursor image: {}", e);
+            false
+        }
     }
 }
 
@@ -376,6 +521,11 @@ pub fn spawn_cursor_recorder(
             keyboard_presses: vec![],
         };
 
+        let has_incremental_outputs =
+            incremental_outputs.cursor.is_some() || incremental_outputs.keyboard.is_some();
+        let writer = CursorFileWriter::spawn(incremental_outputs.clone())
+            .inspect_err(|e| error!("Failed to start cursor writer, writing inline: {e}"))
+            .ok();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
@@ -438,10 +588,11 @@ pub fn spawn_cursor_recorder(
                     if let Ok(image) = image::load_from_memory(&data.image) {
                         let rgba_image = image.into_rgba8();
 
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            error!("Failed to save cursor image: {}", e);
-                        } else {
-                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                        let saved = match &writer {
+                            Some(writer) => writer.save_image(cursor_path, rgba_image),
+                            None => save_cursor_image(&cursor_path, &rgba_image),
+                        };
+                        if saved {
                             response.cursors.insert(
                                 id,
                                 Cursor {
@@ -541,12 +692,11 @@ pub fn spawn_cursor_recorder(
 
             last_keys = current_keys;
 
-            if last_flush.elapsed() >= flush_interval {
-                if let Some(ref path) = incremental_outputs.cursor {
-                    flush_cursor_data(path, &response.moves, &response.clicks);
-                }
-                if let Some(ref kb_path) = incremental_outputs.keyboard {
-                    flush_keyboard_data(kb_path, &response.keyboard_presses);
+            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
+                let snapshot = || IncrementalSnapshot::capture(&incremental_outputs, &response);
+                match &writer {
+                    Some(writer) => writer.flush(snapshot),
+                    None => snapshot().write(&incremental_outputs),
                 }
                 last_flush = Instant::now();
             }
@@ -554,12 +704,20 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
-        if let Some(ref path) = incremental_outputs.cursor {
-            flush_cursor_data(path, &response.moves, &response.clicks);
-        }
-
-        if let Some(ref kb_path) = incremental_outputs.keyboard {
-            flush_keyboard_data(kb_path, &response.keyboard_presses);
+        let snapshot = has_incremental_outputs
+            .then(|| IncrementalSnapshot::capture(&incremental_outputs, &response));
+        match writer {
+            Some(writer) => {
+                let unsaved = writer.finish(snapshot);
+                response.cursors.retain(|_, cursor| {
+                    !unsaved.iter().any(|path| path.ends_with(&cursor.file_name))
+                });
+            }
+            None => {
+                if let Some(snapshot) = snapshot {
+                    snapshot.write(&incremental_outputs);
+                }
+            }
         }
 
         let _ = tx.send(response);
@@ -1105,5 +1263,187 @@ mod input_epoch_tests {
             input_epoch(Some(&gate), start_time),
             Some(start_time.instant())
         );
+    }
+}
+
+#[cfg(test)]
+mod incremental_writer_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn response(events: usize) -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 1,
+            moves: (0..events)
+                .map(|i| CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 16.0,
+                    x: i as f64 / events as f64,
+                    y: 0.5,
+                })
+                .collect(),
+            clicks: (0..events / 10)
+                .map(|i| CursorClickEvent {
+                    active_modifiers: vec![],
+                    cursor_num: 0,
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+            keyboard_presses: (0..events / 10)
+                .map(|i| KeyPressEvent {
+                    key: "a".to_string(),
+                    key_code: "KeyA".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn outputs(dir: &Path, name: &str) -> IncrementalCaptureOutputs {
+        IncrementalCaptureOutputs {
+            cursor: Some(dir.join(format!("{name}-cursor.json"))),
+            keyboard: Some(dir.join(format!("{name}-keyboard.bin"))),
+        }
+    }
+
+    #[test]
+    fn writer_thread_produces_the_same_files_as_inline_flushes() {
+        let dir = tempfile::tempdir().unwrap();
+        let full = response(500);
+
+        let inline = outputs(dir.path(), "inline");
+        IncrementalSnapshot::capture(&inline, &full).write(&inline);
+
+        let threaded = outputs(dir.path(), "threaded");
+        let writer = CursorFileWriter::spawn(threaded.clone()).unwrap();
+        writer.flush(|| IncrementalSnapshot::capture(&threaded, &response(10)));
+        writer.finish(Some(IncrementalSnapshot::capture(&threaded, &full)));
+
+        for (a, b) in [
+            (&inline.cursor, &threaded.cursor),
+            (&inline.keyboard, &threaded.keyboard),
+        ] {
+            let (a, b) = (a.as_ref().unwrap(), b.as_ref().unwrap());
+            assert_eq!(std::fs::read(a).unwrap(), std::fs::read(b).unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flushes_do_not_wait_for_a_blocked_writer() {
+        use std::ffi::CString;
+        use std::io::Read;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("cursor.json");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+        let outputs = IncrementalCaptureOutputs {
+            cursor: Some(fifo.clone()),
+            keyboard: Some(dir.path().join("keyboard.bin")),
+        };
+
+        // Opening a FIFO for writing blocks until a reader arrives, which
+        // stands in for a stalled output volume.
+        let writer = CursorFileWriter::spawn(outputs.clone()).unwrap();
+        let started = Instant::now();
+        for events in [10, 20, 30, 40] {
+            writer.flush(|| IncrementalSnapshot::capture(&outputs, &response(events)));
+        }
+        assert!(writer.save_image(
+            dir.path().join("cursor_0.png"),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+
+        let mut drain = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let drainer = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while !done.load(Ordering::Acquire) {
+                    if !matches!(drain.read(&mut buf), Ok(n) if n > 0) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            })
+        };
+
+        let final_response = response(50);
+        let unsaved = writer.finish(Some(IncrementalSnapshot::capture(
+            &outputs,
+            &final_response,
+        )));
+        done.store(true, Ordering::Release);
+        drainer.join().unwrap();
+
+        assert!(unsaved.is_empty());
+        assert!(dir.path().join("cursor_0.png").exists());
+        let expected = dir.path().join("expected-keyboard.bin");
+        flush_keyboard_data(&expected, &final_response.keyboard_presses);
+        assert_eq!(
+            std::fs::read(dir.path().join("keyboard.bin")).unwrap(),
+            std::fs::read(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn unsaved_cursor_images_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = CursorFileWriter::spawn(IncrementalCaptureOutputs {
+            cursor: None,
+            keyboard: None,
+        })
+        .unwrap();
+        let missing = dir.path().join("missing").join("cursor_0.png");
+        assert!(writer.save_image(
+            missing.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        let saved = dir.path().join("cursor_1.png");
+        assert!(writer.save_image(
+            saved.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        assert_eq!(writer.finish(None), vec![missing]);
+        assert!(saved.exists());
+    }
+
+    #[test]
+    fn cursor_images_are_retried_until_storage_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = CursorFileWriter::spawn(IncrementalCaptureOutputs {
+            cursor: None,
+            keyboard: None,
+        })
+        .unwrap();
+        let cursors_dir = dir.path().join("cursors");
+        let path = cursors_dir.join("cursor_0.png");
+        assert!(writer.save_image(
+            path.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!path.exists());
+        std::fs::create_dir_all(&cursors_dir).unwrap();
+        let deadline = Instant::now() + CURSOR_IMAGE_RETRY_INTERVAL * 3;
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(path.exists());
+        assert!(writer.finish(None).is_empty());
     }
 }
