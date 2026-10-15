@@ -31,3 +31,11 @@ store-failure-output = true
 filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
 threads-required = 3
 
+
+# The FULL-tier seek storms (3000 seeks per decoder) are the slowest tests:
+# on the macos-15 runner one storm fixture takes 240 to 570 s per decoder,
+# up to about 900 s for both decoders on one shard. Twice that, so a real
+# hang still fails.
+[[profile.ci.overrides]]
+filter = 'binary_id(cap-verify::seek) and test(/^storm_/)'
+slow-timeout = { period = "60s", terminate-after = 30 }

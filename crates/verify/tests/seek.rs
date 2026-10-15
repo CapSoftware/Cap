@@ -102,32 +102,43 @@ fn storm(seed: u64, count: usize) -> impl Fn(u32, &common::Project) -> Vec<Reque
     }
 }
 
+// One test per fixture: a storm is the slowest seek workload (FULL tier on
+// the macos-15 runner: 240 to 570 s per decoder), and as one test the three
+// storms of a shard ran past nextest's per-test limit.
 #[test]
-fn random_storm() {
-    let mut failures: Vec<String> = Vec::new();
+fn storm_seek_gop() {
     let count = seek_count(150, 3000);
-    failures.extend(run(
+    common::assert_passed(run(
         catalog::seek_gop(report::tier()),
         "storm",
         30,
         no_edit,
         &storm(0x5EE4_0001, count),
     ));
-    failures.extend(run(
+}
+
+#[test]
+fn storm_vfr_holds() {
+    let count = seek_count(150, 3000);
+    common::assert_passed(run(
         catalog::vfr_holds(report::tier()),
         "storm",
         60,
         no_edit,
         &storm(0x5EE4_0002, count),
     ));
-    failures.extend(run(
+}
+
+#[test]
+fn storm_seek_native() {
+    let count = seek_count(150, 3000);
+    common::assert_passed(run(
         catalog::seek_gop_native(report::tier()),
         "storm",
         30,
         no_edit,
         &storm(0x5EE4_0004, count),
     ));
-    common::assert_passed(failures);
 }
 
 /// Seeks landing on and around every source keyframe, at 60 fps output so
