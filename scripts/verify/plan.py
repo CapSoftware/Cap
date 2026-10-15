@@ -103,6 +103,22 @@ def cmd_select(args):
     print(",".join(skips))
 
 
+def cmd_env(args):
+    """Shell `export` lines for the env of the selected suites (suites.json
+    `env`: {"KEY": "value"} or {"KEY": {"<platform>": "value"}}). Variables
+    already set in the environment win."""
+    import shlex
+    config = load_config()
+    names = [n for n in (args.suites or "").split(",") if n]
+    for suite in select(config, args.tier, args.platform, names or None, args.local):
+        for key, value in suite.get("env", {}).items():
+            if isinstance(value, dict):
+                value = value.get(args.platform)
+            if value is None or key in os.environ:
+                continue
+            print(f"export {key}={shlex.quote(str(value))}")
+
+
 def workspace_graph(metadata):
     """Package dirs and reverse dependencies (normal, dev and build)."""
     dirs, deps = {}, {}
@@ -274,6 +290,12 @@ def main():
     p.add_argument("--suites")
     p.add_argument("--local", action="store_true")
     p.set_defaults(func=cmd_select)
+    p = sub.add_parser("env")
+    p.add_argument("--tier", choices=["fast", "full"], required=True)
+    p.add_argument("--platform", choices=PLATFORMS, required=True)
+    p.add_argument("--suites")
+    p.add_argument("--local", action="store_true")
+    p.set_defaults(func=cmd_env)
     p = sub.add_parser("changes")
     p.add_argument("--tier", choices=["fast", "full"], required=True)
     p.add_argument("--files")

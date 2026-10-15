@@ -63,6 +63,7 @@ suite_names="$(sed -n 1p <<<"$plan")"
 read -r -a cargo_args <<<"$(sed -n 2p <<<"$plan")"
 filter="$(sed -n 3p <<<"$plan")"
 skip="$(sed -n 4p <<<"$plan")"
+eval "$("$py" scripts/verify/plan.py env --tier "$tier" --platform "$platform" ${suites:+--suites "$suites"} $local_flag)"
 if [[ -n "$skip" ]]; then
   export CAP_VERIFY_SKIP="${CAP_VERIFY_SKIP:+$CAP_VERIFY_SKIP,}$skip"
 fi
