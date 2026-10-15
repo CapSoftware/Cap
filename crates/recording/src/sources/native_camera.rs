@@ -51,7 +51,9 @@ async fn forward_native_frames<T: Send + 'static>(
                 match result {
                     Ok(frame) => {
                         frame_count += 1;
-                        match video_tx.try_send(frame) {
+                        let diag_result = video_tx.try_send(frame);
+                        crate::diag!("NCAM n={frame_count} ok={}", diag_result.is_ok());
+                        match diag_result {
                             Ok(()) => {
                                 sent_count += 1;
                                 if sent_count.is_multiple_of(30) {

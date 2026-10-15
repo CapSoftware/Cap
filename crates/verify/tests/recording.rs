@@ -549,6 +549,26 @@ fn sleep_until_host_blocking(host: u64) {
     }
 }
 
+/// Diagnostic (scratch branch only): source emit events appended to
+/// `$CAP_DIAG_DIR/verify.log`, host time first.
+fn diag(args: std::fmt::Arguments) {
+    use std::{fs::File, io::Write, sync::Mutex, sync::OnceLock};
+    static FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+    if let Some(file) = FILE.get_or_init(|| {
+        let dir = std::env::var_os("CAP_DIAG_DIR")?;
+        std::fs::create_dir_all(&dir).ok()?;
+        File::options()
+            .create(true)
+            .append(true)
+            .open(Path::new(&dir).join("verify.log"))
+            .ok()
+            .map(Mutex::new)
+    }) && let Ok(mut f) = file.lock()
+    {
+        let _ = writeln!(f, "{} {args}", host_now());
+    }
+}
+
 fn start_feeds(
     reference: u64,
     max_secs: f64,
@@ -855,6 +875,11 @@ async fn run_case(
         let attempt_scratch = scratch.join(format!("attempt-{tries}"));
         std::fs::create_dir_all(&attempt_scratch)?;
         let reference = host_now();
+        diag(format_args!(
+            "CASE id={} repeat={} try={tries} reference={reference}",
+            spec.id,
+            ATTEMPT.load(Ordering::Relaxed)
+        ));
         let recorded = record(spec, capture, shareable, &attempt_scratch, reference, case).await?;
         match inconclusive(spec, &recorded) {
             Some(reason) if tries < 2 => {
