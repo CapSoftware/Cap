@@ -76,10 +76,10 @@ def details(r):
         name = stream.get("stream") or "stream"
         lines.append(f"{name}: first {min(len(mismatches), MAX_MISMATCHES)} of {len(mismatches)} mismatches")
         lines.extend("  " + frame(m) for m in mismatches[:MAX_MISMATCHES])
-    for class_name, problem in (r.get("problems") or {}).items():
-        line = f"{class_name}: {problem}"
-        if line not in lines:
-            lines.append(line)
+    if not r.get("streams"):
+        for class_name, problem in (r.get("problems") or {}).items():
+            if problem not in summary:
+                lines.append(f"{class_name}: {problem}")
     return lines
 
 
