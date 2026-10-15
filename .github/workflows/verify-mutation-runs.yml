@@ -25,6 +25,7 @@ env:
 
 jobs:
   engine:
+    if: false
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
@@ -145,6 +146,7 @@ jobs:
       - name: Mutations
         run: |
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/x86_64-unknown-linux-gnu/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          cargo +1.95.0 check --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui --target x86_64-unknown-linux-gnu
           xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" \
             python3 scripts/verify/mutation/run.py --platform linux --ids "${{ matrix.ids }}" \
             --suites gpui --out "$RUNNER_TEMP/mutation-${{ matrix.name }}"

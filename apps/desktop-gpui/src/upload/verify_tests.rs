@@ -1663,6 +1663,59 @@ fn instant_live_segment_reset_mid_body() {
     );
 }
 
+#[test]
+fn instant_live_deferred_retries_back_off_after_recording_ends() {
+    let scratch = Scratch::new("instant_live_deferred_retries_back_off");
+    virtual_time(async {
+        let mock = MockCap::start(vec![
+            rule(
+                Route::Object("segments/video/segment_008"),
+                Fault::Status(503),
+            )
+            .times(12),
+        ])
+        .await;
+        scratch.sign_in(&mock.url);
+        let (video, audio) = instant_tracks(&scratch.0, INSTANT_PAIRS);
+        let (sender, events) = flume::unbounded();
+        let feeder = tokio::spawn(feed(video.clone(), audio.clone(), sender));
+        let result = upload_segments(
+            &LiveSegmentTransport,
+            INSTANT_VIDEO_ID,
+            events,
+            mock.cancel_flag(),
+            None,
+        )
+        .await;
+        feeder.await.unwrap();
+        assert_eq!(result, Ok(()));
+        assert_segments_stored(&mock, INSTANT_VIDEO_ID, &video, &audio);
+        assert_eq!(mock.confirmations().len(), 1);
+        let attempts = mock
+            .lock()
+            .requests
+            .iter()
+            .filter(|(method, path, ..)| {
+                method == "PUT" && path.ends_with("segments/video/segment_008.m4s")
+            })
+            .map(|(_, _, status, at)| (*status, *at))
+            .collect::<Vec<_>>();
+        assert_eq!(attempts.len(), 13, "{}", mock.timeline());
+        assert!(attempts[..12].iter().all(|(status, _)| *status == 503));
+        assert_eq!(attempts[12].0, 200);
+        for (round, seconds) in [2, 4, 8, 16].into_iter().enumerate() {
+            let last_failure = attempts[round * 3 + 2].1;
+            let next_attempt = attempts[round * 3 + 3].1;
+            assert!(
+                next_attempt.saturating_sub(last_failure) >= Duration::from_secs(seconds),
+                "deferred retry round {round} did not wait {seconds}s:\n{}",
+                mock.timeline()
+            );
+        }
+        mock.assert_clean();
+    });
+}
+
 /// The network drops while video segment 3 is half sent and stays down for
 /// 5.7 s, past the in-call attempts. The live upload survives it.
 #[test]
