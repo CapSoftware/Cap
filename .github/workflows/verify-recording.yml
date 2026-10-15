@@ -47,7 +47,7 @@ on:
       - ".github/workflows/verify-recording.yml"
 
 concurrency:
-  group: verify-recording-${{ github.event.pull_request.number || github.ref_name }}-${{ github.event_name }}
+  group: verify-recording-${{ github.event.pull_request.number || github.ref_name }}-${{ github.event_name }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 permissions:
