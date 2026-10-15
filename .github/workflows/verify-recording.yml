@@ -41,7 +41,7 @@ jobs:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
-      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '1' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
       CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
@@ -94,6 +94,5 @@ jobs:
           path: |
             ${{ github.workspace }}/verify-report
             ${{ github.workspace }}/verify-dump
-            ${{ github.workspace }}/verify-scratch/**/stimulus.jsonl
-            ${{ github.workspace }}/verify-scratch/**/recording-meta.json
+            ${{ github.workspace }}/verify-scratch
           if-no-files-found: ignore
