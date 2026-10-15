@@ -60,6 +60,12 @@ const START_CUE_MS: u64 = 400;
 const STARTUP_SECS: f64 = 1.0;
 const STARTUP_DROPS: usize = 6;
 const SCREEN_MISS_FRACTION: f64 = 0.03;
+/// Stimulus rate for cases captured at 30 fps (Instant, Studio with a
+/// camera). A picture is only guaranteed a sample when it stays on screen
+/// for one capture interval plus one refresh (50 ms at 30 fps); 20 fps
+/// pictures last exactly that long, so about half of them were excused from
+/// the drop checks. At 15 fps every picture lasts 67 ms and must be captured.
+const STIMULUS_FPS_30: f64 = 15.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -122,7 +128,7 @@ fn specs() -> Vec<Spec> {
                 camera: true,
             },
             seconds: 8.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![],
             camera_drops_at: vec![0.3, 1.1],
             gated: false,
@@ -135,7 +141,7 @@ fn specs() -> Vec<Spec> {
             tier: Tier::Fast,
             mode: Mode::Instant,
             seconds: 8.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![],
             camera_drops_at: vec![],
             gated: false,
@@ -164,7 +170,7 @@ fn specs() -> Vec<Spec> {
             tier: Tier::Fast,
             mode: Mode::Instant,
             seconds: 8.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![],
             camera_drops_at: vec![],
             gated: true,
@@ -177,7 +183,7 @@ fn specs() -> Vec<Spec> {
             tier: Tier::Fast,
             mode: Mode::Instant,
             seconds: 8.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![],
             camera_drops_at: vec![],
             gated: false,
@@ -190,7 +196,7 @@ fn specs() -> Vec<Spec> {
             tier: Tier::Fast,
             mode: Mode::Instant,
             seconds: 8.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![],
             camera_drops_at: vec![],
             gated: false,
@@ -251,7 +257,7 @@ fn specs() -> Vec<Spec> {
                 camera: true,
             },
             seconds: 30.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![(10.0, 3.0)],
             camera_drops_at: vec![0.5, 1.5, 12.0],
             gated: false,
@@ -264,7 +270,7 @@ fn specs() -> Vec<Spec> {
             tier: Tier::Full,
             mode: Mode::Instant,
             seconds: 30.0,
-            stimulus_fps: 20.0,
+            stimulus_fps: STIMULUS_FPS_30,
             holds: vec![(6.0, 2.0), (18.0, 5.0)],
             camera_drops_at: vec![],
             gated: false,
@@ -305,8 +311,26 @@ fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
 }
 
+/// Hosted runners start jobs at utility QoS (scheduler priority 20) and
+/// every thread of the test inherits it, below what an app the user is
+/// running gets. The runtime also drives the synthetic camera and
+/// microphone, which stand in for capture callbacks the system delivers at
+/// high priority; at utility priority a loaded runner delays them and their
+/// lateness shows up as recording timing errors. Run the runtime at the
+/// priority the product itself asks for its recording threads.
+#[cfg(target_os = "macos")]
+fn raise_thread_qos() {
+    const QOS_CLASS_USER_INITIATED: u32 = 0x19;
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+    }
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+}
+
 fn runtime() -> tokio::runtime::Runtime {
+    raise_thread_qos();
     tokio::runtime::Builder::new_multi_thread()
+        .on_thread_start(raise_thread_qos)
         .worker_threads(4)
         .thread_stack_size(16 * 1024 * 1024)
         .enable_all()
@@ -1200,6 +1224,29 @@ fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
                 );
                 display = display.with_extension("mp4");
             }
+            // The editor places each track at its start_time; without one it
+            // aligns the track at 0, offsetting it by its start-up delay.
+            let unplaced: Vec<&str> = [
+                ("display", Some(segment.display.start_time)),
+                ("camera", segment.camera.as_ref().map(|c| c.start_time)),
+                ("mic", segment.mic.as_ref().map(|m| m.start_time)),
+                (
+                    "system audio",
+                    segment.system_audio.as_ref().map(|s| s.start_time),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(name, start)| matches!(start, Some(None)).then_some(name))
+            .collect();
+            if !unplaced.is_empty() {
+                case.problem(
+                    "sync",
+                    format!(
+                        "recording-meta.json has no start_time for {}: the editor aligns them at 0 instead of where they started",
+                        unplaced.join(", ")
+                    ),
+                );
+            }
             let track = |path: &relative_path::RelativePathBuf, start: Option<f64>| Track {
                 path: meta.path(path),
                 start: start.unwrap_or(0.0),
@@ -1293,12 +1340,16 @@ enum Injection {
     Freeze,
     /// An already written frame is emitted again five frames later.
     Stale,
-    /// The whole screen track lands 100 ms late against the audio.
+    /// The whole screen track lands 150 ms late against the audio: more than
+    /// the width of any screen sync window, so a working sync measurement
+    /// reports it from any in-window baseline.
     Late,
 }
 
 thread_local! {
     static INJECTION: std::cell::Cell<Option<Injection>> = const { std::cell::Cell::new(None) };
+    /// Whether the last injection found frames to act on.
+    static INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 const INJECTIONS: [Injection; 4] = [
@@ -1307,7 +1358,7 @@ const INJECTIONS: [Injection; 4] = [
     Injection::Stale,
     Injection::Late,
 ];
-const INJECTED_LATENESS: f64 = 0.1;
+const INJECTED_LATENESS: f64 = 0.15;
 
 impl Injection {
     fn label(self) -> &'static str {
@@ -1315,7 +1366,7 @@ impl Injection {
             Injection::DropRun => "drop 3 consecutive frames",
             Injection::Freeze => "freeze over 3 frames",
             Injection::Stale => "re-emit a stale frame",
-            Injection::Late => "screen 100 ms late",
+            Injection::Late => "screen 150 ms late",
         }
     }
 
@@ -1353,6 +1404,12 @@ impl Injection {
     }
 
     fn apply(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
+        let before = frames.clone();
+        self.mutate(frames, check);
+        INJECTED.set(*frames != before);
+    }
+
+    fn mutate(self, frames: &mut Vec<(f64, Readout)>, check: &VideoCheck) {
         let index_of = |r: &Readout| match r {
             Readout::Marker { marker, .. } => Some(marker.index),
             _ => None,
@@ -1429,6 +1486,7 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             continue;
         }
         let mut probe = Case::new(format!("{} (self-check: {})", case.id, injection.label()));
+        INJECTED.set(false);
         INJECTION.set(Some(injection));
         let result = analyze(rec, reference, &mut probe);
         INJECTION.set(None);
@@ -1438,7 +1496,15 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             .iter()
             .filter(|p| p.starts_with(prefix) && !case.problems.contains(p))
             .collect();
-        if probe.classes.contains(class) && !new.is_empty() {
+        if !INJECTED.get() {
+            case.problem(
+                "oracle",
+                format!(
+                    "self-check: no frames to inject '{}' into: no 3 consecutive pictures the capture rate must sample",
+                    injection.label()
+                ),
+            );
+        } else if probe.classes.contains(class) && !new.is_empty() {
             caught.push(format!(
                 "{}: caught ({class}: {})",
                 injection.label(),
