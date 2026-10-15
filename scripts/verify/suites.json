@@ -189,6 +189,10 @@
             "audio/*/mp4-plain30",
             "audio/*/gif30",
             "audio/*/mov30"
+          ],
+          "macos": [
+            "audio/*/mp4-plain30",
+            "audio/*/gif30"
           ]
         }
       }
