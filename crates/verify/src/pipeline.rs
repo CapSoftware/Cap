@@ -256,6 +256,7 @@ struct VideoLeg {
     fps: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn video_leg(
     dir: &Path,
     rel: RelativePathBuf,

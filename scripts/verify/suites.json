@@ -1,375 +1,203 @@
 {
-  "_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them.",
-  "suites": [
-    {
-      "name": "verify-self",
-      "about": "marker codecs, reference timeline model, oracle and report self-tests",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--lib",
-        "--test",
-        "codec"
-      ],
-      "binaries": [
-        "cap-verify",
-        "cap-verify::codec"
-      ],
-      "platforms": {
-        "fast": [
-          "linux"
-        ],
-        "full": [
-          "linux",
-          "macos"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/codec.rs"
-      ]
-    },
-    {
-      "name": "export",
-      "about": "every exported frame against the reference model (MP4, GIF, both decoders on macOS)",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "export"
-      ],
-      "binaries": [
-        "cap-verify::export"
-      ],
-      "platforms": {
-        "fast": [
-          "linux",
-          "macos",
-          "windows"
-        ],
-        "full": [
-          "linux",
-          "macos",
-          "windows"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/export.rs"
-      ],
-      "skip": {
-        "fast": {
-          "macos": [
-            "export/*/ffmpeg",
-            "export/backward-hold/*/mp430/*"
-          ],
-          "windows": [
-            "export/*/mp460/*",
-            "export/backward-hold/*",
-            "export/jitter-camera-*",
-            "export/*/uhd-*"
-          ]
-        }
-      }
-    },
-    {
-      "name": "playback",
-      "about": "offline-driven editor playback frames against the reference model",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "playback"
-      ],
-      "binaries": [
-        "cap-verify::playback"
-      ],
-      "platforms": {
-        "fast": [
-          "linux",
-          "macos"
-        ],
-        "full": [
-          "linux",
-          "macos",
-          "windows"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/playback.rs"
-      ],
-      "skip": {
-        "fast": {
-          "macos": [
-            "playback/*/ffmpeg"
-          ]
-        }
-      }
-    },
-    {
-      "name": "seek",
-      "about": "random, keyframe and scrub seeks against the reference model",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "seek"
-      ],
-      "binaries": [
-        "cap-verify::seek"
-      ],
-      "platforms": {
-        "fast": [
-          "linux",
-          "macos"
-        ],
-        "full": [
-          "linux",
-          "macos",
-          "windows"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/seek.rs"
-      ],
-      "skip": {
-        "fast": {
-          "macos": [
-            "seek/*/ffmpeg"
-          ]
-        }
-      }
-    },
-    {
-      "name": "audio",
-      "about": "export and offline playback audio against sample-accurate markers (mic, system audio, cuts, speeds, mute, volume, A/V offset)",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "audio"
-      ],
-      "binaries": [
-        "cap-verify::audio"
-      ],
-      "platforms": {
-        "fast": [
-          "linux",
-          "macos",
-          "windows"
-        ],
-        "full": [
-          "linux",
-          "macos",
-          "windows"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/audio.rs",
-        "crates/verify/tests/audio_support/**",
-        "crates/verify/src/audio_model.rs",
-        "crates/verify/src/audio_fixture.rs"
-      ],
-      "skip": {
-        "fast": {
-          "windows": [
-            "audio/*/mp4-plain30",
-            "audio/*/gif30",
-            "audio/*/mov30"
-          ],
-          "macos": [
-            "audio/*/mp4-plain30",
-            "audio/*/gif30"
-          ]
-        }
-      }
-    },
-    {
-      "name": "editing",
-      "about": "random edit sequences (split, delete, speed, trim, reorder, transitions) exported and checked frame by frame against the reference model",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "editing"
-      ],
-      "binaries": [
-        "cap-verify::editing"
-      ],
-      "platforms": {
-        "fast": [
-          "linux"
-        ],
-        "full": [
-          "linux"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/editing.rs",
-        "crates/verify/tests/edits/**"
-      ]
-    },
-    {
-      "name": "captions",
-      "about": "fake-transcriber captions: caption segments and rendered captions on the right frames",
-      "cargo": [
-        "-p",
-        "cap-verify",
-        "--test",
-        "captions"
-      ],
-      "binaries": [
-        "cap-verify::captions"
-      ],
-      "platforms": {
-        "fast": [
-          "linux"
-        ],
-        "full": [
-          "linux"
-        ]
-      },
-      "roots": [
-        "cap-verify"
-      ],
-      "own": [
-        "crates/verify/tests/captions.rs"
-      ]
-    },
-    {
-      "name": "decoder-model-ffmpeg",
-      "about": "model-based fuzzing of the FFmpeg decoder's request decisions on scripted media",
-      "cargo": [
-        "-p",
-        "cap-rendering",
-        "--lib"
-      ],
-      "binaries": [
-        "cap-rendering"
-      ],
-      "test": "decoder::model::ffmpeg_answers_match_the_reference_model",
-      "platforms": {
-        "fast": [
-          "linux"
-        ],
-        "full": [
-          "linux"
-        ]
-      },
-      "roots": [
-        "cap-rendering"
-      ],
-      "own": []
-    },
-    {
-      "name": "decoder-model-avf",
-      "about": "model-based fuzzing of the AVAssetReader decoder's request decisions on scripted media",
-      "cargo": [
-        "-p",
-        "cap-rendering",
-        "--lib"
-      ],
-      "binaries": [
-        "cap-rendering"
-      ],
-      "test": "decoder::model::avassetreader_answers_match_the_reference_model",
-      "platforms": {
-        "fast": [
-          "macos"
-        ],
-        "full": [
-          "macos"
-        ]
-      },
-      "roots": [
-        "cap-rendering"
-      ],
-      "own": []
-    },
-    {
-      "name": "native-rendering",
-      "about": "native macOS rendering regressions (IOSurface source lifetime in the YUV converter)",
-      "cargo": [
-        "-p",
-        "cap-rendering",
-        "--test",
-        "iosurface-source-lifetime"
-      ],
-      "binaries": [
-        "cap-rendering::iosurface-source-lifetime"
-      ],
-      "platforms": {
-        "fast": [
-          "macos"
-        ],
-        "full": [
-          "macos"
-        ]
-      },
-      "roots": [
-        "cap-rendering"
-      ],
-      "own": [
-        "crates/rendering/tests/iosurface-source-lifetime.rs",
-        "crates/rendering/tests/expectations.toml"
-      ]
-    }
-  ],
-  "always": [
-    ".cargo/**",
-    ".config/nextest.toml",
-    ".github/workflows/engine-verify*.yml",
-    ".github/actions/**",
-    "Cargo.lock",
-    "Cargo.toml",
-    "rust-toolchain.toml",
-    "scripts/setup.js",
-    "scripts/verify/**",
-    "vendor/**"
-  ],
-  "runners": {
-    "linux": {
-      "runner": "ubuntu-24.04",
-      "target": "x86_64-unknown-linux-gnu",
-      "shards": {
-        "fast": 2,
-        "full": 3
-      },
-      "archive": false
-    },
-    "macos": {
-      "runner": "macos-15",
-      "target": "aarch64-apple-darwin",
-      "shards": {
-        "fast": 1,
-        "full": 2
-      },
-      "archive": false
-    },
-    "windows": {
-      "runner": "windows-2022",
-      "target": "x86_64-pc-windows-msvc",
-      "shards": {
-        "fast": 3,
-        "full": 4
-      },
-      "archive": false
-    }
-  }
+	"_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them.",
+	"suites": [
+		{
+			"name": "verify-self",
+			"about": "marker codecs, reference timeline model, oracle and report self-tests",
+			"cargo": ["-p", "cap-verify", "--lib", "--test", "codec"],
+			"binaries": ["cap-verify", "cap-verify::codec"],
+			"platforms": {
+				"fast": ["linux"],
+				"full": ["linux", "macos"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/codec.rs"]
+		},
+		{
+			"name": "export",
+			"about": "every exported frame against the reference model (MP4, GIF, both decoders on macOS)",
+			"cargo": ["-p", "cap-verify", "--test", "export"],
+			"binaries": ["cap-verify::export"],
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/export.rs"],
+			"skip": {
+				"fast": {
+					"macos": ["export/*/ffmpeg", "export/backward-hold/*/mp430/*"],
+					"windows": [
+						"export/*/mp460/*",
+						"export/backward-hold/*",
+						"export/jitter-camera-*",
+						"export/*/uhd-*"
+					]
+				}
+			}
+		},
+		{
+			"name": "playback",
+			"about": "offline-driven editor playback frames against the reference model",
+			"cargo": ["-p", "cap-verify", "--test", "playback"],
+			"binaries": ["cap-verify::playback"],
+			"platforms": {
+				"fast": ["linux", "macos"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/playback.rs"],
+			"skip": {
+				"fast": {
+					"macos": ["playback/*/ffmpeg"]
+				}
+			}
+		},
+		{
+			"name": "seek",
+			"about": "random, keyframe and scrub seeks against the reference model",
+			"cargo": ["-p", "cap-verify", "--test", "seek"],
+			"binaries": ["cap-verify::seek"],
+			"platforms": {
+				"fast": ["linux", "macos"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/seek.rs"],
+			"skip": {
+				"fast": {
+					"macos": ["seek/*/ffmpeg"]
+				}
+			}
+		},
+		{
+			"name": "audio",
+			"about": "export and offline playback audio against sample-accurate markers (mic, system audio, cuts, speeds, mute, volume, A/V offset)",
+			"cargo": ["-p", "cap-verify", "--test", "audio"],
+			"binaries": ["cap-verify::audio"],
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-verify"],
+			"own": [
+				"crates/verify/tests/audio.rs",
+				"crates/verify/tests/audio_support/**",
+				"crates/verify/src/audio_model.rs",
+				"crates/verify/src/audio_fixture.rs"
+			],
+			"skip": {
+				"fast": {
+					"windows": ["audio/*/mp4-plain30", "audio/*/gif30", "audio/*/mov30"],
+					"macos": ["audio/*/mp4-plain30", "audio/*/gif30"]
+				}
+			}
+		},
+		{
+			"name": "editing",
+			"about": "random edit sequences (split, delete, speed, trim, reorder, transitions) exported and checked frame by frame against the reference model",
+			"cargo": ["-p", "cap-verify", "--test", "editing"],
+			"binaries": ["cap-verify::editing"],
+			"platforms": {
+				"fast": ["linux"],
+				"full": ["linux"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/editing.rs", "crates/verify/tests/edits/**"]
+		},
+		{
+			"name": "captions",
+			"about": "fake-transcriber captions: caption segments and rendered captions on the right frames",
+			"cargo": ["-p", "cap-verify", "--test", "captions"],
+			"binaries": ["cap-verify::captions"],
+			"platforms": {
+				"fast": ["linux"],
+				"full": ["linux"]
+			},
+			"roots": ["cap-verify"],
+			"own": ["crates/verify/tests/captions.rs"]
+		},
+		{
+			"name": "decoder-model-ffmpeg",
+			"about": "model-based fuzzing of the FFmpeg decoder's request decisions on scripted media",
+			"cargo": ["-p", "cap-rendering", "--lib"],
+			"binaries": ["cap-rendering"],
+			"test": "decoder::model::ffmpeg_answers_match_the_reference_model",
+			"platforms": {
+				"fast": ["linux"],
+				"full": ["linux"]
+			},
+			"roots": ["cap-rendering"],
+			"own": []
+		},
+		{
+			"name": "decoder-model-avf",
+			"about": "model-based fuzzing of the AVAssetReader decoder's request decisions on scripted media",
+			"cargo": ["-p", "cap-rendering", "--lib"],
+			"binaries": ["cap-rendering"],
+			"test": "decoder::model::avassetreader_answers_match_the_reference_model",
+			"platforms": {
+				"fast": ["macos"],
+				"full": ["macos"]
+			},
+			"roots": ["cap-rendering"],
+			"own": []
+		},
+		{
+			"name": "native-rendering",
+			"about": "native macOS rendering regressions (IOSurface source lifetime in the YUV converter)",
+			"cargo": ["-p", "cap-rendering", "--test", "iosurface-source-lifetime"],
+			"binaries": ["cap-rendering::iosurface-source-lifetime"],
+			"platforms": {
+				"fast": ["macos"],
+				"full": ["macos"]
+			},
+			"roots": ["cap-rendering"],
+			"own": [
+				"crates/rendering/tests/iosurface-source-lifetime.rs",
+				"crates/rendering/tests/expectations.toml"
+			]
+		}
+	],
+	"always": [
+		".cargo/**",
+		".config/nextest.toml",
+		".github/workflows/engine-verify*.yml",
+		".github/actions/**",
+		"Cargo.lock",
+		"Cargo.toml",
+		"rust-toolchain.toml",
+		"scripts/setup.js",
+		"scripts/verify/**",
+		"vendor/**"
+	],
+	"runners": {
+		"linux": {
+			"runner": "ubuntu-24.04",
+			"target": "x86_64-unknown-linux-gnu",
+			"shards": {
+				"fast": 2,
+				"full": 3
+			},
+			"archive": false
+		},
+		"macos": {
+			"runner": "macos-15",
+			"target": "aarch64-apple-darwin",
+			"shards": {
+				"fast": 1,
+				"full": 2
+			},
+			"archive": false
+		},
+		"windows": {
+			"runner": "windows-2022",
+			"target": "x86_64-pc-windows-msvc",
+			"shards": {
+				"fast": 3,
+				"full": 4
+			},
+			"archive": false
+		}
+	}
 }

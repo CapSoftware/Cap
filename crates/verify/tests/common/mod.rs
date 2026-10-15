@@ -1058,6 +1058,7 @@ pub fn assert_passed(failures: Vec<String>) {
 /// (so transition frames are read as blends).
 /// Video only (`create_segments_without_audio`): the audio clock has its own
 /// oracle. Dropped frames are normal under load; delivered ones must be right.
+#[allow(clippy::too_many_arguments)]
 pub async fn realtime_playback(
     project: &Project,
     config: ProjectConfiguration,

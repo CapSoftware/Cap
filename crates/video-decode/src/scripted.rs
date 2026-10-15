@@ -106,11 +106,13 @@ impl ScriptState {
     }
 
     /// Whether `pts` (in stream ticks) is at or before `value / scale` seconds.
+    #[cfg(target_os = "macos")]
     fn at_or_before(&self, pts: i64, value: i64, scale: i32) -> bool {
         let (num, den) = self.script.time_base;
         (pts as i128) * (num as i128) * (scale as i128) <= (value as i128) * (den as i128)
     }
 
+    #[cfg(target_os = "macos")]
     fn newest_at_or_before(&self, value: i64, scale: i32) -> Option<usize> {
         self.script
             .frames
