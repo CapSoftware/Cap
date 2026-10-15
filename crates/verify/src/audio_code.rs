@@ -297,6 +297,44 @@ pub fn locate_markers(
     out
 }
 
+/// Identifies markers whose chirp was found but whose payload did not
+/// decode, by their timing pattern: the schedule's per-index jitter makes
+/// the gaps between markers unique, so one constant shift maps the chirps
+/// onto the expected times. Returns `(index, chirp time)` pairs, or `None`
+/// unless a single shift places at least three chirps within `tolerance`
+/// of an expected marker and no other shift places as many.
+pub fn identify_by_schedule(
+    expected: &[(u32, f64)],
+    chirps: &[f64],
+    tolerance: f64,
+) -> Option<Vec<(u32, f64)>> {
+    let pairs = |shift: f64| -> Vec<(u32, f64)> {
+        chirps
+            .iter()
+            .filter_map(|&c| {
+                expected
+                    .iter()
+                    .find(|&&(_, t)| (c - shift - t).abs() <= tolerance)
+                    .map(|&(index, _)| (index, c))
+            })
+            .collect()
+    };
+    let mut scored: Vec<(usize, f64)> = Vec::new();
+    for &c in chirps {
+        for &(_, t) in expected {
+            let shift = c - t;
+            if scored.iter().any(|&(_, s)| (s - shift).abs() <= tolerance) {
+                continue;
+            }
+            scored.push((pairs(shift).len(), shift));
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    let &(best, shift) = scored.first()?;
+    let runner_up = scored.get(1).map_or(0, |s| s.0);
+    (best >= 3 && runner_up < best).then(|| pairs(shift))
+}
+
 fn refine_peak(corr: &[f64], at: usize) -> f64 {
     if at == 0 || at + 1 >= corr.len() {
         return at as f64;
@@ -411,6 +449,32 @@ mod tests {
                 assert!((f.gain - 0.2).abs() < 0.03, "gain {}", f.gain);
             }
         }
+    }
+
+    #[test]
+    fn schedule_pattern_identifies_undecodable_markers_without_aliasing() {
+        let schedule = standard_schedule(AudioSource::Mic, 0.1, 5.9, 0.5);
+        let expected: Vec<(u32, f64)> = schedule
+            .iter()
+            .skip(1)
+            .map(|p| (p.index, p.time_secs))
+            .collect();
+        for shift in [-0.519, 0.0, 0.5, 1.0, 0.0145] {
+            let chirps: Vec<f64> = schedule.iter().map(|p| p.time_secs + shift).collect();
+            let found = identify_by_schedule(&expected, &chirps, 0.002).expect("identified");
+            assert!(
+                found.len() >= expected.len() - 2,
+                "shift {shift}: {found:?}"
+            );
+            for (index, time) in found {
+                let truth = schedule.iter().find(|p| p.index == index).unwrap();
+                assert!(
+                    (time - shift - truth.time_secs).abs() < 1e-9,
+                    "shift {shift}"
+                );
+            }
+        }
+        assert!(identify_by_schedule(&expected, &[1.0, 2.0], 0.002).is_none());
     }
 
     #[test]

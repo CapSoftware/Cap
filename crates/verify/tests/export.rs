@@ -577,6 +577,28 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
                     .collect::<Vec<_>>()
             ));
         }
+        // Chirps whose payload was damaged can still be identified by the
+        // schedule's timing pattern, so a large offset stays measurable.
+        let chirps: Vec<f64> = found
+            .iter()
+            .filter(|f| f.index.is_none())
+            .map(|f| f.time_secs + audio.start_secs)
+            .collect();
+        if let Some(pattern) = audio_code::identify_by_schedule(&expected, &chirps, 0.002) {
+            let mut added = 0;
+            for (index, time) in pattern {
+                if absent.contains(&index)
+                    && let Some(&(_, t)) = expected.iter().find(|e| e.0 == index)
+                {
+                    offsets.push(time - t);
+                    added += 1;
+                }
+            }
+            case.note(format!(
+                "{}: {added} markers without a decodable identity identified by their timing pattern",
+                source.name()
+            ));
+        }
         if offsets.is_empty() {
             case.unobserved(
                 "sync",
