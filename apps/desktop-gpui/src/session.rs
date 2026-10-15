@@ -17,6 +17,8 @@ use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use crate::app_sounds::AppSound;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
+const PAUSE_CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
 /// `Recording`, matching the `recording`/`paused` variants of the Tauri bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,7 +182,15 @@ async fn run_pause_control(
     control: impl Future<Output = anyhow::Result<()>>,
     query_paused: impl Future<Output = anyhow::Result<bool>>,
 ) -> PauseControlOutcome {
-    let result = control.await;
+    let result = match tokio::time::timeout(PAUSE_CONTROL_TIMEOUT, control).await {
+        Ok(result) => result,
+        Err(_) => {
+            return PauseControlOutcome {
+                paused: None,
+                error: Some("Timed out changing the recording pause state".into()),
+            };
+        }
+    };
     let state = tokio::time::timeout(Duration::from_secs(2), query_paused).await;
     let (paused, state_error) = match state {
         Ok(Ok(true)) => (Some(true), None),
@@ -366,7 +376,15 @@ async fn run_clean_control(
     if kind == CleanControlKind::Resume {
         settle.await;
     }
-    let result = control.await;
+    let result = match tokio::time::timeout(PAUSE_CONTROL_TIMEOUT, control).await {
+        Ok(result) => result,
+        Err(_) => {
+            return CleanControlOutcome {
+                paused: None,
+                error: Some("Timed out changing the recording pause state".into()),
+            };
+        }
+    };
     let control_succeeded = result.is_ok();
     let state = tokio::time::timeout(Duration::from_secs(2), query_paused).await;
     let (paused, state_error) = match state {
@@ -2394,6 +2412,60 @@ mod clean_capture_tests {
         assert_eq!(outcome.paused, None);
         assert!(outcome.error.unwrap().contains("Timed out"));
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_pause_command_releases_a_waiting_stop_without_authorizing_main() {
+        let owner = owner(1, "recording-a");
+        let mut state = CleanControlState::default();
+        let (ticket, _) = state.begin(owner.clone(), CleanControlKind::Pause);
+        let phase = Phase::Recording { paused: false };
+        assert!(clean_capture_stop_must_wait(phase, state.pending_kind()));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(13),
+            run_clean_control(
+                CleanControlKind::Pause,
+                std::future::pending(),
+                std::future::pending(),
+                async {},
+            ),
+        )
+        .await
+        .expect("A stalled pause command must release the deferred Stop request");
+        assert_eq!(outcome.paused, None);
+        assert!(outcome.error.as_ref().unwrap().contains("Timed out"));
+        assert!(state.complete(&ticket, Some(&owner), phase, &outcome));
+        assert!(!clean_capture_stop_must_wait(phase, state.pending_kind()));
+        assert!(!state.paused_for(Some(&owner)));
+        assert!(state.uncertain);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_resume_command_cannot_authorize_main_from_a_stale_paused_state() {
+        let owner = owner(1, "recording-a");
+        let mut state = CleanControlState::default();
+        let (ticket, _) = state.begin(owner.clone(), CleanControlKind::Resume);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(13),
+            run_clean_control(
+                CleanControlKind::Resume,
+                std::future::pending(),
+                async { Ok(true) },
+                async {},
+            ),
+        )
+        .await
+        .expect("An unfinished resume must not confirm capture is safely paused");
+        assert_eq!(outcome.paused, None);
+        assert!(outcome.error.as_ref().unwrap().contains("Timed out"));
+        assert!(state.complete(
+            &ticket,
+            Some(&owner),
+            Phase::Recording { paused: true },
+            &outcome,
+        ));
+        assert!(!state.paused_for(Some(&owner)));
+        assert!(state.uncertain);
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -2495,6 +2567,46 @@ mod recording_failure_tests {
 #[cfg(test)]
 mod pause_control_tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_pause_command_releases_pending_control_without_confirming_capture() {
+        let mut state = PauseControlState::default();
+        let (ticket, _) = state.begin(1, true).unwrap();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(13),
+            run_pause_control(true, std::future::pending(), std::future::pending()),
+        )
+        .await
+        .expect("A stalled pause command must finish with an uncertain capture state");
+        assert_eq!(outcome.paused, None);
+        assert!(outcome.error.unwrap().contains("Timed out"));
+        assert!(state.complete(
+            &ticket,
+            1,
+            Phase::Recording { paused: false },
+            outcome.paused,
+        ));
+        assert!(state.pending.is_none());
+        assert!(state.uncertain);
+        assert!(state.begin(1, false).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_resume_command_cannot_confirm_a_pause_while_resume_is_unfinished() {
+        let queried = std::sync::atomic::AtomicBool::new(false);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(13),
+            run_pause_control(false, std::future::pending(), async {
+                queried.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(true)
+            }),
+        )
+        .await
+        .expect("A stalled resume command must finish with an uncertain capture state");
+        assert_eq!(outcome.paused, None);
+        assert!(outcome.error.unwrap().contains("Timed out"));
+        assert!(!queried.load(std::sync::atomic::Ordering::SeqCst));
+    }
 
     #[test]
     fn rapid_toggle_does_not_dispatch_a_second_control() {
