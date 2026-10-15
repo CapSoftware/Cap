@@ -119,6 +119,14 @@ link = ""
 # recording epoch on Linux only.
 
 [[xfail]]
+case = "export/instant*/output/mp4/native"
+class = "timestamps"
+platforms = ["macos"]
+flaky = true
+reason = "On macOS the Instant video timestamps follow the muxer's processing clock, not the capture timestamps: after the 2 s warmup VideoDriftTracker::calculate_timestamp (crates/recording/src/output_pipeline/core.rs) returns anchor_source + (wall clock when the frame is processed - anchor wall clock), and the anchor is the first frame processed after the first 2 s segment rollover. Any delay between capture and processing (late delivery, a muxer stall) moves frames by that delay, and a stall at the anchor shifts every later frame (860 ms in one fresh recording, frames 62-75 compressed into 35 ms). Linux uses CaptureInstantTimeline (capture cadence bounded by the wall clock) and is not affected. Fresh fixtures: 22 of 105 case runs on macos-15/26 (instant probe run 38735811849, every Instant variant), 1 of 7 in run 38735816076; spread 17-860 ms against the 16.7 ms limit"
+link = ""
+
+[[xfail]]
 case = "export/instant-ungated-mic-late/output/mp4/native"
 class = "sync"
 platforms = ["macos", "windows"]
@@ -149,7 +157,7 @@ link = ""
 case = "export/instant/output/mp4/native"
 class = "audio"
 platforms = ["macos", "windows"]
-reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings; same on windows-2022). Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers (3 of 3 CI runs), which points at the FirstFrame anchor path"
+reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings; same on windows-2022). On macOS the mic markers are damaged too: in 8 of 15 fresh recordings (probe run 38735811849) the last 20-35 ms of every mic marker is replaced by the tail of a system-audio marker, so no mic payload decodes (the chirps are intact and are identified by their timing pattern, which keeps sync measured), and once a decoded mic marker sat 68 ms early. Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers (3 of 3 CI runs), which points at the FirstFrame anchor path"
 link = ""
 
 [[xfail]]
@@ -166,19 +174,11 @@ reason = "NEW: during a cross-fade both clips read the same AVAssetReader decode
 link = ""
 
 [[xfail]]
-case = "export/basic/transition/mp430/avf"
+case = "*/basic/transition/*/avf"
 class = "future"
 platforms = ["macos"]
 flaky = true
-reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
-case = "export/basic/transition/mp460/avf"
-class = "future"
-platforms = ["macos"]
-flaky = true
-reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
+reason = "AVFoundation cross-fades sometimes show the incoming clip up to 6 source frames ahead on one blend frame (export mp430 frame 74: 121 for 115; export mp460 and playback seq60 frame 148: 120 for 115). Timing dependent on macos-15: 4 of 16 case runs (export mp430/mp460, playback seq30/seq60 in runs 38730081267, 38731626324, 38732325087, 38735816076). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
@@ -186,7 +186,15 @@ case = "audio/audio-mix-8s-a2/transition/mp4-app30"
 class = "future"
 platforms = ["macos"]
 flaky = true
-reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
+reason = "Same AVFoundation cross-fade corruption in the app export of the audio mix project: frame 93 shows source 162 for 155. 2 of 4 macos-15 runs (38730081267, 38732325087). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
+case = "export/camera-pts-late/full/mp430/avf"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+reason = "One camera frame (output frame 48) with a torn picture whose marker checksum fails, 1 of 4 macos-15 runs (38735816076), on top of the strict future entry. Attributed to the same AVFoundation source lifetime bug: the camera's AVAssetReader buffer is repainted while the GPU samples it, which tears the picture. Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
