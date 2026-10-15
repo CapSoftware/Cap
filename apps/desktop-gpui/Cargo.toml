@@ -169,7 +169,7 @@ tauri-winres = "0.3.5"
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
