@@ -70,7 +70,8 @@
           "windows": [
             "export/*/mp460/*",
             "export/backward-hold/*",
-            "export/jitter-camera-*"
+            "export/jitter-camera-*",
+            "export/*/uhd-*"
           ]
         }
       }
@@ -259,7 +260,7 @@
     "linux": {
       "runner": "ubuntu-24.04",
       "target": "x86_64-unknown-linux-gnu",
-      "shards": 1,
+      "shards": 2,
       "archive": false
     },
     "macos": {
@@ -271,7 +272,7 @@
     "windows": {
       "runner": "windows-2022",
       "target": "x86_64-pc-windows-msvc",
-      "shards": 2,
+      "shards": 3,
       "archive": false
     }
   }
