@@ -68,9 +68,11 @@ enum Mode {
         camera: bool,
     },
     Instant,
-    /// Fragmented Studio recorded by a child process that is SIGKILLed
-    /// mid-recording, then recovered the way the app recovers it.
-    StudioKilled,
+    /// Fragmented Studio whose on-disk state is snapshotted mid-recording
+    /// (an APFS clone of the project, exactly what a crash leaves behind:
+    /// in-progress meta, finished fragments, the fragment being written),
+    /// then recovered the way the app recovers it.
+    StudioCrashed,
 }
 
 #[derive(Clone, Debug)]
@@ -213,9 +215,9 @@ fn specs() -> Vec<Spec> {
             system_audio: true,
         },
         Spec {
-            id: "recording/studio-recovery/sigkill",
+            id: "recording/studio-recovery/crash",
             tier: Tier::Fast,
-            mode: Mode::StudioKilled,
+            mode: Mode::StudioCrashed,
             seconds: 8.0,
             stimulus_fps: 20.0,
             holds: vec![],
@@ -396,6 +398,13 @@ fn real_capture() {
     let mut failures = Vec::new();
     for spec in specs() {
         if !report::selected(spec.id) || (spec.tier == Tier::Full && tier == Tier::Fast) {
+            continue;
+        }
+        if !spec.mic && !require_system_audio() {
+            eprintln!(
+                "[cap-verify] {}: skipped, system audio is its only audio and this host's output is not capturable",
+                spec.id
+            );
             continue;
         }
         for attempt in 0..repeat {
@@ -664,65 +673,6 @@ fn studio_builder(
     (builder, defaults.studio_max_fps(camera, None))
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ChildSpec {
-    project: PathBuf,
-    truth: PathBuf,
-    ready: PathBuf,
-    reference: u64,
-    max_secs: f64,
-    window: bool,
-}
-
-const CHILD_ENV: &str = "CAP_VERIFY_RECORD_CHILD";
-
-/// Child half of `studio-recovery/sigkill`: records until killed.
-#[test]
-fn recording_child() {
-    let Ok(spec) = std::env::var(CHILD_ENV) else {
-        return;
-    };
-    init();
-    let spec: ChildSpec = serde_json::from_str(&spec).expect("child spec");
-    let rt = runtime();
-    rt.block_on(async move {
-        let capture = if spec.window {
-            CaptureMode::Window
-        } else {
-            CaptureMode::Display
-        };
-        let (target, excluded, shareable) = capture_setup(capture).await.expect("capture");
-        let feeds = start_feeds(spec.reference, spec.max_secs, false, vec![], 0.0);
-        std::fs::write(
-            &spec.truth,
-            serde_json::to_string(&feeds.mic_truth).expect("truth"),
-        )
-        .expect("write truth");
-        let mic_lock = Arc::new(feeds.mic.lock().await.expect("mic lock"));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let init = spec
-            .project
-            .join("content/segments/segment-0/display/init.mp4");
-        let (builder, max_fps) = studio_builder(spec.project, target, excluded, true, false, true);
-        let handle = builder
-            .with_mic_feed(mic_lock)
-            .build(Some(shareable))
-            .await
-            .expect("studio recording");
-        let started = host_now();
-        // The parent only starts the stimulus once the screen track is
-        // demonstrably being written.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !init.exists() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        let state = if init.exists() { "ok" } else { "nostart" };
-        std::fs::write(&spec.ready, format!("{state} {started} {max_fps}\n")).expect("ready");
-        tokio::time::sleep(Duration::from_secs_f64(spec.max_secs)).await;
-        drop(handle);
-    });
-}
-
 fn stimulus_binary() -> PathBuf {
     std::env::var_os("CAP_VERIFY_STIMULUS_BIN")
         .map(PathBuf::from)
@@ -745,8 +695,8 @@ struct Recorded {
     camera: Option<(Truth, Vec<u32>)>,
     max_fps: u32,
     mic_delay: f64,
-    /// Recovery after a kill may lose at most this many seconds before the
-    /// kill (the in-flight fragment).
+    /// Recovery after a crash may lose at most this many seconds before the
+    /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
 }
 
@@ -862,9 +812,6 @@ async fn record(
         )
     })?;
     tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
-    if spec.mode == Mode::StudioKilled {
-        return record_killed(spec, capture, scratch, reference, stimulus, case).await;
-    }
     let (target, excluded, shareable) = capture_setup(capture).await?;
 
     let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
@@ -931,7 +878,21 @@ async fn record(
                 cap_recording::DEFAULT_INSTANT_MODE_FPS,
             )
         }
-        Mode::StudioKilled => unreachable!("recorded by record_killed"),
+        Mode::StudioCrashed => {
+            let (builder, max_fps) = studio_builder(
+                project.clone(),
+                target,
+                excluded,
+                true,
+                false,
+                spec.system_audio,
+            );
+            let builder = builder.with_mic_feed(mic_lock.clone());
+            (
+                Handle::Studio(builder.build(Some(shareable.clone())).await?),
+                max_fps,
+            )
+        }
     };
     let started_host = match &gate {
         Some(gate) => {
@@ -950,6 +911,18 @@ async fn record(
     });
     tokio::time::sleep(Duration::from_millis(400)).await;
     let stopped_host = host_now();
+    let crashed = if spec.mode == Mode::StudioCrashed {
+        let snapshot = scratch.join("crashed.cap");
+        let status = std::process::Command::new("cp")
+            .arg("-cR")
+            .arg(&project)
+            .arg(&snapshot)
+            .status()?;
+        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        Some(snapshot)
+    } else {
+        None
+    };
     let stop_started = std::time::Instant::now();
     let project_path = match handle {
         Handle::Studio(handle) => {
@@ -994,6 +967,23 @@ async fn record(
     drop(feeds.camera);
     let events = tokio::task::block_in_place(|| stimulus.finish())?;
     waited?;
+    let (project_path, loss_budget) = match crashed {
+        Some(snapshot) => {
+            let started = std::time::Instant::now();
+            let recovered = tokio::task::spawn_blocking(move || {
+                let incomplete = RecoveryManager::inspect_recording(&snapshot)
+                    .ok_or_else(|| anyhow::anyhow!("crash snapshot is not recoverable"))?;
+                RecoveryManager::recover(&incomplete).map_err(|e| anyhow::anyhow!("recover: {e}"))
+            })
+            .await??;
+            case.note(format!(
+                "recovered the crash snapshot in {:.2}s",
+                started.elapsed().as_secs_f64()
+            ));
+            (recovered.project_path, Some(CRASH_LOSS_BUDGET))
+        }
+        None => (project_path, None),
+    };
     Ok(Recorded {
         project: project_path,
         started: host_secs(started_host, reference),
@@ -1003,135 +993,14 @@ async fn record(
         camera: camera_truth,
         max_fps,
         mic_delay: spec.mic_delay,
-        loss_budget: None,
+        loss_budget,
     })
 }
 
-/// Seconds of capture a SIGKILL may cost: the fragment being written (Studio
+/// Seconds of capture a crash may cost: the fragment being written (Studio
 /// fragments are 2 s, see `MacOSFragmentedM4SMuxerConfig`) plus the encoder
 /// pipeline still in flight.
-const KILL_LOSS_BUDGET: f64 = 3.0;
-
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-async fn record_killed(
-    spec: &Spec,
-    capture: CaptureMode,
-    scratch: &Path,
-    reference: u64,
-    mut stimulus: StimulusProcess,
-    case: &mut Case,
-) -> anyhow::Result<Recorded> {
-    let project = scratch.join("recording.cap");
-    let truth_path = scratch.join("mic-truth.json");
-    let child_spec = ChildSpec {
-        project: project.clone(),
-        truth: truth_path.clone(),
-        ready: scratch.join("child-ready.txt"),
-        reference,
-        max_secs: spec.seconds + 60.0,
-        window: capture == CaptureMode::Window,
-    };
-    let ready_path = scratch.join("child-ready.txt");
-    let child = std::process::Command::new(std::env::current_exe()?)
-        .args([
-            "recording_child",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_ENV, serde_json::to_string(&child_spec)?)
-        .env(
-            "RUST_LOG",
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,cap_recording=debug".into()),
-        )
-        .stdout(std::process::Stdio::null())
-        .stderr(std::fs::File::create(scratch.join("child.log"))?)
-        .spawn()?;
-    let mut child = ChildGuard(child);
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    let ready = loop {
-        if let Ok(text) = std::fs::read_to_string(&ready_path)
-            && text.ends_with('\n')
-        {
-            break text;
-        }
-        if std::time::Instant::now() > deadline {
-            anyhow::bail!("recording child never started");
-        }
-        if let Ok(Some(status)) = child.0.try_wait() {
-            anyhow::bail!("recording child exited early: {status}");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
-    let mut fields = ready.split_whitespace();
-    if fields.next() != Some("ok") {
-        let log = std::fs::read_to_string(scratch.join("child.log")).unwrap_or_default();
-        let tail: Vec<&str> = log.lines().rev().take(12).collect();
-        anyhow::bail!(
-            "recording child wrote no screen track within 10 s; child log tail:\n{}",
-            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
-        );
-    }
-    let started_host: u64 = fields.next().unwrap_or_default().parse()?;
-    let max_fps: u32 = fields.next().unwrap_or_default().parse()?;
-    tokio::task::block_in_place(|| stimulus.send("go"))?;
-    let waited = tokio::task::block_in_place(|| {
-        stimulus.wait_for("done", Duration::from_secs_f64(spec.seconds + 20.0))
-    });
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let killed_host = host_now();
-    child.0.kill()?;
-    child.0.wait()?;
-    let events = tokio::task::block_in_place(|| stimulus.finish())?;
-    waited?;
-    let mic_truth: Truth = serde_json::from_str(&std::fs::read_to_string(&truth_path)?)?;
-
-    let recover_started = std::time::Instant::now();
-    let recover_path = project.clone();
-    let recovered = tokio::task::spawn_blocking(move || {
-        let incomplete = RecoveryManager::inspect_recording(&recover_path).ok_or_else(|| {
-            let display = recover_path.join("content/segments/segment-0/display");
-            let files = std::fs::read_dir(&display)
-                .map(|d| {
-                    d.flatten()
-                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            anyhow::anyhow!("killed recording is not recoverable (display fragments: {files:?})")
-        })?;
-        let estimated = incomplete.estimated_duration;
-        let recovered =
-            RecoveryManager::recover(&incomplete).map_err(|e| anyhow::anyhow!("recover: {e}"))?;
-        anyhow::Ok((recovered, estimated))
-    })
-    .await??;
-    case.note(format!(
-        "recovered in {:.2}s (estimated {:.2}s of {:.2}s recorded before the kill)",
-        recover_started.elapsed().as_secs_f64(),
-        recovered.1.as_secs_f64(),
-        host_secs(killed_host, started_host)
-    ));
-    Ok(Recorded {
-        project: recovered.0.project_path,
-        started: host_secs(started_host, reference),
-        stopped: host_secs(killed_host, reference),
-        stimulus: events,
-        mic_truth,
-        camera: None,
-        max_fps,
-        mic_delay: 0.0,
-        loss_budget: Some(KILL_LOSS_BUDGET),
-    })
-}
+const CRASH_LOSS_BUDGET: f64 = 3.0;
 
 async fn finalize_instant(
     recording: &mut instant_recording::CompletedRecording,
@@ -1795,7 +1664,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                 case.problem(
                     "missing",
                     format!(
-                        "screen: recovery kept frames up to {:.2}s before the kill, budget {:.1}s",
+                        "screen: recovery kept frames up to {:.2}s before the crash, budget {:.1}s",
                         rec.stopped - last,
                         rec.loss_budget.unwrap_or_default()
                     ),
@@ -1945,9 +1814,9 @@ fn sync_checks(
     } else {
         (-0.010, 0.060)
     };
-    const SYSTEM_VS_MIC: f64 = 0.020;
-    // System audio truth adds the output device's latency (measured 0 to
-    // 10 ms against the microphone).
+    const SYSTEM_VS_MIC: f64 = 0.030;
+    // System audio truth adds the output device's latency (measured -4 to
+    // +21 ms against the microphone on a developer Mac).
     let slack = |name: &str| if name == "mic" { 0.0 } else { 0.015 };
 
     let ms = |s: f64| s * 1000.0;
