@@ -52,6 +52,10 @@ const CAMERA_SIZE: (usize, usize) = (640, 360);
 const AUDIO_PERIOD: f64 = 0.5;
 const WINDOW_TITLE: &str = "Cap Verify Stimulus";
 const SYSTEM_AUDIO_STARTUP: f64 = 1.0;
+/// Frames a track may lose while its encoder starts (the capture pool is full
+/// until VideoToolbox is ready; #2573 measured 0-6 per run).
+const STARTUP_SECS: f64 = 1.0;
+const STARTUP_DROPS: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -187,8 +191,7 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
-#[test]
-fn real_capture() {
+fn init() {
     media::init();
     if std::env::var_os("RUST_LOG").is_some() {
         let _ = tracing_subscriber::fmt()
@@ -196,6 +199,11 @@ fn real_capture() {
             .with_writer(std::io::stderr)
             .try_init();
     }
+}
+
+#[test]
+fn real_capture() {
+    init();
     let Some(capture) = capture_mode() else {
         eprintln!("[cap-verify] recording: CAP_VERIFY_CAPTURE=off, skipping");
         return;
@@ -477,13 +485,13 @@ fn studio_builder(
 struct ChildSpec {
     project: PathBuf,
     truth: PathBuf,
+    ready: PathBuf,
     reference: u64,
     max_secs: f64,
     window: bool,
 }
 
 const CHILD_ENV: &str = "CAP_VERIFY_RECORD_CHILD";
-const CHILD_READY: &str = "CAP-VERIFY-RECORDING";
 
 /// Child half of `studio-recovery/sigkill`: records until killed.
 #[test]
@@ -491,7 +499,7 @@ fn recording_child() {
     let Ok(spec) = std::env::var(CHILD_ENV) else {
         return;
     };
-    media::init();
+    init();
     let spec: ChildSpec = serde_json::from_str(&spec).expect("child spec");
     let rt = runtime();
     rt.block_on(async move {
@@ -515,7 +523,7 @@ fn recording_child() {
             .build(Some(shareable))
             .await
             .expect("studio recording");
-        println!("{CHILD_READY} {} {max_fps}", host_now());
+        std::fs::write(&spec.ready, format!("{} {max_fps}\n", host_now())).expect("ready");
         tokio::time::sleep(Duration::from_secs_f64(spec.max_secs)).await;
         drop(handle);
     });
@@ -586,6 +594,10 @@ async fn record(
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
+        warmup: match capture {
+            CaptureMode::Display => 2.0,
+            CaptureMode::Window => 2.0,
+        },
         audio: true,
         audio_period: AUDIO_PERIOD,
         audio_origin: reference,
@@ -602,13 +614,6 @@ async fn record(
         )
     })?;
     tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
-    // A fullscreen window lands in its own Space; let the transition finish
-    // so the first captured frames already show the stimulus.
-    tokio::time::sleep(Duration::from_millis(match capture {
-        CaptureMode::Display => 1500,
-        CaptureMode::Window => 300,
-    }))
-    .await;
     if spec.mode == Mode::StudioKilled {
         return record_killed(spec, capture, scratch, reference, stimulus, case).await;
     }
@@ -740,18 +745,18 @@ async fn record_killed(
     mut stimulus: StimulusProcess,
     case: &mut Case,
 ) -> anyhow::Result<Recorded> {
-    use std::io::BufRead;
-
     let project = scratch.join("recording.cap");
     let truth_path = scratch.join("mic-truth.json");
     let child_spec = ChildSpec {
         project: project.clone(),
         truth: truth_path.clone(),
+        ready: scratch.join("child-ready.txt"),
         reference,
         max_secs: spec.seconds + 60.0,
         window: capture == CaptureMode::Window,
     };
-    let mut child = std::process::Command::new(std::env::current_exe()?)
+    let ready_path = scratch.join("child-ready.txt");
+    let child = std::process::Command::new(std::env::current_exe()?)
         .args([
             "recording_child",
             "--exact",
@@ -759,35 +764,24 @@ async fn record_killed(
             "--test-threads=1",
         ])
         .env(CHILD_ENV, serde_json::to_string(&child_spec)?)
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .spawn()?;
-    let stdout = child.stdout.take();
     let mut child = ChildGuard(child);
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    if let Some(stdout) = stdout {
-        std::thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout)
-                .lines()
-                .map_while(Result::ok)
-            {
-                if tx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-    let ready = tokio::task::block_in_place(|| {
-        loop {
-            match rx.recv_timeout(Duration::from_secs(60)) {
-                Ok(line) => {
-                    if let Some(at) = line.find(CHILD_READY) {
-                        break Ok(line[at + CHILD_READY.len()..].trim().to_string());
-                    }
-                }
-                Err(e) => break Err(anyhow::anyhow!("recording child never started: {e}")),
-            }
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let ready = loop {
+        if let Ok(text) = std::fs::read_to_string(&ready_path)
+            && text.ends_with('\n')
+        {
+            break text;
         }
-    })?;
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("recording child never started");
+        }
+        if let Ok(Some(status)) = child.0.try_wait() {
+            anyhow::bail!("recording child exited early: {status}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     let mut fields = ready.split_whitespace();
     let started_host: u64 = fields.next().unwrap_or_default().parse()?;
     let max_fps: u32 = fields.next().unwrap_or_default().parse()?;
@@ -1152,16 +1146,29 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         return Ok(Offsets::default());
     };
     let mut skipped = Vec::new();
+    let mut startup = Vec::new();
     let mut explained = 0;
-    for &index in check.truth.keys().filter(|&&i| i > lo && i < hi) {
+    let startup_end = check.truth.get(&lo).copied().unwrap_or(f64::MIN) + STARTUP_SECS;
+    for (&index, &truth) in check.truth.range(lo + 1..hi) {
         if first_seen.contains_key(&index) || check.not_sent.contains(&index) {
             continue;
         }
         if (check.may_skip)(index) {
             explained += 1;
+        } else if truth < startup_end {
+            startup.push(index);
         } else {
             skipped.push(index);
         }
+    }
+    if startup.len() > STARTUP_DROPS {
+        skipped.extend(startup.iter().copied());
+    } else if !startup.is_empty() {
+        case.note(format!(
+            "{name}: {} start-up drops {:?} (allowed {STARTUP_DROPS} in the first {STARTUP_SECS}s)",
+            startup.len(),
+            startup
+        ));
     }
     if !skipped.is_empty() {
         case.problem(

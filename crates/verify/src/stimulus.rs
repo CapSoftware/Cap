@@ -23,6 +23,8 @@ pub struct StimulusSpec {
     /// Pseudo-random achromatic noise bands above and below the marker, new
     /// every frame, so the encoder sees dense changing content.
     pub busy: bool,
+    /// Seconds of moving noise before `ready` (frame 0 keeps showing).
+    pub warmup: f64,
     pub audio: bool,
     pub audio_period: f64,
     /// Host time the system-audio marker schedule counts from (0 = helper
