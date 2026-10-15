@@ -30,7 +30,9 @@ use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 use cap_recording::{
     NativeCameraFrame, RecordingDefaults, SendableShareableContent, StudioQuality,
-    feeds::{camera::synthetic::SyntheticCamera, microphone::synthetic::SyntheticMicrophone},
+    feeds::{
+        Admission, camera::synthetic::SyntheticCamera, microphone::synthetic::SyntheticMicrophone,
+    },
     instant_recording,
     recovery::RecoveryManager,
     screen_capture::ScreenCaptureTarget,
@@ -41,6 +43,7 @@ use cap_verify::{
     audio_code::{self, AudioSource, MarkerPlacement},
     fixture_avf, media,
     report::{self, Case, Tier},
+    sched,
     stimulus::{StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs, host_now, host_secs},
     video_code::{self, FrameMarker, Readout, StreamKind},
 };
@@ -466,53 +469,98 @@ struct Feeds {
     stop: Arc<AtomicBool>,
     started: Arc<AtomicU64>,
     mic_truth: Truth,
-    mic_task: tokio::task::JoinHandle<SourceLag>,
-    camera_task: Option<tokio::task::JoinHandle<(Truth, Vec<u32>, SourceLag)>>,
+    mic_task: std::thread::JoinHandle<SourceTrace>,
+    camera_task: Option<std::thread::JoinHandle<(Truth, Vec<u32>, SourceTrace)>>,
 }
 
-/// Hand-offs a synthetic source made late: (seconds from the reference when
-/// the frame or chunk was due, seconds late). Only lateness above 20 ms is
-/// kept.
-#[derive(Clone, Debug, Default)]
-struct SourceLag(Vec<(f64, f64)>);
+/// Computation budget per period of the synthetic sources' time
+/// constraint: a camera frame (marker, NV12 pixel buffer, sample) took
+/// 1.6 ms median, 4.7 ms p95 on hosted runners (run 38766191045); a mic
+/// chunk is pre-rendered and only copied.
+const CAMERA_COMPUTATION_SECS: f64 = 0.010;
+const MIC_COMPUTATION_SECS: f64 = 0.001;
 
-impl SourceLag {
-    fn observe(&mut self, due: u64, reference: u64) {
-        let late = host_secs(host_now(), due);
-        if late > 0.02 {
-            self.0.push((host_secs(due, reference), late));
-        }
+/// One hand-off of a synthetic source (host ticks).
+#[derive(Clone, Copy, Debug)]
+struct Handoff {
+    /// Camera slot or microphone chunk number.
+    index: u32,
+    /// When the frame was captured, or the chunk's last sample was.
+    due: u64,
+    /// When the source's wait for `due` returned.
+    wake: u64,
+    /// When the frame or chunk was ready to hand over.
+    built: u64,
+    /// When the hand-off returned.
+    pushed: u64,
+    admission: Admission,
+    /// The source thread's scheduler priority when it woke.
+    pri: i32,
+}
+
+/// Every hand-off of one synthetic source plus its scheduling: the
+/// independent evidence for a source verdict, persisted per attempt.
+#[derive(Clone, Debug)]
+struct SourceTrace {
+    name: &'static str,
+    realtime: sched::Realtime,
+    /// Scheduling state after the last hand-off.
+    end: Option<sched::ThreadState>,
+    handoffs: Vec<Handoff>,
+}
+
+impl SourceTrace {
+    fn start(name: &'static str, period: f64, computation: f64, capacity: usize) -> (Self, u32) {
+        let realtime = sched::request_realtime(period, computation);
+        (
+            Self {
+                name,
+                realtime,
+                end: None,
+                handoffs: Vec::with_capacity(capacity),
+            },
+            sched::current_thread(),
+        )
     }
 
-    /// The latest hand-off inside the window.
-    fn worst_in(&self, window: (f64, f64)) -> Option<(f64, f64)> {
-        self.0
-            .iter()
-            .copied()
-            .filter(|(at, _)| *at >= window.0 && *at <= window.1)
-            .max_by(|a, b| a.1.total_cmp(&b.1))
+    /// Hands over through `push`, timing each step.
+    fn handoff(
+        &mut self,
+        index: u32,
+        due: u64,
+        wake: u64,
+        pri: i32,
+        push: impl FnOnce() -> Admission,
+    ) -> Admission {
+        let built = host_now();
+        let admission = push();
+        self.handoffs.push(Handoff {
+            index,
+            due,
+            wake,
+            built,
+            pushed: host_now(),
+            admission,
+            pri,
+        });
+        admission
     }
+}
+
+/// Waits for `due` on the source thread and samples its priority.
+fn wait_for(thread: u32, due: u64) -> (u64, i32) {
+    sched::wait_until(due);
+    let wake = host_now();
+    (wake, sched::thread_state(thread).map_or(-1, |s| s.cur_pri))
 }
 
 /// Synthetic sources stand in for capture devices, which the system feeds
-/// from its own high-priority threads. They run on dedicated threads at
-/// user-interactive QoS (not on the recorder's async runtime) and block on
-/// their feed the way a device callback would.
-fn source_thread_qos() {
-    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-    unsafe extern "C" {
-        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
-    }
-    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
-}
-
-fn sleep_until_host_blocking(host: u64) {
-    let secs = host_secs(host, host_now());
-    if secs > 0.0 {
-        std::thread::sleep(Duration::from_secs_f64(secs));
-    }
-}
-
+/// from its own real-time threads and which never wait for the recorder:
+/// each runs on a dedicated thread under a time constraint of its own
+/// period (`cap_verify::sched`, shared with the stimulus) and hands over
+/// with `try_send`, exactly like the device callbacks. A feed that cannot
+/// keep up therefore shows as rejected hand-offs (a product failure), and a
+/// late hand-off can only come from the source thread itself.
 fn start_feeds(
     reference: u64,
     max_secs: f64,
@@ -545,48 +593,55 @@ fn start_feeds(
         .iter()
         .map(|p| (p.index, base + (p.time_secs * rate).round() / rate))
         .collect();
-    let handle = tokio::runtime::Handle::current();
     let mic_task = {
         let mic = mic.clone();
         let stop = stop.clone();
         let started = started.clone();
-        let handle = handle.clone();
-        tokio::task::spawn_blocking(move || {
-            source_thread_qos();
-            let mut lag = SourceLag::default();
-            let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
-            audio_code::render_markers(
-                &mut signal,
-                MIC_RATE,
-                AudioSource::Mic,
-                &schedule,
-                audio_code::DEFAULT_AMPLITUDE,
-            );
-            for (n, chunk) in signal.chunks(MIC_CHUNK).enumerate() {
-                if stop.load(Ordering::Acquire) {
-                    break;
-                }
-                let first = n * MIC_CHUNK;
-                let capture = host_add_secs(origin, first as f64 / f64::from(MIC_RATE));
-                let delivered =
-                    host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
-                sleep_until_host_blocking(delivered);
-                if mic_delay > 0.0 {
-                    let start = started.load(Ordering::Acquire);
-                    if start == 0 || host_secs(capture, start) < mic_delay {
-                        continue;
+        std::thread::Builder::new()
+            .name("verify-synthetic-mic".into())
+            .spawn(move || {
+                // Render the whole signal before going real-time: the
+                // constrained loop only copies chunks.
+                let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
+                audio_code::render_markers(
+                    &mut signal,
+                    MIC_RATE,
+                    AudioSource::Mic,
+                    &schedule,
+                    audio_code::DEFAULT_AMPLITUDE,
+                );
+                let (mut trace, thread) = SourceTrace::start(
+                    "microphone",
+                    MIC_CHUNK as f64 / f64::from(MIC_RATE),
+                    MIC_COMPUTATION_SECS,
+                    signal.len() / MIC_CHUNK + 1,
+                );
+                for (n, chunk) in signal.chunks(MIC_CHUNK).enumerate() {
+                    if stop.load(Ordering::Acquire) {
+                        break;
                     }
+                    let first = n * MIC_CHUNK;
+                    let capture = host_add_secs(origin, first as f64 / f64::from(MIC_RATE));
+                    let delivered =
+                        host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
+                    let (wake, pri) = wait_for(thread, delivered);
+                    if mic_delay > 0.0 {
+                        let start = started.load(Ordering::Acquire);
+                        if start == 0 || host_secs(capture, start) < mic_delay {
+                            continue;
+                        }
+                    }
+                    trace.handoff(n as u32, delivered, wake, pri, || {
+                        mic.try_push(
+                            chunk,
+                            Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
+                        )
+                    });
                 }
-                if started.load(Ordering::Acquire) != 0 {
-                    lag.observe(delivered, reference);
-                }
-                handle.block_on(mic.push(
-                    chunk,
-                    Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
-                ));
-            }
-            lag
-        })
+                trace.end = sched::thread_state(thread);
+                trace
+            })
+            .expect("spawn synthetic microphone")
     };
     let (camera, camera_task) = if camera {
         let info = VideoInfo::from_raw(
@@ -600,50 +655,59 @@ fn start_feeds(
             let feed = feed.clone();
             let stop = stop.clone();
             let started = started.clone();
-            let handle = handle.clone();
-            tokio::task::spawn_blocking(move || {
-                source_thread_qos();
-                let mut lag = SourceLag::default();
-                let origin = host_now();
-                let base = host_secs(origin, reference);
-                let mut truth = Truth::new();
-                let mut dropped = Vec::new();
-                let mut drop_slots: Option<Vec<u32>> = None;
-                for slot in 0..(max_secs * f64::from(CAMERA_FPS)) as u32 {
-                    if stop.load(Ordering::Acquire) {
-                        break;
+            std::thread::Builder::new()
+                .name("verify-synthetic-camera".into())
+                .spawn(move || {
+                    let slots = (max_secs * f64::from(CAMERA_FPS)) as u32;
+                    let (mut trace, thread) = SourceTrace::start(
+                        "camera",
+                        1.0 / f64::from(CAMERA_FPS),
+                        CAMERA_COMPUTATION_SECS,
+                        slots as usize,
+                    );
+                    let origin = host_now();
+                    let base = host_secs(origin, reference);
+                    let mut truth = Truth::new();
+                    let mut dropped = Vec::new();
+                    let mut drop_slots: Option<Vec<u32>> = None;
+                    for slot in 0..slots {
+                        if stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        let secs = f64::from(slot) / f64::from(CAMERA_FPS);
+                        let capture = host_add_secs(origin, secs);
+                        let (wake, pri) = wait_for(thread, capture);
+                        let start = started.load(Ordering::Acquire);
+                        if drop_slots.is_none() && start != 0 {
+                            let since = host_secs(start, origin);
+                            drop_slots = Some(
+                                drops_at
+                                    .iter()
+                                    .flat_map(|at| {
+                                        let s =
+                                            ((since + at) * f64::from(CAMERA_FPS)).ceil() as u32;
+                                        [s, s + 1]
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        if drop_slots.as_ref().is_some_and(|d| d.contains(&slot)) {
+                            dropped.push(slot);
+                            continue;
+                        }
+                        let Some(frame) = camera_frame(slot, capture) else {
+                            continue;
+                        };
+                        trace.handoff(slot, capture, wake, pri, || feed.try_push_native(frame));
+                        // Intended frames stay in the truth even when the
+                        // feed rejected them: the recording must not
+                        // silently lack them.
+                        truth.insert(slot, base + secs);
                     }
-                    let secs = f64::from(slot) / f64::from(CAMERA_FPS);
-                    let capture = host_add_secs(origin, secs);
-                    sleep_until_host_blocking(capture);
-                    let start = started.load(Ordering::Acquire);
-                    if drop_slots.is_none() && start != 0 {
-                        let since = host_secs(start, origin);
-                        drop_slots = Some(
-                            drops_at
-                                .iter()
-                                .flat_map(|at| {
-                                    let s = ((since + at) * f64::from(CAMERA_FPS)).ceil() as u32;
-                                    [s, s + 1]
-                                })
-                                .collect(),
-                        );
-                    }
-                    if drop_slots.as_ref().is_some_and(|d| d.contains(&slot)) {
-                        dropped.push(slot);
-                        continue;
-                    }
-                    let Some(frame) = camera_frame(slot, capture) else {
-                        continue;
-                    };
-                    if start != 0 {
-                        lag.observe(capture, reference);
-                    }
-                    handle.block_on(feed.push_native(frame));
-                    truth.insert(slot, base + secs);
-                }
-                (truth, dropped, lag)
-            })
+                    trace.end = sched::thread_state(thread);
+                    (truth, dropped, trace)
+                })
+                .expect("spawn synthetic camera")
         };
         (Some(feed), Some(task))
     } else {
@@ -658,6 +722,235 @@ fn start_feeds(
         mic_task,
         camera_task,
     }
+}
+
+struct StopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// The product classes a synthetic source's hand-offs can fail with.
+fn ingress_class(source: &str) -> &'static str {
+    match source {
+        "camera" => "camera-ingress",
+        _ => "mic-ingress",
+    }
+}
+
+/// What one source's hand-offs inside the recording window show.
+#[derive(Debug, Default)]
+struct SourceVerdict {
+    /// Product failures: (class, message).
+    product: Vec<(&'static str, String)>,
+    /// The source itself handed over more than `SOURCE_STALL_SECS` late
+    /// (the host stalled its thread): (lateness, inconclusive reason).
+    stalled: Option<(f64, String)>,
+    /// Worst lateness inside the window, seconds.
+    worst: f64,
+    /// Hand-offs inside the window, and those the feed rejected outside it
+    /// (before the recording started or after it stopped).
+    inside: usize,
+    rejected_outside: usize,
+}
+
+/// Judges one source over the recording window (seconds from `reference`,
+/// by due time). A hand-off is late by `built - due`, as before.
+///
+/// A rejected hand-off (feed mailbox full or closed) is a product failure:
+/// the real capture callbacks `try_send` the same way and lose the frame.
+/// A late hand-off is attributed by its debt chain: while a hand-off was
+/// due before the previous one returned, the time spent inside the feed's
+/// hand-offs is the feed's. When the lateness without that time stays within
+/// `SOURCE_STALL_SECS`, Cap delayed the source: a product failure, never
+/// inconclusive. Otherwise the source thread itself woke or ran late.
+fn judge_source(trace: &SourceTrace, reference: u64, window: (f64, f64)) -> SourceVerdict {
+    let class = ingress_class(trace.name);
+    let mut verdict = SourceVerdict::default();
+    let mut rejected: Vec<(u32, f64, Admission)> = Vec::new();
+    let mut cap_debt = 0.0f64;
+    let mut held = 0usize;
+    let mut held_worst: Option<(f64, String)> = None;
+    let mut previous: Option<&Handoff> = None;
+    for h in &trace.handoffs {
+        let busy = previous.is_some_and(|p| p.pushed > h.due);
+        cap_debt = match previous {
+            Some(p) if busy => cap_debt + host_secs(p.pushed, p.built),
+            _ => 0.0,
+        };
+        let due = host_secs(h.due, reference);
+        let inside = due >= window.0 && due <= window.1;
+        if h.admission != Admission::Accepted {
+            if inside {
+                rejected.push((h.index, due, h.admission));
+            } else {
+                verdict.rejected_outside += 1;
+            }
+        }
+        if inside {
+            verdict.inside += 1;
+            let late = host_secs(h.built, h.due);
+            verdict.worst = verdict.worst.max(late);
+            if late > SOURCE_STALL_SECS {
+                let cap = cap_debt.min(late);
+                let asleep_from = previous.map_or(h.due, |p| p.pushed.max(h.due));
+                let breakdown = format!(
+                    "woke {:.1} ms past its deadline at scheduler priority {}, built in {:.1} ms, \
+                     {:.1} ms inside Cap's hand-offs of earlier frames",
+                    host_secs(h.wake, asleep_from).max(0.0) * 1000.0,
+                    h.pri,
+                    host_secs(h.built, h.wake) * 1000.0,
+                    cap * 1000.0
+                );
+                if late - cap <= SOURCE_STALL_SECS {
+                    held += 1;
+                    if held_worst.as_ref().is_none_or(|(worst, _)| late > *worst) {
+                        held_worst = Some((
+                            late,
+                            format!(
+                                "hand-off {} due at {due:.2}s, {:.0} ms late: {breakdown}",
+                                h.index,
+                                late * 1000.0
+                            ),
+                        ));
+                    }
+                } else if verdict
+                    .stalled
+                    .as_ref()
+                    .is_none_or(|(worst, _)| late > *worst)
+                {
+                    verdict.stalled = Some((
+                        late,
+                        format!(
+                            "{} source stalled: hand-off {} due at {due:.2}s was {:.0} ms late ({breakdown})",
+                            trace.name,
+                            h.index,
+                            late * 1000.0
+                        ),
+                    ));
+                }
+            }
+        }
+        previous = Some(h);
+    }
+    if let Some((_, worst)) = held_worst {
+        verdict.product.push((
+            class,
+            format!(
+                "Cap's {} feed held the source: {held} hand-offs more than {:.0} ms late because of time spent inside the feed; worst {worst}",
+                trace.name,
+                SOURCE_STALL_SECS * 1000.0
+            ),
+        ));
+    }
+    if let Some((index, at, admission)) = rejected.first() {
+        let full = rejected
+            .iter()
+            .filter(|(_, _, a)| *a == Admission::Full)
+            .count();
+        verdict.product.push((
+            class,
+            format!(
+                "Cap's {} feed rejected {} of {} hand-offs inside the recording ({full} mailbox full, {} closed); first {index} at {at:.2}s ({admission:?})",
+                trace.name,
+                rejected.len(),
+                verdict.inside,
+                rejected.len() - full
+            ),
+        ));
+    }
+    verdict
+}
+
+/// `Err` when a source did not run under its real-time constraint for the
+/// whole recording: its timing would not stand in for a capture device.
+fn source_scheduling(
+    trace: &SourceTrace,
+    reference: u64,
+    window: (f64, f64),
+) -> Result<(), String> {
+    trace.realtime.obtained().map_err(|e| {
+        format!(
+            "{} source: real-time scheduling not obtained: {e}",
+            trace.name
+        )
+    })?;
+    sched::state_is_realtime(trace.end).map_err(|e| {
+        format!(
+            "{} source: real-time scheduling lost by the end: {e}",
+            trace.name
+        )
+    })?;
+    if let Some(h) = trace.handoffs.iter().find(|h| {
+        let due = host_secs(h.due, reference);
+        due >= window.0 && due <= window.1 && h.pri < sched::REALTIME_PRIORITY
+    }) {
+        return Err(format!(
+            "{} source: hand-off {} ran at scheduler priority {}, below the real-time band",
+            trace.name, h.index, h.pri
+        ));
+    }
+    Ok(())
+}
+
+/// Writes every source's scheduling and hand-offs for one attempt (all
+/// attempts, including discarded retries) and returns the file.
+fn persist_sources(
+    stem: &str,
+    reference: u64,
+    rec: &Recorded,
+    verdicts: &[SourceVerdict],
+    fallback: &Path,
+) -> PathBuf {
+    let dir = std::env::var_os("CAP_VERIFY_DUMP")
+        .map(|d| PathBuf::from(d).join("sources"))
+        .unwrap_or_else(|| fallback.to_path_buf());
+    let path = dir.join(format!("{stem}.json"));
+    let info = cidre::mach::TimeBaseInfo::new();
+    let sources: Vec<serde_json::Value> = rec
+        .sources
+        .iter()
+        .zip(verdicts)
+        .map(|(trace, verdict)| {
+            serde_json::json!({
+                "name": trace.name,
+                "realtime": trace.realtime,
+                "end": trace.end,
+                "worst_late_ms": verdict.worst * 1000.0,
+                "stalled": verdict.stalled.as_ref().map(|(_, reason)| reason),
+                "product": verdict.product.iter().map(|(class, text)| format!("{class}: {text}")).collect::<Vec<_>>(),
+                "handoffs": trace.handoffs.iter().map(|h| (
+                    h.index,
+                    h.due,
+                    h.wake,
+                    h.built,
+                    h.pushed,
+                    match h.admission {
+                        Admission::Accepted => "ok",
+                        Admission::Full => "full",
+                        Admission::Closed => "closed",
+                    },
+                    h.pri,
+                )).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "attempt": stem,
+        "timebase": [info.numer, info.denom],
+        "reference": reference,
+        "window_secs": [rec.started, rec.stopped],
+        "columns": ["index", "due", "wake", "built", "pushed", "admission", "pri"],
+        "sources": sources,
+    });
+    let written =
+        std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, value.to_string()));
+    if let Err(e) = written {
+        eprintln!("[cap-verify] could not write {}: {e}", path.display());
+    }
+    path
 }
 
 fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
@@ -792,8 +1085,8 @@ struct Recorded {
     /// after each hold.
     holds: Vec<(f64, f64)>,
     stimulus_fps: f64,
-    /// Late hand-offs of the synthetic microphone and camera.
-    source_lag: Vec<(&'static str, SourceLag)>,
+    /// Every hand-off of the synthetic microphone and camera.
+    sources: Vec<SourceTrace>,
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
@@ -818,14 +1111,75 @@ async fn run_case(
         std::fs::create_dir_all(&attempt_scratch)?;
         let reference = host_now();
         let recorded = record(spec, capture, shareable, &attempt_scratch, reference, case).await?;
-        match inconclusive(spec, &recorded) {
-            Some(reason) if tries < 2 => {
-                case.note(format!("inconclusive, retrying: {reason}"));
+        let window = (recorded.started, recorded.stopped);
+        let verdicts: Vec<SourceVerdict> = recorded
+            .sources
+            .iter()
+            .map(|trace| judge_source(trace, reference, window))
+            .collect();
+        let stem = format!(
+            "{}-r{}-a{tries}",
+            spec.id.replace('/', "-"),
+            ATTEMPT.load(Ordering::Relaxed)
+        );
+        let evidence = persist_sources(&stem, reference, &recorded, &verdicts, &attempt_scratch);
+        case.note(format!(
+            "attempt {tries} sources ({}): {}",
+            evidence.display(),
+            recorded
+                .sources
+                .iter()
+                .zip(&verdicts)
+                .map(|(trace, verdict)| format!(
+                    "{} {} hand-offs, worst {:.1} ms late, priority {}",
+                    trace.name,
+                    verdict.inside,
+                    verdict.worst * 1000.0,
+                    trace.realtime.state.map_or(-1, |s| s.base_pri)
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+        for (trace, verdict) in recorded.sources.iter().zip(&verdicts) {
+            if verdict.rejected_outside > 0 {
+                case.note(format!(
+                    "{} feed rejected {} hand-offs outside the recording",
+                    trace.name, verdict.rejected_outside
+                ));
             }
+        }
+        if let Some(reason) = recorded
+            .sources
+            .iter()
+            .find_map(|trace| source_scheduling(trace, reference, window).err())
+        {
+            case.problem(
+                "harness",
+                format!("{reason}; evidence {}", evidence.display()),
+            );
+            case.note(format!("artifacts kept at {}", scratch.display()));
+            return Ok(());
+        }
+        let product: Vec<&(&str, String)> = verdicts.iter().flat_map(|v| &v.product).collect();
+        if !product.is_empty() {
+            // The recorder's own feed failed its source: a product failure
+            // that a retry must not hide. The output checks still run.
+            for (class, text) in product {
+                case.problem(class, format!("{text}; evidence {}", evidence.display()));
+            }
+            break (recorded, reference);
+        }
+        match inconclusive(spec, &recorded, &verdicts) {
             Some(reason) => {
-                case.problem("environment", format!("stimulus starved twice: {reason}"));
-                case.note(format!("artifacts kept at {}", scratch.display()));
-                return Ok(());
+                let reason = format!("{reason}; evidence {}", evidence.display());
+                keep_stimulus_log(&attempt_scratch, &stem);
+                if tries < 2 {
+                    case.note(format!("inconclusive, retrying: {reason}"));
+                } else {
+                    case.problem("environment", format!("inconclusive twice: {reason}"));
+                    case.note(format!("artifacts kept at {}", scratch.display()));
+                    return Ok(());
+                }
             }
             None => break (recorded, reference),
         }
@@ -856,27 +1210,33 @@ const SOURCE_STALL_SECS: f64 = 0.1;
 ///   process) received no new frame for more than four stimulus periods
 ///   while pictures were being presented: the window server or capture
 ///   service stalled, so the pictures never reached any recorder;
-/// - a synthetic source handed over input more than `SOURCE_STALL_SECS`
-///   late inside the recording.
-fn inconclusive(spec: &Spec, rec: &Recorded) -> Option<String> {
+/// - a synthetic source's own thread handed over input more than
+///   `SOURCE_STALL_SECS` late inside the recording (`judge_source`; time
+///   spent inside Cap's feed is a product failure instead).
+fn inconclusive(spec: &Spec, rec: &Recorded, verdicts: &[SourceVerdict]) -> Option<String> {
     if let Some(reason) = starved(spec, &rec.stimulus) {
         return Some(reason);
     }
     if let Some(reason) = compositor_stall(spec, &rec.stimulus) {
         return Some(reason);
     }
-    let window = (rec.started, rec.stopped);
-    rec.source_lag.iter().find_map(|(name, lag)| {
-        lag.worst_in(window)
-            .filter(|(_, late)| *late > SOURCE_STALL_SECS)
-            .map(|(at, late)| {
-                format!(
-                    "{name} source stalled: handed over {:.0} ms late at {:.2}s",
-                    late * 1000.0,
-                    at
-                )
-            })
-    })
+    verdicts
+        .iter()
+        .find_map(|v| v.stalled.as_ref().map(|(_, reason)| reason.clone()))
+}
+
+/// Keeps a discarded attempt's stimulus log (its independent capture
+/// observer) next to the source evidence: the case's scratch directory is
+/// removed when a retry passes.
+fn keep_stimulus_log(attempt_scratch: &Path, stem: &str) {
+    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
+        let dir = PathBuf::from(dir).join("sources");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::copy(
+            attempt_scratch.join("stimulus.jsonl"),
+            dir.join(format!("{stem}-stimulus.jsonl")),
+        );
+    }
 }
 
 /// Longest stretch without a new frame on the stimulus's own capture stream
@@ -1033,11 +1393,213 @@ fn capture_service_stalls_are_inconclusive_but_hold_resumes_are_not() {
     assert_eq!(compositor_stall(&held, &events), None);
 }
 
+fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
+    let constraint = sched::Constraint {
+        period_ms: 33.333,
+        computation_ms: 16.667,
+        constraint_ms: 33.333,
+        preemptible: true,
+    };
+    let state = sched::ThreadState {
+        policy: 2,
+        base_pri: 97,
+        cur_pri: 97,
+        max_pri: 63,
+        cpu_us: 0,
+    };
+    SourceTrace {
+        name,
+        realtime: sched::Realtime {
+            requested: sched::Constraint {
+                computation_ms: 10.0,
+                ..constraint
+            },
+            qos_status: 0,
+            policy_status: 0,
+            readback_status: 0,
+            readback_default: false,
+            granted: Some(constraint),
+            state: Some(state),
+        },
+        end: Some(state),
+        handoffs,
+    }
+}
+
+/// Camera hand-offs every 33 ms from `reference`; `late(slot)` gives the
+/// wake delay and `push(slot)` the time inside the feed, in seconds. A
+/// source behind schedule wakes as soon as its previous hand-off returns.
+fn simulated_handoffs(
+    reference: u64,
+    slots: u32,
+    late: impl Fn(u32) -> f64,
+    push: impl Fn(u32) -> f64,
+    admission: impl Fn(u32) -> Admission,
+) -> Vec<Handoff> {
+    let mut free = reference;
+    (0..slots)
+        .map(|slot| {
+            let due = host_add_secs(reference, f64::from(slot) / 30.0);
+            let wake = host_add_secs(due.max(free), late(slot));
+            let built = host_add_secs(wake, 0.003);
+            let pushed = host_add_secs(built, push(slot));
+            free = pushed;
+            Handoff {
+                index: slot,
+                due,
+                wake,
+                built,
+                pushed,
+                admission: admission(slot),
+                pri: 97,
+            }
+        })
+        .collect()
+}
+
 #[test]
-fn source_lag_counts_only_inside_the_recording() {
-    let lag = SourceLag(vec![(0.5, 0.3), (4.0, 0.05), (9.0, 0.4)]);
-    assert_eq!(lag.worst_in((1.0, 8.0)), Some((4.0, 0.05)));
-    assert_eq!(lag.worst_in((0.0, 10.0)), Some((9.0, 0.4)));
+fn source_lateness_is_attributed_to_the_source_or_to_cap() {
+    let reference = host_now();
+    let window = (1.0, 8.0);
+    let ok = |_| Admission::Accepted;
+    // The source overslept 151 ms at slot 90 (3.0 s) and caught up in a
+    // burst: the host stalled it, inconclusive with its breakdown.
+    let overslept = test_trace(
+        "camera",
+        simulated_handoffs(
+            reference,
+            300,
+            |s| if s == 90 { 0.151 } else { 0.0005 },
+            |_| 0.00004,
+            ok,
+        ),
+    );
+    let verdict = judge_source(&overslept, reference, window);
+    assert!(verdict.product.is_empty(), "{:?}", verdict.product);
+    let (late, reason) = verdict.stalled.expect("stall");
+    assert!((late - 0.154).abs() < 0.002, "{late}");
+    assert!(
+        reason.contains("woke 151.0 ms past its deadline"),
+        "{reason}"
+    );
+    // Outside the recording window it does not count.
+    assert!(
+        judge_source(&overslept, reference, (3.5, 8.0))
+            .stalled
+            .is_none()
+    );
+    // Cap's feed held the source for 200 ms inside hand-off 90: the later
+    // hand-offs are late because of Cap, never inconclusive.
+    let blocked = test_trace(
+        "camera",
+        simulated_handoffs(
+            reference,
+            300,
+            |_| 0.0005,
+            |s| if s == 90 { 0.2 } else { 0.00004 },
+            ok,
+        ),
+    );
+    let verdict = judge_source(&blocked, reference, window);
+    assert!(verdict.stalled.is_none(), "{:?}", verdict.stalled);
+    assert_eq!(verdict.product.len(), 1, "{:?}", verdict.product);
+    assert_eq!(verdict.product[0].0, "camera-ingress");
+    assert!(
+        verdict.product[0].1.contains("hand-off 91"),
+        "{:?}",
+        verdict.product
+    );
+    // A rejected hand-off fails as ingress inside the window and is only
+    // counted outside it.
+    let full = |s| {
+        if s == 15 || s == 150 {
+            Admission::Full
+        } else {
+            Admission::Accepted
+        }
+    };
+    let rejected = test_trace(
+        "microphone",
+        simulated_handoffs(reference, 300, |_| 0.0005, |_| 0.00004, full),
+    );
+    let verdict = judge_source(&rejected, reference, window);
+    assert_eq!(verdict.rejected_outside, 1);
+    assert_eq!(verdict.product.len(), 1);
+    assert_eq!(verdict.product[0].0, "mic-ingress");
+    assert!(
+        verdict.product[0].1.contains("rejected 1 of"),
+        "{:?}",
+        verdict.product
+    );
+    // A source below the real-time band is a harness failure.
+    let mut demoted = overslept.clone();
+    demoted.handoffs[100].pri = 31;
+    assert!(source_scheduling(&demoted, reference, window).is_err());
+    assert!(source_scheduling(&overslept, reference, window).is_ok());
+}
+
+/// A feed that stops taking frames (scripted slow consumer: its actor is
+/// blocked for 4 s) must be reported as a product failure of class
+/// `camera-ingress` / `mic-ingress`, never as a late, inconclusive source.
+/// Runs the real synthetic sources, under the real-time constraint this
+/// host grants, against the real feed actors.
+#[test]
+fn injected_feed_backpressure_is_ingress_not_inconclusive() {
+    let rt = runtime();
+    rt.block_on(async {
+        let reference = host_now();
+        let feeds = start_feeds(reference, 8.0, true, vec![], 0.0);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let started = host_now();
+        feeds.started.store(started, Ordering::Release);
+        let camera = feeds.camera.clone().expect("camera");
+        assert_eq!(camera.stall(Duration::from_secs(4)), Admission::Accepted);
+        assert_eq!(feeds.mic.stall(Duration::from_secs(4)), Admission::Accepted);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let stopped = host_now();
+        feeds.stop.store(true, Ordering::Release);
+        let mic = tokio::task::block_in_place(|| feeds.mic_task.join()).expect("mic source");
+        let (truth, _, cam) =
+            tokio::task::block_in_place(|| feeds.camera_task.expect("camera").join())
+                .expect("camera source");
+        let window = (host_secs(started, reference), host_secs(stopped, reference));
+        let mut case = Case::new("recording/self-check/feed-backpressure");
+        for trace in [&cam, &mic] {
+            source_scheduling(trace, reference, window).expect("real-time sources");
+            let verdict = judge_source(trace, reference, window);
+            eprintln!(
+                "  {}: {} hand-offs, worst {:.1} ms late, priority {:?}, stalled {:?}",
+                trace.name,
+                verdict.inside,
+                verdict.worst * 1000.0,
+                trace.realtime.state.map(|s| s.base_pri),
+                verdict.stalled
+            );
+            // run_case reports product verdicts before (and instead of)
+            // any inconclusive retry.
+            assert!(
+                !verdict.product.is_empty(),
+                "{} rejections not reported",
+                trace.name
+            );
+            for (class, text) in verdict.product {
+                eprintln!("  {class}: {text}");
+                case.problem(class, text);
+            }
+        }
+        assert_eq!(
+            case.classes.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["camera-ingress", "mic-ingress"]
+        );
+        let rejected: Vec<u32> = cam
+            .handoffs
+            .iter()
+            .filter(|h| h.admission == Admission::Full)
+            .map(|h| h.index)
+            .collect();
+        assert!(!rejected.is_empty());
+        assert!(rejected.iter().all(|slot| truth.contains_key(slot)));
+    });
 }
 
 #[test]
@@ -1109,6 +1671,8 @@ async fn record(
         spec.camera_drops_at.clone(),
         spec.mic_delay,
     );
+    // The real-time source threads must not outlive a failed attempt.
+    let _stop_sources = StopOnDrop(feeds.stop.clone());
     let mic_lock = Arc::new(feeds.mic.lock().await?);
     let camera_lock = match &feeds.camera {
         Some(camera) => Some(Arc::new(camera.lock().await?)),
@@ -1247,7 +1811,10 @@ async fn record(
     feeds.stop.store(true, Ordering::Release);
     drop(mic_lock);
     drop(camera_lock);
-    let mut source_lag = vec![("microphone", feeds.mic_task.await?)];
+    let join = |name: &str| anyhow::anyhow!("synthetic {name} source panicked");
+    let mut sources = vec![
+        tokio::task::block_in_place(|| feeds.mic_task.join()).map_err(|_| join("microphone"))?,
+    ];
     let mic_truth = if spec.mic {
         feeds.mic_truth
     } else {
@@ -1255,8 +1822,9 @@ async fn record(
     };
     let camera_truth = match feeds.camera_task {
         Some(task) => {
-            let (truth, dropped, lag) = task.await?;
-            source_lag.push(("camera", lag));
+            let (truth, dropped, trace) =
+                tokio::task::block_in_place(|| task.join()).map_err(|_| join("camera"))?;
+            sources.push(trace);
             Some((truth, dropped))
         }
         None => None,
@@ -1302,7 +1870,7 @@ async fn record(
         mic_delay: spec.mic_delay,
         holds: spec.holds.clone(),
         stimulus_fps: spec.stimulus_fps,
-        source_lag,
+        sources,
         loss_budget,
     })
 }
