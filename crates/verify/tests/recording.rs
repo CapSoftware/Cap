@@ -60,6 +60,11 @@ const START_CUE_MS: u64 = 400;
 const STARTUP_SECS: f64 = 1.0;
 const STARTUP_DROPS: usize = 6;
 const SCREEN_MISS_FRACTION: f64 = 0.03;
+/// Video frames are stamped from their source capture time until the drift
+/// anchor, two seconds into the track (`VideoDriftTracker` in
+/// crates/recording/src/output_pipeline/core.rs); after it, from the
+/// processing wall clock.
+const DRIFT_ANCHOR_SECS: f64 = 2.0;
 /// Stimulus rate for cases captured at 30 fps (Instant, Studio with a
 /// camera). A picture is only guaranteed a sample when it stays on screen
 /// for one capture interval plus one refresh (50 ms at 30 fps); 20 fps
@@ -461,14 +466,50 @@ struct Feeds {
     stop: Arc<AtomicBool>,
     started: Arc<AtomicU64>,
     mic_truth: Truth,
-    mic_task: tokio::task::JoinHandle<()>,
-    camera_task: Option<tokio::task::JoinHandle<(Truth, Vec<u32>)>>,
+    mic_task: tokio::task::JoinHandle<SourceLag>,
+    camera_task: Option<tokio::task::JoinHandle<(Truth, Vec<u32>, SourceLag)>>,
 }
 
-async fn sleep_until_host(host: u64) {
+/// Hand-offs a synthetic source made late: (seconds from the reference when
+/// the frame or chunk was due, seconds late). Only lateness above 20 ms is
+/// kept.
+#[derive(Clone, Debug, Default)]
+struct SourceLag(Vec<(f64, f64)>);
+
+impl SourceLag {
+    fn observe(&mut self, due: u64, reference: u64) {
+        let late = host_secs(host_now(), due);
+        if late > 0.02 {
+            self.0.push((host_secs(due, reference), late));
+        }
+    }
+
+    /// The latest hand-off inside the window.
+    fn worst_in(&self, window: (f64, f64)) -> Option<(f64, f64)> {
+        self.0
+            .iter()
+            .copied()
+            .filter(|(at, _)| *at >= window.0 && *at <= window.1)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+}
+
+/// Synthetic sources stand in for capture devices, which the system feeds
+/// from its own high-priority threads. They run on dedicated threads at
+/// user-interactive QoS (not on the recorder's async runtime) and block on
+/// their feed the way a device callback would.
+fn source_thread_qos() {
+    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+    }
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+}
+
+fn sleep_until_host_blocking(host: u64) {
     let secs = host_secs(host, host_now());
     if secs > 0.0 {
-        tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+        std::thread::sleep(Duration::from_secs_f64(secs));
     }
 }
 
@@ -504,11 +545,15 @@ fn start_feeds(
         .iter()
         .map(|p| (p.index, base + (p.time_secs * rate).round() / rate))
         .collect();
+    let handle = tokio::runtime::Handle::current();
     let mic_task = {
         let mic = mic.clone();
         let stop = stop.clone();
         let started = started.clone();
-        tokio::spawn(async move {
+        let handle = handle.clone();
+        tokio::task::spawn_blocking(move || {
+            source_thread_qos();
+            let mut lag = SourceLag::default();
             let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
             audio_code::render_markers(
                 &mut signal,
@@ -525,19 +570,22 @@ fn start_feeds(
                 let capture = host_add_secs(origin, first as f64 / f64::from(MIC_RATE));
                 let delivered =
                     host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
-                sleep_until_host(delivered).await;
+                sleep_until_host_blocking(delivered);
                 if mic_delay > 0.0 {
                     let start = started.load(Ordering::Acquire);
                     if start == 0 || host_secs(capture, start) < mic_delay {
                         continue;
                     }
                 }
-                mic.push(
+                if started.load(Ordering::Acquire) != 0 {
+                    lag.observe(delivered, reference);
+                }
+                handle.block_on(mic.push(
                     chunk,
                     Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
-                )
-                .await;
+                ));
             }
+            lag
         })
     };
     let (camera, camera_task) = if camera {
@@ -552,7 +600,10 @@ fn start_feeds(
             let feed = feed.clone();
             let stop = stop.clone();
             let started = started.clone();
-            tokio::spawn(async move {
+            let handle = handle.clone();
+            tokio::task::spawn_blocking(move || {
+                source_thread_qos();
+                let mut lag = SourceLag::default();
                 let origin = host_now();
                 let base = host_secs(origin, reference);
                 let mut truth = Truth::new();
@@ -564,7 +615,7 @@ fn start_feeds(
                     }
                     let secs = f64::from(slot) / f64::from(CAMERA_FPS);
                     let capture = host_add_secs(origin, secs);
-                    sleep_until_host(capture).await;
+                    sleep_until_host_blocking(capture);
                     let start = started.load(Ordering::Acquire);
                     if drop_slots.is_none() && start != 0 {
                         let since = host_secs(start, origin);
@@ -585,10 +636,13 @@ fn start_feeds(
                     let Some(frame) = camera_frame(slot, capture) else {
                         continue;
                     };
-                    feed.push_native(frame).await;
+                    if start != 0 {
+                        lag.observe(capture, reference);
+                    }
+                    handle.block_on(feed.push_native(frame));
                     truth.insert(slot, base + secs);
                 }
-                (truth, dropped)
+                (truth, dropped, lag)
             })
         };
         (Some(feed), Some(task))
@@ -723,6 +777,8 @@ struct Recorded {
     /// after each hold.
     holds: Vec<(f64, f64)>,
     stimulus_fps: f64,
+    /// Late hand-offs of the synthetic microphone and camera.
+    source_lag: Vec<(&'static str, SourceLag)>,
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
@@ -747,7 +803,7 @@ async fn run_case(
         std::fs::create_dir_all(&attempt_scratch)?;
         let reference = host_now();
         let recorded = record(spec, capture, shareable, &attempt_scratch, reference, case).await?;
-        match starved(spec, &recorded.stimulus) {
+        match inconclusive(spec, &recorded) {
             Some(reason) if tries < 2 => {
                 case.note(format!("inconclusive, retrying: {reason}"));
             }
@@ -769,6 +825,91 @@ async fn run_case(
         case.note(format!("artifacts kept at {}", scratch.display()));
     }
     Ok(())
+}
+
+/// A synthetic source that hands a frame or chunk over this late did not
+/// produce its input on time: no capture device delivers this late, so the
+/// host stalled the source (a VM-wide stall measured 286 ms; with the
+/// sources on their own threads, steady hand-offs are within a few ms).
+const SOURCE_STALL_SECS: f64 = 0.1;
+
+/// A run whose input was faulty, proven by a log independent of the
+/// recorder, cannot tell a capture problem from a harness problem: it is
+/// retried once, and a case that stays inconclusive fails as `environment`.
+/// - the stimulus was starved (it skipped or stalled its own pictures);
+/// - the stimulus's own ScreenCaptureKit stream (another client, another
+///   process) received no new frame for more than four stimulus periods
+///   while pictures were being presented: the window server or capture
+///   service stalled, so the pictures never reached any recorder;
+/// - a synthetic source handed over input more than `SOURCE_STALL_SECS`
+///   late inside the recording.
+fn inconclusive(spec: &Spec, rec: &Recorded) -> Option<String> {
+    if let Some(reason) = starved(spec, &rec.stimulus) {
+        return Some(reason);
+    }
+    if let Some(reason) = compositor_stall(spec, &rec.stimulus) {
+        return Some(reason);
+    }
+    let window = (rec.started, rec.stopped);
+    rec.source_lag.iter().find_map(|(name, lag)| {
+        lag.worst_in(window)
+            .filter(|(_, late)| *late > SOURCE_STALL_SECS)
+            .map(|(at, late)| {
+                format!(
+                    "{name} source stalled: handed over {:.0} ms late at {:.2}s",
+                    late * 1000.0,
+                    at
+                )
+            })
+    })
+}
+
+/// Longest stretch without a new frame on the stimulus's own capture stream
+/// while the stimulus was changing its picture (outside scripted holds and
+/// the period after them, where a capture stream legitimately resumes late).
+fn compositor_stall(spec: &Spec, events: &[StimulusEvent]) -> Option<String> {
+    let go = events.iter().find_map(|e| match e {
+        StimulusEvent::Go { host } => Some(*host),
+        _ => None,
+    })?;
+    let done = events.iter().find_map(|e| match e {
+        StimulusEvent::Done { host } => Some(host_secs(*host, go)),
+        _ => None,
+    })?;
+    let observed: Vec<f64> = events
+        .iter()
+        .filter_map(|e| match e {
+            StimulusEvent::Observed { host } => Some(host_secs(*host, go)),
+            _ => None,
+        })
+        .collect();
+    if observed.is_empty() {
+        return None;
+    }
+    let period = 1.0 / spec.stimulus_fps;
+    let quiet = |t: f64| {
+        spec.holds
+            .iter()
+            .any(|&(s, l)| t > s - period && t < s + l + 4.0 * period)
+    };
+    let mut points: Vec<f64> = observed
+        .into_iter()
+        .filter(|t| *t >= 0.0 && *t <= done)
+        .collect();
+    points.insert(0, 0.0);
+    points.push(done);
+    let (gap, at) = points
+        .windows(2)
+        .filter(|w| !quiet(w[0]) && !quiet(w[1]))
+        .map(|w| (w[1] - w[0], w[0]))
+        .fold((0.0f64, 0.0f64), |m, x| if x.0 > m.0 { x } else { m });
+    (gap > 4.0 * period).then(|| {
+        format!(
+            "screen capture stalled for every client: the stimulus's own capture stream received no frame for {:.0} ms at {:.2}s after go",
+            gap * 1000.0,
+            at
+        )
+    })
 }
 
 /// The stimulus is the truth source: when the host starves it (it skipped
@@ -849,6 +990,39 @@ fn scripted_holds_do_not_count_as_stimulus_starvation() {
         });
     }
     assert_eq!(starved(&spec, &events), None);
+}
+
+#[test]
+fn capture_service_stalls_are_inconclusive_but_hold_resumes_are_not() {
+    let spec = &specs()[0];
+    let go = host_now();
+    let period = 1.0 / spec.stimulus_fps;
+    let mut events = vec![StimulusEvent::Go { host: go }];
+    let observe = |events: &mut Vec<StimulusEvent>, from: f64, to: f64| {
+        let mut t = from;
+        while t < to {
+            events.push(StimulusEvent::Observed {
+                host: host_add_secs(go, t),
+            });
+            t += period;
+        }
+    };
+    observe(&mut events, 0.0, 2.0);
+    observe(&mut events, 3.05, spec.seconds);
+    events.push(StimulusEvent::Done {
+        host: host_add_secs(go, spec.seconds),
+    });
+    assert!(compositor_stall(spec, &events).is_some_and(|r| r.contains("1100 ms at 1.95s")));
+    let mut held = spec.clone();
+    held.holds = vec![(2.0, 1.0)];
+    assert_eq!(compositor_stall(&held, &events), None);
+}
+
+#[test]
+fn source_lag_counts_only_inside_the_recording() {
+    let lag = SourceLag(vec![(0.5, 0.3), (4.0, 0.05), (9.0, 0.4)]);
+    assert_eq!(lag.worst_in((1.0, 8.0)), Some((4.0, 0.05)));
+    assert_eq!(lag.worst_in((0.0, 10.0)), Some((9.0, 0.4)));
 }
 
 #[test]
@@ -1058,14 +1232,18 @@ async fn record(
     feeds.stop.store(true, Ordering::Release);
     drop(mic_lock);
     drop(camera_lock);
-    feeds.mic_task.await?;
+    let mut source_lag = vec![("microphone", feeds.mic_task.await?)];
     let mic_truth = if spec.mic {
         feeds.mic_truth
     } else {
         Truth::new()
     };
     let camera_truth = match feeds.camera_task {
-        Some(task) => Some(task.await?),
+        Some(task) => {
+            let (truth, dropped, lag) = task.await?;
+            source_lag.push(("camera", lag));
+            Some((truth, dropped))
+        }
         None => None,
     };
     drop(feeds.camera);
@@ -1109,6 +1287,7 @@ async fn record(
         mic_delay: spec.mic_delay,
         holds: spec.holds.clone(),
         stimulus_fps: spec.stimulus_fps,
+        source_lag,
         loss_budget,
     })
 }
@@ -1778,16 +1957,47 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
         offsets.0.push((truth, pts + track.start - truth));
     }
+    let first_truth = first_seen
+        .keys()
+        .filter_map(|i| check.truth.get(i))
+        .copied()
+        .fold(f64::MAX, f64::min);
+    // Steady offsets on each side of the drift anchor (see sync_checks).
+    let side_median = |past: bool| {
+        Offsets(
+            offsets
+                .0
+                .iter()
+                .copied()
+                .filter(|(t, _)| (*t >= first_truth + DRIFT_ANCHOR_SECS) == past)
+                .collect(),
+        )
+        .median()
+    };
     if let Some(median) = offsets.median() {
         let period = 1.0 / f64::from(CAMERA_FPS);
         for &(index, offset) in &snapped {
+            let past = check
+                .truth
+                .get(&index)
+                .is_some_and(|t| *t >= first_truth + DRIFT_ANCHOR_SECS);
+            let median = side_median(past).unwrap_or(median);
             let early = median - offset;
             let gap = (0..index)
                 .rev()
                 .take_while(|i| check.not_sent.contains(i))
                 .count() as f64;
+            let past_anchor = past;
+            // Late past the drift anchor is the processing-clock stamping
+            // (class camera-clock); early beyond the gap, or late before the
+            // anchor, is a timestamp defect.
+            let class = if early < -0.004 && past_anchor {
+                "camera-clock"
+            } else {
+                "timestamps"
+            };
             if early < -0.004 || early > gap * period + 0.004 {
-                case.problem("timestamps", format!(
+                case.problem(class, format!(
                     "{name}: frame {index} after a {gap}-frame source gap is {:+.1} ms off the steady offset (allowed 0..{:.1} early)",
                     -early * 1000.0,
                     gap * period * 1000.0
@@ -2205,58 +2415,84 @@ fn sync_checks(
             ms(EXACT_SPREAD)
         ));
     }
-    if let Some(camera) = camera
-        && let Some(median) = camera.median()
-    {
-        // Camera frames carry exact capture times, but past the 2 s drift
-        // anchor the muxer stamps frames from the processing wall clock, so
-        // a loaded host shifts single frames (measured up to 73 ms on hosted
-        // runners) and can freeze the anchor's processing delay into the
-        // rest of the track (measured 25 ms). A frame more than three periods
-        // off, or three consecutive frames more than a period off (a ladder
-        // that froze a whole-slot lag, #2573: 66.7 ms for 22 frames), shows
-        // the wrong picture.
+    // Camera frames carry exact capture times. Until the drift anchor the
+    // recorder stamps them with those times, so their offsets must be
+    // constant: a frame more than three periods off, or three consecutive
+    // frames more than a period off (a ladder that froze a whole-slot lag,
+    // #2573: 66.7 ms for 22 frames), is a timestamp defect. Past the anchor
+    // the recorder stamps frames from the processing wall clock instead
+    // (`VideoDriftTracker::calculate_timestamp`), so every frame carries its
+    // processing delay; that is reported as class camera-clock, together
+    // with the same frame checks applied to those frames.
+    let camera_parts = camera.map(|camera| {
+        let first = camera.0.iter().map(|(t, _)| *t).fold(f64::MAX, f64::min);
+        let (pre, post): (Vec<_>, Vec<_>) = camera
+            .0
+            .iter()
+            .copied()
+            .partition(|(t, _)| *t < first + DRIFT_ANCHOR_SECS);
+        (Offsets(pre), Offsets(post))
+    });
+    if let Some((pre, post)) = &camera_parts {
         let period = 1.0 / f64::from(CAMERA_FPS);
-        let mut run = 0;
-        let mut worst_run = (0, 0.0f64, 0.0f64);
-        let mut isolated = Vec::new();
-        for &(truth, offset) in &camera.0 {
-            let d = offset - median;
-            if d.abs() > 3.0 * period {
-                isolated.push(format!("{:.2}s {:+.1} ms", truth, ms(d)));
-            }
-            if d.abs() > period {
-                run += 1;
-                if run > worst_run.0 {
-                    worst_run = (run, truth, d);
+        for (part, class, label) in [
+            (pre, "timestamps", "before the drift anchor"),
+            (post, "camera-clock", "past the drift anchor"),
+        ] {
+            let Some(median) = part.median() else {
+                continue;
+            };
+            let mut run = 0;
+            let mut worst_run = (0, 0.0f64, 0.0f64);
+            let mut isolated = Vec::new();
+            for &(truth, offset) in &part.0 {
+                let d = offset - median;
+                if d.abs() > 3.0 * period {
+                    isolated.push(format!("{:.2}s {:+.1} ms", truth, ms(d)));
                 }
-            } else {
-                run = 0;
+                if d.abs() > period {
+                    run += 1;
+                    if run > worst_run.0 {
+                        worst_run = (run, truth, d);
+                    }
+                } else {
+                    run = 0;
+                }
+            }
+            if worst_run.0 >= CAMERA_SUSTAINED_FRAMES {
+                case.problem(
+                    class,
+                    format!(
+                        "camera {label}: {} consecutive frames off the steady offset by more than a frame period (until {:.2}s, {:+.1} ms)",
+                        worst_run.0,
+                        worst_run.1,
+                        ms(worst_run.2)
+                    ),
+                );
+            }
+            if !isolated.is_empty() {
+                case.problem(
+                    class,
+                    format!(
+                        "camera {label}: {} frames more than three periods off the steady offset: {}",
+                        isolated.len(),
+                        isolated
+                            .iter()
+                            .take(4)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
             }
         }
-        if worst_run.0 >= CAMERA_SUSTAINED_FRAMES {
+        if post.0.len() > 1 && post.spread() > EXACT_SPREAD {
             case.problem(
-                "timestamps",
+                "camera-clock",
                 format!(
-                    "camera: {} consecutive frames off the steady offset by more than a frame period (until {:.2}s, {:+.1} ms)",
-                    worst_run.0,
-                    worst_run.1,
-                    ms(worst_run.2)
-                ),
-            );
-        }
-        if !isolated.is_empty() {
-            case.problem(
-                "timestamps",
-                format!(
-                    "camera: {} frames more than three periods off the steady offset: {}",
-                    isolated.len(),
-                    isolated
-                        .iter()
-                        .take(4)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "camera past the drift anchor: frame offsets vary by {:.1} ms (limit {:.1}): frames are stamped from the processing clock, not their capture times",
+                    ms(post.spread()),
+                    ms(EXACT_SPREAD)
                 ),
             );
         }
@@ -2264,18 +2500,29 @@ fn sync_checks(
     let mic_m = mic.and_then(Offsets::median);
     let screen_m = screen.median();
     let system_m = system.and_then(Offsets::median);
-    if let (Some(camera_m), Some(mic_m)) = (camera.and_then(Offsets::median), mic_m) {
-        let d = camera_m - mic_m;
-        case.note(format!("sync camera-mic {:+.1} ms", ms(d)));
-        if d.abs() > CAMERA_VS_MIC {
-            case.problem(
-                "sync",
-                format!(
-                    "camera vs mic out of sync: {:+.1} ms (limit +-{:.0})",
-                    ms(d),
-                    ms(CAMERA_VS_MIC)
-                ),
-            );
+    // Camera against the microphone, separately before and past the drift
+    // anchor (past it the camera carries processing delays, class
+    // camera-clock).
+    if let (Some((pre, post)), Some(mic_m)) = (&camera_parts, mic_m) {
+        for (part, class, label) in [
+            (pre, "sync", "before the drift anchor"),
+            (post, "camera-clock", "past the drift anchor"),
+        ] {
+            let Some(camera_m) = part.median() else {
+                continue;
+            };
+            let d = camera_m - mic_m;
+            case.note(format!("sync camera-mic {label} {:+.1} ms", ms(d)));
+            if d.abs() > CAMERA_VS_MIC {
+                case.problem(
+                    class,
+                    format!(
+                        "camera {label} vs mic out of sync: {:+.1} ms (limit +-{:.0})",
+                        ms(d),
+                        ms(CAMERA_VS_MIC)
+                    ),
+                );
+            }
         }
     }
     if let (Some(system_m), Some(mic_m)) = (system_m, mic_m) {

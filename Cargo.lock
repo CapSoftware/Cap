@@ -2171,6 +2171,7 @@ dependencies = [
  "objc2-foundation 0.3.1",
  "relative-path",
  "rustfft",
+ "scap-screencapturekit",
  "scap-targets",
  "serde",
  "serde_json",

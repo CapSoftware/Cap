@@ -119,6 +119,7 @@ mod app {
             wake: (String::new(), None),
             presented_at: None,
         };
+        let observer = start_observer(app.log.clone());
         let (qos, realtime) = raise_priority(app.spec.fps);
         app.log.write(&StimulusEvent::Priority { qos, realtime });
         let process_info = NSProcessInfo::processInfo();
@@ -131,11 +132,88 @@ mod app {
         let result = event_loop.run_app(&mut app);
         unsafe { process_info.endActivity(&activity) };
         result?;
+        drop(observer);
         drop(audio);
         if let Some(error) = app.error {
             anyhow::bail!(error);
         }
         Ok(())
+    }
+
+    /// Stops the observer stream when dropped.
+    struct Observer {
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for Observer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// A small ScreenCaptureKit stream of the primary display, owned by this
+    /// process: the recorder under test is a different client in a different
+    /// process, so a stretch where this stream also receives no new frames
+    /// while pictures are being presented is the window server or capture
+    /// service stalling (the input never reached the screen or the capture
+    /// service), not the recorder.
+    fn start_observer(log: Arc<Log>) -> Observer {
+        use cidre::{ns, sc};
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let fail =
+                    |reason: String| log.write(&StimulusEvent::ObserverUnavailable { reason });
+                let content = match futures::executor::block_on(sc::ShareableContent::current()) {
+                    Ok(content) => content,
+                    Err(e) => return fail(format!("shareable content: {e:?}")),
+                };
+                let displays = content.displays();
+                let Some(display) = displays.iter().next() else {
+                    return fail("no display".into());
+                };
+                let filter =
+                    sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new());
+                let config = scap_screencapturekit::StreamCfgBuilder::default()
+                    .with_width(160)
+                    .with_height(120)
+                    .with_fps(60.0)
+                    .with_queue_depth(4)
+                    .with_shows_cursor(false)
+                    .build();
+                let observed = log.clone();
+                let capturer = scap_screencapturekit::Capturer::builder(filter, config)
+                    .with_output_sample_buf_cb(move |frame| {
+                        if let scap_screencapturekit::Frame::Screen(frame) = frame {
+                            let host = cidre::cm::Clock::convert_host_time_to_sys_units(
+                                frame.sample_buf().pts(),
+                            );
+                            observed.write(&StimulusEvent::Observed { host });
+                        }
+                    })
+                    .build();
+                let capturer = match capturer {
+                    Ok(capturer) => capturer,
+                    Err(e) => return fail(format!("stream: {e:?}")),
+                };
+                if let Err(e) = futures::executor::block_on(capturer.start()) {
+                    return fail(format!("start: {e:?}"));
+                }
+                while !stop.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let _ = futures::executor::block_on(capturer.stop());
+            })
+        };
+        Observer {
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn spawn_stdin_reader(proxy: EventLoopProxy<Command>) {
