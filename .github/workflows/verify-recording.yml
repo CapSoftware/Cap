@@ -83,6 +83,14 @@ jobs:
           system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null | sed -n 1,80p
           sysctl hw.memsize hw.ncpu
 
+      # Spotlight indexes the build and every recording the suite writes:
+      # mds (priority 50) plus a dozen mdworkers averaged 1 to 1.8 of the 3
+      # cores during the tests (ps samples, run 38736744971).
+      - name: Disable Spotlight indexing
+        run: |
+          sudo mdutil -a -i off || true
+          sudo mdutil -as || true
+
       - name: Build
         run: |
           start=$(date +%s)
@@ -97,8 +105,9 @@ jobs:
           (while sleep 1; do
             date -u +%H:%M:%S
             ps -A -o pid,pri,%cpu,comm -r | head -14
-            stim=$(pgrep -f cap-verify-stimulus | head -1)
-            [ -n "$stim" ] && ps -M -p "$stim" | head -6
+            for p in $(pgrep -f cap-verify-stimulus | head -1) $(pgrep -f 'deps/recording-' | head -1); do
+              ps -M -p "$p" | awk 'NR == 1 || $4 > 0.5 || NR < 4' | cut -c1-90
+            done
           done) > "$CAP_VERIFY_DUMP/ps.log" 2>&1 &
           top_pid=$!
           start=$(date +%s)
