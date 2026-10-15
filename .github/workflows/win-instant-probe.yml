@@ -1,0 +1,71 @@
+name: Windows Instant sync probe (scratch)
+
+on:
+  push:
+    branches: [scratch/win-instant-probe2]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+
+jobs:
+  probe:
+    name: probe ${{ matrix.copy }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+      - name: Build
+        shell: bash
+        run: scripts/verify/run.sh fast --suites export --no-run
+      - name: Fresh ungated Instant fixtures, one process each
+        shell: bash
+        env:
+          CAP_VERIFY_TIER: fast
+          CAP_VERIFY_CASE: export/instant-ungated-system-continuous-mic-late/*
+          CAP_VERIFY_LOG: cap_recording=debug,cap_enc_ffmpeg=debug
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/probe"
+          for i in $(seq 1 12); do
+            for p in 1 2 3; do
+              (
+                export CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/probe/fx-$i-$p"
+                export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/report-$i-$p"
+                cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast --no-capture \
+                  -E 'binary_id(cap-verify::export) and test(=instant_output)' > "$RUNNER_TEMP/probe/log-$i-$p.txt" 2>&1
+              ) &
+            done
+            wait
+            for p in 1 2 3; do
+              cat "$RUNNER_TEMP/probe/report-$i-$p"/*.jsonl | python -c '
+          import sys, json
+          for l in sys.stdin:
+              r = json.loads(l)
+              print("'$i-$p'", r["outcome"], sorted(r["failures"]), "|", "; ".join(n for n in r.get("notes", []) if "offset" in n or "late" in n))'
+              rm -r "$RUNNER_TEMP/probe/fx-$i-$p/scratch" 2>/dev/null
+            done
+          done
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: win-instant-probe-${{ matrix.copy }}
+          path: ${{ runner.temp }}/probe
+          retention-days: 7
