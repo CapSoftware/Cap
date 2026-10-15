@@ -31,12 +31,3 @@ store-failure-output = true
 filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
 threads-required = 3
 
-# Windows hosted runners render through WARP; concurrent wgpu devices in
-# parallel test processes lose the device. One rendering test at a time there.
-[test-groups]
-warp = { max-threads = 1 }
-
-[[profile.ci.overrides]]
-platform = 'cfg(windows)'
-filter = 'package(cap-verify) and not binary_id(cap-verify::codec) and not binary_id(cap-verify)'
-test-group = 'warp'

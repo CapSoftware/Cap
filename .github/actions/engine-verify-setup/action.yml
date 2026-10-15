@@ -78,6 +78,16 @@ runs:
       shell: bash
       run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib" >> "$GITHUB_ENV"
 
+    # The app ships DXC next to its executable and cap-rendering looks for it
+    # next to the test binary or in its profile dir; setup.js only fills
+    # target/debug and target/release. Without it wgpu falls back to FXC.
+    - name: DXC for the ci-verify profile (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        mkdir -p target/ci-verify
+        cp target/native-deps/dxc/dxcompiler.dll target/native-deps/dxc/dxil.dll target/ci-verify/
+
     - name: FFmpeg DLLs on PATH (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
