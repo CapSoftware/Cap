@@ -159,3 +159,18 @@ class = "stale"
 platforms = ["macos"]
 reason = "NEW: during a cross-fade both clips read the same AVAssetReader decoder at two positions; at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Same frame in export and in offline playback, deterministic (3 of 3)"
 link = ""
+
+[[xfail]]
+case = "seek/seek-native/keyframes60/avf"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "On the macos-15 runner (paravirtual VideoToolbox) the wrong-GOP seek also produced one answer a frame ahead (1 of 66); not seen on Apple silicon hardware"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/seek-*/keyframes60/ffmpeg"
+class = "stale"
+platforms = ["linux", "windows"]
+reason = "NEW: FFmpeg decoder seeks near the start show frame 0 (frame 124 at 60 fps shows source 0 instead of 61) and one keyframe seek answers one frame stale (linux runner; the x264 fallback fixture)"
+link = ""

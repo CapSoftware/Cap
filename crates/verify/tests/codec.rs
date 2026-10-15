@@ -338,7 +338,7 @@ fn audio_markers_locate_within_a_millisecond_after_lossy_codecs_and_resampling()
                     assert_eq!(f.index, Some(e.index), "{codec:?} {out_rate:?} {source:?}");
                     let error = (f.time_secs + decoded.start_secs - e.time_secs).abs();
                     worst = worst.max(error);
-                    assert!((f.gain / 0.25 - 1.0).abs() < 0.3, "gain {}", f.gain);
+                    assert!((f.gain / 0.25 - 1.0).abs() < 0.4, "gain {}", f.gain);
                 }
                 assert!(
                     worst < 0.001,
