@@ -594,6 +594,86 @@ fn projection_all() {
     );
 }
 
+/// Fullscreen text holds placed exactly where captions end or start (as when
+/// a text card is snapped to a caption): a caption ending exactly at a hold
+/// ends before it, one starting there starts after it, also when an earlier
+/// hold has already moved the boundary.
+#[test]
+fn projection_hold_boundaries() {
+    let id = "captions/projection/hold-boundaries";
+    if !report::selected(id) {
+        return;
+    }
+    let mut case = Case::new(id);
+    let durations = [6.0];
+    let mut config = edits::base_config(&durations);
+    {
+        let timeline = config.timeline.as_mut().expect("timeline");
+        // Output time; the second hold starts at gapless 4.0 s.
+        timeline
+            .text_segments
+            .push(edits::fullscreen_text(2.0, 3.0));
+        timeline
+            .text_segments
+            .push(edits::fullscreen_text(5.0, 5.5));
+    }
+    let word = |text: &str, start: f32, end: f32| CaptionWord {
+        text: text.into(),
+        start,
+        end,
+    };
+    let captions = vec![
+        CaptionSegment {
+            id: "ends-at-hold".into(),
+            start: 1.0,
+            end: 2.0,
+            text: "apple river".into(),
+            words: vec![word("apple", 1.0, 1.5), word("river", 1.5, 2.0)],
+        },
+        CaptionSegment {
+            id: "starts-at-hold".into(),
+            start: 2.0,
+            end: 3.0,
+            text: "cloud stone".into(),
+            words: vec![word("cloud", 2.0, 2.5), word("stone", 2.5, 3.0)],
+        },
+        CaptionSegment {
+            id: "text-only-ends-at-second-hold".into(),
+            start: 3.5,
+            end: 4.0,
+            text: "maple tiger".into(),
+            words: Vec::new(),
+        },
+    ];
+    set_captions(&mut config, captions.clone(), true);
+    cap_project::synchronize_captions(&mut config, &durations);
+    let model = model_project(&captions, &config, &durations);
+    let product = &edits::timeline(&config).caption_segments;
+    let mut problems = compare_track(product, &model);
+    // The documented outcome, written out: the model must agree with it.
+    for (id, start, end) in [
+        ("ends-at-hold", 1.0, 2.0),
+        ("starts-at-hold", 3.0, 4.0),
+        ("text-only-ends-at-second-hold", 4.5, 5.0),
+    ] {
+        if !model
+            .iter()
+            .any(|p| p.id == id && close(p.start, start) && close(p.end, end))
+        {
+            problems.push(format!("model has no piece {id} {start:.1}-{end:.1}"));
+        }
+    }
+    if problems.is_empty() {
+        case.note(format!("{} pieces at hold boundaries", model.len()));
+    } else {
+        case.problem(
+            "caption-track",
+            format!("{} problems: {}", problems.len(), problems.join("; ")),
+        );
+    }
+    finish(case);
+}
+
 fn track_as_captions(track: &[CaptionTrackSegment]) -> Vec<CaptionSegment> {
     track
         .iter()
@@ -1462,6 +1542,11 @@ struct RenderEdit {
     /// Apply the edit after the caption track was projected, leaving the
     /// stored track stale (the export must re-project it).
     stale_track: bool,
+    /// Source captions for the recording's total length.
+    captions: fn(f64) -> Vec<CaptionSegment>,
+    /// Check frames that fall exactly on a caption start or end too. Only
+    /// for captions whose boundaries are exact in f32 and on the frame grid.
+    strict_edges: bool,
 }
 
 fn render_case(
@@ -1476,7 +1561,7 @@ fn render_case(
     let project = common::project(&spec);
     let mut case = Case::new(&id);
     let durations = display_durations(&mut case, &project, &spec);
-    let captions = scripted_captions(durations.iter().sum());
+    let captions = (edit.captions)(durations.iter().sum());
     let mut config = project.config();
     config.camera.hide = true;
     if !edit.stale_track {
@@ -1528,7 +1613,7 @@ fn render_case(
                 let edge = pieces
                     .iter()
                     .any(|p| (t - p.start).abs() < 1e-3 || (t - p.visible_end()).abs() < 1e-3);
-                if edge {
+                if edge && !edit.strict_edges {
                     continue;
                 }
                 checked += 1;
@@ -1591,6 +1676,8 @@ fn render_edits() -> Vec<RenderEdit> {
             name: "full",
             apply: |_| {},
             stale_track: false,
+            captions: scripted_captions,
+            strict_edges: false,
         },
         RenderEdit {
             name: "cuts-speeds-reorder",
@@ -1606,6 +1693,8 @@ fn render_edits() -> Vec<RenderEdit> {
                 )
             },
             stale_track: false,
+            captions: scripted_captions,
+            strict_edges: false,
         },
         RenderEdit {
             name: "transition",
@@ -1614,13 +1703,61 @@ fn render_edits() -> Vec<RenderEdit> {
                 common::add_transition(c, 1, 0.4);
             },
             stale_track: false,
+            captions: scripted_captions,
+            strict_edges: false,
         },
         RenderEdit {
             name: "stale-track",
             apply: |c| common::set_cuts(c, &[(2.7, 6.0, 1.0), (0.0, 2.0, 1.0)]),
             stale_track: true,
+            captions: scripted_captions,
+            strict_edges: false,
+        },
+        RenderEdit {
+            // Half speed: the third caption's stretched last word lasts
+            // 4.6 s on the output, so the renderer's 2.5 s word limit
+            // decides when it disappears.
+            name: "slow",
+            apply: |c| common::set_cuts(c, &[(0.0, 6.0, 0.5)]),
+            stale_track: false,
+            captions: scripted_captions,
+            strict_edges: false,
+        },
+        RenderEdit {
+            name: "back-to-back",
+            apply: |_| {},
+            stale_track: false,
+            captions: back_to_back_captions,
+            strict_edges: true,
         },
     ]
+}
+
+/// Captions that follow each other without a gap, every boundary on a half
+/// second (exact in f32 and on the 30 fps frame grid): on the frame where
+/// one caption ends the next one shows, and after the last one nothing.
+fn back_to_back_captions(total: f64) -> Vec<CaptionSegment> {
+    let mut captions = Vec::new();
+    let mut start = 0.5;
+    while start + 1.0 <= total - 0.5 && captions.len() < 5 {
+        let k = captions.len() * 2;
+        let words: Vec<CaptionWord> = (0..2)
+            .map(|i| CaptionWord {
+                text: WORDS[k + i].into(),
+                start: (start + 0.5 * i as f64) as f32,
+                end: (start + 0.5 * (i + 1) as f64) as f32,
+            })
+            .collect();
+        captions.push(CaptionSegment {
+            id: format!("segment-{}", captions.len()),
+            start: words[0].start,
+            end: words[1].end,
+            text: join_words(words.iter().map(|w| w.text.as_str())),
+            words,
+        });
+        start += 1.0;
+    }
+    captions
 }
 
 #[test]
@@ -1643,6 +1780,8 @@ fn render_multi_clip() {
             timeline.segments.reverse();
         },
         stale_track: true,
+        captions: scripted_captions,
+        strict_edges: false,
     };
     let failures: Vec<String> = render_case(catalog::multi_segment(report::tier()), &edit, &rt)
         .into_iter()

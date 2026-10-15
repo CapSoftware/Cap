@@ -666,3 +666,250 @@ fn uhd() {
     );
     common::assert_passed(failures);
 }
+
+/// Fixed aspect ratios (Wide, Vertical, Square, Classic, Tall): the frame is
+/// the crop's longer side (relative to the aspect) with the other side
+/// derived from the aspect, rounded up to even numbers. It must hold the
+/// exact aspect-fit size (never smaller, or the picture is squeezed into a
+/// frame that is too small) and be at most 2 px larger on each side.
+#[test]
+fn aspect_frame_size() {
+    use cap_project::AspectRatio;
+    use cap_rendering::{ProjectUniforms, RenderOptions};
+    let id = "export/frame-size/aspect-ratios";
+    if !report::selected(id) {
+        return;
+    }
+    let mut case = Case::new(id);
+    let mut checked = 0;
+    let mut wrong = Vec::new();
+    for (w, h) in [
+        (1000u32, 700u32),
+        (1512, 982),
+        (1920, 1080),
+        (1081, 1919),
+        (333, 777),
+        (2559, 1599),
+        (1470, 956),
+        (3024, 1964),
+    ] {
+        for (aspect, ratio) in [
+            (AspectRatio::Wide, 16.0 / 9.0),
+            (AspectRatio::Vertical, 9.0 / 16.0),
+            (AspectRatio::Square, 1.0),
+            (AspectRatio::Classic, 4.0 / 3.0),
+            (AspectRatio::Tall, 3.0 / 4.0),
+        ] {
+            let mut config = cap_verify::fixture::verification_project_config();
+            config.aspect_ratio = Some(aspect.clone());
+            config.background.padding = 0.0;
+            config.background.crop = None;
+            let options = RenderOptions {
+                camera_size: None,
+                screen_size: cap_project::XY::new(w, h),
+                preserve_screen_alpha: false,
+            };
+            let (bw, bh) = ProjectUniforms::get_base_size(&options, &config);
+            let (fw, fh) = (f64::from(w), f64::from(h));
+            let (ew, eh) = if fw / fh > ratio {
+                (fw, fw / ratio)
+            } else {
+                (fh * ratio, fh)
+            };
+            checked += 1;
+            let fits = |got: u32, exact: f64| {
+                got % 2 == 0 && f64::from(got) >= exact - 1e-6 && f64::from(got) < exact + 2.0
+            };
+            if !fits(bw, ew) || !fits(bh, eh) {
+                wrong.push(format!(
+                    "{w}x{h} at {aspect:?}: frame {bw}x{bh}, exact fit {ew:.2}x{eh:.2}"
+                ));
+            }
+        }
+    }
+    if wrong.is_empty() {
+        case.note(format!("{checked} crop sizes and aspect ratios"));
+    } else {
+        case.problem(
+            "frame-size",
+            format!(
+                "{} of {checked} frames are not the smallest even size holding the aspect fit: {}",
+                wrong.len(),
+                wrong[..wrong.len().min(4)].join("; ")
+            ),
+        );
+    }
+    common::finish(case);
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MeasuredColour {
+    ycbcr: [f64; 3],
+    space: ffmpeg::util::color::Space,
+    range: ffmpeg::util::color::Range,
+}
+
+/// Measured minus expected (Y, Cb, Cr) code values for `rgb` encoded the way
+/// the stream's colour tag says (BT.709 unless tagged BT.601; limited range
+/// unless tagged full), the way players decode it.
+fn colour_error(colour: &MeasuredColour, rgb: [u8; 3]) -> [f64; 3] {
+    use ffmpeg::util::color::{Range, Space};
+    let [r, g, b] = rgb.map(|v| f64::from(v) / 255.0);
+    let (kr, kb) = if matches!(colour.space, Space::BT470BG | Space::SMPTE170M) {
+        (0.299, 0.114)
+    } else {
+        (0.2126, 0.0722)
+    };
+    let y = kr * r + (1.0 - kr - kb) * g + kb * b;
+    let (cb, cr) = ((b - y) / (2.0 * (1.0 - kb)), (r - y) / (2.0 * (1.0 - kr)));
+    let expected = if colour.range == Range::JPEG {
+        [255.0 * y, 128.0 + 255.0 * cb, 128.0 + 255.0 * cr]
+    } else {
+        [16.0 + 219.0 * y, 128.0 + 224.0 * cb, 128.0 + 224.0 * cr]
+    };
+    [0, 1, 2].map(|k| colour.ycbcr[k] - expected[k])
+}
+
+/// Mean code values and tag of a rectangle (fractions of the picture).
+fn rect_colour(
+    frame: &ffmpeg::frame::Video,
+    view: &impl cap_verify::video_code::PixelSource,
+    rect: [f64; 4],
+) -> Option<MeasuredColour> {
+    if !matches!(
+        frame.format(),
+        ffmpeg::format::Pixel::YUV420P | ffmpeg::format::Pixel::NV12
+    ) {
+        return None;
+    }
+    let (w, h) = (view.width() as f64, view.height() as f64);
+    let (x0, x1) = ((rect[0] * w) as usize, (rect[2] * w) as usize);
+    let (y0, y1) = ((rect[1] * h) as usize, (rect[3] * h) as usize);
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for y in y0..y1.max(y0 + 1) {
+        for x in x0..x1.max(x0 + 1) {
+            let (cb, cr) = view.chroma(x, y);
+            sum[0] += view.luma(x, y);
+            sum[1] += cb + 128.0;
+            sum[2] += cr + 128.0;
+            n += 1.0;
+        }
+    }
+    Some(MeasuredColour {
+        ycbcr: sum.map(|v| v / n),
+        space: frame.color_space(),
+        range: frame.color_range(),
+    })
+}
+
+/// Allowed error of a flat background (code values): luma level, chroma.
+const COLOUR_LEVEL_TOLERANCE: f64 = 4.0;
+const COLOUR_MATRIX_TOLERANCE: f64 = 2.0;
+
+/// Colour fidelity of pixels the renderer generates in RGB (the background):
+/// a flat background must decode, under the stream's own colour tag (what
+/// players use), to the configured colour. Red separates BT.601 from BT.709
+/// (about 13 luma and 9 chroma code values apart); black and white sit at
+/// the ends of the limited range (Y 16 and 235, neutral chroma) under every
+/// matrix, so they pin the range independently of the matrix question.
+#[test]
+fn colour() {
+    use cap_project::BackgroundSource;
+    use cap_verify::media;
+    let spec = catalog::basic(report::tier());
+    let mut failures = Vec::new();
+    for (name, background) in [
+        ("colour-red", [220u8, 40, 40]),
+        ("colour-black", [0, 0, 0]),
+        ("colour-white", [255, 255, 255]),
+    ] {
+        let id = case_id(&spec.name, name, Format::Mp4, 30, Decoder::Default);
+        if !report::selected(&id) {
+            continue;
+        }
+        let project = common::project(&spec);
+        let mut config = project.config();
+        config.background.source = BackgroundSource::Color {
+            value: background.map(u16::from),
+            alpha: 255,
+        };
+        config.background.padding = 40.0;
+        let mut case = Case::new(&id);
+        let dir = common::scratch_dir(&id);
+        let run = ExportRun {
+            fps: 30,
+            resolution: RES,
+            format: Format::Mp4,
+            decoder: Decoder::Default,
+        };
+        let out = dir.path().join("a.mp4");
+        match common::runtime().block_on(common::export(&project, config, &run, &out)) {
+            Err(e) => case.problem("error", format!("export failed: {e}")),
+            Ok(path) => {
+                let mut errors = Vec::new();
+                let mut index = 0usize;
+                let decoded = media::decode_video(&path, |picture| {
+                    let i = index;
+                    index += 1;
+                    if i % 10 != 0 {
+                        return;
+                    }
+                    let view = picture.view();
+                    if let Some(colour) =
+                        rect_colour(&picture.frame, &view, [0.01, 0.01, 0.06, 0.06])
+                    {
+                        errors.push((i, colour_error(&colour, background), colour));
+                    }
+                });
+                if let Err(e) = decoded {
+                    case.problem("error", format!("decode: {e:?}"));
+                }
+                if errors.is_empty() {
+                    case.problem("error", "no YUV frames to measure");
+                }
+                if let Some((i, [dy, _, _], colour)) = errors
+                    .iter()
+                    .find(|(_, e, _)| e[0].abs() > COLOUR_LEVEL_TOLERANCE)
+                {
+                    case.problem(
+                        "colour-level",
+                        format!(
+                            "background luma off by {dy:+.1} code values (Y {:.1}) for the stream's {:?} {:?} tag (frame {i})",
+                            colour.ycbcr[0], colour.space, colour.range
+                        ),
+                    );
+                }
+                if let Some((i, [_, dcb, dcr], colour)) = errors
+                    .iter()
+                    .find(|(_, e, _)| e[1].abs().max(e[2].abs()) > COLOUR_MATRIX_TOLERANCE)
+                {
+                    case.problem(
+                        "colour-matrix",
+                        format!(
+                            "background chroma off by Cb {dcb:+.1} Cr {dcr:+.1} for the stream's {:?} tag (frame {i})",
+                            colour.space
+                        ),
+                    );
+                }
+                if let Some((_, e, colour)) = errors.first() {
+                    case.note(format!(
+                        "frame 0: Y {:.1} Cb {:.1} Cr {:.1} ({:?} {:?}), error {:+.1} {:+.1} {:+.1}",
+                        colour.ycbcr[0],
+                        colour.ycbcr[1],
+                        colour.ycbcr[2],
+                        colour.space,
+                        colour.range,
+                        e[0],
+                        e[1],
+                        e[2]
+                    ));
+                }
+            }
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    common::assert_passed(failures);
+}

@@ -263,3 +263,15 @@ case = "seek/seek-gop/home-then-play30/ffmpeg"
 class = "stale"
 reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the start. Seek 6.1 s, seek 0, seek 2.0 s and play: 31 of 122 frames show source frame 0 (up to 89 frames stale, about 1 s frozen). A request at grid 0..2 is answered by the first-frame shortcut (ffmpeg.rs, requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE) without resetting the reader, which stays near 6 s, and last_sent_frame becomes frame 0; the next request is then not 'far forward' of frame 0 (< FRAME_CACHE_SIZE), so no reset happens, the reader vends frames past the request and the answer falls back to last_sent_frame (frame 0) until playback outruns FRAME_CACHE_SIZE. Main decoder on Linux and on Windows without a D3D11 video device; macOS AVAssetReader passes. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-gop@60:6.1,0.0167,2.0667' (third request shows frame 0 for 61)"
 link = ""
+
+[[xfail]]
+case = "export/basic/colour-red/mp430/*"
+class = "colour-level"
+reason = "NEW: export converts rendered RGBA to NV12 with BT.601 coefficients (GPU: crates/rendering/src/shaders/rgba_to_nv12.wgsl; software adapters: convert_rgba_to_nv12 in crates/rendering/src/lib.rs) but the encoder tags the stream BT.709 (crates/enc-ffmpeg/src/video/h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes about 13 luma code values too bright. Screen video whose decode matrix matches passes through unchanged"
+link = ""
+
+[[xfail]]
+case = "export/basic/colour-red/mp430/*"
+class = "colour-matrix"
+reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb about 9 code values low"
+link = ""

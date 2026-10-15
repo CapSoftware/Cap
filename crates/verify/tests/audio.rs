@@ -138,7 +138,16 @@ const FPS: u32 = 30;
 const RES: (u32, u32) = (320, 180);
 
 fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Option<String> {
-    let id = format!("audio/{}/{}/{}{FPS}", spec.name, variant.edit, path.label());
+    export_case_at(spec, variant, path, FPS)
+}
+
+fn export_case_at(
+    spec: &FixtureSpec,
+    variant: &Variant,
+    path: ExportPath,
+    fps: u32,
+) -> Option<String> {
+    let id = format!("audio/{}/{}/{}{fps}", spec.name, variant.edit, path.label());
     if !report::selected(&id) {
         return None;
     }
@@ -152,7 +161,7 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
         &project,
         config.clone(),
         path,
-        FPS,
+        fps,
         RES,
         dir.path(),
     )) {
@@ -176,9 +185,9 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
                         let report = audio_support::check_pcm(&mut case, "export", &model, &mono);
                         let video = project.model(&config);
                         let frames =
-                            common::read_output(&out, Some(&|i| video.expect(i as u32, FPS)));
-                        common::check_sequence(&mut case, &video, &frames, FPS, true);
-                        audio_support::check_av(&mut case, &project.meta, &report, &frames, FPS);
+                            common::read_output(&out, Some(&|i| video.expect(i as u32, fps)));
+                        common::check_sequence(&mut case, &video, &frames, fps, true);
+                        audio_support::check_av(&mut case, &project.meta, &report, &frames, fps);
                     }
                 }
             }
@@ -204,6 +213,143 @@ fn export_mp4() {
         &variants(),
         &[ExportPath::App, ExportPath::Plain],
     );
+}
+
+/// Studio Sound under timeline music at 10 fps (`cap export --fps 10`).
+/// Music sends the export through the editor's `AudioRenderer` instead of
+/// the streaming mixer, and at 10 fps every video frame asks it for 4800
+/// samples: more than one 4096-sample Studio Sound block, so the blocks
+/// after the first in a request must line up too.
+#[test]
+fn export_studio_sound_low_fps() {
+    let failures: Vec<String> = export_case_at(
+        &audio_fixture::mix(report::tier()),
+        &Variant {
+            edit: "studio-sound-music",
+            apply: |config| {
+                studio_sound(config);
+                audio_fixture::add_music(config, 1.0, 7.0, 0.5, -6.0);
+            },
+        },
+        ExportPath::App,
+        10,
+    )
+    .into_iter()
+    .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Full decode of audio recorded at another rate than 48 kHz (44.1 kHz USB
+/// microphones are common): the resampler's buffered tail must be flushed,
+/// so the decoded track lasts exactly as long as the source, its last
+/// milliseconds still carry the signal, and every sample sits at its time.
+#[test]
+fn resampled_decode_tail() {
+    const TONE_HZ: f64 = 1000.0;
+    const AMPLITUDE: f64 = 0.5;
+    let mut failures = Vec::new();
+    for rate in [44_100u32, 32_000] {
+        let id = format!("audio/decode/resample-{rate}/tail");
+        if !report::selected(&id) {
+            continue;
+        }
+        let mut case = Case::new(&id);
+        let dir = common::scratch_dir(&id);
+        let path = dir.path().join("tone.wav");
+        let frames = rate as usize;
+        let tone: Vec<i16> = (0..frames)
+            .map(|n| {
+                let t = n as f64 / f64::from(rate);
+                (AMPLITUDE * (2.0 * std::f64::consts::PI * TONE_HZ * t).sin() * 32767.0).round()
+                    as i16
+            })
+            .collect();
+        write_wav_mono(&path, rate, &tone);
+        match cap_audio::AudioData::from_file(&path) {
+            Err(e) => case.problem("error", format!("decode: {e}")),
+            Ok(data) => {
+                let channels = usize::from(data.channels());
+                let mono: Vec<f64> = data
+                    .samples()
+                    .chunks(channels)
+                    .map(|c| f64::from(c[0]))
+                    .collect();
+                let expected_len = frames * 48_000 / rate as usize;
+                if mono.len().abs_diff(expected_len) > 2 {
+                    case.problem(
+                        "duration",
+                        format!(
+                            "decoded {} samples at 48 kHz, the {frames}-sample {rate} Hz source lasts {expected_len} ({:+.2} ms)",
+                            mono.len(),
+                            (mono.len() as f64 - expected_len as f64) / 48.0
+                        ),
+                    );
+                }
+                let ideal = |m: usize| {
+                    AMPLITUDE * (2.0 * std::f64::consts::PI * TONE_HZ * m as f64 / 48_000.0).sin()
+                };
+                let worst = (4_800..mono.len().min(expected_len).saturating_sub(4_800))
+                    .map(|m| ((mono[m] - ideal(m)).abs(), m))
+                    .max_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((error, m)) = worst
+                    && error > 0.02
+                {
+                    case.problem(
+                        "timing",
+                        format!(
+                            "sample {m} ({:.3} s) is {error:.3} away from the source tone at that time",
+                            m as f64 / 48_000.0
+                        ),
+                    );
+                }
+                let tail = 240.min(mono.len());
+                let rms = (mono[mono.len() - tail..].iter().map(|v| v * v).sum::<f64>()
+                    / tail.max(1) as f64)
+                    .sqrt();
+                let tone_rms = AMPLITUDE / std::f64::consts::SQRT_2;
+                if rms < 0.6 * tone_rms {
+                    case.problem(
+                        "duration",
+                        format!(
+                            "the last 5 ms are {:.1} dB below the tone (rms {rms:.3}, tone {tone_rms:.3})",
+                            20.0 * (rms / tone_rms).log10()
+                        ),
+                    );
+                }
+                case.note(format!(
+                    "{} samples (expected {expected_len}), worst interior error {:.4}, tail rms {rms:.3}",
+                    mono.len(),
+                    worst.map_or(0.0, |w| w.0)
+                ));
+            }
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A 16-bit PCM mono WAV file.
+fn write_wav_mono(path: &std::path::Path, rate: u32, samples: &[i16]) {
+    let data_len = (samples.len() * 2) as u32;
+    let mut bytes = Vec::with_capacity(44 + data_len as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&rate.to_le_bytes());
+    bytes.extend_from_slice(&(rate * 2).to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(path, bytes).expect("write wav");
 }
 
 #[test]
