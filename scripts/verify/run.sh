@@ -30,6 +30,7 @@ suites=""
 mode=run
 archive=""
 partition=""
+prepare_fixtures=0
 extra=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --case) export CAP_VERIFY_CASE="$2"; shift ;;
     --list) mode=list ;;
     --no-run) mode=build ;;
+    --prepare-fixtures) prepare_fixtures=1 ;;
     --archive) mode=archive; archive="$2"; shift ;;
     --from-archive) mode=from-archive; archive="$2"; shift ;;
     --partition) partition="$2"; shift ;;
@@ -138,6 +140,10 @@ if [[ $have_nextest == 1 ]]; then
   else
     run+=(--cargo-profile "$profile" "${cargo_args[@]}")
   fi
+  if [[ $prepare_fixtures == 1 ]]; then
+    "${run[@]}" --run-ignored ignored-only -E 'binary_id(cap-verify::export) and test(=prepare_recorded_fixtures)'
+    exit
+  fi
   shard=()
   [[ -n "$partition" ]] && shard=(--partition "$partition")
   "${run[@]}" ${shard[@]+"${shard[@]}"} -E "$filter" ${extra[@]+"${extra[@]}"} || status=$?
@@ -159,6 +165,10 @@ for c in ET.parse(sys.argv[1]).getroot().iter("testcase"):
         print(c.get("classname"), c.get("name"), sep="\t")' "$CAP_VERIFY_REPORT_DIR/junit.xml" | head -n 5)
   fi
 else
+  if [[ $prepare_fixtures == 1 ]]; then
+    echo "--prepare-fixtures needs cargo-nextest" >&2
+    exit 2
+  fi
   echo "cargo-nextest not found: running suites one by one with cargo test (cargo install cargo-nextest --locked for parallel runs)"
   for name in $suite_names; do
     plan_one="$("$py" scripts/verify/plan.py select --tier "$tier" --platform "$platform" --suites "$name" --local)"

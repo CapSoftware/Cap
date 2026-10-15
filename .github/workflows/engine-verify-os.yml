@@ -173,11 +173,9 @@ jobs:
           CAP_VERIFY_TIER: ${{ inputs.tier }}
         run: |
           if [[ "${{ inputs.archive }}" == true ]]; then
-            cargo-nextest nextest run --profile ci --archive-file "$RUNNER_TEMP/verify.tar.zst" --workspace-remap "$GITHUB_WORKSPACE" \
-              --run-ignored ignored-only -E 'binary_id(cap-verify::export) and test(=prepare_recorded_fixtures)'
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --prepare-fixtures --from-archive "$RUNNER_TEMP/verify.tar.zst"
           else
-            cargo nextest run --profile ci --cargo-profile ci-verify --locked -p cap-verify --test export \
-              --run-ignored ignored-only -E 'test(=prepare_recorded_fixtures)'
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --prepare-fixtures
           fi
 
       - name: Test
