@@ -32,21 +32,6 @@ reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal export
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
-case = "export/jitter-camera-120s/full/mp460/avf"
-class = "nondeterministic"
-platforms = ["macos"]
-reason = "Two exports of the 120 s jitter-camera project differ in 258 to 5518 output frames, first just after the camera runaway starts (frame 1585; first difference 1622-3818). Every baseline run: 3 of 3 full runs and 3 of 3 on Apple silicon. Root cause is the IOSurface source lifetime bug (see the */basic/transition/*/avf future entry and native/rendering/iosurface-source-lifetime/recycled-pool): with sources retained the runaway stays but both exports are identical (0 of 3 in sol-avf proof runs 38762654200, 38764973044, 38764978019). #2595's decoder changes also remove it, by removing the runaway (2 of 2 on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1 https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "export/jitter-camera-120s/full/mp460/avf"
-class = "unreadable"
-platforms = ["macos"]
-flaky = true
-reason = "One camera frame with a torn picture whose marker checksum fails (frame 5574 at 92.9 s in 38763192776), 2 of 3 full runs (38763178760, 38763192776), 0 of 3 on Apple silicon. A torn picture is what the IOSurface source lifetime bug produces when the pool repaints a source while the GPU samples it (native/rendering/iosurface-source-lifetime/recycled-pool reproduces the repaint deterministically); with sources retained it did not occur in 3 of 3 sol-avf proof runs. Attribution by mechanism and absence, not by a deterministic repro of this frame"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
 case = "playback/jitter-camera-120s/full/seq60-from0/avf"
 class = "stale"
 platforms = ["macos"]
@@ -206,51 +191,11 @@ reason = "During a cross-fade both clips read the same AVAssetReader decoder at 
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
-case = "*/basic/transition/*/avf"
-class = "future"
-platforms = ["macos"]
-flaky = true
-reason = "AVFoundation cross-fades sometimes show the incoming clip up to 6 source frames ahead on one blend frame (export mp430 frame 74: 121 for 115; export mp460 and playback seq60 frame 148: 120 for 115). Timing dependent on macos-15: 4 of 16 case runs (export mp430/mp460, playback seq30/seq60 in runs 38730081267, 38731626324, 38732325087, 38735816076). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
-case = "export/rec-studio/across-segments/mp430/avf"
-class = "future"
-platforms = ["macos"]
-flaky = true
-reason = "One isolated frame of the recorded Studio fixture's last cut (1.5x) shows a later picture of the same clip (frame 155: source 148 for 142) while its neighbours are right; 1 of 4 macos-15 runs (push run 38763177849; passed in the three full runs). Same signature as the AVFoundation cross-fade flakes: the IOSurface source lifetime bug (YuvToRgbaConverter releases the decoded CVPixelBuffer before its GPU work is submitted, so the pool repaints it with a later frame; native/rendering/iosurface-source-lifetime/recycled-pool). Attributed by signature; no deterministic repro of this frame"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
-case = "audio/audio-mix-*-a2/transition/mp4-*"
-class = "future"
-platforms = ["macos"]
-flaky = true
-reason = "Same AVFoundation cross-fade corruption in the app export of the audio mix project: frame 93 shows source 162 for 155. 2 of 4 macos-15 runs (38730081267, 38732325087); the 30 s full-tier fixture's plain MP4 export in 2 of 3 full runs (38763192776, 38763206608: 2-3 blend frames up to 7 ahead). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
-case = "export/camera-pts-late/full/mp430/avf"
-class = "unreadable"
-platforms = ["macos"]
-flaky = true
-reason = "One camera frame (output frame 48) with a torn picture whose marker checksum fails, 1 of 4 macos-15 runs (38735816076), on top of the strict future entry. Attributed to the same AVFoundation source lifetime bug: the camera's AVAssetReader buffer is repainted while the GPU samples it, which tears the picture. Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
-
-[[xfail]]
 case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "stale"
 platforms = ["linux", "windows"]
 reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so 12 blend frames take a side up to 49 source frames stale (frame 61: 80 for 129). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux (app and plain MP4) and Windows (app MP4) in run 38743345280, and identical for the 30 s full-tier fixture (same cuts) on every full run"
 link = ""
-
-[[xfail]]
-case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
-class = "future"
-platforms = ["macos"]
-flaky = true
-reason = "AVFoundation source lifetime corruption during the 1.8 s same-clip cross-fade: 4 blend frames show the incoming side up to 7 source frames ahead (frame 81: 156 for 149), 1 of 1 macos-15 runs so far (38743345280); the 30 s full-tier fixture in 3 of 3 full runs (38763178760, 38763192776, 38763206608: 3-6 blend frames up to 7 ahead, app or plain MP4). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted; see native/rendering/iosurface-source-lifetime/recycled-pool. Fixed on fixavf/s2 (8cafa9bfb, 905e0933d)"
-link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/avf"
