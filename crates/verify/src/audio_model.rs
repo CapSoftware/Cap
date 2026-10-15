@@ -245,6 +245,10 @@ pub struct ExpectedMarker {
     /// Whether the marker's payload survives processing. Studio Sound can
     /// smear the FSK bits; such a marker is matched by its chirp time.
     pub payload: bool,
+    /// Whether the marker sounds inside a clip transition, where the video
+    /// is a blend of two frames and has no single frame to time it against.
+    #[serde(default)]
+    pub blended: bool,
 }
 
 /// An output window in which detections of `source` are not judged.
@@ -479,6 +483,7 @@ impl AudioModel {
                         rate: if retimed { segment.timescale } else { 1.0 },
                         recording: Some((segment.clip, recording_time)),
                         payload: !processed,
+                        blended,
                     });
                 }
             }
@@ -541,6 +546,7 @@ impl AudioModel {
                     rate: 1.0,
                     recording: None,
                     payload: true,
+                    blended: false,
                 });
             }
         }

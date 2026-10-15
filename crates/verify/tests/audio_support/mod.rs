@@ -362,7 +362,7 @@ pub fn check_av(
     for (expected, heard) in &report.pairs {
         // Partial markers and markers inside a transition (a video blend)
         // have no single source frame to compare with.
-        if expected.presence != audio_model::Presence::Required {
+        if expected.presence != audio_model::Presence::Required || expected.blended {
             continue;
         }
         let Some((clip, recording_time)) = expected.recording else {
