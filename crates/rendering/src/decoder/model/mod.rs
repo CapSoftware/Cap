@@ -44,15 +44,15 @@
 //! - `CAP_DECODER_MODEL_REPORT=<prefix>`: also write the report to
 //!   `<prefix>.<decoder>.txt`; `CAP_DECODER_MODEL_SEEDS_OUT=<prefix>` writes
 //!   every seed's outcome to `<prefix>.<decoder>.tsv`.
-//! - `CAP_DECODER_MODEL_BLESS=<prefix>`: write the expectations that match
-//!   this run to `<prefix>.<decoder>.toml`.
+//! - `CAP_VERIFY_REPORT_DIR=<dir>`: write one JSON record per case for the
+//!   CI summary and for `cap-verify-expect bless` (see
+//!   `crates/verify-expect`), which rewrites `expectations.toml` to match.
 //!
 //! Wall-clock inputs of the decoders (the AVAssetReader idle timeout of
 //! 250 ms and the scrub detector's 100 ms cooldown) only matter when a
 //! request is delayed by that long, so outcomes are deterministic unless the
 //! machine stalls the test threads.
 
-mod expectations;
 mod generate;
 
 use std::{
@@ -652,7 +652,128 @@ fn env_usize(name: &str) -> Option<usize> {
         .and_then(|value| value.parse().ok())
 }
 
+const EXPECTATIONS: &str = "crates/rendering/src/decoder/model/expectations.toml";
+
+fn write_records(
+    decoder: Decoder,
+    results: &[FamilyResult],
+    ran: &cap_verify_expect::Ran,
+    verdict: &cap_verify_expect::Verdict,
+    platform: &str,
+) {
+    use cap_verify_expect::{Outcome, Record};
+    if cap_verify_expect::report_dir().is_none() {
+        return;
+    }
+    let records: Vec<(Record, serde_json::Value)> = results
+        .iter()
+        .map(|result| {
+            let mut failures: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
+            let mut problems: BTreeMap<String, String> = BTreeMap::new();
+            for (case, failure) in &result.failures {
+                let class = failure.class.name().to_string();
+                failures
+                    .entry(class.clone())
+                    .or_default()
+                    .insert(case.seed_index);
+                problems.entry(class).or_insert_with(|| {
+                    format!(
+                        "seed index {} request {}: {}",
+                        case.seed_index, failure.request, failure.detail
+                    )
+                });
+            }
+            let new: Vec<&cap_verify_expect::Unexpected> = verdict
+                .unexpected
+                .iter()
+                .filter(|found| found.case == result.name)
+                .collect();
+            let fixed: Vec<&cap_verify_expect::Fixed> = verdict
+                .fixed
+                .iter()
+                .filter(|fixed| fixed.case == result.name)
+                .collect();
+            let outcome = if !new.is_empty() {
+                Outcome::Fail
+            } else if !fixed.is_empty() {
+                Outcome::Xpass
+            } else if failures.is_empty() {
+                Outcome::Pass
+            } else {
+                Outcome::Xfail
+            };
+            let mut summary: Vec<String> = new
+                .iter()
+                .map(|found| {
+                    format!(
+                        "{} on seeds {}: {}",
+                        found.class,
+                        cap_verify_expect::format_seeds(&found.seeds),
+                        problems.get(&found.class).map_or("", String::as_str)
+                    )
+                })
+                .collect();
+            summary.extend(fixed.iter().map(|fixed| fixed.message(EXPECTATIONS)));
+            if summary.is_empty() {
+                summary.push(format!(
+                    "{} seeds, {} requests{}",
+                    result.seeds,
+                    result.requests,
+                    if failures.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ", expected failures: {}",
+                            failures.keys().cloned().collect::<Vec<_>>().join(", ")
+                        )
+                    }
+                ));
+            }
+            let replay_seed = new
+                .first()
+                .and_then(|found| found.seeds.first().copied())
+                .or_else(|| {
+                    fixed
+                        .first()
+                        .and_then(|fixed| fixed.seeds.as_ref()?.first().copied())
+                });
+            let test = match decoder {
+                Decoder::Avf => "avassetreader_answers_match_the_reference_model",
+                Decoder::Ffmpeg => "ffmpeg_answers_match_the_reference_model",
+            };
+            let repro = match replay_seed {
+                Some(seed) => format!(
+                    "CAP_DECODER_MODEL_CASE={} CAP_DECODER_MODEL_SEED_INDEX={seed} cargo test -p cap-rendering --lib decoder::model::{test} -- --nocapture",
+                    result.name
+                ),
+                None => format!(
+                    "CAP_DECODER_MODEL_FILTER={} cargo test -p cap-rendering --lib decoder::model::{test} -- --nocapture",
+                    result.name
+                ),
+            };
+            let record = Record {
+                suite: "decoder-model".into(),
+                expectations: EXPECTATIONS.into(),
+                case: result.name.clone(),
+                platform: platform.into(),
+                tier: std::env::var("CAP_VERIFY_TIER").unwrap_or_else(|_| "fast".into()),
+                outcome,
+                failures,
+                seeds_ran: ran.get(&result.name).cloned().flatten(),
+                problems,
+                summary: summary.join("\n"),
+                repro,
+                seconds: result.elapsed.as_secs_f64(),
+            };
+            (record, serde_json::Value::Null)
+        })
+        .collect();
+    cap_verify_expect::write_records(&records);
+}
+
 fn run_suite(decoder: Decoder) {
+    let xfails = cap_verify_expect::parse(include_str!("expectations.toml"))
+        .unwrap_or_else(|e| panic!("{EXPECTATIONS}: {e}"));
     let filter = std::env::var("CAP_DECODER_MODEL_FILTER").ok();
     let scale: f64 = std::env::var("CAP_DECODER_MODEL_SCALE")
         .ok()
@@ -798,9 +919,14 @@ fn run_suite(decoder: Decoder) {
         let _ = std::fs::write(format!("{path}.{}.tsv", decoder.name()), lines);
     }
 
-    let xfails = expectations::parse(include_str!("expectations.toml"));
-    let ran: BTreeSet<String> = results.iter().map(|result| result.name.clone()).collect();
-    let mut observed: BTreeMap<(String, String), BTreeSet<u64>> = BTreeMap::new();
+    let ran: cap_verify_expect::Ran = results
+        .iter()
+        .map(|result| {
+            let seeds = result.outcomes.iter().map(|(seed, _)| *seed).collect();
+            (result.name.clone(), Some(seeds))
+        })
+        .collect();
+    let mut observed = cap_verify_expect::Observed::new();
     for result in &results {
         for (case, failure) in &result.failures {
             observed
@@ -809,16 +935,19 @@ fn run_suite(decoder: Decoder) {
                 .insert(case.seed_index);
         }
     }
-    let verdict = expectations::judge(&xfails, &ran, &observed);
+    let platform = cap_verify_expect::platform();
+    let verdict = cap_verify_expect::judge(&xfails, platform, &ran, &observed);
     let unexpected: BTreeSet<(String, String, u64)> = verdict
         .unexpected
         .iter()
-        .flat_map(|(case, class, seeds)| {
-            seeds
+        .flat_map(|found| {
+            found
+                .seeds
                 .iter()
-                .map(move |&seed| (case.clone(), class.clone(), seed))
+                .map(move |&seed| (found.case.clone(), found.class.clone(), seed))
         })
         .collect();
+    write_records(decoder, &results, &ran, &verdict, platform);
 
     let mut report = String::new();
     let total_requests: usize = results.iter().map(|result| result.requests).sum();
@@ -935,42 +1064,27 @@ fn run_suite(decoder: Decoder) {
         }
     }
 
-    for (case, class, seeds) in &verdict.unexpected {
+    for found in &verdict.unexpected {
         let _ = writeln!(
             report,
-            "\nUNEXPECTED FAILURE {case} {class} on seed indices {}",
-            expectations::format_seeds(seeds)
+            "\nUNEXPECTED FAILURE {} {} on seed indices {}",
+            found.case,
+            found.class,
+            cap_verify_expect::format_seeds(&found.seeds)
         );
     }
-    for (xfail, seeds) in &verdict.unexpected_passes {
-        let _ = writeln!(
-            report,
-            "\nUNEXPECTED PASS {} {} ({}): remove this xfail{}",
-            xfail.case,
-            xfail.class,
-            xfail.reason,
-            if seeds.contains(&u64::MAX) {
-                String::new()
-            } else {
-                format!(" for seed indices {}", expectations::format_seeds(seeds))
-            }
-        );
+    for fixed in &verdict.fixed {
+        let _ = writeln!(report, "\nUNEXPECTED PASS {}", fixed.message(EXPECTATIONS));
     }
     eprintln!("{report}");
     if let Ok(path) = std::env::var("CAP_DECODER_MODEL_REPORT") {
         let _ = std::fs::write(format!("{path}.{}.txt", decoder.name()), report.as_bytes());
     }
-    if let Ok(path) = std::env::var("CAP_DECODER_MODEL_BLESS") {
-        let _ = std::fs::write(
-            format!("{path}.{}.toml", decoder.name()),
-            expectations::bless(&xfails, &observed),
-        );
-    }
     assert!(
-        verdict.unexpected.is_empty() && verdict.unexpected_passes.is_empty(),
+        verdict.ok(),
         "decoder model: {} unexpected failures, {} unexpected passes (see report above)",
         verdict.unexpected.len(),
-        verdict.unexpected_passes.len()
+        verdict.fixed.len()
     );
 }
 
