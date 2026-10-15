@@ -47,8 +47,7 @@ fn fill(buffer: &mut cv::PixelBuf, luma: u8) {
     }
 }
 
-#[test]
-fn conversions_keep_recycled_pixel_buffers_until_submission() {
+fn gpu() -> (wgpu::Device, wgpu::Queue) {
     let instance = create_wgpu_instance_sync();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
@@ -56,49 +55,48 @@ fn conversions_keep_recycled_pixel_buffers_until_submission() {
         compatible_surface: None,
     }))
     .unwrap();
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
-    let mut converter = YuvToRgbaConverter::new(&device);
-    let pool = pool();
-    let lumas = [32, 80, 128, 200];
-    let output = device.create_buffer(&wgpu::BufferDescriptor {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap()
+}
+
+fn readback_buffer(device: &wgpu::Device, frames: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("IOSurface lifetime readback"),
-        size: FRAME_BYTES * lumas.len() as u64,
+        size: FRAME_BYTES * frames as u64,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    for (index, luma) in lumas.into_iter().enumerate() {
-        let mut source = pool.pixel_buf().unwrap();
-        fill(&mut source, luma);
-        converter
-            .convert_nv12_from_iosurface_to_encoder(&device, &mut encoder, &source)
-            .unwrap();
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: converter.output_texture().unwrap(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
+    })
+}
+
+fn copy_output(
+    encoder: &mut wgpu::CommandEncoder,
+    converter: &YuvToRgbaConverter,
+    output: &wgpu::Buffer,
+    index: usize,
+) {
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: converter.output_texture().unwrap(),
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: output,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: index as u64 * FRAME_BYTES,
+                bytes_per_row: Some(ROW_BYTES),
+                rows_per_image: Some(SIZE),
             },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &output,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: index as u64 * FRAME_BYTES,
-                    bytes_per_row: Some(ROW_BYTES),
-                    rows_per_image: Some(SIZE),
-                },
-            },
-            wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-    let mut next = pool.pixel_buf().unwrap();
-    fill(&mut next, 235);
-    queue.submit([encoder.finish()]);
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+fn assert_frames(device: &wgpu::Device, output: &wgpu::Buffer, lumas: &[u8]) {
     let (sender, receiver) = std::sync::mpsc::channel();
     output
         .slice(..)
@@ -107,30 +105,120 @@ fn conversions_keep_recycled_pixel_buffers_until_submission() {
         });
     device.poll(wgpu::PollType::Wait).unwrap();
     receiver.recv().unwrap().unwrap();
-    let bytes = output.slice(..).get_mapped_range();
-    let mut wrong = Vec::new();
-    for (index, luma) in lumas.into_iter().enumerate() {
-        let expected = (f32::from(luma) - 16.0) * 255.0 / 219.0;
-        let start = index * FRAME_BYTES as usize;
-        let bad = (0..SIZE as usize)
-            .flat_map(|row| {
-                let row = start + row * ROW_BYTES as usize;
-                bytes[row..row + SIZE as usize * 4].chunks_exact(4)
-            })
-            .find(|pixel| {
-                pixel[3] != 255
-                    || pixel[..3]
-                        .iter()
-                        .any(|&channel| (f32::from(channel) - expected).abs() >= 3.0)
-            });
-        if let Some(pixel) = bad {
-            wrong.push(format!(
-                "source {index} (luma {luma}, expected grey {expected:.1}) rendered {pixel:?}"
-            ));
+    {
+        let bytes = output.slice(..).get_mapped_range();
+        for (index, &luma) in lumas.iter().enumerate() {
+            let expected = (f32::from(luma) - 16.0) * 255.0 / 219.0;
+            for row in 0..SIZE as usize {
+                let start = index * FRAME_BYTES as usize + row * ROW_BYTES as usize;
+                for pixel in bytes[start..start + SIZE as usize * 4].chunks_exact(4) {
+                    assert!(
+                        pixel[..3]
+                            .iter()
+                            .all(|&channel| (f32::from(channel) - expected).abs() < 3.0),
+                        "source {index} luma {luma}: got {pixel:?}, expected {expected}"
+                    );
+                    assert_eq!(pixel[3], 255);
+                }
+            }
         }
     }
-    drop(bytes);
-    settle(&wrong);
+    output.unmap();
+}
+
+/// Sources whose picture is not their own grey (the pool repainted them
+/// before the GPU sampled them).
+fn wrong_frames(device: &wgpu::Device, output: &wgpu::Buffer, lumas: &[u8]) -> Vec<String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    output
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            sender.send(result).unwrap();
+        });
+    device.poll(wgpu::PollType::Wait).unwrap();
+    receiver.recv().unwrap().unwrap();
+    let mut wrong = Vec::new();
+    {
+        let bytes = output.slice(..).get_mapped_range();
+        for (index, &luma) in lumas.iter().enumerate() {
+            let expected = (f32::from(luma) - 16.0) * 255.0 / 219.0;
+            let start = index * FRAME_BYTES as usize;
+            let bad = (0..SIZE as usize)
+                .flat_map(|row| {
+                    let row = start + row * ROW_BYTES as usize;
+                    bytes[row..row + SIZE as usize * 4].chunks_exact(4)
+                })
+                .find(|pixel| {
+                    pixel[3] != 255
+                        || pixel[..3]
+                            .iter()
+                            .any(|&channel| (f32::from(channel) - expected).abs() >= 3.0)
+                });
+            if let Some(pixel) = bad {
+                wrong.push(format!(
+                    "source {index} (luma {luma}, expected grey {expected:.1}) rendered {pixel:?}"
+                ));
+            }
+        }
+    }
+    output.unmap();
+    wrong
+}
+
+#[test]
+fn conversions_keep_recycled_pixel_buffers_until_submission() {
+    let (device, queue) = gpu();
+    let mut converter = YuvToRgbaConverter::new(&device);
+    let pool = pool();
+    let lumas = [32, 80, 128, 200];
+    let output = readback_buffer(&device, lumas.len());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    for (index, luma) in lumas.into_iter().enumerate() {
+        let mut source = pool.pixel_buf().unwrap();
+        fill(&mut source, luma);
+        converter
+            .convert_nv12_from_iosurface_to_encoder(&device, &mut encoder, &source)
+            .unwrap();
+        copy_output(&mut encoder, &converter, &output, index);
+    }
+    let mut next = pool.pixel_buf().unwrap();
+    fill(&mut next, 235);
+    queue.submit([encoder.finish()]);
+    settle(&wrong_frames(&device, &output, &lumas));
+}
+
+/// The converter holds only its most recent sources. With the pool capped one
+/// buffer above that ring, a converter that never released its sources would
+/// exhaust the pool within the first ring cycle.
+#[test]
+fn conversions_release_sources_once_the_ring_moves_on() {
+    const RING: usize = 4;
+    const CYCLES: usize = 4;
+    let (device, queue) = gpu();
+    let mut converter = YuvToRgbaConverter::new(&device);
+    let pool = pool();
+    let threshold = cf::Number::from_usize(RING + 1);
+    let capped = cf::Dictionary::with_keys_values(
+        &[cv::pixel_buffer_pool::aux_attr_keys::allocation_threashold().as_ref()],
+        &[threshold.as_ref()],
+    )
+    .unwrap();
+    let output = readback_buffer(&device, 1);
+    for step in 0..RING * CYCLES {
+        let luma = 32 + (step * 11 % 190) as u8;
+        let mut source = pool
+            .pixel_buf_with_aux_attrs(Some(capped.as_ref()))
+            .unwrap_or_else(|error| panic!("conversion {step}: pool exhausted ({error:?})"));
+        fill(&mut source, luma);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        converter
+            .convert_nv12_from_iosurface_to_encoder(&device, &mut encoder, &source)
+            .unwrap();
+        copy_output(&mut encoder, &converter, &output, 0);
+        drop(source);
+        queue.submit([encoder.finish()]);
+        assert_frames(&device, &output, &[luma]);
+    }
 }
 
 const CASE: &str = "native/rendering/iosurface-source-lifetime/recycled-pool";
