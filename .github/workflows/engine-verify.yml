@@ -55,7 +55,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: engine-verify-${{ github.event.pull_request.number || github.ref }}-${{ inputs.tier || 'auto' }}
+  # Manual dispatches each get their own group, so repeats of the same ref
+  # run side by side instead of cancelling each other.
+  group: engine-verify-${{ github.event.pull_request.number || github.ref }}-${{ inputs.tier || 'auto' }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   # Superseded PR pushes are cancelled; main and nightly runs finish so their
   # caches are saved.
   cancel-in-progress: ${{ github.event_name != 'schedule' && github.ref != 'refs/heads/main' }}
