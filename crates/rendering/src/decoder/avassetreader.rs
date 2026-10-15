@@ -638,20 +638,23 @@ impl AVAssetReaderDecoder {
         tokio_handle: tokio::runtime::Handle,
         sequential_access: Arc<AtomicBool>,
     ) {
-        let dimensions = (|| {
-            let input = format::input(&path).map_err(|error| error.to_string())?;
-            let stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or_else(|| "No video stream found".to_string())?;
-            let video = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .and_then(|context| context.decoder().video())
-                .map_err(|error| error.to_string())?;
-            if video.width() == 0 || video.height() == 0 {
-                return Err("Invalid video dimensions".to_string());
-            }
-            Ok((video.width(), video.height()))
-        })();
+        let dimensions = match crate::project_recordings::header_video_dimensions(&path) {
+            Some(dimensions) => Ok(dimensions),
+            None => (|| {
+                let input = format::input(&path).map_err(|error| error.to_string())?;
+                let stream = input
+                    .streams()
+                    .best(ffmpeg::media::Type::Video)
+                    .ok_or_else(|| "No video stream found".to_string())?;
+                let video = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                    .and_then(|context| context.decoder().video())
+                    .map_err(|error| error.to_string())?;
+                if video.width() == 0 || video.height() == 0 {
+                    return Err("Invalid video dimensions".to_string());
+                }
+                Ok((video.width(), video.height()))
+            })(),
+        };
         let (width, height) = match dimensions {
             Ok(dimensions) => dimensions,
             Err(error) => {
