@@ -244,7 +244,7 @@ def cmd_test(_args):
         (["apps/web/app/page.tsx", "README.md"], []),
         (["crates/verify/tests/seek.rs"], ["seek"]),
         (["crates/verify/tests/seek.rs", "crates/verify/tests/export.rs"], ["export", "seek"]),
-        (["crates/verify/src/oracle.rs"], ["verify-self", "export", "playback", "seek", "audio"]),
+        (["crates/verify/src/oracle.rs"], [s["name"] for s in config["suites"] if "cap-verify" in s["roots"]]),
         (["crates/verify/src/audio_model.rs"], ["audio"]),
         (["crates/rendering/src/decoder/ffmpeg.rs"], [s["name"] for s in config["suites"]]),
         (["crates/video-decode/src/ffmpeg.rs"], [s["name"] for s in config["suites"]]),

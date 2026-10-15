@@ -18,6 +18,8 @@ The suites are listed in `scripts/verify/suites.json`:
 | `playback` | offline-driven editor playback frames | linux, macos | all |
 | `seek` | random, keyframe and scrub seeks | linux, macos | all |
 | `audio` | export and offline playback audio against sample-accurate markers | linux, macos, windows | all |
+| `editing` | random edit sequences exported and checked frame by frame | linux | linux |
+| `captions` | fake-transcriber captions: segments and rendered captions on the right frames | linux | linux |
 | `decoder-model-ffmpeg` | FFmpeg decoder decisions on scripted media (`cap-rendering` `decoder::model`) | linux | linux |
 | `decoder-model-avf` | AVAssetReader decoder decisions on scripted media | macos | macos |
 
@@ -26,8 +28,12 @@ The upload fault suite (`apps/desktop-gpui/src/upload/verify_tests.rs` and
 resets, outages, hangs and quits, byte-identical objects and request and byte
 budgets) lives in the GPUI app's own workspace. It runs inside
 `cargo test --bin cap-gpui`, which the `CI / Build GPUI Desktop` job already
-runs on all three OSes, so that job is its gate. Run it locally with
-`cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui upload::`.
+runs on all three OSes, so that job is its gate. The app-level caption tests
+(`apps/desktop-gpui/src/transcription/verify_tests.rs`: a fake transcriber
+behind the real extraction and caption pipeline) run in the same job. Run them
+locally with
+`cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui upload::`
+(or `transcription::`).
 
 Platform-independent logic runs on Linux only in CI. Suites that test platform
 code run on that platform: AVFoundation, VideoToolbox and Metal on macOS;

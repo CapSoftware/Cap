@@ -194,6 +194,61 @@
       }
     },
     {
+      "name": "editing",
+      "about": "random edit sequences (split, delete, speed, trim, reorder, transitions) exported and checked frame by frame against the reference model",
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "editing"
+      ],
+      "binaries": [
+        "cap-verify::editing"
+      ],
+      "platforms": {
+        "fast": [
+          "linux"
+        ],
+        "full": [
+          "linux"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/editing.rs",
+        "crates/verify/tests/edits/**"
+      ]
+    },
+    {
+      "name": "captions",
+      "about": "fake-transcriber captions: caption segments and rendered captions on the right frames",
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "captions"
+      ],
+      "binaries": [
+        "cap-verify::captions"
+      ],
+      "platforms": {
+        "fast": [
+          "linux"
+        ],
+        "full": [
+          "linux"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/captions.rs"
+      ]
+    },
+    {
       "name": "decoder-model-ffmpeg",
       "about": "model-based fuzzing of the FFmpeg decoder's request decisions on scripted media",
       "cargo": [
