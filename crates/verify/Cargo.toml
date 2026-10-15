@@ -34,3 +34,4 @@ cap-editor = { path = "../editor" }
 cap-export = { path = "../export" }
 cap-rendering = { path = "../rendering" }
 tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

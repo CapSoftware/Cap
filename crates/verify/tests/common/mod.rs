@@ -23,8 +23,19 @@ pub fn runtime() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
+/// `CAP_VERIFY_LOG=<filter>` (EnvFilter syntax, e.g. `wgpu_hal=warn,cap_rendering=info`)
+/// prints product and wgpu logs to stderr, for triage on remote runners.
 pub fn init() {
     media::init();
+    static LOG: std::sync::Once = std::sync::Once::new();
+    LOG.call_once(|| {
+        if let Ok(filter) = std::env::var("CAP_VERIFY_LOG") {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+                .with_writer(std::io::stderr)
+                .try_init();
+        }
+    });
 }
 
 /// A ready fixture project plus its decoded source truth.
