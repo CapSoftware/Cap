@@ -1469,6 +1469,7 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
+    pub(crate) clean_up: crate::clean_up::CleanUpState,
     clip_speed: Option<ClipSpeedMenu>,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
@@ -2099,6 +2100,7 @@ impl EditorWindow {
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
             generating_keyboard: false,
+            clean_up: crate::clean_up::CleanUpState::default(),
             keyboard_generation_message: None,
             clip_speed: None,
             timeline_scroll: gpui::ScrollHandle::new(),
@@ -2294,6 +2296,51 @@ impl EditorWindow {
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
+        self.sync_silence_marks();
+    }
+
+    pub(crate) fn sync_silence_marks(&mut self) {
+        self.clean_up.refresh(&self.project);
+        let focused = self.clean_up.focused;
+        self.timeline.silences = self
+            .clean_up
+            .silences
+            .iter()
+            .map(|silence| timeline::SilenceMark {
+                start: silence.start,
+                end: silence.end,
+                kept: self.clean_up.is_kept(silence),
+                focused: focused == Some(silence.key),
+            })
+            .collect();
+    }
+
+    fn silence_marks_visible(&self) -> bool {
+        self.clean_up.reviewing
+            || (self.sidebar.tab == crate::editor_sidebar::SidebarTab::CleanUp
+                && self.sidebar_selection().is_none())
+    }
+
+    pub(crate) fn reveal_time_range(&mut self, start: f64, end: f64) {
+        let transform = &mut self.view.transform;
+        if start >= transform.position && end <= transform.position + transform.zoom {
+            return;
+        }
+        let total = self.timeline.total_duration;
+        let lead = (transform.zoom - (end - start)).max(0.) / 2.;
+        transform.set_position(start - lead, total);
+    }
+
+    pub fn set_clean_up_envelopes(
+        &mut self,
+        envelopes: Vec<crate::clean_up::ClipEnvelope>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clean_up.set_envelopes(envelopes);
+        self.sync_silence_marks();
+        cx.notify();
+        window.refresh();
     }
 
     /// `getMicWaveforms()` / `getSystemAudioWaveforms()` resolving
@@ -2343,7 +2390,7 @@ impl EditorWindow {
         true
     }
 
-    fn edit(
+    pub(crate) fn edit(
         &mut self,
         change: impl FnOnce(&mut TimelineConfiguration) -> bool,
         window: &mut Window,
@@ -2382,7 +2429,7 @@ impl EditorWindow {
     /// `note_transform` exists: a drag's arithmetic is only checkable end to
     /// end if the numbers come out of the running app. Intermediate drag
     /// frames log at `debug`; the line below is the settled one.
-    fn note_edit(&self, reason: &'static str, track: Option<TrackKind>) {
+    pub(crate) fn note_edit(&self, reason: &'static str, track: Option<TrackKind>) {
         let timeline = self.project.timeline.as_ref();
         // The affected track's boxes, four decimals, so a scripted drag's
         // predicted seconds can be checked against what actually landed.
@@ -3468,6 +3515,11 @@ impl EditorWindow {
         // The clips overlays -- the import menu and the record modal
         // (`ClipsSidebar.tsx:764-775`).
         if event.keystroke.key.as_str() == "escape" && self.clips_overlay_escape(cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key.as_str() == "escape" && self.clean_up.reviewing {
+            self.stop_silence_review(window, cx);
             cx.stop_propagation();
             return;
         }
@@ -4998,6 +5050,7 @@ impl EditorWindow {
                 *source_duration = draft.end - draft.start;
             }
             model.clip_ghost_gap = gap;
+            model.show_silences = false;
             return Some(model);
         }
         let anim = self.clip_anim.as_ref()?;
@@ -10173,6 +10226,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        self.timeline.show_silences = self.silence_marks_visible();
         if !self.project_ready() {
             if self
                 .preparing_presentation
@@ -10367,6 +10421,7 @@ impl EditorWindow {
                 x.is_finite()
                     .then(|| render_split_preview(&theme, x, true, false))
             }))
+            .children(self.render_silence_review_pill(cx))
             .into_any_element()
     }
 
