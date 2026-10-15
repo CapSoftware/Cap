@@ -498,12 +498,77 @@ impl SourceLag {
 /// from its own high-priority threads. They run on dedicated threads at
 /// user-interactive QoS (not on the recorder's async runtime) and block on
 /// their feed the way a device callback would.
-fn source_thread_qos() {
+fn source_thread_qos() -> (i32, u32, i32) {
     const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
     unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+        fn pthread_get_qos_class_np(thread: usize, qos: *mut u32, priority: *mut i32) -> i32;
+        fn pthread_self() -> usize;
     }
-    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+    let result = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+    let mut qos = 0;
+    let mut priority = 0;
+    unsafe { pthread_get_qos_class_np(pthread_self(), &mut qos, &mut priority) };
+    (result, qos, priority)
+}
+
+#[derive(Default, serde::Serialize)]
+struct CameraBuildTrace {
+    marker_end: u64,
+    pixel_end: u64,
+    format_end: u64,
+}
+
+#[derive(serde::Serialize)]
+struct CameraFrameTrace {
+    slot: u32,
+    due: u64,
+    sleep_start: u64,
+    wake: u64,
+    build_start: u64,
+    build: CameraBuildTrace,
+    build_end: u64,
+    lag_observed: u64,
+    push_start: u64,
+    push_end: u64,
+    mailbox_free_before: Option<usize>,
+    mailbox_free_after: Option<usize>,
+    started: u64,
+}
+
+#[derive(serde::Serialize)]
+struct MicFrameTrace {
+    chunk: usize,
+    due: u64,
+    sleep_start: u64,
+    wake: u64,
+    lag_observed: u64,
+    push_start: u64,
+    push_end: u64,
+    started: u64,
+}
+
+fn persist_source_trace(
+    path: &Path,
+    reference: u64,
+    qos: (i32, u32, i32),
+    frames: impl serde::Serialize,
+) {
+    let timebase = cidre::mach::TimeBaseInfo::new();
+    let data = serde_json::json!({
+        "reference": reference,
+        "timebase_numer": timebase.numer,
+        "timebase_denom": timebase.denom,
+        "qos_set_result": qos.0,
+        "qos_class": qos.1,
+        "qos_priority": qos.2,
+        "frames": frames,
+    });
+    std::fs::write(
+        path,
+        serde_json::to_vec(&data).expect("serialize source trace"),
+    )
+    .expect("persist source trace");
 }
 
 fn sleep_until_host_blocking(host: u64) {
@@ -515,6 +580,7 @@ fn sleep_until_host_blocking(host: u64) {
 
 fn start_feeds(
     reference: u64,
+    scratch: &Path,
     max_secs: f64,
     camera: bool,
     drops_at: Vec<f64>,
@@ -551,8 +617,10 @@ fn start_feeds(
         let stop = stop.clone();
         let started = started.clone();
         let handle = handle.clone();
+        let trace_path = scratch.join("microphone-handoff.json");
         tokio::task::spawn_blocking(move || {
-            source_thread_qos();
+            let qos = source_thread_qos();
+            let mut frames = Vec::with_capacity((max_secs * 100.0) as usize);
             let mut lag = SourceLag::default();
             let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
             audio_code::render_markers(
@@ -570,21 +638,38 @@ fn start_feeds(
                 let capture = host_add_secs(origin, first as f64 / f64::from(MIC_RATE));
                 let delivered =
                     host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
+                let sleep_start = host_now();
                 sleep_until_host_blocking(delivered);
+                let wake = host_now();
                 if mic_delay > 0.0 {
                     let start = started.load(Ordering::Acquire);
                     if start == 0 || host_secs(capture, start) < mic_delay {
                         continue;
                     }
                 }
-                if started.load(Ordering::Acquire) != 0 {
+                let start = started.load(Ordering::Acquire);
+                let lag_observed = host_now();
+                if start != 0 {
                     lag.observe(delivered, reference);
                 }
+                let push_start = host_now();
                 handle.block_on(mic.push(
                     chunk,
                     Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
                 ));
+                let push_end = host_now();
+                frames.push(MicFrameTrace {
+                    chunk: n,
+                    due: delivered,
+                    sleep_start,
+                    wake,
+                    lag_observed,
+                    push_start,
+                    push_end,
+                    started: start,
+                });
             }
+            persist_source_trace(&trace_path, reference, qos, frames);
             lag
         })
     };
@@ -601,8 +686,10 @@ fn start_feeds(
             let stop = stop.clone();
             let started = started.clone();
             let handle = handle.clone();
+            let trace_path = scratch.join("camera-handoff.json");
             tokio::task::spawn_blocking(move || {
-                source_thread_qos();
+                let qos = source_thread_qos();
+                let mut frames = Vec::with_capacity((max_secs * f64::from(CAMERA_FPS)) as usize);
                 let mut lag = SourceLag::default();
                 let origin = host_now();
                 let base = host_secs(origin, reference);
@@ -615,7 +702,9 @@ fn start_feeds(
                     }
                     let secs = f64::from(slot) / f64::from(CAMERA_FPS);
                     let capture = host_add_secs(origin, secs);
+                    let sleep_start = host_now();
                     sleep_until_host_blocking(capture);
+                    let wake = host_now();
                     let start = started.load(Ordering::Acquire);
                     if drop_slots.is_none() && start != 0 {
                         let since = host_secs(start, origin);
@@ -633,15 +722,39 @@ fn start_feeds(
                         dropped.push(slot);
                         continue;
                     }
-                    let Some(frame) = camera_frame(slot, capture) else {
+                    let build_start = host_now();
+                    let mut build = CameraBuildTrace::default();
+                    let Some(frame) = camera_frame(slot, capture, &mut build) else {
                         continue;
                     };
+                    let build_end = host_now();
+                    let lag_observed = host_now();
                     if start != 0 {
                         lag.observe(capture, reference);
                     }
+                    let mailbox_free_before = feed.mailbox_free();
+                    let push_start = host_now();
                     handle.block_on(feed.push_native(frame));
+                    let push_end = host_now();
+                    let mailbox_free_after = feed.mailbox_free();
                     truth.insert(slot, base + secs);
+                    frames.push(CameraFrameTrace {
+                        slot,
+                        due: capture,
+                        sleep_start,
+                        wake,
+                        build_start,
+                        build,
+                        build_end,
+                        lag_observed,
+                        push_start,
+                        push_end,
+                        mailbox_free_before,
+                        mailbox_free_after,
+                        started: start,
+                    });
                 }
+                persist_source_trace(&trace_path, reference, qos, frames);
                 (truth, dropped, lag)
             })
         };
@@ -660,10 +773,15 @@ fn start_feeds(
     }
 }
 
-fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
+fn camera_frame(
+    slot: u32,
+    capture: u64,
+    trace: &mut CameraBuildTrace,
+) -> Option<NativeCameraFrame> {
     let (w, h) = CAMERA_SIZE;
     let rgba = video_code::marker_rgba(FrameMarker::new(StreamKind::Camera, 0, slot), w, h);
-    let sample_buf = camera_sample(&rgba, w, h, capture).ok()?;
+    trace.marker_end = host_now();
+    let sample_buf = camera_sample(&rgba, w, h, capture, trace).ok()?;
     Some(NativeCameraFrame {
         sample_buf,
         timestamp: Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
@@ -675,11 +793,14 @@ fn camera_sample(
     w: usize,
     h: usize,
     host: u64,
+    trace: &mut CameraBuildTrace,
 ) -> anyhow::Result<cidre::arc::R<cidre::cm::SampleBuf>> {
     use cidre::cm;
     let buf = fixture_avf::pixel_buffer(w, h, rgba)?;
+    trace.pixel_end = host_now();
     let format_desc = cm::VideoFormatDesc::with_image_buf(&buf)
         .map_err(|e| anyhow::anyhow!("format description: {e:?}"))?;
+    trace.format_end = host_now();
     let nanos = (host_secs(host, 0) * 1e9).round() as i64;
     let timing = cm::SampleTimingInfo {
         duration: cm::Time::new(1, CAMERA_FPS as i32),
@@ -1089,6 +1210,7 @@ async fn record(
     let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
     let feeds = start_feeds(
         reference,
+        scratch,
         spec.seconds + 30.0,
         camera,
         spec.camera_drops_at.clone(),
@@ -1246,6 +1368,12 @@ async fn record(
         }
         None => None,
     };
+    if let Some(camera) = &feeds.camera {
+        std::fs::write(
+            scratch.join("camera-actor.json"),
+            serde_json::to_vec(&camera.native_trace())?,
+        )?;
+    }
     drop(feeds.camera);
     let events = tokio::task::block_in_place(|| stimulus.finish())?;
     waited?;
@@ -1276,6 +1404,14 @@ async fn record(
         }
         None => (project_path, None),
     };
+    std::fs::write(
+        scratch.join("source-window.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "reference": reference,
+            "started": started_host,
+            "stopped": stopped_host,
+        }))?,
+    )?;
     Ok(Recorded {
         project: project_path,
         started: host_secs(started_host, reference),

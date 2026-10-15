@@ -45,6 +45,8 @@ fn camera_capture_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[derive(Actor)]
 pub struct CameraFeed {
+    #[cfg(all(feature = "test-utils", target_os = "macos"))]
+    native_trace: Arc<std::sync::Mutex<Vec<synthetic::NativeFrameTrace>>>,
     setup_slots: Arc<tokio::sync::Semaphore>,
     setup_cancel: tokio_util::sync::CancellationToken,
     _cancel_setup: tokio_util::sync::DropGuard,
@@ -198,6 +200,8 @@ impl Default for CameraFeed {
     fn default() -> Self {
         let setup_cancel = tokio_util::sync::CancellationToken::new();
         Self {
+            #[cfg(all(feature = "test-utils", target_os = "macos"))]
+            native_trace: Arc::new(std::sync::Mutex::new(Vec::with_capacity(4096))),
             setup_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CAMERA_SETUPS)),
             _cancel_setup: setup_cancel.clone().drop_guard(),
             setup_cancel,
@@ -1575,6 +1579,15 @@ impl Message<NewNativeFrame> for CameraFeed {
         msg: NewNativeFrame,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        #[cfg(all(feature = "test-utils", target_os = "macos"))]
+        let trace = (
+            cidre::mach::abs_time(),
+            cidre::cm::Clock::convert_host_time_to_sys_units(msg.0.sample_buf.pts()),
+            self.native_senders
+                .iter()
+                .map(|sender| (sender.len(), sender.capacity()))
+                .collect::<Vec<_>>(),
+        );
         if let State::Open(OpenState {
             connecting: None,
             attached: Some(attached),
@@ -1592,6 +1605,16 @@ impl Message<NewNativeFrame> for CameraFeed {
                 std::sync::atomic::Ordering::Release,
             );
         }
+        #[cfg(all(feature = "test-utils", target_os = "macos"))]
+        self.native_trace
+            .lock()
+            .unwrap()
+            .push(synthetic::NativeFrameTrace {
+                due: trace.1,
+                handler_start: trace.0,
+                handler_end: cidre::mach::abs_time(),
+                sender_queues: trace.2,
+            });
     }
 }
 
@@ -1834,8 +1857,19 @@ impl Message<Unlock> for CameraFeed {
 pub mod synthetic {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[derive(Clone, serde::Serialize)]
+    pub struct NativeFrameTrace {
+        pub due: u64,
+        pub handler_start: u64,
+        pub handler_end: u64,
+        pub sender_queues: Vec<(usize, Option<usize>)>,
+    }
+
     pub struct SyntheticCamera {
         feed: ActorRef<CameraFeed>,
+        #[cfg(target_os = "macos")]
+        native_trace: Arc<std::sync::Mutex<Vec<NativeFrameTrace>>>,
         _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
     }
 
@@ -1860,15 +1894,20 @@ pub mod synthetic {
                     settings: None,
                 },
             );
-            let feed = CameraFeed::spawn(CameraFeed {
+            let actor = CameraFeed {
                 state: State::Open(OpenState {
                     connecting: None,
                     attached: Some(attached),
                 }),
                 ..CameraFeed::default()
-            });
+            };
+            #[cfg(target_os = "macos")]
+            let native_trace = actor.native_trace.clone();
+            let feed = CameraFeed::spawn(actor);
             Self {
                 feed,
+                #[cfg(target_os = "macos")]
+                native_trace,
                 _done_rx: std::sync::Mutex::new(done_rx),
             }
         }
@@ -1882,6 +1921,18 @@ pub mod synthetic {
 
         pub async fn push_native(&self, frame: NativeCameraFrame) {
             let _ = self.feed.tell(NewNativeFrame(frame)).await;
+        }
+
+        pub fn mailbox_free(&self) -> Option<usize> {
+            match self.feed.mailbox_sender() {
+                kameo::mailbox::MailboxSender::Bounded(sender) => Some(sender.capacity()),
+                kameo::mailbox::MailboxSender::Unbounded(_) => None,
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        pub fn native_trace(&self) -> Vec<NativeFrameTrace> {
+            self.native_trace.lock().unwrap().clone()
         }
 
         pub async fn push(&self, frame: FFmpegVideoFrame) {

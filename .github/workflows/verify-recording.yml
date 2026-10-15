@@ -94,6 +94,7 @@ jobs:
       - name: Build
         run: |
           start=$(date +%s)
+          cargo check --locked -p cap-recording -p cap-verify
           cargo test --locked -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
 
