@@ -1,0 +1,192 @@
+//! Seek oracle: random seek storms, keyframe-exact seeks, scrubbing in both
+//! directions, seeks into holds and cold opens, all checked against the
+//! model. Seeds are fixed and printed; the full tier runs many more seeks.
+
+mod common;
+
+use cap_project::ProjectConfiguration;
+use cap_verify::{
+    catalog,
+    fixture::{FixtureSpec, Rng},
+    media,
+    report::{self, Case, Tier},
+};
+use common::{Decoder, Player};
+
+const RES: (u32, u32) = (480, 270);
+
+/// One request: output frame and whether it is a seek (vs a follow-on
+/// playback frame).
+type Request = (u32, bool);
+
+fn run(
+    spec: FixtureSpec,
+    name: &str,
+    fps: u32,
+    edit: fn(&mut ProjectConfiguration),
+    make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
+) {
+    let project = common::project(&spec);
+    let rt = common::runtime();
+    let mut failures = Vec::new();
+    for decoder in Decoder::all() {
+        let id = format!("seek/{}/{name}{fps}/{}", spec.name, decoder.label());
+        if !report::selected(&id) {
+            continue;
+        }
+        let mut config = project.config();
+        edit(&mut config);
+        let model = project.model(&config);
+        let requests = make(model.output_frames(fps), &project);
+        let mut case = Case::new(&id);
+        case.note(format!("{} requests", requests.len()));
+        let result = rt.block_on(async {
+            let mut player = Player::open(&project, config, decoder, RES).await?;
+            let mut readouts = Vec::new();
+            for &(frame, seek) in &requests {
+                readouts.push(player.frame(frame, fps, seek).await?);
+            }
+            Ok::<_, String>(readouts)
+        });
+        let frames: Vec<u32> = requests.iter().map(|r| r.0).collect();
+        match result {
+            Ok(readouts) => common::check_requests(&mut case, &model, &frames, &readouts, fps),
+            Err(e) => case.problem(e),
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn no_edit(_: &mut ProjectConfiguration) {}
+
+fn seek_count(fast: usize, full: usize) -> usize {
+    match report::tier() {
+        Tier::Fast => fast,
+        Tier::Full => full,
+    }
+}
+
+/// Random seeks, each followed by 0..=3 playback frames.
+fn storm(seed: u64, count: usize) -> impl Fn(u32, &common::Project) -> Vec<Request> {
+    move |total, _| {
+        eprintln!("seek storm seed {seed:#x}, {count} seeks");
+        let mut rng = Rng::new(seed);
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let frame = rng.range(0, u64::from(total - 4)) as u32;
+            out.push((frame, true));
+            for k in 1..=rng.range(0, 3) as u32 {
+                out.push((frame + k, false));
+            }
+        }
+        out
+    }
+}
+
+#[test]
+fn random_storm() {
+    let count = seek_count(150, 3000);
+    run(catalog::seek_gop(report::tier()), "storm", 30, no_edit, &storm(0x5EE4_0001, count));
+    run(catalog::vfr_holds(report::tier()), "storm", 60, no_edit, &storm(0x5EE4_0002, count));
+}
+
+/// Seeks landing exactly on every source keyframe (and the frame before
+/// it), in shuffled order: a reader started a hair before the keyframe
+/// decodes the previous GOP and shows its last frame.
+#[test]
+fn keyframe_seeks() {
+    let keyframes = |total: u32, project: &common::Project| {
+        let display = project.path.join("content/segments/segment-0/display.mp4");
+        let times = media::keyframe_times(&display).expect("keyframes");
+        let mut frames: Vec<u32> = times
+            .iter()
+            .flat_map(|t| {
+                let f = (t * 30.0).round() as u32;
+                [f, f.saturating_sub(1), f + 1]
+            })
+            .filter(|&f| f < total)
+            .collect();
+        let mut rng = Rng::new(0x5EE4_0003);
+        for i in (1..frames.len()).rev() {
+            let j = rng.range(0, i as u64) as usize;
+            frames.swap(i, j);
+        }
+        frames.into_iter().map(|f| (f, true)).collect()
+    };
+    run(catalog::seek_gop(report::tier()), "keyframes", 30, no_edit, &keyframes);
+}
+
+/// Scrubbing: seek every 0.25 s forwards, then backwards.
+#[test]
+fn scrub() {
+    let scrub = |total: u32, _: &common::Project| {
+        let step = 7;
+        let mut out: Vec<Request> = (0..total).step_by(step).map(|f| (f, true)).collect();
+        out.extend((0..total).rev().step_by(step).map(|f| (f, true)));
+        out
+    };
+    run(catalog::seek_gop(report::tier()), "scrub", 30, no_edit, &scrub);
+    run(catalog::vfr_holds(report::tier()), "scrub", 60, no_edit, &scrub);
+}
+
+/// Seeks into the middle of static holds and across them, then playback
+/// out of the hold.
+#[test]
+fn seek_into_holds() {
+    let into_holds = |total: u32, _: &common::Project| {
+        let mut out = Vec::new();
+        for t in [2.0, 3.5, 1.2, 9.0, 11.1, 5.2, 7.05, 2.3] {
+            let f = (t * 60.0) as u32;
+            if f + 30 < total {
+                out.push((f, true));
+                out.extend((1..30).map(|k| (f + k, false)));
+            }
+        }
+        out
+    };
+    run(catalog::vfr_holds(report::tier()), "into-holds", 60, no_edit, &into_holds);
+}
+
+/// The first frame after opening a project, at several positions.
+#[test]
+fn cold_open() {
+    let spec = catalog::seek_gop(report::tier());
+    let project = common::project(&spec);
+    let rt = common::runtime();
+    let mut failures = Vec::new();
+    for decoder in Decoder::all() {
+        let id = format!("seek/{}/cold-open30/{}", spec.name, decoder.label());
+        if !report::selected(&id) {
+            continue;
+        }
+        let config = project.config();
+        let model = project.model(&config);
+        let total = model.output_frames(30);
+        let frames: Vec<u32> = [0.0, 0.37, 0.71, 0.93]
+            .iter()
+            .map(|p| (f64::from(total - 1) * p) as u32)
+            .collect();
+        let mut case = Case::new(&id);
+        let mut readouts = Vec::new();
+        for &frame in &frames {
+            let result = rt.block_on(async {
+                let mut player = Player::open(&project, config.clone(), decoder, RES).await?;
+                player.frame(frame, 30, true).await
+            });
+            match result {
+                Ok(readout) => readouts.push(readout),
+                Err(e) => case.problem(e),
+            }
+        }
+        if readouts.len() == frames.len() {
+            common::check_requests(&mut case, &model, &frames, &readouts, 30);
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

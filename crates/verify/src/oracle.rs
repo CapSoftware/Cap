@@ -57,6 +57,8 @@ pub enum MismatchKind {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mismatch {
+    /// Position in the checked sequence (request number for seek runs).
+    pub position: usize,
     pub output_frame: u32,
     pub time_secs: f64,
     pub kind: MismatchKind,
@@ -133,10 +135,23 @@ impl StreamReport {
             text.push_str(&format!(", up to {} stale", self.max_stale));
         }
         if let Some(first) = self.mismatches.first() {
-            text.push_str(&format!(
-                "; first at output frame {} ({:.3}s): expected {:?}, got {:?}",
-                first.output_frame, first.time_secs, first.expected, first.observed
-            ));
+            let shown: Vec<String> = self
+                .mismatches
+                .iter()
+                .take(4)
+                .map(|m| {
+                    format!(
+                        "#{} frame {} ({:.3}s) expected {} got {}",
+                        m.position,
+                        m.output_frame,
+                        m.time_secs,
+                        m.expected.map_or("-".into(), |(s, i)| format!("{s}:{i}")),
+                        m.observed.map_or("-".into(), |(s, i)| format!("{s}:{i}")),
+                    )
+                })
+                .collect();
+            text.push_str(&format!("; {}", shown.join("; ")));
+            let _ = first;
         }
         text
     }
@@ -167,7 +182,12 @@ pub fn check_stream_at(
     };
     let mut expected_counts: BTreeMap<(u8, u32), u32> = BTreeMap::new();
     let mut observed_counts: BTreeMap<(u8, u32), u32> = BTreeMap::new();
-    for ((expectation, readout), &frame) in expectations.iter().zip(observed).zip(frame_numbers) {
+    for (position, ((expectation, readout), &frame)) in expectations
+        .iter()
+        .zip(observed)
+        .zip(frame_numbers)
+        .enumerate()
+    {
         let time_secs = f64::from(frame) / f64::from(fps);
         let push = |report: &mut StreamReport,
                     kind: MismatchKind,
@@ -175,6 +195,7 @@ pub fn check_stream_at(
                     delta: Option<i64>,
                     detail: Option<String>| {
             report.mismatches.push(Mismatch {
+                position,
                 output_frame: frame,
                 time_secs,
                 kind,

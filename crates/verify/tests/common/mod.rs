@@ -250,3 +250,170 @@ pub fn scratch_dir(name: &str) -> tempfile::TempDir {
         .tempdir_in(root)
         .expect("scratch dir")
 }
+
+/// Drives the editor's decode + render path offline, one requested frame
+/// at a time (no wall clock): `create_segments` decoders, `FrameRenderer`,
+/// `RendererLayers`. Seeks use `get_frames_initial` like the preview
+/// renderer; frames that follow a seek use `get_frames` like playback.
+pub struct Player {
+    constants: std::sync::Arc<cap_rendering::RenderVideoConstants>,
+    segments: Vec<cap_editor::SegmentMedia>,
+    renderer: Option<cap_rendering::FrameRenderer<'static>>,
+    layers: cap_rendering::RendererLayers,
+    zooms: Vec<cap_rendering::ZoomTransformTimeline>,
+    config: ProjectConfiguration,
+    duration: f64,
+    resolution: XY<u32>,
+}
+
+impl Player {
+    pub async fn open(
+        project: &Project,
+        config: ProjectConfiguration,
+        decoder: Decoder,
+        resolution: (u32, u32),
+    ) -> Result<Self, String> {
+        let meta = project.meta.studio_meta().ok_or("not studio")?.clone();
+        let recordings = cap_rendering::ProjectRecordingsMeta::new(&project.path, &meta)?;
+        let constants = std::sync::Arc::new(
+            cap_rendering::RenderVideoConstants::new(
+                &recordings.segments,
+                project.meta.clone(),
+                meta.clone(),
+            )
+            .await
+            .map_err(|e| format!("render constants: {e}"))?,
+        );
+        let segments =
+            cap_editor::create_segments(&project.meta, &meta, decoder == Decoder::Ffmpeg).await?;
+        let mut layers = cap_rendering::RendererLayers::new_with_options(
+            &constants.device,
+            &constants.queue,
+            constants.is_software_adapter,
+        );
+        let (sw, sh) = segments[0].decoders.screen_video_dimensions();
+        let camera = segments[0].decoders.camera_video_dimensions();
+        layers.prepare_for_video_dimensions(
+            &constants.device,
+            sw,
+            sh,
+            camera.map(|c| c.0),
+            camera.map(|c| c.1),
+        );
+        let duration = config.timeline.as_ref().map_or(0.0, |t| t.duration());
+        let zooms = segments
+            .iter()
+            .map(|s| {
+                cap_rendering::ZoomTransformTimeline::from_project(
+                    &config,
+                    &s.cursor,
+                    duration,
+                    constants.options.screen_size,
+                )
+            })
+            .collect();
+        // The renderer borrows the constants; both live as long as the
+        // player, and the Arc keeps the constants' address stable.
+        let constants_ref: &'static cap_rendering::RenderVideoConstants =
+            unsafe { &*std::sync::Arc::as_ptr(&constants) };
+        Ok(Self {
+            renderer: Some(cap_rendering::FrameRenderer::new(constants_ref)),
+            constants,
+            segments,
+            layers,
+            zooms,
+            config,
+            duration,
+            resolution: XY::new(resolution.0, resolution.1),
+        })
+    }
+
+    pub fn prefer_sequential(&self) {
+        for segment in &self.segments {
+            segment.decoders.prefer_sequential_access();
+        }
+    }
+
+    /// Renders output frame `frame` and reads its markers. `None` when the
+    /// timeline has no segment there or the decoders returned nothing.
+    pub async fn frame(&mut self, frame: u32, fps: u32, seek: bool) -> Result<FrameReadout, String> {
+        let t = f64::from(frame) / f64::from(fps);
+        let (segment_time, segment) = self
+            .config
+            .get_segment_time(t)
+            .ok_or_else(|| format!("no timeline segment at {t:.3}s"))?;
+        let clip = segment.recording_clip;
+        let media = &self.segments[clip as usize];
+        let offsets = self
+            .config
+            .clips
+            .iter()
+            .find(|c| c.index == clip)
+            .map(|c| c.offsets)
+            .unwrap_or_default();
+        let needs_camera = !self.config.camera.hide;
+        let frames = if seek {
+            media
+                .decoders
+                .get_frames_initial(segment_time as f32, needs_camera, true, offsets)
+                .await
+        } else {
+            media
+                .decoders
+                .get_frames(segment_time as f32, needs_camera, true, offsets)
+                .await
+        }
+        .ok_or_else(|| format!("decoders returned no frame at {t:.3}s"))?;
+        let zoom = &mut self.zooms[clip as usize];
+        zoom.ensure_precomputed_until((frame as f32 + 1.0) / fps as f32);
+        let uniforms = cap_rendering::ProjectUniforms::new(
+            &self.constants,
+            &self.config,
+            frame,
+            fps,
+            self.resolution,
+            &media.cursor,
+            &frames,
+            self.duration,
+            zoom,
+        );
+        let rendered = self
+            .renderer
+            .as_mut()
+            .expect("renderer")
+            .render_immediate(frames, uniforms, &media.cursor, true, &mut self.layers)
+            .await
+            .map_err(|e| format!("render: {e}"))?;
+        let view = video_code::PackedFrame {
+            data: &rendered.data,
+            width: rendered.width as usize,
+            height: rendered.height as usize,
+            stride: rendered.padded_bytes_per_row as usize,
+            order: video_code::PixelOrder::Rgba,
+        };
+        Ok(video_code::read_frame(&view))
+    }
+}
+
+impl Drop for Player {
+    fn drop(&mut self) {
+        // Drop the renderer before the constants it borrows.
+        self.renderer.take();
+    }
+}
+
+/// Checks a list of (output frame, readout) pairs against the model.
+pub fn check_requests(
+    case: &mut Case,
+    model: &ReferenceModel,
+    frames: &[u32],
+    readouts: &[FrameReadout],
+    fps: u32,
+) {
+    let expectations: Vec<_> = frames.iter().map(|&f| model.expect(f, fps)).collect();
+    for kind in StreamKind::ALL {
+        let exp: Vec<StreamExpectation> = expectations.iter().map(|e| e.get(kind).clone()).collect();
+        let obs: Vec<_> = readouts.iter().map(|r| r.get(kind).clone()).collect();
+        case.stream(oracle::check_stream_at(kind, &exp, &obs, frames, fps));
+    }
+}

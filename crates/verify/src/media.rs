@@ -372,6 +372,26 @@ pub fn video_packet_times(path: &Path) -> anyhow::Result<Vec<f64>> {
     Ok(times)
 }
 
+/// Presentation times of the keyframes of the best video stream, sorted.
+pub fn keyframe_times(path: &Path) -> anyhow::Result<Vec<f64>> {
+    init();
+    let mut input = format::input(&path).with_context(|| format!("open {path:?}"))?;
+    let stream = input
+        .streams()
+        .best(Type::Video)
+        .ok_or_else(|| anyhow!("{path:?} has no video stream"))?;
+    let index = stream.index();
+    let tb = stream.time_base();
+    let mut times: Vec<f64> = input
+        .packets()
+        .filter(|(s, p)| s.index() == index && p.is_key())
+        .filter_map(|(_, p)| p.pts())
+        .map(|pts| pts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))
+        .collect();
+    times.sort_by(f64::total_cmp);
+    Ok(times)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioCodec {
     Aac,
