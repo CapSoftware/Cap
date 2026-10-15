@@ -1292,3 +1292,67 @@ fn recorded_studio_audio() {
     }
     common::finish(case);
 }
+
+/// Epoch-anchored audio (the product's loopback system audio): the track's
+/// time 0 is the pipeline epoch, so silence must stand in for the time
+/// between the epoch and the first captured frame, or every sample plays
+/// early by that much. A head under the recorder's 70 ms gap threshold is
+/// covered only by that head silence; a longer one is also caught by gap
+/// filling. Recorded fresh every run (no fixture cache).
+#[test]
+fn recorded_epoch_audio_head() {
+    use cap_verify::media;
+    const TOLERANCE_SECS: f64 = 0.005;
+    let rt = common::runtime();
+    let mut failures = Vec::new();
+    for head in [0.04, 0.3] {
+        let id = format!("export/recorded-epoch-audio/head-{:.0}ms", head * 1000.0);
+        if !report::selected(&id) {
+            continue;
+        }
+        let mut case = Case::new(&id);
+        let dir = common::scratch_dir(&id);
+        match rt.block_on(cap_verify::pipeline::record_epoch_audio(
+            dir.path(),
+            head,
+            0.6,
+        )) {
+            Err(e) => case.problem("error", format!("record: {e}")),
+            Ok((path, track_start)) => match media::decode_audio(&path, Some(48_000)) {
+                Err(e) => case.problem("error", format!("decode: {e:?}")),
+                Ok(decoded) => {
+                    let mono = decoded.mono();
+                    match mono.iter().position(|v| v.abs() > 0.05) {
+                        None => case.problem("audio-missing", "the recorded tone is silent"),
+                        Some(index) => {
+                            let heard = track_start + decoded.start_secs + index as f64 / 48_000.0;
+                            let error = heard - head;
+                            if error.abs() > TOLERANCE_SECS {
+                                case.problem(
+                                    "sync",
+                                    format!(
+                                        "audio captured {:.1} ms after the epoch is heard at {:.1} ms on the track ({:+.1} ms; track start {:.1} ms, file start {:.1} ms)",
+                                        head * 1000.0,
+                                        heard * 1000.0,
+                                        error * 1000.0,
+                                        track_start * 1000.0,
+                                        decoded.start_secs * 1000.0
+                                    ),
+                                );
+                            }
+                            case.note(format!(
+                                "tone heard at {:.2} ms (captured at {:.1} ms)",
+                                heard * 1000.0,
+                                head * 1000.0
+                            ));
+                        }
+                    }
+                }
+            },
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    common::assert_passed(failures);
+}

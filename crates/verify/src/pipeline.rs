@@ -832,3 +832,61 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
     )?;
     Ok(())
 }
+
+/// Records one epoch-anchored audio track the way the product records
+/// loopback system audio (`AudioAnchor::PipelineEpoch`, no start gate):
+/// the first captured frame is stamped `head` seconds after the pipeline
+/// epoch and a continuous 1 kHz tone follows for `tone` seconds, in 20 ms
+/// chunks delivered in real time. Returns the file and the track start the
+/// pipeline reports, in seconds after the epoch.
+pub async fn record_epoch_audio(
+    dir: &Path,
+    head: f64,
+    tone: f64,
+) -> anyhow::Result<(std::path::PathBuf, f64)> {
+    let stereo_info = AudioInfo::new(Sample::F32(Type::Packed), AUDIO_RATE, 2)
+        .map_err(|e| anyhow!("audio info: {e:?}"))?;
+    let samples = (tone * f64::from(AUDIO_RATE)) as usize;
+    let track: Vec<f32> = (0..samples)
+        .map(|n| {
+            let t = n as f64 / f64::from(AUDIO_RATE);
+            (0.5 * (2.0 * std::f64::consts::PI * 1000.0 * t).sin()) as f32
+        })
+        .collect();
+    let path = dir.join("system_audio.ogg");
+    let timestamps = Timestamps::now();
+    let (mut tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+    let pipeline = OutputPipeline::builder(path.clone())
+        .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(stereo_info, rx))
+        .with_timestamps(timestamps)
+        .with_audio_anchor(cap_recording::AudioAnchor::PipelineEpoch)
+        .build::<OggMuxer>(())
+        .await
+        .map_err(|e| anyhow!("epoch audio pipeline: {e}"))?;
+    {
+        use futures::SinkExt;
+        let chunks = (tone / AUDIO_CHUNK_SECS).round() as usize;
+        for k in 0..chunks {
+            let t = k as f64 * AUDIO_CHUNK_SECS;
+            let at = timestamps.instant() + Duration::from_secs_f64(head + t);
+            tokio::time::sleep_until(at.into()).await;
+            let frame =
+                AudioFrame::new(audio_chunk(&track, t, &stereo_info), Timestamp::Instant(at));
+            tx.send(frame)
+                .await
+                .map_err(|e| anyhow!("send audio: {e}"))?;
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let finished = pipeline
+        .stop()
+        .await
+        .map_err(|e| anyhow!("epoch audio stop: {e}"))?;
+    drop(tx);
+    Ok((
+        path,
+        finished
+            .first_timestamp
+            .signed_duration_since_secs(timestamps),
+    ))
+}
