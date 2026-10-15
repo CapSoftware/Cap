@@ -11,7 +11,11 @@ use cidre::{arc, cf, cm, cv};
 
 use crate::video_code::{self, FrameMarker};
 
-fn pixel_buffer(width: usize, height: usize, rgba: &[u8]) -> anyhow::Result<arc::R<cv::PixelBuf>> {
+pub fn pixel_buffer(
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> anyhow::Result<arc::R<cv::PixelBuf>> {
     let io_surface_properties = cf::Dictionary::new();
     let keys: [&cf::Type; 1] = [cv::pixel_buffer::keys::io_surf_props().as_ref()];
     let values: [&cf::Type; 1] = [io_surface_properties.as_ref()];

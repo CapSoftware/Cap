@@ -13,4 +13,5 @@ pub mod model;
 pub mod oracle;
 pub mod pipeline;
 pub mod report;
+pub mod stimulus;
 pub mod video_code;

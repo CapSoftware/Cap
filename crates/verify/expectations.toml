@@ -306,3 +306,80 @@ platforms = ["macos"]
 flaky = true
 reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon; passed on the macos-15 runner in run 38743345280, where the loop presents fewer frames, so it is timing dependent there"
 link = ""
+
+# Real capture (crates/verify/tests/recording.rs, verify-recording workflow).
+
+[[xfail]]
+case = "recording/instant/screen-mic-system"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: the Instant screen track starts at its first encoded frame (the VideoToolbox encoder starts after the audio pipeline), so the screen plays early against mic and system audio: runners 34 to 92 ms (10 of 10 runs), developer Mac 340 to 570 ms (8 of 8)"
+link = ""
+
+[[xfail]]
+case = "recording/instant/long-holds"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: same as recording/instant/screen-mic-system on a 30 s recording with screen holds (developer Mac: screen 375 ms early)"
+link = ""
+
+[[xfail]]
+case = "recording/instant/late-mic"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's: runners 974 to 1040 ms (10 of 10), developer Mac 677 to 728 ms (5 of 5)"
+link = ""
+
+[[xfail]]
+case = "recording/instant/system-only"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: Instant with system audio and no microphone: the first ScreenCaptureKit audio buffer becomes audio zero, so system audio plays 140 to 184 ms early (developer Mac, 8 of 8). Skipped on hosted runners, whose output devices give ScreenCaptureKit only silence"
+link = ""
+
+[[xfail]]
+case = "recording/instant/system-only"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+reason = "NEW: Instant system-only: one system-audio marker inside the track does not decode (a discontinuity inside the marker) in 4 of 5 developer-Mac runs"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "sync"
+platforms = ["macos"]
+flaky = true
+reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run: runners -22 to +16 ms (6 of 20 runs below the -10 ms floor), developer Mac +2 to +385 ms (3 of 13 above +75 ms); logs show 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "missing"
+platforms = ["macos"]
+flaky = true
+reason = "NEW: gated Instant with microphone and system audio loses an audio marker near the start in 2 of 5 developer-Mac runs (and 3 of 3 in an earlier batch); not seen on runners, where system audio is silent"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+reason = "NEW: see the gated Instant missing-marker entry: the damaged marker straddles the admission point"
+link = ""
+
+[[xfail]]
+case = "recording/instant/gated"
+class = "timestamps"
+platforms = ["macos"]
+flaky = true
+reason = "NEW: gated Instant microphone timeline not continuous after the gate opens: marker offsets vary by 5 to 852 ms within one recording (4 of 8 developer-Mac runs)"
+link = ""
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay: runners 59 to 104 ms (all runs), developer Mac 317 to 555 ms (all runs)"
+link = ""

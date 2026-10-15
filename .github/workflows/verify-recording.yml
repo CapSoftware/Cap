@@ -1,0 +1,156 @@
+name: Verify recording (real capture)
+
+# Records a marker stimulus through Cap's real Studio and Instant pipelines
+# (ScreenCaptureKit + VideoToolbox) on hosted macOS runners and checks every
+# frame and audio marker against the host-clock truth. See
+# crates/verify/tests/recording.rs.
+
+# Pull requests (and pushes to the suite branches) that touch the capture,
+# encode, timestamp or verify code run the FAST tier once on macos-15; the
+# FULL tier runs on macos-15 and macos-26 nightly and on dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Runs of each case"
+        default: "1"
+      tier:
+        description: "fast or full"
+        default: "full"
+      case_filter:
+        description: "Case globs, comma-separated (empty runs all)"
+        default: ""
+      keep_artifacts:
+        description: "Preserve recordings and raw crash snapshots for passing cases"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "41 3 * * *"
+  pull_request:
+    paths:
+      - "crates/recording/**"
+      - "crates/scap-*/**"
+      - "crates/enc-avfoundation/**"
+      - "crates/timestamp/**"
+      - "crates/camera*/**"
+      - "crates/media-info/**"
+      - "crates/verify/**"
+      - "crates/project/**"
+      - "Cargo.lock"
+      - ".github/workflows/verify-recording.yml"
+  push:
+    branches:
+      - ci/verify-ci
+      - ci/verify-recording
+    paths:
+      - "crates/recording/**"
+      - "crates/scap-*/**"
+      - "crates/enc-avfoundation/**"
+      - "crates/timestamp/**"
+      - "crates/camera*/**"
+      - "crates/media-info/**"
+      - "crates/verify/**"
+      - "crates/project/**"
+      - "Cargo.lock"
+      - ".github/workflows/verify-recording.yml"
+
+concurrency:
+  group: verify-recording-${{ github.event.pull_request.number || github.ref_name }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+permissions:
+  contents: read
+
+jobs:
+  real-capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["macos-15", "macos-26"]' || '["macos-15"]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ inputs.tier || (github.event_name == 'schedule' && 'full') || 'fast' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_AUDIO_OUTPUT: ${{ matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-verify-recording-${{ matrix.runner }}
+          save-cache: "true"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Runner devices
+        run: |
+          sw_vers
+          system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null | sed -n 1,80p
+          sysctl hw.memsize hw.ncpu
+
+      # Spotlight indexes the build and every recording the suite writes:
+      # mds (priority 50) plus a dozen mdworkers averaged 1 to 1.8 of the 3
+      # cores during the tests (ps samples, run 38736744971).
+      - name: Disable Spotlight indexing
+        run: |
+          sudo mdutil -a -i off || true
+          sudo mdutil -as || true
+
+      - name: Build
+        run: |
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      - name: Real-capture recording oracle
+        run: |
+          mkdir -p "$CAP_VERIFY_DUMP"
+          # One-second process samples (CPU, scheduler priority) so an
+          # environment failure can be attributed.
+          (while sleep 1; do
+            date -u +%H:%M:%S
+            ps -A -o pid,pri,%cpu,comm -r | head -14
+            for p in $(pgrep -f cap-verify-stimulus | head -1) $(pgrep -f 'deps/recording-' | head -1); do
+              ps -M -p "$p" | awk 'NR == 1 || $4 > 0.5 || NR < 4' | cut -c1-90
+            done
+          done) > "$CAP_VERIFY_DUMP/ps.log" 2>&1 &
+          top_pid=$!
+          start=$(date +%s)
+          set +e
+          cargo test --locked -p cap-verify --test recording -- --nocapture
+          status=$?
+          set -e
+          kill "$top_pid" || true
+          echo "test seconds: $(( $(date +%s) - start ))"
+          exit "$status"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-${{ matrix.runner }}
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore
