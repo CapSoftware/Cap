@@ -4,57 +4,206 @@
     {
       "name": "verify-self",
       "about": "marker codecs, reference timeline model, oracle and report self-tests",
-      "cargo": ["-p", "cap-verify", "--lib", "--test", "codec"],
-      "binaries": ["cap-verify", "cap-verify::codec"],
-      "platforms": { "fast": ["linux"], "full": ["linux", "macos"] },
-      "roots": ["cap-verify"],
-      "own": ["crates/verify/tests/codec.rs"]
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--lib",
+        "--test",
+        "codec"
+      ],
+      "binaries": [
+        "cap-verify",
+        "cap-verify::codec"
+      ],
+      "platforms": {
+        "fast": [
+          "linux"
+        ],
+        "full": [
+          "linux",
+          "macos"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/codec.rs"
+      ]
     },
     {
       "name": "export",
       "about": "every exported frame against the reference model (MP4, GIF, both decoders on macOS)",
-      "cargo": ["-p", "cap-verify", "--test", "export"],
-      "binaries": ["cap-verify::export"],
-      "platforms": { "fast": ["linux", "macos", "windows"], "full": ["linux", "macos", "windows"] },
-      "roots": ["cap-verify"],
-      "own": ["crates/verify/tests/export.rs"]
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "export"
+      ],
+      "binaries": [
+        "cap-verify::export"
+      ],
+      "platforms": {
+        "fast": [
+          "linux",
+          "macos",
+          "windows"
+        ],
+        "full": [
+          "linux",
+          "macos",
+          "windows"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/export.rs"
+      ]
     },
     {
       "name": "playback",
       "about": "offline-driven editor playback frames against the reference model",
-      "cargo": ["-p", "cap-verify", "--test", "playback"],
-      "binaries": ["cap-verify::playback"],
-      "platforms": { "fast": ["linux", "macos"], "full": ["linux", "macos", "windows"] },
-      "roots": ["cap-verify"],
-      "own": ["crates/verify/tests/playback.rs"]
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "playback"
+      ],
+      "binaries": [
+        "cap-verify::playback"
+      ],
+      "platforms": {
+        "fast": [
+          "linux",
+          "macos"
+        ],
+        "full": [
+          "linux",
+          "macos",
+          "windows"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/playback.rs"
+      ]
     },
     {
       "name": "seek",
       "about": "random, keyframe and scrub seeks against the reference model",
-      "cargo": ["-p", "cap-verify", "--test", "seek"],
-      "binaries": ["cap-verify::seek"],
-      "platforms": { "fast": ["linux", "macos"], "full": ["linux", "macos", "windows"] },
-      "roots": ["cap-verify"],
-      "own": ["crates/verify/tests/seek.rs"]
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "seek"
+      ],
+      "binaries": [
+        "cap-verify::seek"
+      ],
+      "platforms": {
+        "fast": [
+          "linux",
+          "macos"
+        ],
+        "full": [
+          "linux",
+          "macos",
+          "windows"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/seek.rs"
+      ]
+    },
+    {
+      "name": "audio",
+      "about": "export and offline playback audio against sample-accurate markers (mic, system audio, cuts, speeds, mute, volume, A/V offset)",
+      "cargo": [
+        "-p",
+        "cap-verify",
+        "--test",
+        "audio"
+      ],
+      "binaries": [
+        "cap-verify::audio"
+      ],
+      "platforms": {
+        "fast": [
+          "linux",
+          "macos",
+          "windows"
+        ],
+        "full": [
+          "linux",
+          "macos",
+          "windows"
+        ]
+      },
+      "roots": [
+        "cap-verify"
+      ],
+      "own": [
+        "crates/verify/tests/audio.rs",
+        "crates/verify/tests/audio_support/**",
+        "crates/verify/src/audio_model.rs",
+        "crates/verify/src/audio_fixture.rs"
+      ]
     },
     {
       "name": "decoder-model-ffmpeg",
       "about": "model-based fuzzing of the FFmpeg decoder's request decisions on scripted media",
-      "cargo": ["-p", "cap-rendering", "--lib"],
-      "binaries": ["cap-rendering"],
+      "cargo": [
+        "-p",
+        "cap-rendering",
+        "--lib"
+      ],
+      "binaries": [
+        "cap-rendering"
+      ],
       "test": "decoder::model::ffmpeg_answers_match_the_reference_model",
-      "platforms": { "fast": ["linux"], "full": ["linux"] },
-      "roots": ["cap-rendering"],
+      "platforms": {
+        "fast": [
+          "linux"
+        ],
+        "full": [
+          "linux"
+        ]
+      },
+      "roots": [
+        "cap-rendering"
+      ],
       "own": []
     },
     {
       "name": "decoder-model-avf",
       "about": "model-based fuzzing of the AVAssetReader decoder's request decisions on scripted media",
-      "cargo": ["-p", "cap-rendering", "--lib"],
-      "binaries": ["cap-rendering"],
+      "cargo": [
+        "-p",
+        "cap-rendering",
+        "--lib"
+      ],
+      "binaries": [
+        "cap-rendering"
+      ],
       "test": "decoder::model::avassetreader_answers_match_the_reference_model",
-      "platforms": { "fast": ["macos"], "full": ["macos"] },
-      "roots": ["cap-rendering"],
+      "platforms": {
+        "fast": [
+          "macos"
+        ],
+        "full": [
+          "macos"
+        ]
+      },
+      "roots": [
+        "cap-rendering"
+      ],
       "own": []
     }
   ],
@@ -71,8 +220,20 @@
     "vendor/**"
   ],
   "runners": {
-    "linux": { "runner": "ubuntu-24.04", "target": "x86_64-unknown-linux-gnu", "shards": 1 },
-    "macos": { "runner": "macos-15", "target": "aarch64-apple-darwin", "shards": 1 },
-    "windows": { "runner": "windows-2022", "target": "x86_64-pc-windows-msvc", "shards": 1 }
+    "linux": {
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
+      "shards": 1
+    },
+    "macos": {
+      "runner": "macos-15",
+      "target": "aarch64-apple-darwin",
+      "shards": 1
+    },
+    "windows": {
+      "runner": "windows-2022",
+      "target": "x86_64-pc-windows-msvc",
+      "shards": 1
+    }
   }
 }
