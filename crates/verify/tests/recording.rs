@@ -2621,20 +2621,39 @@ fn check_audio(
     let mut found: BTreeMap<u32, f64> = BTreeMap::new();
     let mut damaged = 0;
     let mut repeated = Vec::new();
+    let mut cut = Vec::new();
+    let track_secs = mono.len() as f64 / f64::from(decoded.sample_rate);
     for marker in &located {
         let at = marker.time_secs + decoded.start_secs + start;
+        // Starting or stopping a recording may cut a marker; the rest of
+        // the track can be silence (encoder padding). A cut marker's payload
+        // is meaningless: undecodable, or a CRC-valid index of near-silence
+        // (index 0, chirp correlation 0.56, run 38780355968). Markers inside
+        // the track must decode to a known index.
+        let interior = marker.time_secs > 0.15
+            && marker.time_secs + audio_code::MARKER_SECS < track_secs - 0.15;
         let Some(index) = marker.index else {
-            let track_secs = mono.len() as f64 / f64::from(decoded.sample_rate);
-            if marker.time_secs > 0.15
-                && marker.time_secs + audio_code::MARKER_SECS < track_secs - 0.15
-            {
+            if interior {
                 damaged += 1;
             }
             continue;
         };
+        if !interior && !check.truth.contains_key(&index) {
+            cut.push((index, marker.time_secs, marker.correlation));
+            continue;
+        }
         if found.insert(index, at).is_some() {
             repeated.push(index);
         }
+    }
+    if !cut.is_empty() {
+        case.note(format!(
+            "{name}: ignored markers cut by the track's start or end (index, at, chirp correlation): {}",
+            cut.iter()
+                .map(|(i, t, c)| format!("({i}, {t:.3}s, {c:.3})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if damaged > 0 {
         case.problem(
