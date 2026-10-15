@@ -391,8 +391,26 @@ fn covered_by<'a>(
     covered
 }
 
+/// Classes a case could not measure because an earlier check failed (for
+/// example A/V sync when no audio marker could be identified): `(case,
+/// class)`. An unobserved class is neither a failure nor a pass, so an xfail
+/// for it is not reported as fixed and `bless` leaves it alone. The failure
+/// that made it unobservable is judged on its own.
+pub type Unobserved = BTreeSet<(String, String)>;
+
 /// Compares the failures of a run with the expectations, on `platform`.
 pub fn judge(xfails: &[Xfail], platform: &str, ran: &Ran, observed: &Observed) -> Verdict {
+    judge_observing(xfails, platform, ran, observed, &Unobserved::new())
+}
+
+/// [`judge`] for runs where some classes could not be measured.
+pub fn judge_observing(
+    xfails: &[Xfail],
+    platform: &str,
+    ran: &Ran,
+    observed: &Observed,
+    unobserved: &Unobserved,
+) -> Verdict {
     let mut verdict = Verdict::default();
     for ((case, class), seeds) in observed {
         let has_entry = xfails
@@ -418,6 +436,9 @@ pub fn judge(xfails: &[Xfail], platform: &str, ran: &Ran, observed: &Observed) -
     }
     for x in xfails.iter().filter(|x| !x.flaky && x.applies_on(platform)) {
         for (case, ran_seeds) in ran.iter().filter(|(case, _)| glob_match(&x.case, case)) {
+            if unobserved.contains(&(case.clone(), x.class.clone())) {
+                continue;
+            }
             let seen = observed.get(&(case.clone(), x.class.clone()));
             let seeds = match (&x.seeds, seen) {
                 (None, None) => None,
@@ -456,6 +477,26 @@ pub fn bless(
     observed: &Observed,
     problems: &BTreeMap<(String, String), String>,
 ) -> Vec<Xfail> {
+    bless_observing(
+        xfails,
+        platform,
+        ran,
+        observed,
+        &Unobserved::new(),
+        problems,
+    )
+}
+
+/// [`bless`] that keeps entries whose class some matching case could not
+/// measure in this run.
+pub fn bless_observing(
+    xfails: &[Xfail],
+    platform: &str,
+    ran: &Ran,
+    observed: &Observed,
+    unobserved: &Unobserved,
+    problems: &BTreeMap<(String, String), String>,
+) -> Vec<Xfail> {
     let mut out: Vec<Xfail> = Vec::new();
     let mut kept_here: Vec<Xfail> = Vec::new();
     for x in xfails {
@@ -463,7 +504,10 @@ pub fn bless(
             .iter()
             .filter(|(case, _)| glob_match(&x.case, case))
             .collect();
-        if !x.applies_on(platform) || matched.is_empty() || x.flaky {
+        let unmeasured = matched
+            .iter()
+            .any(|(case, _)| unobserved.contains(&((*case).clone(), x.class.clone())));
+        if !x.applies_on(platform) || matched.is_empty() || x.flaky || unmeasured {
             out.push(x.clone());
             if x.applies_on(platform) {
                 kept_here.push(x.clone());
@@ -626,6 +670,9 @@ pub struct Record {
     /// Seeds that ran, for seeded cases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seeds_ran: Option<BTreeSet<u64>>,
+    /// Classes this case could not measure -> why (see [`Unobserved`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unobserved: BTreeMap<String, String>,
     /// First problem per class, used as the draft reason when blessing.
     #[serde(default)]
     pub problems: BTreeMap<String, String>,
@@ -723,6 +770,7 @@ mod tests {
                             outcome: Outcome::Unsupported,
                             failures: BTreeMap::new(),
                             seeds_ran: None,
+                            unobserved: BTreeMap::new(),
                             problems: BTreeMap::new(),
                             summary: "test record".repeat(100),
                             repro: String::new(),
@@ -812,6 +860,37 @@ mod tests {
         assert_eq!(verdict.unexpected[0].seeds, set(&[3]));
         assert_eq!(verdict.fixed.len(), 1);
         assert_eq!(verdict.fixed[0].seeds, Some(set(&[1])));
+    }
+
+    #[test]
+    fn unobserved_classes_are_neither_fixed_nor_blessed_away() {
+        let xfails = vec![
+            entry("a", "sync", &[], None),
+            entry("a", "audio", &[], None),
+        ];
+        let ran = Ran::from([("a".to_string(), None)]);
+        let observed = Observed::from([(("a".into(), "audio".into()), set(&[]))]);
+        let unobserved = Unobserved::from([("a".to_string(), "sync".to_string())]);
+        assert!(judge_observing(&xfails, "linux", &ran, &observed, &unobserved).ok());
+        let measured = judge(&xfails, "linux", &ran, &observed);
+        assert_eq!(measured.fixed.len(), 1);
+        assert_eq!(measured.fixed[0].xfail.class, "sync");
+        let blessed = bless_observing(
+            &xfails,
+            "linux",
+            &ran,
+            &observed,
+            &unobserved,
+            &BTreeMap::new(),
+        );
+        assert_eq!(blessed, coalesce(xfails.clone()));
+        let unexpected = Observed::from([(("a".into(), "audio".into()), set(&[]))]);
+        let verdict = judge_observing(&[], "linux", &ran, &unexpected, &unobserved);
+        assert_eq!(
+            verdict.unexpected.len(),
+            1,
+            "the prerequisite failure still fails"
+        );
     }
 
     #[test]

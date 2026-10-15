@@ -109,6 +109,9 @@ def render(records, title, junit, flaky, text):
         f"{counts.get('fail', 0)} FAILED, {counts.get('xpass', 0)} unexpectedly passing, "
         f"{counts.get('unsupported', 0)} unsupported ({seconds:.0f} s of case time)"
     )
+    unmeasured = [r for r in records if r.get("unobserved")]
+    if unmeasured:
+        head += f"; {len(unmeasured)} with classes not measured because an earlier check failed"
     recorded = {r["case"] for r in records}
     crashed = [(name, msg) for name, msg in junit if not any(c in msg for c in recorded)]
     out = []
@@ -170,6 +173,9 @@ def render(records, title, junit, flaky, text):
         out.append("| --- | --- | --- |")
         for r in xfails:
             classes = ", ".join(sorted((r.get("failures") or {}).keys())) or "-"
+            unmeasured = sorted((r.get("unobserved") or {}).keys())
+            if unmeasured:
+                classes += f" (not measured: {', '.join(unmeasured)})"
             summary = (r.get("summary") or "").splitlines()[0:1]
             summary = summary[0].replace("|", "\\|")[:200] if summary else ""
             out.append(f"| `{r['case']}` | {classes} | {summary} |")

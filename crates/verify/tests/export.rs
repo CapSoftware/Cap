@@ -460,15 +460,18 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
             ),
         );
     }
-    let emit_time = |slot: u32| {
-        emitted
-            .screen
-            .iter()
-            .find(|e| e.0 == slot)
-            .map(|e| e.1)
-            .unwrap_or(f64::NAN)
-    };
-    let video_offsets: Vec<f64> = shown.iter().map(|&(pts, s)| pts - emit_time(s)).collect();
+    // Frames within the start gate's margin have no recorded emit time and
+    // are not timed.
+    let video_offsets: Vec<f64> = shown
+        .iter()
+        .filter_map(|&(pts, slot)| {
+            emitted
+                .screen
+                .iter()
+                .find(|e| e.0 == slot)
+                .map(|e| pts - e.1)
+        })
+        .collect();
     let spread = |v: &[f64]| {
         let lo = v.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -480,9 +483,31 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
     };
     let frame = 1.0 / f64::from(emitted.fps);
+    if video_offsets.is_empty() {
+        case.problem(
+            "dropped",
+            "no emitted screen frame identified in the output",
+        );
+        case.unobserved("timestamps", "no emitted screen frame identified");
+        case.unobserved("sync", "no emitted screen frame identified");
+    }
     let video_spread = spread(&video_offsets);
     case.note(format!("video timing spread {:.2} ms", video_spread * 1e3));
-    if video_spread > frame / 2.0 {
+    let late = emitted
+        .screen_sent
+        .iter()
+        .filter_map(|&(slot, sent)| {
+            let planned = emitted.screen.iter().find(|e| e.0 == slot)?.1;
+            Some((slot, sent - planned))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((slot, late)) = late {
+        case.note(format!(
+            "test emitter at most {:.2} ms late (slot {slot})",
+            late * 1e3
+        ));
+    }
+    if !video_offsets.is_empty() && video_spread > frame / 2.0 {
         case.problem(
             "timestamps",
             format!(
@@ -504,6 +529,8 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         if expected.is_empty() {
             continue;
         }
+        // Markers are matched by their decoded identity anywhere in the
+        // track, so an arbitrarily large A/V offset is still measured.
         let found = audio_code::locate_markers(&mono, audio.sample_rate, source);
         let mut offsets = Vec::new();
         let mut absent = Vec::new();
@@ -515,18 +542,53 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         }
         let extra = found.len().saturating_sub(expected.len() - absent.len());
         if !absent.is_empty() || extra > 0 {
+            let undecoded = found.iter().filter(|f| f.index.is_none()).count();
             case.problem(
                 "audio",
                 format!(
-                    "{}: {} markers missing (first {:?}), {} unexpected",
+                    "{}: {} markers missing (first {:?}), {} unexpected ({} chirps without a decodable identity)",
                     source.name(),
                     absent.len(),
                     &absent[..absent.len().min(5)],
-                    extra
+                    extra,
+                    undecoded
                 ),
             );
+            let listed: Vec<String> = found
+                .iter()
+                .take(16)
+                .map(|f| {
+                    format!(
+                        "{:.4}s {} corr {:.2} gain {:.3}",
+                        f.time_secs + audio.start_secs,
+                        f.index.map_or("undecoded".to_string(), |i| format!("#{i}")),
+                        f.correlation,
+                        f.gain
+                    )
+                })
+                .collect();
+            case.note(format!(
+                "{} chirps found: [{}]; expected {:?}",
+                source.name(),
+                listed.join(", "),
+                expected
+                    .iter()
+                    .map(|&(i, t)| format!("#{i} {t:.4}s"))
+                    .collect::<Vec<_>>()
+            ));
         }
         if offsets.is_empty() {
+            case.unobserved(
+                "sync",
+                format!(
+                    "{}: none of the {} expected markers was identified in the output",
+                    source.name(),
+                    expected.len()
+                ),
+            );
+            continue;
+        }
+        if video_offsets.is_empty() {
             continue;
         }
         let av = median(&offsets) - median(&video_offsets);

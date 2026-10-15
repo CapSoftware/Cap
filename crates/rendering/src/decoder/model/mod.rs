@@ -760,6 +760,7 @@ fn write_records(
                 outcome,
                 failures,
                 seeds_ran: ran.get(&result.name).cloned().flatten(),
+                unobserved: Default::default(),
                 problems,
                 summary: summary.join("\n"),
                 repro,

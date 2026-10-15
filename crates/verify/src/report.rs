@@ -67,6 +67,9 @@ pub struct Case {
     /// First problem per class (the draft reason when blessing).
     class_problems: BTreeMap<String, String>,
     pub notes: Vec<String>,
+    /// Classes this case could not measure because an earlier check failed
+    /// -> why (see `cap_verify_expect::Unobserved`).
+    pub unobserved: BTreeMap<String, String>,
     /// Set when this runner cannot run the case at all (for example no
     /// D3D11 video device for Media Foundation on a GPU-less Windows VM).
     pub unsupported: Option<String>,
@@ -84,6 +87,7 @@ impl Case {
             classes: Default::default(),
             class_problems: Default::default(),
             notes: Vec::new(),
+            unobserved: Default::default(),
             unsupported: None,
         }
     }
@@ -112,6 +116,16 @@ impl Case {
             .entry(class.to_string())
             .or_insert_with(|| text.clone());
         self.problems.push(text);
+    }
+
+    /// Records that `class` could not be measured because the check it
+    /// depends on failed. The case must also report that failure: an
+    /// unobserved class never makes a case pass, it only stops an expected
+    /// failure of `class` from counting as fixed.
+    pub fn unobserved(&mut self, class: &str, why: impl Into<String>) {
+        self.unobserved
+            .entry(class.to_string())
+            .or_insert_with(|| why.into());
     }
 
     pub fn note(&mut self, text: impl Into<String>) {
@@ -184,7 +198,11 @@ pub fn selected(id: &str) -> bool {
     cap_verify_expect::case_selected(id)
 }
 
-fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {
+fn write_result(
+    result: &CaseResult,
+    classes: &BTreeMap<String, String>,
+    unobserved: &BTreeMap<String, String>,
+) {
     use cap_verify_expect::{Outcome, Record};
     let record = Record {
         suite: "cap-verify".into(),
@@ -207,6 +225,7 @@ fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {
             .map(|class| (class.clone(), Default::default()))
             .collect(),
         seeds_ran: None,
+        unobserved: unobserved.clone(),
         problems: classes.clone(),
         summary: result.summary.clone(),
         repro: result.repro.clone(),
@@ -221,7 +240,23 @@ fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {
 
 /// Settles a case against the expectations file. Returns an error message
 /// when the test must fail.
-pub fn settle(case: Case) -> Result<CaseResult, String> {
+pub fn settle(mut case: Case) -> Result<CaseResult, String> {
+    let measured: Vec<String> = case
+        .unobserved
+        .keys()
+        .filter(|class| case.classes.contains(*class))
+        .cloned()
+        .collect();
+    for class in measured {
+        case.unobserved.remove(&class);
+    }
+    if !case.unobserved.is_empty() && !case.failed() {
+        let classes: Vec<&String> = case.unobserved.keys().collect();
+        case.problem(
+            "harness",
+            format!("{classes:?} reported unmeasurable without the failure that prevented it"),
+        );
+    }
     let xfails = xfails_for(&case.id);
     let failed = case.failed();
     let repro = repro_command(&case.id);
@@ -232,7 +267,13 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
         .iter()
         .map(|class| ((case.id.clone(), class.clone()), Default::default()))
         .collect();
-    let verdict = cap_verify_expect::judge(&xfails, platform, &ran, &observed);
+    let unobserved: cap_verify_expect::Unobserved = case
+        .unobserved
+        .keys()
+        .map(|class| (case.id.clone(), class.clone()))
+        .collect();
+    let verdict =
+        cap_verify_expect::judge_observing(&xfails, platform, &ran, &observed, &unobserved);
     let unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
     let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
     let outcome = if case.unsupported.is_some() && !failed {
@@ -258,6 +299,9 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
             .collect();
         format!("all checks passed: {}", streams.join(", "))
     };
+    for (class, why) in &case.unobserved {
+        summary.push_str(&format!("\n  ({class} not measured: {why})"));
+    }
     for x in &xfails {
         summary.push_str(&format!(
             "\n  (expected {}{}: {} {})",
@@ -279,7 +323,7 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
         repro: repro.clone(),
         outcome: outcome.to_string(),
     };
-    write_result(&result, &case.class_problems);
+    write_result(&result, &case.class_problems, &case.unobserved);
     eprintln!(
         "[cap-verify] {outcome} {} in {:.1}s\n  {summary}",
         result.id, result.seconds

@@ -476,6 +476,10 @@ pub struct Emitted {
     pub fps: u32,
     /// (source, marker index, chirp time) of every audio marker.
     pub audio: Vec<(AudioSource, u32, f64)>,
+    /// (slot, time the frame was actually handed to the pipeline), to tell a
+    /// late emitter (a starved test runtime) from late processing.
+    #[serde(default)]
+    pub screen_sent: Vec<(u32, f64)>,
 }
 
 pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()> {
@@ -511,6 +515,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
     }
     let (fps, width, height, delay) = (video.fps, video.width, video.height, video.start_delay);
     let video_emit = tokio::spawn(async move {
+        let mut sent = Vec::new();
         for slot in slots {
             let t = delay + f64::from(slot) / f64::from(fps);
             let at = base + Duration::from_secs_f64(t);
@@ -522,7 +527,9 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
             if tx.send_async(frame).await.is_err() {
                 break;
             }
+            sent.push((slot, base.elapsed().as_secs_f64()));
         }
+        sent
     });
     let mut video_builder = OutputPipeline::builder(content.join("display"))
         .with_video::<ChannelVideoSource<FFmpegVideoFrame>>(ChannelVideoSourceConfig::new(info, rx))
@@ -654,7 +661,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
         tokio::time::sleep_until((base + Duration::from_secs_f64(arm_at)).into()).await;
         gate.arm();
     }
-    video_emit.await.context("video emit")?;
+    emitted.screen_sent = video_emit.await.context("video emit")?;
     let mut held = Vec::new();
     for emit in audio_emits {
         held.push(emit.await.context("audio emit")?);

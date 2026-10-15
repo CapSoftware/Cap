@@ -89,6 +89,11 @@ link = "https://github.com/CapSoftware/Cap/pull/2595"   # empty = no fix yet
 - A listed class or seed that no longer fails also fails the run, with
   "remove this xfail". When a fix lands, its expected failures must be removed
   in the same PR, so the fix is locked in.
+- A class that cannot be measured because an earlier check failed (A/V sync
+  when no audio marker of a source could be identified) is recorded as "not
+  measured", never as a pass: its xfail is neither confirmed nor reported as
+  fixed, and bless leaves it alone. The failure that prevented the measurement
+  is judged on its own, so it still has to be listed.
 
 To update the files after a deliberate change, run:
 

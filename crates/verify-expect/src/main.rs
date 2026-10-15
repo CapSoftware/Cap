@@ -11,7 +11,9 @@ use std::{
     process::ExitCode,
 };
 
-use cap_verify_expect::{Observed, Outcome, Ran, Record, bless, header, load, parse, render};
+use cap_verify_expect::{
+    Observed, Outcome, Ran, Record, Unobserved, bless_observing, header, load, parse, render,
+};
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_dir() {
@@ -38,6 +40,7 @@ fn repo_root() -> PathBuf {
 struct Run {
     ran: Ran,
     observed: Observed,
+    unobserved: Unobserved,
     problems: BTreeMap<(String, String), String>,
 }
 
@@ -73,6 +76,9 @@ fn bless_command(inputs: &[String]) -> ExitCode {
             if let Some(seeds) = &record.seeds_ran {
                 ran.get_or_insert_with(BTreeSet::new).extend(seeds);
             }
+            for class in record.unobserved.keys() {
+                run.unobserved.insert((record.case.clone(), class.clone()));
+            }
             for (class, seeds) in &record.failures {
                 run.observed
                     .entry((record.case.clone(), class.clone()))
@@ -93,7 +99,14 @@ fn bless_command(inputs: &[String]) -> ExitCode {
         let before = load(&path);
         let mut entries = before.clone();
         for (platform, run) in platforms {
-            entries = bless(&entries, platform, &run.ran, &run.observed, &run.problems);
+            entries = bless_observing(
+                &entries,
+                platform,
+                &run.ran,
+                &run.observed,
+                &run.unobserved,
+                &run.problems,
+            );
         }
         let added = entries.iter().filter(|e| !before.contains(e)).count();
         let removed = before.iter().filter(|e| !entries.contains(e)).count();
