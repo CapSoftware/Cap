@@ -1106,7 +1106,6 @@ fn duration_to_sample_count(duration: Duration, sample_rate: u32) -> u64 {
     ns_to_sample_count(ns, sample_rate)
 }
 
-#[cfg(target_os = "linux")]
 #[derive(Default)]
 struct CaptureInstantTimeline {
     source_epoch: Duration,
@@ -1115,8 +1114,31 @@ struct CaptureInstantTimeline {
     last_wall: Option<Duration>,
 }
 
-#[cfg(target_os = "linux")]
 impl CaptureInstantTimeline {
+    // Continues an existing output timeline from `output_epoch`, which the
+    // frame captured at `source` was stamped with, so later frames advance by
+    // their capture-time delta.
+    #[cfg(not(target_os = "linux"))]
+    fn continuing(
+        source: Duration,
+        output_epoch: Duration,
+        output: Duration,
+        wall: Duration,
+    ) -> Self {
+        Self {
+            source_epoch: source,
+            output_epoch,
+            last_output: output,
+            last_wall: Some(wall),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn candidate(&self, source: Duration) -> Duration {
+        self.output_epoch
+            .saturating_add(source.saturating_sub(self.source_epoch))
+    }
+
     fn calculate(
         &mut self,
         source: Duration,
@@ -1145,6 +1167,8 @@ impl CaptureInstantTimeline {
 struct VideoDriftTracker {
     #[cfg(target_os = "linux")]
     capture_timeline: CaptureInstantTimeline,
+    #[cfg(not(target_os = "linux"))]
+    capture_clock: Option<CaptureInstantTimeline>,
     anchor: Option<(f64, f64)>,
     anchor_deferred: bool,
     capped_frame_count: u64,
@@ -1156,6 +1180,8 @@ impl VideoDriftTracker {
         Self {
             #[cfg(target_os = "linux")]
             capture_timeline: CaptureInstantTimeline::default(),
+            #[cfg(not(target_os = "linux"))]
+            capture_clock: None,
             anchor: None,
             anchor_deferred: false,
             capped_frame_count: 0,
@@ -1234,6 +1260,59 @@ impl VideoDriftTracker {
         Duration::from_secs_f64(final_secs)
     }
 
+    // Sources stamped on the host monotonic clock (the clock the wall clock
+    // reads): up to and including the warmup anchor this is exactly
+    // `calculate_timestamp`. After the anchor each frame advances from the
+    // anchor by its own capture-time delta instead of the wall-clock delta,
+    // because the wall clock here is when the mux loop processed the frame:
+    // any hand-off delay, mux stall or drain burst would move the frame by that
+    // delay, and a stall on the anchor frame would shift every later frame.
+    // Both clocks run at the same rate, so dropping the processing delay is the
+    // only difference. The wall clock still bounds the output and sizes the
+    // bridge over a detected source discontinuity, never per frame.
+    #[cfg(not(target_os = "linux"))]
+    fn calculate_capture_timestamp(
+        &mut self,
+        source_duration: Duration,
+        capture_elapsed: Duration,
+        wall_clock_elapsed: Duration,
+        discontinuity: bool,
+    ) -> Duration {
+        let Some(timeline) = self.capture_clock.as_mut() else {
+            let output = self.calculate_timestamp(source_duration, wall_clock_elapsed);
+            if self.anchor.is_some() {
+                self.capture_clock = Some(CaptureInstantTimeline::continuing(
+                    capture_elapsed,
+                    source_duration,
+                    output,
+                    wall_clock_elapsed,
+                ));
+            }
+            return output;
+        };
+
+        // A frame captured on the host clock cannot be stamped ahead of the
+        // time it is processed, so a capture time beyond the wall-clock bound
+        // is a source clock that jumped forward by less than the anomaly
+        // tracker's threshold. Bridge it like any other discontinuity rather
+        // than pinning every later frame to the bound.
+        let bound = wall_clock_elapsed
+            .saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
+        let ahead = !discontinuity && timeline.candidate(capture_elapsed) > bound;
+        if ahead && !self.clamp_warning_logged {
+            warn!(
+                capture_secs = capture_elapsed.as_secs_f64(),
+                wall_clock_secs = wall_clock_elapsed.as_secs_f64(),
+                "Video capture clock ran ahead of the wall-clock bound, bridging it as a discontinuity"
+            );
+            self.clamp_warning_logged = true;
+        }
+        let (output, capped) =
+            timeline.calculate(capture_elapsed, wall_clock_elapsed, discontinuity || ahead);
+        self.capped_frame_count += u64::from(capped || ahead);
+        output
+    }
+
     fn baseline_offset_secs(&self) -> Option<f64> {
         self.anchor
             .map(|(camera_secs, wall_secs)| camera_secs - wall_secs)
@@ -1243,27 +1322,58 @@ impl VideoDriftTracker {
         self.capped_frame_count
     }
 }
+// `capture_elapsed` is the frame's own capture time since the recording's
+// `Timestamps` base (unsmoothed, pauses excised); only its deltas are used.
 fn calculate_video_timestamp(
     tracker: &mut VideoDriftTracker,
     source_timestamp: Timestamp,
     source_duration: Duration,
+    capture_elapsed: Duration,
     wall_elapsed: Duration,
     discontinuity: bool,
 ) -> Duration {
     #[cfg(target_os = "linux")]
-    if matches!(source_timestamp, Timestamp::Instant(_)) {
-        // Linux capture stamps the same monotonic clock as the consumer. Arrival
-        // latency is not device-clock drift and must not replace capture cadence.
-        let (duration, capped) =
-            tracker
-                .capture_timeline
-                .calculate(source_duration, wall_elapsed, discontinuity);
-        tracker.capped_frame_count += u64::from(capped);
-        return duration;
+    {
+        let _ = capture_elapsed;
+        if matches!(source_timestamp, Timestamp::Instant(_)) {
+            // Linux capture stamps the same monotonic clock as the consumer. Arrival
+            // latency is not device-clock drift and must not replace capture cadence.
+            let (duration, capped) =
+                tracker
+                    .capture_timeline
+                    .calculate(source_duration, wall_elapsed, discontinuity);
+            tracker.capped_frame_count += u64::from(capped);
+            return duration;
+        }
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = (source_timestamp, discontinuity);
+    if stamped_on_host_clock(&source_timestamp) {
+        return tracker.calculate_capture_timestamp(
+            source_duration,
+            capture_elapsed,
+            wall_elapsed,
+            discontinuity,
+        );
+    }
     tracker.calculate_timestamp(source_duration, wall_elapsed)
+}
+
+// Capture clocks that are the wall clock's own monotonic host clock, so their
+// deltas carry no drift against it. SystemTime can be stepped and slewed.
+#[cfg(not(target_os = "linux"))]
+fn stamped_on_host_clock(timestamp: &Timestamp) -> bool {
+    match timestamp {
+        Timestamp::Instant(_) => true,
+        #[cfg(target_os = "macos")]
+        Timestamp::MachAbsoluteTime(_) => true,
+        #[cfg(windows)]
+        Timestamp::PerformanceCounter(_) => true,
+        Timestamp::SystemTime(_) => false,
+    }
+}
+
+fn capture_elapsed(raw_ns: i64, total_pause: Duration) -> Duration {
+    Duration::from_nanos(raw_ns.max(0) as u64).saturating_sub(total_pause)
 }
 
 const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 300;
@@ -3102,6 +3212,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         &mut drift_tracker,
                         timestamp,
                         raw_duration,
+                        capture_elapsed(remap.raw_ns, total_pause_duration),
                         wall_clock_elapsed,
                         resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                     );
@@ -3230,6 +3341,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             &mut drift_tracker,
                             timestamp,
                             raw_duration,
+                            capture_elapsed(
+                                remap.raw_ns,
+                                shared_pause.total_pause_duration(),
+                            ),
                             wall_clock_elapsed,
                             resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                         );
@@ -4642,6 +4757,7 @@ mod tests {
                         &mut drift,
                         timestamp,
                         raw_duration,
+                        capture_elapsed(remap.raw_ns, Duration::ZERO),
                         wall,
                         anomaly.take_resync_flag()
                             || matches!(remap.outcome, SourceClockOutcome::HardReset),
@@ -4729,6 +4845,313 @@ mod tests {
         }
     }
 
+    // Sources on the host clock after the warmup anchor: stamped by capture
+    // time, with the wall clock (when the mux loop processed the frame) only
+    // bounding the output and bridging detected discontinuities.
+    #[cfg(not(target_os = "linux"))]
+    mod video_capture_clock {
+        use super::*;
+
+        const FPS: f64 = 30.0;
+        const EXACT: Duration = Duration::from_micros(1);
+
+        fn secs(value: f64) -> Duration {
+            Duration::from_secs_f64(value)
+        }
+
+        fn capture(frame: u64) -> Duration {
+            secs(frame as f64 / FPS)
+        }
+
+        struct Frame {
+            capture: Duration,
+            wall: Duration,
+            discontinuity: bool,
+        }
+
+        fn frame(capture: Duration, wall: Duration) -> Frame {
+            Frame {
+                capture,
+                wall,
+                discontinuity: false,
+            }
+        }
+
+        fn run(frames: &[Frame]) -> (Vec<Duration>, VideoDriftTracker) {
+            let mut tracker = VideoDriftTracker::new();
+            let output = frames
+                .iter()
+                .map(|f| {
+                    calculate_video_timestamp(
+                        &mut tracker,
+                        Timestamp::Instant(Instant::now()),
+                        f.capture,
+                        f.capture,
+                        f.wall,
+                        f.discontinuity,
+                    )
+                })
+                .collect();
+            (output, tracker)
+        }
+
+        fn legacy(frames: &[Frame]) -> Vec<Duration> {
+            let mut tracker = VideoDriftTracker::new();
+            frames
+                .iter()
+                .map(|f| tracker.calculate_timestamp(f.capture, f.wall))
+                .collect()
+        }
+
+        // Frames processed in capture order, each `delay(frame)` after its capture
+        // but never before the previous one was processed (one mux loop).
+        fn processed(count: u64, delay: impl Fn(u64) -> Duration) -> Vec<Frame> {
+            let mut wall = Duration::ZERO;
+            (0..count)
+                .map(|i| {
+                    wall = wall.max(capture(i) + delay(i));
+                    frame(capture(i), wall)
+                })
+                .collect()
+        }
+
+        fn assert_on_capture_time(frames: &[Frame], output: &[Duration]) {
+            for (i, (f, out)) in frames.iter().zip(output).enumerate() {
+                assert!(
+                    out.abs_diff(f.capture) <= EXACT,
+                    "frame {i}: pts {out:?} vs capture {:?} (processed at {:?})",
+                    f.capture,
+                    f.wall
+                );
+            }
+        }
+
+        #[test]
+        fn warmup_and_anchor_match_legacy() {
+            let frames = processed(300, |i| Duration::from_millis(5 + (i * 7919) % 40));
+            let (output, _) = run(&frames);
+            let reference = legacy(&frames);
+            let anchor = frames
+                .iter()
+                .position(|f| f.wall >= secs(2.0) && f.capture >= secs(2.0))
+                .unwrap();
+            assert_eq!(output[..=anchor], reference[..=anchor]);
+        }
+
+        #[test]
+        fn stall_on_the_anchor_frame_does_not_shift_later_frames() {
+            // The anchor frame (the first processed after 2 s) waits 860 ms
+            // and the backlog behind it drains at once: the probe failure.
+            let frames = processed(300, |i| match i {
+                60 => Duration::from_millis(860),
+                _ => Duration::from_millis(12),
+            });
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+
+            let old = legacy(&frames);
+            let late = old[200].as_secs_f64() - frames[200].capture.as_secs_f64();
+            assert!(
+                late < -0.8,
+                "legacy must show the bug this test guards: {late:.3}s"
+            );
+        }
+
+        #[test]
+        fn processing_delay_never_reaches_timestamps() {
+            let mut rng = 0x5eed_u64;
+            let delays: Vec<Duration> = (0..1800)
+                .map(|_| {
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let spike = (rng >> 60) == 0;
+                    let ms = (rng >> 33) % 40 + if spike { 300 } else { 0 };
+                    Duration::from_millis(ms)
+                })
+                .collect();
+            let frames = processed(1800, |i| delays[i as usize]);
+            let (output, tracker) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+            assert_eq!(tracker.capped_frame_count(), 0);
+        }
+
+        #[test]
+        fn drain_burst_at_stop_keeps_capture_cadence() {
+            let mut frames = processed(150, |_| Duration::from_millis(10));
+            let stop = capture(170) + Duration::from_millis(300);
+            frames.extend((150..170).map(|i| frame(capture(i), stop + Duration::from_micros(i))));
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+        }
+
+        #[test]
+        fn delivery_gap_stays_in_the_timeline() {
+            // A static screen: no frames for 3 s, then capture resumes. The
+            // anomaly tracker keeps such wall-confirmed gaps in the source time.
+            let frames: Vec<Frame> = (0..300u64)
+                .filter(|i| !(100..190).contains(i))
+                .map(|i| frame(capture(i), capture(i) + Duration::from_millis(15)))
+                .collect();
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+        }
+
+        #[test]
+        fn clock_reset_is_bridged_by_the_wall_clock_gap() {
+            let mut frames = processed(120, |_| Duration::from_millis(10));
+            let last_wall = frames.last().unwrap().wall;
+            // The source clock restarts at zero after a 2.5 s hard reset.
+            for k in 0..60u64 {
+                frames.push(Frame {
+                    capture: capture(k),
+                    wall: last_wall + secs(2.5) + capture(k),
+                    discontinuity: k == 0,
+                });
+            }
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames[..120], &output[..120]);
+            let bridge = output[120] - output[119];
+            assert!(bridge.abs_diff(secs(2.5)) <= EXACT, "bridge {bridge:?}");
+            for k in 121..180 {
+                assert!(
+                    (output[k] - output[k - 1]).abs_diff(capture(1)) <= EXACT,
+                    "frame {k} keeps the capture cadence after the reset"
+                );
+            }
+        }
+
+        #[test]
+        fn source_jumping_ahead_is_bridged_not_pinned_to_the_wall_clock() {
+            // The capture clock jumps 0.5 s ahead (under the anomaly tracker's
+            // 2 s threshold) without real time passing.
+            let frames: Vec<Frame> = (0..240u64)
+                .map(|i| {
+                    let skew = if i >= 150 { secs(0.5) } else { Duration::ZERO };
+                    frame(capture(i) + skew, capture(i) + Duration::from_millis(20))
+                })
+                .collect();
+            let (output, tracker) = run(&frames);
+            assert_on_capture_time(&frames[..150], &output[..150]);
+            for (f, out) in frames.iter().zip(&output) {
+                assert!(*out <= f.wall + secs(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
+            }
+            let step = output[150] - output[149];
+            assert!(step <= capture(1) + EXACT, "glitch absorbed, step {step:?}");
+            for k in 151..240 {
+                assert!((output[k] - output[k - 1]).abs_diff(capture(1)) <= EXACT);
+            }
+            assert!(tracker.capped_frame_count() > 0);
+        }
+
+        #[test]
+        fn runaway_source_stays_bounded_and_monotonic() {
+            let frames: Vec<Frame> = (0..1800u64)
+                .map(|i| {
+                    frame(
+                        secs(i as f64 / FPS * 1.005),
+                        capture(i) + Duration::from_millis(5),
+                    )
+                })
+                .collect();
+            let (output, _) = run(&frames);
+            for (i, (f, out)) in frames.iter().zip(&output).enumerate() {
+                assert!(*out <= f.wall + secs(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
+                if i > 0 {
+                    assert!(*out >= output[i - 1]);
+                }
+            }
+            let last = output.last().unwrap().as_secs_f64();
+            let wall = frames.last().unwrap().wall.as_secs_f64();
+            assert!((last - wall).abs() < 0.2, "{last:.3} vs wall {wall:.3}");
+        }
+
+        #[test]
+        fn backward_capture_time_is_clamped_to_the_previous_frame() {
+            let mut frames = processed(120, |_| Duration::from_millis(10));
+            let last = frames.last().unwrap();
+            let (capture_back, wall) = (last.capture - Duration::from_millis(5), last.wall);
+            frames.push(frame(capture_back, wall + Duration::from_millis(33)));
+            let (output, _) = run(&frames);
+            assert_eq!(output[120], output[119]);
+        }
+
+        #[test]
+        fn system_time_keeps_the_wall_clock_path() {
+            let frames = processed(200, |i| Duration::from_millis(5 + (i % 9) * 10));
+            let mut tracker = VideoDriftTracker::new();
+            let output: Vec<Duration> = frames
+                .iter()
+                .map(|f| {
+                    calculate_video_timestamp(
+                        &mut tracker,
+                        Timestamp::SystemTime(std::time::SystemTime::now()),
+                        f.capture,
+                        f.capture,
+                        f.wall,
+                        false,
+                    )
+                })
+                .collect();
+            assert_eq!(output, legacy(&frames));
+        }
+
+        // The full chain (source remap, anomaly tracker, drift tracker) against
+        // the sample-counted audio leg, with processing delays and a stall on the
+        // anchor frame: a flash and its co-timed beep land on the same PTS.
+        #[test]
+        fn flash_and_beep_stay_aligned_under_processing_delays() {
+            let timestamps = Timestamps::now();
+            let master = MasterClock::new(timestamps, 48_000);
+            let mut source = SourceClockState::new("video");
+            #[cfg(target_os = "macos")]
+            {
+                source = source.detecting_skipped_frames();
+            }
+            let mut anomaly = TimestampAnomalyTracker::new("video");
+            let mut drift = VideoDriftTracker::new();
+            let startup = Duration::from_millis(400);
+            let frames = processed(1200, |i| match i {
+                60 => Duration::from_millis(900),
+                _ if i % 37 == 0 => Duration::from_millis(250),
+                _ => Duration::from_millis(3 + (i * 31) % 20),
+            });
+            for (i, f) in frames.iter().enumerate() {
+                let timestamp = Timestamp::Instant(timestamps.instant() + startup + f.capture);
+                let remap =
+                    remap_video_timestamp(&mut source, &master, timestamp, 1_000_000_000 / 30);
+                let wall = startup + f.wall;
+                let raw = anomaly
+                    .process_timestamp(
+                        Timestamp::Instant(timestamps.instant() + remap.duration()),
+                        timestamps,
+                        wall,
+                    )
+                    .unwrap();
+                drift.defer_anchor(source.lag_pending());
+                let pts = calculate_video_timestamp(
+                    &mut drift,
+                    timestamp,
+                    raw,
+                    capture_elapsed(remap.raw_ns, Duration::ZERO),
+                    wall,
+                    anomaly.take_resync_flag()
+                        || matches!(remap.outcome, SourceClockOutcome::HardReset),
+                );
+                let mut audio = AudioTimestampGenerator::new(48_000);
+                let samples = (f.capture.as_secs_f64() * 48_000.0).round() as u64;
+                if samples > 0 {
+                    audio.next_timestamp(samples);
+                }
+                let beep = audio.next_timestamp(0);
+                assert!(
+                    pts.abs_diff(beep) < Duration::from_millis(1),
+                    "frame {i}: video {pts:?} vs beep {beep:?}"
+                );
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     mod video_cadence {
         use super::*;
@@ -4763,6 +5186,7 @@ mod tests {
                     calculate_video_timestamp(
                         &mut drift,
                         Timestamp::Instant(timestamps.instant() + Duration::from_nanos(elapsed)),
+                        adjusted,
                         adjusted,
                         wall,
                         anomaly.take_resync_flag()
@@ -5268,6 +5692,7 @@ mod tests {
                 tracker,
                 frame_timestamp(),
                 ns(source),
+                ns(source),
                 ns(wall),
                 discontinuity,
             )
@@ -5518,6 +5943,7 @@ mod tests {
                         &mut drift,
                         timestamp,
                         validated,
+                        validated,
                         Duration::from_millis(wall),
                         false
                     ),
@@ -5550,6 +5976,7 @@ mod tests {
                     &mut tracker,
                     timestamp,
                     validated,
+                    validated,
                     wall,
                     discontinuity,
                 );
@@ -5578,6 +6005,7 @@ mod tests {
                 let output = calculate_video_timestamp(
                     &mut tracker,
                     timestamp,
+                    validated,
                     validated,
                     wall,
                     actual_resync,
@@ -5615,7 +6043,14 @@ mod tests {
                 let wall =
                     Duration::from_millis(wall).saturating_sub(Duration::from_millis(paused));
                 assert_eq!(
-                    calculate_video_timestamp(&mut tracker, frame_timestamp(), source, wall, false),
+                    calculate_video_timestamp(
+                        &mut tracker,
+                        frame_timestamp(),
+                        source,
+                        source,
+                        wall,
+                        false
+                    ),
                     Duration::from_millis(expected)
                 );
             }
@@ -5647,6 +6082,7 @@ mod tests {
                     &mut policy,
                     Timestamp::SystemTime(std::time::SystemTime::now()),
                     source,
+                    source,
                     wall,
                     false,
                 );
@@ -5677,8 +6113,14 @@ mod tests {
                 } else {
                     50
                 }));
-                let pts =
-                    calculate_video_timestamp(&mut video, frame_timestamp(), source, wall, false);
+                let pts = calculate_video_timestamp(
+                    &mut video,
+                    frame_timestamp(),
+                    source,
+                    source,
+                    wall,
+                    false,
+                );
                 let audio_pts = audio.next_timestamp(1600);
                 assert!(pts.abs_diff(audio_pts) <= Duration::from_nanos(1));
             }
