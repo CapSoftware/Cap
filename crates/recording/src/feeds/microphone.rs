@@ -159,9 +159,7 @@ pub struct MicrophoneSamples {
     pub format: SampleFormat,
     pub sample_rate: u32,
     pub channels: u16,
-    /// The device callback's info; `None` only for test-utils synthetic
-    /// devices.
-    pub info: Option<InputCallbackInfo>,
+    pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
 }
 
@@ -1421,7 +1419,7 @@ impl MicrophoneFeed {
                                 format: data.sample_format(),
                                 sample_rate: effective_sample_rate.sample_rate,
                                 channels: callback_channels,
-                                info: Some(info.clone()),
+                                info: info.clone(),
                                 timestamp: timestamp - capture_latency,
                             };
 
@@ -3087,6 +3085,17 @@ pub mod synthetic {
 
     const STREAM_ID: u32 = 1;
 
+    /// cpal has no public constructor for `InputCallbackInfo`, and a
+    /// synthetic device has no device callback. Consumers time samples from
+    /// `MicrophoneSamples::timestamp`; this info reads as stream instant 0.
+    fn zero_callback_info() -> InputCallbackInfo {
+        // SAFETY: `InputCallbackInfo` (cpal pinned by git rev) holds two
+        // `StreamInstant { secs: i64, nanos: u32 }` values and nothing else,
+        // so the all-zero bit pattern is a valid value (instant 0) whatever
+        // the field layout.
+        unsafe { std::mem::zeroed() }
+    }
+
     pub struct SyntheticMicrophone {
         feed: ActorRef<MicrophoneFeed>,
         sample_rate: u32,
@@ -3143,7 +3152,7 @@ pub mod synthetic {
                     format: SampleFormat::F32,
                     sample_rate: self.sample_rate,
                     channels: self.channels,
-                    info: None,
+                    info: zero_callback_info(),
                     timestamp,
                 })
                 .await;
