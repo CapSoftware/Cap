@@ -1,0 +1,258 @@
+name: cap-verify platforms (temporary triage)
+
+# Temporary workflow for the PLATFORMS track: runs the cap-verify suite and
+# the decoder model fuzz on Windows and Linux runners, several times, and
+# uploads the per-case JSON reports. Not for merging; the CI-INFRA track owns
+# engine-verify.yml.
+
+on:
+  push:
+    branches:
+      - ci/verify-platforms
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Times to run each test binary"
+        default: "3"
+      case:
+        description: "CAP_VERIFY_CASE filter (glob, comma separated)"
+        default: ""
+
+concurrency:
+  group: verify-platforms-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  suite:
+    name: suite (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2022
+          - ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      REPEATS: ${{ github.event.inputs.repeats || '3' }}
+      CAP_VERIFY_CASE: ${{ github.event.inputs.case || '' }}
+      CAP_VERIFY_FIXTURE_DIR: ${{ github.workspace }}/verify-fixtures
+      OUT: ${{ github.workspace }}/verify-out
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Rust cache (restore only)
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+          prefix-key: v1-rust-sync
+          save-cache: "false"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+        run: node scripts/setup.js
+
+      - name: FFmpeg DLLs on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Native libs on LD_LIBRARY_PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug" >> "$GITHUB_ENV"
+
+      - name: Software Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+          vulkaninfo --summary || true
+
+      - name: Virtual audio device (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch: got $actual, expected $expected" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite")
+          $store.Add($cert)
+          $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed with exit code $LASTEXITCODE" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+
+      - name: Runner facts
+        shell: bash
+        run: |
+          mkdir -p "$OUT"
+          {
+            echo "runner=${{ matrix.runner }}"
+            nproc 2>/dev/null || echo "NUMBER_OF_PROCESSORS=$NUMBER_OF_PROCESSORS"
+            rustc -V
+          } | tee "$OUT/runner.txt"
+
+      - name: Build tests
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --no-run 2>&1 | tail -40
+          echo "build_seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+
+      - name: Run suite (${{ env.REPEATS }}x)
+        shell: bash
+        run: |
+          set +e
+          status=0
+          for run in $(seq 1 "$REPEATS"); do
+            for test in codec export playback seek; do
+              export CAP_VERIFY_REPORT_DIR="$OUT/run$run/$test"
+              mkdir -p "$CAP_VERIFY_REPORT_DIR"
+              start=$(date +%s)
+              cargo test --locked -p cap-verify --test "$test" -- --nocapture > "$OUT/run$run/$test.log" 2>&1
+              code=$?
+              secs=$(( $(date +%s) - start ))
+              echo "run$run $test exit=$code seconds=$secs" | tee -a "$OUT/timings.txt"
+              grep -E "^\[cap-verify\] (pass|xfail|FAIL|XPASS)|^test .* \.\.\. |panicked|error" "$OUT/run$run/$test.log" | head -80
+              [ $code -ne 0 ] && status=1
+            done
+          done
+          exit $status
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          python - "$OUT" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import glob, json, os, sys, collections
+          out = sys.argv[1]
+          cases = collections.OrderedDict()
+          for path in sorted(glob.glob(os.path.join(out, "run*", "*", "*.jsonl"))):
+              run = path.split(os.sep)[-3]
+              for line in open(path, encoding="utf-8"):
+                  r = json.loads(line)
+                  cases.setdefault(r["id"], []).append((run, r["outcome"], r["seconds"], r["summary"].splitlines()[0][:160]))
+          print(f"## cap-verify on {os.environ.get('RUNNER_OS')}")
+          print()
+          print("| case | outcomes | seconds | first line |")
+          print("|---|---|---|---|")
+          for cid, rs in cases.items():
+              outs = " ".join(o for _, o, _, _ in rs)
+              secs = " ".join(f"{s:.1f}" for _, _, s, _ in rs)
+              print(f"| {cid} | {outs} | {secs} | {rs[0][3].replace('|', '/')} |")
+          print()
+          for line in open(os.path.join(out, "timings.txt"), encoding="utf-8"):
+              print(f"- {line.strip()}")
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-${{ matrix.runner }}
+          path: ${{ github.workspace }}/verify-out
+          if-no-files-found: warn
+
+  decoder-model:
+    name: decoder model (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - windows-2022
+          - ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      REPEATS: ${{ github.event.inputs.repeats || '3' }}
+      OUT: ${{ github.workspace }}/model-out
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ci/verify-decoder-model
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Rust cache (restore only)
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'x86_64-unknown-linux-gnu' }}
+          prefix-key: v1-rust-sync
+          save-cache: "false"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || 'x86_64-pc-windows-msvc' }}
+        run: node scripts/setup.js
+
+      - name: FFmpeg DLLs on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Native libs on LD_LIBRARY_PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug" >> "$GITHUB_ENV"
+
+      - name: Build
+        shell: bash
+        run: |
+          mkdir -p "$OUT"
+          start=$(date +%s)
+          cargo test --locked -p cap-rendering --lib --no-run 2>&1 | tail -20
+          echo "build_seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+
+      - name: Run decoder model (${{ env.REPEATS }}x)
+        shell: bash
+        run: |
+          set +e
+          status=0
+          for run in $(seq 1 "$REPEATS"); do
+            start=$(date +%s)
+            cargo test --locked -p cap-rendering --lib decoder::model -- --nocapture > "$OUT/run$run.log" 2>&1
+            code=$?
+            echo "run$run exit=$code seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+            tail -60 "$OUT/run$run.log"
+            [ $code -ne 0 ] && status=1
+          done
+          exit $status
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: decoder-model-${{ matrix.runner }}
+          path: ${{ github.workspace }}/model-out
+          if-no-files-found: warn

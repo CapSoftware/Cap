@@ -81,6 +81,7 @@ fn run_project(
                     format,
                     decoder,
                 };
+                rt.block_on(common::probe_decoders(&mut case, &project, decoder));
                 let first = dir.path().join(format!("a.{ext}"));
                 match rt.block_on(common::export(&project, config.clone(), &run, &first)) {
                     Err(e) => case.problem("error", format!("export failed: {e}")),

@@ -128,7 +128,8 @@ pub enum Format {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decoder {
-    /// The platform default (AVAssetReader on macOS, FFmpeg elsewhere).
+    /// The platform default: AVAssetReader on macOS, Media Foundation on
+    /// Windows, FFmpeg on Linux.
     Default,
     /// `--force-ffmpeg-decoder`.
     Ffmpeg,
@@ -138,6 +139,7 @@ impl Decoder {
     pub fn label(self) -> &'static str {
         match self {
             Decoder::Default if cfg!(target_os = "macos") => "avf",
+            Decoder::Default if cfg!(target_os = "windows") => "mf",
             Decoder::Default => "ffmpeg",
             Decoder::Ffmpeg => "ffmpeg",
         }
@@ -145,11 +147,60 @@ impl Decoder {
 
     /// Decoders that are actually distinct on this platform.
     pub fn all() -> Vec<Decoder> {
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             vec![Decoder::Default, Decoder::Ffmpeg]
         } else {
             vec![Decoder::Default]
         }
+    }
+
+    /// The `DecoderType` display prefix this choice must produce. A silent
+    /// fallback (Media Foundation or AVAssetReader failing over to FFmpeg)
+    /// would otherwise test the wrong decoder under this label.
+    pub fn expected_type(self) -> &'static str {
+        match self {
+            Decoder::Default if cfg!(target_os = "macos") => "AVAssetReader",
+            Decoder::Default if cfg!(target_os = "windows") => "MediaFoundation",
+            _ => "FFmpeg",
+        }
+    }
+}
+
+/// Records which decoder each stream actually used and flags any stream
+/// that is not on the requested decoder.
+pub fn check_decoders(case: &mut Case, decoder: Decoder, segments: &[cap_editor::SegmentMedia]) {
+    let mut used = Vec::new();
+    for (i, segment) in segments.iter().enumerate() {
+        let streams =
+            std::iter::once(("screen", Some(segment.decoders.screen_decoder_status()))).chain(
+                std::iter::once(("camera", segment.decoders.camera_decoder_status())),
+            );
+        for (stream, status) in streams {
+            let Some(status) = status else { continue };
+            let kind = status.decoder_type.to_string();
+            used.push(format!("{stream}{i}={kind}"));
+            if !kind.starts_with(decoder.expected_type()) {
+                case.problem(format!(
+                    "segment {i} {stream} decoded by {kind}, expected {} (fallback reason: {})",
+                    decoder.expected_type(),
+                    status.fallback_reason.as_deref().unwrap_or("none")
+                ));
+            }
+        }
+    }
+    case.note(format!("decoders: {}", used.join(" ")));
+}
+
+/// Opens the project's decoders the way the exporter does and checks them.
+/// The exporter's own decoders are private, so this probes the same
+/// `create_segments` decision on the same files.
+pub async fn probe_decoders(case: &mut Case, project: &Project, decoder: Decoder) {
+    let Some(meta) = project.meta.studio_meta() else {
+        return;
+    };
+    match cap_editor::create_segments(&project.meta, meta, decoder == Decoder::Ffmpeg).await {
+        Ok(segments) => check_decoders(case, decoder, &segments),
+        Err(e) => case.problem(format!("decoder probe failed: {e}")),
     }
 }
 
@@ -415,6 +466,12 @@ impl Player {
             duration,
             resolution: XY::new(resolution.0, resolution.1),
         })
+    }
+
+    /// Flags streams that are not on `decoder` (checked after the run, so a
+    /// mid-run fallback is caught too).
+    pub fn check_decoders(&self, case: &mut Case, decoder: Decoder) {
+        check_decoders(case, decoder, &self.segments);
     }
 
     pub fn prefer_sequential(&self) {

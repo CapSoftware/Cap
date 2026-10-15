@@ -59,6 +59,7 @@ fn run_project(
                         .await?,
                 );
             }
+            player.check_decoders(&mut case, decoder);
             Ok::<_, String>(readouts)
         });
         let frames: Vec<u32> = requests.iter().map(|r| r.0).collect();
@@ -302,7 +303,9 @@ fn cold_open() {
         for &frame in &frames {
             let result = rt.block_on(async {
                 let mut player = Player::open(&project, config.clone(), decoder, RES).await?;
-                player.frame(frame, 30, true, None).await
+                let readout = player.frame(frame, 30, true, None).await;
+                player.check_decoders(&mut case, decoder);
+                readout
             });
             match result {
                 Ok(readout) => readouts.push(readout),

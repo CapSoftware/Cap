@@ -82,6 +82,7 @@ fn sequential_project(
                         .await?,
                 );
             }
+            player.check_decoders(&mut case, decoder);
             Ok::<_, String>(readouts)
         });
         match result {
