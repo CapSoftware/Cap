@@ -1319,7 +1319,6 @@ impl Playback {
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
                     playhead_rx: audio_playhead_rx.clone(),
-                    project_updates: Some(self.project.clone()),
                 })
             };
             let mut has_audio = audio_generation.is_some();
@@ -1382,7 +1381,6 @@ impl Playback {
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
                         playhead_rx: audio_playhead_rx.clone(),
-                        project_updates: Some(self.project.clone()),
                     });
                     let started = runtime.block_on(async {
                         tokio::select! {
@@ -1459,7 +1457,6 @@ impl Playback {
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,
                                 playhead_rx: audio_playhead_rx.clone(),
-                                project_updates: Some(self.project.clone()),
                             },
                             generation,
                         );

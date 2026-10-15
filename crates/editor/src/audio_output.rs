@@ -62,7 +62,6 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
-    pub project_updates: Option<watch::Receiver<ProjectConfiguration>>,
 }
 
 enum ControlMsg {
@@ -958,7 +957,6 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         duration_secs,
         start_playhead_secs,
         playhead_rx,
-        project_updates,
     } = *spec;
 
     if !(duration_secs.is_finite() && duration_secs > 0.0) {
@@ -1011,7 +1009,6 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             duration_secs,
             start_playhead,
             cache,
-            project_updates,
         )
     };
     if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
@@ -1516,7 +1513,6 @@ mod tests {
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
                 playhead_rx,
-                project_updates: None,
             }),
             0,
             SourceAcknowledgement::Ordinary(ack_tx),
