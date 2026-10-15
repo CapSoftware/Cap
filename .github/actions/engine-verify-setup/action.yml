@@ -54,7 +54,16 @@ runs:
         prefix-key: v1-verify
         shared-key: ${{ inputs.target }}
         cache-bin: "false"
+        cache-workspace-crates: "true"
         save-if: ${{ inputs.save-cache }}
+
+    # Unchanged workspace crates are reused from the cache instead of being
+    # rebuilt because the checkout touched every file (scripts/verify/mtime.py).
+    - name: Reuse unchanged workspace crates
+      if: inputs.rust-cache == 'true'
+      shell: bash
+      run: |
+        "$(command -v python3 || command -v python)" scripts/verify/mtime.py apply target/ci-verify/.fingerprint/cap-verify-srcmanifest
 
     - name: Native dependencies
       shell: bash

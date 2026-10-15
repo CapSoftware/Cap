@@ -82,6 +82,12 @@ jobs:
             scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --no-run
           fi
 
+      - name: Record sources of the cached build
+        if: inputs.save-cache
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/.fingerprint/cap-verify-srcmanifest
+
       - name: Upload test archive
         if: inputs.shards > 1
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
