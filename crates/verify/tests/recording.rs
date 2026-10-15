@@ -3088,13 +3088,20 @@ fn sync_checks(
                 );
             }
         }
-        if post.0.len() > 1 && post.spread() > EXACT_SPREAD {
+        // Stamped with their capture times, camera frames keep one offset:
+        // before the anchor every one of 20 runs had a spread of exactly 0
+        // (run 38780355968), so any spread of a file tick (1.7 ms) or more
+        // past it is the processing clock. The microphone's 4 ms limit
+        // missed it in 2 of those 20 runs once the synthetic camera ran on
+        // time (spread 3.3 ms; 3.3 to 30 ms in the others).
+        const CAMERA_EXACT_SPREAD: f64 = 0.001;
+        if post.0.len() > 1 && post.spread() > CAMERA_EXACT_SPREAD {
             case.problem(
                 "camera-clock",
                 format!(
                     "camera past the drift anchor: frame offsets vary by {:.1} ms (limit {:.1}): frames are stamped from the processing clock, not their capture times",
                     ms(post.spread()),
-                    ms(EXACT_SPREAD)
+                    ms(CAMERA_EXACT_SPREAD)
                 ),
             );
         }
