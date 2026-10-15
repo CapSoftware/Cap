@@ -215,9 +215,9 @@ fn export_mp4() {
     );
 }
 
-/// Studio Sound under timeline music at 10 fps (`cap export --fps 10`).
-/// Music sends the export through the editor's `AudioRenderer` instead of
-/// the streaming mixer, and at 10 fps every video frame asks it for 4800
+/// Studio Sound at 10 fps (`cap export --fps 10`). The cuts' backward jump
+/// sends the export through the editor's `AudioRenderer` instead of the
+/// streaming mixer, and at 10 fps every video frame asks it for 4800
 /// samples: more than one 4096-sample Studio Sound block, so the blocks
 /// after the first in a request must line up too.
 #[test]
@@ -225,11 +225,8 @@ fn export_studio_sound_low_fps() {
     let failures: Vec<String> = export_case_at(
         &audio_fixture::mix(report::tier()),
         &Variant {
-            edit: "studio-sound-music",
-            apply: |config| {
-                studio_sound(config);
-                audio_fixture::add_music(config, 1.0, 7.0, 0.5, -6.0);
-            },
+            edit: "studio-sound",
+            apply: studio_sound,
         },
         ExportPath::App,
         10,
