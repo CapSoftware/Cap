@@ -35,6 +35,7 @@ mod app {
         video_code::{self, FrameMarker, PixelOrder, StreamKind},
     };
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
     use winit::{
         application::ApplicationHandler,
         dpi::{LogicalPosition, LogicalSize},
@@ -115,7 +116,16 @@ mod app {
             idle_tick: 0,
             last_idle: None,
         };
-        event_loop.run_app(&mut app)?;
+        let process_info = NSProcessInfo::processInfo();
+        let activity = unsafe {
+            process_info.beginActivityWithOptions_reason(
+                NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                &NSString::from_str("Present recording verification markers on schedule"),
+            )
+        };
+        let result = event_loop.run_app(&mut app);
+        unsafe { process_info.endActivity(&activity) };
+        result?;
         drop(audio);
         if let Some(error) = app.error {
             anyhow::bail!(error);

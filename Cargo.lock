@@ -2168,6 +2168,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "futures",
+ "objc2-foundation 0.3.1",
  "relative-path",
  "rustfft",
  "scap-targets",
