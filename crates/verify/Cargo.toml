@@ -30,7 +30,7 @@ cap-enc-avfoundation = { path = "../enc-avfoundation" }
 cidre = { workspace = true }
 
 [dev-dependencies]
-cap-editor = { path = "../editor" }
+cap-editor = { path = "../editor", features = ["test-hooks"] }
 cap-export = { path = "../export" }
 cap-rendering = { path = "../rendering" }
 tempfile = "3"
