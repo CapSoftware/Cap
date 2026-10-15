@@ -1,8 +1,6 @@
 name: Instant fixture probe (scratch)
 
 on:
-  push:
-    branches: [ci/fixproof-video-timestamps, scratch/fixproof-video-timestamps-base]
   workflow_dispatch:
 
 permissions:
