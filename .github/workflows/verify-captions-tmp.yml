@@ -1,0 +1,179 @@
+name: cap-verify captions + editing (temporary triage)
+
+# Temporary workflow for the CAPTIONS-EDITING track: runs the cap-verify
+# captions and editing oracles, and the desktop app's fake-transcriber
+# caption tests, on Linux, Windows and macOS runners. Not for merging; the
+# CI-INFRA track owns engine-verify.yml (the app tests already run in ci.yml's
+# "Build GPUI Desktop" job once merged).
+
+on:
+  push:
+    branches:
+      - ci/verify-captions-editing
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "CAP_VERIFY_TIER (fast or full)"
+        default: "fast"
+
+concurrency:
+  group: verify-captions-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  engine:
+    name: captions + editing (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            triple: x86_64-unknown-linux-gnu
+          - runner: windows-2022
+            triple: x86_64-pc-windows-msvc
+          - runner: macos-15
+            triple: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CAP_VERIFY_TIER: ${{ github.event.inputs.tier || 'fast' }}
+      CAP_VERIFY_FIXTURE_DIR: ${{ github.workspace }}/verify-fixtures
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-out/report
+      OUT: ${{ github.workspace }}/verify-out
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Rust cache (restore only)
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.triple }}
+          prefix-key: v1-rust-sync
+          save-cache: "false"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.triple }}
+        run: node scripts/setup.js
+
+      - name: FFmpeg DLLs on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Native libs on LD_LIBRARY_PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug" >> "$GITHUB_ENV"
+
+      - name: Software Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: Build tests
+        shell: bash
+        run: |
+          mkdir -p "$OUT/report"
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test captions --test editing --no-run 2>&1 | tail -20
+          echo "build_seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+
+      - name: Run captions + editing
+        shell: bash
+        run: |
+          set +e
+          status=0
+          for test in captions editing; do
+            start=$(date +%s)
+            cargo test --locked -p cap-verify --test $test -- --nocapture > "$OUT/$test.log" 2>&1
+            code=$?
+            echo "$test exit=$code seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+            grep -E "^\[cap-verify\] (pass|xfail|FAIL|XPASS)|^\[cap-verify\]   |^  |^test .* \.\.\. |panicked|^error" "$OUT/$test.log" | cut -c1-600 | head -300
+            [ $code -ne 0 ] && status=1
+          done
+          exit $status
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-captions-${{ matrix.runner }}
+          path: verify-out
+          retention-days: 7
+
+  app:
+    name: app caption tests (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: App caption tests
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$(cygpath "$GITHUB_WORKSPACE/target/ffmpeg/bin"):$PATH"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.target }}/debug/Frameworks"
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui transcription:: -- --nocapture 2>&1 | grep -E "^\[cap-verify\]|^  |^test |panicked|^error" | cut -c1-600 | head -200
+          exit ${PIPESTATUS[0]}

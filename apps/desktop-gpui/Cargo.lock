@@ -1547,6 +1547,7 @@ dependencies = [
  "cap-rendering",
  "cap-timestamp",
  "cap-utils",
+ "cap-verify",
  "chrono",
  "cidre",
  "clipboard-rs",
@@ -1584,6 +1585,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "tauri-winres",
+ "tempfile",
  "tiny-skia",
  "tokio",
  "tracing",
@@ -1999,6 +2001,29 @@ dependencies = [
  "windows-sys 0.52.0",
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "cap-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-enc-avfoundation",
+ "cap-media-info",
+ "cap-project",
+ "cap-recording",
+ "cap-timestamp",
+ "cidre",
+ "ffmpeg-next",
+ "flume 0.11.1",
+ "futures",
+ "relative-path",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.23",
+ "workspace-hack",
 ]
 
 [[package]]
