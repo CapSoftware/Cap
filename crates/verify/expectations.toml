@@ -166,6 +166,30 @@ reason = "NEW: during a cross-fade both clips read the same AVAssetReader decode
 link = ""
 
 [[xfail]]
+case = "export/basic/transition/mp430/avf"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
+case = "export/basic/transition/mp460/avf"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
+case = "audio/audio-mix-8s-a2/transition/mp4-app30"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "AVFoundation exports with a cross-fade sometimes show the incoming clip up to 7 source frames ahead on one blend frame (mp430 frame 74: 121 for 115; mp460 frame 148: 120 for 115; audio-mix mp4-app30 frame 93: 162 for 155). Root cause: the YUV converter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pool recycles the IOSurface and the GPU samples a later frame painted into it. Timing dependent: 5 of 9 macos-15 case runs (these 3 cases in runs 38730081267, 38731626324, 38732325087) failed: 2, 0 and 3 per run. Deterministic reproduction: native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d); remove these entries with that fix"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
 case = "seek/seek-native/keyframes60/avf"
 class = "future"
 platforms = ["macos"]
