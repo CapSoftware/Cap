@@ -111,6 +111,9 @@ mod app {
             ready: false,
             done: false,
             error: None,
+            created: None,
+            idle_tick: 0,
+            last_idle: None,
         };
         event_loop.run_app(&mut app)?;
         drop(audio);
@@ -150,6 +153,9 @@ mod app {
         ready: bool,
         done: bool,
         error: Option<String>,
+        created: Option<Instant>,
+        idle_tick: u32,
+        last_idle: Option<Instant>,
     }
 
     impl App {
@@ -177,7 +183,21 @@ mod app {
                 .or(Some(now))
         }
 
-        fn draw(&mut self, index: u32) {
+        /// Before `go` the picture keeps frame 0 but the noise bands keep
+        /// moving at the frame rate, so the window server is compositing at
+        /// full rate by the time the recording starts (a cold paravirtual
+        /// display presents its first changes late).
+        fn idle_due(&self, now: Instant) -> Option<Instant> {
+            if self.go_at.is_some() {
+                return None;
+            }
+            Some(
+                self.last_idle
+                    .map_or(now, |t| t + Duration::from_secs_f64(1.0 / self.spec.fps)),
+            )
+        }
+
+        fn draw(&mut self, index: u32, salt: u64) {
             let (w, h) = self.size;
             let Some(surface) = self.surface.as_mut() else {
                 return;
@@ -211,14 +231,22 @@ mod app {
                     PixelOrder::Bgra,
                 );
                 if band > 0 {
-                    noise_band(&mut bytes[..band * stride], w, band, index, 0);
-                    noise_band(&mut bytes[(h - band) * stride..], w, band, index, 1);
+                    noise_band(&mut bytes[..band * stride], w, band, index, salt << 1);
+                    noise_band(
+                        &mut bytes[(h - band) * stride..],
+                        w,
+                        band,
+                        index,
+                        (salt << 1) | 1,
+                    );
                 }
             }
             if buffer.present().is_ok() {
                 let host = host_now();
+                if self.shown != Some(index) {
+                    self.log.write(&StimulusEvent::Frame { index, host });
+                }
                 self.shown = Some(index);
-                self.log.write(&StimulusEvent::Frame { index, host });
             }
         }
     }
@@ -316,12 +344,20 @@ mod app {
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    let index = self.desired(Instant::now());
-                    let resized = !self.ready;
-                    if self.shown != Some(index) || resized {
-                        self.draw(index);
+                    let now = Instant::now();
+                    let created = *self.created.get_or_insert(now);
+                    let index = self.desired(now);
+                    if self.go_at.is_none() {
+                        if self.idle_due(now).is_some_and(|due| due <= now) {
+                            self.idle_tick += 1;
+                            self.last_idle = Some(now);
+                            self.draw(0, u64::from(self.idle_tick));
+                        }
+                    } else if self.shown != Some(index) {
+                        self.draw(index, 0);
                     }
-                    if !self.ready && self.shown == Some(0) {
+                    let warm = now.duration_since(created).as_secs_f64() >= self.spec.warmup;
+                    if !self.ready && warm && self.shown == Some(0) {
                         self.ready = true;
                         let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
                         self.log.write(&StimulusEvent::Ready {
@@ -346,11 +382,20 @@ mod app {
         }
 
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            if self.done || self.go_at.is_none() {
+            let now = Instant::now();
+            if let Some(due) = self.idle_due(now) {
+                if due <= now
+                    && let Some(window) = &self.window
+                {
+                    window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::WaitUntil(due.max(now)));
+                return;
+            }
+            if self.done {
                 event_loop.set_control_flow(ControlFlow::Wait);
                 return;
             }
-            let now = Instant::now();
             if let Some(window) = &self.window
                 && self.desired(now) != self.shown.unwrap_or(0)
             {
