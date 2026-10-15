@@ -19,6 +19,7 @@ cap-frame-converter = { path = "../frame-converter" }
 windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3.20.0"
 
 [lints]
