@@ -10,4 +10,5 @@ pub mod media;
 pub mod model;
 pub mod oracle;
 pub mod report;
+pub mod stimulus;
 pub mod video_code;
