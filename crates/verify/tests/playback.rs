@@ -192,3 +192,41 @@ fn recorded_studio_sequential() {
     );
     common::assert_passed(failures);
 }
+
+fn transition(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(0.0, 2.5, 1.0), (3.5, 6.0, 1.0)]);
+    common::add_transition(config, 1, 0.4);
+}
+
+fn hide_camera_scene(config: &mut ProjectConfiguration) {
+    config
+        .timeline
+        .as_mut()
+        .expect("timeline")
+        .scene_segments
+        .push(cap_project::SceneSegment {
+            start: 2.0,
+            end: 4.0,
+            mode: cap_project::SceneMode::HideCamera,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 0.3,
+        });
+}
+
+fn camera_hidden(config: &mut ProjectConfiguration) {
+    config.camera.hide = true;
+}
+
+#[test]
+fn edits_sequential() {
+    let mut failures = Vec::new();
+    for edit in [
+        ("transition", transition as fn(&mut ProjectConfiguration)),
+        ("hide-camera-scene", hide_camera_scene),
+        ("camera-hidden", camera_hidden),
+    ] {
+        failures.extend(sequential(catalog::basic(report::tier()), edit, 30, 0.0));
+    }
+    common::assert_passed(failures);
+}

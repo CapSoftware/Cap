@@ -1,5 +1,5 @@
 //! Engine verification suite: marker codecs, fixture generation, a reference
-//! timeline model and oracle checkers. See `crates/verify/README.md`.
+//! timeline model and oracle checkers.
 
 pub mod audio_code;
 pub mod catalog;

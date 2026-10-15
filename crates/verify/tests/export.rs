@@ -22,6 +22,7 @@ fn case_id(fixture: &str, edit: &str, format: Format, fps: u32, decoder: Decoder
     let format = match format {
         Format::Mp4 => "mp4",
         Format::Gif => "gif",
+        Format::Mov => "mov",
     };
     format!("export/{fixture}/{edit}/{format}{fps}/{}", decoder.label())
 }
@@ -69,7 +70,11 @@ fn run_project(
                 let model = project.model(&config);
                 let mut case = Case::new(&id);
                 let dir = common::scratch_dir(&id);
-                let ext = if format == Format::Gif { "gif" } else { "mp4" };
+                let ext = match format {
+                    Format::Gif => "gif",
+                    Format::Mov => "mov",
+                    Format::Mp4 => "mp4",
+                };
                 let run = ExportRun {
                     fps,
                     resolution,
@@ -540,4 +545,46 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         }
     }
     report::settle(case).err()
+}
+
+/// ProRes MOV export.
+#[test]
+fn mov() {
+    let failures = run(
+        catalog::basic(report::tier()),
+        &[Variant {
+            edit: "cuts-speeds-reorder",
+            apply: cuts_speeds_reorder,
+        }],
+        &[(Format::Mov, 30)],
+        &[Decoder::Default],
+        RES,
+        false,
+    );
+    common::assert_passed(failures);
+}
+
+fn short_cut(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(1.0, 2.5, 1.0), (4.0, 5.0, 2.0)]);
+}
+
+/// 4K output (sources upscaled): the full-size encode and render path.
+#[test]
+fn uhd() {
+    let (formats, decoders): (&[(Format, u32)], Vec<Decoder>) = match report::tier() {
+        Tier::Fast => (&[(Format::Mp4, 30)], vec![Decoder::Default]),
+        Tier::Full => (&[(Format::Mp4, 30), (Format::Mp4, 60)], Decoder::all()),
+    };
+    let failures = run(
+        catalog::basic(report::tier()),
+        &[Variant {
+            edit: "uhd-short-cut",
+            apply: short_cut,
+        }],
+        formats,
+        &decoders,
+        (3840, 2160),
+        false,
+    );
+    common::assert_passed(failures);
 }

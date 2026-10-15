@@ -123,6 +123,7 @@ pub fn add_transition(config: &mut ProjectConfiguration, segment_index: u32, dur
 pub enum Format {
     Mp4,
     Gif,
+    Mov,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +184,15 @@ pub async fn export(
                 custom_bpp: None,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: false,
+            }
+            .export(base, |_| true)
+            .await
+        }
+        Format::Mov => {
+            cap_export::mov::MovExportSettings {
+                fps: run.fps,
+                resolution_base,
+                cursor_only: false,
             }
             .export(base, |_| true)
             .await
