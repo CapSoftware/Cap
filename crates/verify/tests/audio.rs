@@ -449,3 +449,92 @@ fn transport() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// The oracle itself: real playback PCM passes, and the same PCM with one
+/// device block (10.7 ms) of inserted silence, one dropped block, a
+/// repeated half second, a 6 ms shift (tolerance 5 ms) or a 6 dB drop on one source fails
+/// with the right class.
+#[test]
+fn oracle_self_check() {
+    let spec = audio_fixture::mix(report::tier());
+    let id = format!("audio/{}/oracle-self-check", spec.name);
+    if !report::selected(&id) {
+        return;
+    }
+    let project = audio_support::project(&spec);
+    let rt = common::runtime();
+    let mut config = project.config();
+    music_over_cuts(&mut config);
+    let model = audio_support::audio_model(&project, &config);
+    let mut player = OfflinePlayer::open(&rt, &project, config);
+    player.play(0.0);
+    let pcm = audio_support::mono(&player.pull(model.duration + 0.3));
+    let model = model.window(0.0, pcm.len() as f64 / f64::from(audio_support::RATE));
+    let at = |secs: f64| (secs * f64::from(audio_support::RATE)) as usize;
+    let block = audio_support::BLOCK;
+    let gap = {
+        let mut v = pcm.clone();
+        v.splice(at(3.0)..at(3.0), std::iter::repeat_n(0.0, block));
+        v
+    };
+    let dropped = {
+        let mut v = pcm.clone();
+        v.drain(at(3.0)..at(3.0) + block);
+        v
+    };
+    let repeated = {
+        let mut v = pcm.clone();
+        let copy = v[at(2.0)..at(2.5)].to_vec();
+        v.splice(at(2.5)..at(2.5), copy);
+        v
+    };
+    let shifted = {
+        let mut v = vec![0.0; at(0.006)];
+        v.extend_from_slice(&pcm);
+        v
+    };
+    let mut case = Case::new(&id);
+    let classes = |mono: &[f32]| {
+        audio_model::check(&model, &audio_model::hear(mono, 0.0, &model.rate_windows)).classes()
+    };
+    let original = classes(&pcm);
+    if !original.is_empty() {
+        case.problem("error", format!("unmodified playback fails: {original:?}"));
+    }
+    for (label, mono, must) in [
+        ("10.7 ms gap", &gap, "audio-timing"),
+        ("10.7 ms drop", &dropped, "audio-timing"),
+        ("0.5 s repeat", &repeated, "audio-unexpected"),
+        ("6 ms shift", &shifted, "audio-timing"),
+    ] {
+        let found = classes(mono);
+        if found.contains(&must) {
+            case.note(format!("{label}: caught as {found:?}"));
+        } else {
+            case.problem(
+                "error",
+                format!("{label} not caught as {must} (classes {found:?})"),
+            );
+        }
+    }
+    let quiet = {
+        let mut config = project.config();
+        music_over_cuts(&mut config);
+        config.audio.system_volume_db = -6.0;
+        audio_support::audio_model(&project, &config)
+    };
+    let found = audio_model::check(
+        &quiet.window(0.0, pcm.len() as f64 / f64::from(audio_support::RATE)),
+        &audio_model::hear(&pcm, 0.0, &quiet.rate_windows),
+    )
+    .classes();
+    if found.contains(&"audio-level") {
+        case.note(format!("6 dB system level error: caught as {found:?}"));
+    } else {
+        case.problem(
+            "error",
+            format!("6 dB level error not caught (classes {found:?})"),
+        );
+    }
+    common::finish(case);
+}
