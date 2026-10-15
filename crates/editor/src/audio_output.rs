@@ -62,6 +62,9 @@ pub struct PlaySpec {
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
     pub playhead_rx: watch::Receiver<f64>,
+    /// Preview-only playback speed (1.0 = normal), read live by the realtime
+    /// callback. See [`crate::EditorInstance::set_playback_rate`].
+    pub playback_rate: watch::Receiver<f64>,
 }
 
 enum ControlMsg {
@@ -544,6 +547,11 @@ struct ActiveSource<T: FromSampleBytes> {
     refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
+    /// Preview playback speed. A fixed `1.0` receiver (sender dropped) for
+    /// the preparing/progressive-handoff path, which always plays at normal
+    /// speed regardless of the editor's rate setting -- see module docs on
+    /// [`crate::audio::TimeStretcher`].
+    playback_rate: watch::Receiver<f64>,
     ack: Option<SourceAcknowledgement>,
     preparing_request: Option<Arc<PreparingAudioRequest>>,
     #[cfg(not(target_os = "windows"))]
@@ -551,21 +559,24 @@ struct ActiveSource<T: FromSampleBytes> {
 }
 
 enum ActiveSourceBuffer<T: FromSampleBytes> {
-    Ordinary(PrerenderedAudioBuffer<T>),
+    Ordinary(
+        PrerenderedAudioBuffer<T>,
+        Box<crate::audio::TimeStretcher<T>>,
+    ),
     Preparing(PreparingAudioBuffer<T>),
 }
 
 #[cfg(test)]
 impl<T: FromSampleBytes + cpal::FromSample<f32>> ActiveSourceBuffer<T> {
     fn current_playhead_secs(&self) -> f64 {
-        let Self::Ordinary(buffer) = self else {
+        let Self::Ordinary(buffer, _) = self else {
             panic!("Preparing playback uses its consumed-span clock");
         };
         buffer.current_playhead_secs()
     }
 
     fn current_audible_playhead(&self, latency_seconds: f64) -> f64 {
-        let Self::Ordinary(buffer) = self else {
+        let Self::Ordinary(buffer, _) = self else {
             panic!("Preparing playback uses its consumed-span clock");
         };
         buffer.current_audible_playhead(latency_seconds)
@@ -798,7 +809,9 @@ fn stop_stream_state<S>(
 fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
     active: &mut Option<ActiveSource<T>>,
     source_rx: &std_mpsc::Receiver<SourceCommand<T>>,
-) {
+) where
+    f32: cpal::FromSample<T>,
+{
     while let Ok(command) = source_rx.try_recv() {
         match command {
             SourceCommand::Refresh {
@@ -812,15 +825,18 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
                 }) {
                     current.refresh_revision = source.refresh_revision;
                     if let (
-                        ActiveSourceBuffer::Ordinary(previous),
-                        ActiveSourceBuffer::Ordinary(replacement),
+                        ActiveSourceBuffer::Ordinary(previous, _),
+                        ActiveSourceBuffer::Ordinary(replacement, _),
                     ) = (&current.buffer, &mut source.buffer)
                     {
                         let playhead = previous.current_audible_playhead(0.0);
                         if !replacement.try_align_prepared_playhead(playhead) {
                             let sender = retire_tx.clone();
                             let _ = sender.send(ControlMsg::Realign(Box::new(move || {
-                                if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
+                                if let ActiveSourceBuffer::Ordinary(buffer, stretcher) =
+                                    &mut source.buffer
+                                {
+                                    stretcher.flush();
                                     buffer.set_playhead(playhead);
                                     if !buffer.wait_until_ready(PRERENDER_READY_TIMEOUT) {
                                         return;
@@ -883,7 +899,9 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     source: &mut ActiveSource<T>,
     buffer: &mut [T],
     latency_secs: f64,
-) {
+) where
+    f32: cpal::FromSample<T>,
+{
     if source
         .preparing_request
         .as_ref()
@@ -893,17 +911,27 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
         return;
     }
     match &mut source.buffer {
-        ActiveSourceBuffer::Ordinary(audio) => {
+        ActiveSourceBuffer::Ordinary(audio, stretcher) => {
+            // A rate stretcher adds its own internal (lookahead) buffering
+            // delay on top of the device's own latency, and that delay is
+            // measured in *output* seconds while the source position below
+            // is in source/timeline seconds -- at `rate` the source advances
+            // `rate` timeline-seconds per output-second, so both the device
+            // latency hint and the stretcher's delay are scaled by `rate`
+            // before being folded into the source-time drift comparison.
+            let rate = *source.playback_rate.borrow();
             if source.playhead_rx.has_changed().unwrap_or(false) {
                 let video_playhead = *source.playhead_rx.borrow_and_update();
-                let audible_playhead = audio.current_audible_playhead(latency_secs);
+                let raw_playhead = audio.current_audible_playhead(latency_secs * rate);
+                let audible_playhead = stretcher.current_audible_playhead(raw_playhead);
                 let drift = (video_playhead - audible_playhead).abs();
 
                 if drift > 0.04 {
-                    audio.set_playhead(video_playhead + latency_secs);
+                    audio.set_playhead(video_playhead + latency_secs * rate);
+                    stretcher.flush();
                 }
             }
-            audio.fill(buffer);
+            stretcher.fill(buffer, rate, |scratch| audio.fill(scratch));
         }
         ActiveSourceBuffer::Preparing(audio) => {
             if audio.fill(buffer, latency_secs) == 0 {
@@ -941,7 +969,10 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     output_info: AudioInfo,
     use_device_latency_hint: bool,
     install_tx: &std_mpsc::Sender<SourceCommand<T>>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    f32: cpal::FromSample<T>,
+{
     let preparing_request = ack.preparing_request();
     if preparing_request
         .as_ref()
@@ -956,6 +987,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         duration_secs,
         start_playhead_secs,
         playhead_rx,
+        playback_rate,
     } = *spec;
 
     if !(duration_secs.is_finite() && duration_secs > 0.0) {
@@ -1037,11 +1069,17 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         SourceAcknowledgement::Refresh(_, revision) => *revision,
         _ => 0,
     };
+    let stretch_info = output_info.for_ffmpeg_output();
+    let stretcher = Box::new(crate::audio::TimeStretcher::<T>::new(
+        stretch_info.sample_rate,
+        stretch_info.channels,
+    ));
     let source = Box::new(ActiveSource {
         generation,
         refresh_revision,
-        buffer: ActiveSourceBuffer::Ordinary(buffer),
+        buffer: ActiveSourceBuffer::Ordinary(buffer, stretcher),
         playhead_rx,
+        playback_rate,
         ack: Some(ack),
         preparing_request,
         #[cfg(not(target_os = "windows"))]
@@ -1099,6 +1137,10 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
         return Err("Preparing audio request cancelled".into());
     }
     let (_, playhead_rx) = watch::channel(start_seconds);
+    // The preparing/progressive-handoff path always plays at normal speed:
+    // it hands off to ordinary playback (which does support the rate) well
+    // before a user would reach for a speed control during this phase.
+    let (_, playback_rate) = watch::channel(1.0);
     request.awaiting_callback();
     install_tx
         .send(SourceCommand::Install(Box::new(ActiveSource {
@@ -1106,6 +1148,7 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             refresh_revision: 0,
             buffer: ActiveSourceBuffer::Preparing(buffer),
             playhead_rx,
+            playback_rate,
             ack: Some(SourceAcknowledgement::Preparing(request.clone())),
             preparing_request: Some(request.clone()),
             #[cfg(not(target_os = "windows"))]
@@ -1384,6 +1427,7 @@ fn build_stream<T>(
 ) -> Result<TypedStreamHandle, String>
 where
     T: FromSampleBytes + cpal::SizedSample + cpal::FromSample<f32>,
+    f32: cpal::FromSample<T>,
 {
     let output_info = playback_output_info(&supported_config);
     // Clamp for FFmpeg compatibility (max 8 channels); the stream config must
@@ -1498,6 +1542,7 @@ mod tests {
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
                 playhead_rx,
+                playback_rate: watch::channel(1.0).1,
             }),
             0,
             SourceAcknowledgement::Ordinary(ack_tx),
@@ -1576,11 +1621,12 @@ mod tests {
             let (mut replacement, _playhead) = source(48_000);
             replacement.generation = generation;
             let replacement_receiver = replacement.playhead_rx.clone();
-            let ActiveSourceBuffer::Ordinary(buffer) = &mut replacement.buffer else {
+            let ActiveSourceBuffer::Ordinary(buffer, _) = &mut replacement.buffer else {
                 panic!("expected ordinary source");
             };
             buffer.set_playhead(0.5);
-            let ActiveSourceBuffer::Ordinary(buffer) = &mut active.as_mut().unwrap().buffer else {
+            let ActiveSourceBuffer::Ordinary(buffer, _) = &mut active.as_mut().unwrap().buffer
+            else {
                 panic!("expected ordinary source");
             };
             buffer.set_playhead(0.125);
@@ -1624,7 +1670,7 @@ mod tests {
         for (newer_revision, stopped) in [(false, false), (true, false), (false, true)] {
             let (mut original, _playhead) = source(48_000);
             original.generation = 7;
-            let ActiveSourceBuffer::Ordinary(buffer) = &mut original.buffer else {
+            let ActiveSourceBuffer::Ordinary(buffer, _) = &mut original.buffer else {
                 panic!("expected ordinary source");
             };
             buffer.set_playhead(1.0);
@@ -1633,13 +1679,16 @@ mod tests {
             let (mut replacement, _playhead) = source(48_000);
             replacement.generation = 7;
             replacement.refresh_revision = 1;
-            replacement.buffer = ActiveSourceBuffer::Ordinary(PrerenderedAudioBuffer::bounded(
-                Vec::new(),
-                MusicTracks::new(),
-                &ProjectConfiguration::default(),
-                AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
-                3.0,
-            ));
+            replacement.buffer = ActiveSourceBuffer::Ordinary(
+                PrerenderedAudioBuffer::bounded(
+                    Vec::new(),
+                    MusicTracks::new(),
+                    &ProjectConfiguration::default(),
+                    AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
+                    3.0,
+                ),
+                Box::new(crate::audio::TimeStretcher::new(48_000, 2)),
+            );
             let replacement_receiver = replacement.playhead_rx.clone();
             let (tx, rx) = std_mpsc::channel();
             let (retire_tx, retire_rx) = std_mpsc::channel();
@@ -1659,7 +1708,7 @@ mod tests {
             if newer_revision {
                 current.refresh_revision = 2;
             }
-            let ActiveSourceBuffer::Ordinary(buffer) = &mut current.buffer else {
+            let ActiveSourceBuffer::Ordinary(buffer, _) = &mut current.buffer else {
                 panic!("expected ordinary source");
             };
             buffer.set_playhead(1.025);
