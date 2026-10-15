@@ -146,3 +146,10 @@ case = "export/instant/output/mp4/native"
 class = "sync"
 reason = "NEW: see instant-gated-*: audio up to one frame late after the start gate"
 link = ""
+
+[[xfail]]
+case = "*/basic/transition/*60*/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "NEW: during a cross-fade both clips read the same AVAssetReader decoder at two positions; at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Same frame in export and in offline playback, deterministic (3 of 3)"
+link = ""

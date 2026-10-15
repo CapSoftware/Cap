@@ -85,7 +85,8 @@ fn run_project(
                 match rt.block_on(common::export(&project, config.clone(), &run, &first)) {
                     Err(e) => case.problem("error", format!("export failed: {e}")),
                     Ok(path) => {
-                        let frames = common::read_output(&path);
+                        let frames =
+                            common::read_output(&path, Some(&|i| model.expect(i as u32, fps)));
                         common::check_sequence(
                             &mut case,
                             &model,
@@ -100,7 +101,7 @@ fn run_project(
                                     case.problem("error", format!("second export failed: {e}"))
                                 }
                                 Ok(path) => {
-                                    let again = common::read_output(&path);
+                                    let again = common::read_output(&path, None);
                                     let differing: Vec<usize> = frames
                                         .iter()
                                         .zip(&again)

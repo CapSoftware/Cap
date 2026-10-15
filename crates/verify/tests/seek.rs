@@ -53,7 +53,11 @@ fn run_project(
             let mut player = Player::open(&project, config, decoder, RES).await?;
             let mut readouts = Vec::new();
             for &(frame, seek) in &requests {
-                readouts.push(player.frame(frame, fps, seek).await?);
+                readouts.push(
+                    player
+                        .frame(frame, fps, seek, Some(&model.expect(frame, fps)))
+                        .await?,
+                );
             }
             Ok::<_, String>(readouts)
         });
@@ -298,7 +302,7 @@ fn cold_open() {
         for &frame in &frames {
             let result = rt.block_on(async {
                 let mut player = Player::open(&project, config.clone(), decoder, RES).await?;
-                player.frame(frame, 30, true).await
+                player.frame(frame, 30, true, None).await
             });
             match result {
                 Ok(readout) => readouts.push(readout),

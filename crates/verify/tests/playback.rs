@@ -76,7 +76,11 @@ fn sequential_project(
             let mut player = common::Player::open(&project, config, decoder, RES).await?;
             let mut readouts = Vec::new();
             for &f in &frames {
-                readouts.push(player.frame(f, fps, f == first).await?);
+                readouts.push(
+                    player
+                        .frame(f, fps, f == first, Some(&model.expect(f, fps)))
+                        .await?,
+                );
             }
             Ok::<_, String>(readouts)
         });
@@ -227,6 +231,7 @@ fn edits_sequential() {
         ("camera-hidden", camera_hidden),
     ] {
         failures.extend(sequential(catalog::basic(report::tier()), edit, 30, 0.0));
+        failures.extend(sequential(catalog::basic(report::tier()), edit, 60, 0.0));
     }
     common::assert_passed(failures);
 }

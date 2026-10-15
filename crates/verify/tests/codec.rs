@@ -268,7 +268,7 @@ fn damaged_codes_read_as_unreadable_never_as_another_frame() {
                 assert_eq!(m, marker);
                 hits += 1;
             }
-            Readout::Unreadable { .. } | Readout::Absent => {}
+            Readout::Unreadable { .. } | Readout::Absent | Readout::Blend { .. } => {}
         }
     }
     assert!(hits > 0);

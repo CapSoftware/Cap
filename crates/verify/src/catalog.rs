@@ -108,10 +108,10 @@ pub fn seek_gop(_tier: Tier) -> FixtureSpec {
     }
 }
 
-/// The seek fixture written by the product's macOS encoder (AVAssetWriter
-/// + VideoToolbox, its own GOP structure, 1/600 time base). Keyframes at
-/// k/30 s are off the 10 ms grid for most k. Identical to `seek_gop`
-/// elsewhere.
+/// The seek fixture written by the product's macOS encoder: AVAssetWriter
+/// with VideoToolbox, its own GOP structure and a 1/600 time base.
+/// Keyframes at k/30 s are off the 10 ms grid for most k. Identical to
+/// `seek_gop` elsewhere.
 pub fn seek_gop_native(_tier: Tier) -> FixtureSpec {
     let duration = 12.0;
     let native = |mut track: VideoTrackSpec| {
