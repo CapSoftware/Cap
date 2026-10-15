@@ -25,18 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux-captions
+          - name: linux-audio
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            specs: "-:captions:projection_hold_boundaries -:captions:render_single_clip K05:captions:projection_hold_boundaries K02:captions:render_single_clip K03:captions:render_single_clip"
-          - name: linux-export-audio
-            runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            specs: "-:export:aspect_frame_size -:audio:resampled_decode_tail -:audio:export_studio_sound_low_fps R07:export:aspect_frame_size A13:audio:resampled_decode_tail A10:audio:export_studio_sound_low_fps"
-          - name: macos-colour
-            runner: macos-15
-            target: aarch64-apple-darwin
-            specs: "-:export:colour R11:export:colour R12:export:colour"
+            specs: "-:audio:export_studio_sound_low_fps A10:audio:export_studio_sound_low_fps -:audio:probe_music"
     env:
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
     steps:

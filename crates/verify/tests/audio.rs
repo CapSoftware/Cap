@@ -682,3 +682,24 @@ fn oracle_self_check() {
     }
     common::finish(case);
 }
+
+#[test]
+fn probe_music() {
+    let spec = audio_fixture::mix(report::tier());
+    let ss_music = Variant {
+        edit: "studio-sound-music",
+        apply: |config| {
+            studio_sound(config);
+            audio_fixture::add_music(config, 1.0, 7.0, 0.5, -6.0);
+        },
+    };
+    let music_cuts = Variant {
+        edit: "music-cuts",
+        apply: music_over_cuts,
+    };
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(export_case_at(&spec, &ss_music, ExportPath::App, 30));
+    failures.extend(export_case_at(&spec, &music_cuts, ExportPath::App, 10));
+    failures.extend(export_case_at(&spec, &ss_music, ExportPath::App, 10));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
