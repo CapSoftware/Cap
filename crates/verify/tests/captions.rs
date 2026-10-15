@@ -1347,6 +1347,7 @@ fn templates(
     rt: &tokio::runtime::Runtime,
     project: &common::Project,
     texts: &[String],
+    durations: &[f64],
     out: &Path,
 ) -> Result<Vec<(String, CaptionPixels)>, String> {
     let slot = 0.3;
@@ -1368,6 +1369,9 @@ fn templates(
         settings: render_settings(),
         source_timed: true,
     });
+    // Projected here so the templates do not depend on the export's own
+    // projection (which `render_*` checks).
+    cap_project::synchronize_captions(&mut config, durations);
     let duration = edits::timeline(&config).duration();
     if texts.len() as f64 * slot > duration {
         return Err(format!(
@@ -1430,11 +1434,17 @@ fn render_case(
     let mut texts: Vec<String> = pieces.iter().map(|p| p.text.clone()).collect();
     texts.sort();
     texts.dedup();
-    let result =
-        templates(rt, &project, &texts, &dir.path().join("templates.mp4")).and_then(|templates| {
-            render_export(rt, &project, config.clone(), &dir.path().join("out.mp4"))
-                .map(|frames| (templates, frames))
-        });
+    let result = templates(
+        rt,
+        &project,
+        &texts,
+        &durations,
+        &dir.path().join("templates.mp4"),
+    )
+    .and_then(|templates| {
+        render_export(rt, &project, config.clone(), &dir.path().join("out.mp4"))
+            .map(|frames| (templates, frames))
+    });
     match result {
         Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok((templates, frames)) => {

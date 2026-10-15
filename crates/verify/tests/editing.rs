@@ -313,7 +313,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         }
         let mut rng = Rng::new(0xED17_1000 ^ (seed << 8) ^ spec.name.len() as u64);
         let count = rng.range(3, 8) as usize;
-        let ops = edits::random_sequence(
+        let mut ops = edits::random_sequence(
             &mut rng,
             &base,
             count,
@@ -322,6 +322,17 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
                 holds: false,
             },
         );
+        // Odd seeds end with a transition on every boundary, long ones and
+        // ones below the minimum included, so clamping is always exercised.
+        if seed % 2 == 1 {
+            let segments = edits::timeline(&edits::replay(&base, &ops)).segments.len();
+            for segment in 1..segments {
+                ops.push(Op::Transition {
+                    segment,
+                    duration: [3.0, 0.02, 0.4][(segment + seed as usize) % 3],
+                });
+            }
+        }
         let config = edits::replay(&base, &ops);
         let mut case = Case::new(&id);
         case.note(format!("ops: {ops:?}"));
