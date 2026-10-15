@@ -405,6 +405,8 @@ mod app {
                 && self.desired(now) != self.shown.unwrap_or(0)
             {
                 window.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Poll);
+                return;
             }
             match self.next_due(now) {
                 Some(next) => event_loop.set_control_flow(ControlFlow::WaitUntil(next)),
