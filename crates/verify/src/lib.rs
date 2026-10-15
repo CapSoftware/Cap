@@ -11,3 +11,5 @@ pub mod model;
 pub mod oracle;
 pub mod report;
 pub mod video_code;
+pub mod audio_fixture;
+pub mod audio_model;
