@@ -8,10 +8,12 @@ holds an up-to-date build.
 
   mtime.py record <manifest>   after a build: record the git blob id of every
                                tracked file (stored inside the cached target)
-  mtime.py apply <manifest>   after restoring the cache: files whose blob id
-                               matches the manifest get an old fixed mtime, so
-                               cargo sees them as unchanged; every other file
-                               keeps the checkout time and its crate rebuilds
+  mtime.py apply <manifest>    before building: files whose blob id matches
+                               the manifest get an old fixed mtime, so cargo
+                               sees them as unchanged; every other file keeps
+                               the checkout time and its crate rebuilds. With
+                               no manifest (cold build) every file gets the
+                               fixed time.
 
 Only content equality is trusted, never commit times, so a stale build cannot
 be reused for changed code.
@@ -55,17 +57,27 @@ def main():
                 f.write(f"{blob} {path}\n")
         print(f"recorded {len(current)} files in {manifest}")
         return
-    if not os.path.exists(manifest):
-        print(f"no manifest at {manifest}: every workspace crate rebuilds")
-        return
-    saved = {}
-    with open(manifest, encoding="utf-8", errors="surrogateescape") as f:
-        for line in f:
-            blob, _, path = line.rstrip("\n").partition(" ")
-            saved[path] = blob
+    saved = None
+    if os.path.exists(manifest):
+        saved = {}
+        with open(manifest, encoding="utf-8", errors="surrogateescape") as f:
+            for line in f:
+                blob, _, path = line.rstrip("\n").partition(" ")
+                saved[path] = blob
+    else:
+        # Cold build: give every file the fixed time too. Build scripts
+        # without rerun-if-changed fingerprint the newest mtime of their
+        # package by equality, so the build that gets cached must see the
+        # same times the next run will set.
+        print(f"no manifest at {manifest}: cold build, normalising every file")
     same = changed = 0
     for path, blob in current.items():
-        if blob != "dirty" and saved.get(path) == blob and os.path.isfile(path) and not os.path.islink(path):
+        if (
+            blob != "dirty"
+            and (saved is None or saved.get(path) == blob)
+            and os.path.isfile(path)
+            and not os.path.islink(path)
+        ):
             os.utime(path, (OLD, OLD))
             same += 1
         else:

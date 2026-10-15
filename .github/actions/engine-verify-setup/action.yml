@@ -60,7 +60,7 @@ runs:
       if: inputs.rust-cache == 'true'
       shell: bash
       run: |
-        base="verify-build-v2-${{ inputs.target }}-$(date -u +%G-W%V)"
+        base="verify-build-v3-${{ inputs.target }}-$(date -u +%G-W%V)"
         echo "base=$base" >> "$GITHUB_OUTPUT"
         echo "key=$base-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
