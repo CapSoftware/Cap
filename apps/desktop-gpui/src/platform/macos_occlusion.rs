@@ -84,7 +84,7 @@ fn reported_state(
     }
 }
 
-fn ordered_out_windows_keep_raw_state() -> bool {
+pub(super) fn ordered_out_windows_keep_raw_state() -> bool {
     static KEEP_RAW: OnceLock<bool> = OnceLock::new();
     *KEEP_RAW.get_or_init(|| macos_major_version().is_some_and(|major| major >= 27))
 }

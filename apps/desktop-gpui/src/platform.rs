@@ -939,12 +939,18 @@ mod mac {
         }
     }
 
-    /// The shim reports an ordered-out window as hidden, so its link stops;
-    /// every native show re-runs the gate rather than trusting AppKit to post
-    /// an occlusion change for the window coming back.
     fn rerun_occlusion_handler(ns_window: &NSWindow) {
         unsafe {
             let _: () = objc2::msg_send![ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// Where the shim reports an ordered-out window as hidden (so its link
+    /// stops), every native show re-runs the gate rather than trusting AppKit
+    /// to post an occlusion change for the window coming back.
+    fn rerun_occlusion_handler_after_show(ns_window: &NSWindow) {
+        if super::macos_occlusion::ordered_out_windows_keep_raw_state() {
+            rerun_occlusion_handler(ns_window);
         }
     }
 
@@ -1243,7 +1249,7 @@ mod mac {
     /// Same task-only rule as every other ordering call here.
     pub fn order_front_native(native: &NativeWindow) {
         unsafe { native.0.orderFrontRegardless() };
-        rerun_occlusion_handler(&native.0);
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -1371,7 +1377,7 @@ mod mac {
     /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
     pub fn show_native(native: &NativeWindow) {
         native.0.makeKeyAndOrderFront(None);
-        rerun_occlusion_handler(&native.0);
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// Close the window the way the red traffic light does: ask the
@@ -1705,7 +1711,7 @@ mod mac {
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
             unsafe { ns_window.orderFrontRegardless() };
-            rerun_occlusion_handler(&ns_window);
+            rerun_occlusion_handler_after_show(&ns_window);
         }
     }
 
