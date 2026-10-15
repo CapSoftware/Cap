@@ -567,8 +567,7 @@ impl AVAssetReaderDecoder {
             || self
                 .decoders
                 .get(decoder_idx)
-                .and_then(|decoder| decoder.prev_vended)
-                .is_some_and(|prev| prev >= requested_frame);
+                .is_some_and(|decoder| reader_passed_request(decoder.prev_vended, requested_frame));
 
         let max_decoder_count = self
             .pool_manager
@@ -1050,23 +1049,11 @@ impl AVAssetReaderDecoder {
                                 } else {
                                     current_frame > *cache.keys().next_back().unwrap()
                                 };
-                                let unpinned = |frame: &&u32| {
-                                    Some(**frame) != vended_before
-                                        && !pinned_frames.contains(*frame)
-                                };
-                                let frame_to_remove = if from_oldest {
-                                    *cache
-                                        .keys()
-                                        .find(unpinned)
-                                        .unwrap_or_else(|| cache.keys().next().unwrap())
-                                } else {
-                                    *cache
-                                        .keys()
-                                        .rev()
-                                        .find(unpinned)
-                                        .unwrap_or_else(|| cache.keys().next_back().unwrap())
-                                };
-                                if let Some(removed) = cache.remove(&frame_to_remove) {
+                                let victim = cache_eviction_victim(&cache, from_oldest, |frame| {
+                                    Some(frame) == vended_before || pinned_frames.contains(&frame)
+                                });
+                                if let Some(removed) = victim.and_then(|frame| cache.remove(&frame))
+                                {
                                     cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
                                 }
                             } else {
@@ -1126,11 +1113,12 @@ impl AVAssetReaderDecoder {
                                     // longer held anywhere, any other answer is stale or
                                     // from the future: retry once from a fresh seek, which
                                     // re-vends and keeps it.
-                                    let expected =
-                                        vended_before.filter(|&number| number <= req.frame);
                                     if !req.retried
-                                        && expected.is_some()
-                                        && best_before.as_ref().map(|d| d.number) != expected
+                                        && answer_misses_previous_vend(
+                                            vended_before,
+                                            req.frame,
+                                            best_before.as_ref().map(|d| d.number),
+                                        )
                                     {
                                         retry_requests.push(PendingRequest {
                                             retried: true,
@@ -1356,6 +1344,45 @@ impl AVAssetReaderDecoder {
     }
 }
 
+fn reader_passed_request(prev_vended: Option<u32>, requested_frame: u32) -> bool {
+    prev_vended.is_some_and(|prev| prev >= requested_frame)
+}
+
+// A request the reader steps over is answered by the frame it vended just
+// before, the newest one at or before the request. Any other answer is stale.
+fn answer_misses_previous_vend(
+    vended_before: Option<u32>,
+    requested_frame: u32,
+    answer: Option<u32>,
+) -> bool {
+    vended_before
+        .filter(|&number| number <= requested_frame)
+        .is_some_and(|expected| answer != Some(expected))
+}
+
+// Drops from the end the cache is trimmed from, skipping pinned frames unless
+// every frame is pinned.
+fn cache_eviction_victim<V>(
+    cache: &BTreeMap<u32, V>,
+    from_oldest: bool,
+    is_pinned: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    if from_oldest {
+        cache
+            .keys()
+            .copied()
+            .find(|&frame| !is_pinned(frame))
+            .or_else(|| cache.keys().next().copied())
+    } else {
+        cache
+            .keys()
+            .rev()
+            .copied()
+            .find(|&frame| !is_pinned(frame))
+            .or_else(|| cache.keys().next_back().copied())
+    }
+}
+
 fn should_grow_decoder_pool(
     is_scrubbing: bool,
     needs_reset: bool,
@@ -1433,6 +1460,44 @@ mod tests {
             1,
             limit
         ));
+    }
+
+    #[test]
+    fn a_reader_that_vended_the_request_cannot_serve_it_again() {
+        assert!(!reader_passed_request(None, 10));
+        assert!(!reader_passed_request(Some(9), 10));
+        assert!(reader_passed_request(Some(10), 10));
+        assert!(reader_passed_request(Some(57), 54));
+    }
+
+    #[test]
+    fn only_the_frame_vended_before_a_gap_answers_requests_inside_it() {
+        assert!(!answer_misses_previous_vend(Some(1054), 1055, Some(1054)));
+        assert!(answer_misses_previous_vend(Some(1054), 1055, Some(1052)));
+        assert!(answer_misses_previous_vend(Some(751), 752, Some(421)));
+        assert!(answer_misses_previous_vend(Some(751), 752, None));
+        assert!(!answer_misses_previous_vend(None, 752, Some(421)));
+        assert!(!answer_misses_previous_vend(Some(760), 752, Some(751)));
+    }
+
+    #[test]
+    fn cache_eviction_skips_pinned_frames() {
+        let cache: BTreeMap<u32, ()> = [415, 419, 421, 749, 751]
+            .into_iter()
+            .map(|f| (f, ()))
+            .collect();
+        assert_eq!(cache_eviction_victim(&cache, true, |_| false), Some(415));
+        assert_eq!(cache_eviction_victim(&cache, false, |_| false), Some(751));
+        assert_eq!(
+            cache_eviction_victim(&cache, false, |f| f == 751),
+            Some(749)
+        );
+        assert_eq!(cache_eviction_victim(&cache, true, |f| f < 420), Some(421));
+        assert_eq!(cache_eviction_victim(&cache, true, |_| true), Some(415));
+        assert_eq!(
+            cache_eviction_victim(&BTreeMap::<u32, ()>::new(), true, |_| false),
+            None
+        );
     }
 
     #[test]
