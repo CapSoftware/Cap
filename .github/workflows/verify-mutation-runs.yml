@@ -5,11 +5,6 @@ name: Verify mutation runs
 # cases catch them. Never merged.
 
 on:
-  workflow_dispatch:
-    inputs:
-      only:
-        description: "space separated job names to run (empty = all)"
-        default: ""
   push:
     branches:
       - ci/verify-mutation-runs
@@ -31,7 +26,6 @@ env:
 jobs:
   engine:
     name: ${{ matrix.name }}
-    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.name) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     strategy:
@@ -109,7 +103,6 @@ jobs:
 
   gpui:
     name: ${{ matrix.name }}
-    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.name) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
