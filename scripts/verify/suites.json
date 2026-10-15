@@ -301,6 +301,34 @@
         "cap-rendering"
       ],
       "own": []
+    },
+    {
+      "name": "native-rendering",
+      "about": "native macOS rendering regressions (IOSurface source lifetime in the YUV converter)",
+      "cargo": [
+        "-p",
+        "cap-rendering",
+        "--test",
+        "iosurface-source-lifetime"
+      ],
+      "binaries": [
+        "cap-rendering::iosurface-source-lifetime"
+      ],
+      "platforms": {
+        "fast": [
+          "macos"
+        ],
+        "full": [
+          "macos"
+        ]
+      },
+      "roots": [
+        "cap-rendering"
+      ],
+      "own": [
+        "crates/rendering/tests/iosurface-source-lifetime.rs",
+        "crates/rendering/tests/expectations.toml"
+      ]
     }
   ],
   "always": [

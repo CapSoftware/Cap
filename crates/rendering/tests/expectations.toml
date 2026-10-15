@@ -1,0 +1,10 @@
+# Strict expected failures of the native rendering tests in this directory
+# (format: crates/verify-expect). A listed failure that no longer occurs fails
+# the run: remove the entry together with the fix.
+
+[[xfail]]
+case = "native/rendering/iosurface-source-lifetime/recycled-pool"
+class = "recycled-source"
+platforms = ["macos"]
+reason = "YuvToRgbaConverter::convert_nv12_from_iosurface_to_encoder wraps the source CVPixelBuffer's IOSurface in a Metal texture but does not keep the pixel buffer alive until the encoded GPU work is submitted. Once the caller drops it, the CVPixelBufferPool hands the same IOSurface out again, and the GPU samples whatever was painted into it next: source 0 renders white instead of its own grey. In exports this is the nondeterministic AVFoundation transition corruption (export/basic/transition/*/avf, audio/audio-mix-8s-a2/transition/mp4-app30). Fixed on fixavf/s2 by retaining sources until submission (8cafa9bfb, 905e0933d)"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
