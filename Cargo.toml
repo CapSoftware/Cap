@@ -109,6 +109,11 @@ opt-level = 2
 [profile.dev.package.cap-audio]
 opt-level = 2
 
+# The verification suite decodes markers from every output pixel it reads;
+# unoptimised it spends minutes in its own loops.
+[profile.dev.package.cap-verify]
+opt-level = 3
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"

@@ -2151,6 +2151,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-editor",
+ "cap-export",
+ "cap-media-info",
+ "cap-project",
+ "cap-recording",
+ "cap-rendering",
+ "cap-timestamp",
+ "ffmpeg-next",
+ "flume",
+ "futures",
+ "relative-path",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
