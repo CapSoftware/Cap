@@ -57,7 +57,12 @@ impl EditorWindow {
         .stretch()
         .on_select(cx.listener(|this, index: &usize, window, cx| {
             if let Some(preset) = SilencePreset::ALL.get(*index) {
-                this.apply_clean_up_settings(preset.settings(), window, cx);
+                let normalize = this.clean_up.settings.normalize;
+                this.apply_clean_up_settings(
+                    preset.settings().with_normalize(normalize),
+                    window,
+                    cx,
+                );
             }
         }));
 
@@ -66,6 +71,7 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .pt(px(6.))
+            .child(self.render_clean_up_normalize(cx))
             .children(
                 SilenceParameter::ALL
                     .into_iter()
@@ -287,6 +293,79 @@ impl EditorWindow {
             .into_any_element()
     }
 
+    fn render_clean_up_normalize(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let settings = self.clean_up.settings;
+        let boost = self.clean_up.level_boost_db;
+        let detail = if !settings.normalize {
+            "Levels are measured as recorded".to_string()
+        } else if boost >= 0.5 {
+            format!(
+                "Quiet recording, boosted +{} dB for detection",
+                boost.round() as i32
+            )
+        } else {
+            "Recording is loud enough, no boost needed".to_string()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child("Boost quiet audio"),
+                    )
+                    .child(
+                        div()
+                            .id("clean-up-info-normalize")
+                            .flex()
+                            .items_center()
+                            .child(
+                                svg()
+                                    .path("icons/info.svg")
+                                    .size(px(12.))
+                                    .text_color(Hsla::from(theme.editor.text_3)),
+                            )
+                            .tooltip(move |_window, cx| {
+                                ui::Tooltip::new(
+                                    &theme,
+                                    "Lifts a quiet voice to a normal level before looking for \
+                                     silence, so the threshold works on soft or distant mics. \
+                                     Detection only: playback and export are unchanged.",
+                                )
+                                .view(cx)
+                            }),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        ui::Toggle::plain(&theme, "clean-up-normalize", settings.normalize)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let next = this
+                                    .clean_up
+                                    .settings
+                                    .with_normalize(!this.clean_up.settings.normalize);
+                                this.apply_clean_up_settings(next, window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(Hsla::from(theme.editor.text_3))
+                    .child(detail),
+            )
+            .into_any_element()
+    }
+
     fn render_clean_up_parameter(
         &self,
         parameter: SilenceParameter,
@@ -483,19 +562,20 @@ impl EditorWindow {
             .child(separator())
             .when_some(focused, |this, silence| {
                 this.child(
-                    pill_button(
+                    pill_text_button(
                         &theme,
                         "silence-keep",
                         "icons/audio-on.svg",
+                        if kept { "Kept" } else { "Keep" },
                         if kept {
                             Hsla::from(theme.editor.accent)
                         } else {
                             idle
                         },
                         if kept {
-                            "Kept. Click to cut it with the rest"
+                            "Kept in the video. Click to cut it with the rest"
                         } else {
-                            "Keep this silence"
+                            "Keep this silence in the video (double-click a mark to toggle)"
                         },
                     )
                     .when(kept, |this| this.bg(Hsla::from(theme.editor.ctl_active)))
@@ -505,12 +585,13 @@ impl EditorWindow {
                     })),
                 )
                 .child(
-                    pill_button(
+                    pill_text_button(
                         &theme,
                         "silence-cut",
                         "icons/scissors.svg",
+                        "Cut now",
                         red,
-                        "Cut this silence",
+                        "Cut this silence from the timeline",
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.cut_focused_silence(window, cx);
@@ -669,6 +750,24 @@ impl EditorWindow {
         self.refresh_clean_up(window, cx);
     }
 
+    pub(crate) fn press_silence(
+        &mut self,
+        silence: TimelineSilence,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let already_focused = self.clean_up.reviewing && self.clean_up.focused == Some(silence.key);
+        self.clean_up.reviewing = true;
+        self.clean_up.focused = Some(silence.key);
+        if click_count >= 2 && already_focused {
+            self.clean_up.toggle_kept(silence.key);
+        } else if !self.playing {
+            self.seek_to_time(silence.start, cx);
+        }
+        self.refresh_clean_up(window, cx);
+    }
+
     fn step_silence(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(silence) = self.clean_up.step_focus(forward) {
             self.focus_silence(silence, window, cx);
@@ -706,6 +805,38 @@ fn pill_button(
         .cursor_pointer()
         .hover(move |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
         .child(svg().path(icon).size(px(14.)).text_color(color))
+        .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
+}
+
+fn pill_text_button(
+    theme: &Theme,
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+    color: Hsla,
+    tooltip: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = *theme;
+    div()
+        .id(id)
+        .h(px(24.))
+        .px(px(8.))
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .gap(px(5.))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .hover(move |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+        .child(svg().path(icon).size(px(13.)).text_color(color))
+        .child(
+            div()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color)
+                .child(label),
+        )
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
 }
 

@@ -14,6 +14,9 @@ const BLIP_WINDOWS: usize = 2;
 const MIN_CUT_SECS: f64 = 0.05;
 const EDGE_SNAP_SECS: f64 = 0.03;
 const MUTED_TRACK_DB: f32 = -30.0;
+const VOICE_REFERENCE_DB: f32 = -20.0;
+const VOICE_PERCENTILE: f64 = 0.95;
+const MAX_LEVEL_BOOST_DB: f32 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SilencePreset {
@@ -41,6 +44,7 @@ impl SilencePreset {
                 min_keep_ms: 200.,
                 pad_start_ms: 100.,
                 pad_end_ms: 150.,
+                normalize: true,
             },
             Self::Balanced => SilenceSettings {
                 threshold_db: -40.,
@@ -48,6 +52,7 @@ impl SilencePreset {
                 min_keep_ms: 300.,
                 pad_start_ms: 10.,
                 pad_end_ms: 10.,
+                normalize: true,
             },
             Self::Aggressive => SilenceSettings {
                 threshold_db: -35.,
@@ -55,6 +60,7 @@ impl SilencePreset {
                 min_keep_ms: 400.,
                 pad_start_ms: 0.,
                 pad_end_ms: 0.,
+                normalize: true,
             },
         }
     }
@@ -67,6 +73,7 @@ pub struct SilenceSettings {
     pub min_keep_ms: f32,
     pub pad_start_ms: f32,
     pub pad_end_ms: f32,
+    pub normalize: bool,
 }
 
 impl Default for SilenceSettings {
@@ -79,7 +86,12 @@ impl SilenceSettings {
     pub fn preset(&self) -> Option<SilencePreset> {
         SilencePreset::ALL
             .into_iter()
-            .find(|preset| preset.settings() == *self)
+            .find(|preset| preset.settings().with_normalize(self.normalize) == *self)
+    }
+
+    pub fn with_normalize(mut self, normalize: bool) -> Self {
+        self.normalize = normalize;
+        self
     }
 }
 
@@ -113,7 +125,9 @@ impl SilenceParameter {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Threshold => "Audio quieter than this counts as silence",
+            Self::Threshold => {
+                "Audio quieter than this counts as silence, measured after quiet recordings are boosted"
+            }
             Self::MinSilence => "Only cut silences at least this long",
             Self::MinKeep => {
                 "Sounds shorter than this between two silences (clicks, breaths) are cut with them"
@@ -330,8 +344,28 @@ impl DetectionInputs {
     }
 }
 
-fn detect_clips(envelopes: &[ClipEnvelope], inputs: &DetectionInputs) -> Vec<Vec<(f64, f64)>> {
-    envelopes
+pub fn level_boost_db<'a>(clips: impl IntoIterator<Item = &'a [f32]>) -> f32 {
+    let mut audible: Vec<f32> = clips
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|level| level.is_finite() && *level > FLOOR_DB)
+        .collect();
+    if audible.is_empty() {
+        return 0.;
+    }
+    let index = ((audible.len() - 1) as f64 * VOICE_PERCENTILE).round() as usize;
+    let (_, reference, _) = audible.select_nth_unstable_by(index, f32::total_cmp);
+    (VOICE_REFERENCE_DB - *reference).clamp(0., MAX_LEVEL_BOOST_DB)
+}
+
+struct Detection {
+    ranges: Vec<Vec<(f64, f64)>>,
+    boost_db: f32,
+}
+
+fn detect_clips(envelopes: &[ClipEnvelope], inputs: &DetectionInputs) -> Detection {
+    let combined: Vec<Option<Vec<f32>>> = envelopes
         .iter()
         .zip(&inputs.offsets)
         .map(|(envelope, (mic_offset, system_offset))| {
@@ -354,12 +388,29 @@ fn detect_clips(envelopes: &[ClipEnvelope], inputs: &DetectionInputs) -> Vec<Vec
                     gain_db: inputs.system_volume_db,
                 });
             }
-            if tracks.is_empty() {
-                return Vec::new();
-            }
-            detect_silences(&combined_levels(&tracks), &inputs.settings)
+            (!tracks.is_empty()).then(|| combined_levels(&tracks))
         })
-        .collect()
+        .collect();
+    let boost_db = if inputs.settings.normalize {
+        level_boost_db(combined.iter().flatten().map(Vec::as_slice))
+    } else {
+        0.
+    };
+    let ranges = combined
+        .into_iter()
+        .map(|levels| match levels {
+            Some(mut levels) => {
+                if boost_db > 0. {
+                    for level in &mut levels {
+                        *level += boost_db;
+                    }
+                }
+                detect_silences(&levels, &inputs.settings)
+            }
+            None => Vec::new(),
+        })
+        .collect();
+    Detection { ranges, boost_db }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -510,6 +561,7 @@ pub struct CleanUpState {
     pub envelopes: Option<Arc<Vec<ClipEnvelope>>>,
     detected_for: Option<DetectionInputs>,
     detected: Vec<Vec<(f64, f64)>>,
+    pub level_boost_db: f32,
     pub silences: Vec<TimelineSilence>,
     pub kept: HashSet<SilenceKey>,
     pub focused: Option<SilenceKey>,
@@ -525,6 +577,7 @@ impl Default for CleanUpState {
             envelopes: None,
             detected_for: None,
             detected: Vec::new(),
+            level_boost_db: 0.,
             silences: Vec::new(),
             kept: HashSet::new(),
             focused: None,
@@ -566,7 +619,9 @@ impl CleanUpState {
         };
         let inputs = DetectionInputs::new(project, self.settings, envelopes.len());
         if self.detected_for.as_ref() != Some(&inputs) {
-            self.detected = detect_clips(&envelopes, &inputs);
+            let detection = detect_clips(&envelopes, &inputs);
+            self.detected = detection.ranges;
+            self.level_boost_db = detection.boost_db;
             self.detected_for = Some(inputs);
             self.kept.clear();
             self.focused = None;
@@ -641,6 +696,28 @@ impl CleanUpState {
         Some(silence)
     }
 
+    pub fn silence_at(&self, time: f64) -> Option<TimelineSilence> {
+        self.silences
+            .iter()
+            .find(|silence| time >= silence.start && time < silence.end)
+            .copied()
+    }
+
+    pub fn skip_target(&self, time: f64, lead: f64) -> Option<f64> {
+        let pending: Vec<&TimelineSilence> = self.pending().collect();
+        let mut end = pending
+            .iter()
+            .find(|silence| time >= silence.start - lead && time < silence.end - lead)?
+            .end;
+        while let Some(next) = pending
+            .iter()
+            .find(|silence| silence.start <= end + lead && silence.end > end)
+        {
+            end = next.end;
+        }
+        Some(end)
+    }
+
     pub fn toggle_kept(&mut self, key: SilenceKey) {
         if !self.kept.remove(&key) {
             self.kept.insert(key);
@@ -673,6 +750,7 @@ mod tests {
             min_keep_ms,
             pad_start_ms: pad,
             pad_end_ms: pad,
+            normalize: false,
         }
     }
 
@@ -944,6 +1022,71 @@ mod tests {
         assert_eq!(state.step_focus(true).map(|s| s.start), Some(5.));
         assert_eq!(state.step_focus(true).map(|s| s.start), Some(5.));
         assert_eq!(state.step_focus(false).map(|s| s.start), Some(1.));
+    }
+
+    fn silence(index: usize, start: f64, end: f64) -> TimelineSilence {
+        TimelineSilence {
+            key: SilenceKey {
+                recording_clip: 0,
+                index,
+            },
+            segment_index: 0,
+            source_start: start,
+            source_end: end,
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn playback_skips_pending_silences_and_their_neighbours() {
+        let mut state = CleanUpState {
+            silences: vec![silence(0, 1., 2.), silence(1, 2.01, 3.), silence(2, 5., 6.)],
+            ..CleanUpState::default()
+        };
+        let lead = 1. / 60.;
+        assert_eq!(state.skip_target(0.5, lead), None);
+        assert_eq!(state.skip_target(0.99, lead), Some(3.));
+        assert_eq!(state.skip_target(1.5, lead), Some(3.));
+        assert_eq!(state.skip_target(3., lead), None);
+        state.toggle_kept(state.silences[2].key);
+        assert_eq!(state.skip_target(5.5, lead), None);
+        state.toggle_kept(state.silences[1].key);
+        assert_eq!(state.skip_target(1.5, lead), Some(2.));
+        assert_eq!(state.silence_at(2.5).map(|s| s.key.index), Some(1));
+        assert_eq!(state.silence_at(4.), None);
+    }
+
+    #[test]
+    fn quiet_recordings_are_boosted_towards_a_voice_reference() {
+        let quiet = levels(&[(3.0, -45.), (1.0, -70.)]);
+        assert!((level_boost_db([quiet.as_slice()]) - 25.).abs() < 1e-4);
+        let loud = levels(&[(3.0, -12.), (1.0, -60.)]);
+        assert_eq!(level_boost_db([loud.as_slice()]), 0.);
+        let silent = vec![FLOOR_DB; 100];
+        assert_eq!(level_boost_db([silent.as_slice()]), 0.);
+        let whisper = levels(&[(3.0, -80.)]);
+        assert_eq!(level_boost_db([whisper.as_slice()]), MAX_LEVEL_BOOST_DB);
+    }
+
+    #[test]
+    fn boosting_finds_speech_the_default_threshold_misses() {
+        let envelope = ClipEnvelope {
+            mic: Some(Arc::new(levels(&[(1.0, -45.), (1.0, -70.), (1.0, -45.)]))),
+            ..ClipEnvelope::default()
+        };
+        let inputs = |normalize: bool| DetectionInputs {
+            settings: SilenceSettings::default().with_normalize(normalize),
+            mic_volume_db: 0.,
+            system_volume_db: 0.,
+            offsets: vec![(0., 0.)],
+        };
+        let flat = detect_clips(std::slice::from_ref(&envelope), &inputs(false));
+        assert_eq!(flat.ranges[0].len(), 1);
+        assert!(flat.ranges[0][0].1 - flat.ranges[0][0].0 > 2.5);
+        let boosted = detect_clips(std::slice::from_ref(&envelope), &inputs(true));
+        assert!((boosted.boost_db - 25.).abs() < 1e-4);
+        approx(&boosted.ranges[0], &[(1.01, 1.99)]);
     }
 
     #[test]

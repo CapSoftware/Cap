@@ -971,6 +971,7 @@ pub struct Desired {
     pub seek: Option<u32>,
     pub seek_gen: u64,
     pub resolution: XY<u32>,
+    pub rate: f64,
 }
 
 impl Default for Desired {
@@ -980,6 +981,7 @@ impl Default for Desired {
             seek: None,
             seek_gen: 0,
             resolution: default_preview_resolution(),
+            rate: 1.0,
         }
     }
 }
@@ -1045,6 +1047,10 @@ impl TransportHandle {
         self.modify(|desired| desired.resolution = resolution);
     }
 
+    pub fn set_rate(&self, rate: f64) {
+        self.modify(|desired| desired.rate = rate);
+    }
+
     pub fn play_from(&self, frame: u32) {
         self.modify(|desired| {
             desired.playing = true;
@@ -1077,6 +1083,7 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
     let fps = EDITOR_PREVIEW_FPS;
     let mut applied_playing = false;
     let mut applied_gen = 0u64;
+    let mut applied_rate = instance.playback_rate();
     // The engine's own liveness, epoch-guarded inside `EditorInstance` so a
     // deliberate stop/start transition can never masquerade as a death.
     let mut active_rx = instance.playback_watch();
@@ -1116,6 +1123,11 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let seeking = want.seek_gen != applied_gen;
+
+        if want.rate != applied_rate {
+            applied_rate = want.rate;
+            instance.set_playback_rate(want.rate);
+        }
 
         // A pause stops the engine outright. A seek no longer does: the
         // engine holds a live-seek input (`PlaybackHandle::seek`), so
@@ -1572,6 +1584,7 @@ pub struct EditorWindow {
     pub(crate) snap_guides: Vec<crate::editor_canvas::SnapGuide>,
 
     preview_quality: crate::store::EditorPreviewQuality,
+    pub(crate) playback_rate: f64,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     frame_controls: frame::FrameControls,
@@ -1587,6 +1600,7 @@ pub struct EditorWindow {
     notice_seq: u64,
     /// While a shot is being auditioned, the time playback stops itself at.
     play_until: Option<f64>,
+    silence_skip_target: Option<f64>,
     /// The empty 3D lane's "How many shots?" picker, and the pill under the
     /// pointer in it or in the panel's Auto scene row -- which is what the
     /// lane draws its preview ghosts from.
@@ -1888,6 +1902,14 @@ fn clip_menu_row(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolbarMenu {
     AspectRatio,
+    PlaybackRate,
+}
+
+pub(crate) const PLAYBACK_RATES: [f64; 7] = [0.5, 0.75, 1.0, 1.2, 1.5, 1.75, 2.0];
+
+pub(crate) fn playback_rate_label(rate: f64) -> String {
+    let label = format!("{rate:.2}");
+    format!("{}×", label.trim_end_matches('0').trim_end_matches('.'))
 }
 
 struct OpenToolbarMenu {
@@ -2140,6 +2162,7 @@ impl EditorWindow {
             canvas_overlay_rect: None,
             snap_guides: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
+            playback_rate: 1.0,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             frame_controls: frame::FrameControls::default(),
@@ -2152,6 +2175,7 @@ impl EditorWindow {
             notice: None,
             notice_seq: 0,
             play_until: None,
+            silence_skip_target: None,
             camera3d_picker: false,
             camera3d_count_hover: None,
             timeline_height_override: None,
@@ -2315,7 +2339,7 @@ impl EditorWindow {
             .collect();
     }
 
-    fn silence_marks_visible(&self) -> bool {
+    pub(crate) fn silence_marks_visible(&self) -> bool {
         self.clean_up.reviewing
             || (self.sidebar.tab == crate::editor_sidebar::SidebarTab::CleanUp
                 && self.sidebar_selection().is_none())
@@ -3059,8 +3083,40 @@ impl EditorWindow {
             self.stop_playback(cx);
         }
 
+        self.skip_pending_silence(next, cx);
+
         self.last_playhead_redraw = Instant::now();
         self.invalidate_playback_chrome(window, cx);
+    }
+
+    /// While the Clean Up marks are on screen, playback previews the cut: a
+    /// pending silence is jumped over a frame before it starts. Frames the
+    /// engine emits before the jump lands still sit inside the silence, so
+    /// the target is remembered until playback reaches it.
+    fn skip_pending_silence(&mut self, now: f64, cx: &mut Context<Self>) {
+        if !self.playing || !self.silence_marks_visible() {
+            self.silence_skip_target = None;
+            return;
+        }
+        let frame = self.playback_rate.max(1.) / f64::from(EDITOR_PREVIEW_FPS);
+        if let Some(target) = self.silence_skip_target {
+            if now < target - frame {
+                return;
+            }
+            self.silence_skip_target = None;
+        }
+        let Some(end) = self.clean_up.skip_target(now, frame) else {
+            return;
+        };
+        let play_until = self.play_until;
+        if end >= self.total_duration() - frame {
+            self.stop_playback(cx);
+            self.seek_to_time(end, cx);
+            return;
+        }
+        self.seek_to_time(end, cx);
+        self.play_until = play_until;
+        self.silence_skip_target = Some(end);
     }
 
     /// The pause half of `handlePlayPauseClick`, also used by the end-of-media
@@ -3068,6 +3124,7 @@ impl EditorWindow {
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
         self.play_until = None;
+        self.silence_skip_target = None;
         self.playback_follow.reset();
         if self.preparing_transport_active() {
             self.preparing_command(None, Some(false));
@@ -3248,6 +3305,7 @@ impl EditorWindow {
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
         // Moving the playhead by hand ends any shot audition.
         self.play_until = None;
+        self.silence_skip_target = None;
         if self.preparing_transport_active() {
             self.preparing_command(Some(time), None);
             return;
@@ -4139,6 +4197,17 @@ impl EditorWindow {
             selection = ?self.selection,
             "timeline press"
         );
+
+        if kind == TrackKind::Clip
+            && !self.split_mode
+            && !matches!(hit, Hit::Handle { .. })
+            && self.silence_marks_visible()
+            && let Some(silence) = self.clean_up.silence_at(press_time)
+        {
+            cx.stop_propagation();
+            self.press_silence(silence, event.click_count, window, cx);
+            return;
+        }
 
         // The selected 3D shot's pose dots: a press on one picks that pose
         // instead of starting a move. Only inside the body, so the resize
@@ -6839,7 +6908,28 @@ impl EditorWindow {
                     })
                     .collect()
             }
+            ToolbarMenu::PlaybackRate => PLAYBACK_RATES
+                .iter()
+                .map(|rate| {
+                    ui::MenuItem::new(
+                        playback_rate_label(*rate),
+                        (rate - self.playback_rate).abs() < 1e-6,
+                    )
+                })
+                .collect(),
         }
+    }
+
+    fn set_playback_rate(&mut self, rate: f64, cx: &mut Context<Self>) {
+        if !rate.is_finite() || (rate - self.playback_rate).abs() < 1e-6 {
+            return;
+        }
+        self.playback_rate = rate;
+        if let Some(transport) = &self.transport {
+            transport.set_rate(rate);
+        }
+        tracing::info!(rate, "preview playback rate");
+        cx.notify();
     }
 
     fn open_toolbar_menu(
@@ -6912,6 +7002,11 @@ impl EditorWindow {
                     true
                 });
             }
+            ToolbarMenu::PlaybackRate => {
+                if let Some(rate) = PLAYBACK_RATES.get(index) {
+                    self.set_playback_rate(*rate, cx);
+                }
+            }
         }
         cx.notify();
         window.refresh();
@@ -6923,7 +7018,11 @@ impl EditorWindow {
         let items = self.toolbar_menu_items(kind);
         Some(
             ui::Menu::editor(&self.theme, "toolbar-menu", items, &menu.state)
-                .min_width(px(200.))
+                .min_width(px(if kind == ToolbarMenu::PlaybackRate {
+                    96.
+                } else {
+                    200.
+                }))
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
                 }))
@@ -10073,7 +10172,28 @@ impl EditorWindow {
                                     "--:--".into()
                                 }
                             )))
-                    })),
+                    }))
+                    .child(div().w(px(10.)))
+                    .child(
+                        ui::EditorButton::plain(&theme, "transport-playback-rate")
+                            .text(&theme)
+                            .label(playback_rate_label(self.playback_rate))
+                            .tooltip(&theme, "Preview speed")
+                            .disabled(self.transport.is_none())
+                            .pressed(
+                                self.toolbar_menu
+                                    .as_ref()
+                                    .is_some_and(|menu| menu.kind == ToolbarMenu::PlaybackRate),
+                            )
+                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                                this.open_toolbar_menu(
+                                    ToolbarMenu::PlaybackRate,
+                                    *bounds,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -10272,7 +10392,7 @@ impl EditorWindow {
                 self.playing,
                 self.playhead_epoch_live,
                 self.last_playhead_redraw.elapsed().as_secs_f64(),
-            );
+            ) * self.playback_rate;
             if ahead > 0.0 {
                 view.playhead = (view.playhead + ahead).min(self.total_duration());
             }
@@ -12687,6 +12807,18 @@ mod tests {
         // Paused, no matter what the anchor says.
         assert_eq!(playhead_extrapolation(false, true, 0.5), 0.0);
         assert_eq!(playhead_extrapolation(false, false, 0.5), 0.0);
+    }
+
+    #[test]
+    fn playback_rate_labels_drop_trailing_zeros() {
+        let labels: Vec<String> = PLAYBACK_RATES
+            .iter()
+            .map(|rate| playback_rate_label(*rate))
+            .collect();
+        assert_eq!(
+            labels,
+            ["0.5×", "0.75×", "1×", "1.2×", "1.5×", "1.75×", "2×"]
+        );
     }
 
     /// Once the epoch is live the line glides by the wall clock between
