@@ -6,6 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+# Test-only: lets decoder model tests register scripted media in place of files.
+scripted = []
+
 [dependencies]
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 ffmpeg.workspace = true

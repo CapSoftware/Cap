@@ -639,6 +639,10 @@ impl AVAssetReaderDecoder {
         sequential_access: Arc<AtomicBool>,
     ) {
         let dimensions = (|| {
+            #[cfg(test)]
+            if let Some(dimensions) = cap_video_decode::scripted::dimensions(&path) {
+                return Ok(dimensions);
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
