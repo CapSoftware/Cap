@@ -347,7 +347,7 @@ mod publication_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod recording_encoder_tests {
     use super::*;
     use ffmpeg::{
@@ -391,6 +391,12 @@ mod recording_encoder_tests {
             prefer_audiotoolbox,
         )
         .unwrap();
+        assert_eq!(
+            file.encoder().codec_name().as_deref(),
+            Some(if prefer_audiotoolbox { "aac_at" } else { "aac" }),
+            "requested AudioToolbox={prefer_audiotoolbox}, but opened {:?}",
+            file.encoder().codec_name()
+        );
 
         for &(start, len) in send_ranges {
             let mut position = start;
@@ -438,6 +444,12 @@ mod recording_encoder_tests {
             prefer_audiotoolbox,
         )
         .unwrap();
+        assert_eq!(
+            file.encoder().codec_name().as_deref(),
+            Some(if prefer_audiotoolbox { "aac_at" } else { "aac" }),
+            "requested AudioToolbox={prefer_audiotoolbox}, but opened {:?}",
+            file.encoder().codec_name()
+        );
 
         let mut position = 0;
         let mut frame_index = 0;
@@ -609,7 +621,6 @@ mod recording_encoder_tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn recording_audio_uses_audiotoolbox_on_macos() {
         if std::env::var_os("CAP_RECORDING_FFMPEG_AAC").is_some_and(|v| !v.is_empty()) {
@@ -621,7 +632,6 @@ mod recording_encoder_tests {
         assert_eq!(file.encoder().codec_name().as_deref(), Some("aac_at"));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn recording_audio_silence_stays_small() {
         let timeline = vec![0.0_f32; 480_000];
