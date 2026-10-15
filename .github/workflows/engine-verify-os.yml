@@ -188,6 +188,14 @@ jobs:
             scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}"
           fi
 
+      # Equivalent-mutant guards (scripts/verify/guards.toml): a failing
+      # sentinel is a warning for review, never a failure.
+      - name: Guard sentinels
+        if: always() && inputs.platform == 'linux' && matrix.shard == 1 && steps.test.outcome != 'skipped'
+        continue-on-error: true
+        shell: bash
+        run: python3 scripts/verify/guards.py --profile "$CAP_VERIFY_CARGO_PROFILE"
+
       - name: Summary
         if: always() && steps.test.outcome != 'skipped'
         shell: bash

@@ -9,6 +9,9 @@
       Maps changed paths to suites through the workspace dependency graph
       (`cargo metadata`) and prints GitHub step outputs: run, reason,
       suites, matrix.
+  plan.py risk --files F [--summary FILE] [--output FILE]
+      changed files -> high-risk regions and guards (scripts/verify/guards.toml):
+      escalate=, regions=, guards= lines plus ::warning annotations.
 
   plan.py test
       Self-test of the change mapping.
@@ -23,6 +26,52 @@ import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 PLATFORMS = ["linux", "macos", "windows"]
+
+
+def load_guards():
+    import tomllib
+
+    with open(os.path.join(ROOT, "scripts", "verify", "guards.toml"), "rb") as f:
+        return tomllib.load(f)
+
+
+def risk(files, guards=None):
+    """(regions touched, guards whose files are touched) for changed files."""
+    guards = guards or load_guards()
+    regions = []
+    for region in guards.get("region", []):
+        hits = sorted({p for p in files for pattern in region["paths"] if match(p, pattern)})
+        if hits:
+            regions.append((region["name"], hits))
+    touched = [
+        g for g in guards.get("guard", []) if any(p in g["files"] for p in files)
+    ]
+    return regions, touched
+
+
+def risk_report(regions, touched):
+    """Job-summary markdown and annotation lines for a risky diff."""
+    if not regions and not touched:
+        return "", []
+    md = ["## Needs deep review", ""]
+    notes = []
+    if regions:
+        md.append("This change touches high-risk engine code. A pull request that does runs the FULL tier, with real capture on both macOS versions:")
+        md.append("")
+        for name, hits in regions:
+            md.append(f"- **{name}**: " + ", ".join(f"`{h}`" for h in hits[:6]) + (" ..." if len(hits) > 6 else ""))
+            notes.append(f"::warning title=Needs deep review ({name})::{', '.join(hits[:6])}")
+        md.append("")
+    if touched:
+        md.append("### Guard changed: needs deep review")
+        md.append("")
+        md.append("These guards protect users, but removing them changes no output the suites check (equivalent mutants), so only review can catch a regression:")
+        md.append("")
+        for g in touched:
+            md.append(f"- **{g['id']}** ({g['area']}; {', '.join(g['symbols'])}): {g['why']} Prevents: {g['prevents']}")
+            notes.append(f"::warning title=Guard changed: {g['id']} ({g['area']})::{g['prevents']}")
+        md.append("")
+    return "\n".join(md), notes
 
 
 def load_config():
@@ -255,6 +304,28 @@ def cmd_changes(args):
         print(f"{key}={value}")
 
 
+def cmd_risk(args):
+    with open(args.files) as f:
+        files = [line.strip() for line in f if line.strip()]
+    regions, touched = risk(files)
+    md, notes = risk_report(regions, touched)
+    if args.summary and md:
+        with open(args.summary, "a") as f:
+            f.write(md + "\n")
+    for note in notes:
+        print(note)
+    outputs = [
+        f"escalate={'true' if regions or touched else 'false'}",
+        f"regions={','.join(name for name, _ in regions)}",
+        f"guards={','.join(g['id'] for g in touched)}",
+    ]
+    if args.output:
+        with open(args.output, "a") as f:
+            f.write("\n".join(outputs) + "\n")
+    else:
+        print("\n".join(outputs))
+
+
 def cmd_test(_args):
     config = load_config()
     metadata = load_metadata(None)
@@ -280,6 +351,22 @@ def cmd_test(_args):
         ok = sorted(names) == sorted(expected)
         failed += not ok
         print(f"{'ok ' if ok else 'BAD'} {files} -> {names} ({reason})")
+    guards = load_guards()
+    for g in guards.get("guard", []):
+        if not any(match(f, pattern) for f in g["files"] for r in guards["region"] for pattern in r["paths"]):
+            failed += 1
+            print(f"BAD guard {g['id']}: its files lie outside every high-risk region")
+    for files, expected in [
+        (["crates/enc-ffmpeg/src/base.rs"], (["encoder timestamps"], ["E02"])),
+        (["crates/editor/src/audio.rs", "README.md"], (["audio mixing and Studio Sound"], ["A09"])),
+        (["apps/desktop-gpui/src/upload/queue.rs"], (["upload retry"], [])),
+        (["crates/verify/src/oracle.rs", "apps/web/app/page.tsx"], ([], [])),
+    ]:
+        regions, touched = risk(files, guards)
+        got = ([n for n, _ in regions], [g["id"] for g in touched])
+        ok = got == expected
+        failed += not ok
+        print(f"{'ok ' if ok else 'BAD'} risk {files} -> {got}")
     rendering_only = affected(config, ["crates/rendering/src/decoder/model/mod.rs"], metadata, "fast")[0]
     if "decoder-model-ffmpeg" not in rendering_only:
         failed += 1
@@ -310,6 +397,11 @@ def main():
     p.add_argument("--max-files", type=int, default=3000)
     p.add_argument("--suites")
     p.set_defaults(func=cmd_changes)
+    p = sub.add_parser("risk")
+    p.add_argument("--files", required=True)
+    p.add_argument("--summary", help="append the markdown report to this file")
+    p.add_argument("--output", help="append the escalate/regions/guards lines to this file (GITHUB_OUTPUT)")
+    p.set_defaults(func=cmd_risk)
     p = sub.add_parser("test")
     p.set_defaults(func=cmd_test)
     args = parser.parse_args()

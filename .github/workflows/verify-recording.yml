@@ -7,7 +7,8 @@ name: Verify recording (real capture)
 
 # Pull requests (and pushes to the suite branches) that touch the capture,
 # encode, timestamp or verify code run the FAST tier once on macos-15; the
-# FULL tier runs on macos-15 and macos-26 nightly and on dispatch.
+# FULL tier runs on macos-15 and macos-26 nightly and on dispatch, and for a
+# pull request that touches a high-risk region of scripts/verify/guards.toml.
 on:
   workflow_dispatch:
     inputs:
@@ -38,6 +39,15 @@ on:
       - "crates/project/**"
       - "Cargo.lock"
       - ".github/workflows/verify-recording.yml"
+      - "crates/enc-ffmpeg/**"
+      - "crates/audio/**"
+      - "crates/editor/src/audio*.rs"
+      - "crates/rendering/src/decoder/**"
+      - "crates/video-decode/**"
+      - "apps/desktop-gpui/src/upload*"
+      - "apps/desktop-gpui/src/upload/**"
+      - "scripts/verify/guards.toml"
+
   push:
     branches:
       - ci/verify-ci
@@ -60,19 +70,60 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runners: ${{ steps.scope.outputs.runners }}
+      tier: ${{ steps.scope.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/verify
+      - name: Scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          INPUT_TIER: ${{ inputs.tier }}
+        run: |
+          set -euo pipefail
+          both='["macos-15","macos-26"]'
+          case "$EVENT" in
+            schedule) runners="$both"; tier=full ;;
+            workflow_dispatch) runners="$both"; tier="${INPUT_TIER:-full}" ;;
+            pull_request)
+              gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+              python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --summary "$GITHUB_STEP_SUMMARY" --output "$RUNNER_TEMP/risk.txt"
+              if grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt"; then
+                runners="$both"; tier=full
+              else
+                runners='["macos-15"]'; tier=fast
+              fi ;;
+            *) runners='["macos-15"]'; tier=fast ;;
+          esac
+          echo "runners=$runners" >> "$GITHUB_OUTPUT"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "real capture: $tier tier on $runners" | tee -a "$GITHUB_STEP_SUMMARY"
+
   real-capture:
+    needs: scope
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["macos-15", "macos-26"]' || '["macos-15"]') }}
+        runner: ${{ fromJSON(needs.scope.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
-      CAP_VERIFY_TIER: ${{ inputs.tier || (github.event_name == 'schedule' && 'full') || 'fast' }}
+      CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
       CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
       CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}

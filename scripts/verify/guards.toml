@@ -1,0 +1,100 @@
+# Code that protects users but that the engine suites cannot see change.
+#
+# [[region]]: high-risk code. A pull request whose diff touches one gets a
+# "needs deep review" warning (job summary, annotation, and the
+# needs-deep-review label where the token may add labels), and Engine verify
+# plus real capture run the FULL tier (real capture on macos-15 and
+# macos-26). Paths are globs relative to the repository root; `/**` matches
+# everything below a directory.
+#
+# [[guard]]: a protective guard whose removal changes no output of the suites
+# today (an equivalent mutant), so only a sentinel notices. The sentinel is a
+# small behaviour test of the unit's own API. It runs on every Linux Engine
+# verify job; a failing sentinel, or a diff touching the guard's files, is a
+# WARNING ("Guard changed: needs deep review"), never a CI failure. To cover
+# a new equivalent mutant, add a sentinel test and an entry here.
+#
+# Read by scripts/verify/plan.py (`risk`) and scripts/verify/guards.py.
+
+[[region]]
+name = "encoder timestamps"
+paths = [
+  "crates/enc-ffmpeg/src/base.rs",
+  "crates/enc-ffmpeg/src/video/**",
+  "crates/enc-ffmpeg/src/mux/**",
+  "crates/enc-avfoundation/src/**",
+  "crates/enc-mediafoundation/src/**",
+]
+
+[[region]]
+name = "audio mixing and Studio Sound"
+paths = [
+  "crates/audio/src/**",
+  "crates/editor/src/audio.rs",
+  "crates/editor/src/audio_output.rs",
+  "crates/enc-ffmpeg/src/audio/**",
+]
+
+[[region]]
+name = "decoder seek and frame selection"
+paths = [
+  "crates/rendering/src/decoder/**",
+  "crates/video-decode/src/**",
+]
+
+[[region]]
+name = "recording timestamps and sync"
+paths = [
+  "crates/recording/src/output_pipeline/**",
+  "crates/recording/src/sources/**",
+  "crates/recording/src/feeds/**",
+  "crates/recording/src/sync_calibration.rs",
+  "crates/timestamp/src/**",
+]
+
+[[region]]
+name = "Instant finalize"
+paths = [
+  "crates/recording/src/instant_recording.rs",
+  "crates/recording/src/instant_recording/**",
+]
+
+[[region]]
+name = "recovery"
+paths = [
+  "crates/recording/src/recovery.rs",
+  "crates/recording/src/recovery/**",
+  "crates/recording/src/track_heal.rs",
+]
+
+[[region]]
+name = "upload retry"
+paths = [
+  "apps/desktop-gpui/src/upload.rs",
+  "apps/desktop-gpui/src/upload/**",
+  "crates/recording/src/upload_resume.rs",
+]
+
+[[guard]]
+id = "E02"
+mutation = "E02"
+area = "encoder timestamps"
+files = ["crates/enc-ffmpeg/src/base.rs"]
+symbols = ["EncoderBase::update_pts"]
+package = "cap-enc-ffmpeg"
+target = "--lib"
+test = "base::tests::guard_e02_rebases_a_stream_whose_first_pts_is_not_zero"
+why = "The encoder rebases a stream whose first frame has a non-zero pts so it starts at 0. Exports already start at 0, so removing the rebase changes no export the suites check."
+prevents = "A recording or export whose first frame is not at 0 would start with a gap or frozen first frame and its audio would drift from the picture by that offset."
+
+[[guard]]
+id = "A09"
+mutation = "A09"
+area = "audio mixing and Studio Sound"
+files = ["crates/audio/src/voice.rs", "crates/editor/src/audio.rs"]
+symbols = ["VoiceEnhancer::render", "VoiceEnhancementCache::render"]
+package = "cap-audio"
+target = "--lib"
+test = "voice::tests::guard_a09_render_after_a_seek_equals_a_fresh_enhancer"
+why = "A Studio Sound render that does not continue the previous one restarts the enhancer (the reset in VoiceEnhancer::render), and the editor cache never reuses an enhancer across a seek. Either alone keeps the output right, so removing one changes nothing the suites see. The sentinel checks the property itself (a render after a seek equals a fresh one); removing only the reset leaves its output bit-identical too, so that edit is flagged by the path warning, not by the sentinel."
+prevents = "Studio Sound after a seek or scrub would carry denoiser and leveler state from another part of the recording: a burst of wrong gain or suppressed speech right after every seek, different from the export."

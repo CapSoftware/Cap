@@ -40,6 +40,10 @@ on:
         description: "CARGO_LOG for the build (for example cargo::core::compiler::fingerprint=info)"
         type: string
         default: ""
+      base:
+        description: "Plan from the diff against this ref, like a pull request (scope, risk escalation)"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       tier:
@@ -63,7 +67,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       run: ${{ steps.plan.outputs.run }}
-      tier: ${{ steps.tier.outputs.tier }}
+      tier: ${{ steps.escalated.outputs.tier }}
+      escalate: ${{ steps.risk.outputs.escalate }}
       matrix: ${{ steps.plan.outputs.matrix }}
       save-cache: ${{ steps.tier.outputs.save-cache }}
     steps:
@@ -110,6 +115,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           MQ_BASE: ${{ github.event.merge_group.base_sha }}
           MQ_HEAD: ${{ github.event.merge_group.head_sha }}
+          BASE: ${{ inputs.base }}
           SUITES: ${{ inputs.suites }}
         run: |
           set -euo pipefail
@@ -128,16 +134,44 @@ jobs:
               else
                 gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' > "$files"
               fi ;;
-            *) scope=all ;;
+            *)
+              if [[ -n "${BASE:-}" ]]; then
+                gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$GITHUB_SHA" --jq '.files[].filename' > "$files"
+                max=3000
+              else
+                scope=all
+              fi ;;
           esac
           echo "scope=$scope" >> "$GITHUB_OUTPUT"
           echo "max=$max" >> "$GITHUB_OUTPUT"
           [[ -f "$files" ]] && { echo "$(wc -l < "$files") changed files"; head -50 "$files"; } || true
 
+      # High-risk code (scripts/verify/guards.toml): warn, and run a pull
+      # request that touches it at the FULL tier.
+      - name: Risk
+        id: risk
+        if: steps.files.outputs.scope == 'files'
+        run: python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --summary "$GITHUB_STEP_SUMMARY" --output "$GITHUB_OUTPUT"
+
+      - name: Escalate tier
+        id: escalated
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          ESCALATE: ${{ steps.risk.outputs.escalate }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ inputs.base }}
+        run: |
+          tier="$TIER"
+          if [[ "$ESCALATE" == true && ( "$EVENT" == pull_request || -n "$BASE" ) && "$tier" == fast ]]; then
+            tier=full
+            echo "High-risk code changed: running the FULL tier." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
       - name: Plan
         id: plan
         env:
-          TIER: ${{ steps.tier.outputs.tier }}
+          TIER: ${{ steps.escalated.outputs.tier }}
           SCOPE: ${{ steps.files.outputs.scope }}
           MAX: ${{ steps.files.outputs.max }}
           SUITES: ${{ inputs.suites }}
@@ -155,6 +189,26 @@ jobs:
             echo "## Engine verify plan ($TIER tier)"
             grep -E '^(reason|suites)=' "$RUNNER_TEMP/plan.txt" | sed 's/^/- /'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Labels a risky pull request needs-deep-review. Kept apart from the plan
+  # job so no step that runs repository code holds a write token; fork pull
+  # requests get a read-only token and only keep the summary and annotations.
+  deep-review-label:
+    name: Deep review label
+    needs: plan
+    if: github.event_name == 'pull_request' && needs.plan.outputs.escalate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" -f "labels[]=needs-deep-review" > /dev/null \
+            || echo "::notice::could not add the needs-deep-review label with this token; the summary and annotations still flag the change"
 
   verify:
     name: ${{ matrix.platform }}
