@@ -1,0 +1,1317 @@
+//! Real-capture recording oracle (macOS).
+//!
+//! A helper process shows the screen marker of a monotonically increasing
+//! frame index at a fixed rate and plays system-audio markers; synthetic
+//! camera and microphone feeds deliver their own markers with exact capture
+//! times. Cap's real Studio and Instant pipelines record it all through
+//! ScreenCaptureKit and VideoToolbox, stop and finalize exactly like the app
+//! and the CLI, and every output frame and audio marker is then checked
+//! against the host-clock truth logged by the sources.
+//!
+//! Capture mode (`CAP_VERIFY_CAPTURE`): `display` records the primary display
+//! with a fullscreen stimulus (CI); `window` records only the stimulus window
+//! (default on a developer Mac, so other screen activity cannot leak in);
+//! `off` skips. Without Screen Recording permission the cases skip unless
+//! `CAP_VERIFY_REQUIRE_CAPTURE=1`.
+
+#![cfg(target_os = "macos")]
+
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use cap_media_info::{RawVideoFormat, VideoInfo};
+use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+use cap_recording::{
+    NativeCameraFrame, RecordingDefaults, SendableShareableContent, StudioQuality,
+    feeds::{camera::synthetic::SyntheticCamera, microphone::synthetic::SyntheticMicrophone},
+    instant_recording,
+    recovery::RecoveryManager,
+    screen_capture::ScreenCaptureTarget,
+    studio_recording,
+};
+use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+use cap_verify::{
+    audio_code::{self, AudioSource},
+    fixture_avf, media,
+    report::{self, Case, Tier},
+    stimulus::{
+        StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs, host_now, host_secs,
+    },
+    video_code::{self, FrameMarker, Readout, StreamKind},
+};
+
+const MIC_RATE: u32 = 48_000;
+const MIC_CHUNK: usize = 480;
+const CAMERA_FPS: u32 = 30;
+const CAMERA_SIZE: (usize, usize) = (640, 360);
+const AUDIO_PERIOD: f64 = 0.5;
+const WINDOW_TITLE: &str = "Cap Verify Stimulus";
+const SYSTEM_AUDIO_STARTUP: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Studio { fragmented: bool, camera: bool },
+    Instant,
+}
+
+#[derive(Clone, Debug)]
+struct Spec {
+    id: &'static str,
+    tier: Tier,
+    mode: Mode,
+    seconds: f64,
+    stimulus_fps: f64,
+    holds: Vec<(f64, f64)>,
+    /// Pairs of consecutive camera frames dropped this many seconds after
+    /// the recording started (the start-up drops #2573 fixed).
+    camera_drops_at: Vec<f64>,
+}
+
+fn specs() -> Vec<Spec> {
+    vec![
+        Spec {
+            id: "recording/studio-screen/fragmented",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 8.0,
+            stimulus_fps: 30.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+        },
+        Spec {
+            id: "recording/studio-camera/startup-drops",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: true,
+            },
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![0.3, 1.1],
+        },
+        Spec {
+            id: "recording/instant/screen-mic-system",
+            tier: Tier::Fast,
+            mode: Mode::Instant,
+            seconds: 8.0,
+            stimulus_fps: 20.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+        },
+        Spec {
+            id: "recording/studio-screen/mp4-holds",
+            tier: Tier::Full,
+            mode: Mode::Studio {
+                fragmented: false,
+                camera: false,
+            },
+            seconds: 30.0,
+            stimulus_fps: 30.0,
+            holds: vec![(5.0, 2.0), (12.0, 0.5), (20.0, 4.0)],
+            camera_drops_at: vec![],
+        },
+        Spec {
+            id: "recording/studio-camera/long",
+            tier: Tier::Full,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: true,
+            },
+            seconds: 30.0,
+            stimulus_fps: 20.0,
+            holds: vec![(10.0, 3.0)],
+            camera_drops_at: vec![0.5, 1.5, 12.0],
+        },
+        Spec {
+            id: "recording/instant/long-holds",
+            tier: Tier::Full,
+            mode: Mode::Instant,
+            seconds: 30.0,
+            stimulus_fps: 20.0,
+            holds: vec![(6.0, 2.0), (18.0, 5.0)],
+            camera_drops_at: vec![],
+        },
+    ]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureMode {
+    Display,
+    Window,
+}
+
+fn capture_mode() -> Option<CaptureMode> {
+    match std::env::var("CAP_VERIFY_CAPTURE").as_deref() {
+        Ok("display") => Some(CaptureMode::Display),
+        Ok("window") => Some(CaptureMode::Window),
+        Ok("off") => None,
+        _ if std::env::var_os("CI").is_some() => Some(CaptureMode::Display),
+        _ => Some(CaptureMode::Window),
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+#[test]
+fn real_capture() {
+    media::init();
+    if std::env::var_os("RUST_LOG").is_some() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+    let Some(capture) = capture_mode() else {
+        eprintln!("[cap-verify] recording: CAP_VERIFY_CAPTURE=off, skipping");
+        return;
+    };
+    let rt = runtime();
+    let shareable = match rt.block_on(cidre::sc::ShareableContent::current()) {
+        Ok(content) => SendableShareableContent::from(content),
+        Err(e) => {
+            let message = format!("ScreenCaptureKit unavailable ({e:?}); grant Screen Recording");
+            if env_flag("CAP_VERIFY_REQUIRE_CAPTURE") {
+                panic!("{message}");
+            }
+            eprintln!("[cap-verify] recording: {message}, skipping");
+            return;
+        }
+    };
+    let tier = report::tier();
+    let repeat: usize = std::env::var("CAP_VERIFY_REPEAT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let mut failures = Vec::new();
+    for spec in specs() {
+        if !report::selected(spec.id) || (spec.tier == Tier::Full && tier == Tier::Fast) {
+            continue;
+        }
+        for attempt in 0..repeat {
+            let mut case = Case::new(spec.id);
+            if repeat > 1 {
+                case.note(format!("repeat {}/{repeat}", attempt + 1));
+            }
+            if let Err(e) = rt.block_on(run_case(&spec, capture, &shareable, &mut case)) {
+                case.problem(format!("{e:#}"));
+            }
+            for note in &case.notes {
+                eprintln!("  note: {note}");
+            }
+            if let Err(e) = report::settle(case) {
+                failures.push(e);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Host-clock truth for one source: marker index -> host time (seconds from
+/// the case reference).
+type Truth = BTreeMap<u32, f64>;
+
+struct Feeds {
+    mic: Arc<SyntheticMicrophone>,
+    camera: Option<Arc<SyntheticCamera>>,
+    stop: Arc<AtomicBool>,
+    started: Arc<AtomicU64>,
+    mic_task: tokio::task::JoinHandle<Truth>,
+    camera_task: Option<tokio::task::JoinHandle<(Truth, Vec<u32>)>>,
+}
+
+async fn sleep_until_host(host: u64) {
+    let secs = host_secs(host, host_now());
+    if secs > 0.0 {
+        tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+    }
+}
+
+fn start_feeds(reference: u64, max_secs: f64, camera: bool, drops_at: Vec<f64>) -> Feeds {
+    let stop = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicU64::new(0));
+    let mic = Arc::new(SyntheticMicrophone::spawn(
+        "Cap Verify Synthetic Microphone",
+        MIC_RATE,
+        1,
+    ));
+    let mic_task = {
+        let mic = mic.clone();
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            let origin = host_now();
+            let schedule =
+                audio_code::standard_schedule(AudioSource::Mic, 0.3, max_secs - 0.3, AUDIO_PERIOD);
+            let mut signal = vec![0.0f32; (max_secs * f64::from(MIC_RATE)) as usize];
+            audio_code::render_markers(
+                &mut signal,
+                MIC_RATE,
+                AudioSource::Mic,
+                &schedule,
+                audio_code::DEFAULT_AMPLITUDE,
+            );
+            let base = host_secs(origin, reference);
+            let truth: Truth = schedule
+                .iter()
+                .map(|p| (p.index, base + p.time_secs))
+                .collect();
+            for (n, chunk) in signal.chunks(MIC_CHUNK).enumerate() {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let first = n * MIC_CHUNK;
+                let capture = host_add_secs(origin, first as f64 / f64::from(MIC_RATE));
+                let delivered =
+                    host_add_secs(origin, (first + chunk.len()) as f64 / f64::from(MIC_RATE));
+                sleep_until_host(delivered).await;
+                mic.push(
+                    chunk,
+                    Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
+                )
+                .await;
+            }
+            truth
+        })
+    };
+    let (camera, camera_task) = if camera {
+        let info = VideoInfo::from_raw(
+            RawVideoFormat::Nv12,
+            CAMERA_SIZE.0 as u32,
+            CAMERA_SIZE.1 as u32,
+            CAMERA_FPS,
+        );
+        let feed = Arc::new(SyntheticCamera::spawn("Cap Verify Synthetic Camera", info));
+        let task = {
+            let feed = feed.clone();
+            let stop = stop.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                let origin = host_now();
+                let base = host_secs(origin, reference);
+                let mut truth = Truth::new();
+                let mut dropped = Vec::new();
+                let mut drop_slots: Option<Vec<u32>> = None;
+                for slot in 0..(max_secs * f64::from(CAMERA_FPS)) as u32 {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let secs = f64::from(slot) / f64::from(CAMERA_FPS);
+                    let capture = host_add_secs(origin, secs);
+                    sleep_until_host(capture).await;
+                    let start = started.load(Ordering::Acquire);
+                    if drop_slots.is_none() && start != 0 {
+                        let since = host_secs(start, origin);
+                        drop_slots = Some(
+                            drops_at
+                                .iter()
+                                .flat_map(|at| {
+                                    let s = ((since + at) * f64::from(CAMERA_FPS)).ceil() as u32;
+                                    [s, s + 1]
+                                })
+                                .collect(),
+                        );
+                    }
+                    if drop_slots.as_ref().is_some_and(|d| d.contains(&slot)) {
+                        dropped.push(slot);
+                        continue;
+                    }
+                    let Some(frame) = camera_frame(slot, capture) else {
+                        continue;
+                    };
+                    feed.push_native(frame).await;
+                    truth.insert(slot, base + secs);
+                }
+                (truth, dropped)
+            })
+        };
+        (Some(feed), Some(task))
+    } else {
+        (None, None)
+    };
+    Feeds {
+        mic,
+        camera,
+        stop,
+        started,
+        mic_task,
+        camera_task,
+    }
+}
+
+fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
+    let (w, h) = CAMERA_SIZE;
+    let rgba = video_code::marker_rgba(FrameMarker::new(StreamKind::Camera, 0, slot), w, h);
+    let sample_buf = camera_sample(&rgba, w, h, capture).ok()?;
+    Some(NativeCameraFrame {
+        sample_buf,
+        timestamp: Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
+    })
+}
+
+fn camera_sample(
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+    host: u64,
+) -> anyhow::Result<cidre::arc::R<cidre::cm::SampleBuf>> {
+    use cidre::cm;
+    let buf = fixture_avf::pixel_buffer(w, h, rgba)?;
+    let format_desc = cm::VideoFormatDesc::with_image_buf(&buf)
+        .map_err(|e| anyhow::anyhow!("format description: {e:?}"))?;
+    let nanos = (host_secs(host, 0) * 1e9).round() as i64;
+    let timing = cm::SampleTimingInfo {
+        duration: cm::Time::new(1, CAMERA_FPS as i32),
+        pts: cm::Time::new(nanos, 1_000_000_000),
+        dts: cm::Time::invalid(),
+    };
+    cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &format_desc, &timing)
+        .map_err(|e| anyhow::anyhow!("sample buffer: {e:?}"))
+}
+
+enum Handle {
+    Studio(studio_recording::ActorHandle),
+    Instant(instant_recording::ActorHandle),
+}
+
+fn stimulus_binary() -> PathBuf {
+    std::env::var_os("CAP_VERIFY_STIMULUS_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_cap-verify-stimulus")))
+}
+
+fn find_window(title: &str) -> Option<scap_targets::WindowId> {
+    scap_targets::Window::list()
+        .into_iter()
+        .find(|w| w.name().as_deref() == Some(title))
+        .map(|w| w.id())
+}
+
+struct Recorded {
+    project: PathBuf,
+    started: f64,
+    stopped: f64,
+    stimulus: Vec<StimulusEvent>,
+    mic_truth: Truth,
+    camera: Option<(Truth, Vec<u32>)>,
+    max_fps: u32,
+}
+
+async fn run_case(
+    spec: &Spec,
+    capture: CaptureMode,
+    shareable: &SendableShareableContent,
+    case: &mut Case,
+) -> anyhow::Result<()> {
+    let scratch = scratch_root().join(spec.id.replace('/', "-"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch)?;
+    let reference = host_now();
+    let recorded = record(spec, capture, shareable, &scratch, reference, case).await?;
+    analyze(spec, &recorded, reference, case)?;
+    if !case.failed() && !env_flag("CAP_VERIFY_KEEP") {
+        let _ = std::fs::remove_dir_all(&scratch);
+    } else {
+        case.note(format!("artifacts kept at {}", scratch.display()));
+    }
+    Ok(())
+}
+
+fn scratch_root() -> PathBuf {
+    std::env::var_os("CAP_VERIFY_SCRATCH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("cap-verify-recording"))
+}
+
+async fn record(
+    spec: &Spec,
+    capture: CaptureMode,
+    _preflight: &SendableShareableContent,
+    scratch: &Path,
+    reference: u64,
+    case: &mut Case,
+) -> anyhow::Result<Recorded> {
+    let stimulus_spec = StimulusSpec {
+        fps: spec.stimulus_fps,
+        seconds: spec.seconds,
+        holds: spec.holds.clone(),
+        busy: true,
+        audio: true,
+        audio_period: AUDIO_PERIOD,
+        window: match capture {
+            CaptureMode::Display => None,
+            CaptureMode::Window => Some((80, 120, 640, 400)),
+        },
+    };
+    let mut stimulus = tokio::task::block_in_place(|| {
+        StimulusProcess::spawn(&stimulus_binary(), &stimulus_spec, &scratch.join("stimulus.jsonl"))
+    })?;
+    tokio::task::block_in_place(|| stimulus.wait_for("ready", Duration::from_secs(30)))?;
+    // A fullscreen window lands in its own Space; let the transition finish
+    // so the first captured frames already show the stimulus.
+    tokio::time::sleep(Duration::from_millis(match capture {
+        CaptureMode::Display => 1500,
+        CaptureMode::Window => 300,
+    }))
+    .await;
+    // Only the stimulus may reach the recording: other windows (system
+    // prompts, the developer's apps) are excluded from the capture filter.
+    let stimulus_window = find_window(WINDOW_TITLE);
+    let excluded: Vec<scap_targets::WindowId> = scap_targets::Window::list()
+        .into_iter()
+        .map(|w| w.id())
+        .filter(|id| Some(id) != stimulus_window.as_ref())
+        .collect();
+    let shareable: SendableShareableContent = cidre::sc::ShareableContent::current()
+        .await
+        .map_err(|e| anyhow::anyhow!("shareable content: {e:?}"))?
+        .into();
+    let shareable = &shareable;
+    let target = match capture {
+        CaptureMode::Display => ScreenCaptureTarget::Display {
+            id: scap_targets::Display::primary().id(),
+        },
+        CaptureMode::Window => ScreenCaptureTarget::Window {
+            id: stimulus_window
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("stimulus window not found"))?,
+        },
+    };
+
+    let camera = matches!(spec.mode, Mode::Studio { camera: true, .. });
+    let feeds = start_feeds(
+        reference,
+        spec.seconds + 30.0,
+        camera,
+        spec.camera_drops_at.clone(),
+    );
+    let mic_lock = Arc::new(feeds.mic.lock().await?);
+    let camera_lock = match &feeds.camera {
+        Some(camera) => Some(Arc::new(camera.lock().await?)),
+        None => None,
+    };
+    // Real cameras and microphones are already streaming when a recording
+    // starts.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let project = scratch.join("recording.cap");
+    let defaults = RecordingDefaults::default();
+    let (handle, max_fps) = match spec.mode {
+        Mode::Studio { fragmented, .. } => {
+            let mut builder = defaults.apply_to_studio_builder(
+                studio_recording::Actor::builder(project.clone(), target).with_system_audio(true),
+                camera,
+                None,
+            );
+            builder = builder
+                .with_excluded_windows(excluded.clone())
+                .with_keyboard_capture(false)
+                .with_fragmented(fragmented)
+                .with_quality(StudioQuality::Balanced)
+                .with_mic_feed(mic_lock.clone());
+            if let Some(lock) = &camera_lock {
+                builder = builder.with_camera_feed(lock.clone());
+            }
+            let max_fps = defaults.studio_max_fps(camera, None);
+            (
+                Handle::Studio(builder.build(Some(shareable.clone())).await?),
+                max_fps,
+            )
+        }
+        Mode::Instant => {
+            let builder = instant_recording::Actor::builder(project.clone(), target)
+                .with_system_audio(true)
+                .with_max_output_size(defaults.instant_mode_max_resolution)
+                .with_excluded_windows(excluded.clone())
+                .with_mic_feed(mic_lock.clone());
+            (
+                Handle::Instant(builder.build(Some(shareable.clone())).await?),
+                cap_recording::DEFAULT_INSTANT_MODE_FPS,
+            )
+        }
+    };
+    let started_host = host_now();
+    feeds.started.store(started_host, Ordering::Release);
+    tokio::task::block_in_place(|| stimulus.send("go"))?;
+    let waited = tokio::task::block_in_place(|| {
+        stimulus.wait_for("done", Duration::from_secs_f64(spec.seconds + 20.0))
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let stopped_host = host_now();
+    let stop_started = std::time::Instant::now();
+    let project_path = match handle {
+        Handle::Studio(handle) => {
+            let completed = handle.stop().await?;
+            let path = completed.project_path.clone();
+            let finalize = std::time::Instant::now();
+            let remux_path = path.clone();
+            tokio::task::spawn_blocking(move || RecoveryManager::remux_if_needed(&remux_path))
+                .await??;
+            case.note(format!(
+                "stop {:.2}s, remux {:.2}s",
+                (finalize - stop_started).as_secs_f64(),
+                finalize.elapsed().as_secs_f64()
+            ));
+            path
+        }
+        Handle::Instant(handle) => {
+            let mut completed = handle.stop().await?;
+            let finalize = std::time::Instant::now();
+            finalize_instant(&mut completed).await?;
+            case.note(format!(
+                "stop {:.2}s, finalize {:.2}s",
+                (finalize - stop_started).as_secs_f64(),
+                finalize.elapsed().as_secs_f64()
+            ));
+            completed.project_path
+        }
+    };
+    feeds.stop.store(true, Ordering::Release);
+    drop(mic_lock);
+    drop(camera_lock);
+    let mic_truth = feeds.mic_task.await?;
+    let camera_truth = match feeds.camera_task {
+        Some(task) => Some(task.await?),
+        None => None,
+    };
+    drop(feeds.camera);
+    let events = tokio::task::block_in_place(|| stimulus.finish())?;
+    waited?;
+    Ok(Recorded {
+        project: project_path,
+        started: host_secs(started_host, reference),
+        stopped: host_secs(stopped_host, reference),
+        stimulus: events,
+        mic_truth,
+        camera: camera_truth,
+        max_fps,
+    })
+}
+
+async fn finalize_instant(
+    recording: &mut instant_recording::CompletedRecording,
+) -> anyhow::Result<()> {
+    let completion = recording.clean_completion.take();
+    let project = recording.project_path.clone();
+    let output = project.join("content/output.mp4");
+    let audio_dir = project.join("content/audio");
+    let display_dir = project.join("content/display");
+    let already = std::fs::metadata(&output).is_ok_and(|m| m.len() > 0) && !audio_dir.exists();
+    if !already {
+        tokio::task::spawn_blocking(move || match completion {
+            Some(completion) => RecoveryManager::finalize_completed_instant_output(
+                &display_dir,
+                &audio_dir,
+                &output,
+                completion,
+            ),
+            None => RecoveryManager::finalize_instant_output(&display_dir, &audio_dir, &output),
+        })
+        .await??;
+    }
+    let meta = match &recording.meta {
+        InstantRecordingMeta::InProgress { .. } => InstantRecordingMeta::Failed {
+            error: "instant recording stopped before completion".to_string(),
+        },
+        other => other.clone(),
+    };
+    RecordingMeta {
+        platform: Some(cap_project::Platform::default()),
+        project_path: project.clone(),
+        pretty_name: "Cap Verify".to_string(),
+        sharing: None,
+        inner: RecordingMetaInner::Instant(meta),
+        upload: None,
+    }
+    .save_for_project()
+    .map_err(|e| anyhow::anyhow!("save meta: {e}"))?;
+    Ok(())
+}
+
+/// One recorded track located through recording-meta.json.
+struct Track {
+    path: PathBuf,
+    /// `start_time` from the meta: the editor aligns tracks by it.
+    start: f64,
+}
+
+struct Layout {
+    display: Track,
+    camera: Option<Track>,
+    mic: Option<Track>,
+    system: Option<Track>,
+    /// Instant mode muxes every source into the display file.
+    muxed_audio: bool,
+}
+
+fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
+    let meta = RecordingMeta::load_for_project(project)
+        .map_err(|e| anyhow::anyhow!("recording-meta.json: {e}"))?;
+    match &meta.inner {
+        RecordingMetaInner::Instant(instant) => {
+            if !matches!(instant, InstantRecordingMeta::Complete { .. }) {
+                case.problem(format!("instant meta is not complete: {instant:?}"));
+            }
+            Ok(Layout {
+                display: Track {
+                    path: project.join("content/output.mp4"),
+                    start: 0.0,
+                },
+                camera: None,
+                mic: None,
+                system: None,
+                muxed_audio: true,
+            })
+        }
+        RecordingMetaInner::Studio(studio) => {
+            let StudioRecordingMeta::MultipleSegments { inner } = &**studio else {
+                anyhow::bail!("expected a multi-segment studio recording");
+            };
+            if !matches!(
+                studio.status(),
+                cap_project::StudioRecordingStatus::Complete
+            ) {
+                case.problem(format!("studio status after finalize: {:?}", studio.status()));
+            }
+            if inner.segments.len() != 1 {
+                case.problem(format!("{} segments, expected 1", inner.segments.len()));
+            }
+            let segment = inner
+                .segments
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("no segments"))?;
+            let mut display = meta.path(&segment.display.path);
+            if display.is_dir() {
+                case.problem(format!(
+                    "display path still points at fragments after finalize: {}",
+                    display.display()
+                ));
+                display = display.with_extension("mp4");
+            }
+            let track = |path: &relative_path::RelativePathBuf, start: Option<f64>| Track {
+                path: meta.path(path),
+                start: start.unwrap_or(0.0),
+            };
+            Ok(Layout {
+                display: track(&segment.display.path, segment.display.start_time),
+                camera: segment
+                    .camera
+                    .as_ref()
+                    .map(|c| track(&c.path, c.start_time)),
+                mic: segment.mic.as_ref().map(|m| track(&m.path, m.start_time)),
+                system: segment
+                    .system_audio
+                    .as_ref()
+                    .map(|s| track(&s.path, s.start_time)),
+                muxed_audio: false,
+            })
+            .map(|mut l| {
+                l.display.path = display;
+                l
+            })
+        }
+    }
+}
+
+/// Offsets of every observed marker: recorded (editor) time minus host truth.
+#[derive(Default, Clone)]
+struct Offsets(Vec<(f64, f64)>);
+
+impl Offsets {
+    fn median(&self) -> Option<f64> {
+        let mut v: Vec<f64> = self.0.iter().map(|(_, d)| *d).collect();
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(f64::total_cmp);
+        Some(v[v.len() / 2])
+    }
+
+    fn spread(&self) -> f64 {
+        let v: Vec<f64> = self.0.iter().map(|(_, d)| *d).collect();
+        let max = v.iter().copied().fold(f64::MIN, f64::max);
+        let min = v.iter().copied().fold(f64::MAX, f64::min);
+        if v.is_empty() { 0.0 } else { max - min }
+    }
+
+    /// Least-squares slope of offset over truth time, in ms per minute.
+    fn drift_ms_per_min(&self) -> f64 {
+        let n = self.0.len() as f64;
+        if n < 3.0 {
+            return 0.0;
+        }
+        let mx = self.0.iter().map(|(t, _)| t).sum::<f64>() / n;
+        let my = self.0.iter().map(|(_, d)| d).sum::<f64>() / n;
+        let sxy: f64 = self.0.iter().map(|(t, d)| (t - mx) * (d - my)).sum();
+        let sxx: f64 = self.0.iter().map(|(t, _)| (t - mx).powi(2)).sum();
+        if sxx == 0.0 { 0.0 } else { sxy / sxx * 60_000.0 }
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "n={} median {:+.1} ms, spread {:.1} ms, drift {:+.2} ms/min",
+            self.0.len(),
+            self.median().unwrap_or(f64::NAN) * 1000.0,
+            self.spread() * 1000.0,
+            self.drift_ms_per_min()
+        )
+    }
+}
+
+fn first_presented(events: &[StimulusEvent], reference: u64) -> Truth {
+    let mut truth = Truth::new();
+    for event in events {
+        if let StimulusEvent::Frame { index, host } = event {
+            truth.entry(*index).or_insert(host_secs(*host, reference));
+        }
+    }
+    truth
+}
+
+struct VideoCheck<'a> {
+    name: &'a str,
+    kind: StreamKind,
+    truth: &'a Truth,
+    /// Indices that were never delivered to the recorder.
+    not_sent: &'a [u32],
+    /// Indices the source showed too briefly for the capture rate to
+    /// guarantee a sample (screen only).
+    may_skip: Box<dyn Fn(u32) -> bool + 'a>,
+    allow_duplicates: bool,
+}
+
+fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Result<Offsets> {
+    let mut frames: Vec<(f64, Readout)> = Vec::new();
+    media::decode_video(&track.path, |picture| {
+        let readout = video_code::read_stream(&picture.view(), check.kind);
+        frames.push((picture.pts_secs, readout));
+    })?;
+    let name = check.name;
+    if frames.is_empty() {
+        case.problem(format!("{name}: no frames"));
+        return Ok(Offsets::default());
+    }
+    let mut bad = Vec::new();
+    let mut indices = Vec::new();
+    for (i, (pts, readout)) in frames.iter().enumerate() {
+        match readout {
+            Readout::Marker { marker, .. } if marker.kind == check.kind && marker.segment == 0 => {
+                indices.push((*pts, marker.index));
+            }
+            other => bad.push(format!("frame {i} at {pts:.3}s: {other:?}")),
+        }
+    }
+    if !bad.is_empty() {
+        case.problem(format!(
+            "{name}: {} of {} frames carry no valid marker, first: {}",
+            bad.len(),
+            frames.len(),
+            bad.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+        ));
+    }
+    let mut backwards = Vec::new();
+    let mut duplicates = 0;
+    let mut pts_problems = Vec::new();
+    for w in indices.windows(2) {
+        let ((pa, a), (pb, b)) = (w[0], w[1]);
+        if pb <= pa {
+            pts_problems.push(format!("{pa:.4}->{pb:.4}"));
+        }
+        if b < a {
+            backwards.push(format!("{a}->{b} at {pb:.3}s"));
+        } else if b == a {
+            duplicates += 1;
+        }
+    }
+    if !pts_problems.is_empty() {
+        case.problem(format!(
+            "{name}: non-increasing pts x{}: {}",
+            pts_problems.len(),
+            pts_problems.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if !backwards.is_empty() {
+        case.problem(format!(
+            "{name}: frame index went backwards x{}: {}",
+            backwards.len(),
+            backwards.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if duplicates > 0 && !check.allow_duplicates {
+        case.problem(format!("{name}: {duplicates} duplicated frames"));
+    }
+    let mut first_seen: BTreeMap<u32, f64> = BTreeMap::new();
+    for &(pts, index) in &indices {
+        first_seen.entry(index).or_insert(pts);
+    }
+    let unknown: Vec<u32> = first_seen
+        .keys()
+        .filter(|i| !check.truth.contains_key(i))
+        .copied()
+        .collect();
+    if !unknown.is_empty() {
+        case.problem(format!(
+            "{name}: {} recorded indices were never produced: {:?}",
+            unknown.len(),
+            &unknown[..unknown.len().min(8)]
+        ));
+    }
+    let (Some(&lo), Some(&hi)) = (first_seen.keys().next(), first_seen.keys().next_back()) else {
+        return Ok(Offsets::default());
+    };
+    let mut skipped = Vec::new();
+    let mut explained = 0;
+    for &index in check.truth.keys().filter(|&&i| i > lo && i < hi) {
+        if first_seen.contains_key(&index) || check.not_sent.contains(&index) {
+            continue;
+        }
+        if (check.may_skip)(index) {
+            explained += 1;
+        } else {
+            skipped.push(index);
+        }
+    }
+    if !skipped.is_empty() {
+        case.problem(format!(
+            "{name}: {} produced frames missing from the recording: {:?}",
+            skipped.len(),
+            &skipped[..skipped.len().min(12)]
+        ));
+    }
+    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
+        let rows: Vec<String> = indices
+            .iter()
+            .map(|(pts, i)| {
+                let truth = check.truth.get(i).copied().unwrap_or(f64::NAN);
+                format!("{pts:.6},{i},{truth:.6},{:.6}", pts + track.start - truth)
+            })
+            .collect();
+        let _ = std::fs::write(
+            Path::new(&dir).join(format!("{}-{name}.csv", case.id.replace('/', "-"))),
+            format!("pts,index,truth,offset\n{}\n", rows.join("\n")),
+        );
+    }
+    let mut offsets = Offsets::default();
+    let mut snapped = Vec::new();
+    for (&index, &pts) in &first_seen {
+        if index == 0 {
+            continue;
+        }
+        let Some(&truth) = check.truth.get(&index) else {
+            continue;
+        };
+        // The documented cadence rule (#2573): after a source gap the first
+        // frame may stay on the skipped slot, so it can land up to the gap
+        // early. It is reported, and excluded from the steady-state offsets.
+        let gap = index.checked_sub(1).map_or(0, |prev| {
+            (0..prev)
+                .rev()
+                .take_while(|i| check.not_sent.contains(i))
+                .count()
+        });
+        if gap > 0 {
+            snapped.push((index, pts + track.start - truth));
+            continue;
+        }
+        offsets.0.push((truth, pts + track.start - truth));
+    }
+    if let Some(median) = offsets.median() {
+        let period = 1.0 / f64::from(CAMERA_FPS);
+        for &(index, offset) in &snapped {
+            let early = median - offset;
+            let gap = (0..index)
+                .rev()
+                .take_while(|i| check.not_sent.contains(i))
+                .count() as f64;
+            if early < -0.004 || early > gap * period + 0.004 {
+                case.problem(format!(
+                    "{name}: frame {index} after a {gap}-frame source gap is {:+.1} ms off the steady offset (allowed 0..{:.1} early)",
+                    -early * 1000.0,
+                    gap * period * 1000.0
+                ));
+            }
+        }
+        if !snapped.is_empty() {
+            case.note(format!(
+                "{name}: first frames after source gaps: {}",
+                snapped
+                    .iter()
+                    .map(|(i, o)| format!("{i} {:+.1} ms", (o - median) * 1000.0))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    case.note(format!(
+        "{name}: {} frames, indices {lo}..={hi}, {} distinct, {duplicates} repeats, {} skips explained by display timing, offset {}",
+        frames.len(),
+        first_seen.len(),
+        explained,
+        offsets.describe()
+    ));
+    Ok(offsets)
+}
+
+struct AudioCheck<'a> {
+    name: &'a str,
+    source: AudioSource,
+    truth: &'a Truth,
+    /// Truth window inside which every marker must be present.
+    window: (f64, f64),
+}
+
+fn check_audio(
+    case: &mut Case,
+    decoded: &media::DecodedAudio,
+    start: f64,
+    check: AudioCheck,
+) -> Offsets {
+    let name = check.name;
+    let mono = decoded.mono();
+    let located = audio_code::locate_markers(&mono, decoded.sample_rate, check.source);
+    let mut found: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut damaged = 0;
+    let mut repeated = Vec::new();
+    for marker in &located {
+        let at = marker.time_secs + decoded.start_secs + start;
+        let Some(index) = marker.index else {
+            let track_secs = mono.len() as f64 / f64::from(decoded.sample_rate);
+            if marker.time_secs > 0.15 && marker.time_secs + audio_code::MARKER_SECS < track_secs - 0.15 {
+                damaged += 1;
+            }
+            continue;
+        };
+        if found.insert(index, at).is_some() {
+            repeated.push(index);
+        }
+    }
+    if damaged > 0 {
+        case.problem(format!(
+            "{name}: {damaged} markers inside the track located but undecodable"
+        ));
+    }
+    if !repeated.is_empty() {
+        case.problem(format!("{name}: markers repeated {repeated:?}"));
+    }
+    let unknown: Vec<u32> = found
+        .keys()
+        .filter(|i| !check.truth.contains_key(i))
+        .copied()
+        .collect();
+    if !unknown.is_empty() {
+        case.problem(format!("{name}: unexpected marker indices {unknown:?}"));
+    }
+    let missing: Vec<u32> = check
+        .truth
+        .iter()
+        .filter(|(i, t)| **t > check.window.0 && **t < check.window.1 && !found.contains_key(i))
+        .map(|(i, _)| *i)
+        .collect();
+    if !missing.is_empty() {
+        case.problem(format!(
+            "{name}: {} markers inside the recording window are missing: {:?}",
+            missing.len(),
+            &missing[..missing.len().min(12)]
+        ));
+    }
+    let mut order = found.iter().collect::<Vec<_>>();
+    order.sort_by(|a, b| a.1.total_cmp(b.1));
+    if order.windows(2).any(|w| w[1].0 < w[0].0) {
+        case.problem(format!("{name}: markers out of order"));
+    }
+    if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
+        let rows: Vec<String> = located
+            .iter()
+            .map(|m| {
+                let at = m.time_secs + decoded.start_secs + start;
+                let truth = m
+                    .index
+                    .and_then(|i| check.truth.get(&i))
+                    .copied()
+                    .unwrap_or(f64::NAN);
+                format!("{at:.6},{:?},{truth:.6},{:.3}", m.index, m.correlation)
+            })
+            .chain(
+                check
+                    .truth
+                    .iter()
+                    .map(|(i, t)| format!("truth,{i},{t:.6},")),
+            )
+            .collect();
+        let _ = std::fs::write(
+            Path::new(&dir).join(format!("{}-{name}.csv", case.id.replace('/', "-"))),
+            format!(
+                "at,index,truth,correlation (start {start:.6}, file start {:.6}, window {:.3}..{:.3})\n{}\n",
+                decoded.start_secs,
+                check.window.0,
+                check.window.1,
+                rows.join("\n")
+            ),
+        );
+    }
+    let mut offsets = Offsets::default();
+    for (index, at) in &found {
+        if let Some(&truth) = check.truth.get(index) {
+            offsets.0.push((truth, at - truth));
+        }
+    }
+    case.note(format!(
+        "{name}: {} markers ({} expected in window), offset {}",
+        found.len(),
+        check
+            .truth
+            .values()
+            .filter(|t| **t > check.window.0 && **t < check.window.1)
+            .count(),
+        offsets.describe()
+    ));
+    offsets
+}
+
+fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
+    let layout = layout(&rec.project, case)?;
+    let screen_truth = first_presented(&rec.stimulus, reference);
+    let presented: Vec<(u32, f64)> = screen_truth.iter().map(|(i, t)| (*i, *t)).collect();
+    let capture_interval = 1.0 / f64::from(rec.max_fps);
+    // SCK delivers a changed display at most once per minimum frame
+    // interval. A picture is guaranteed to be sampled only when it stays on
+    // screen for a full interval plus one display refresh of phase.
+    let refresh = 1.0 / 60.0;
+    let on_screen: BTreeMap<u32, f64> = presented
+        .windows(2)
+        .map(|w| (w[0].0, w[1].1 - w[0].1))
+        .collect();
+    let screen = check_video(
+        case,
+        &layout.display,
+        VideoCheck {
+            name: "screen",
+            kind: StreamKind::Screen,
+            truth: &screen_truth,
+            not_sent: &[],
+            may_skip: Box::new(|index| {
+                on_screen
+                    .get(&index)
+                    .is_some_and(|d| *d < capture_interval + refresh)
+            }),
+            allow_duplicates: true,
+        },
+    )?;
+    let camera = match (&layout.camera, &rec.camera) {
+        (Some(track), Some((truth, dropped))) => {
+            case.note(format!("camera: dropped at source {dropped:?}"));
+            Some(check_video(
+                case,
+                track,
+                VideoCheck {
+                    name: "camera",
+                    kind: StreamKind::Camera,
+                    truth,
+                    not_sent: dropped,
+                    may_skip: Box::new(|_| false),
+                    allow_duplicates: false,
+                },
+            )?)
+        }
+        (None, Some(_)) => {
+            case.problem("camera feed attached but no camera track recorded");
+            None
+        }
+        _ => None,
+    };
+    let window = (rec.started + 0.3, rec.stopped - 0.3);
+    // ScreenCaptureKit starts delivering system audio some time after the
+    // stream starts (measured 0.2-0.6 s); Cap fills that span with silence.
+    let system_window = (rec.started + SYSTEM_AUDIO_STARTUP, window.1);
+    let system_truth: Truth = rec
+        .stimulus
+        .iter()
+        .filter_map(|e| match e {
+            StimulusEvent::Audio { index, host } => Some((*index, host_secs(*host, reference))),
+            _ => None,
+        })
+        .collect();
+    let audio_unavailable = rec.stimulus.iter().find_map(|e| match e {
+        StimulusEvent::AudioUnavailable { reason } => Some(reason.clone()),
+        _ => None,
+    });
+    if let Some(reason) = &audio_unavailable {
+        case.note(format!("system audio stimulus unavailable: {reason}"));
+        if env_flag("CAP_VERIFY_REQUIRE_SYSTEM_AUDIO") {
+            case.problem(format!("system audio required but unavailable: {reason}"));
+        }
+    }
+    let (mic, system) = if layout.muxed_audio {
+        let decoded = media::decode_audio(&layout.display.path, Some(48_000))?;
+        let mic = check_audio(
+            case,
+            &decoded,
+            0.0,
+            AudioCheck {
+                name: "mic",
+                source: AudioSource::Mic,
+                truth: &rec.mic_truth,
+                window,
+            },
+        );
+        let system = (!system_truth.is_empty()).then(|| {
+            check_audio(
+                case,
+                &decoded,
+                0.0,
+                AudioCheck {
+                    name: "system",
+                    source: AudioSource::System,
+                    truth: &system_truth,
+                    window: system_window,
+                },
+            )
+        });
+        (Some(mic), system)
+    } else {
+        let mic = match &layout.mic {
+            Some(track) => {
+                let decoded = media::decode_audio(&track.path, Some(48_000))?;
+                Some(check_audio(
+                    case,
+                    &decoded,
+                    track.start,
+                    AudioCheck {
+                        name: "mic",
+                        source: AudioSource::Mic,
+                        truth: &rec.mic_truth,
+                        window,
+                    },
+                ))
+            }
+            None => {
+                case.problem("no mic track recorded");
+                None
+            }
+        };
+        let system = match (&layout.system, system_truth.is_empty()) {
+            (Some(track), false) => {
+                let decoded = media::decode_audio(&track.path, Some(48_000))?;
+                Some(check_audio(
+                    case,
+                    &decoded,
+                    track.start,
+                    AudioCheck {
+                        name: "system",
+                        source: AudioSource::System,
+                        truth: &system_truth,
+                        window: system_window,
+                    },
+                ))
+            }
+            (None, false) => {
+                case.problem("system audio was playing but no system audio track was recorded");
+                None
+            }
+            _ => None,
+        };
+        (mic, system)
+    };
+    sync_checks(spec, case, &screen, camera.as_ref(), mic.as_ref(), system.as_ref());
+    Ok(())
+}
+
+/// Tolerances, from first principles:
+/// - Synthetic camera and microphone carry exact capture times, so their
+///   offsets must be constant (spread within one audio chunk / encoder
+///   rounding) and must agree with each other to within one camera frame
+///   period's rounding.
+/// - The screen truth is the time the stimulus handed a frame to the window
+///   server; the display shows it at a later refresh, so the screen offset may
+///   exceed the exact sources' by up to a few refresh intervals, never less.
+fn sync_checks(
+    _spec: &Spec,
+    case: &mut Case,
+    screen: &Offsets,
+    camera: Option<&Offsets>,
+    mic: Option<&Offsets>,
+    system: Option<&Offsets>,
+) {
+    const EXACT_SPREAD: f64 = 0.004;
+    const CAMERA_SPREAD: f64 = 0.012;
+    const CAMERA_VS_MIC: f64 = 0.020;
+    const SCREEN_LATENCY: (f64, f64) = (-0.025, 0.060);
+    const SYSTEM_VS_SCREEN: f64 = 0.080;
+
+    let ms = |s: f64| s * 1000.0;
+    if let Some(mic) = mic
+        && mic.spread() > EXACT_SPREAD
+    {
+        case.problem(format!(
+            "mic: marker offsets vary by {:.1} ms (limit {:.1}): audio timing is not continuous",
+            ms(mic.spread()),
+            ms(EXACT_SPREAD)
+        ));
+    }
+    if let Some(camera) = camera
+        && camera.spread() > CAMERA_SPREAD
+    {
+        case.problem(format!(
+            "camera: frame offsets vary by {:.1} ms (limit {:.1})",
+            ms(camera.spread()),
+            ms(CAMERA_SPREAD)
+        ));
+    }
+    let (Some(mic_m), screen_m) = (mic.and_then(Offsets::median), screen.median()) else {
+        return;
+    };
+    if let Some(camera_m) = camera.and_then(Offsets::median) {
+        let d = camera_m - mic_m;
+        case.note(format!("sync camera-mic {:+.1} ms", ms(d)));
+        if d.abs() > CAMERA_VS_MIC {
+            case.problem(format!(
+                "camera vs mic out of sync: {:+.1} ms (limit +-{:.0})",
+                ms(d),
+                ms(CAMERA_VS_MIC)
+            ));
+        }
+    }
+    if let Some(screen_m) = screen_m {
+        let d = screen_m - mic_m;
+        case.note(format!("sync screen-mic {:+.1} ms", ms(d)));
+        if d < SCREEN_LATENCY.0 || d > SCREEN_LATENCY.1 {
+            case.problem(format!(
+                "screen vs mic out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
+                ms(d),
+                ms(SCREEN_LATENCY.0),
+                ms(SCREEN_LATENCY.1)
+            ));
+        }
+        if let Some(system_m) = system.and_then(Offsets::median) {
+            let d = system_m - screen_m;
+            case.note(format!("sync system-screen {:+.1} ms", ms(d)));
+            if d.abs() > SYSTEM_VS_SCREEN {
+                case.problem(format!(
+                    "system audio vs screen out of sync: {:+.1} ms (limit +-{:.0})",
+                    ms(d),
+                    ms(SYSTEM_VS_SCREEN)
+                ));
+            }
+        }
+    }
+}

@@ -1,0 +1,99 @@
+name: Verify recording (real capture)
+
+# Records a marker stimulus through Cap's real Studio and Instant pipelines
+# (ScreenCaptureKit + VideoToolbox) on hosted macOS runners and checks every
+# frame and audio marker against the host-clock truth. See
+# crates/verify/tests/recording.rs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Runs of each case"
+        default: "1"
+      tier:
+        description: "fast or full"
+        default: "fast"
+  push:
+    branches:
+      - ci/verify-recording
+    paths:
+      - "crates/verify/**"
+      - "crates/recording/**"
+      - ".github/workflows/verify-recording.yml"
+
+concurrency:
+  group: verify-recording-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  real-capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '1' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-verify-recording
+          save-cache: "true"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Runner devices
+        run: |
+          sw_vers
+          system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null | sed -n 1,80p
+          sysctl hw.memsize hw.ncpu
+
+      - name: Build
+        run: |
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      - name: Real-capture recording oracle
+        run: |
+          mkdir -p "$CAP_VERIFY_DUMP"
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test recording -- --nocapture
+          echo "test seconds: $(( $(date +%s) - start ))"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-${{ matrix.runner }}
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch/**/stimulus.jsonl
+            ${{ github.workspace }}/verify-scratch/**/recording-meta.json
+          if-no-files-found: ignore
