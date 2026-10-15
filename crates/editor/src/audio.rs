@@ -1601,11 +1601,16 @@ impl ProgressiveTimeline {
         self.woken.notify_all();
     }
 
-    /// Parks the render thread until `notify` or the timeout.
-    fn wait(&self, timeout: std::time::Duration) {
+    fn wake_generation(&self) -> u64 {
+        *lock(&self.wake)
+    }
+
+    /// Parks the render thread until a `notify` after `seen` was read, or
+    /// the timeout. Callers read `seen` before checking the conditions they
+    /// wait on, so a notify racing those checks is never missed.
+    fn wait(&self, seen: u64, timeout: std::time::Duration) {
         let deadline = std::time::Instant::now() + timeout;
         let mut wake = lock(&self.wake);
-        let seen = *wake;
         while *wake == seen {
             let now = std::time::Instant::now();
             if now >= deadline {
@@ -3088,6 +3093,7 @@ struct RenderControl {
 impl RenderControl {
     fn should_continue(&mut self) -> bool {
         loop {
+            let seen = self.timeline.wake_generation();
             if self.timeline.stop.load(Ordering::Acquire) {
                 return false;
             }
@@ -3102,7 +3108,7 @@ impl RenderControl {
                 return true;
             }
             self.timeline.release_retired(false);
-            self.wait_for_wake();
+            self.wait_for_wake(seen);
         }
     }
 
@@ -3123,11 +3129,15 @@ impl RenderControl {
             }
         }
         if completed {
-            while self.release.is_some() && !self.timeline.stop.load(Ordering::Acquire) {
+            loop {
+                let seen = self.timeline.wake_generation();
+                if self.release.is_none() || self.timeline.stop.load(Ordering::Acquire) {
+                    break;
+                }
                 if self.release_if_idle() {
                     return;
                 }
-                self.wait_for_wake();
+                self.wait_for_wake(seen);
             }
         }
         if let Some(release) = self.release.take() {
@@ -3149,7 +3159,7 @@ impl RenderControl {
         false
     }
 
-    fn wait_for_wake(&self) {
+    fn wait_for_wake(&self, seen: u64) {
         let idle_release = self
             .release
             .as_ref()
@@ -3159,7 +3169,7 @@ impl RenderControl {
         } else {
             idle_release.saturating_sub(self.timeline.paused_for())
         };
-        self.timeline.wait(timeout);
+        self.timeline.wait(seen, timeout);
     }
 }
 
@@ -5181,6 +5191,28 @@ mod tests {
         ];
         for (name, edit) in visual {
             assert_eq!(key(edit), original, "{name} must keep the key");
+        }
+    }
+
+    #[test]
+    fn a_replay_resumes_a_parked_render() {
+        let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
+        let fixture = ProgressiveFixture::new();
+        let output_info = stereo_48k();
+        for _ in 0..20 {
+            let cache = PlaybackAudioCache::default();
+            let mut first = fixture.cached(&cache, output_info, 0.0);
+            first.set_playhead(0.0);
+            assert!(first.wait_until_ready(std::time::Duration::from_secs(30)));
+            let timeline = progressive_timeline(&first);
+            drop(first);
+            let mut replay = fixture.cached(&cache, output_info, 0.0);
+            assert!(Arc::ptr_eq(&timeline, &progressive_timeline(&replay)));
+            assert_bit_identical(
+                &read_everything(&mut replay),
+                &fixture.reference(output_info, 0.0),
+                "resumed render",
+            );
         }
     }
 
