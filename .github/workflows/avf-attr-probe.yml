@@ -1,0 +1,78 @@
+name: AVF unreadable attribution probe (scratch)
+
+on:
+  push:
+    branches: [scratch/avf-attr-probe2]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_TIER: full
+
+jobs:
+  probe:
+    name: probe ${{ matrix.config }}
+    runs-on: macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [base, iosurface, decoder]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Apply product patch
+        if: matrix.config != 'base'
+        run: |
+          case "${{ matrix.config }}" in
+            iosurface) git apply probe-patches/iosurface.patch ;;
+            decoder) git apply probe-patches/decoder2595.patch ;;
+          esac
+          git diff --stat
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build
+        run: scripts/verify/run.sh full --suites export,audio,playback --no-run
+      - name: Repeat cases
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/probe"
+          summary() {
+            cat "$1"/*.jsonl 2>/dev/null | python3 -c '
+          import sys, json
+          for l in sys.stdin:
+              r = json.loads(l)
+              print("   ", r["outcome"], r["case"], sorted(r["failures"]), "|", r["summary"][:160].replace("\n", " "))'
+          }
+          run() {
+            local name="$1" test="$2" case="$3" reps="$4" tier="${5:-full}"
+            for i in $(seq 1 "$reps"); do
+              export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/$name-$i"
+              CAP_VERIFY_TIER="$tier" CAP_VERIFY_CASE="$case" cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test "$test" --no-fail-fast \
+                > "$RUNNER_TEMP/probe/$name-$i.log" 2>&1
+              echo "$name rep $i"
+              summary "$CAP_VERIFY_REPORT_DIR"
+            done
+          }
+          run transition-export export 'export/basic/transition/*/avf' 10 fast
+          run transition-playback playback 'playback/basic/transition/seq*/avf' 10 fast
+          run recstudio export 'export/rec-studio/across-segments/*/avf' 8 fast
+          run campts export 'export/camera-pts-late/full/mp430/avf' 12
+          run crossfade audio 'audio/audio-mix-30s-a2/long-crossfade/mp4-*' 3
+          run jitter export 'export/jitter-camera-120s/full/mp460/avf' 5
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: avf-attr-probe-${{ matrix.config }}
+          path: ${{ runner.temp }}/probe/**/*.jsonl
+          retention-days: 7
