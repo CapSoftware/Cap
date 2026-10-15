@@ -124,7 +124,7 @@ const decideCanView = (
 				yield* Effect.log(
 					"Email access restriction active and user not logged in. Access denied.",
 				);
-				yield* Effect.fail(
+				return yield* Effect.fail(
 					new Policy.PolicyDeniedError({
 						reason: "email_restriction_login_required",
 					}),
@@ -136,7 +136,7 @@ const decideCanView = (
 				!(yield* repo.hasViewerGrant(video.id, user.value.email))
 			) {
 				yield* Effect.log("Email access restriction active. Access denied.");
-				yield* Effect.fail(
+				return yield* Effect.fail(
 					new Policy.PolicyDeniedError({
 						reason: "email_restriction_denied",
 					}),

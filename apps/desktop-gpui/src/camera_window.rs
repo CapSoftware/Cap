@@ -58,6 +58,7 @@ use gpui::{
 use serde_json::Value;
 
 use crate::{
+    camera_loading,
     feeds::Feeds,
     platform,
     store::{self, BlurMode, CameraShape, CameraWindowState},
@@ -75,6 +76,8 @@ pub const CAMERA_PRESET_LARGE: f32 = 400.;
 pub const CAMERA_TOOLBAR_HEIGHT: f32 = 56.;
 /// `CAMERA_WIDE_ASPECT_RATIO`.
 const WIDE_ASPECT: f32 = 16. / 9.;
+const LOADING_FADE_OUT_SECONDS: f32 = 0.28;
+const CUTOUT_REVEAL_SECONDS: f32 = 0.45;
 
 pub fn clamp_size(scale: f32) -> f32 {
     scale.clamp(CAMERA_MIN_SIZE, CAMERA_MAX_SIZE)
@@ -397,9 +400,11 @@ mod frame {
     /// caps its input at 720p, [`crate::camera_blur::BLUR_MAX_DIMS`]), so
     /// the blur path's scaling costs nothing extra.
     ///
-    /// Mirroring is a second hardware pass: a `VTPixelRotationSession` with
-    /// `FlipHorizontalOrientation` flips the converted BGRA buffer into a
-    /// sibling ring. This is the preview-only mirror the Tauri bubble has --
+    /// Mirroring is a second hardware pass: the conversion lands in a single
+    /// scratch buffer and a `VTPixelRotationSession` with
+    /// `FlipHorizontalOrientation` flips it into the ring. Both passes are
+    /// synchronous, so the unflipped scratch is never painted and one buffer
+    /// covers it. This is the preview-only mirror the Tauri bubble has --
     /// its shader flips the sampling UV (`camera.wgsl:97-100`), its legacy
     /// page flips the canvas with `scaleX(-1)` (`camera.tsx:869`), and
     /// neither touches the recorded camera track.
@@ -413,7 +418,7 @@ mod frame {
         /// created (the preview then degrades to unmirrored, logged once).
         flip_session: Option<FlipSession>,
         ring: Vec<arc::R<cv::PixelBuf>>,
-        mirror_ring: Vec<arc::R<cv::PixelBuf>>,
+        scratch: Option<arc::R<cv::PixelBuf>>,
         next: usize,
         src_dims: (usize, usize),
         dst_dims: (usize, usize),
@@ -426,7 +431,11 @@ mod frame {
 
     const RING_SIZE: usize = 4;
 
-    fn buffer_ring(width: usize, height: usize) -> Option<Vec<arc::R<cv::PixelBuf>>> {
+    fn bgra_buffers(
+        count: usize,
+        width: usize,
+        height: usize,
+    ) -> Option<Vec<arc::R<cv::PixelBuf>>> {
         let io_surface_properties = cf::Dictionary::new();
         let keys: [&cf::Type; 2] = [
             cv::pixel_buffer::keys::io_surf_props().as_ref(),
@@ -437,7 +446,7 @@ mod frame {
             cf::Boolean::value_true().as_ref(),
         ];
         let attrs = cf::Dictionary::with_keys_values(&keys, &values)?;
-        (0..RING_SIZE)
+        (0..count)
             .map(|_| {
                 cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, Some(&attrs))
                     .ok()
@@ -482,18 +491,18 @@ mod frame {
                 None
             };
 
-            let ring = buffer_ring(dst_dims.0, dst_dims.1)?;
-            let mirror_ring = if flip_session.is_some() {
-                buffer_ring(dst_dims.0, dst_dims.1)?
+            let ring = bgra_buffers(RING_SIZE, dst_dims.0, dst_dims.1)?;
+            let scratch = if flip_session.is_some() {
+                Some(bgra_buffers(1, dst_dims.0, dst_dims.1)?.pop()?)
             } else {
-                Vec::new()
+                None
             };
 
             Some(Self {
                 session,
                 flip_session,
                 ring,
-                mirror_ring,
+                scratch,
                 next: 0,
                 src_dims,
                 dst_dims,
@@ -525,21 +534,23 @@ mod frame {
             }
             let converter = this.as_mut()?;
 
-            let dst = converter.ring[converter.next].clone();
-            converter.session.transfer(src, &dst).ok()?;
-            let out = if let Some(flip) = &converter.flip_session {
-                let mut flipped = converter.mirror_ring[converter.next].clone();
-                match flip.rotate(&dst, &mut flipped) {
-                    Ok(()) => flipped,
-                    Err(error) => {
-                        tracing::warn!(?error, "camera preview mirroring failed");
-                        converter.flip_session = None;
-                        dst
-                    }
+            let mut out = converter.ring[converter.next].clone();
+            let flipped = match (&converter.flip_session, &converter.scratch) {
+                (Some(flip), Some(scratch)) => {
+                    converter.session.transfer(src, scratch).ok()?;
+                    flip.rotate(scratch, &mut out)
+                        .inspect_err(|error| {
+                            tracing::warn!(?error, "camera preview mirroring failed");
+                        })
+                        .is_ok()
                 }
-            } else {
-                dst
+                _ => false,
             };
+            if !flipped {
+                converter.flip_session = None;
+                converter.scratch = None;
+                converter.session.transfer(src, &out).ok()?;
+            }
             converter.next = (converter.next + 1) % RING_SIZE;
             Some(Converted {
                 buffer: out,
@@ -969,6 +980,8 @@ struct CameraPreviewView {
     retained_dims: Option<(usize, usize)>,
     retained_captured_at: Option<Instant>,
     reveal_started: Option<Instant>,
+    loading_started: Option<Instant>,
+    loading_fade_started: Option<Instant>,
     retained_invalidated: bool,
     selection_revision: u64,
     frame_revision: Option<u64>,
@@ -1057,6 +1070,8 @@ impl CameraPreviewView {
             retained_dims,
             retained_captured_at,
             reveal_started: None,
+            loading_started: None,
+            loading_fade_started: None,
             retained_invalidated: false,
             selection_revision: 0,
             frame_revision: None,
@@ -1112,7 +1127,7 @@ impl CameraPreviewView {
 }
 
 impl Render for CameraPreviewView {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(target_os = "macos")]
         if self.painted_cutout_frame.as_ref().is_some_and(|painted| {
             self.cutout_frame
@@ -1152,6 +1167,35 @@ impl Render for CameraPreviewView {
         let theme = self.theme;
         let radius = self.radius;
 
+        let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
+        let has_issue = self.camera_error.is_some() || self.effect_issue.is_some();
+
+        let loading = if !showing_frame {
+            self.loading_fade_started = None;
+            let started = *self.loading_started.get_or_insert_with(Instant::now);
+            Some((started, 1., !has_issue && !cx.reduce_motion()))
+        } else if let Some(started) = self.loading_started {
+            let fade_started = *self.loading_fade_started.get_or_insert_with(Instant::now);
+            let fade_seconds = if radius > 0. {
+                LOADING_FADE_OUT_SECONDS
+            } else {
+                CUTOUT_REVEAL_SECONDS
+            };
+            let progress = fade_started.elapsed().as_secs_f32() / fade_seconds;
+            if progress < 1. && !cx.reduce_motion() {
+                Some((
+                    started,
+                    1. - progress * progress * (3. - 2. * progress),
+                    true,
+                ))
+            } else {
+                self.loading_started = None;
+                self.loading_fade_started = None;
+                None
+            }
+        } else {
+            None
+        };
         let mut container = div()
             .relative()
             .size_full()
@@ -1201,10 +1245,15 @@ impl Render for CameraPreviewView {
         if let Some(image) = self.cutout_frame.clone() {
             self.painted_cutout_frame = Some(image.clone());
             self.paints.fetch_add(1, Ordering::Relaxed);
+            // The cutout window is transparent, so the person fades in while
+            // the loading disc fades out; a raw surface cannot take opacity,
+            // but the bubble's opaque glass covers it during its own fade.
+            let reveal = loading.map_or(1., |(_, opacity, _)| 1. - opacity);
             container = container.child(
                 gpui::img(image)
                     .size_full()
-                    .object_fit(gpui::ObjectFit::Cover),
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .opacity(reveal),
             );
         }
 
@@ -1237,19 +1286,10 @@ impl Render for CameraPreviewView {
             };
         }
 
-        let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
-
-        if !showing_frame {
-            container = container.child(
-                div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(16.))
-                    .text_color(theme.gray_11)
-                    .child("Loading camera..."),
-            );
+        if let Some((started, opacity, animate)) = loading {
+            container = container.child(camera_loading::camera_loading(
+                started, radius, opacity, animate, !has_issue,
+            ));
         }
 
         // `CameraIssueOverlay` (`camera.tsx:911-955`): a black/75 wash over
