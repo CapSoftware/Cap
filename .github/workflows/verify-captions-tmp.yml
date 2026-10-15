@@ -175,5 +175,9 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           fi
-          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui transcription:: -- --nocapture 2>&1 | grep -E "^\[cap-verify\]|^  |^test |panicked|^error" | cut -c1-600 | head -200
-          exit ${PIPESTATUS[0]}
+          set +e
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui transcription:: -- --nocapture > app-tests.log 2>&1
+          code=$?
+          grep -E "^\[cap-verify\]|^  [a-z0-9(]|^test |panicked|^error" app-tests.log | grep -v "Downloaded\|Compiling" | cut -c1-600
+          tail -5 app-tests.log
+          exit $code

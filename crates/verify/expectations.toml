@@ -194,3 +194,15 @@ case = "captions/app/segmentation/unicode"
 class = "caption-segments"
 reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
 link = ""
+
+[[xfail]]
+case = "captions/legacy-migration/ends-at-timeline-end"
+class = "caption-migration"
+reason = "NEW (minor): loading a legacy (output-timed) project drops a caption that ends exactly at the timeline end: synchronize_captions maps each end through source_start + (end - start) / timescale, which rounds just below the timeline end after a clip transition (clips 41/15 s and 82/15 s, 0.2 s transition: 7.9999999 < 8.0), so the end does not map and the whole caption is discarded"
+link = ""
+
+[[xfail]]
+case = "editing/export/multi-segment/seed-7"
+class = "stale"
+reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the 10 frames after the transition show source frame 0 instead of 20-29 (deterministic). Same mechanism as the seek/*/storm*/ffmpeg xfail: backward seeks near the start answer frame 0"
+link = ""

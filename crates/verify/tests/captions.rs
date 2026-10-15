@@ -616,7 +616,11 @@ fn migration_problems(
     let mut config = edits::replay(base, ops);
     set_captions(&mut config, captions.to_vec(), true);
     cap_project::synchronize_captions(&mut config, durations);
-    let shown = edits::timeline(&config).caption_segments.clone();
+    let mut shown = edits::timeline(&config).caption_segments.clone();
+    // Captions ending exactly at the timeline end are covered by
+    // `legacy_migration_caption_at_timeline_end`.
+    let end = TimeModel::new(&config).duration();
+    shown.retain(|t| (t.end - end).abs() > TIME_TOLERANCE);
     let legacy = track_as_captions(&shown);
     config
         .timeline
@@ -691,6 +695,64 @@ fn migration_problems(
         }
     }
     problems
+}
+
+/// A legacy caption that ends exactly where the timeline ends (its last
+/// word ran to the end of the recording) must survive loading.
+#[test]
+fn legacy_migration_caption_at_timeline_end() {
+    let id = "captions/legacy-migration/ends-at-timeline-end";
+    if !report::selected(id) {
+        return;
+    }
+    let durations = [41.0 / 15.0, 82.0 / 15.0];
+    let mut config = edits::base_config(&durations);
+    common::add_transition(&mut config, 1, 0.2);
+    let end = edits::timeline(&config).duration() as f32;
+    let legacy = vec![CaptionSegment {
+        id: "last".into(),
+        start: end - 2.2,
+        end,
+        text: "until the end".into(),
+        words: vec![
+            CaptionWord {
+                text: "until".into(),
+                start: end - 2.2,
+                end: end - 1.5,
+            },
+            CaptionWord {
+                text: "the".into(),
+                start: end - 1.5,
+                end: end - 1.0,
+            },
+            CaptionWord {
+                text: "end".into(),
+                start: end - 1.0,
+                end,
+            },
+        ],
+    }];
+    let expected = model_migrate(&legacy, &config, &durations);
+    set_captions(&mut config, legacy, false);
+    cap_project::synchronize_captions(&mut config, &durations);
+    let mut case = Case::new(id);
+    let migrated = &config.captions.as_ref().expect("captions").segments;
+    if migrated.len() == expected.len() && expected.len() == 1 {
+        case.note(format!(
+            "caption ending at {end:.4}s kept at source {:.4}-{:.4}",
+            migrated[0].start, migrated[0].end
+        ));
+    } else {
+        case.problem(
+            "caption-migration",
+            format!(
+                "a legacy caption ending at the {end:.4}s timeline end: {} captions after loading, the model keeps {}",
+                migrated.len(),
+                expected.len()
+            ),
+        );
+    }
+    finish(case);
 }
 
 #[test]
