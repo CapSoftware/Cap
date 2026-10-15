@@ -539,10 +539,9 @@ impl AVAssetReaderDecoder {
 
     fn select_best_decoder(
         &mut self,
-        requested_frame: u32,
         requested_time: f32,
         is_scrubbing: bool,
-        must_reset: bool,
+        must_reset: impl Fn(&DecoderInstance) -> bool,
     ) -> (usize, bool) {
         let decoder_count = self.decoders.len();
         let (best_id, _distance, needs_reset) = if is_scrubbing {
@@ -558,16 +557,7 @@ impl AVAssetReaderDecoder {
         };
 
         let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
-        // Pool positions are capped to the newest request, so a reader that
-        // decoded ahead can look usable for a request it has already passed.
-        // It can never vend that frame again, and reading on would answer
-        // with a stale or later frame, so it has to seek back first.
-        let needs_reset = needs_reset
-            || must_reset
-            || self
-                .decoders
-                .get(decoder_idx)
-                .is_some_and(|decoder| reader_passed_request(decoder.prev_vended, requested_frame));
+        let needs_reset = needs_reset || self.decoders.get(decoder_idx).is_some_and(must_reset);
 
         let max_decoder_count = self
             .pool_manager
@@ -909,12 +899,24 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
-            let (decoder_idx, was_reset) = this.select_best_decoder(
-                requested_frame,
-                requested_time,
-                is_scrubbing,
-                pending_requests.iter().any(|request| request.retried),
-            );
+            // Pool positions are capped to the newest request, so a reader that
+            // decoded ahead can look usable for a request it has already passed.
+            // It can never vend that frame again, and reading on would answer
+            // with a stale or later frame, so it has to seek back first. Before
+            // the stream's first frame nothing better exists, so a seek is wasted.
+            let retrying = pending_requests.iter().any(|request| request.retried);
+            let before_stream_start = keyframe_index
+                .as_ref()
+                .and_then(|index| index.keyframes().first())
+                .is_some_and(|&(_, secs)| {
+                    f64::from(requested_frame) < (secs * f64::from(fps)).round()
+                });
+            let (decoder_idx, was_reset) =
+                this.select_best_decoder(requested_time, is_scrubbing, |decoder| {
+                    retrying
+                        || (!before_stream_start
+                            && reader_passed_request(decoder.prev_vended, requested_frame))
+                });
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
