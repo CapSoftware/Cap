@@ -1,0 +1,64 @@
+name: AVF flake probe (scratch)
+
+on:
+  push:
+    branches: [scratch/avf-flake-probe]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+
+jobs:
+  probe:
+    name: ${{ matrix.variant }} ${{ matrix.copy }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [main, retain]
+        copy: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: IOSurface retain fix
+        if: matrix.variant == 'retain'
+        run: git apply scripts/scratch/iosurface-retain.patch
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Build
+        run: scripts/verify/run.sh fast --suites export --no-run
+      - name: Repeat the two cases
+        env:
+          CAP_VERIFY_TIER: fast
+          CAP_VERIFY_CASE: export/backward-hold/backward-jumps/mp460/avf,export/jitter-camera-40s/full/mp460/avf
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/probe"
+          for i in $(seq 1 12); do
+            export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/report-$i"
+            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
+              -E 'binary_id(cap-verify::export) and (test(=backward_hold) or test(=jitter_camera))' > "$RUNNER_TEMP/probe/log-$i.txt" 2>&1
+            grep -h '"case"' "$CAP_VERIFY_REPORT_DIR"/*.jsonl | python3 -c '
+          import sys, json
+          for l in sys.stdin:
+              r = json.loads(l)
+              bad = [(s.get("stream"), m["output_frame"], m["kind"]) for s in r.get("streams", []) for m in (s.get("mismatches") or []) if m["kind"] != "ahead"]
+              print(sys.argv[1], r["outcome"], r["case"].split("/")[1], sorted(r["failures"]), bad[:4])' "$i"
+          done
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: avf-flake-${{ matrix.variant }}-${{ matrix.copy }}
+          path: ${{ runner.temp }}/probe/report-*
+          retention-days: 7
