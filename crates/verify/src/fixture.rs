@@ -208,16 +208,20 @@ pub struct FixtureSpec {
     pub segments: Vec<SegmentSpec>,
 }
 
+/// Stable cache key over a spec and the generator version.
+pub fn cache_key(name: &str, spec: &impl Serialize) -> String {
+    let json = serde_json::to_string(spec).unwrap_or_default();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ u64::from(GENERATOR_VERSION);
+    for byte in json.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{name}-{hash:016x}")
+}
+
 impl FixtureSpec {
-    /// Stable key over the spec and generator version, for caching.
     pub fn cache_key(&self) -> String {
-        let json = serde_json::to_string(self).unwrap_or_default();
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ u64::from(GENERATOR_VERSION);
-        for byte in json.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        format!("{}-{hash:016x}", self.name)
+        cache_key(&self.name, self)
     }
 }
 
@@ -454,9 +458,16 @@ pub fn ensure_fixture(
     spec: &FixtureSpec,
     generate: impl FnOnce(&FixtureSpec, &Path) -> anyhow::Result<()>,
 ) -> anyhow::Result<PathBuf> {
+    ensure_fixture_keyed(spec.cache_key(), |dir| generate(spec, dir))
+}
+
+/// [`ensure_fixture`] for any generator, keyed by `key`.
+pub fn ensure_fixture_keyed(
+    key: String,
+    generate: impl FnOnce(&Path) -> anyhow::Result<()>,
+) -> anyhow::Result<PathBuf> {
     let root = fixture_root();
     std::fs::create_dir_all(&root)?;
-    let key = spec.cache_key();
     let dir = root.join(format!("{key}.cap"));
     let done = root.join(format!("{key}.complete"));
     if done.exists() && dir.exists() {
@@ -473,7 +484,7 @@ pub fn ensure_fixture(
         std::process::id(),
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    generate(spec, &staging)?;
+    generate(&staging)?;
     // Paths inside recording-meta.json are relative, so the staged project
     // stays valid after the rename.
     if dir.exists() {

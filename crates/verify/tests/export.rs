@@ -37,13 +37,30 @@ fn run(
     resolution: (u32, u32),
     determinism: bool,
 ) -> Vec<String> {
-    let project = common::project(&spec);
+    run_project(
+        common::project(&spec),
+        variants,
+        formats,
+        decoders,
+        resolution,
+        determinism,
+    )
+}
+
+fn run_project(
+    project: common::Project,
+    variants: &[Variant],
+    formats: &[(Format, u32)],
+    decoders: &[Decoder],
+    resolution: (u32, u32),
+    determinism: bool,
+) -> Vec<String> {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for variant in variants {
         for &(format, fps) in formats {
             for &decoder in decoders {
-                let id = case_id(&spec.name, variant.edit, format, fps, decoder);
+                let id = case_id(&project.name, variant.edit, format, fps, decoder);
                 if !report::selected(&id) {
                     continue;
                 }
@@ -61,7 +78,7 @@ fn run(
                 };
                 let first = dir.path().join(format!("a.{ext}"));
                 match rt.block_on(common::export(&project, config.clone(), &run, &first)) {
-                    Err(e) => case.problem(format!("export failed: {e}")),
+                    Err(e) => case.problem("error", format!("export failed: {e}")),
                     Ok(path) => {
                         let frames = common::read_output(&path);
                         common::check_sequence(
@@ -74,7 +91,9 @@ fn run(
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
                             match rt.block_on(common::export(&project, config, &run, &second)) {
-                                Err(e) => case.problem(format!("second export failed: {e}")),
+                                Err(e) => {
+                                    case.problem("error", format!("second export failed: {e}"))
+                                }
                                 Ok(path) => {
                                     let again = common::read_output(&path);
                                     let differing: Vec<usize> = frames
@@ -85,7 +104,9 @@ fn run(
                                         .map(|(i, _)| i)
                                         .collect();
                                     if !differing.is_empty() || frames.len() != again.len() {
-                                        case.problem(format!(
+                                        case.problem(
+                                            "nondeterministic",
+                                            format!(
                                             "nondeterministic: {} of {} frames differ between two exports (first {:?})",
                                             differing.len(),
                                             frames.len(),
@@ -295,5 +316,35 @@ fn multi_segment() {
         RES,
         true,
     ));
+    common::assert_passed(failures);
+}
+
+fn across_segments(config: &mut ProjectConfiguration) {
+    common::set_clip_cuts(
+        config,
+        &[(0, 0.5, 3.0, 1.0), (1, 0.5, 2.5, 1.0), (0, 3.5, 5.5, 1.5)],
+    );
+}
+
+/// A Studio project recorded through the real recording pipeline.
+#[test]
+fn recorded_studio() {
+    let failures = run_project(
+        common::recorded(&catalog::recorded_studio(report::tier())),
+        &[
+            Variant {
+                edit: "full",
+                apply: no_edit,
+            },
+            Variant {
+                edit: "across-segments",
+                apply: across_segments,
+            },
+        ],
+        &[(Format::Mp4, 30), (Format::Mp4, 60)],
+        &Decoder::all(),
+        RES,
+        false,
+    );
     common::assert_passed(failures);
 }

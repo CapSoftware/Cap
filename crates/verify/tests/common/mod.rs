@@ -29,6 +29,7 @@ pub fn init() {
 
 /// A ready fixture project plus its decoded source truth.
 pub struct Project {
+    pub name: String,
     pub path: PathBuf,
     pub meta: RecordingMeta,
     pub truth: SourceTruth,
@@ -38,9 +39,29 @@ pub fn project(spec: &FixtureSpec) -> Project {
     init();
     let path = fixture::ensure_fixture(spec, fixture::write_fixture)
         .unwrap_or_else(|e| panic!("fixture {}: {e:?}", spec.name));
+    load(&spec.name, path)
+}
+
+fn load(name: &str, path: PathBuf) -> Project {
     let meta = RecordingMeta::load_for_project(&path).expect("fixture meta");
     let truth = SourceTruth::read(&path).expect("fixture truth");
-    Project { path, meta, truth }
+    Project {
+        name: name.to_string(),
+        path,
+        meta,
+        truth,
+    }
+}
+
+/// A fixture recorded through the real recording pipeline (real time on
+/// first use, cached afterwards).
+pub fn recorded(spec: &cap_verify::pipeline::RecordedSpec) -> Project {
+    init();
+    let path = fixture::ensure_fixture_keyed(spec.cache_key(), |dir| {
+        runtime().block_on(cap_verify::pipeline::record_studio(spec, dir))
+    })
+    .unwrap_or_else(|e| panic!("recorded fixture {}: {e:?}", spec.name));
+    load(&format!("rec-{}", spec.name), path)
 }
 
 impl Project {
@@ -60,6 +81,24 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
         .iter()
         .map(|&(start, end, timescale)| TimelineSegment {
             recording_clip: 0,
+            start,
+            end,
+            timescale,
+            name: None,
+            speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
+        })
+        .collect();
+}
+
+/// Replaces the timeline with `(clip, start, end, timescale)` segments.
+pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, f64)]) {
+    let timeline = config.timeline.as_mut().expect("timeline");
+    timeline.segments = cuts
+        .iter()
+        .map(|&(clip, start, end, timescale)| TimelineSegment {
+            recording_clip: clip,
             start,
             end,
             timescale,
@@ -217,11 +256,14 @@ pub fn check_sequence(
 ) {
     let expected_count = model.output_frames(fps);
     if frames.len() as u32 != expected_count {
-        case.problem(format!(
-            "output has {} frames, the model expects {expected_count} ({:.3}s at {fps} fps)",
-            frames.len(),
-            model.duration()
-        ));
+        case.problem(
+            "frame-count",
+            format!(
+                "output has {} frames, the model expects {expected_count} ({:.3}s at {fps} fps)",
+                frames.len(),
+                model.duration()
+            ),
+        );
     }
     if check_timestamps {
         let off_grid: Vec<(usize, f64)> = frames
@@ -232,9 +274,10 @@ pub fn check_sequence(
             .take(5)
             .collect();
         if !off_grid.is_empty() {
-            case.problem(format!(
-                "output timestamps off the {fps} fps grid: {off_grid:?}"
-            ));
+            case.problem(
+                "timestamps",
+                format!("output timestamps off the {fps} fps grid: {off_grid:?}"),
+            );
         }
     }
     let n = frames.len().min(expected_count as usize);

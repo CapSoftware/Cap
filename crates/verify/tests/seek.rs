@@ -26,11 +26,20 @@ fn run(
     edit: fn(&mut ProjectConfiguration),
     make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
 ) -> Vec<String> {
-    let project = common::project(&spec);
+    run_project(common::project(&spec), name, fps, edit, make)
+}
+
+fn run_project(
+    project: common::Project,
+    name: &str,
+    fps: u32,
+    edit: fn(&mut ProjectConfiguration),
+    make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
+) -> Vec<String> {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for decoder in Decoder::all() {
-        let id = format!("seek/{}/{name}{fps}/{}", spec.name, decoder.label());
+        let id = format!("seek/{}/{name}{fps}/{}", project.name, decoder.label());
         if !report::selected(&id) {
             continue;
         }
@@ -51,7 +60,7 @@ fn run(
         let frames: Vec<u32> = requests.iter().map(|r| r.0).collect();
         match result {
             Ok(readouts) => common::check_requests(&mut case, &model, &frames, &readouts, fps),
-            Err(e) => case.problem(e),
+            Err(e) => case.problem("error", e),
         }
         if let Err(message) = report::settle(case) {
             failures.push(message);
@@ -183,6 +192,42 @@ fn scrub() {
     common::assert_passed(failures);
 }
 
+/// Ad-hoc repro runner: `CAP_VERIFY_SEEK_SCRIPT="<fixture>@<fps>:<secs>+<follow>,..."`
+/// seeks to each time and plays `follow` frames after it (fixtures:
+/// seek-gop, seek-native, vfr-holds). Ignored without the variable.
+#[test]
+fn script() {
+    let Ok(script) = std::env::var("CAP_VERIFY_SEEK_SCRIPT") else {
+        return;
+    };
+    let (head, steps) = script.split_once(':').expect("<fixture>@<fps>:<steps>");
+    let (fixture, fps) = head.split_once('@').expect("<fixture>@<fps>");
+    let fps: u32 = fps.parse().expect("fps");
+    let spec = match fixture {
+        "seek-gop" => catalog::seek_gop(report::tier()),
+        "seek-native" => catalog::seek_gop_native(report::tier()),
+        "vfr-holds" => catalog::vfr_holds(report::tier()),
+        other => panic!("unknown fixture {other}"),
+    };
+    let steps: Vec<(f64, u32)> = steps
+        .split(',')
+        .map(|step| {
+            let (t, n) = step.split_once('+').unwrap_or((step, "0"));
+            (t.parse().expect("secs"), n.parse().expect("follow"))
+        })
+        .collect();
+    let make = move |total: u32, _: &common::Project| {
+        let mut out = Vec::new();
+        for &(t, n) in &steps {
+            let f = ((t * f64::from(fps)) as u32).min(total - 1);
+            out.push((f, true));
+            out.extend((1..=n).map(|k| (f + k, false)).filter(|&(f, _)| f < total));
+        }
+        out
+    };
+    common::assert_passed(run(spec, "script", fps, no_edit, &make));
+}
+
 /// Seeks into the middle of static holds and across them, then playback
 /// out of the hold.
 #[test]
@@ -206,6 +251,26 @@ fn seek_into_holds() {
         no_edit,
         &into_holds,
     ));
+    // Minimal deterministic sequence for the AVAssetReader camera answering
+    // one frame stale after revisiting a region (found by into-holds).
+    let revisit = |total: u32, _: &common::Project| {
+        let mut out = Vec::new();
+        for t in [2.0, 3.5, 1.2, 2.3] {
+            let f = (t * 60.0) as u32;
+            if f + 30 < total {
+                out.push((f, true));
+                out.extend((1..30).map(|k| (f + k, false)));
+            }
+        }
+        out
+    };
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        "revisit",
+        60,
+        no_edit,
+        &revisit,
+    ));
     common::assert_passed(failures);
 }
 
@@ -217,7 +282,7 @@ fn cold_open() {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for decoder in Decoder::all() {
-        let id = format!("seek/{}/cold-open30/{}", spec.name, decoder.label());
+        let id = format!("seek/{}/cold-open30/{}", project.name, decoder.label());
         if !report::selected(&id) {
             continue;
         }
@@ -237,7 +302,7 @@ fn cold_open() {
             });
             match result {
                 Ok(readout) => readouts.push(readout),
-                Err(e) => case.problem(e),
+                Err(e) => case.problem("error", e),
             }
         }
         if readouts.len() == frames.len() {

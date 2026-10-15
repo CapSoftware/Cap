@@ -43,13 +43,21 @@ fn sequential(
     fps: u32,
     start_fraction: f64,
 ) -> Vec<String> {
-    let project = common::project(&spec);
+    sequential_project(common::project(&spec), edit, fps, start_fraction)
+}
+
+fn sequential_project(
+    project: common::Project,
+    edit: (&str, fn(&mut ProjectConfiguration)),
+    fps: u32,
+    start_fraction: f64,
+) -> Vec<String> {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for decoder in Decoder::all() {
         let id = format!(
             "playback/{}/{}/seq{fps}-from{:.0}/{}",
-            spec.name,
+            project.name,
             edit.0,
             start_fraction * 100.0,
             decoder.label()
@@ -74,7 +82,7 @@ fn sequential(
         });
         match result {
             Ok(readouts) => common::check_requests(&mut case, &model, &frames, &readouts, fps),
-            Err(e) => case.problem(e),
+            Err(e) => case.problem("error", e),
         }
         if let Err(message) = report::settle(case) {
             failures.push(message);
@@ -171,5 +179,16 @@ fn multi_segment_sequential() {
         30,
         0.0,
     ));
+    common::assert_passed(failures);
+}
+
+#[test]
+fn recorded_studio_sequential() {
+    let failures = sequential_project(
+        common::recorded(&catalog::recorded_studio(report::tier())),
+        ("full", no_edit),
+        60,
+        0.0,
+    );
     common::assert_passed(failures);
 }
