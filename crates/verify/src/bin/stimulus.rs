@@ -39,7 +39,7 @@ mod app {
     use winit::{
         application::ApplicationHandler,
         dpi::{LogicalPosition, LogicalSize},
-        event::WindowEvent,
+        event::{StartCause, WindowEvent},
         event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
         window::{Fullscreen, Window, WindowId, WindowLevel},
     };
@@ -115,6 +115,9 @@ mod app {
             created: None,
             idle_tick: 0,
             last_idle: None,
+            thread: unsafe { mach_thread_self() },
+            wake: (String::new(), None),
+            presented_at: None,
         };
         let process_info = NSProcessInfo::processInfo();
         let activity = unsafe {
@@ -166,6 +169,56 @@ mod app {
         created: Option<Instant>,
         idle_tick: u32,
         last_idle: Option<Instant>,
+        thread: u32,
+        wake: (String, Option<i64>),
+        presented_at: Option<(u32, Instant)>,
+    }
+
+    #[repr(C)]
+    struct ThreadExtendedInfo {
+        user_time: u64,
+        system_time: u64,
+        cpu_usage: i32,
+        policy: i32,
+        run_state: i32,
+        flags: i32,
+        sleep_time: i32,
+        cur_pri: i32,
+        priority: i32,
+        max_priority: i32,
+        name: [u8; 64],
+    }
+
+    unsafe extern "C" {
+        fn mach_thread_self() -> u32;
+        fn thread_info(thread: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
+    }
+
+    fn sched_info(thread: u32) -> Option<ThreadExtendedInfo> {
+        const THREAD_EXTENDED_INFO: i32 = 5;
+        let mut info = ThreadExtendedInfo {
+            user_time: 0,
+            system_time: 0,
+            cpu_usage: 0,
+            policy: 0,
+            run_state: 0,
+            flags: 0,
+            sleep_time: 0,
+            cur_pri: 0,
+            priority: 0,
+            max_priority: 0,
+            name: [0; 64],
+        };
+        let mut count = (std::mem::size_of::<ThreadExtendedInfo>() / 4) as u32;
+        let status = unsafe {
+            thread_info(
+                thread,
+                THREAD_EXTENDED_INFO,
+                (&raw mut info).cast(),
+                &mut count,
+            )
+        };
+        (status == 0).then_some(info)
     }
 
     impl App {
@@ -262,6 +315,9 @@ mod app {
                     });
                 }
                 self.shown = Some(index);
+                if self.go_at.is_some() {
+                    self.presented_at = Some((index, Instant::now()));
+                }
             }
         }
     }
@@ -396,8 +452,41 @@ mod app {
             }
         }
 
+        fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+            let now = Instant::now();
+            self.wake = match cause {
+                StartCause::ResumeTimeReached {
+                    requested_resume, ..
+                } => (
+                    "timer".into(),
+                    Some(now.saturating_duration_since(requested_resume).as_micros() as i64),
+                ),
+                StartCause::WaitCancelled {
+                    requested_resume, ..
+                } => (
+                    "cancelled".into(),
+                    requested_resume.map(|r| now.saturating_duration_since(r).as_micros() as i64),
+                ),
+                StartCause::Poll => ("poll".into(), None),
+                StartCause::Init => ("init".into(), None),
+            };
+        }
+
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
             let now = Instant::now();
+            if let Some((index, at)) = self.presented_at.take()
+                && let Some(info) = sched_info(self.thread)
+            {
+                self.log.write(&StimulusEvent::Sched {
+                    index,
+                    cause: self.wake.0.clone(),
+                    wake_late_us: self.wake.1,
+                    post_present_us: now.saturating_duration_since(at).as_micros() as i64,
+                    cur_pri: info.cur_pri,
+                    base_pri: info.priority,
+                    cpu_us: (info.user_time + info.system_time) / 1000,
+                });
+            }
             if let Some(due) = self.idle_due(now) {
                 if due <= now
                     && let Some(window) = &self.window

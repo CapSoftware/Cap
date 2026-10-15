@@ -92,9 +92,16 @@ jobs:
       - name: Real-capture recording oracle
         run: |
           mkdir -p "$CAP_VERIFY_DUMP"
+          top -l 0 -s 1 -n 15 -o cpu -stats pid,command,cpu,th,state,pri > "$CAP_VERIFY_DUMP/top.log" 2>&1 &
+          top_pid=$!
           start=$(date +%s)
+          set +e
           cargo test --locked -p cap-verify --test recording -- --nocapture
+          status=$?
+          set -e
+          kill "$top_pid" || true
           echo "test seconds: $(( $(date +%s) - start ))"
+          exit "$status"
 
       - name: Upload artifacts
         if: always()

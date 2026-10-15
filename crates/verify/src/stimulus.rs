@@ -86,6 +86,18 @@ pub enum StimulusEvent {
     Done {
         host: u64,
     },
+    /// Scheduling diagnostics for the frame just presented: how late the
+    /// run loop woke for it, how long the loop took to get back to waiting
+    /// after presenting, and the main thread's scheduler state.
+    Sched {
+        index: u32,
+        cause: String,
+        wake_late_us: Option<i64>,
+        post_present_us: i64,
+        cur_pri: i32,
+        base_pri: i32,
+        cpu_us: u64,
+    },
 }
 
 pub fn read_log(path: &Path) -> anyhow::Result<Vec<StimulusEvent>> {
