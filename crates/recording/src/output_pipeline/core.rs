@@ -1649,11 +1649,11 @@ impl SharedWallClockPause {
     }
 
     pub fn check(&self) -> (bool, Duration) {
-        let is_paused = self.flag.load(Ordering::Acquire);
         let mut inner = match self.inner.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        let is_paused = self.flag.load(Ordering::Acquire);
 
         if is_paused {
             if inner.pause_started_at.is_none() {
@@ -4878,6 +4878,25 @@ mod tests {
 
     mod shared_pause_state {
         use super::*;
+
+        #[test]
+        fn check_waiting_on_resume_does_not_start_a_new_pause() {
+            let flag = Arc::new(AtomicBool::new(true));
+            let pause = SharedWallClockPause::new(flag.clone());
+            assert!(pause.check().0);
+
+            let resuming = pause.inner.lock().unwrap();
+            let waiting = std::thread::spawn({
+                let pause = pause.clone();
+                move || pause.check()
+            });
+            std::thread::sleep(Duration::from_millis(50));
+            flag.store(false, Ordering::Release);
+            drop(resuming);
+
+            assert!(!waiting.join().unwrap().0);
+            assert!(pause.inner.lock().unwrap().pause_started_at.is_none());
+        }
 
         fn frame_ts(index: u64) -> Duration {
             Duration::from_nanos(index * 33_333_333 + 400)
