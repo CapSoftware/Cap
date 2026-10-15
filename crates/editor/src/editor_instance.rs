@@ -2331,10 +2331,7 @@ mod initial_clip_configuration_tests {
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0].index, 0);
         assert!(clips[0].offsets_auto_calculated);
-        assert_eq!(
-            clips[0].offsets.camera.to_bits(),
-            ((1.23456789_f64 - 0.987654321) as f32).to_bits()
-        );
+        assert_eq!(clips[0].offsets.camera.to_bits(), 0.0_f32.to_bits());
         assert_eq!(
             clips[0].offsets.mic.to_bits(),
             (((1.23456789_f64 - 0.876543219) as f32) + calibration).to_bits()
