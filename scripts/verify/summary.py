@@ -53,6 +53,20 @@ def junit_failures(paths):
     return out
 
 
+def crash_excerpt(msg, limit):
+    """The first panic (message and a few lines after it), else the tail."""
+    lines = msg.splitlines()
+    for i, line in enumerate(lines):
+        if "panicked at" in line or "error:" in line.lower():
+            excerpt = []
+            for follow in lines[i:i + 12]:
+                if "stack backtrace" in follow.lower():
+                    break
+                excerpt.append(follow)
+            return excerpt
+    return lines[-limit:]
+
+
 def frame(m):
     def fmt(v):
         return "none" if v is None else f"seg {v[0]} frame {v[1]}"
@@ -106,7 +120,7 @@ def render(records, title, junit, flaky, text):
                 out.append(f"    repro: {r['repro']}")
         for name, msg in crashed:
             out.append(f"TEST FAILED {name}")
-            out.extend("    " + line for line in msg.splitlines()[-15:])
+            out.extend("    " + line for line in crash_excerpt(msg, 15))
         for name in flaky:
             out.append(f"FLAKY {name}: failed, then passed when rerun (still a failure: fix the cause)")
         return "\n".join(out)
@@ -139,7 +153,7 @@ def render(records, title, junit, flaky, text):
         for name, msg in crashed[:MAX_CASES]:
             out.append(f"**`{name}`**")
             out.append("```text")
-            out.extend(msg.splitlines()[-25:])
+            out.extend(crash_excerpt(msg, 25))
             out.append("```")
     if xfails:
         out.append(f"<details><summary>Expected failures ({len(xfails)})</summary>")
