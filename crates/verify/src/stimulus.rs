@@ -86,6 +86,11 @@ pub enum StimulusEvent {
     Done {
         host: u64,
     },
+    /// Kernel status of the stimulus's priority requests (0 = applied).
+    Priority {
+        qos: i32,
+        realtime: i32,
+    },
     /// Scheduling diagnostics for the frame just presented: how late the
     /// run loop woke for it, how long the loop took to get back to waiting
     /// after presenting, and the main thread's scheduler state.

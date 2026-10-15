@@ -119,6 +119,8 @@ mod app {
             wake: (String::new(), None),
             presented_at: None,
         };
+        let (qos, realtime) = raise_priority(app.spec.fps);
+        app.log.write(&StimulusEvent::Priority { qos, realtime });
         let process_info = NSProcessInfo::processInfo();
         let activity = unsafe {
             process_info.beginActivityWithOptions_reason(
@@ -192,6 +194,47 @@ mod app {
     unsafe extern "C" {
         fn mach_thread_self() -> u32;
         fn thread_info(thread: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
+        fn thread_policy_set(thread: u32, flavor: u32, policy: *const i32, count: u32) -> i32;
+        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+    }
+
+    /// Hosted runners start jobs at utility QoS (scheduler base priority 20)
+    /// and children inherit it, so under recording load the stimulus loses
+    /// the CPU to the capture and encoder services for 50-190 ms at a time.
+    /// The pictures a user records come from foreground apps; the stimulus
+    /// asks for the same treatment (user-interactive QoS) and a time
+    /// constraint matching its frame period, so it keeps its schedule.
+    /// Returns the kernel status of each request (0 = applied).
+    fn raise_priority(fps: f64) -> (i32, i32) {
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+        #[repr(C)]
+        struct TimeConstraint {
+            period: u32,
+            computation: u32,
+            constraint: u32,
+            preemptible: i32,
+        }
+        let qos = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+        let info = cidre::mach::TimeBaseInfo::new();
+        let ticks =
+            |secs: f64| (secs * 1e9 * f64::from(info.denom) / f64::from(info.numer)).round() as u32;
+        let period = 1.0 / fps;
+        let policy = TimeConstraint {
+            period: ticks(period),
+            computation: ticks(0.010),
+            constraint: ticks(period),
+            preemptible: 1,
+        };
+        let realtime = unsafe {
+            thread_policy_set(
+                mach_thread_self(),
+                THREAD_TIME_CONSTRAINT_POLICY,
+                (&raw const policy).cast(),
+                (std::mem::size_of::<TimeConstraint>() / 4) as u32,
+            )
+        };
+        (qos, realtime)
     }
 
     fn sched_info(thread: u32) -> Option<ThreadExtendedInfo> {
@@ -467,7 +510,9 @@ mod app {
                     "cancelled".into(),
                     requested_resume.map(|r| now.saturating_duration_since(r).as_micros() as i64),
                 ),
-                StartCause::Poll => ("poll".into(), None),
+                // A frame is drawn on the poll pass that follows the wake;
+                // keep the wake's own lateness.
+                StartCause::Poll => return,
                 StartCause::Init => ("init".into(), None),
             };
         }
