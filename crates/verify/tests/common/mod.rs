@@ -465,10 +465,15 @@ pub fn finish(case: Case) {
 pub fn scratch_dir(name: &str) -> tempfile::TempDir {
     let root = fixture::fixture_root().join("scratch");
     std::fs::create_dir_all(&root).expect("scratch root");
-    tempfile::Builder::new()
+    let mut dir = tempfile::Builder::new()
         .prefix(&format!("{}-", name.replace('/', "_")))
         .tempdir_in(root)
-        .expect("scratch dir")
+        .expect("scratch dir");
+    if std::env::var_os("CAP_VERIFY_KEEP_OUTPUT").is_some() {
+        dir.disable_cleanup(true);
+        eprintln!("[cap-verify-output] {name} {}", dir.path().display());
+    }
+    dir
 }
 
 /// Drives the editor's decode + render path offline, one requested frame
