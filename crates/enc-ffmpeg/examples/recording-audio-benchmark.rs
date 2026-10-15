@@ -1,11 +1,3 @@
-//! Encodes the same input through `FragmentedAudioFile` with FFmpeg's `aac`
-//! and AudioToolbox's `aac_at`, interleaving rounds, and reports process CPU
-//! time, wall time and output bitrate for mono and stereo.
-//!
-//! Run: cargo run --release -p cap-enc-ffmpeg --example recording-audio-benchmark -- [input-file] [rounds]
-//! With no input file a deterministic 60 s signal (220 Hz tone + filtered
-//! noise) is synthesized; any ffmpeg-decodable file is decoded to 48 kHz mono.
-
 #[cfg(target_os = "macos")]
 mod benchmark {
     use std::{
