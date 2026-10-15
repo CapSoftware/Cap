@@ -811,19 +811,26 @@ fn stereo_channels() {
 /// A recording whose mic gap summary reports a stale startup burst: the
 /// editor plays the mic earlier by the trimmed time (stale-startup repair),
 /// in exports and in playback.
+///
+/// The trim is one whole marker period (500 ms), so the repaired mic markers
+/// keep their own schedule phase and stay clear of the system-audio markers.
+/// A 300 ms trim moved every mic marker to 33 ms after the start of the
+/// system marker with the same index; the two overlapped for 87 ms and the
+/// overlapped system marker sometimes failed to decode.
 #[test]
 fn timing_repair() {
     use cap_verify::fixture;
+    const TRIMMED_MS: u32 = 500;
     common::init();
     let mut spec = audio_fixture::mix(report::tier());
-    spec.name = format!("{}-repair", spec.name);
+    spec.name = format!("{}-repair{TRIMMED_MS}", spec.name);
     let path = fixture::ensure_fixture(&spec, |spec, dir| {
         audio_fixture::write(spec, dir)?;
         let meta_path = dir.join("recording-meta.json");
         let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta_path)?)?;
         meta["segments"][0]["mic"]["gap_summary"] = serde_json::json!({
-            "total_overlap_trimmed_ms": 300,
-            "startup_overlap_trimmed_ms": 300,
+            "total_overlap_trimmed_ms": TRIMMED_MS,
+            "startup_overlap_trimmed_ms": TRIMMED_MS,
             "overlap_dropped_frames": 4,
             "startup_overlap_drops": 4
         });
