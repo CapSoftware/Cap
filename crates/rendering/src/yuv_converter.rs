@@ -1168,7 +1168,7 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1239,7 +1239,7 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
         }
 
         Ok(self.current_output_view())
