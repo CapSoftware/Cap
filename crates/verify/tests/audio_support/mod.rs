@@ -345,9 +345,20 @@ pub fn check_av(
     fps: u32,
 ) {
     let timing = display_timing(meta);
+    // Screen frames the video oracle already found wrong show the wrong
+    // source frame, so they cannot time a marker: a marker whose first
+    // showing is one of them is not measured (the video failure is judged
+    // on its own).
+    let wrong: std::collections::BTreeSet<usize> = case
+        .streams
+        .iter()
+        .filter(|s| s.stream == Some(StreamKind::Screen))
+        .flat_map(|s| s.mismatches.iter().map(|m| m.output_frame as usize))
+        .collect();
     let mut worst = 0.0f64;
     let mut bad = Vec::new();
     let mut checked = 0;
+    let mut unmeasured = 0;
     for (expected, heard) in &report.pairs {
         // Partial markers and markers inside a transition (a video blend)
         // have no single source frame to compare with.
@@ -378,6 +389,10 @@ pub fn check_av(
         let Some((i, _)) = shown else {
             continue;
         };
+        if wrong.contains(&i) {
+            unmeasured += 1;
+            continue;
+        }
         checked += 1;
         let av = heard.time_secs - i as f64 / f64::from(fps);
         let limit = (1.0 / f64::from(fps)).max(1.0 / (f64::from(src_fps) * heard.rate)) + 0.005;
@@ -397,6 +412,17 @@ pub fn check_av(
         "A/V: {checked} markers, worst offset {:.1} ms (limit one frame + 5 ms)",
         worst * 1000.0
     );
+    if unmeasured > 0 {
+        case.note(format!(
+            "A/V: {unmeasured} markers not measured: their source frame first shows on a frame the video oracle found wrong"
+        ));
+        if checked == 0 {
+            case.unobserved(
+                "av-sync",
+                format!("all {unmeasured} timeable markers first show on wrong video frames"),
+            );
+        }
+    }
     if bad.is_empty() {
         case.note(summary);
     } else {
