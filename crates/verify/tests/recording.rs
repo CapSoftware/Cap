@@ -734,6 +734,10 @@ struct Recorded {
     camera: Option<(Truth, Vec<u32>)>,
     max_fps: u32,
     mic_delay: f64,
+    /// The stimulus's scripted holds and rate, to locate the first picture
+    /// after each hold.
+    holds: Vec<(f64, f64)>,
+    stimulus_fps: f64,
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
@@ -1118,6 +1122,8 @@ async fn record(
         camera: camera_truth,
         max_fps,
         mic_delay: spec.mic_delay,
+        holds: spec.holds.clone(),
+        stimulus_fps: spec.stimulus_fps,
         loss_budget,
     })
 }
@@ -1559,6 +1565,10 @@ struct VideoCheck<'a> {
     /// guarantee a sample (screen only).
     may_skip: Box<dyn Fn(u32) -> bool + 'a>,
     allow_duplicates: bool,
+    /// Pictures that must each be in the recording, outside any loss budget:
+    /// the first picture after each scripted hold (a change after a static
+    /// screen, the moment a viewer is waiting for).
+    required: Vec<(u32, String)>,
 }
 
 fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Result<Offsets> {
@@ -1716,6 +1726,18 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             (best.max(run), run, Some(i))
         })
         .0;
+    for (index, what) in &check.required {
+        if check.truth.contains_key(index)
+            && *index > lo
+            && *index < hi
+            && !first_seen.contains_key(index)
+        {
+            case.problem(
+                "missing-after-hold",
+                format!("{name}: {what} (index {index}) is missing from the recording"),
+            );
+        }
+    }
     if skipped.len() > budget || longest_run >= 3 {
         case.problem(
             "missing",
@@ -1950,6 +1972,22 @@ fn check_audio(
     offsets
 }
 
+/// The first presented picture after each scripted hold.
+fn after_holds(rec: &Recorded, truth: &Truth) -> Vec<(u32, String)> {
+    rec.holds
+        .iter()
+        .filter_map(|&(start, length)| {
+            let first = ((start + length) * rec.stimulus_fps).ceil() as u32 + 1;
+            truth.range(first..).next().map(|(&index, _)| {
+                (
+                    index,
+                    format!("first picture after the {length} s hold at {start} s"),
+                )
+            })
+        })
+        .collect()
+}
+
 fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
     let layout = layout(&rec.project, case)?;
     let screen_truth = first_presented(&rec.stimulus, reference);
@@ -1977,6 +2015,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     .is_some_and(|d| *d < capture_interval + refresh)
             }),
             allow_duplicates: true,
+            required: after_holds(rec, &screen_truth),
         },
     )?;
     let camera = match (&layout.camera, &rec.camera) {
@@ -1992,6 +2031,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     not_sent: dropped,
                     may_skip: Box::new(|_| false),
                     allow_duplicates: false,
+                    required: Vec::new(),
                 },
             )?)
         }

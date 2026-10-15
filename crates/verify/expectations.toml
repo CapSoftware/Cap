@@ -383,3 +383,38 @@ class = "sync"
 platforms = ["macos"]
 reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay: runners 59 to 104 ms (all runs), developer Mac 317 to 555 ms (all runs)"
 link = ""
+
+# First picture after a static screen. During a scripted hold ScreenCaptureKit
+# delivers only Idle status buffers; its first Complete frame after the hold
+# arrives 70 to 82 ms after the new picture was presented (steady state 23 to
+# 31 ms after each present), and it already shows the next picture. Frame-level
+# logs (run 38745219281, macos-15: every SCK screen buffer with its
+# SCStreamFrameInfoStatus, every Cap send, every mux call) show 0 Complete
+# frames between the post-hold picture and the next one, and 1797 Complete
+# frames = 1797 Cap sends = 1797 mux calls: the picture never reaches Cap's
+# capture callback and Cap drops nothing. The stimulus presents through the
+# standard Core Animation path, so a user's first change after a static screen
+# is affected the same way: it is recorded ~50 to 80 ms late and anything
+# shown for less than that is lost.
+
+[[xfail]]
+case = "recording/studio-screen/mp4-holds"
+class = "missing-after-hold"
+platforms = ["macos"]
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+
+[[xfail]]
+case = "recording/instant/long-holds"
+class = "missing-after-hold"
+platforms = ["macos"]
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6, at least one per run 6 of 6"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+
+[[xfail]]
+case = "recording/studio-camera/long"
+class = "missing-after-hold"
+platforms = ["macos"]
+flaky = true
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture)"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
