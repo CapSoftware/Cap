@@ -133,6 +133,7 @@ jobs:
           for run in $(seq 1 "$REPEATS"); do
             for test in codec export playback seek; do
               export CAP_VERIFY_REPORT_DIR="$OUT/run$run/$test"
+              export CAP_VERIFY_FIXTURE_DIR="$GITHUB_WORKSPACE/verify-fixtures-run$run"
               mkdir -p "$CAP_VERIFY_REPORT_DIR"
               start=$(date +%s)
               cargo test --locked -p cap-verify --test "$test" -- --nocapture > "$OUT/run$run/$test.log" 2>&1

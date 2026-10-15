@@ -144,7 +144,8 @@ link = ""
 [[xfail]]
 case = "export/instant/output/mp4/native"
 class = "audio"
-reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings)"
+platforms = ["macos", "windows"]
+reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings; same on windows-2022). Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers (3 of 3 CI runs), which points at the FirstFrame anchor path"
 link = ""
 
 [[xfail]]
