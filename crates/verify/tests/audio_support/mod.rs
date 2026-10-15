@@ -34,7 +34,12 @@ pub fn project(spec: &FixtureSpec) -> Project {
         .unwrap_or_else(|e| panic!("fixture {}: {e:?}", spec.name));
     let meta = RecordingMeta::load_for_project(&path).expect("fixture meta");
     let truth = SourceTruth::read(&path).expect("fixture truth");
-    Project { path, meta, truth }
+    Project {
+        name: spec.name.clone(),
+        path,
+        meta,
+        truth,
+    }
 }
 
 pub fn audio_model(project: &Project, config: &ProjectConfiguration) -> AudioModel {
