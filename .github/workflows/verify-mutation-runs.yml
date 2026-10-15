@@ -1,0 +1,179 @@
+name: Verify mutation runs
+
+# Scratch workflow for the cap-verify mutation audit (scripts/verify/mutation).
+# Each job applies catalogue mutations one at a time and records which suite
+# cases catch them. Never merged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "space separated job names to run (empty = all)"
+        default: ""
+  push:
+    branches:
+      - ci/verify-mutation-runs
+
+concurrency:
+  group: verify-mutation-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "1"
+  CARGO_PROFILE_CI_VERIFY_INCREMENTAL: "true"
+  RUST_BACKTRACE: "1"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+
+jobs:
+  engine:
+    name: ${{ matrix.name }}
+    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.name) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: lin-01, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "T01 T02 T03 T04" }
+          - { name: lin-02, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "T05 T06 T07 T08" }
+          - { name: lin-03, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "R01 R02 R03 R04" }
+          - { name: lin-04, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "R05 R06 R07 R08" }
+          - { name: lin-05, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "R09 R10 R11 E01" }
+          - { name: lin-06, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "E02 E03 E04 E05" }
+          - { name: lin-07, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "D01 D02 D03" }
+          - { name: lin-08, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "D04 D05 D06" }
+          - { name: lin-09, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "A01 A02 A03 A04" }
+          - { name: lin-10, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "A05 A06 A07 A08" }
+          - { name: lin-11, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "A09 A10 A11" }
+          - { name: lin-12, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "A12 A13 A14" }
+          - { name: lin-13, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "C01 C02 C03 C04 C05" }
+          - { name: lin-14, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "K01 K02 K03 K04 K05" }
+          - { name: lin-fresh, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "C01 C02 C03 C04 C05", fresh: true }
+          - { name: mac-01, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "D01 D02 D07" }
+          - { name: mac-02, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "D08 D09 D10" }
+          - { name: mac-03, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "C01 C02 C03" }
+          - { name: mac-04, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "C04 C05" }
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REPEAT: "1"
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: fast
+
+      - name: Desktop dependencies (macOS recording)
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Mutations
+        shell: bash
+        run: |
+          mkdir -p "$CAP_VERIFY_SCRATCH"
+          python3 scripts/verify/mutation/run.py --platform "${{ matrix.platform }}" \
+            --ids "${{ matrix.ids }}" --out "$RUNNER_TEMP/mutation-${{ matrix.name }}" \
+            ${{ matrix.fresh && '--fresh-fixtures' || '' }}
+
+      - name: Results
+        if: always()
+        shell: bash
+        run: cat "$RUNNER_TEMP/mutation-${{ matrix.name }}/results.jsonl" || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.json
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.jsonl
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gpui:
+    name: ${{ matrix.name }}
+    if: ${{ github.event.inputs.only == '' || contains(github.event.inputs.only, matrix.name) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gpui-01, ids: "U01 U02 U03 U04 U05 K06" }
+          - { name: gpui-02, ids: "U06 U07 U08 U09 U10" }
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_INCREMENTAL: "1"
+      GPUI_TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-mutation-gpui
+          workspaces: apps/desktop-gpui -> target
+          cache-on-failure: "true"
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+        run: node scripts/setup.js
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Mutations
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/x86_64-unknown-linux-gnu/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" \
+            python3 scripts/verify/mutation/run.py --platform linux --ids "${{ matrix.ids }}" \
+            --suites gpui --out "$RUNNER_TEMP/mutation-${{ matrix.name }}"
+
+      - name: Results
+        if: always()
+        run: cat "$RUNNER_TEMP/mutation-${{ matrix.name }}/results.jsonl" || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.json
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.jsonl
+            ${{ runner.temp }}/mutation-${{ matrix.name }}/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7

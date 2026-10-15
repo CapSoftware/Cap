@@ -353,7 +353,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         )) {
             Err(e) => case.problem("error", format!("export failed: {e}")),
             Ok(out) => {
-                let frames = common::read_output(&out);
+                let frames = common::read_output(&out, Some(&|i| model.expect(i as u32, fps)));
                 common::check_sequence(&mut case, &model, &frames, fps, true);
             }
         }
@@ -409,7 +409,7 @@ fn hold_past_end_export() {
     )) {
         Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok(out) => {
-            let frames = common::read_output(&out).len();
+            let frames = common::read_output(&out, None).len();
             let expected = (duration * f64::from(fps)).ceil() as usize;
             if frames == expected {
                 case.note(format!("{frames} frames for the {duration:.3}s timeline"));
