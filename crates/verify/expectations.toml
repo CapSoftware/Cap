@@ -102,3 +102,47 @@ case = "seek/*/storm*/ffmpeg"
 class = "stale"
 reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1-4 source frames old, and seeks near the start show frame 0 (up to 67 source frames stale)"
 link = ""
+
+# Instant mode (fixtures recorded through the real Instant muxers and
+# finalize_instant_output). Needs confirmation with real capture devices
+# (recording track); the product anchors the Instant audio track at the
+# recording epoch on Linux only.
+
+[[xfail]]
+case = "export/instant-ungated-mic-late/output/mp4/native"
+class = "sync"
+platforms = ["macos", "windows"]
+reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4"
+link = ""
+
+[[xfail]]
+case = "export/instant-ungated-system-loopback/output/mp4/native"
+class = "sync"
+platforms = ["macos", "windows"]
+reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-*/output/mp4/native"
+class = "sync"
+reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (13 ms with the gate opening between frames; 30-33 ms when it opens on a frame)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-system-only/output/mp4/native"
+class = "audio"
+flaky = true
+reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early)"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "audio"
+reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings)"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync"
+reason = "NEW: see instant-gated-*: audio up to one frame late after the start gate"
+link = ""

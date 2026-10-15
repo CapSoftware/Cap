@@ -348,3 +348,196 @@ fn recorded_studio() {
     );
     common::assert_passed(failures);
 }
+
+/// Instant mode: the finalised `output.mp4` is the deliverable. Every
+/// emitted screen frame must appear once, in order, on its own timing, and
+/// every audio marker must be present, within 5 ms of the screen.
+#[test]
+fn instant_output() {
+    let mut failures = Vec::new();
+    for spec in catalog::instant_variants(report::tier()) {
+        if let Some(failure) = instant_case(spec) {
+            failures.push(failure);
+        }
+    }
+    common::assert_passed(failures);
+}
+
+fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
+    use cap_verify::{
+        audio_code::{self, AudioSource},
+        fixture, media,
+        pipeline::{self, Emitted},
+        video_code::{self, StreamKind},
+    };
+    let id = format!("export/{}/output/mp4/native", spec.name);
+    if !report::selected(&id) {
+        return None;
+    }
+    common::init();
+    let dir = fixture::ensure_fixture_keyed(spec.cache_key(), |dir| {
+        common::runtime().block_on(pipeline::record_instant(&spec, dir))
+    })
+    .expect("instant fixture");
+    let emitted: Emitted = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("verify-emitted.json")).expect("emitted"),
+    )
+    .expect("emitted json");
+    let output = dir.join("content/output.mp4");
+    let mut case = Case::new(&id);
+    let mut frames = Vec::new();
+    media::decode_video(&output, |p| {
+        frames.push((
+            p.pts_secs,
+            video_code::read_stream(&p.view(), StreamKind::Screen),
+        ))
+    })
+    .expect("decode instant output");
+    let shown: Vec<(f64, u32)> = frames
+        .iter()
+        .filter_map(|(pts, r)| r.marker().map(|m| (*pts, m.index)))
+        .collect();
+    if shown.len() != frames.len() {
+        case.problem(
+            "unreadable",
+            format!(
+                "{} of {} frames unreadable",
+                frames.len() - shown.len(),
+                frames.len()
+            ),
+        );
+    }
+    let emitted_slots: Vec<u32> = emitted.screen.iter().map(|e| e.0).collect();
+    let shown_slots: Vec<u32> = shown.iter().map(|s| s.1).collect();
+    let missing: Vec<u32> = emitted_slots
+        .iter()
+        .filter(|s| !shown_slots.contains(s))
+        .copied()
+        .collect();
+    let repeated: Vec<u32> = shown_slots
+        .windows(2)
+        .filter(|w| w[1] <= w[0])
+        .map(|w| w[1])
+        .collect();
+    if !missing.is_empty() {
+        case.problem(
+            "dropped",
+            format!(
+                "{} emitted frames missing from the output (first {:?})",
+                missing.len(),
+                &missing[..missing.len().min(8)]
+            ),
+        );
+    }
+    if !repeated.is_empty() {
+        case.problem(
+            "stale",
+            format!(
+                "{} frames repeated or out of order (first {:?})",
+                repeated.len(),
+                &repeated[..repeated.len().min(8)]
+            ),
+        );
+    }
+    let emit_time = |slot: u32| {
+        emitted
+            .screen
+            .iter()
+            .find(|e| e.0 == slot)
+            .map(|e| e.1)
+            .unwrap_or(f64::NAN)
+    };
+    let video_offsets: Vec<f64> = shown.iter().map(|&(pts, s)| pts - emit_time(s)).collect();
+    let spread = |v: &[f64]| {
+        let lo = v.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = v.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        hi - lo
+    };
+    let median = |v: &[f64]| {
+        let mut v = v.to_vec();
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
+    };
+    let frame = 1.0 / f64::from(emitted.fps);
+    let video_spread = spread(&video_offsets);
+    case.note(format!("video timing spread {:.2} ms", video_spread * 1e3));
+    if video_spread > frame / 2.0 {
+        case.problem(
+            "timestamps",
+            format!(
+                "video frame times drift by {:.1} ms against emission (allowed {:.1})",
+                video_spread * 1e3,
+                frame / 2.0 * 1e3
+            ),
+        );
+    }
+    let audio = media::decode_audio(&output, None).expect("decode instant audio");
+    let mono = audio.mono();
+    for source in [AudioSource::Mic, AudioSource::System] {
+        let expected: Vec<(u32, f64)> = emitted
+            .audio
+            .iter()
+            .filter(|e| e.0 == source)
+            .map(|e| (e.1, e.2))
+            .collect();
+        if expected.is_empty() {
+            continue;
+        }
+        let found = audio_code::locate_markers(&mono, audio.sample_rate, source);
+        let mut offsets = Vec::new();
+        let mut absent = Vec::new();
+        for &(index, t) in &expected {
+            match found.iter().find(|f| f.index == Some(index)) {
+                Some(f) => offsets.push(f.time_secs + audio.start_secs - t),
+                None => absent.push(index),
+            }
+        }
+        let extra = found.len().saturating_sub(expected.len() - absent.len());
+        if !absent.is_empty() || extra > 0 {
+            case.problem(
+                "audio",
+                format!(
+                    "{}: {} markers missing (first {:?}), {} unexpected",
+                    source.name(),
+                    absent.len(),
+                    &absent[..absent.len().min(5)],
+                    extra
+                ),
+            );
+        }
+        if offsets.is_empty() {
+            continue;
+        }
+        let av = median(&offsets) - median(&video_offsets);
+        case.note(format!(
+            "{}: {} markers, spread {:.2} ms, A/V offset {:+.2} ms",
+            source.name(),
+            offsets.len(),
+            spread(&offsets) * 1e3,
+            av * 1e3
+        ));
+        eprintln!(
+            "[cap-verify] instant {}: spread {:.2} ms, A/V {:+.2} ms",
+            source.name(),
+            spread(&offsets) * 1e3,
+            av * 1e3
+        );
+        if spread(&offsets) > 0.005 {
+            case.problem(
+                "audio",
+                format!(
+                    "{} marker timing drifts by {:.2} ms",
+                    source.name(),
+                    spread(&offsets) * 1e3
+                ),
+            );
+        }
+        if av.abs() > 0.005 {
+            case.problem(
+                "sync",
+                format!("{} is {:+.1} ms off the screen", source.name(), av * 1e3),
+            );
+        }
+    }
+    report::settle(case).err()
+}
