@@ -409,8 +409,24 @@ link = "https://github.com/CapSoftware/Cap/pull/2595"
 [[xfail]]
 case = "decoder-model/avf/vfr/keyframe-seeks/playback"
 class = "future"
-seeds = "28 51 53 56 59-61 63 86"
+seeds = "51 56 60 61 63 86"
 reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "future"
+seeds = "28 53 59"
+flaky = true
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek Seeds 28, 53 and 59 fail in every run, but their first wrong answer is a future frame in some macos-15 runs (38730081267, 38732325087, 38740252853) and a stale frame in others (38743345280), so each class is flaky for these seeds"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "28 53 59"
+flaky = true
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek Seeds 28, 53 and 59 fail in every run, but their first wrong answer is a future frame in some macos-15 runs (38730081267, 38732325087, 38740252853) and a stale frame in others (38743345280), so each class is flaky for these seeds"
 link = "https://github.com/CapSoftware/Cap/pull/2603"
 
 [[xfail]]

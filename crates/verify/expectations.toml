@@ -198,6 +198,21 @@ reason = "One camera frame (output frame 48) with a torn picture whose marker ch
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
+case = "audio/audio-mix-8s-a2/long-crossfade/mp4-*"
+class = "stale"
+platforms = ["linux", "windows"]
+reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so 12 blend frames take a side up to 49 source frames stale (frame 61: 80 for 129). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux (app and plain MP4) and Windows (app MP4) in run 38743345280"
+link = ""
+
+[[xfail]]
+case = "audio/audio-mix-8s-a2/long-crossfade/mp4-app30"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "AVFoundation source lifetime corruption during the 1.8 s same-clip cross-fade: 4 blend frames show the incoming side up to 7 source frames ahead (frame 81: 156 for 149), 1 of 1 macos-15 runs so far (38743345280). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted; see native/rendering/iosurface-source-lifetime/recycled-pool. Fixed on fixavf/s2 (8cafa9bfb, 905e0933d)"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
 case = "seek/seek-native/keyframes60/avf"
 class = "future"
 platforms = ["macos"]
@@ -288,5 +303,6 @@ link = ""
 case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. Deterministic, 3 of 3 runs on Apple silicon"
+flaky = true
+reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon; passed on the macos-15 runner in run 38743345280, where the loop presents fewer frames, so it is timing dependent there"
 link = ""
