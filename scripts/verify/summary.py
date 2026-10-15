@@ -106,7 +106,8 @@ def render(records, title, junit, flaky, text):
     seconds = sum(float(r.get("seconds") or 0) for r in records)
     head = (
         f"{len(records)} cases: {counts.get('pass', 0)} pass, {counts.get('xfail', 0)} expected failures, "
-        f"{counts.get('fail', 0)} FAILED, {counts.get('xpass', 0)} unexpectedly passing ({seconds:.0f} s of case time)"
+        f"{counts.get('fail', 0)} FAILED, {counts.get('xpass', 0)} unexpectedly passing, "
+        f"{counts.get('unsupported', 0)} unsupported ({seconds:.0f} s of case time)"
     )
     recorded = {r["case"] for r in records}
     crashed = [(name, msg) for name, msg in junit if not any(c in msg for c in recorded)]
@@ -155,6 +156,13 @@ def render(records, title, junit, flaky, text):
             out.append("```text")
             out.extend(crash_excerpt(msg, 25))
             out.append("```")
+    unsupported = [r for r in records if r["outcome"] == "unsupported"]
+    if unsupported:
+        out.append(f"<details><summary>Unsupported on this runner ({len(unsupported)})</summary>")
+        out.append("")
+        out.extend(f"- `{r['case']}`: {r.get('summary', '')}" for r in unsupported)
+        out.append("")
+        out.append("</details>")
     if xfails:
         out.append(f"<details><summary>Expected failures ({len(xfails)})</summary>")
         out.append("")

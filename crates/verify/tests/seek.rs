@@ -9,7 +9,7 @@ use cap_verify::{
     catalog,
     fixture::{FixtureSpec, Rng},
     media,
-    report::{self, Case, Tier},
+    report::{self, Tier},
 };
 use common::{Decoder, Player};
 
@@ -47,7 +47,9 @@ fn run_project(
         edit(&mut config);
         let model = project.model(&config);
         let requests = make(model.output_frames(fps), &project);
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
         case.note(format!("{} requests", requests.len()));
         let result = rt.block_on(async {
             let mut player = Player::open(&project, config, decoder, RES).await?;
@@ -59,6 +61,7 @@ fn run_project(
                         .await?,
                 );
             }
+            player.check_decoders(&mut case, decoder);
             Ok::<_, String>(readouts)
         });
         let frames: Vec<u32> = requests.iter().map(|r| r.0).collect();
@@ -165,6 +168,30 @@ fn keyframe_seeks() {
         60,
         no_edit,
         &keyframes,
+    ));
+    common::assert_passed(failures);
+}
+
+/// The editor's "jump to start" after watching later in the file, then a
+/// click 2 s in and playback: seek 6.1 s, seek 0, seek 2.0 s and play 4 s.
+#[test]
+fn home_then_play() {
+    let mut failures: Vec<String> = Vec::new();
+    let home = |total: u32, _: &common::Project| {
+        let fps = 30.0;
+        let mut out: Vec<Request> = vec![((6.1 * fps) as u32, true), (0, true)];
+        let start = (2.0 * fps) as u32;
+        out.push((start, true));
+        out.extend((1..=120).map(|k| (start + k, false)));
+        out.retain(|&(f, _)| f < total);
+        out
+    };
+    failures.extend(run(
+        catalog::seek_gop(report::tier()),
+        "home-then-play",
+        30,
+        no_edit,
+        &home,
     ));
     common::assert_passed(failures);
 }
@@ -297,12 +324,16 @@ fn cold_open() {
             .iter()
             .map(|p| (f64::from(total - 1) * p) as u32)
             .collect();
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
         let mut readouts = Vec::new();
         for &frame in &frames {
             let result = rt.block_on(async {
                 let mut player = Player::open(&project, config.clone(), decoder, RES).await?;
-                player.frame(frame, 30, true, None).await
+                let readout = player.frame(frame, 30, true, None).await;
+                player.check_decoders(&mut case, decoder);
+                readout
             });
             match result {
                 Ok(readout) => readouts.push(readout),

@@ -23,8 +23,19 @@ pub fn runtime() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
+/// `CAP_VERIFY_LOG=<filter>` (EnvFilter syntax, e.g. `wgpu_hal=warn,cap_rendering=info`)
+/// prints product and wgpu logs to stderr, for triage on remote runners.
 pub fn init() {
     media::init();
+    static LOG: std::sync::Once = std::sync::Once::new();
+    LOG.call_once(|| {
+        if let Ok(filter) = std::env::var("CAP_VERIFY_LOG") {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+                .with_writer(std::io::stderr)
+                .try_init();
+        }
+    });
 }
 
 /// A ready fixture project plus its decoded source truth.
@@ -128,7 +139,8 @@ pub enum Format {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Decoder {
-    /// The platform default (AVAssetReader on macOS, FFmpeg elsewhere).
+    /// The platform default: AVAssetReader on macOS, Media Foundation on
+    /// Windows, FFmpeg on Linux.
     Default,
     /// `--force-ffmpeg-decoder`.
     Ffmpeg,
@@ -138,6 +150,7 @@ impl Decoder {
     pub fn label(self) -> &'static str {
         match self {
             Decoder::Default if cfg!(target_os = "macos") => "avf",
+            Decoder::Default if cfg!(target_os = "windows") => "mf",
             Decoder::Default => "ffmpeg",
             Decoder::Ffmpeg => "ffmpeg",
         }
@@ -145,11 +158,109 @@ impl Decoder {
 
     /// Decoders that are actually distinct on this platform.
     pub fn all() -> Vec<Decoder> {
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
             vec![Decoder::Default, Decoder::Ffmpeg]
         } else {
             vec![Decoder::Default]
         }
+    }
+
+    /// The `DecoderType` display prefix this choice must produce. A silent
+    /// fallback (Media Foundation or AVAssetReader failing over to FFmpeg)
+    /// would otherwise test the wrong decoder under this label.
+    pub fn expected_type(self) -> &'static str {
+        match self {
+            Decoder::Default if cfg!(target_os = "macos") => "AVAssetReader",
+            Decoder::Default if cfg!(target_os = "windows") => "MediaFoundation",
+            _ => "FFmpeg",
+        }
+    }
+}
+
+/// Records which decoder each stream actually used and flags any stream
+/// that is not on the requested decoder.
+pub fn check_decoders(case: &mut Case, decoder: Decoder, segments: &[cap_editor::SegmentMedia]) {
+    let mut used = Vec::new();
+    for (i, segment) in segments.iter().enumerate() {
+        let streams =
+            std::iter::once(("screen", Some(segment.decoders.screen_decoder_status()))).chain(
+                std::iter::once(("camera", segment.decoders.camera_decoder_status())),
+            );
+        for (stream, status) in streams {
+            let Some(status) = status else { continue };
+            let kind = status.decoder_type.to_string();
+            used.push(format!("{stream}{i}={kind}"));
+            if !kind.starts_with(decoder.expected_type()) {
+                case.problem(
+                    "decoder-fallback",
+                    format!(
+                        "segment {i} {stream} decoded by {kind}, expected {} (fallback reason: {})",
+                        decoder.expected_type(),
+                        status.fallback_reason.as_deref().unwrap_or("none")
+                    ),
+                );
+            }
+        }
+    }
+    case.note(format!("decoders: {}", used.join(" ")));
+}
+
+/// Why `decoder` cannot run on this machine at all, probed once per
+/// process. Only Windows has such a case: the Media Foundation decoder
+/// needs a D3D11 device with video support, which GPU-less VMs (hosted CI
+/// runners, where D3D11 falls back to WARP) cannot create, so the product
+/// falls back to FFmpeg there. Any other Media Foundation failure stays a
+/// `decoder-fallback` test failure.
+pub fn decoder_unsupported(project: &Project, decoder: Decoder) -> Option<String> {
+    if decoder != Decoder::Default || !cfg!(target_os = "windows") {
+        return None;
+    }
+    static PROBE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PROBE
+        .get_or_init(|| {
+            let meta = project.meta.studio_meta()?;
+            let segments = runtime()
+                .block_on(cap_editor::create_segments(&project.meta, meta, false))
+                .ok()?;
+            let reason = segments
+                .first()?
+                .decoders
+                .screen_decoder_status()
+                .fallback_reason
+                .clone()?;
+            reason.contains("D3D11CreateDevice").then(|| {
+                format!(
+                    "Media Foundation needs a D3D11 device with video support and this machine has none (WARP has no video decode): {reason}"
+                )
+            })
+        })
+        .clone()
+}
+
+/// Starts a case, or settles it as unsupported and returns `None` when this
+/// machine cannot run `decoder` (see [`decoder_unsupported`]).
+pub fn begin(id: &str, project: &Project, decoder: Decoder) -> Option<Case> {
+    let mut case = Case::new(id);
+    if let Some(reason) = decoder_unsupported(project, decoder) {
+        case.unsupported(reason);
+        if case.unsupported.is_some() {
+            let _ = report::settle(case);
+            return None;
+        }
+    }
+    Some(case)
+}
+
+/// Opens the project's decoders the way the exporter does and checks them.
+/// The exporter's own decoders are private, so this probes the same
+/// `create_segments` decision on the same files.
+pub async fn probe_decoders(case: &mut Case, project: &Project, decoder: Decoder) {
+    let Some(meta) = project.meta.studio_meta() else {
+        return;
+    };
+    match cap_editor::create_segments(&project.meta, meta, decoder == Decoder::Ffmpeg).await {
+        Ok(segments) => check_decoders(case, decoder, &segments),
+        Err(e) => case.problem("error", format!("decoder probe failed: {e}")),
     }
 }
 
@@ -269,10 +380,32 @@ pub fn read_expecting(
     img: &impl video_code::PixelSource,
     expectation: &cap_verify::model::FrameExpectation,
 ) -> FrameReadout {
-    FrameReadout {
+    let readout = FrameReadout {
         screen: oracle::read_expecting(img, StreamKind::Screen, &expectation.screen),
         camera: oracle::read_expecting(img, StreamKind::Camera, &expectation.camera),
+    };
+    if std::env::var("CAP_VERIFY_TRACE_BLEND").as_deref() == Ok("1") {
+        for (kind, expected, observed) in [
+            (StreamKind::Screen, &expectation.screen, &readout.screen),
+            (StreamKind::Camera, &expectation.camera, &readout.camera),
+        ] {
+            if matches!(expected, StreamExpectation::Blend { .. })
+                && let Ok(cells) = video_code::read_cells(img, kind)
+            {
+                eprintln!(
+                    "[cap-verify-blend] {}",
+                    serde_json::json!({
+                        "stream": kind,
+                        "expected": expected,
+                        "observed": observed,
+                        "contrast": cells.contrast,
+                        "levels": cells.levels,
+                    })
+                );
+            }
+        }
     }
+    readout
 }
 
 /// Checks a sequential output (export or sequential playback) frame by frame
@@ -415,6 +548,21 @@ impl Player {
             duration,
             resolution: XY::new(resolution.0, resolution.1),
         })
+    }
+
+    /// Flags streams that are not on `decoder` (checked after the run, so a
+    /// mid-run fallback is caught too).
+    pub fn check_decoders(&self, case: &mut Case, decoder: Decoder) {
+        check_decoders(case, decoder, &self.segments);
+        case.note(format!(
+            "render adapter: {}{}",
+            self.constants.adapter_name(),
+            if self.constants.is_software_adapter {
+                " (software)"
+            } else {
+                ""
+            }
+        ));
     }
 
     pub fn prefer_sequential(&self) {

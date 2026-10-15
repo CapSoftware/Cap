@@ -9,7 +9,7 @@ use cap_project::ProjectConfiguration;
 use cap_verify::{
     catalog,
     fixture::{FixtureSpec, Rng},
-    report::{self, Case, Tier},
+    report::{self, Tier},
 };
 use common::Decoder;
 
@@ -70,7 +70,9 @@ fn sequential_project(
         let model = project.model(&config);
         let total = model.output_frames(fps);
         let first = (f64::from(total) * start_fraction) as u32;
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
         let frames: Vec<u32> = (first..total).collect();
         let result = rt.block_on(async {
             let mut player = common::Player::open(&project, config, decoder, RES).await?;
@@ -82,6 +84,7 @@ fn sequential_project(
                         .await?,
                 );
             }
+            player.check_decoders(&mut case, decoder);
             Ok::<_, String>(readouts)
         });
         match result {

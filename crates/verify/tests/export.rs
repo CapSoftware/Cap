@@ -68,7 +68,9 @@ fn run_project(
                 let mut config = project.config();
                 (variant.apply)(&mut config);
                 let model = project.model(&config);
-                let mut case = Case::new(&id);
+                let Some(mut case) = common::begin(&id, &project, decoder) else {
+                    continue;
+                };
                 let dir = common::scratch_dir(&id);
                 let ext = match format {
                     Format::Gif => "gif",
@@ -81,6 +83,7 @@ fn run_project(
                     format,
                     decoder,
                 };
+                rt.block_on(common::probe_decoders(&mut case, &project, decoder));
                 let first = dir.path().join(format!("a.{ext}"));
                 match rt.block_on(common::export(&project, config.clone(), &run, &first)) {
                     Err(e) => case.problem("error", format!("export failed: {e}")),
@@ -330,6 +333,18 @@ fn across_segments(config: &mut ProjectConfiguration) {
         config,
         &[(0, 0.5, 3.0, 1.0), (1, 0.5, 2.5, 1.0), (0, 3.5, 5.5, 1.5)],
     );
+}
+
+#[test]
+#[ignore]
+fn prepare_recorded_fixtures() {
+    common::recorded(&catalog::recorded_studio(report::tier()));
+    for spec in catalog::instant_variants(report::tier()) {
+        cap_verify::fixture::ensure_fixture_keyed(spec.cache_key(), |dir| {
+            common::runtime().block_on(cap_verify::pipeline::record_instant(&spec, dir))
+        })
+        .expect("instant fixture");
+    }
 }
 
 /// A Studio project recorded through the real recording pipeline.

@@ -126,4 +126,4 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/verify-fixtures
-        key: verify-fixtures-v1-${{ runner.os }}-${{ inputs.tier }}-${{ hashFiles('crates/verify/src/**', 'crates/verify/Cargo.toml', 'scripts/setup.js') }}
+        key: verify-fixtures-v1-${{ runner.os }}-${{ inputs.tier }}-${{ hashFiles('crates/**/src/**', 'crates/**/Cargo.toml', 'Cargo.lock', 'scripts/setup.js') }}

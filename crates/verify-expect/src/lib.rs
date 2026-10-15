@@ -604,6 +604,7 @@ pub enum Outcome {
     Xfail,
     Fail,
     Xpass,
+    Unsupported,
 }
 
 /// One case's result, written as a JSON line to `CAP_VERIFY_REPORT_DIR`.
@@ -649,28 +650,32 @@ pub fn write_records(records: &[(Record, serde_json::Value)]) {
     let Some(dir) = report_dir() else {
         return;
     };
-    let _ = std::fs::create_dir_all(&dir);
+    write_records_to(&dir, records);
+}
+
+fn write_records_to(dir: &Path, records: &[(Record, serde_json::Value)]) {
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITER.lock().expect("report writer lock");
+    std::fs::create_dir_all(dir).expect("create report directory");
     let Some((first, _)) = records.first() else {
         return;
     };
     let file = dir.join(format!("{}-{}.jsonl", first.suite, std::process::id()));
-    let Ok(mut f) = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(file)
-    else {
-        return;
-    };
+        .expect("open report file");
     for (record, extra) in records {
-        let Ok(mut value) = serde_json::to_value(record) else {
-            continue;
-        };
+        let mut value = serde_json::to_value(record).expect("serialize report record");
         if let (Some(map), Some(extra)) = (value.as_object_mut(), extra.as_object()) {
             for (k, v) in extra {
                 map.entry(k.clone()).or_insert_with(|| v.clone());
             }
         }
-        let _ = writeln!(f, "{value}");
+        let line = format!("{value}\n");
+        file.write_all(line.as_bytes())
+            .expect("write report record");
     }
 }
 
@@ -692,6 +697,55 @@ mod tests {
             reason: "r".into(),
             link: String::new(),
         }
+    }
+
+    #[test]
+    fn concurrent_reports_remain_complete_json_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "cap-verify-reports-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::thread::scope(|scope| {
+            for writer in 0..8 {
+                let dir = &dir;
+                scope.spawn(move || {
+                    for index in 0..50 {
+                        let record = Record {
+                            suite: "concurrent".into(),
+                            expectations: "expectations.toml".into(),
+                            case: format!("{writer}/{index}"),
+                            platform: "windows".into(),
+                            tier: "fast".into(),
+                            outcome: Outcome::Unsupported,
+                            failures: BTreeMap::new(),
+                            seeds_ran: None,
+                            problems: BTreeMap::new(),
+                            summary: "test record".repeat(100),
+                            repro: String::new(),
+                            seconds: 0.0,
+                        };
+                        write_records_to(dir, &[(record, serde_json::json!({"writer": writer}))]);
+                    }
+                });
+            }
+        });
+        let file = dir.join(format!("concurrent-{}.jsonl", std::process::id()));
+        let text = std::fs::read_to_string(file).unwrap();
+        let cases: BTreeSet<String> = text
+            .lines()
+            .map(|line| {
+                let record: Record = serde_json::from_str(line).unwrap();
+                assert_eq!(record.outcome, Outcome::Unsupported);
+                record.case
+            })
+            .collect();
+        assert_eq!(text.lines().count(), 400);
+        assert_eq!(cases.len(), 400);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

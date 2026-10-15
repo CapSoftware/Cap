@@ -116,6 +116,7 @@ jobs:
         shard: ${{ fromJSON(inputs.shard-list) }}
     env:
       CAP_VERIFY_SHARD: ${{ inputs.shards > 1 && format('{0}/{1}', matrix.shard, inputs.shards) || '' }}
+      CAP_VERIFY_TRACE_BLEND: ${{ inputs.platform == 'macos' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,6 +166,20 @@ jobs:
         with:
           name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}
+
+      - name: Prepare recorded fixtures without concurrent rendering
+        if: contains(format(',{0},', inputs.suites), ',export,')
+        shell: bash
+        env:
+          CAP_VERIFY_TIER: ${{ inputs.tier }}
+        run: |
+          if [[ "${{ inputs.archive }}" == true ]]; then
+            cargo-nextest nextest run --profile ci --archive-file "$RUNNER_TEMP/verify.tar.zst" --workspace-remap "$GITHUB_WORKSPACE" \
+              --run-ignored ignored-only -E 'binary_id(cap-verify::export) and test(=prepare_recorded_fixtures)'
+          else
+            cargo nextest run --profile ci --cargo-profile ci-verify --locked -p cap-verify --test export \
+              --run-ignored ignored-only -E 'test(=prepare_recorded_fixtures)'
+          fi
 
       - name: Test
         id: test

@@ -405,9 +405,30 @@ async fn record_segment(
     })
 }
 
-/// Records a Studio project (one recording segment per spec segment, like
-/// pause/resume) into `dir`.
+/// The emitters sleep until each frame's time. Windows wakes timers on its
+/// default 15.6 ms tick, which by itself makes frames up to a tick late
+/// (more under load); the product raises the timer resolution the same way
+/// for playback and export.
+fn high_resolution_timer() {
+    #[cfg(windows)]
+    {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn timeBeginPeriod(period: u32) -> u32;
+        }
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            assert_eq!(
+                unsafe { timeBeginPeriod(1) },
+                0,
+                "set Windows timer resolution"
+            );
+        });
+    }
+}
+
 pub async fn record_studio(spec: &RecordedSpec, dir: &Path) -> anyhow::Result<()> {
+    high_resolution_timer();
     crate::media::init();
     if dir.exists() {
         std::fs::remove_dir_all(dir)?;
@@ -458,6 +479,7 @@ pub struct Emitted {
 }
 
 pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()> {
+    high_resolution_timer();
     use cap_recording::{DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig};
     crate::media::init();
     if dir.exists() {

@@ -67,6 +67,9 @@ pub struct Case {
     /// First problem per class (the draft reason when blessing).
     class_problems: BTreeMap<String, String>,
     pub notes: Vec<String>,
+    /// Set when this runner cannot run the case at all (for example no
+    /// D3D11 video device for Media Foundation on a GPU-less Windows VM).
+    pub unsupported: Option<String>,
 }
 
 impl Case {
@@ -81,6 +84,22 @@ impl Case {
             classes: Default::default(),
             class_problems: Default::default(),
             notes: Vec::new(),
+            unsupported: None,
+        }
+    }
+
+    /// Marks the case as impossible on this machine. With
+    /// `CAP_VERIFY_REQUIRE_SUPPORTED=1` (runners that must have every path)
+    /// it is a failure of class `unsupported` instead.
+    pub fn unsupported(&mut self, reason: impl Into<String>) {
+        let reason = reason.into();
+        if std::env::var("CAP_VERIFY_REQUIRE_SUPPORTED").as_deref() == Ok("1") {
+            self.problem(
+                "unsupported",
+                format!("unsupported on this machine: {reason}"),
+            );
+        } else {
+            self.unsupported = Some(reason);
         }
     }
 
@@ -178,6 +197,7 @@ fn write_result(result: &CaseResult, classes: &BTreeMap<String, String>) {
         },
         outcome: match result.outcome.as_str() {
             "pass" => Outcome::Pass,
+            "unsupported" => Outcome::Unsupported,
             "xfail" => Outcome::Xfail,
             "XPASS" => Outcome::Xpass,
             _ => Outcome::Fail,
@@ -215,7 +235,9 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
     let verdict = cap_verify_expect::judge(&xfails, platform, &ran, &observed);
     let unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
     let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
-    let outcome = if !unexpected.is_empty() {
+    let outcome = if case.unsupported.is_some() && !failed {
+        "unsupported"
+    } else if !unexpected.is_empty() {
         "FAIL"
     } else if !fixed.is_empty() {
         "XPASS"
@@ -224,7 +246,9 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
     } else {
         "pass"
     };
-    let mut summary = if failed {
+    let mut summary = if let Some(reason) = case.unsupported.as_ref().filter(|_| !failed) {
+        format!("not run: {reason}")
+    } else if failed {
         case.problems.join("\n  ")
     } else {
         let streams: Vec<String> = case
@@ -247,7 +271,7 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
         id: case.id.clone(),
         platform: platform.to_string(),
         tier: tier(),
-        passed: matches!(outcome, "pass" | "xfail"),
+        passed: matches!(outcome, "pass" | "xfail" | "unsupported"),
         summary: summary.clone(),
         streams: case.streams,
         notes: case.notes,

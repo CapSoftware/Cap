@@ -11,7 +11,7 @@ use std::{
     process::ExitCode,
 };
 
-use cap_verify_expect::{Observed, Ran, Record, bless, header, load, parse, render};
+use cap_verify_expect::{Observed, Outcome, Ran, Record, bless, header, load, parse, render};
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_dir() {
@@ -61,6 +61,9 @@ fn bless_command(inputs: &[String]) -> ExitCode {
                     continue;
                 }
             };
+            if record.outcome == Outcome::Unsupported {
+                continue;
+            }
             let run = runs
                 .entry(record.expectations.clone())
                 .or_default()
