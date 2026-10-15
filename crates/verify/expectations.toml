@@ -7,7 +7,8 @@
 #   class = "<stale | future | wrong-segment | unreadable | missing | unexpected
 #             | frame-count | timestamps | nondeterministic | error
 #             | mapping | coverage | duration | caption-track | caption-frame
-#             | caption-words | caption-migration | caption-roundtrip>"
+#             | caption-words | caption-segments | caption-migration
+#             | caption-roundtrip>"
 #   reason = "<what is wrong>"
 #   link = "<PR or issue that fixes it; empty when no fix exists yet>"
 #   platforms = ["macos"]   (optional; absent = every platform)
@@ -186,4 +187,10 @@ link = ""
 case = "editing/export/hold-past-end"
 class = "frame-count"
 reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fullscreen text at 5.4 s and the clip trimmed to 3.2 s give a 4.2 s timeline, but the export stops at the first unmapped frame: 96 frames instead of 126, and the text card is never rendered"
+link = ""
+
+[[xfail]]
+case = "captions/app/segmentation/unicode"
+class = "caption-segments"
+reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
 link = ""
