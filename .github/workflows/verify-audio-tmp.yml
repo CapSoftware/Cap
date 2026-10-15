@@ -1,0 +1,151 @@
+name: cap-verify audio (temporary triage)
+
+# Temporary workflow for the AUDIO track: runs the cap-verify audio oracle
+# on Windows, Linux and macOS runners and uploads the per-case JSON reports.
+# Not for merging; the CI-INFRA track owns engine-verify.yml.
+
+on:
+  push:
+    branches:
+      - ci/verify-audio
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "Times to run the audio test binary"
+        default: "2"
+      tier:
+        description: "CAP_VERIFY_TIER (fast or full)"
+        default: "fast"
+
+concurrency:
+  group: verify-audio-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  audio:
+    name: audio (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            triple: x86_64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            triple: x86_64-unknown-linux-gnu
+          - runner: macos-15
+            triple: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      REPEATS: ${{ github.event.inputs.repeats || '2' }}
+      CAP_VERIFY_TIER: ${{ github.event.inputs.tier || 'fast' }}
+      CAP_VERIFY_FIXTURE_DIR: ${{ github.workspace }}/verify-fixtures
+      OUT: ${{ github.workspace }}/verify-out
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Rust cache (restore only)
+        uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.triple }}
+          prefix-key: v1-rust-sync
+          save-cache: "false"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.triple }}
+        run: node scripts/setup.js
+
+      - name: FFmpeg DLLs on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Native libs on LD_LIBRARY_PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug" >> "$GITHUB_ENV"
+
+      - name: Software Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: Build tests
+        shell: bash
+        run: |
+          mkdir -p "$OUT"
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test audio --no-run 2>&1 | tail -40
+          echo "build_seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+
+      - name: Run audio oracle (${{ env.REPEATS }}x)
+        shell: bash
+        run: |
+          set +e
+          status=0
+          for run in $(seq 1 "$REPEATS"); do
+            export CAP_VERIFY_REPORT_DIR="$OUT/run$run"
+            mkdir -p "$CAP_VERIFY_REPORT_DIR"
+            start=$(date +%s)
+            cargo test --locked -p cap-verify --test audio -- --nocapture > "$OUT/run$run.log" 2>&1
+            code=$?
+            echo "run$run exit=$code seconds=$(( $(date +%s) - start ))" | tee -a "$OUT/timings.txt"
+            grep -E "^\[cap-verify\] (pass|xfail|FAIL|XPASS)|^  |^test .* \.\.\. |panicked|error" "$OUT/run$run.log" | head -200
+            [ $code -ne 0 ] && status=1
+          done
+          exit $status
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          python - "$OUT" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import glob, json, os, sys, collections
+          out = sys.argv[1]
+          cases = collections.OrderedDict()
+          for path in sorted(glob.glob(os.path.join(out, "run*", "*.jsonl"))):
+              run = path.split(os.sep)[-2]
+              for line in open(path, encoding="utf-8"):
+                  r = json.loads(line)
+                  cases.setdefault(r["id"], []).append((run, r["outcome"], r["seconds"], r["summary"].splitlines()[0][:200]))
+          print(f"## cap-verify audio on {os.environ.get('RUNNER_OS')}")
+          print()
+          print("| case | outcomes | seconds | first line |")
+          print("|---|---|---|---|")
+          for cid, rs in cases.items():
+              outs = " ".join(o for _, o, _, _ in rs)
+              secs = " ".join(f"{s:.1f}" for _, _, s, _ in rs)
+              print(f"| {cid} | {outs} | {secs} | {rs[0][3].replace('|', '/')} |")
+          print()
+          for line in open(os.path.join(out, "timings.txt"), encoding="utf-8"):
+              print(f"- {line.strip()}")
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-audio-${{ matrix.runner }}
+          path: ${{ github.workspace }}/verify-out
+          if-no-files-found: warn
