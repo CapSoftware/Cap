@@ -75,7 +75,7 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path};
+pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
@@ -560,6 +560,13 @@ impl RecordingSegmentDecoders {
         self.camera
             .as_ref()
             .map(AsyncVideoDecoderHandle::decoder_status)
+    }
+
+    pub fn prefer_sequential_access(&self) {
+        self.screen.prefer_sequential_access();
+        if let Some(camera) = &self.camera {
+            camera.prefer_sequential_access();
+        }
     }
 
     pub fn screen_video_dimensions(&self) -> (u32, u32) {

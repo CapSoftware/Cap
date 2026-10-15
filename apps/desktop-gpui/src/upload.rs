@@ -50,6 +50,7 @@ pub struct InstantUpload {
     completion_control: Option<CompletionControl>,
     bridge: Option<std::thread::JoinHandle<()>>,
     ownership: Option<cap_recording::upload_resume::UploadLock>,
+    prior_attempts: u32,
     request_context: Option<auth::UploadRequestContext>,
     reads: Arc<UploadReads>,
 }
@@ -277,10 +278,12 @@ pub(crate) fn start_instant_upload(
         metadata_lock,
         authorization,
         ownership,
+        state.attempt_count(),
         Some(request_context),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_instant_upload_with_ownership(
     video: VideoUploadInfo,
     project_path: PathBuf,
@@ -288,6 +291,7 @@ fn start_instant_upload_with_ownership(
     metadata_lock: Arc<Mutex<()>>,
     authorization: Option<CompletionAuthorization>,
     ownership: cap_recording::upload_resume::UploadLock,
+    prior_attempts: u32,
     request_context: Option<auth::UploadRequestContext>,
 ) -> Result<InstantUpload, String> {
     let (completion_permit, required, completion_control) = match authorization {
@@ -360,6 +364,7 @@ fn start_instant_upload_with_ownership(
         completion_control,
         bridge,
         ownership: Some(ownership),
+        prior_attempts,
         request_context,
         reads,
     })
@@ -2532,6 +2537,7 @@ mod tests {
                     completion_control: None,
                     bridge: None,
                     ownership: None,
+                    prior_attempts: 0,
                     request_context: None,
                     reads: Arc::new(UploadReads::default()),
                 };
@@ -2576,6 +2582,7 @@ mod tests {
             completion_control: control,
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
@@ -3119,6 +3126,7 @@ mod tests {
             completion_control: Some(control.clone()),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };
@@ -3314,6 +3322,7 @@ mod tests {
             completion_control: Some(authorization.control),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };
@@ -3841,6 +3850,7 @@ mod exported_upload_cancellation_tests {
             completion_control: Some(authorization.control),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };
