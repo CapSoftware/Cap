@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 45
     env:
       CAP_VERIFY_CAPTURE: display
+      CAP_DIAG_SCK: "1"
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}

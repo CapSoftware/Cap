@@ -1,5 +1,5 @@
 use cidre::{
-    arc, cm, cv, define_obj_type, dispatch, ns, objc,
+    arc, cf, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
 
@@ -61,6 +61,25 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
                 let sample_buf = sample_buf.retained();
                 let frame = match kind {
                     sc::OutputType::Screen => {
+                        if std::env::var_os("CAP_DIAG_SCK").is_some() {
+                            let host = cm::Clock::convert_host_time_to_sys_units(sample_buf.pts());
+                            let key: &cf::String = sc::FrameInfo::status().as_cf();
+                            let status = sample_buf
+                                .attaches(false)
+                                .filter(|a| !a.is_empty())
+                                .and_then(|a| {
+                                    a[0].get(key).map(|v| {
+                                        unsafe { std::mem::transmute::<&cf::Plist, &cf::Number>(v) }
+                                            .to_i64()
+                                            .unwrap_or(-2)
+                                    })
+                                })
+                                .unwrap_or(-1);
+                            eprintln!(
+                                "SCKDIAG host={host} status={status} image={}",
+                                sample_buf.image_buf().is_some()
+                            );
+                        }
                         if sample_buf.image_buf().is_none() {
                             return;
                         }

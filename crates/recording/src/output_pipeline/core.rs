@@ -3125,6 +3125,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
+                    if std::env::var_os("CAP_DIAG_SCK").is_some() {
+                        eprintln!(
+                            "MUXDIAG n={frame_count} dur={:.6} raw={:.6} wall={:.6}",
+                            duration.as_secs_f64(),
+                            raw_duration.as_secs_f64(),
+                            wall_clock_elapsed.as_secs_f64()
+                        );
+                    }
                     let duplicate = frame.duplicate();
                     if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
                         return Err(video_mux_send_error(frame_count, e));
