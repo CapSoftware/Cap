@@ -1178,6 +1178,90 @@ impl CaptureInstantTimeline {
     }
 }
 
+// Follows a capture clock that runs at a different rate from the host clock
+// (a device clock behind a host-time label) without letting processing delays
+// in. The minimum hand-off lag (wall minus capture) over each window of frames
+// the mux loop waited for ignores stalls, since some frames are always handed
+// over promptly, but moves with real clock drift. The first window after the
+// anchor is the reference; once two consecutive windows sit more than
+// CLOCK_DRIFT_ENGAGE beyond it in the same direction, every window sets the
+// target, and the applied correction slews toward it by at most
+// 1/CLOCK_DRIFT_SLEW_DIVISOR of each frame's capture interval. Host-clock
+// sources never engage, so their stamps are unchanged.
+#[cfg(not(target_os = "linux"))]
+#[derive(Default)]
+struct CaptureClockDrift {
+    reference_lag_ns: Option<i128>,
+    window_start: Option<Duration>,
+    window_min_lag_ns: Option<i128>,
+    pending_ns: Option<i128>,
+    engaged: bool,
+    target_ns: i128,
+    correction_ns: i128,
+    last_capture: Option<Duration>,
+}
+
+#[cfg(not(target_os = "linux"))]
+const CLOCK_DRIFT_WINDOW: Duration = Duration::from_secs(1);
+#[cfg(not(target_os = "linux"))]
+const CLOCK_DRIFT_ENGAGE_NS: i128 = 25_000_000;
+#[cfg(not(target_os = "linux"))]
+const CLOCK_DRIFT_SLEW_DIVISOR: i128 = 20;
+
+#[cfg(not(target_os = "linux"))]
+impl CaptureClockDrift {
+    fn observe(&mut self, lag_ns: i128, wall: Duration, waited: bool) {
+        if waited {
+            self.window_min_lag_ns =
+                Some(self.window_min_lag_ns.map_or(lag_ns, |min| min.min(lag_ns)));
+        }
+        let start = *self.window_start.get_or_insert(wall);
+        if wall.saturating_sub(start) < CLOCK_DRIFT_WINDOW {
+            return;
+        }
+        self.window_start = Some(wall);
+        let Some(window_min) = self.window_min_lag_ns.take() else {
+            return;
+        };
+        let Some(reference) = self.reference_lag_ns else {
+            self.reference_lag_ns = Some(window_min);
+            return;
+        };
+        let residual = window_min - reference - self.target_ns;
+        if self.engaged {
+            self.target_ns += residual;
+            return;
+        }
+        if residual.abs() <= CLOCK_DRIFT_ENGAGE_NS {
+            self.pending_ns = None;
+            return;
+        }
+        match self.pending_ns {
+            Some(previous) if previous.signum() == residual.signum() => {
+                self.engaged = true;
+                self.target_ns += residual;
+                self.pending_ns = None;
+            }
+            _ => self.pending_ns = Some(residual),
+        }
+    }
+
+    fn correction_ns(&mut self, capture: Duration) -> i128 {
+        let advanced = self
+            .last_capture
+            .map_or(0, |last| capture.saturating_sub(last).as_nanos() as i128);
+        self.last_capture = Some(capture);
+        let max_step = advanced / CLOCK_DRIFT_SLEW_DIVISOR;
+        self.correction_ns += (self.target_ns - self.correction_ns).clamp(-max_step, max_step);
+        self.correction_ns
+    }
+
+    fn expected_lag_ns(&self) -> Option<i128> {
+        self.reference_lag_ns
+            .map(|reference| reference + self.target_ns)
+    }
+}
+
 struct VideoDriftTracker {
     #[cfg(target_os = "linux")]
     capture_timeline: CaptureInstantTimeline,
@@ -1185,6 +1269,8 @@ struct VideoDriftTracker {
     capture_clock: Option<CaptureInstantTimeline>,
     #[cfg(not(target_os = "linux"))]
     min_capture_lag_secs: Option<f64>,
+    #[cfg(not(target_os = "linux"))]
+    clock_drift: CaptureClockDrift,
     #[cfg(not(target_os = "linux"))]
     waited_for_frame: bool,
     anchor: Option<(f64, f64)>,
@@ -1202,6 +1288,8 @@ impl VideoDriftTracker {
             capture_clock: None,
             #[cfg(not(target_os = "linux"))]
             min_capture_lag_secs: None,
+            #[cfg(not(target_os = "linux"))]
+            clock_drift: CaptureClockDrift::default(),
             #[cfg(not(target_os = "linux"))]
             waited_for_frame: true,
             anchor: None,
@@ -1317,9 +1405,8 @@ impl VideoDriftTracker {
         // How long after its capture time the frame reached the mux loop. Its
         // minimum since the last source clock discontinuity is the clocks'
         // base offset plus the quickest hand-off.
-        let lag_secs = (wall_clock_elapsed.as_nanos() as i128 - capture_elapsed.as_nanos() as i128)
-            as f64
-            / 1e9;
+        let lag_ns = wall_clock_elapsed.as_nanos() as i128 - capture_elapsed.as_nanos() as i128;
+        let lag_secs = lag_ns as f64 / 1e9;
         let min_lag_secs = match self.min_capture_lag_secs {
             Some(min) if !discontinuity => min,
             _ => lag_secs,
@@ -1343,6 +1430,8 @@ impl VideoDriftTracker {
 
         if discontinuity {
             self.min_capture_lag_secs = Some(lag_secs);
+            self.clock_drift = CaptureClockDrift::default();
+            self.clock_drift.correction_ns(capture_elapsed);
             let (output, capped) = timeline.calculate(capture_elapsed, wall_clock_elapsed, true);
             self.capped_frame_count += u64::from(capped);
             return output;
@@ -1359,15 +1448,23 @@ impl VideoDriftTracker {
         //   less (scheduling or capture-service stalls, whose timestamps were
         //   exact in every measured case) and frames queued behind a mux stall
         //   keep their capture time.
+        let corrected_capture = Duration::from_nanos(
+            (capture_elapsed.as_nanos() as i128 + self.clock_drift.correction_ns(capture_elapsed))
+                .clamp(0, i128::from(u64::MAX)) as u64,
+        );
+        let expected_lag_secs = self
+            .clock_drift
+            .expected_lag_ns()
+            .map_or(min_lag_secs, |lag| lag as f64 / 1e9);
         let bound = wall_clock_elapsed
             .saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
-        let ahead = timeline.candidate(capture_elapsed) > bound;
-        let stale = self.waited_for_frame && lag_secs - min_lag_secs > STALE_CAPTURE_SECS;
+        let ahead = timeline.candidate(corrected_capture) > bound;
+        let stale = self.waited_for_frame && lag_secs - expected_lag_secs > STALE_CAPTURE_SECS;
         if ahead || stale {
             if !self.clamp_warning_logged {
                 warn!(
                     ahead,
-                    lag_ms = (lag_secs - min_lag_secs) * 1000.0,
+                    lag_ms = (lag_secs - expected_lag_secs) * 1000.0,
                     "Video capture time not trusted for this frame, stamping it from the wall clock"
                 );
                 self.clamp_warning_logged = true;
@@ -1379,7 +1476,9 @@ impl VideoDriftTracker {
         }
 
         self.min_capture_lag_secs = Some(min_lag_secs.min(lag_secs));
-        let (output, capped) = timeline.calculate(capture_elapsed, wall_clock_elapsed, false);
+        self.clock_drift
+            .observe(lag_ns, wall_clock_elapsed, self.waited_for_frame);
+        let (output, capped) = timeline.calculate(corrected_capture, wall_clock_elapsed, false);
         self.capped_frame_count += u64::from(capped);
         output
     }
@@ -5227,6 +5326,78 @@ mod tests {
                     assert!(out.abs_diff(f.capture) <= EXACT, "frame {i}");
                 }
             }
+        }
+
+        // An hour at 30 fps from a source whose clock runs `rate` faster than
+        // the host clock (negative: slower), handed over 10-15 ms after
+        // capture, with a 1.5 s mux stall every 5 minutes and a frame handed
+        // over 300 ms late every 97 s. Returns the frames and the host time
+        // each was captured at.
+        fn hour_of_frames(rate: f64) -> (Vec<Frame>, Vec<Duration>) {
+            let mut rng = 0x0d71_f700_u64;
+            let mut free_at = Duration::ZERO;
+            let mut host = Vec::new();
+            let frames = (0..108_000u64)
+                .map(|i| {
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let t = capture(i);
+                    let late = if i % 2910 == 1455 {
+                        Duration::from_millis(300)
+                    } else {
+                        Duration::from_micros(10_000 + (rng >> 33) % 5_000)
+                    };
+                    let handed_over = t + late;
+                    let waited = handed_over >= free_at;
+                    let wall = handed_over.max(free_at);
+                    free_at = wall
+                        + if i % 9000 == 4500 {
+                            Duration::from_millis(1500)
+                        } else {
+                            Duration::ZERO
+                        };
+                    host.push(t);
+                    Frame {
+                        waited,
+                        ..frame(secs(t.as_secs_f64() * (1.0 + rate)), wall)
+                    }
+                })
+                .collect();
+            (frames, host)
+        }
+
+        fn worst_error_ms(output: &[Duration], host: &[Duration]) -> f64 {
+            let offset = |i: usize| output[i].as_secs_f64() - host[i].as_secs_f64();
+            let reference = offset(90);
+            (90..output.len())
+                .map(|i| ((offset(i) - reference) * 1000.0).abs())
+                .fold(0.0, f64::max)
+        }
+
+        #[test]
+        fn drifting_device_clock_stays_on_the_host_timeline() {
+            for (rate, limit_ms) in [(-0.01, 50.0), (-0.001, 30.0), (0.001, 30.0), (0.01, 50.0)] {
+                let (frames, host) = hour_of_frames(rate);
+                let (output, tracker) = run(&frames);
+                let worst = worst_error_ms(&output, &host);
+                println!("clock rate {rate:+}: worst error {worst:.1} ms");
+                assert!(
+                    worst <= limit_ms,
+                    "rate {rate}: {worst:.1} ms off the host timeline"
+                );
+                assert!(output.windows(2).all(|pair| pair[1] >= pair[0]));
+                assert!(tracker.clock_drift.engaged);
+            }
+        }
+
+        #[test]
+        fn host_clock_hour_with_stalls_keeps_exact_capture_times() {
+            let (frames, _) = hour_of_frames(0.0);
+            let (output, tracker) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+            assert!(!tracker.clock_drift.engaged);
+            assert_eq!(tracker.clock_drift.correction_ns, 0);
         }
 
         #[test]
