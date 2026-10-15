@@ -763,7 +763,6 @@ pub(crate) struct AudioTimestampGenerator {
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
 #[cfg(not(target_os = "linux"))]
 const STALE_CAPTURE_SECS: f64 = 1.0;
-const WAITED_FOR_FRAME: Duration = Duration::from_millis(1);
 
 impl AudioTimestampGenerator {
     #[cfg(test)]
@@ -1186,6 +1185,7 @@ struct VideoDriftTracker {
     capture_clock: Option<CaptureInstantTimeline>,
     #[cfg(not(target_os = "linux"))]
     min_capture_lag_secs: Option<f64>,
+    #[cfg(not(target_os = "linux"))]
     waited_for_frame: bool,
     anchor: Option<(f64, f64)>,
     anchor_deferred: bool,
@@ -1202,6 +1202,7 @@ impl VideoDriftTracker {
             capture_clock: None,
             #[cfg(not(target_os = "linux"))]
             min_capture_lag_secs: None,
+            #[cfg(not(target_os = "linux"))]
             waited_for_frame: true,
             anchor: None,
             anchor_deferred: false,
@@ -1222,7 +1223,12 @@ impl VideoDriftTracker {
     // behind the loop (a mux-side delay, where the capture time is the right
     // stamp whatever the delay).
     fn waited_for_frame(&mut self, waited: bool) {
-        self.waited_for_frame = waited;
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.waited_for_frame = waited;
+        }
+        #[cfg(target_os = "linux")]
+        let _ = waited;
     }
 
     // Post-warmup video PTS are pinned to the wall clock, but anchored at the
@@ -1437,6 +1443,16 @@ fn stamped_on_host_clock(timestamp: &Timestamp) -> bool {
 
 fn capture_elapsed(raw_ns: i64, total_pause: Duration) -> Duration {
     Duration::from_nanos(raw_ns.max(0) as u64).saturating_sub(total_pause)
+}
+
+// The next item, and whether the mux loop had to wait for it (nothing was
+// queued) rather than taking a frame that was already behind it.
+async fn next_frame<S: futures::Stream + Unpin>(rx: &mut S) -> (Option<S::Item>, bool) {
+    use futures::{FutureExt, StreamExt};
+    match rx.next().now_or_never() {
+        Some(item) => (item, false),
+        None => (rx.next().await, true),
+    }
 }
 
 const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 300;
@@ -3147,7 +3163,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let res = stop_token
             .run_until_cancelled(async {
                 loop {
-                    let wait_started = std::time::Instant::now();
+                    let mut waited_for_frame = true;
                     let (frame, released_at_arm) = if let Some(gate) = &start_gate
                         && held_frame.is_some()
                     {
@@ -3167,7 +3183,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             }
                         }
                     } else {
-                        match video_rx.next().await {
+                        let (next, waited) = next_frame(&mut video_rx).await;
+                        waited_for_frame = waited;
+                        match next {
                             Some(frame) => (frame, false),
                             None => break,
                         }
@@ -3272,7 +3290,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
                     drift_tracker.defer_anchor(source_clock.lag_pending());
-                    drift_tracker.waited_for_frame(wait_started.elapsed() >= WAITED_FOR_FRAME);
+                    drift_tracker.waited_for_frame(waited_for_frame);
                     let duration = calculate_video_timestamp(
                         &mut drift_tracker,
                         timestamp,
@@ -4909,6 +4927,21 @@ mod tests {
                 mux_chain(&frames, SourceClockState::new("legacy"))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn next_frame_reports_whether_the_loop_waited() {
+        let (mut tx, mut rx) = mpsc::channel::<u32>(4);
+        tx.try_send(1).unwrap();
+        assert_eq!(next_frame(&mut rx).await, (Some(1), false));
+
+        let sender = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            tx.try_send(2).unwrap();
+        });
+        assert_eq!(next_frame(&mut rx).await, (Some(2), true));
+        sender.await.unwrap();
+        assert_eq!(next_frame(&mut rx).await, (None, false));
     }
 
     // Sources on the host clock after the warmup anchor: stamped by capture
