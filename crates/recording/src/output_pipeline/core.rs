@@ -2471,7 +2471,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.done_tx,
             None,
             &path,
-            shared_pause,
+            shared_pause.clone(),
             true,
             video_start_gate,
             start_gate,
@@ -2497,6 +2497,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             done_fut: build_ctx.done_rx,
             pause_flag: build_ctx.pause_flag,
+            shared_pause,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
             video_timestamp_span,
@@ -2568,7 +2569,7 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.done_tx,
             Some(first_tx),
             &path,
-            shared_pause,
+            shared_pause.clone(),
             false,
             None,
             start_gate,
@@ -2587,6 +2588,7 @@ impl OutputPipelineBuilder<NoVideo> {
             video_info: None,
             done_fut: build_ctx.done_rx,
             pause_flag: build_ctx.pause_flag,
+            shared_pause,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
             video_timestamp_span: Arc::new(VideoTimestampSpan::default()),
@@ -4172,6 +4174,7 @@ pub struct OutputPipeline {
     stop_token: Option<DropGuard>,
     done_fut: DoneFut,
     pause_flag: Arc<AtomicBool>,
+    shared_pause: SharedWallClockPause,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
     video_timestamp_span: Arc<VideoTimestampSpan>,
@@ -4322,10 +4325,12 @@ impl OutputPipeline {
 
     pub fn pause(&self) {
         self.pause_flag.store(true, atomic::Ordering::Release);
+        self.shared_pause.check();
     }
 
     pub fn resume(&self) {
         self.pause_flag.store(false, atomic::Ordering::Release);
+        self.shared_pause.check();
     }
 
     pub fn video_info(&self) -> Option<VideoInfo> {
@@ -7195,6 +7200,46 @@ mod tests {
 
             let timestamps = sent.lock().unwrap().clone();
             (timestamps, capture_duration)
+        }
+
+        #[tokio::test]
+        async fn pause_without_video_frames_is_excluded_on_resume() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let (sender, receiver) = flume::bounded(4);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("paused.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            for expected_frames in 1..=2 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    while sent.lock().unwrap().len() < expected_frames {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                if expected_frames == 1 {
+                    pipeline.pause();
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    pipeline.resume();
+                }
+            }
+            pipeline.stop().await.unwrap();
+
+            let timestamps = sent.lock().unwrap();
+            assert!(timestamps[1] < Duration::from_millis(100), "{timestamps:?}");
         }
 
         #[tokio::test]
