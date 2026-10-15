@@ -137,6 +137,10 @@ impl H264EncoderBuilder {
         self,
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
+        let _trace = crate::camstall::span(
+            "codec_init",
+            serde_json::json!({"width": self.input_config.width, "height": self.input_config.height}),
+        );
         let input_config = self.input_config;
         let (raw_width, raw_height) = self
             .output_size
@@ -934,6 +938,7 @@ impl H264Encoder {
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
             let converted = self.converted_frame_pool.as_mut().unwrap();
+            let _trace = crate::camstall::span("pixel_convert", serde_json::json!({"pts": pts}));
             converter
                 .run(&frame, converted)
                 .map_err(QueueFrameError::Converter)?;

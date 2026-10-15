@@ -1,6 +1,7 @@
 use std::{fs::OpenOptions, io, path::Path};
 
 pub fn sync_media_file(path: &Path) -> io::Result<()> {
+    let _trace = crate::camstall::span("media_fsync", serde_json::json!({"path": path}));
     // Windows FlushFileBuffers requires GENERIC_WRITE; Unix also permits read-only handles.
     OpenOptions::new()
         .read(true)

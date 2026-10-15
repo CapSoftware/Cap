@@ -2998,6 +2998,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             None => break,
                         }
                     };
+                    let _frame_trace = cap_enc_ffmpeg::camstall::span("pipeline_frame", serde_json::json!({"muxer": std::any::type_name::<TMutex>(), "frame": frame_count + 1, "source": format!("{:?}", frame.timestamp())}));
                     let (is_paused, total_pause_duration) = shared_pause.check();
 
                     if is_paused {
@@ -3106,6 +3107,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                     );
                     timestamp_span.record(duration);
+                    cap_enc_ffmpeg::camstall::event("timestamp", serde_json::json!({"muxer": std::any::type_name::<TMutex>(), "frame": frame_count, "source": format!("{timestamp:?}"), "source_us": raw_duration.as_micros(), "wall_us": wall_clock_elapsed.as_micros(), "pts_us": duration.as_micros(), "anchor": drift_tracker.anchor}));
 
                     if frame_count.is_multiple_of(300) {
                         let drift_ratio = if raw_duration.as_secs_f64() > 0.0 {
@@ -3126,7 +3128,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
 
                     let duplicate = frame.duplicate();
-                    if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
+                    let lock_trace = cap_enc_ffmpeg::camstall::span("mux_lock", serde_json::json!({"muxer": std::any::type_name::<TMutex>(), "frame": frame_count}));
+                    let mut guard = muxer.lock().await;
+                    drop(lock_trace);
+                    let send_trace = cap_enc_ffmpeg::camstall::span("mux_send", serde_json::json!({"muxer": std::any::type_name::<TMutex>(), "frame": frame_count, "pts_us": duration.as_micros()}));
+                    let send_result = guard.send_video_frame(frame, duration);
+                    drop(send_trace);
+                    drop(guard);
+                    if let Err(e) = send_result {
                         return Err(video_mux_send_error(frame_count, e));
                     }
                     last_frame = duplicate;

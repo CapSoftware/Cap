@@ -27,15 +27,22 @@ pub struct DiskSpaceWarning {
 pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    let _trace = crate::camstall::span("atomic_manifest", serde_json::json!({"path": path}));
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     let mut file = std::fs::File::create(&temp_path)?;
     file.write_all(json.as_bytes())?;
-    file.sync_all()?;
+    {
+        let _trace = crate::camstall::span("manifest_fsync", serde_json::json!({"path": path}));
+        file.sync_all()?;
+    }
 
-    std::fs::rename(&temp_path, path)?;
+    {
+        let _trace = crate::camstall::span("manifest_rename", serde_json::json!({"path": path}));
+        std::fs::rename(&temp_path, path)?;
+    }
 
     if let Some(parent) = path.parent()
         && let Ok(dir) = std::fs::File::open(parent)
@@ -198,6 +205,10 @@ impl SegmentedVideoEncoder {
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
     ) -> Result<Self, InitError> {
+        let _trace = crate::camstall::span(
+            "segment_encoder_init",
+            serde_json::json!({"path": base_path}),
+        );
         std::fs::create_dir_all(&base_path)?;
 
         let manifest_path = base_path.join("dash_manifest.mpd");
@@ -264,7 +275,11 @@ impl SegmentedVideoEncoder {
             None => builder.build(&mut output)?,
         };
 
-        output.write_header()?;
+        {
+            let _trace =
+                crate::camstall::span("write_header", serde_json::json!({"path": base_path}));
+            output.write_header()?;
+        }
 
         let init_path = base_path.join(INIT_SEGMENT_NAME);
         let manifest_exists = manifest_path.exists();
@@ -372,6 +387,10 @@ impl SegmentedVideoEncoder {
         frame: frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
+        let _trace = crate::camstall::span(
+            "segment_frame",
+            serde_json::json!({"path": self.base_path, "pts_us": timestamp.as_micros(), "index": self.current_index}),
+        );
         // Encode with the frame's real capture-derived timestamp. The encoder
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
@@ -402,6 +421,10 @@ impl SegmentedVideoEncoder {
     }
 
     fn flush_pending_segments(&mut self) {
+        let _trace = crate::camstall::span(
+            "segment_scan",
+            serde_json::json!({"path": self.base_path, "index": self.current_index}),
+        );
         let first_index = self.current_index;
         loop {
             let index = self.current_index;
@@ -444,6 +467,10 @@ impl SegmentedVideoEncoder {
     }
 
     fn write_in_progress_manifest(&self) {
+        let _trace = crate::camstall::span(
+            "manifest",
+            serde_json::json!({"path": self.base_path, "index": self.current_index}),
+        );
         let mut segments: Vec<SegmentEntry> = self
             .completed_segments
             .iter()

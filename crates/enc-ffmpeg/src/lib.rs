@@ -1,4 +1,5 @@
 mod base;
+pub mod camstall;
 pub use base::{EncodedPacket, EncodedPacketStats, PacketQueue, PacketSink};
 
 mod file_sync;

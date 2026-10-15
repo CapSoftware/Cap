@@ -9,13 +9,17 @@ use std::{
 };
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    let _trace = crate::camstall::span("atomic_manifest", serde_json::json!({"path": path}));
     let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     let mut file = std::fs::File::create(&temp_path)?;
     file.write_all(json.as_bytes())?;
-    file.sync_all()?;
+    {
+        let _trace = crate::camstall::span("manifest_fsync", serde_json::json!({"path": path}));
+        file.sync_all()?;
+    }
 
     std::fs::rename(&temp_path, path)?;
 

@@ -51,6 +51,7 @@ async fn forward_native_frames<T: Send + 'static>(
                 match result {
                     Ok(frame) => {
                         frame_count += 1;
+                        cap_enc_ffmpeg::camstall::event("forward_receive", serde_json::json!({"frame": frame_count, "depth": rx.len()}));
                         match video_tx.try_send(frame) {
                             Ok(()) => {
                                 sent_count += 1;
@@ -66,6 +67,7 @@ async fn forward_native_frames<T: Send + 'static>(
                             Err(e) => {
                                 if e.is_full() {
                                     dropped_count += 1;
+                                    cap_enc_ffmpeg::camstall::event("forward_full", serde_json::json!({"frame": frame_count, "total_drops": dropped_count}));
                                     if dropped_count.is_multiple_of(30) {
                                         tracing::warn!(
                                             "Native camera source: encoder can't keep up, dropped {} frames so far",
@@ -102,6 +104,10 @@ async fn forward_native_frames<T: Send + 'static>(
         }
     }
 
+    cap_enc_ffmpeg::camstall::event(
+        "forward_summary",
+        serde_json::json!({"received": frame_count, "sent": sent_count, "dropped": dropped_count}),
+    );
     drop(video_tx);
 
     tracing::info!(
@@ -140,6 +146,27 @@ impl VideoSource for NativeCamera {
         let stopped = Arc::new(AtomicBool::new(false));
         let stopped_clone = stopped.clone();
 
+        if cap_enc_ffmpeg::camstall::enabled() {
+            let monitor_rx = rx.clone();
+            let monitor_stopped = stopped.clone();
+            drop(std::thread::Builder::new().name("camstall-watch".into()).spawn(move || {
+                while !monitor_stopped.load(Ordering::Relaxed) {
+                    cap_enc_ffmpeg::camstall::event("native_depth", serde_json::json!({"depth": monitor_rx.len(), "capacity": monitor_rx.capacity()}));
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })?);
+            let heartbeat_stopped = stopped.clone();
+            drop(tokio::spawn(async move {
+                while !heartbeat_stopped.load(Ordering::Relaxed) {
+                    let start = std::time::Instant::now();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    cap_enc_ffmpeg::camstall::event(
+                        "runtime_tick",
+                        serde_json::json!({"elapsed_us": start.elapsed().as_micros()}),
+                    );
+                }
+            }));
+        }
         let task = forward_native_frames(rx, video_tx, stop_rx, stopped_clone, cfg!(windows));
         #[cfg(windows)]
         _ctx.tasks().spawn("native-camera", task);

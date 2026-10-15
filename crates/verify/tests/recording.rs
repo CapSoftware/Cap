@@ -1621,6 +1621,10 @@ async fn record(
     reference: u64,
     case: &mut Case,
 ) -> anyhow::Result<Recorded> {
+    let _trace = cap_recording::camstall::span(
+        "recording_attempt",
+        serde_json::json!({"case": spec.id, "scratch": scratch, "reference": reference}),
+    );
     let stimulus_spec = StimulusSpec {
         fps: spec.stimulus_fps,
         seconds: spec.seconds,

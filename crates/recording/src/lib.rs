@@ -1,3 +1,4 @@
+pub use cap_enc_ffmpeg::camstall;
 pub mod benchmark;
 pub mod camera_placement;
 mod capture_pipeline;

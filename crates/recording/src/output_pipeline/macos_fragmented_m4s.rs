@@ -277,6 +277,10 @@ impl Muxer for MacOSFragmentedM4SMuxer {
 
 impl MacOSFragmentedM4SMuxer {
     fn start_encoder(&mut self) -> anyhow::Result<()> {
+        let _trace = cap_enc_ffmpeg::camstall::span(
+            "encoder_start",
+            serde_json::json!({"path": self.base_path}),
+        );
         let buffer_size = get_muxer_buffer_size();
         debug!(
             buffer_size = buffer_size,
@@ -338,6 +342,7 @@ impl MacOSFragmentedM4SMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
+                    let _frame_trace = cap_enc_ffmpeg::camstall::span("encoder_frame", serde_json::json!({"path": base_path, "pts_us": timestamp.as_micros(), "frame": total_frames + 1}));
                     if matches!(
                         disk_monitor.poll(&base_path, &health_tx),
                         super::core::DiskSpacePollResult::Exhausted { .. }
@@ -352,7 +357,9 @@ impl MacOSFragmentedM4SMuxer {
                     if let Some(frame_pool) = frame_pool.as_mut() {
                         let convert_start = std::time::Instant::now();
                         let frame = frame_pool.get_frame();
+                        let convert_trace = cap_enc_ffmpeg::camstall::span("frame_convert", serde_json::json!({"pts_us": timestamp.as_micros()}));
                         let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                        drop(convert_trace);
                         let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                         if convert_elapsed_ms > slow_threshold_ms {
@@ -516,6 +523,10 @@ impl VideoMuxer for MacOSFragmentedM4SMuxer {
                 Err(e) => match e {
                     std::sync::mpsc::TrySendError::Full(_) => {
                         self.frame_drops.record_drop();
+                        cap_enc_ffmpeg::camstall::event(
+                            "encoder_full",
+                            serde_json::json!({"path": self.base_path, "pts_us": timestamp.as_micros()}),
+                        );
                     }
                     std::sync::mpsc::TrySendError::Disconnected(_) => {
                         return Err(anyhow!("M4S encoder channel disconnected"));
@@ -664,6 +675,10 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
 
 impl MacOSFragmentedM4SCameraMuxer {
     fn start_encoder(&mut self) -> anyhow::Result<()> {
+        let _trace = cap_enc_ffmpeg::camstall::span(
+            "encoder_start",
+            serde_json::json!({"path": self.base_path}),
+        );
         let buffer_size = get_muxer_buffer_size();
         debug!(
             buffer_size = buffer_size,
@@ -723,6 +738,7 @@ impl MacOSFragmentedM4SCameraMuxer {
                 let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
+                    let _frame_trace = cap_enc_ffmpeg::camstall::span("encoder_frame", serde_json::json!({"path": base_path, "pts_us": timestamp.as_micros(), "frame": total_frames + 1}));
                     if matches!(
                         disk_monitor.poll(&base_path, &health_tx),
                         super::core::DiskSpacePollResult::Exhausted { .. }
@@ -736,7 +752,9 @@ impl MacOSFragmentedM4SCameraMuxer {
 
                     let convert_start = std::time::Instant::now();
                     let frame = frame_pool.get_frame();
+                    let convert_trace = cap_enc_ffmpeg::camstall::span("camera_convert", serde_json::json!({"pts_us": timestamp.as_micros()}));
                     let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                    drop(convert_trace);
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
                     if convert_elapsed_ms > slow_threshold_ms {
@@ -858,6 +876,10 @@ impl VideoMuxer for MacOSFragmentedM4SCameraMuxer {
                 Err(e) => match e {
                     std::sync::mpsc::TrySendError::Full(_) => {
                         self.frame_drops.record_drop();
+                        cap_enc_ffmpeg::camstall::event(
+                            "encoder_full",
+                            serde_json::json!({"path": self.base_path, "pts_us": timestamp.as_micros()}),
+                        );
                     }
                     std::sync::mpsc::TrySendError::Disconnected(_) => {
                         return Err(anyhow!("M4S camera encoder channel disconnected"));

@@ -45,6 +45,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
+      CAP_CAMSTALL_DIR: ${{ github.workspace }}/verify-dump/camstall
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
@@ -94,6 +95,7 @@ jobs:
       - name: Build
         run: |
           start=$(date +%s)
+          cargo check --locked -p cap-recording -p cap-enc-ffmpeg -p cap-verify
           cargo test --locked -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
 

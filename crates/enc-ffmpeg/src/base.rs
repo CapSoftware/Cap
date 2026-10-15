@@ -21,6 +21,10 @@ impl PacketSink for format::context::Output {
     }
 
     fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        let _trace = crate::camstall::span(
+            "packet_write",
+            serde_json::json!({"pts": packet.pts(), "stream": packet.stream()}),
+        );
         packet.write_interleaved(self)
     }
 }
@@ -191,7 +195,13 @@ impl EncoderBase {
         output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
-        encoder.send_frame(frame)?;
+        {
+            let _trace = crate::camstall::span(
+                "encode_submit",
+                serde_json::json!({"pts": frame.pts(), "stream": self.stream_index}),
+            );
+            encoder.send_frame(frame)?;
+        }
 
         self.process_packets(output, encoder)
     }
@@ -201,7 +211,13 @@ impl EncoderBase {
         output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
-        while packet_available(encoder.receive_packet(&mut self.packet))? {
+        while {
+            let _trace = crate::camstall::span(
+                "encode_receive",
+                serde_json::json!({"stream": self.stream_index}),
+            );
+            packet_available(encoder.receive_packet(&mut self.packet))?
+        } {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),

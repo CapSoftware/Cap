@@ -1471,9 +1471,19 @@ fn send_frame_to_camera_senders<T: Clone>(
     }
 
     let mut last_ready_sender = None;
+    for (i, sender) in senders.iter().enumerate() {
+        cap_enc_ffmpeg::camstall::event(
+            "feed_queue",
+            serde_json::json!({"label": sender_label, "sender": i, "frame": frame_num, "depth": sender.len(), "capacity": sender.capacity(), "full": sender.is_full()}),
+        );
+    }
 
     for (i, sender) in senders.iter().enumerate() {
         if sender.is_full() {
+            cap_enc_ffmpeg::camstall::event(
+                "feed_full",
+                serde_json::json!({"label": sender_label, "sender": i, "frame": frame_num, "depth": sender.len(), "pass": "select"}),
+            );
             if frame_num.is_multiple_of(30) {
                 warn!(
                     "{} sender {} channel full at frame {}, dropping frame",
@@ -1494,6 +1504,10 @@ fn send_frame_to_camera_senders<T: Clone>(
 
     for (i, sender) in senders.iter().enumerate().take(last_ready_sender + 1) {
         if sender.is_full() {
+            cap_enc_ffmpeg::camstall::event(
+                "feed_full",
+                serde_json::json!({"label": sender_label, "sender": i, "frame": frame_num, "depth": sender.len(), "pass": "send"}),
+            );
             continue;
         }
 
@@ -1510,8 +1524,17 @@ fn send_frame_to_camera_senders<T: Clone>(
         };
 
         match send_result {
-            Ok(()) => {}
+            Ok(()) => {
+                cap_enc_ffmpeg::camstall::event(
+                    "feed_sent",
+                    serde_json::json!({"label": sender_label, "sender": i, "frame": frame_num, "depth": sender.len()}),
+                );
+            }
             Err(flume::TrySendError::Full(_)) => {
+                cap_enc_ffmpeg::camstall::event(
+                    "feed_full",
+                    serde_json::json!({"label": sender_label, "sender": i, "frame": frame_num, "depth": sender.len(), "pass": "try_send"}),
+                );
                 if frame_num.is_multiple_of(30) {
                     warn!(
                         "{} sender {} channel full at frame {}, dropping frame",
@@ -1585,6 +1608,10 @@ impl Message<NewNativeFrame> for CameraFeed {
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        cap_enc_ffmpeg::camstall::event(
+            "feed_frame",
+            serde_json::json!({"frame": frame_num, "source": format!("{:?}", msg.0.timestamp)}),
+        );
         if send_frame_to_camera_senders(&mut self.native_senders, msg.0, frame_num, "Native camera")
         {
             self.native_sender_count.store(
