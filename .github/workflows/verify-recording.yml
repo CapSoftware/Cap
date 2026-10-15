@@ -92,7 +92,14 @@ jobs:
       - name: Real-capture recording oracle
         run: |
           mkdir -p "$CAP_VERIFY_DUMP"
-          top -l 0 -s 1 -n 15 -o cpu -stats pid,command,cpu,th,state,pri > "$CAP_VERIFY_DUMP/top.log" 2>&1 &
+          # One-second process samples (CPU, scheduler priority) so an
+          # environment failure can be attributed.
+          (while sleep 1; do
+            date -u +%H:%M:%S
+            ps -A -o pid,pri,%cpu,comm -r | head -14
+            stim=$(pgrep -f cap-verify-stimulus | head -1)
+            [ -n "$stim" ] && ps -M -p "$stim" | head -6
+          done) > "$CAP_VERIFY_DUMP/ps.log" 2>&1 &
           top_pid=$!
           start=$(date +%s)
           set +e
