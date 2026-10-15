@@ -44,7 +44,10 @@ use cap_verify::{
     fixture_avf, media,
     report::{self, Case, Tier},
     sched,
-    stimulus::{StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs, host_now, host_secs},
+    stimulus::{
+        SENTINEL_FILE, SentinelLog, StimulusEvent, StimulusProcess, StimulusSpec, host_add_secs,
+        host_now, host_secs,
+    },
     video_code::{self, FrameMarker, Readout, StreamKind},
 };
 
@@ -1072,6 +1075,8 @@ struct Recorded {
     stimulus_fps: f64,
     /// Every hand-off of the synthetic microphone and camera.
     sources: Vec<SourceTrace>,
+    /// The stimulus process's real-time sentinel.
+    sentinel: Result<SentinelLog, String>,
     /// Recovery after a crash may lose at most this many seconds before the
     /// crash (the in-flight fragment).
     loss_budget: Option<f64>,
@@ -1145,31 +1150,84 @@ async fn run_case(
             case.note(format!("artifacts kept at {}", scratch.display()));
             return Ok(());
         }
+        let sentinel = match &recorded.sentinel {
+            Ok(log) => log,
+            Err(e) => {
+                case.problem("harness", format!("stimulus sentinel log unavailable: {e}"));
+                case.note(format!("artifacts kept at {}", scratch.display()));
+                return Ok(());
+            }
+        };
+        let sentinel_evidence = keep_sentinel_log(&attempt_scratch, &stem);
+        if let Err(e) = sentinel
+            .realtime
+            .obtained()
+            .and_then(|()| sched::state_is_realtime(sentinel.end))
+        {
+            case.problem(
+                "harness",
+                format!("stimulus sentinel: real-time scheduling not obtained or lost: {e}"),
+            );
+            case.note(format!("artifacts kept at {}", scratch.display()));
+            return Ok(());
+        }
+        let freezes = machine_freezes(sentinel, reference, window);
+        case.note(format!(
+            "attempt {tries} sentinel ({}): {}",
+            sentinel_evidence.display(),
+            describe_sentinel(sentinel, reference, window)
+        ));
         let product: Vec<&(&str, String)> = verdicts.iter().flat_map(|v| &v.product).collect();
-        if !product.is_empty() {
-            // The recorder's own feed failed its source: a product failure
-            // that a retry must not hide. The output checks still run.
-            for (class, text) in product {
-                case.problem(class, format!("{text}; evidence {}", evidence.display()));
+        let product_failed = !product.is_empty();
+        // The recorder's own feed failed its source: a product failure that
+        // a retry must not hide. The output checks still run.
+        for (class, text) in product {
+            case.problem(class, format!("{text}; evidence {}", evidence.display()));
+        }
+        if !product_failed && let Some(reason) = inconclusive(spec, &recorded, &verdicts) {
+            let reason = format!("{reason}; evidence {}", evidence.display());
+            keep_stimulus_log(&attempt_scratch, &stem);
+            if tries < 2 {
+                case.note(format!("inconclusive, retrying: {reason}"));
+                continue;
             }
+            case.problem("environment", format!("inconclusive twice: {reason}"));
+            case.note(format!("artifacts kept at {}", scratch.display()));
+            return Ok(());
+        }
+        let before = (
+            case.problems.len(),
+            case.problem_classes.len(),
+            case.classes.clone(),
+            case.streams.len(),
+            case.notes.len(),
+        );
+        IMPLICATED.with(|m| m.borrow_mut().clear());
+        analyze(&recorded, reference, case)?;
+        let implicated = IMPLICATED.with(|m| std::mem::take(&mut *m.borrow_mut()));
+        let excuse = (!product_failed)
+            .then(|| frozen_failures(case, before.0, &implicated, &freezes))
+            .flatten();
+        let Some(reason) = excuse else {
             break (recorded, reference);
+        };
+        // Every unexpected failure lies inside a machine freeze: the
+        // recording cannot tell Cap from the host. Discard the analysis.
+        case.problems.truncate(before.0);
+        case.problem_classes.truncate(before.1);
+        case.classes = before.2;
+        case.streams.truncate(before.3);
+        case.notes.truncate(before.4);
+        let reason = format!("{reason}; evidence {}", sentinel_evidence.display());
+        keep_stimulus_log(&attempt_scratch, &stem);
+        if tries < 2 {
+            case.note(format!("inconclusive, retrying: {reason}"));
+            continue;
         }
-        match inconclusive(spec, &recorded, &verdicts) {
-            Some(reason) => {
-                let reason = format!("{reason}; evidence {}", evidence.display());
-                keep_stimulus_log(&attempt_scratch, &stem);
-                if tries < 2 {
-                    case.note(format!("inconclusive, retrying: {reason}"));
-                } else {
-                    case.problem("environment", format!("inconclusive twice: {reason}"));
-                    case.note(format!("artifacts kept at {}", scratch.display()));
-                    return Ok(());
-                }
-            }
-            None => break (recorded, reference),
-        }
+        case.problem("environment", format!("inconclusive twice: {reason}"));
+        case.note(format!("artifacts kept at {}", scratch.display()));
+        return Ok(());
     };
-    analyze(&recorded, reference, case)?;
     if self_check_enabled() {
         self_check(&recorded, reference, case)?;
     }
@@ -1208,6 +1266,135 @@ fn inconclusive(spec: &Spec, rec: &Recorded, verdicts: &[SourceVerdict]) -> Opti
     verdicts
         .iter()
         .find_map(|v| v.stalled.as_ref().map(|(_, reason)| reason.clone()))
+}
+
+/// A gap this long between wakes of the stimulus's real-time sentinel
+/// means the whole machine stopped running (see `Sentinel` in the stimulus).
+/// Nothing the recorder does can delay a priority-97 thread of another
+/// process that long: it preempts every timeshare thread, the recorder's
+/// real-time threads (audio and capture callbacks, the synthetic sources)
+/// each run a few ms per period and are demoted by the kernel if they
+/// overrun their computation budget, so only a host that runs no virtual
+/// CPU, or a kernel that schedules nothing, leaves the sentinel asleep.
+const SENTINEL_FREEZE_SECS: f64 = 0.1;
+/// Failures attributed to a freeze: frames or markers captured from shortly
+/// before it (in flight when it began) until shortly after it (the burst of
+/// frames the recorder catches up with).
+const FREEZE_MARGIN_BEFORE: f64 = 0.15;
+const FREEZE_MARGIN_AFTER: f64 = 0.3;
+
+/// Sentinel gaps over `SENTINEL_FREEZE_SECS` that overlap the recording
+/// window: (start, end) in seconds from the reference.
+fn machine_freezes(log: &SentinelLog, reference: u64, window: (f64, f64)) -> Vec<(f64, f64)> {
+    log.gaps()
+        .filter(|(_, gap)| *gap > SENTINEL_FREEZE_SECS)
+        .map(|(start, gap)| {
+            let start = host_secs(start, reference);
+            (start, start + gap)
+        })
+        .filter(|(start, end)| *end >= window.0 && *start <= window.1)
+        .collect()
+}
+
+fn describe_sentinel(log: &SentinelLog, reference: u64, window: (f64, f64)) -> String {
+    let gaps: Vec<f64> = log
+        .gaps()
+        .filter(|(start, _)| {
+            let at = host_secs(*start, reference);
+            at >= window.0 && at <= window.1
+        })
+        .map(|(_, gap)| gap)
+        .collect();
+    let max = gaps.iter().copied().fold(0.0f64, f64::max);
+    format!(
+        "{} wakes in the recording, priority {}, longest gap {:.1} ms, {} over 10 ms, {} over {:.0} ms",
+        gaps.len(),
+        log.realtime.state.map_or(-1, |s| s.base_pri),
+        max * 1000.0,
+        gaps.iter().filter(|g| **g > 0.010).count(),
+        gaps.iter().filter(|g| **g > SENTINEL_FREEZE_SECS).count(),
+        SENTINEL_FREEZE_SECS * 1000.0
+    )
+}
+
+/// `Some(reason)` when the analysis added unexpected failures (classes the
+/// case has no xfail for) and every one of them is localized to frames or
+/// markers captured within a machine freeze. Failures that are not
+/// localized (sync medians, spreads, unreadable or unknown frames) are never
+/// attributed to a freeze, and a case without a freeze keeps every failure.
+fn frozen_failures(
+    case: &Case,
+    from: usize,
+    implicated: &BTreeMap<usize, Vec<f64>>,
+    freezes: &[(f64, f64)],
+) -> Option<String> {
+    if freezes.is_empty() {
+        return None;
+    }
+    let expected: Vec<String> = report::xfails_for(&case.id)
+        .into_iter()
+        .map(|x| x.class)
+        .collect();
+    let unexpected: Vec<usize> = (from..case.problems.len())
+        .filter(|&i| {
+            case.problem_classes[i]
+                .split(',')
+                .any(|class| !expected.iter().any(|e| e == class))
+        })
+        .collect();
+    if unexpected.is_empty() {
+        return None;
+    }
+    let inside = |t: f64| {
+        freezes.iter().any(|&(start, end)| {
+            t >= start - FREEZE_MARGIN_BEFORE && t <= end + FREEZE_MARGIN_AFTER
+        })
+    };
+    for &i in &unexpected {
+        let times = implicated.get(&i)?;
+        if times.is_empty() || !times.iter().all(|&t| inside(t)) {
+            return None;
+        }
+    }
+    Some(format!(
+        "machine froze (stimulus sentinel asleep {}) and every unexpected failure lies within it: {}",
+        freezes
+            .iter()
+            .map(|(start, end)| format!("{:.0} ms at {start:.2}s", (end - start) * 1000.0))
+            .collect::<Vec<_>>()
+            .join(", "),
+        unexpected
+            .iter()
+            .map(|&i| format!("{}: {}", case.problem_classes[i], case.problems[i]))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
+/// Keeps every attempt's sentinel log with the source evidence.
+fn keep_sentinel_log(attempt_scratch: &Path, stem: &str) -> PathBuf {
+    let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") else {
+        return attempt_scratch.join(SENTINEL_FILE);
+    };
+    let dir = PathBuf::from(dir).join("sources");
+    let path = dir.join(format!("{stem}-sentinel.txt"));
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::copy(attempt_scratch.join(SENTINEL_FILE), &path);
+    path
+}
+
+thread_local! {
+    /// Capture times (seconds from the reference) of the frames or markers
+    /// behind each localized problem, by its index in `Case::problems`.
+    static IMPLICATED: std::cell::RefCell<BTreeMap<usize, Vec<f64>>> =
+        const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// Localizes the problem just added to `case`.
+fn implicate(case: &Case, times: impl IntoIterator<Item = f64>) {
+    if let Some(index) = case.problems.len().checked_sub(1) {
+        IMPLICATED.with(|m| m.borrow_mut().insert(index, times.into_iter().collect()));
+    }
 }
 
 /// Keeps a discarded attempt's stimulus log (its independent capture
@@ -1523,6 +1710,70 @@ fn source_lateness_is_attributed_to_the_source_or_to_cap() {
     assert!(source_scheduling(&overslept, reference, window).is_ok());
 }
 
+#[test]
+fn sentinel_freezes_excuse_only_failures_localized_inside_them() {
+    let reference = host_now();
+    // A sentinel log with a 300 ms gap at 9.9 s and a 60 ms gap at 5 s.
+    let mut wakes = vec![host_add_secs(reference, 1.0)];
+    let mut t: f64 = 1.0;
+    while t < 12.0 {
+        t += if (t - 9.9).abs() < 0.001 {
+            0.3
+        } else if (t - 5.0).abs() < 0.001 {
+            0.06
+        } else {
+            0.002
+        };
+        t = (t * 1000.0).round() / 1000.0;
+        wakes.push(host_add_secs(reference, t));
+    }
+    let realtime = test_trace("camera", vec![]).realtime;
+    let mut text = serde_json::json!({
+        "period_secs": 0.002,
+        "first": wakes[0],
+        "realtime": realtime,
+        "end": realtime.state,
+    })
+    .to_string();
+    for w in wakes.windows(2) {
+        text.push_str(&format!("\n{}", w[1] - w[0]));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(SENTINEL_FILE);
+    std::fs::write(&path, text).unwrap();
+    let log = SentinelLog::read(&path).unwrap();
+    assert_eq!(log.wakes, wakes);
+    let freezes = machine_freezes(&log, reference, (2.0, 11.0));
+    assert_eq!(freezes.len(), 1);
+    assert!((freezes[0].0 - 9.9).abs() < 1e-3 && (freezes[0].1 - 10.2).abs() < 1e-3);
+    assert!(machine_freezes(&log, reference, (2.0, 9.0)).is_empty());
+
+    let excuse = |problems: &[(&str, Option<Vec<f64>>)], freezes: &[(f64, f64)]| {
+        let mut case = Case::new("recording/studio-camera/startup-drops");
+        IMPLICATED.with(|m| m.borrow_mut().clear());
+        for (class, times) in problems {
+            case.problem(class, format!("{class} problem"));
+            if let Some(times) = times {
+                implicate(&case, times.iter().copied());
+            }
+        }
+        let implicated = IMPLICATED.with(|m| std::mem::take(&mut *m.borrow_mut()));
+        frozen_failures(&case, 0, &implicated, freezes)
+    };
+    let lost = ("missing", Some(vec![9.8, 10.0, 10.4]));
+    // Expected classes (camera-clock here) never need an excuse.
+    let clock = ("camera-clock", None);
+    assert!(excuse(&[lost.clone(), clock.clone()], &freezes).is_some());
+    // Without a freeze, or outside it, a loss stays a Cap failure.
+    assert!(excuse(&[lost.clone()], &[]).is_none());
+    assert!(excuse(&[("missing", Some(vec![10.0, 10.6]))], &freezes).is_none());
+    assert!(excuse(&[("missing", Some(vec![9.7]))], &freezes).is_none());
+    // A failure that is not localized (a sync median) is never excused.
+    assert!(excuse(&[lost, ("sync", None)], &freezes).is_none());
+    // Only expected failures: nothing to excuse.
+    assert!(excuse(&[clock], &freezes).is_none());
+}
+
 /// A feed that stops taking frames (scripted slow consumer: its actor is
 /// blocked for 4 s) must be reported as a product failure of class
 /// `camera-ingress` / `mic-ingress`, never as a late, inconclusive source.
@@ -1816,6 +2067,7 @@ async fn record(
     };
     drop(feeds.camera);
     let events = tokio::task::block_in_place(|| stimulus.finish())?;
+    let sentinel = SentinelLog::read(&scratch.join(SENTINEL_FILE)).map_err(|e| format!("{e:#}"));
     waited?;
     let (project_path, loss_budget) = match crashed {
         Some(snapshot) => {
@@ -1856,6 +2108,7 @@ async fn record(
         holds: spec.holds.clone(),
         stimulus_fps: spec.stimulus_fps,
         sources,
+        sentinel,
         loss_budget,
     })
 }
@@ -2341,6 +2594,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         );
     }
     let mut backwards = Vec::new();
+    let mut backwards_at = Vec::new();
     let mut duplicates = 0;
     let mut pts_problems = Vec::new();
     for w in indices.windows(2) {
@@ -2350,6 +2604,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
         if b < a {
             backwards.push(format!("{a}->{b} at {pb:.3}s"));
+            backwards_at.extend([a, b].iter().filter_map(|i| check.truth.get(i).copied()));
         } else if b == a {
             duplicates += 1;
         }
@@ -2383,6 +2638,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
                     .join(", ")
             ),
         );
+        implicate(case, backwards_at);
     }
     if duplicates > 0 && !check.allow_duplicates {
         case.problem(
@@ -2468,6 +2724,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
                 "missing-after-hold",
                 format!("{name}: {what} (index {index}) is missing from the recording"),
             );
+            implicate(case, check.truth.get(index).copied());
         }
     }
     if skipped.len() > budget || longest_run >= 3 {
@@ -2478,6 +2735,10 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
                 skipped.len(),
                 &skipped[..skipped.len().min(12)]
             ),
+        );
+        implicate(
+            case,
+            skipped.iter().filter_map(|i| check.truth.get(i).copied()),
         );
     } else if !skipped.is_empty() {
         case.note(format!(
@@ -2570,6 +2831,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
                     -early * 1000.0,
                     gap * period * 1000.0
                 ));
+                implicate(case, check.truth.get(&index).copied());
             }
         }
         if !snapped.is_empty() {
@@ -2692,6 +2954,10 @@ fn check_audio(
                 missing.len(),
                 &missing[..missing.len().min(12)]
             ),
+        );
+        implicate(
+            case,
+            missing.iter().filter_map(|i| check.truth.get(i).copied()),
         );
     }
     let mut order = found.iter().collect::<Vec<_>>();
@@ -3032,12 +3298,16 @@ fn sync_checks(
             let mut run = 0;
             let mut worst_run = (0, 0.0f64, 0.0f64);
             let mut isolated = Vec::new();
+            let mut isolated_at = Vec::new();
+            let mut off_at = Vec::new();
             for &(truth, offset) in &part.0 {
                 let d = offset - median;
                 if d.abs() > 3.0 * period {
                     isolated.push(format!("{:.2}s {:+.1} ms", truth, ms(d)));
+                    isolated_at.push(truth);
                 }
                 if d.abs() > period {
+                    off_at.push(truth);
                     run += 1;
                     if run > worst_run.0 {
                         worst_run = (run, truth, d);
@@ -3056,6 +3326,7 @@ fn sync_checks(
                         ms(worst_run.2)
                     ),
                 );
+                implicate(case, off_at);
             }
             if !isolated.is_empty() {
                 case.problem(
@@ -3071,6 +3342,7 @@ fn sync_checks(
                             .join(", ")
                     ),
                 );
+                implicate(case, isolated_at);
             }
         }
         // Stamped with their capture times, camera frames keep one offset:
