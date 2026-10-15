@@ -542,6 +542,7 @@ impl AVAssetReaderDecoder {
         requested_frame: u32,
         requested_time: f32,
         is_scrubbing: bool,
+        must_reset: bool,
     ) -> (usize, bool) {
         let decoder_count = self.decoders.len();
         let (best_id, _distance, needs_reset) = if is_scrubbing {
@@ -562,6 +563,7 @@ impl AVAssetReaderDecoder {
         // It can never vend that frame again, and reading on would answer
         // with a stale or later frame, so it has to seek back first.
         let needs_reset = needs_reset
+            || must_reset
             || self
                 .decoders
                 .get(decoder_idx)
@@ -709,6 +711,7 @@ impl AVAssetReaderDecoder {
             frame: u32,
             max_fallback_distance: u32,
             sender: oneshot::Sender<DecodedFrame>,
+            retried: bool,
         }
 
         let mut deferred_requests = VecDeque::<PendingRequest>::new();
@@ -766,6 +769,7 @@ impl AVAssetReaderDecoder {
                                 frame,
                                 max_fallback_distance,
                                 sender,
+                                retried: false,
                             });
                         }
                     }
@@ -784,6 +788,7 @@ impl AVAssetReaderDecoder {
                                     frame,
                                     max_fallback_distance,
                                     sender,
+                                    retried: false,
                                 });
                             }
                         }
@@ -905,7 +910,12 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
-            let (decoder_idx, was_reset) = this.select_best_decoder(requested_frame, requested_time, is_scrubbing);
+            let (decoder_idx, was_reset) = this.select_best_decoder(
+                requested_frame,
+                requested_time,
+                is_scrubbing,
+                pending_requests.iter().any(|request| request.retried),
+            );
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
@@ -938,6 +948,7 @@ impl AVAssetReaderDecoder {
             // reader re-vends from the keyframe at-or-before the request, and
             // that frame is the true VFR hold for requests inside a pts hole.
             let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
+            let mut retry_requests = Vec::new();
 
             {
                 let decoder = &mut this.decoders[decoder_idx];
@@ -965,7 +976,8 @@ impl AVAssetReaderDecoder {
                     let current_frame =
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
 
-                    if let Some(prev) = decoder.prev_vended
+                    let vended_before = decoder.prev_vended;
+                    if let Some(prev) = vended_before
                         && current_frame > prev + 1
                     {
                         record_pts_hole(&mut pts_holes, prev, current_frame);
@@ -1080,6 +1092,25 @@ impl AVAssetReaderDecoder {
                                             .flatten()
                                             .max_by_key(|d| d.number);
 
+                                    // The reader vends every sample in pts order, so the
+                                    // frame it vended just before this one is the newest
+                                    // at or before the request. When that frame is no
+                                    // longer held anywhere, any other answer is stale or
+                                    // from the future: retry once from a fresh seek, which
+                                    // re-vends and keeps it.
+                                    let expected =
+                                        vended_before.filter(|&number| number <= req.frame);
+                                    if !req.retried
+                                        && expected.is_some()
+                                        && best_before.as_ref().map(|d| d.number) != expected
+                                    {
+                                        retry_requests.push(PendingRequest {
+                                            retried: true,
+                                            ..req
+                                        });
+                                        continue;
+                                    }
+
                                     if let Some(data) = best_before {
                                         gap_hold = Some(data.clone());
                                         *last_sent_frame.borrow_mut() = Some(data.clone());
@@ -1118,6 +1149,10 @@ impl AVAssetReaderDecoder {
                 }
 
                 decoder.is_done = true;
+            }
+
+            for request in retry_requests.into_iter().rev() {
+                deferred_requests.push_front(request);
             }
 
             let last_frame_in_cache = cache.keys().max().copied().unwrap_or(0);
