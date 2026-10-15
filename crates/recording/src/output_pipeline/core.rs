@@ -761,6 +761,9 @@ pub(crate) struct AudioTimestampGenerator {
 }
 
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
+#[cfg(not(target_os = "linux"))]
+const STALE_CAPTURE_SECS: f64 = 1.0;
+const WAITED_FOR_FRAME: Duration = Duration::from_millis(1);
 
 impl AudioTimestampGenerator {
     #[cfg(test)]
@@ -1139,6 +1142,18 @@ impl CaptureInstantTimeline {
             .saturating_add(source.saturating_sub(self.source_epoch))
     }
 
+    // Stamps one frame with `output` (kept monotonic and under the wall-clock
+    // bound) without moving the epoch, so later frames keep their capture
+    // cadence.
+    #[cfg(not(target_os = "linux"))]
+    fn place(&mut self, output: Duration, wall: Duration) -> Duration {
+        let bound = wall.saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
+        let output = output.clamp(self.last_output, bound.max(self.last_output));
+        self.last_output = output;
+        self.last_wall = Some(wall);
+        output
+    }
+
     fn calculate(
         &mut self,
         source: Duration,
@@ -1169,6 +1184,9 @@ struct VideoDriftTracker {
     capture_timeline: CaptureInstantTimeline,
     #[cfg(not(target_os = "linux"))]
     capture_clock: Option<CaptureInstantTimeline>,
+    #[cfg(not(target_os = "linux"))]
+    min_capture_lag_secs: Option<f64>,
+    waited_for_frame: bool,
     anchor: Option<(f64, f64)>,
     anchor_deferred: bool,
     capped_frame_count: u64,
@@ -1182,6 +1200,9 @@ impl VideoDriftTracker {
             capture_timeline: CaptureInstantTimeline::default(),
             #[cfg(not(target_os = "linux"))]
             capture_clock: None,
+            #[cfg(not(target_os = "linux"))]
+            min_capture_lag_secs: None,
+            waited_for_frame: true,
             anchor: None,
             anchor_deferred: false,
             capped_frame_count: 0,
@@ -1194,6 +1215,14 @@ impl VideoDriftTracker {
     // skip; the next frame settles onto the real source time.
     fn defer_anchor(&mut self, deferred: bool) {
         self.anchor_deferred = deferred;
+    }
+
+    // Whether the mux loop was idle waiting for this frame (the delay since
+    // capture happened before the hand-off) or the frame was already queued
+    // behind the loop (a mux-side delay, where the capture time is the right
+    // stamp whatever the delay).
+    fn waited_for_frame(&mut self, waited: bool) {
+        self.waited_for_frame = waited;
     }
 
     // Post-warmup video PTS are pinned to the wall clock, but anchored at the
@@ -1268,8 +1297,9 @@ impl VideoDriftTracker {
     // any hand-off delay, mux stall or drain burst would move the frame by that
     // delay, and a stall on the anchor frame would shift every later frame.
     // Both clocks run at the same rate, so dropping the processing delay is the
-    // only difference. The wall clock still bounds the output and sizes the
-    // bridge over a detected source discontinuity, never per frame.
+    // only difference. The wall clock still sizes the bridge over a detected
+    // source discontinuity, and stamps the frames whose capture time cannot be
+    // trusted, exactly as before.
     #[cfg(not(target_os = "linux"))]
     fn calculate_capture_timestamp(
         &mut self,
@@ -1278,7 +1308,19 @@ impl VideoDriftTracker {
         wall_clock_elapsed: Duration,
         discontinuity: bool,
     ) -> Duration {
-        let Some(timeline) = self.capture_clock.as_mut() else {
+        // How long after its capture time the frame reached the mux loop. Its
+        // minimum since the last source clock discontinuity is the clocks'
+        // base offset plus the quickest hand-off.
+        let lag_secs = wall_clock_elapsed.as_secs_f64() - capture_elapsed.as_secs_f64();
+        let min_lag_secs = match self.min_capture_lag_secs {
+            Some(min) if !discontinuity => min,
+            _ => lag_secs,
+        };
+
+        let (Some(timeline), Some((anchor_camera_secs, anchor_wall_secs))) =
+            (self.capture_clock.as_mut(), self.anchor)
+        else {
+            self.min_capture_lag_secs = Some(min_lag_secs.min(lag_secs));
             let output = self.calculate_timestamp(source_duration, wall_clock_elapsed);
             if self.anchor.is_some() {
                 self.capture_clock = Some(CaptureInstantTimeline::continuing(
@@ -1291,25 +1333,46 @@ impl VideoDriftTracker {
             return output;
         };
 
-        // A frame captured on the host clock cannot be stamped ahead of the
-        // time it is processed, so a capture time beyond the wall-clock bound
-        // is a source clock that jumped forward by less than the anomaly
-        // tracker's threshold. Bridge it like any other discontinuity rather
-        // than pinning every later frame to the bound.
+        if discontinuity {
+            self.min_capture_lag_secs = Some(lag_secs);
+            let (output, capped) = timeline.calculate(capture_elapsed, wall_clock_elapsed, true);
+            self.capped_frame_count += u64::from(capped);
+            return output;
+        }
+
+        // Capture times that cannot be trusted get the wall-clock stamp this
+        // tracker always gave them, for that frame only:
+        // - ahead of the wall-clock bound: a frame captured on the host clock
+        //   cannot be stamped after the moment it is processed, so its source
+        //   clock jumped forward by less than the anomaly tracker's threshold;
+        // - more than a second older than its hand-off to an idle mux loop:
+        //   ScreenCaptureKit has delivered a frame whose timestamp predated its
+        //   picture by 1.8 s after a static screen. Frames handed over late by
+        //   less (scheduling or capture-service stalls, whose timestamps were
+        //   exact in every measured case) and frames queued behind a mux stall
+        //   keep their capture time.
         let bound = wall_clock_elapsed
             .saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
-        let ahead = !discontinuity && timeline.candidate(capture_elapsed) > bound;
-        if ahead && !self.clamp_warning_logged {
-            warn!(
-                capture_secs = capture_elapsed.as_secs_f64(),
-                wall_clock_secs = wall_clock_elapsed.as_secs_f64(),
-                "Video capture clock ran ahead of the wall-clock bound, bridging it as a discontinuity"
-            );
-            self.clamp_warning_logged = true;
+        let ahead = timeline.candidate(capture_elapsed) > bound;
+        let stale = self.waited_for_frame && lag_secs - min_lag_secs > STALE_CAPTURE_SECS;
+        if ahead || stale {
+            if !self.clamp_warning_logged {
+                warn!(
+                    ahead,
+                    lag_ms = (lag_secs - min_lag_secs) * 1000.0,
+                    "Video capture time not trusted for this frame, stamping it from the wall clock"
+                );
+                self.clamp_warning_logged = true;
+            }
+            self.capped_frame_count += u64::from(ahead);
+            let wall_secs =
+                anchor_camera_secs + (wall_clock_elapsed.as_secs_f64() - anchor_wall_secs).max(0.0);
+            return timeline.place(Duration::from_secs_f64(wall_secs), wall_clock_elapsed);
         }
-        let (output, capped) =
-            timeline.calculate(capture_elapsed, wall_clock_elapsed, discontinuity || ahead);
-        self.capped_frame_count += u64::from(capped || ahead);
+
+        self.min_capture_lag_secs = Some(min_lag_secs.min(lag_secs));
+        let (output, capped) = timeline.calculate(capture_elapsed, wall_clock_elapsed, false);
+        self.capped_frame_count += u64::from(capped);
         output
     }
 
@@ -3084,6 +3147,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let res = stop_token
             .run_until_cancelled(async {
                 loop {
+                    let wait_started = std::time::Instant::now();
                     let (frame, released_at_arm) = if let Some(gate) = &start_gate
                         && held_frame.is_some()
                     {
@@ -3208,6 +3272,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
                     drift_tracker.defer_anchor(source_clock.lag_pending());
+                    drift_tracker.waited_for_frame(wait_started.elapsed() >= WAITED_FOR_FRAME);
                     let duration = calculate_video_timestamp(
                         &mut drift_tracker,
                         timestamp,
@@ -3337,6 +3402,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                         let resynced = anomaly_tracker.take_resync_flag();
                         drift_tracker.defer_anchor(source_clock.lag_pending());
+                        drift_tracker.waited_for_frame(false);
                         let duration = calculate_video_timestamp(
                             &mut drift_tracker,
                             timestamp,
@@ -4867,6 +4933,7 @@ mod tests {
             capture: Duration,
             wall: Duration,
             discontinuity: bool,
+            waited: bool,
         }
 
         fn frame(capture: Duration, wall: Duration) -> Frame {
@@ -4874,6 +4941,7 @@ mod tests {
                 capture,
                 wall,
                 discontinuity: false,
+                waited: true,
             }
         }
 
@@ -4882,6 +4950,7 @@ mod tests {
             let output = frames
                 .iter()
                 .map(|f| {
+                    tracker.waited_for_frame(f.waited);
                     calculate_video_timestamp(
                         &mut tracker,
                         Timestamp::Instant(Instant::now()),
@@ -4909,8 +4978,13 @@ mod tests {
             let mut wall = Duration::ZERO;
             (0..count)
                 .map(|i| {
-                    wall = wall.max(capture(i) + delay(i));
-                    frame(capture(i), wall)
+                    let handed_over = capture(i) + delay(i);
+                    let waited = handed_over >= wall;
+                    wall = wall.max(handed_over);
+                    Frame {
+                        waited,
+                        ..frame(capture(i), wall)
+                    }
                 })
                 .collect()
         }
@@ -5007,6 +5081,7 @@ mod tests {
                     capture: capture(k),
                     wall: last_wall + secs(2.5) + capture(k),
                     discontinuity: k == 0,
+                    waited: true,
                 });
             }
             let (output, _) = run(&frames);
@@ -5022,7 +5097,7 @@ mod tests {
         }
 
         #[test]
-        fn source_jumping_ahead_is_bridged_not_pinned_to_the_wall_clock() {
+        fn source_jumping_ahead_keeps_the_wall_clock_stamp() {
             // The capture clock jumps 0.5 s ahead (under the anomaly tracker's
             // 2 s threshold) without real time passing.
             let frames: Vec<Frame> = (0..240u64)
@@ -5045,6 +5120,25 @@ mod tests {
         }
 
         #[test]
+        fn one_off_forward_glitch_costs_one_frame() {
+            let latency = Duration::from_millis(20);
+            let frames: Vec<Frame> = (0..240u64)
+                .map(|i| {
+                    let glitch = if i == 150 { secs(1.5) } else { Duration::ZERO };
+                    frame(capture(i) + glitch, capture(i) + latency)
+                })
+                .collect();
+            let (output, _) = run(&frames);
+            assert_eq!(output[150], legacy(&frames)[150]);
+            assert!(output[150].abs_diff(capture(150)) <= EXACT);
+            for (i, (f, out)) in frames.iter().zip(&output).enumerate() {
+                if i != 150 {
+                    assert!(out.abs_diff(f.capture) <= EXACT, "frame {i}");
+                }
+            }
+        }
+
+        #[test]
         fn runaway_source_stays_bounded_and_monotonic() {
             let frames: Vec<Frame> = (0..1800u64)
                 .map(|i| {
@@ -5064,6 +5158,77 @@ mod tests {
             let last = output.last().unwrap().as_secs_f64();
             let wall = frames.last().unwrap().wall.as_secs_f64();
             assert!((last - wall).abs() < 0.2, "{last:.3} vs wall {wall:.3}");
+        }
+
+        #[test]
+        fn stale_capture_time_falls_back_to_the_wall_clock() {
+            // A static screen from frame 120 to 179; the first frame after it
+            // arrives on time but carries a capture time 1.83 s too old.
+            let latency = Duration::from_millis(15);
+            let mut frames: Vec<Frame> = (0..240u64)
+                .filter(|i| !(120..180).contains(i))
+                .map(|i| frame(capture(i), capture(i) + latency))
+                .collect();
+            let first_after = frames
+                .iter()
+                .position(|f| f.capture == capture(180))
+                .unwrap();
+            frames[first_after].capture = capture(180) - Duration::from_millis(1830);
+            let (output, _) = run(&frames);
+            assert!(
+                output[first_after].abs_diff(capture(180)) <= EXACT,
+                "stamped {:?}, the frame was handed over at {:?}",
+                output[first_after],
+                capture(180)
+            );
+            assert_eq!(output[first_after], legacy(&frames)[first_after]);
+            for (f, out) in frames.iter().zip(&output).skip(first_after + 1) {
+                assert!(out.abs_diff(f.capture) <= EXACT);
+            }
+        }
+
+        #[test]
+        fn late_delivery_under_the_bound_keeps_its_capture_time() {
+            // The capture service stalls: the frame after a static screen is
+            // handed over 0.9 s after its (correct) capture time.
+            let latency = Duration::from_millis(15);
+            let frames: Vec<Frame> = (0..240u64)
+                .filter(|i| !(120..180).contains(i))
+                .map(|i| {
+                    let late = if i == 180 {
+                        Duration::from_millis(900)
+                    } else {
+                        latency
+                    };
+                    frame(capture(i), capture(i) + late)
+                })
+                .collect();
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+        }
+
+        #[test]
+        fn mux_stall_beyond_the_bound_keeps_queued_frames_on_capture_time() {
+            // Sending frame 150 to the muxer blocks for 1.5 s; everything
+            // captured meanwhile queues behind the loop, so no frame is handed
+            // to an idle loop late and every frame keeps its capture time.
+            let mut free_at = Duration::ZERO;
+            let frames: Vec<Frame> = (0..300u64)
+                .map(|i| {
+                    let handed_over = capture(i) + Duration::from_millis(10);
+                    let waited = handed_over >= free_at;
+                    let wall = handed_over.max(free_at);
+                    free_at = wall + if i == 150 { secs(1.5) } else { Duration::ZERO };
+                    Frame {
+                        waited,
+                        ..frame(capture(i), wall)
+                    }
+                })
+                .collect();
+            assert!(frames[151..190].iter().all(|f| !f.waited));
+            assert!(frames[151].wall - frames[151].capture > secs(1.4));
+            let (output, _) = run(&frames);
+            assert_on_capture_time(&frames, &output);
         }
 
         #[test]
