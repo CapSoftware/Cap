@@ -325,8 +325,8 @@
       "runner": "macos-15",
       "target": "aarch64-apple-darwin",
       "shards": {
-        "fast": 2,
-        "full": 3
+        "fast": 1,
+        "full": 2
       },
       "archive": false
     },
