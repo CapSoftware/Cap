@@ -700,7 +700,22 @@ fn studio_builder(
 fn stimulus_binary() -> PathBuf {
     std::env::var_os("CAP_VERIFY_STIMULUS_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_cap-verify-stimulus")))
+        .unwrap_or_else(|| {
+            // Built by `cargo build -p cap-verify-stimulus` into the same
+            // target directory as this test (target/<profile>/deps/..).
+            let exe = std::env::current_exe().expect("test executable path");
+            let path = exe
+                .parent()
+                .and_then(|deps| deps.parent())
+                .expect("target profile directory")
+                .join("cap-verify-stimulus");
+            assert!(
+                path.exists(),
+                "{} not found: build it first with `cargo build -p cap-verify-stimulus` (same profile), or set CAP_VERIFY_STIMULUS_BIN",
+                path.display()
+            );
+            path
+        })
 }
 
 fn find_window(title: &str) -> Option<scap_targets::WindowId> {
