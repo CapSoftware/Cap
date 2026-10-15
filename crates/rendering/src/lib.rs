@@ -7663,6 +7663,8 @@ pub struct RendererLayers {
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
     realtime_camera_effects: bool,
+    #[cfg(test)]
+    split_layer_passes: bool,
 }
 
 fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
@@ -7786,6 +7788,8 @@ impl RendererLayers {
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
                 realtime_camera_effects: false,
+                #[cfg(test)]
+                split_layer_passes: false,
             }
         });
         layers_phase.finish("returned");
@@ -8293,6 +8297,8 @@ impl RendererLayers {
         let mut passes = LayerPasses {
             encoder,
             open: None,
+            #[cfg(test)]
+            split: self.split_layer_passes,
         };
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let load = wgpu::LoadOp::Load;
@@ -8532,9 +8538,14 @@ impl RendererLayers {
 /// Every pass boundary costs a store and reload of the whole attachment on
 /// Apple's tile-based GPUs, and wgpu-core gives each pass its own native
 /// command buffer, so a pass per layer multiplied both by the layer count.
+/// Because consecutive layers share one pass, a layer that changes dynamic
+/// pass state (scissor, viewport, blend constant, stencil reference) must
+/// restore it before returning.
 struct LayerPasses<'a> {
     encoder: &'a mut wgpu::CommandEncoder,
     open: Option<(wgpu::TextureView, wgpu::RenderPass<'static>)>,
+    #[cfg(test)]
+    split: bool,
 }
 
 impl LayerPasses<'_> {
@@ -8544,6 +8555,7 @@ impl LayerPasses<'_> {
         load: wgpu::LoadOp<wgpu::Color>,
     ) -> &mut wgpu::RenderPass<'static> {
         let continues_open_pass = matches!(load, wgpu::LoadOp::Load)
+            && !self.splits_every_layer()
             && self
                 .open
                 .as_ref()
@@ -8578,6 +8590,16 @@ impl LayerPasses<'_> {
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
         self.open = None;
         self.encoder
+    }
+
+    #[cfg(test)]
+    fn splits_every_layer(&self) -> bool {
+        self.split
+    }
+
+    #[cfg(not(test))]
+    fn splits_every_layer(&self) -> bool {
+        false
     }
 }
 
