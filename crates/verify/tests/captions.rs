@@ -525,7 +525,7 @@ fn projection_case(name: &str, mix: OpMix, seeds: u64) {
             !projection_problems(&base, ops, &captions, &durations, seed).is_empty()
         });
         let minimal_problems = projection_problems(&base, &minimal, &captions, &durations, seed);
-        case.problem(format!(
+        case.problem("caption-track", format!(
             "seed {seed}: clips {durations:?}, {} captions, shrunk from {} to {} ops {minimal:?}: {} problems (first: {})",
             captions.len(),
             ops.len(),
@@ -538,7 +538,10 @@ fn projection_case(name: &str, mix: OpMix, seeds: u64) {
         "{seeds} random caption sets and edit sequences, {pieces} projected pieces, {failed} failed"
     ));
     if failed > 3 {
-        case.problem(format!("{failed} sequences failed in total"));
+        case.problem(
+            "caption-track",
+            format!("{failed} sequences failed in total"),
+        );
     }
     finish(case);
 }
@@ -551,7 +554,7 @@ fn projection_cuts_speeds() {
             transitions: false,
             holds: false,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
     );
 }
 
@@ -563,7 +566,7 @@ fn projection_transitions() {
             transitions: true,
             holds: false,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
     );
 }
 
@@ -575,7 +578,7 @@ fn projection_holds() {
             transitions: false,
             holds: true,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
     );
 }
 
@@ -587,7 +590,7 @@ fn projection_all() {
             transitions: true,
             holds: true,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
     );
 }
 
@@ -697,7 +700,7 @@ fn legacy_migration() {
         return;
     }
     let mut case = Case::new(id);
-    let seeds = seeds(300, 3000);
+    let seeds = seeds(1000, 20000);
     let mut failed = 0;
     for seed in 0..seeds {
         let mut rng = Rng::new(0xCA97_1000 ^ (seed << 8));
@@ -725,7 +728,7 @@ fn legacy_migration() {
             !migration_problems(&base, ops, &captions, &durations).is_empty()
         });
         let problems = migration_problems(&base, &minimal, &captions, &durations);
-        case.problem(format!(
+        case.problem("caption-migration", format!(
             "seed {seed}: clips {durations:?}, shrunk to ops {minimal:?}: {} problems (first: {})",
             problems.len(),
             problems
@@ -738,7 +741,10 @@ fn legacy_migration() {
     }
     case.note(format!("{seeds} legacy projects migrated, {failed} failed"));
     if failed > 3 {
-        case.problem(format!("{failed} sequences failed in total"));
+        case.problem(
+            "caption-migration",
+            format!("{failed} sequences failed in total"),
+        );
     }
     finish(case);
 }
@@ -808,13 +814,13 @@ fn round_trip_on_disk() {
         let project = dir.path().join(format!("seed-{seed}"));
         std::fs::create_dir_all(&project).expect("project dir");
         if let Err(e) = config.write(&project) {
-            case.problem(format!("seed {seed}: write failed: {e}"));
+            case.problem("error", format!("seed {seed}: write failed: {e}"));
             continue;
         }
         let loaded = match ProjectConfiguration::load(&project) {
             Ok(loaded) => loaded,
             Err(e) => {
-                case.problem(format!("seed {seed}: load failed: {e}"));
+                case.problem("error", format!("seed {seed}: load failed: {e}"));
                 continue;
             }
         };
@@ -825,16 +831,18 @@ fn round_trip_on_disk() {
             )
         };
         if json(&config) != json(&loaded) {
-            case.problem(format!(
-                "seed {seed}: captions changed through project-config.json"
-            ));
+            case.problem(
+                "caption-roundtrip",
+                format!("seed {seed}: captions changed through project-config.json"),
+            );
         }
         let mut resynced = loaded.clone();
         cap_project::synchronize_captions(&mut resynced, &durations);
         if json(&resynced) != json(&loaded) {
-            case.problem(format!(
-                "seed {seed}: re-projecting a loaded project changed its captions"
-            ));
+            case.problem(
+                "caption-roundtrip",
+                format!("seed {seed}: re-projecting a loaded project changed its captions"),
+            );
         }
     }
     // The legacy captions.json sidecar of older projects: output-timed
@@ -856,10 +864,13 @@ fn round_trip_on_disk() {
     let meta = RecordingMeta::load_for_project(&copy).expect("meta");
     let loaded = meta.project_config();
     match &loaded.captions {
-        None => case.problem("captions.json sidecar was not loaded"),
+        None => case.problem("caption-roundtrip", "captions.json sidecar was not loaded"),
         Some(c) => {
             if serde_json::to_value(c).ok() != serde_json::to_value(&legacy).ok() {
-                case.problem("captions.json sidecar loaded with different captions");
+                case.problem(
+                    "caption-roundtrip",
+                    "captions.json sidecar loaded with different captions",
+                );
             }
         }
     }
@@ -952,9 +963,10 @@ fn display_durations(case: &mut Case, project: &common::Project, spec: &FixtureS
     for (d, s) in durations.iter().zip(&spec.segments) {
         let truth = s.display.timing.duration(s.display.fps);
         if (d - truth).abs() > 1.0 / f64::from(s.display.fps) + 1e-6 {
-            case.problem(format!(
-                "display duration {d:.4}s, the track has {truth:.4}s of frames"
-            ));
+            case.problem(
+                "duration",
+                format!("display duration {d:.4}s, the track has {truth:.4}s of frames"),
+            );
         }
     }
     durations
@@ -1133,16 +1145,19 @@ fn transcription_audio_words() {
             worst * 1000.0
         ));
     } else {
-        case.problem(format!(
-            "{} problems (first: {})",
-            problems.len(),
-            problems
-                .iter()
-                .take(4)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("; ")
-        ));
+        case.problem(
+            "caption-words",
+            format!(
+                "{} problems (first: {})",
+                problems.len(),
+                problems
+                    .iter()
+                    .take(4)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        );
     }
     // The transcribed captions through a reorder of the two takes, projected
     // with the spec's display lengths as the source of truth.
@@ -1171,11 +1186,14 @@ fn transcription_audio_words() {
         &model_project(&captions, &config, &durations),
     );
     if !track_problems.is_empty() {
-        case.problem(format!(
-            "reordered takes: {} caption problems (first: {})",
-            track_problems.len(),
-            track_problems[0]
-        ));
+        case.problem(
+            "caption-track",
+            format!(
+                "reordered takes: {} caption problems (first: {})",
+                track_problems.len(),
+                track_problems[0]
+            ),
+        );
     }
     finish(case);
 }
@@ -1418,15 +1436,18 @@ fn render_case(
                 .map(|frames| (templates, frames))
         });
     match result {
-        Err(e) => case.problem(format!("export failed: {e}")),
+        Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok((templates, frames)) => {
             let time = TimeModel::new(&config);
             let expected_frames = (time.duration() * f64::from(RENDER_FPS)).ceil() as usize;
             if frames.len() != expected_frames {
-                case.problem(format!(
-                    "{} frames, the timeline needs {expected_frames}",
-                    frames.len()
-                ));
+                case.problem(
+                    "frame-count",
+                    format!(
+                        "{} frames, the timeline needs {expected_frames}",
+                        frames.len()
+                    ),
+                );
             }
             let mut wrong = Vec::new();
             let (mut checked, mut shown) = (0, 0);
@@ -1478,11 +1499,14 @@ fn render_case(
             if wrong.is_empty() {
                 case.note(summary);
             } else {
-                case.problem(format!(
-                    "{summary}; {} frames wrong (first: {})",
-                    wrong.len(),
-                    wrong.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
-                ));
+                case.problem(
+                    "caption-frame",
+                    format!(
+                        "{summary}; {} frames wrong (first: {})",
+                        wrong.len(),
+                        wrong.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
+                    ),
+                );
             }
         }
     }
@@ -1600,8 +1624,10 @@ fn editor_open() {
     let project = common::project(&spec);
     let mut durations_check = Case::new("captions/editor-open/durations");
     let durations = display_durations(&mut durations_check, &project, &spec);
-    let mut rng = Rng::new(0xCA97_3000);
-    let captions = random_captions(&mut rng, durations.iter().sum());
+    let captions = (0..)
+        .map(|seed| random_captions(&mut Rng::new(0xCA97_3000 + seed), durations.iter().sum()))
+        .find(|captions| captions.len() >= 5)
+        .expect("captions");
     let edit = |config: &mut ProjectConfiguration| {
         let timeline = config.timeline.as_mut().expect("timeline");
         timeline.segments.reverse();
@@ -1620,7 +1646,7 @@ fn editor_open() {
         }
         let mut case = Case::new(&id);
         for problem in &durations_check.problems {
-            case.problem(problem.clone());
+            case.problem("duration", problem.clone());
         }
         let dir = common::scratch_dir(&id);
         let mut config = project.config();
@@ -1652,12 +1678,15 @@ fn editor_open() {
             }
         };
         match open_in_editor(&rt, &project, &config, dir.path(), sidecar.as_ref()) {
-            Err(e) => case.problem(format!("editor failed to open: {e}")),
+            Err(e) => case.problem("error", format!("editor failed to open: {e}")),
             Ok(loaded) => match &loaded.captions {
-                None => case.problem("no captions after opening"),
+                None => case.problem("caption-migration", "no captions after opening"),
                 Some(data) => {
                     if !data.source_timed {
-                        case.problem("captions still output-timed after opening");
+                        case.problem(
+                            "caption-migration",
+                            "captions still output-timed after opening",
+                        );
                     }
                     let same = data.segments.len() == expected_captions.len()
                         && data.segments.iter().zip(&expected_captions).all(|(a, b)| {
@@ -1667,11 +1696,14 @@ fn editor_open() {
                                 && a.words.len() == b.words.len()
                         });
                     if !same {
-                        case.problem(format!(
-                            "stored captions after opening differ from the model ({} vs {})",
-                            data.segments.len(),
-                            expected_captions.len()
-                        ));
+                        case.problem(
+                            "caption-migration",
+                            format!(
+                                "stored captions after opening differ from the model ({} vs {})",
+                                data.segments.len(),
+                                expected_captions.len()
+                            ),
+                        );
                     }
                     let problems = compare_track(
                         &edits::timeline(&loaded).caption_segments,
@@ -1684,11 +1716,10 @@ fn editor_open() {
                             edits::timeline(&loaded).caption_segments.len()
                         ));
                     } else {
-                        case.problem(format!(
-                            "{} track problems (first: {})",
-                            problems.len(),
-                            problems[0]
-                        ));
+                        case.problem(
+                            "caption-track",
+                            format!("{} track problems (first: {})", problems.len(), problems[0]),
+                        );
                     }
                 }
             },

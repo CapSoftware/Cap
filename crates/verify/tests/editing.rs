@@ -68,6 +68,15 @@ enum Check {
     Coverage,
 }
 
+impl Check {
+    fn class(self) -> &'static str {
+        match self {
+            Check::Mapping => "mapping",
+            Check::Coverage => "coverage",
+        }
+    }
+}
+
 /// Checks one edited config; returns the problems.
 fn check_config(
     config: &ProjectConfiguration,
@@ -177,7 +186,7 @@ fn mapping_case(name: &str, mix: OpMix, seeds: u64, check: Check) {
         });
         let minimal_problems =
             check_config(&edits::replay(&base, &minimal), &durations, seed, check);
-        case.problem(format!(
+        case.problem(check.class(), format!(
             "seed {seed}: clips {durations:?}, shrunk from {} to {} ops {minimal:?}: {} mismatches (first: {})",
             ops.len(),
             minimal.len(),
@@ -194,7 +203,7 @@ fn mapping_case(name: &str, mix: OpMix, seeds: u64, check: Check) {
         "{seeds} random edit sequences, {probes} probe times, {failed} sequences failed"
     ));
     if failed > 3 {
-        case.problem(format!("{failed} sequences failed in total"));
+        case.problem(check.class(), format!("{failed} sequences failed in total"));
     }
     finish(case);
 }
@@ -229,7 +238,7 @@ fn mapping_cuts_speeds() {
             transitions: false,
             holds: false,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
         Check::Mapping,
     );
 }
@@ -242,7 +251,7 @@ fn mapping_transitions() {
             transitions: true,
             holds: false,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
         Check::Mapping,
     );
 }
@@ -255,7 +264,7 @@ fn mapping_holds() {
             transitions: false,
             holds: true,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
         Check::Mapping,
     );
 }
@@ -268,7 +277,7 @@ fn mapping_all() {
             transitions: true,
             holds: true,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
         Check::Mapping,
     );
 }
@@ -284,7 +293,7 @@ fn mapping_duration_covered() {
             transitions: true,
             holds: true,
         },
-        seeds(300, 3000),
+        seeds(1000, 20000),
         Check::Coverage,
     );
 }
@@ -331,7 +340,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
             &run,
             &dir.path().join("out.mp4"),
         )) {
-            Err(e) => case.problem(format!("export failed: {e}")),
+            Err(e) => case.problem("error", format!("export failed: {e}")),
             Ok(out) => {
                 let frames = common::read_output(&out);
                 common::check_sequence(&mut case, &model, &frames, fps, true);
@@ -387,16 +396,19 @@ fn hold_past_end_export() {
         &run,
         &dir.path().join("out.mp4"),
     )) {
-        Err(e) => case.problem(format!("export failed: {e}")),
+        Err(e) => case.problem("error", format!("export failed: {e}")),
         Ok(out) => {
             let frames = common::read_output(&out).len();
             let expected = (duration * f64::from(fps)).ceil() as usize;
             if frames == expected {
                 case.note(format!("{frames} frames for the {duration:.3}s timeline"));
             } else {
-                case.problem(format!(
-                    "{frames} frames exported, the {duration:.3}s timeline needs {expected}"
-                ));
+                case.problem(
+                    "frame-count",
+                    format!(
+                        "{frames} frames exported, the {duration:.3}s timeline needs {expected}"
+                    ),
+                );
             }
         }
     }
