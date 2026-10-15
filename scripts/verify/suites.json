@@ -1,5 +1,5 @@
 {
-	"_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them.",
+	"_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them. Exception: hosted Windows runners have no D3D11 video device, so every Windows case decodes with FFmpeg (the code Linux runs) and renders on the WARP software rasterizer; there the 120 s jitter-camera export and playback and the 3000-seek storms took 6 to more than 15 minutes each (killed at the 15 minute per-test limit in 4 of 5 full runs), so FULL leaves them to Linux and macOS.",
 	"suites": [
 		{
 			"name": "verify-self",
@@ -33,6 +33,9 @@
 						"export/jitter-camera-*",
 						"export/*/uhd-*"
 					]
+				},
+				"full": {
+					"windows": ["export/jitter-camera-120s/*"]
 				}
 			}
 		},
@@ -50,6 +53,9 @@
 			"skip": {
 				"fast": {
 					"macos": ["playback/*/ffmpeg"]
+				},
+				"full": {
+					"windows": ["playback/jitter-camera-120s/*"]
 				}
 			}
 		},
@@ -67,6 +73,9 @@
 			"skip": {
 				"fast": {
 					"macos": ["seek/*/ffmpeg"]
+				},
+				"full": {
+					"windows": ["seek/*/storm*"]
 				}
 			}
 		},
