@@ -54,7 +54,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: aarch64-apple-darwin
-          prefix-key: v1-rust-verify-recording
+          prefix-key: v1-rust-verify-recording-${{ matrix.runner }}
           save-cache: "true"
 
       - uses: ./.github/actions/install-desktop-deps
