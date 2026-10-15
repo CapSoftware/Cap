@@ -418,3 +418,33 @@ platforms = ["macos"]
 flaky = true
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture)"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+
+# Camera timestamps past the drift anchor. The synthetic camera hands every
+# frame over with its exact capture time; until two seconds into the track
+# the recorder writes exactly that time, after it the recorder writes the
+# processing wall clock instead (VideoDriftTracker::calculate_timestamp in
+# crates/recording/src/output_pipeline/core.rs: pts = anchor + wall-clock
+# delta). Frame-level logs (run 38753929239): before the anchor written pts
+# minus source time is 0.00 ms for every frame; past it, -1.1 to +4.9 ms and
+# +71 ms for the first frame after a source gap (the frame's source time was
+# snapped onto the skipped slot, the wall clock ignores it), equal to each
+# frame's processing delay (2.5 to 8.5 ms). Every camera recording shows it:
+# offset spread 5.0 to 450 ms across 56 runs (exact stamping stays within
+# 1.7 ms of file rounding). User impact: camera frames jitter by the
+# recorder's processing delay, which under load reached +293 ms at the end
+# of a recording and froze a 57 ms lag into the track for seconds.
+
+[[xfail]]
+case = "recording/studio-camera/startup-drops"
+class = "camera-clock"
+platforms = ["macos"]
+reason = "NEW: camera frames past the 2 s drift anchor are stamped from the processing wall clock instead of their capture time (see above); offsets vary by 5 to 97 ms, 28 of 28 runs"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38753929239"
+
+[[xfail]]
+case = "recording/studio-camera/long"
+class = "camera-clock"
+platforms = ["macos"]
+reason = "NEW: camera frames past the 2 s drift anchor are stamped from the processing wall clock instead of their capture time (see above); offsets vary by 6.7 to 450 ms, 28 of 28 runs"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38753929239"
+

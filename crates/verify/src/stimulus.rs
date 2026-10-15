@@ -86,6 +86,16 @@ pub enum StimulusEvent {
     Done {
         host: u64,
     },
+    /// A frame delivered to the stimulus's own ScreenCaptureKit stream (a
+    /// separate client in a separate process from the recorder), with the
+    /// host time it was captured: independent proof of what the window
+    /// server composited and the capture service delivered.
+    Observed {
+        host: u64,
+    },
+    ObserverUnavailable {
+        reason: String,
+    },
     /// Kernel status of the stimulus's priority requests (0 = applied).
     Priority {
         qos: i32,
