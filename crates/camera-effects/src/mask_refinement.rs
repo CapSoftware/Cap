@@ -415,7 +415,6 @@ mod tests {
         assert_eq!(frame.as_ptr(), frame_pointer);
     }
 
-    /// The breadth-first implementation the run-based regions replaced.
     mod reference {
         pub struct Reference {
             width: usize,
