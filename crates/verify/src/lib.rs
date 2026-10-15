@@ -5,3 +5,7 @@ pub mod audio_code;
 pub mod media;
 pub mod oracle;
 pub mod video_code;
+pub mod catalog;
+pub mod fixture;
+pub mod model;
+pub mod report;
