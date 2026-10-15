@@ -42,6 +42,9 @@ on:
       cargo-config:
         type: string
         default: ""
+      cargo-log:
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -135,6 +138,8 @@ jobs:
       - name: Build
         if: ${{ !inputs.archive }}
         shell: bash
+        env:
+          CARGO_LOG: ${{ inputs.cargo-log }}
         run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --no-run
 
       - name: Record sources of the cached build

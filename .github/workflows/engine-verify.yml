@@ -36,6 +36,10 @@ on:
         description: "Extra cargo --config overrides, separated by ; (profile experiments)"
         type: string
         default: ""
+      cargo-log:
+        description: "CARGO_LOG for the build (for example cargo::core::compiler::fingerprint=info)"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       tier:
@@ -171,6 +175,7 @@ jobs:
       archive: ${{ matrix.archive }}
       save-cache: ${{ needs.plan.outputs.save-cache == 'true' }}
       cargo-config: ${{ inputs.cargo-config || '' }}
+      cargo-log: ${{ inputs.cargo-log || '' }}
 
   gate:
     name: Engine verify
