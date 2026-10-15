@@ -169,10 +169,18 @@ pub struct OutputFrame {
 
 fn picture_hash(frame: &ffmpeg::frame::Video) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let planes = if frame.format() == ffmpeg::format::Pixel::NV12 { 2 } else { 3 };
+    let planes = if frame.format() == ffmpeg::format::Pixel::NV12 {
+        2
+    } else {
+        3
+    };
     for plane in 0..planes.min(frame.planes()) {
         let width = frame.plane_width(plane) as usize
-            * if frame.format() == ffmpeg::format::Pixel::NV12 && plane == 1 { 2 } else { 1 };
+            * if frame.format() == ffmpeg::format::Pixel::NV12 && plane == 1 {
+                2
+            } else {
+                1
+            };
         let stride = frame.stride(plane);
         let data = frame.data(plane);
         for row in 0..frame.plane_height(plane) as usize {
@@ -224,14 +232,20 @@ pub fn check_sequence(
             .take(5)
             .collect();
         if !off_grid.is_empty() {
-            case.problem(format!("output timestamps off the {fps} fps grid: {off_grid:?}"));
+            case.problem(format!(
+                "output timestamps off the {fps} fps grid: {off_grid:?}"
+            ));
         }
     }
     let n = frames.len().min(expected_count as usize);
     let expectations: Vec<_> = (0..n as u32).map(|i| model.expect(i, fps)).collect();
     for kind in StreamKind::ALL {
-        let exp: Vec<StreamExpectation> = expectations.iter().map(|e| e.get(kind).clone()).collect();
-        let obs: Vec<_> = frames[..n].iter().map(|f| f.readout.get(kind).clone()).collect();
+        let exp: Vec<StreamExpectation> =
+            expectations.iter().map(|e| e.get(kind).clone()).collect();
+        let obs: Vec<_> = frames[..n]
+            .iter()
+            .map(|f| f.readout.get(kind).clone())
+            .collect();
         case.stream(oracle::check_stream(kind, &exp, &obs, fps));
     }
 }
@@ -336,7 +350,12 @@ impl Player {
 
     /// Renders output frame `frame` and reads its markers. `None` when the
     /// timeline has no segment there or the decoders returned nothing.
-    pub async fn frame(&mut self, frame: u32, fps: u32, seek: bool) -> Result<FrameReadout, String> {
+    pub async fn frame(
+        &mut self,
+        frame: u32,
+        fps: u32,
+        seek: bool,
+    ) -> Result<FrameReadout, String> {
         let t = f64::from(frame) / f64::from(fps);
         let (segment_time, segment) = self
             .config
@@ -412,8 +431,13 @@ pub fn check_requests(
 ) {
     let expectations: Vec<_> = frames.iter().map(|&f| model.expect(f, fps)).collect();
     for kind in StreamKind::ALL {
-        let exp: Vec<StreamExpectation> = expectations.iter().map(|e| e.get(kind).clone()).collect();
+        let exp: Vec<StreamExpectation> =
+            expectations.iter().map(|e| e.get(kind).clone()).collect();
         let obs: Vec<_> = readouts.iter().map(|r| r.get(kind).clone()).collect();
         case.stream(oracle::check_stream_at(kind, &exp, &obs, frames, fps));
     }
+}
+
+pub fn assert_passed(failures: Vec<String>) {
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

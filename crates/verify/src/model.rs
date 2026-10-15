@@ -316,7 +316,11 @@ impl ReferenceModel {
         let mut allowed = Vec::new();
         for slot in slots {
             let upto = numbers.partition_point(|&n| n <= slot);
-            let target = if upto == 0 { numbers[0] } else { numbers[upto - 1] };
+            let target = if upto == 0 {
+                numbers[0]
+            } else {
+                numbers[upto - 1]
+            };
             for (frame, &n) in track.frames.iter().zip(&numbers) {
                 if n == target && !allowed.contains(&frame.index) {
                     allowed.push(frame.index);

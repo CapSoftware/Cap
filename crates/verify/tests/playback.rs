@@ -20,12 +20,20 @@ fn no_edit(_: &mut ProjectConfiguration) {}
 fn cuts(config: &mut ProjectConfiguration) {
     common::set_cuts(
         config,
-        &[(0.5, 2.0, 1.0), (2.5, 4.0, 2.0), (1.0, 2.0, 0.5), (4.0, 5.8, 1.5)],
+        &[
+            (0.5, 2.0, 1.0),
+            (2.5, 4.0, 2.0),
+            (1.0, 2.0, 0.5),
+            (4.0, 5.8, 1.5),
+        ],
     );
 }
 
 fn backward_jumps(config: &mut ProjectConfiguration) {
-    common::set_cuts(config, &[(5.0, 35.0, 1.0), (44.0, 50.0, 1.0), (28.0, 45.0, 1.0)]);
+    common::set_cuts(
+        config,
+        &[(5.0, 35.0, 1.0), (44.0, 50.0, 1.0), (28.0, 45.0, 1.0)],
+    );
 }
 
 /// Plays `[start, end)` output frames sequentially (the first as a seek).
@@ -34,7 +42,7 @@ fn sequential(
     edit: (&str, fn(&mut ProjectConfiguration)),
     fps: u32,
     start_fraction: f64,
-) {
+) -> Vec<String> {
     let project = common::project(&spec);
     let rt = common::runtime();
     let mut failures = Vec::new();
@@ -72,44 +80,96 @@ fn sequential(
             failures.push(message);
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures
 }
 
 #[test]
 fn basic_sequential() {
-    sequential(catalog::basic(report::tier()), ("full", no_edit), 30, 0.0);
-    sequential(catalog::basic(report::tier()), ("cuts-speeds-reorder", cuts), 60, 0.0);
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(sequential(
+        catalog::basic(report::tier()),
+        ("full", no_edit),
+        30,
+        0.0,
+    ));
+    failures.extend(sequential(
+        catalog::basic(report::tier()),
+        ("cuts-speeds-reorder", cuts),
+        60,
+        0.0,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn play_from_middle() {
+    let mut failures: Vec<String> = Vec::new();
     let seed = 0x9A1D_0001;
     let mut rng = Rng::new(seed);
     eprintln!("seed {seed:#x}");
     for _ in 0..2 {
         let start = 0.2 + rng.f64() * 0.6;
-        sequential(catalog::basic(report::tier()), ("full", no_edit), 30, start);
+        failures.extend(sequential(
+            catalog::basic(report::tier()),
+            ("full", no_edit),
+            30,
+            start,
+        ));
     }
-    sequential(catalog::vfr_holds(report::tier()), ("full", no_edit), 60, 0.3);
+    failures.extend(sequential(
+        catalog::vfr_holds(report::tier()),
+        ("full", no_edit),
+        60,
+        0.3,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn vfr_holds_sequential() {
-    sequential(catalog::vfr_holds(report::tier()), ("full", no_edit), 30, 0.0);
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(sequential(
+        catalog::vfr_holds(report::tier()),
+        ("full", no_edit),
+        30,
+        0.0,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn backward_jumps_sequential() {
-    sequential(catalog::backward_hold(report::tier()), ("backward-jumps", backward_jumps), 30, 0.0);
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(sequential(
+        catalog::backward_hold(report::tier()),
+        ("backward-jumps", backward_jumps),
+        30,
+        0.0,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn jitter_camera_sequential() {
+    let mut failures: Vec<String> = Vec::new();
     let fps = if report::tier() == Tier::Full { 60 } else { 30 };
-    sequential(catalog::jitter_camera(report::tier()), ("full", no_edit), fps, 0.0);
+    failures.extend(sequential(
+        catalog::jitter_camera(report::tier()),
+        ("full", no_edit),
+        fps,
+        0.0,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn multi_segment_sequential() {
-    sequential(catalog::multi_segment(report::tier()), ("full", no_edit), 30, 0.0);
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(sequential(
+        catalog::multi_segment(report::tier()),
+        ("full", no_edit),
+        30,
+        0.0,
+    ));
+    common::assert_passed(failures);
 }

@@ -36,7 +36,7 @@ fn run(
     decoders: &[Decoder],
     resolution: (u32, u32),
     determinism: bool,
-) {
+) -> Vec<String> {
     let project = common::project(&spec);
     let rt = common::runtime();
     let mut failures = Vec::new();
@@ -64,7 +64,13 @@ fn run(
                     Err(e) => case.problem(format!("export failed: {e}")),
                     Ok(path) => {
                         let frames = common::read_output(&path);
-                        common::check_sequence(&mut case, &model, &frames, fps, format == Format::Mp4);
+                        common::check_sequence(
+                            &mut case,
+                            &model,
+                            &frames,
+                            fps,
+                            format == Format::Mp4,
+                        );
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
                             match rt.block_on(common::export(&project, config, &run, &second)) {
@@ -97,7 +103,7 @@ fn run(
             }
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures
 }
 
 const RES: (u32, u32) = (480, 270);
@@ -141,7 +147,8 @@ fn hide_camera_scene(config: &mut ProjectConfiguration) {
 
 #[test]
 fn basic() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::basic(report::tier()),
         &[
             Variant {
@@ -169,12 +176,14 @@ fn basic() {
         &Decoder::all(),
         RES,
         false,
-    );
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn gif() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::basic(report::tier()),
         &[Variant {
             edit: "cuts-speeds-reorder",
@@ -184,12 +193,14 @@ fn gif() {
         &[Decoder::Default],
         (320, 180),
         false,
-    );
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn vfr_holds() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::vfr_holds(report::tier()),
         &[Variant {
             edit: "full",
@@ -199,14 +210,16 @@ fn vfr_holds() {
         &Decoder::all(),
         RES,
         false,
-    );
+    ));
+    common::assert_passed(failures);
 }
 
 /// Long recordings with a jittery ~12 fps camera at 30 fps nominal exported
 /// at 60 fps: the camera must never run ahead of the screen.
 #[test]
 fn jitter_camera() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::jitter_camera(report::tier()),
         &[Variant {
             edit: "full",
@@ -216,17 +229,22 @@ fn jitter_camera() {
         &Decoder::all(),
         RES,
         report::tier() == Tier::Full,
-    );
+    ));
+    common::assert_passed(failures);
 }
 
 fn backward_jumps(config: &mut ProjectConfiguration) {
-    common::set_cuts(config, &[(5.0, 35.0, 1.0), (44.0, 50.0, 1.0), (28.0, 45.0, 1.0)]);
+    common::set_cuts(
+        config,
+        &[(5.0, 35.0, 1.0), (44.0, 50.0, 1.0), (28.0, 45.0, 1.0)],
+    );
 }
 
 /// Play past a long hold, elsewhere, then jump back into the hold.
 #[test]
 fn backward_hold() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::backward_hold(report::tier()),
         &[Variant {
             edit: "backward-jumps",
@@ -236,17 +254,19 @@ fn backward_hold() {
         &Decoder::all(),
         RES,
         false,
-    );
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
 fn start_offsets() {
+    let mut failures: Vec<String> = Vec::new();
     for spec in [
         catalog::late_camera(report::tier()),
         catalog::early_camera(report::tier()),
         catalog::camera_pts_late(report::tier()),
     ] {
-        run(
+        failures.extend(run(
             spec,
             &[Variant {
                 edit: "full",
@@ -256,13 +276,15 @@ fn start_offsets() {
             &Decoder::all(),
             RES,
             false,
-        );
+        ));
     }
+    common::assert_passed(failures);
 }
 
 #[test]
 fn multi_segment() {
-    run(
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
         catalog::multi_segment(report::tier()),
         &[Variant {
             edit: "full",
@@ -272,5 +294,6 @@ fn multi_segment() {
         &Decoder::all(),
         RES,
         true,
-    );
+    ));
+    common::assert_passed(failures);
 }

@@ -108,6 +108,27 @@ pub fn seek_gop(_tier: Tier) -> FixtureSpec {
     }
 }
 
+/// The seek fixture written by the product's macOS encoder (AVAssetWriter
+/// + VideoToolbox, its own GOP structure, 1/600 time base). Keyframes at
+/// k/30 s are off the 10 ms grid for most k. Identical to `seek_gop`
+/// elsewhere.
+pub fn seek_gop_native(_tier: Tier) -> FixtureSpec {
+    let duration = 12.0;
+    let native = |mut track: VideoTrackSpec| {
+        track.encoder = crate::fixture::TrackEncoder::AvFoundation;
+        track
+    };
+    FixtureSpec {
+        name: "seek-native".into(),
+        segments: vec![SegmentSpec {
+            display: native(screen(30, Timing::Constant { duration })),
+            camera: Some(native(camera(Timing::Constant { duration }))),
+            mic: None,
+            system_audio: None,
+        }],
+    }
+}
+
 /// Camera that starts 1.5 s after the screen (it is the latest track).
 pub fn late_camera(_tier: Tier) -> FixtureSpec {
     let duration = 6.0;

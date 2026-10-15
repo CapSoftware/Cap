@@ -25,7 +25,7 @@ fn run(
     fps: u32,
     edit: fn(&mut ProjectConfiguration),
     make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
-) {
+) -> Vec<String> {
     let project = common::project(&spec);
     let rt = common::runtime();
     let mut failures = Vec::new();
@@ -57,7 +57,7 @@ fn run(
             failures.push(message);
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures
 }
 
 fn no_edit(_: &mut ProjectConfiguration) {}
@@ -88,24 +88,47 @@ fn storm(seed: u64, count: usize) -> impl Fn(u32, &common::Project) -> Vec<Reque
 
 #[test]
 fn random_storm() {
+    let mut failures: Vec<String> = Vec::new();
     let count = seek_count(150, 3000);
-    run(catalog::seek_gop(report::tier()), "storm", 30, no_edit, &storm(0x5EE4_0001, count));
-    run(catalog::vfr_holds(report::tier()), "storm", 60, no_edit, &storm(0x5EE4_0002, count));
+    failures.extend(run(
+        catalog::seek_gop(report::tier()),
+        "storm",
+        30,
+        no_edit,
+        &storm(0x5EE4_0001, count),
+    ));
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        "storm",
+        60,
+        no_edit,
+        &storm(0x5EE4_0002, count),
+    ));
+    failures.extend(run(
+        catalog::seek_gop_native(report::tier()),
+        "storm",
+        30,
+        no_edit,
+        &storm(0x5EE4_0004, count),
+    ));
+    common::assert_passed(failures);
 }
 
-/// Seeks landing exactly on every source keyframe (and the frame before
-/// it), in shuffled order: a reader started a hair before the keyframe
-/// decodes the previous GOP and shows its last frame.
+/// Seeks landing on and around every source keyframe, at 60 fps output so
+/// requests also fall between the keyframe's pts and the next source slot,
+/// in shuffled order: a reader started a hair before the keyframe decodes
+/// the previous GOP and shows its last frame under the keyframe's number.
 #[test]
 fn keyframe_seeks() {
+    let mut failures: Vec<String> = Vec::new();
     let keyframes = |total: u32, project: &common::Project| {
         let display = project.path.join("content/segments/segment-0/display.mp4");
         let times = media::keyframe_times(&display).expect("keyframes");
         let mut frames: Vec<u32> = times
             .iter()
             .flat_map(|t| {
-                let f = (t * 30.0).round() as u32;
-                [f, f.saturating_sub(1), f + 1]
+                let f = (t * 60.0).round() as u32;
+                [f, f.saturating_sub(1), f + 1, f + 2]
             })
             .filter(|&f| f < total)
             .collect();
@@ -116,26 +139,55 @@ fn keyframe_seeks() {
         }
         frames.into_iter().map(|f| (f, true)).collect()
     };
-    run(catalog::seek_gop(report::tier()), "keyframes", 30, no_edit, &keyframes);
+    failures.extend(run(
+        catalog::seek_gop(report::tier()),
+        "keyframes",
+        60,
+        no_edit,
+        &keyframes,
+    ));
+    failures.extend(run(
+        catalog::seek_gop_native(report::tier()),
+        "keyframes",
+        60,
+        no_edit,
+        &keyframes,
+    ));
+    common::assert_passed(failures);
 }
 
 /// Scrubbing: seek every 0.25 s forwards, then backwards.
 #[test]
 fn scrub() {
+    let mut failures: Vec<String> = Vec::new();
     let scrub = |total: u32, _: &common::Project| {
         let step = 7;
         let mut out: Vec<Request> = (0..total).step_by(step).map(|f| (f, true)).collect();
         out.extend((0..total).rev().step_by(step).map(|f| (f, true)));
         out
     };
-    run(catalog::seek_gop(report::tier()), "scrub", 30, no_edit, &scrub);
-    run(catalog::vfr_holds(report::tier()), "scrub", 60, no_edit, &scrub);
+    failures.extend(run(
+        catalog::seek_gop(report::tier()),
+        "scrub",
+        30,
+        no_edit,
+        &scrub,
+    ));
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        "scrub",
+        60,
+        no_edit,
+        &scrub,
+    ));
+    common::assert_passed(failures);
 }
 
 /// Seeks into the middle of static holds and across them, then playback
 /// out of the hold.
 #[test]
 fn seek_into_holds() {
+    let mut failures: Vec<String> = Vec::new();
     let into_holds = |total: u32, _: &common::Project| {
         let mut out = Vec::new();
         for t in [2.0, 3.5, 1.2, 9.0, 11.1, 5.2, 7.05, 2.3] {
@@ -147,7 +199,14 @@ fn seek_into_holds() {
         }
         out
     };
-    run(catalog::vfr_holds(report::tier()), "into-holds", 60, no_edit, &into_holds);
+    failures.extend(run(
+        catalog::vfr_holds(report::tier()),
+        "into-holds",
+        60,
+        no_edit,
+        &into_holds,
+    ));
+    common::assert_passed(failures);
 }
 
 /// The first frame after opening a project, at several positions.
@@ -188,5 +247,5 @@ fn cold_open() {
             failures.push(message);
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    common::assert_passed(failures);
 }

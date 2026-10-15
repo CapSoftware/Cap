@@ -66,7 +66,10 @@ pub enum Timing {
     Constant { duration: f64 },
     /// Constant rate with no frames inside the given (start, length) holds,
     /// like a static screen under VFR capture.
-    Holds { duration: f64, holds: Vec<(f64, f64)> },
+    Holds {
+        duration: f64,
+        holds: Vec<(f64, f64)>,
+    },
     /// A source delivering below its nominal rate with jitter: consecutive
     /// frames are 1..=4 slots apart (mean ~2.4), with a rare 6..=12 slot
     /// stall, and no frames inside `holds`.
@@ -82,7 +85,9 @@ pub enum Timing {
 impl Timing {
     pub fn slots(&self, fps: u32) -> Vec<u32> {
         match self {
-            Timing::Constant { duration } => (0..(duration * f64::from(fps)).round() as u32).collect(),
+            Timing::Constant { duration } => {
+                (0..(duration * f64::from(fps)).round() as u32).collect()
+            }
             Timing::Holds { duration, holds } => (0..(duration * f64::from(fps)).round() as u32)
                 .filter(|&k| {
                     let t = f64::from(k) / f64::from(fps);
@@ -149,6 +154,19 @@ pub struct VideoTrackSpec {
     pub pts_offset: f64,
     /// `start_time` written to recording-meta.json.
     pub start_time: f64,
+    /// Encoder used for the track.
+    #[serde(default)]
+    pub encoder: TrackEncoder,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TrackEncoder {
+    /// libx264 with exact GOP control (all platforms).
+    #[default]
+    X264,
+    /// The product's macOS AVAssetWriter/VideoToolbox encoder. Falls back to
+    /// libx264 on other platforms.
+    AvFoundation,
 }
 
 impl VideoTrackSpec {
@@ -162,6 +180,7 @@ impl VideoTrackSpec {
             b_frames: 0,
             pts_offset: 0.0,
             start_time: 0.0,
+            encoder: TrackEncoder::X264,
         }
     }
 }
@@ -212,6 +231,28 @@ fn write_video_track(
     segment: u8,
     spec: &VideoTrackSpec,
 ) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    if spec.encoder == TrackEncoder::AvFoundation {
+        let times: Vec<(u32, f64)> = spec
+            .timing
+            .slots(spec.fps)
+            .into_iter()
+            .map(|slot| {
+                (
+                    slot,
+                    spec.pts_offset + f64::from(slot) / f64::from(spec.fps),
+                )
+            })
+            .collect();
+        return crate::fixture_avf::write_video_track(
+            path,
+            |slot| FrameMarker::new(kind, segment, slot),
+            spec.width,
+            spec.height,
+            spec.fps,
+            &times,
+        );
+    }
     let mut config = VideoWriterConfig::new(spec.width, spec.height, spec.fps);
     config.gop = spec.gop;
     config.b_frames = spec.b_frames;
@@ -219,7 +260,10 @@ fn write_video_track(
     for slot in spec.timing.slots(spec.fps) {
         let marker = FrameMarker::new(kind, segment, slot);
         let rgba = video_code::marker_rgba(marker, spec.width as usize, spec.height as usize);
-        writer.write_rgba(&rgba, spec.pts_offset + f64::from(slot) / f64::from(spec.fps))?;
+        writer.write_rgba(
+            &rgba,
+            spec.pts_offset + f64::from(slot) / f64::from(spec.fps),
+        )?;
     }
     writer.finish()?;
     Ok(())
@@ -418,7 +462,17 @@ pub fn ensure_fixture(
     if done.exists() && dir.exists() {
         return Ok(dir);
     }
-    let staging = root.join(format!("{key}.{}.tmp.cap", std::process::id()));
+    static GENERATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serial = GENERATING.lock().unwrap_or_else(|e| e.into_inner());
+    if done.exists() && dir.exists() {
+        return Ok(dir);
+    }
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let staging = root.join(format!(
+        "{key}.{}-{}.tmp.cap",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     generate(spec, &staging)?;
     // Paths inside recording-meta.json are relative, so the staged project
     // stays valid after the rename.

@@ -155,10 +155,7 @@ pub fn load_expectations() -> Vec<Xfail> {
 pub fn lookup_xfail(id: &str) -> Option<Xfail> {
     let platform = platform();
     load_expectations().into_iter().find(|x| {
-        glob_match(&x.pattern, id)
-            && x.platforms
-                .iter()
-                .any(|p| p == "all" || p == platform)
+        glob_match(&x.pattern, id) && x.platforms.iter().any(|p| p == "all" || p == platform)
     })
 }
 
@@ -221,7 +218,10 @@ pub fn settle(case: Case) -> Result<CaseResult, String> {
         (Some(_), false) => "XPASS",
     };
     if let Some(x) = &xfail {
-        summary = format!("{summary}\n  (expected failure, expectations.txt:{}: {})", x.line, x.reason);
+        summary = format!(
+            "{summary}\n  (expected failure, expectations.txt:{}: {})",
+            x.line, x.reason
+        );
     }
     let result = CaseResult {
         id: case.id.clone(),
