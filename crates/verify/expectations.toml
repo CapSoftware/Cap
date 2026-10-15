@@ -5,7 +5,9 @@
 #   [[xfail]]
 #   case = "<case id as printed by the suite, * globs allowed>"
 #   class = "<stale | future | wrong-segment | unreadable | missing | unexpected
-#             | frame-count | timestamps | nondeterministic | error>"
+#             | frame-count | timestamps | nondeterministic | error
+#             | mapping | coverage | duration | caption-track | caption-frame
+#             | caption-words | caption-migration | caption-roundtrip>"
 #   reason = "<what is wrong>"
 #   link = "<PR or issue that fixes it; empty when no fix exists yet>"
 #   platforms = ["macos"]   (optional; absent = every platform)
@@ -173,4 +175,15 @@ case = "seek/seek-*/keyframes60/ffmpeg"
 class = "stale"
 platforms = ["linux", "windows"]
 reason = "NEW: FFmpeg decoder seeks near the start show frame 0 (frame 124 at 60 fps shows source 0 instead of 61) and one keyframe seek answers one frame stale (linux runner; the x264 fallback fixture)"
+
+[[xfail]]
+case = "editing/mapping/duration-covered"
+class = "coverage"
+reason = "NEW: a fullscreen text segment (a hold) left past the end of the clips (place a text card near the end, then trim or delete clips; clip edits do not ripple text segments) still adds its length to TimelineConfiguration::duration(), but get_frame_mapping returns None from the content end on, so the hold and the time before it have no source frame. Minimal repro: Hold at 0.92 of a 7 s clip, then trim the clip end"
+link = ""
+
+[[xfail]]
+case = "editing/export/hold-past-end"
+class = "frame-count"
+reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fullscreen text at 5.4 s and the clip trimmed to 3.2 s give a 4.2 s timeline, but the export stops at the first unmapped frame: 96 frames instead of 126, and the text card is never rendered"
 link = ""
