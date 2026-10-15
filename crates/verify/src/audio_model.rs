@@ -7,12 +7,21 @@
 //! - Timeline segments play back to back; segment `k` covers
 //!   `(end - start) / timescale` output seconds and maps output time `u` in it
 //!   to recording time `start + u * timescale`. A transition into segment `k`
-//!   overlaps the two segments by its clamped duration; markers inside the
-//!   overlap may be heard at any level (a blend) and are not required.
+//!   overlaps the two segments by its clamped duration. A cross-fade mixes
+//!   the outgoing clip at `cos(p * pi / 2)` and the incoming one at
+//!   `sin(p * pi / 2)` (equal power, `p` = progress through the overlap); a
+//!   fade through black at `max(1 - 2p, 0)` and `max(2p - 1, 0)`. Markers
+//!   wholly inside the overlap whose blend gain is at least
+//!   `BLEND_REQUIRED_GAIN` must be heard at that gain; the rest may be heard
+//!   at any level.
 //! - A recording audio track sample at track time `t` plays at recording time
 //!   `t - offset`, where `offset` is the clip's stored offset for that track
 //!   (mic or system audio; auto-calculated offsets align every track to the
 //!   latest track start).
+//! - Stale-startup repair: a track whose recording-meta gap summary reports
+//!   at least 3 startup overlap drops, at least 3 dropped frames and 100 to
+//!   2000 ms of startup overlap trimmed plays that many ms earlier (its offset
+//!   is reduced by the trimmed time).
 //! - Track gain is `10^(dB / 20)`; at or below -30 dB, or with the project
 //!   muted, the track is silent. Clip volume multiplies the recording mix. A
 //!   mono track is centre-panned at -3 dB (0.707 per channel).
@@ -29,7 +38,10 @@
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use cap_project::{ClipSpeedAudioMode, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
+use cap_project::{
+    ClipSpeedAudioMode, ClipTransitionType, ProjectConfiguration, RecordingMeta,
+    StudioRecordingMeta,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -56,6 +68,23 @@ const MIN_HEARD_GAIN: f64 = 1e-3;
 const CROSSTALK_CORRELATION: f64 = 0.8;
 const MIN_TRANSITION: f64 = 0.05;
 const MONO_PAN: f64 = 0.707;
+/// Blend gain from which a marker inside a transition must be heard (and its
+/// level checked); quieter blended markers may be missed by the detector.
+const BLEND_REQUIRED_GAIN: f64 = 0.75;
+/// Offset of the point a marker's level is measured at (the chirp centre).
+const CHIRP_CENTRE_SECS: f64 = 0.010;
+
+/// Gain a transition applies to the outgoing (`incoming == false`) or
+/// incoming clip at progress `p`.
+fn blend_gain(kind: ClipTransitionType, p: f64, incoming: bool) -> f64 {
+    let p = p.clamp(0.0, 1.0);
+    match (kind, incoming) {
+        (ClipTransitionType::CrossFade, false) => (p * std::f64::consts::FRAC_PI_2).cos(),
+        (ClipTransitionType::CrossFade, true) => (p * std::f64::consts::FRAC_PI_2).sin(),
+        (ClipTransitionType::FadeThroughBlack, false) => (1.0 - 2.0 * p).max(0.0),
+        (ClipTransitionType::FadeThroughBlack, true) => (2.0 * p - 1.0).max(0.0),
+    }
+}
 
 /// One marker found in a source file.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -244,6 +273,7 @@ struct ModelSegment {
     mode: ClipSpeedAudioMode,
     volume: f64,
     transition_in: f64,
+    transition_kind: ClipTransitionType,
 }
 
 impl ModelSegment {
@@ -283,12 +313,25 @@ impl AudioModel {
             .timeline
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("project has no timeline"))?;
+        let repair = |audio: Option<&cap_project::AudioMeta>| {
+            audio
+                .and_then(|a| a.gap_summary.as_ref())
+                .filter(|s| {
+                    s.startup_overlap_drops >= 3
+                        && s.overlap_dropped_frames >= 3
+                        && (100..=2000).contains(&s.startup_overlap_trimmed_ms)
+                })
+                .map_or(0.0, |s| -f64::from(s.startup_overlap_trimmed_ms) / 1000.0)
+        };
         let offsets: Vec<ClipAudioOffsets> = (0..inner.segments.len())
             .map(|i| {
                 let clip = project.clips.iter().find(|c| c.index as usize == i);
+                let segment = &inner.segments[i];
                 ClipAudioOffsets {
-                    mic: clip.map_or(0.0, |c| f64::from(c.offsets.mic)),
-                    system: clip.map_or(0.0, |c| f64::from(c.offsets.system_audio)),
+                    mic: clip.map_or(0.0, |c| f64::from(c.offsets.mic))
+                        + repair(segment.mic.as_ref()),
+                    system: clip.map_or(0.0, |c| f64::from(c.offsets.system_audio))
+                        + repair(segment.system_audio.as_ref()),
                 }
             })
             .collect();
@@ -307,6 +350,7 @@ impl AudioModel {
                     .unwrap_or(1.0)
                     .clamp(0.0, 2.0),
                 transition_in: 0.0,
+                transition_kind: ClipTransitionType::CrossFade,
             })
             .collect();
         for transition in &timeline.transitions {
@@ -318,6 +362,7 @@ impl AudioModel {
             if transition.duration.is_finite() && transition.duration > 0.0 && max >= MIN_TRANSITION
             {
                 segments[k].transition_in = transition.duration.clamp(MIN_TRANSITION, max);
+                segments[k].transition_kind = transition.kind;
             }
         }
         let mut output_starts = Vec::with_capacity(segments.len());
@@ -332,13 +377,19 @@ impl AudioModel {
         let mut expected = Vec::new();
         let mut unchecked = Vec::new();
         let mut rate_windows = Vec::new();
+        // Whether each recording marker in `expected` sounds inside a transition.
+        let mut in_blend: Vec<bool> = Vec::new();
 
         for (k, segment) in segments.iter().enumerate() {
             let out_start = output_starts[k];
             let out_end = out_start + segment.duration();
             // Output window shared with a neighbour's transition.
             let blend_until = out_start + segment.transition_in;
-            let blend_from = out_end - segments.get(k + 1).map_or(0.0, |n| n.transition_in);
+            let next_in = segments.get(k + 1).map_or(0.0, |n| n.transition_in);
+            let next_kind = segments
+                .get(k + 1)
+                .map_or(ClipTransitionType::CrossFade, |n| n.transition_kind);
+            let blend_from = out_end - next_in;
             let Some(clip_truth) = truth.segments.get(segment.clip) else {
                 continue;
             };
@@ -392,10 +443,23 @@ impl AudioModel {
                     let time = out_start + (recording_time - segment.start) / segment.timescale;
                     let whole = recording_time >= segment.start
                         && recording_time + marker_len <= segment.end;
-                    let blended =
-                        time < blend_until || time + MARKER_SECS / segment.timescale > blend_from;
+                    let marker_end = time + MARKER_SECS / segment.timescale;
+                    let blended = time < blend_until || marker_end > blend_from;
+                    // Blend gain when the whole marker lies in one overlap.
+                    let blend = if !blended {
+                        Some(1.0)
+                    } else if marker_end <= blend_until && time >= out_start {
+                        let p = (time + CHIRP_CENTRE_SECS - out_start) / segment.transition_in;
+                        Some(blend_gain(segment.transition_kind, p, true))
+                    } else if time >= blend_from && marker_end <= out_end && next_in > 0.0 {
+                        let p = (time + CHIRP_CENTRE_SECS - blend_from) / next_in;
+                        Some(blend_gain(next_kind, p, false))
+                    } else {
+                        None
+                    };
                     let level_known = !processed && segment.volume > 0.0;
-                    let presence = if whole && !blended && segment.volume > 0.0 {
+                    let audible = blend.filter(|&b| !blended || b >= BLEND_REQUIRED_GAIN);
+                    let presence = if whole && audible.is_some() && segment.volume > 0.0 {
                         Presence::Required
                     } else {
                         Presence::Optional
@@ -403,18 +467,41 @@ impl AudioModel {
                     if segment.volume == 0.0 {
                         continue;
                     }
+                    in_blend.push(blended);
                     expected.push(ExpectedMarker {
                         source: track.source,
                         index: marker.index,
                         time_secs: time,
-                        gain: (level_known && !blended)
-                            .then_some(marker.gain * pan * gain * segment.volume),
+                        gain: audible
+                            .filter(|_| level_known)
+                            .map(|b| marker.gain * pan * gain * segment.volume * b),
                         presence,
                         rate: if retimed { segment.timescale } else { 1.0 },
                         recording: Some((segment.clip, recording_time)),
                         payload: !processed,
                     });
                 }
+            }
+        }
+
+        // Two markers of one source sounding at once (the two sides of a
+        // transition) disturb each other's detection: neither is required.
+        let overlapping: Vec<bool> = expected
+            .iter()
+            .zip(&in_blend)
+            .map(|(e, &blended)| {
+                blended
+                    && expected.iter().any(|o: &ExpectedMarker| {
+                        !std::ptr::eq(e, o)
+                            && o.source == e.source
+                            && (o.time_secs - e.time_secs).abs() < MARKER_SECS + 0.005
+                    })
+            })
+            .collect();
+        for (e, overlaps) in expected.iter_mut().zip(overlapping) {
+            if overlaps {
+                e.presence = Presence::Optional;
+                e.gain = None;
             }
         }
 

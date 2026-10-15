@@ -3,7 +3,7 @@
 
 mod common;
 
-use cap_project::{ProjectConfiguration, SceneMode, SceneSegment};
+use cap_project::{ProjectConfiguration, SceneMode, SceneSegment, XY};
 use cap_verify::{
     catalog,
     fixture::FixtureSpec,
@@ -92,6 +92,14 @@ fn run_project(
                             &model,
                             &frames,
                             fps,
+                            format != Format::Mov,
+                        );
+                        common::check_presentation(
+                            &mut case,
+                            &config,
+                            &frames,
+                            &path,
+                            fps,
                             format == Format::Mp4,
                         );
                         if determinism {
@@ -170,6 +178,42 @@ fn hide_camera_scene(config: &mut ProjectConfiguration) {
             transition_in: 0.3,
             transition_out: 0.3,
         });
+}
+
+/// A camera offset the user set on the clip (not auto-calculated): the camera
+/// shows the frame `0.3 s` later than the screen's.
+fn camera_user_offset(config: &mut ProjectConfiguration) {
+    match config.clips.iter_mut().find(|c| c.index == 0) {
+        Some(clip) => {
+            clip.offsets.camera = 0.3;
+            clip.offsets_auto_calculated = false;
+        }
+        None => config.clips.push(cap_project::ClipConfiguration {
+            index: 0,
+            offsets: cap_project::ClipOffsets {
+                camera: 0.3,
+                ..Default::default()
+            },
+            offsets_auto_calculated: false,
+        }),
+    }
+}
+
+#[test]
+fn camera_offset() {
+    let mut failures: Vec<String> = Vec::new();
+    failures.extend(run(
+        catalog::basic(report::tier()),
+        &[Variant {
+            edit: "camera-user-offset",
+            apply: camera_user_offset,
+        }],
+        &[(Format::Mp4, 30)],
+        &Decoder::all(),
+        RES,
+        false,
+    ));
+    common::assert_passed(failures);
 }
 
 #[test]
@@ -588,4 +632,396 @@ fn uhd() {
         false,
     );
     common::assert_passed(failures);
+}
+
+/// Background crop: the export must show the cropped part of the screen.
+/// Frame identity alone cannot see a crop (the code is still readable when
+/// the crop is ignored), so the screen code's square is located in every
+/// tenth frame (the low-chroma block inside the screen's key region) and
+/// must sit where the crop puts it.
+#[test]
+fn crop() {
+    use cap_project::Crop;
+    use cap_verify::{
+        media,
+        video_code::{self, PixelSource, StreamKind},
+    };
+    let spec = catalog::basic(report::tier());
+    let id = case_id(&spec.name, "crop", Format::Mp4, 30, Decoder::Default);
+    if !report::selected(&id) {
+        return;
+    }
+    let project = common::project(&spec);
+    let (src_w, src_h) = (f64::from(catalog::SCREEN_W), f64::from(catalog::SCREEN_H));
+    let crop = Crop {
+        position: XY::new(20, 10),
+        size: XY::new(256, 144),
+    };
+    let mut config = project.config();
+    config.camera.hide = true;
+    config.background.crop = Some(crop.clone());
+    let model = project.model(&config);
+    let mut case = Case::new(&id);
+    let dir = common::scratch_dir(&id);
+    let run = ExportRun {
+        fps: 30,
+        resolution: RES,
+        format: Format::Mp4,
+        decoder: Decoder::Default,
+    };
+    let out = dir.path().join("a.mp4");
+    match common::runtime().block_on(common::export(&project, config.clone(), &run, &out)) {
+        Err(e) => case.problem("error", format!("export failed: {e}")),
+        Ok(path) => {
+            let mut frames = Vec::new();
+            let (cx0, cy0) = (f64::from(crop.position.x), f64::from(crop.position.y));
+            let (cw, ch) = (f64::from(crop.size.x), f64::from(crop.size.y));
+            let side = StreamKind::Screen.code_side_fraction() * src_h;
+            let mut misplaced = Vec::new();
+            let mut index = 0usize;
+            let decoded = media::decode_video(&path, |picture| {
+                let i = index;
+                index += 1;
+                let view = picture.view();
+                let region = video_code::locate_region(&view, StreamKind::Screen);
+                let expected = region.map(|region| {
+                    let (rw, rh) = (region.x1 - region.x0, region.y1 - region.y0);
+                    (
+                        region.x0 + (src_w / 2.0 - cx0) / cw * rw,
+                        region.y0 + (src_h / 2.0 - cy0) / ch * rh,
+                        side / ch * rh,
+                    )
+                });
+                // The code is off the screen region's centre, so it is read
+                // where the crop puts it.
+                let screen = match expected {
+                    Some((x, y, s)) => {
+                        video_code::read_code_near(&view, StreamKind::Screen, x, y, s)
+                    }
+                    None => video_code::Readout::Absent,
+                };
+                frames.push(common::OutputFrame {
+                    pts_secs: picture.pts_secs,
+                    readout: video_code::FrameReadout {
+                        screen,
+                        camera: video_code::read_stream(&view, StreamKind::Camera),
+                    },
+                    hash: 0,
+                    size: (view.width(), view.height()),
+                    camera_region: None,
+                    screen_colour: None,
+                });
+                if i % common::LAYOUT_SAMPLE_EVERY != 0 {
+                    return;
+                }
+                let (Some(region), Some((expect_cx, expect_cy, expect_side))) = (region, expected)
+                else {
+                    misplaced.push(format!("frame {i}: no screen region"));
+                    return;
+                };
+                let rh = region.y1 - region.y0;
+                let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for y in (region.y0.ceil() as usize)..(region.y1 as usize).min(view.height()) {
+                    for x in (region.x0.ceil() as usize)..(region.x1 as usize).min(view.width()) {
+                        let (cb, cr) = view.chroma(x, y);
+                        if cb.hypot(cr) < 16.0 {
+                            x0 = x0.min(x as f64);
+                            y0 = y0.min(y as f64);
+                            x1 = x1.max(x as f64 + 1.0);
+                            y1 = y1.max(y as f64 + 1.0);
+                        }
+                    }
+                }
+                let tolerance = 0.03 * rh;
+                let (cx, cy, s) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, y1 - y0);
+                if x1 < x0
+                    || (cx - expect_cx).abs() > tolerance
+                    || (cy - expect_cy).abs() > tolerance
+                    || (s - expect_side).abs() > tolerance
+                {
+                    misplaced.push(format!(
+                        "frame {i}: code square centre ({cx:.1}, {cy:.1}) side {s:.1}, crop puts it at ({expect_cx:.1}, {expect_cy:.1}) side {expect_side:.1}"
+                    ));
+                }
+            });
+            if let Err(e) = decoded {
+                case.problem("error", format!("decode: {e:?}"));
+            }
+            common::check_sequence(&mut case, &model, &frames, 30, true);
+            if !misplaced.is_empty() {
+                case.problem(
+                    "layout",
+                    format!(
+                        "cropped screen misplaced in {} sampled frames: {}",
+                        misplaced.len(),
+                        misplaced[..misplaced.len().min(3)].join("; ")
+                    ),
+                );
+            }
+        }
+    }
+    common::finish(case);
+}
+
+/// Colour fidelity of exported pixels the renderer generates in RGB: a
+/// saturated background must decode, under the stream's own colour tag (what
+/// players use), to the configured colour. BT.601 and BT.709 differ here by
+/// about 13 luma and 9 chroma code values.
+#[test]
+fn colour() {
+    use cap_project::BackgroundSource;
+    use cap_verify::media;
+    const BACKGROUND: [u8; 3] = [220, 40, 40];
+    let spec = catalog::basic(report::tier());
+    for decoder in Decoder::all() {
+        let id = case_id(&spec.name, "colour", Format::Mp4, 30, decoder);
+        if !report::selected(&id) {
+            continue;
+        }
+        let project = common::project(&spec);
+        let mut config = project.config();
+        config.background.source = BackgroundSource::Color {
+            value: BACKGROUND.map(u16::from),
+            alpha: 255,
+        };
+        config.background.padding = 40.0;
+        let mut case = Case::new(&id);
+        let dir = common::scratch_dir(&id);
+        let run = ExportRun {
+            fps: 30,
+            resolution: RES,
+            format: Format::Mp4,
+            decoder,
+        };
+        let out = dir.path().join("a.mp4");
+        match common::runtime().block_on(common::export(&project, config, &run, &out)) {
+            Err(e) => case.problem("error", format!("export failed: {e}")),
+            Ok(path) => {
+                let mut errors = Vec::new();
+                let mut index = 0usize;
+                let decoded = media::decode_video(&path, |picture| {
+                    let i = index;
+                    index += 1;
+                    if i % common::LAYOUT_SAMPLE_EVERY != 0 {
+                        return;
+                    }
+                    let view = picture.view();
+                    if let Some(colour) =
+                        common::rect_colour(&picture.frame, &view, [0.01, 0.01, 0.06, 0.06])
+                    {
+                        errors.push((i, common::colour_error(&colour, BACKGROUND), colour.space));
+                    }
+                });
+                if let Err(e) = decoded {
+                    case.problem("error", format!("decode: {e:?}"));
+                }
+                if errors.is_empty() {
+                    case.problem("error", "no YUV frames to measure");
+                }
+                if let Some((i, [dy, _, _], space)) = errors
+                    .iter()
+                    .find(|(_, e, _)| e[0].abs() > common::COLOUR_LEVEL_TOLERANCE)
+                {
+                    case.problem(
+                        "colour-level",
+                        format!("background luma off by {dy:+.1} code values for the stream's {space:?} tag (frame {i})"),
+                    );
+                }
+                if let Some((i, [_, dcb, dcr], space)) = errors
+                    .iter()
+                    .find(|(_, e, _)| e[1].abs().max(e[2].abs()) > common::COLOUR_MATRIX_TOLERANCE)
+                {
+                    case.problem(
+                        "colour-matrix",
+                        format!("background chroma off by Cb {dcb:+.1} Cr {dcr:+.1} for the stream's {space:?} tag (frame {i})"),
+                    );
+                }
+            }
+        }
+        common::finish(case);
+    }
+}
+
+/// Audio of a Studio project recorded through the real recording pipeline:
+/// every marker the synthetic mic and loopback system audio emitted (at a
+/// known time on the same clock as the screen frames) must be heard once in
+/// the export, in sync with the screen frame emitted at the same time. This
+/// checks the recording pipeline's audio timestamps (anchoring, gap filling,
+/// start times in recording-meta) end to end; the audio oracle's own fixtures
+/// are written with exact timing and never pass through the recorder.
+#[test]
+fn recorded_studio_audio() {
+    use cap_verify::{
+        audio_code::{self, AudioSource, MARKER_SECS},
+        media,
+        video_code::StreamKind,
+    };
+    let spec = catalog::recorded_studio(report::tier());
+    let id = case_id(
+        &format!("rec-{}", spec.name),
+        "full-audio",
+        Format::Mp4,
+        30,
+        Decoder::Default,
+    );
+    if !report::selected(&id) {
+        return;
+    }
+    let project = common::recorded(&spec);
+    let mut case = Case::new(&id);
+    let dir = common::scratch_dir(&id);
+    let run = ExportRun {
+        fps: 30,
+        resolution: RES,
+        format: Format::Mp4,
+        decoder: Decoder::Default,
+    };
+    let out = dir.path().join("a.mp4");
+    match common::runtime().block_on(common::export(&project, project.config(), &run, &out)) {
+        Err(e) => case.problem("error", format!("export failed: {e}")),
+        Ok(path) => {
+            let frames = common::read_output(&path, None);
+            match media::decode_audio(&path, Some(48_000)) {
+                Err(e) => case.problem("error", format!("decode audio: {e:?}")),
+                Ok(decoded) => {
+                    let mut mono = decoded.mono();
+                    let lead = (decoded.start_secs * 48_000.0).round() as i64;
+                    if lead > 0 {
+                        let mut padded = vec![0.0; lead as usize];
+                        padded.extend_from_slice(&mono);
+                        mono = padded;
+                    } else if lead < 0 {
+                        mono.drain(..(-lead as usize).min(mono.len()));
+                    }
+                    let frame = 1.0 / 30.0;
+                    let mut missing = Vec::new();
+                    let mut doubled = Vec::new();
+                    let mut off = Vec::new();
+                    let mut checked = 0;
+                    for (source, emitted_from) in [
+                        (
+                            AudioSource::Mic,
+                            spec.segments
+                                .iter()
+                                .map(|s| s.mic_delay)
+                                .collect::<Vec<_>>(),
+                        ),
+                        (
+                            AudioSource::System,
+                            spec.segments
+                                .iter()
+                                .map(|s| s.system_audio.then_some(0.0))
+                                .collect(),
+                        ),
+                    ] {
+                        let heard = audio_code::locate_markers(&mono, 48_000, source);
+                        if std::env::var_os("CAP_VERIFY_DUMP_AUDIO").is_some() {
+                            for h in &heard {
+                                eprintln!(
+                                    "  heard {}: {:?} at {:.4}s gain {:.3}",
+                                    source.name(),
+                                    h.index,
+                                    h.time_secs,
+                                    h.gain
+                                );
+                            }
+                            let file = project.path.join("content/segments/segment-0").join(
+                                if source == AudioSource::Mic {
+                                    "audio-input.ogg"
+                                } else {
+                                    "system_audio.ogg"
+                                },
+                            );
+                            if let Ok(src) = media::decode_audio(&file, Some(48_000)) {
+                                for h in audio_code::locate_markers(&src.mono(), 48_000, source) {
+                                    eprintln!(
+                                        "  file {}: {:?} at {:.4}s (+{:.4}) gain {:.3}",
+                                        source.name(),
+                                        h.index,
+                                        h.time_secs,
+                                        src.start_secs,
+                                        h.gain
+                                    );
+                                }
+                            }
+                        }
+                        for (clip, segment) in spec.segments.iter().enumerate() {
+                            let Some(from) = emitted_from[clip] else {
+                                continue;
+                            };
+                            let schedule = audio_code::standard_schedule(
+                                source,
+                                0.1,
+                                segment.duration - 0.1,
+                                0.5,
+                            );
+                            for placement in schedule {
+                                let t = placement.time_secs;
+                                if t < from || t + MARKER_SECS > segment.duration - 0.05 {
+                                    continue;
+                                }
+                                let slot = (t * 30.0).floor() as u32;
+                                let Some(shown) = frames.iter().position(|f| {
+                                    f.readout.get(StreamKind::Screen).marker().is_some_and(|m| {
+                                        usize::from(m.segment) == clip && m.index == slot
+                                    })
+                                }) else {
+                                    continue;
+                                };
+                                let shown_at = shown as f64 * frame;
+                                let hits: Vec<_> = heard
+                                    .iter()
+                                    .filter(|h| {
+                                        h.index == Some(placement.index)
+                                            && (h.time_secs - shown_at).abs() < 1.0
+                                    })
+                                    .collect();
+                                let what = format!(
+                                    "{} #{} (clip {clip}, {t:.3} s)",
+                                    source.name(),
+                                    placement.index
+                                );
+                                match hits.as_slice() {
+                                    [] => missing.push(what),
+                                    [h] => {
+                                        checked += 1;
+                                        let av = h.time_secs - shown_at;
+                                        if av.abs() > frame + 0.005 {
+                                            off.push(format!("{what} {:+.1} ms", av * 1000.0));
+                                        }
+                                    }
+                                    _ => doubled.push(what),
+                                }
+                            }
+                        }
+                    }
+                    if !missing.is_empty() || !doubled.is_empty() {
+                        case.problem(
+                            "audio",
+                            format!(
+                                "recorded markers: {} missing (first {:?}), {} heard twice (first {:?})",
+                                missing.len(),
+                                missing.first(),
+                                doubled.len(),
+                                doubled.first()
+                            ),
+                        );
+                    }
+                    if !off.is_empty() {
+                        case.problem(
+                            "sync",
+                            format!(
+                                "{} of {checked} recorded markers out of sync with the screen frame emitted with them (limit one frame + 5 ms): {}",
+                                off.len(),
+                                off[..off.len().min(3)].join("; ")
+                            ),
+                        );
+                    } else {
+                        case.note(format!("{checked} recorded markers in sync"));
+                    }
+                }
+            }
+        }
+    }
+    common::finish(case);
 }

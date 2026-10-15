@@ -108,6 +108,7 @@ impl Case {
                 ("unreadable", report.unreadable),
                 ("missing", report.missing),
                 ("unexpected", report.unexpected),
+                ("blend", report.blend_weight),
             ] {
                 if n > 0 {
                     self.classes.insert(class.to_string());

@@ -1301,6 +1301,14 @@ async fn share(project: &Path, cancel: Arc<AtomicBool>) -> StudioRun {
             && progress.iter().all(|value| (0.0..=1.0).contains(value)),
         "progress is not monotonic within 0..=1: {progress:?}"
     );
+    // 100% means shared: only the final report after completion may be 1.0.
+    assert!(
+        progress
+            .split_last()
+            .is_none_or(|(_, earlier)| earlier.iter().all(|value| *value < 1.0))
+            && (result.is_ok() || progress.iter().all(|value| *value < 1.0)),
+        "progress reached 100% before the upload completed: {progress:?}"
+    );
     StudioRun { result, progress }
 }
 

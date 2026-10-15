@@ -93,6 +93,21 @@ fn transition(config: &mut ProjectConfiguration) {
     common::add_transition(config, 1, 0.4);
 }
 
+/// A long cross-fade: markers early in the overlap must keep the outgoing
+/// clip's level and the incoming clip must ramp up (equal-power gains).
+fn long_crossfade(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(0.3, 4.1, 1.0), (3.9, 7.8, 1.0)]);
+    common::add_transition(config, 1, 1.8);
+}
+
+/// A long fade through black: each side fades linearly to silence over half
+/// the overlap.
+fn long_fade_black(config: &mut ProjectConfiguration) {
+    long_crossfade(config);
+    config.timeline.as_mut().expect("timeline").transitions[0].kind =
+        cap_project::ClipTransitionType::FadeThroughBlack;
+}
+
 fn variants() -> Vec<Variant> {
     vec![
         Variant {
@@ -130,6 +145,14 @@ fn variants() -> Vec<Variant> {
         Variant {
             edit: "transition",
             apply: transition,
+        },
+        Variant {
+            edit: "long-crossfade",
+            apply: long_crossfade,
+        },
+        Variant {
+            edit: "long-fade-black",
+            apply: long_fade_black,
         },
     ]
 }
@@ -179,6 +202,19 @@ fn export_case(spec: &FixtureSpec, variant: &Variant, path: ExportPath) -> Optio
                             common::read_output(&out, Some(&|i| video.expect(i as u32, FPS)));
                         common::check_sequence(&mut case, &video, &frames, FPS, true);
                         audio_support::check_av(&mut case, &project.meta, &report, &frames, FPS);
+                        // The audio track must cover the whole video, and end
+                        // within one AAC frame (encoder padding) after it.
+                        let audio_secs = mono.len() as f64 / f64::from(audio_model::ANALYSIS_RATE);
+                        let video_secs = frames.len() as f64 / f64::from(FPS);
+                        let slack = 1024.0 / f64::from(audio_model::ANALYSIS_RATE) + 0.001;
+                        if audio_secs < video_secs - 0.002 || audio_secs > video_secs + slack {
+                            case.problem(
+                                "audio-duration",
+                                format!(
+                                    "audio track lasts {audio_secs:.4} s, video {video_secs:.4} s (slack {slack:.4} s)"
+                                ),
+                            );
+                        }
                     }
                 }
             }
@@ -538,4 +574,167 @@ fn oracle_self_check() {
         );
     }
     common::finish(case);
+}
+
+/// Stereo system audio recorded on the left channel only must come out on
+/// the left channel only. Every other case mixes identical channels and
+/// checks the channel average, so it cannot see swapped or summed channels.
+#[test]
+fn stereo_channels() {
+    use cap_verify::{
+        audio_code::{self, AudioSource},
+        fixture,
+        media::{self, AudioCodec},
+    };
+    let id = format!("audio/stereo-left/full/{}{FPS}", ExportPath::App.label());
+    if !report::selected(&id) {
+        return;
+    }
+    common::init();
+    let mut spec = audio_fixture::mix(report::tier());
+    spec.name = format!("{}-left", spec.name);
+    spec.segments[0].mic = None;
+    let path = fixture::ensure_fixture(&spec, |spec, dir| {
+        audio_fixture::write(spec, dir)?;
+        let file = dir.join("content/segments/segment-0/system_audio.ogg");
+        let decoded = media::decode_audio(&file, None)?;
+        let left = decoded.channels[0].clone();
+        let right = vec![0.0; left.len()];
+        media::write_audio(
+            &file,
+            &[left, right],
+            decoded.sample_rate,
+            AudioCodec::Opus,
+            96_000,
+        )
+    })
+    .unwrap_or_else(|e| panic!("fixture {}: {e:?}", spec.name));
+    let project = common::load(&spec.name, path);
+    let config = project.config();
+    let model = audio_support::audio_model(&project, &config);
+    let required = model
+        .expected
+        .iter()
+        .filter(|e| {
+            e.source == AudioSource::System && e.presence == audio_model::Presence::Required
+        })
+        .count();
+    let mut case = Case::new(&id);
+    let dir = common::scratch_dir(&id);
+    match common::runtime().block_on(audio_support::export(
+        &project,
+        config,
+        ExportPath::App,
+        FPS,
+        RES,
+        dir.path(),
+    )) {
+        Err(e) => case.problem("error", format!("export failed: {e}")),
+        Ok(out) => match media::decode_audio(&out, Some(audio_model::ANALYSIS_RATE)) {
+            Err(e) => case.problem("error", format!("decode audio: {e:?}")),
+            Ok(decoded) if decoded.channels.len() != 2 => case.problem(
+                "audio-channels",
+                format!(
+                    "export has {} audio channels, expected 2",
+                    decoded.channels.len()
+                ),
+            ),
+            Ok(decoded) => {
+                let heard = |channel: &[f32]| {
+                    audio_code::locate_markers(
+                        channel,
+                        audio_model::ANALYSIS_RATE,
+                        AudioSource::System,
+                    )
+                    .into_iter()
+                    .filter(|m| m.index.is_some() && m.gain > 0.02)
+                    .count()
+                };
+                let (left, right) = (heard(&decoded.channels[0]), heard(&decoded.channels[1]));
+                if left < required || right > 0 {
+                    case.problem(
+                        "audio-channels",
+                        format!(
+                            "left-only system audio: {left} markers heard on the left (expected {required}), {right} on the right (expected 0)"
+                        ),
+                    );
+                }
+            }
+        },
+    }
+    common::finish(case);
+}
+
+/// A recording whose mic gap summary reports a stale startup burst: the
+/// editor plays the mic earlier by the trimmed time (stale-startup repair),
+/// in exports and in playback.
+#[test]
+fn timing_repair() {
+    use cap_verify::fixture;
+    common::init();
+    let mut spec = audio_fixture::mix(report::tier());
+    spec.name = format!("{}-repair", spec.name);
+    let path = fixture::ensure_fixture(&spec, |spec, dir| {
+        audio_fixture::write(spec, dir)?;
+        let meta_path = dir.join("recording-meta.json");
+        let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta_path)?)?;
+        meta["segments"][0]["mic"]["gap_summary"] = serde_json::json!({
+            "total_overlap_trimmed_ms": 300,
+            "startup_overlap_trimmed_ms": 300,
+            "overlap_dropped_frames": 4,
+            "startup_overlap_drops": 4
+        });
+        std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta)?)?;
+        Ok(())
+    })
+    .unwrap_or_else(|e| panic!("fixture {}: {e:?}", spec.name));
+    let project = common::load(&spec.name, path);
+    let config = project.config();
+    let model = audio_support::audio_model(&project, &config);
+    let mut failures = Vec::new();
+    for path in [ExportPath::App, ExportPath::Plain] {
+        let id = format!("audio/{}/full/{}{FPS}", spec.name, path.label());
+        if !report::selected(&id) {
+            continue;
+        }
+        let mut case = Case::new(&id);
+        let dir = common::scratch_dir(&id);
+        match common::runtime().block_on(audio_support::export(
+            &project,
+            config.clone(),
+            path,
+            FPS,
+            RES,
+            dir.path(),
+        )) {
+            Err(e) => case.problem("error", format!("export failed: {e}")),
+            Ok(out) => match audio_support::exported_mono(&out) {
+                Err(e) => case.problem("error", e),
+                Ok(mono) => {
+                    audio_support::check_pcm(&mut case, "export", &model, &mono);
+                }
+            },
+        }
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    let id = format!("audio/{}/full/playback", spec.name);
+    if report::selected(&id) {
+        let rt = common::runtime();
+        let mut case = Case::new(&id);
+        let mut player = OfflinePlayer::open(&rt, &project, config);
+        player.play(0.0);
+        let pcm = player.pull(model.duration + 0.3);
+        audio_support::check_pcm(
+            &mut case,
+            "play from 0",
+            &model.window(0.0, audio_support::frames_secs(&pcm)),
+            &audio_support::mono(&pcm),
+        );
+        if let Err(message) = report::settle(case) {
+            failures.push(message);
+        }
+    }
+    common::assert_passed(failures);
 }

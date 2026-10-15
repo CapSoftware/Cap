@@ -42,7 +42,7 @@ pub fn project(spec: &FixtureSpec) -> Project {
     load(&spec.name, path)
 }
 
-fn load(name: &str, path: PathBuf) -> Project {
+pub fn load(name: &str, path: PathBuf) -> Project {
     let meta = RecordingMeta::load_for_project(&path).expect("fixture meta");
     let truth = SourceTruth::read(&path).expect("fixture truth");
     Project {
@@ -214,7 +214,127 @@ pub struct OutputFrame {
     pub readout: FrameReadout,
     /// Hash of the decoded picture, for determinism checks.
     pub hash: u64,
+    /// Picture size.
+    pub size: (usize, usize),
+    /// Camera key region of every `LAYOUT_SAMPLE_EVERY`th frame, as fractions
+    /// of the picture size.
+    pub camera_region: Option<video_code::Region>,
+    /// Mean Y, Cb, Cr code values of a flat band of the screen's key colour
+    /// and the stream's colour tag, sampled like `camera_region` (YUV
+    /// outputs only).
+    pub screen_colour: Option<ScreenColour>,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct ScreenColour {
+    pub ycbcr: [f64; 3],
+    pub space: ffmpeg::util::color::Space,
+    pub range: ffmpeg::util::color::Range,
+}
+
+/// Measured minus expected (Y, Cb, Cr) code values for `rgb` encoded the way
+/// the stream's colour tag says (BT.709 unless tagged BT.601; limited range
+/// unless tagged full).
+pub fn colour_error(colour: &ScreenColour, rgb: [u8; 3]) -> [f64; 3] {
+    use ffmpeg::util::color::{Range, Space};
+    let [r, g, b] = rgb.map(|v| f64::from(v) / 255.0);
+    let (kr, kb) = if matches!(colour.space, Space::BT470BG | Space::SMPTE170M) {
+        (0.299, 0.114)
+    } else {
+        (0.2126, 0.0722)
+    };
+    let y = kr * r + (1.0 - kr - kb) * g + kb * b;
+    let (cb, cr) = ((b - y) / (2.0 * (1.0 - kb)), (r - y) / (2.0 * (1.0 - kr)));
+    let expected = if colour.range == Range::JPEG {
+        [255.0 * y, 128.0 + 255.0 * cb, 128.0 + 255.0 * cr]
+    } else {
+        [16.0 + 219.0 * y, 128.0 + 224.0 * cb, 128.0 + 224.0 * cr]
+    };
+    [0, 1, 2].map(|k| colour.ycbcr[k] - expected[k])
+}
+
+/// Mean code values and tag of a rectangle (fractions of the picture).
+pub fn rect_colour(
+    frame: &ffmpeg::frame::Video,
+    view: &impl video_code::PixelSource,
+    rect: [f64; 4],
+) -> Option<ScreenColour> {
+    if !matches!(
+        frame.format(),
+        ffmpeg::format::Pixel::YUV420P | ffmpeg::format::Pixel::NV12
+    ) {
+        return None;
+    }
+    let (w, h) = (view.width() as f64, view.height() as f64);
+    let (x0, x1) = (
+        (rect[0] * w) as usize,
+        ((rect[2] * w) as usize).max((rect[0] * w) as usize + 1),
+    );
+    let (y0, y1) = (
+        (rect[1] * h) as usize,
+        ((rect[3] * h) as usize).max((rect[1] * h) as usize + 1),
+    );
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (cb, cr) = view.chroma(x, y);
+            sum[0] += view.luma(x, y);
+            sum[1] += cb + 128.0;
+            sum[2] += cr + 128.0;
+            n += 1.0;
+        }
+    }
+    Some(ScreenColour {
+        ycbcr: sum.map(|v| v / n),
+        space: frame.color_space(),
+        range: frame.color_range(),
+    })
+}
+
+/// Mean code values of the band 8-16% down the screen's key region, 20-80%
+/// across (above the code square and the default camera position).
+fn screen_colour(
+    frame: &ffmpeg::frame::Video,
+    view: &impl video_code::PixelSource,
+) -> Option<ScreenColour> {
+    if !matches!(
+        frame.format(),
+        ffmpeg::format::Pixel::YUV420P | ffmpeg::format::Pixel::NV12
+    ) {
+        return None;
+    }
+    let region = video_code::locate_region(view, StreamKind::Screen)?;
+    let (w, h) = (region.x1 - region.x0, region.y1 - region.y0);
+    let (x0, x1) = (
+        (region.x0 + 0.2 * w) as usize,
+        (region.x0 + 0.8 * w) as usize,
+    );
+    let (y0, y1) = (
+        (region.y0 + 0.08 * h) as usize,
+        (region.y0 + 0.16 * h) as usize,
+    );
+    let mut sum = [0.0; 3];
+    let mut n = 0.0;
+    for y in y0..y1.max(y0 + 1) {
+        for x in x0..x1.max(x0 + 1) {
+            let (cb, cr) = view.chroma(x, y);
+            sum[0] += view.luma(x, y);
+            sum[1] += cb + 128.0;
+            sum[2] += cr + 128.0;
+            n += 1.0;
+        }
+    }
+    Some(ScreenColour {
+        ycbcr: sum.map(|v| v / n),
+        space: frame.color_space(),
+        range: frame.color_range(),
+    })
+}
+
+/// Frames between camera placement samples (placement does not change
+/// between frames of the verification projects).
+pub const LAYOUT_SAMPLE_EVERY: usize = 10;
 
 fn picture_hash(frame: &ffmpeg::frame::Video) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -255,10 +375,30 @@ pub fn read_output(
             Some(expect) => read_expecting(&view, &expect(frames.len())),
             None => video_code::read_frame(&view),
         };
+        let size = (
+            picture.frame.width() as usize,
+            picture.frame.height() as usize,
+        );
+        let camera_region = (frames.len() % LAYOUT_SAMPLE_EVERY == 0
+            && matches!(readout.camera, video_code::Readout::Marker { .. }))
+        .then(|| video_code::locate_region(&view, StreamKind::Camera))
+        .flatten()
+        .map(|r| video_code::Region {
+            x0: r.x0 / size.0 as f64,
+            x1: r.x1 / size.0 as f64,
+            y0: r.y0 / size.1 as f64,
+            y1: r.y1 / size.1 as f64,
+        });
+        let screen_colour = (frames.len() % LAYOUT_SAMPLE_EVERY == 0)
+            .then(|| screen_colour(&picture.frame, &view))
+            .flatten();
         frames.push(OutputFrame {
             pts_secs: picture.pts_secs,
             readout,
             hash: picture_hash(&picture.frame),
+            size,
+            camera_region,
+            screen_colour,
         })
     })
     .unwrap_or_else(|e| panic!("decode {path:?}: {e:?}"));
@@ -320,6 +460,147 @@ pub fn check_sequence(
             .map(|f| f.readout.get(kind).clone())
             .collect();
         case.stream(oracle::check_stream(kind, &exp, &obs, fps));
+    }
+}
+
+/// Product contract for exported MP4s: a keyframe at least every
+/// `DEFAULT_KEYFRAME_INTERVAL_SECS` (2 s, crates/enc-ffmpeg h264.rs), so
+/// shared videos seek quickly.
+pub const MAX_KEYFRAME_INTERVAL_SECS: f64 = 2.0;
+/// Colour checks on a flat key-colour band (code values).
+pub const COLOUR_LEVEL_TOLERANCE: f64 = 4.0;
+pub const COLOUR_MATRIX_TOLERANCE: f64 = 2.0;
+
+/// Presentation checks every export gets on top of frame identity: the
+/// keyframe interval (MP4), camera mirroring (the code reads mirrored exactly
+/// when the project mirrors the camera; the screen never is), and camera
+/// placement (the camera's key region lies in the corner/edge the project
+/// asks for).
+pub fn check_presentation(
+    case: &mut Case,
+    config: &ProjectConfiguration,
+    frames: &[OutputFrame],
+    path: &Path,
+    fps: u32,
+    keyframes: bool,
+) {
+    if keyframes {
+        match media::keyframe_times(path) {
+            Err(e) => case.problem("error", format!("keyframes: {e}")),
+            Ok(times) => {
+                let end = frames.len() as f64 / f64::from(fps);
+                let slack = 1.0 / f64::from(fps) + 1e-3;
+                let mut previous = 0.0;
+                let mut worst: Option<(f64, f64)> = None;
+                if times.first().is_none_or(|&t| t > slack) {
+                    case.problem(
+                        "keyframes",
+                        format!("the first frame is not a keyframe (keyframes {times:?})"),
+                    );
+                }
+                for &t in times.iter().chain(std::iter::once(&end)) {
+                    let gap = t - previous;
+                    if gap > MAX_KEYFRAME_INTERVAL_SECS + slack
+                        && worst.is_none_or(|(_, g)| gap > g)
+                    {
+                        worst = Some((previous, gap));
+                    }
+                    previous = t;
+                }
+                if let Some((from, gap)) = worst {
+                    case.problem(
+                        "keyframes",
+                        format!(
+                            "{gap:.3} s without a keyframe from {from:.3} s (contract: at most {MAX_KEYFRAME_INTERVAL_SECS} s; {} keyframes in {end:.3} s)",
+                            times.len()
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    let mut wrong_mirror = Vec::new();
+    for (i, frame) in frames.iter().enumerate() {
+        for kind in StreamKind::ALL {
+            if let video_code::Readout::Marker { mirrored, .. } = frame.readout.get(kind) {
+                let expected = kind == StreamKind::Camera && config.camera.mirror;
+                if *mirrored != expected {
+                    wrong_mirror.push((i, kind.name(), *mirrored));
+                }
+            }
+        }
+    }
+    if !wrong_mirror.is_empty() {
+        case.problem(
+            "mirror",
+            format!(
+                "{} frames show a stream mirrored wrongly (camera mirror setting {}): first {:?}",
+                wrong_mirror.len(),
+                config.camera.mirror,
+                &wrong_mirror[..wrong_mirror.len().min(5)]
+            ),
+        );
+    }
+
+    // Colour level: the screen's key colour must decode, under the stream's
+    // own colour tag (what players use), to the source luma. (Its chroma
+    // barely separates BT.601 from BT.709; `check_colour` covers the matrix
+    // with a saturated colour.)
+    let level: Vec<(usize, f64)> = frames
+        .iter()
+        .enumerate()
+        .filter_map(|(i, frame)| {
+            let colour = frame.screen_colour?;
+            let [dy, _, _] = colour_error(&colour, StreamKind::Screen.key_rgb());
+            (dy.abs() > COLOUR_LEVEL_TOLERANCE).then_some((i, dy))
+        })
+        .collect();
+    if let Some((i, dy)) = level.first() {
+        case.problem(
+            "colour-level",
+            format!(
+                "screen key colour luma off by {dy:+.1} code values in {} sampled frames (first frame {i}; tolerance {COLOUR_LEVEL_TOLERANCE})",
+                level.len()
+            ),
+        );
+    }
+
+    use cap_project::{CameraXPosition, CameraYPosition};
+    let mut misplaced = Vec::new();
+    for (i, frame) in frames.iter().enumerate() {
+        let Some(r) = frame.camera_region else {
+            continue;
+        };
+        let (cx, cy) = ((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0);
+        let x_ok = match config.camera.position.x {
+            CameraXPosition::Left => cx < 0.5,
+            CameraXPosition::Center => (cx - 0.5).abs() < 0.05,
+            CameraXPosition::Right => cx > 0.5,
+        };
+        let y_ok = match config.camera.position.y {
+            CameraYPosition::Top => cy < 0.5,
+            CameraYPosition::Bottom => cy > 0.5,
+        };
+        if !(x_ok && y_ok) {
+            misplaced.push((
+                i,
+                (cx * 1000.0).round() / 1000.0,
+                (cy * 1000.0).round() / 1000.0,
+            ));
+        }
+    }
+    if !misplaced.is_empty() {
+        case.problem(
+            "layout",
+            format!(
+                "camera drawn away from its {:?}/{:?} position in {} sampled frames (frame, centre x, centre y as fractions): {:?}",
+                config.camera.position.x,
+                config.camera.position.y,
+                misplaced.len(),
+                &misplaced[..misplaced.len().min(5)]
+            ),
+        );
     }
 }
 
@@ -621,4 +902,88 @@ pub fn check_requests(
 
 pub fn assert_passed(failures: Vec<String>) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Runs the editor's real-time playback loop (`cap_editor::Playback`: warm-up,
+/// prefetch, frame cache, wall clock) from `start_frame` for `seconds` of wall
+/// time and returns every frame it delivered, read with `expect(frame number)`
+/// (so transition frames are read as blends).
+/// Video only (`create_segments_without_audio`): the audio clock has its own
+/// oracle. Dropped frames are normal under load; delivered ones must be right.
+pub async fn realtime_playback(
+    project: &Project,
+    config: ProjectConfiguration,
+    decoder: Decoder,
+    resolution: (u32, u32),
+    fps: u32,
+    start_frame: u32,
+    seconds: f64,
+    expect: &dyn Fn(u32) -> cap_verify::model::FrameExpectation,
+) -> Result<Vec<(u32, FrameReadout)>, String> {
+    use std::sync::{Arc, Mutex};
+    let meta = project.meta.studio_meta().ok_or("not studio")?.clone();
+    let recordings = cap_rendering::ProjectRecordingsMeta::new(&project.path, &meta)?;
+    let constants = Arc::new(
+        cap_rendering::RenderVideoConstants::new(
+            &recordings.segments,
+            project.meta.clone(),
+            meta.clone(),
+        )
+        .await
+        .map_err(|e| format!("render constants: {e}"))?,
+    );
+    let segments = Arc::new(
+        cap_editor::create_segments_without_audio(&project.meta, &meta, decoder == Decoder::Ffmpeg)
+            .await?,
+    );
+    let layers_rx = cap_editor::start_renderer_layers_creation(&constants, &config);
+    let layers_rx = cap_editor::finish_renderer_layers_creation(layers_rx).await;
+    let delivered: Arc<Mutex<Vec<cap_rendering::RenderedFrame>>> = Default::default();
+    let sink = delivered.clone();
+    let frame_cb: cap_editor::EditorFrameCallback = Box::new(move |output, _| {
+        if let cap_editor::EditorFrameOutput::Rgba(frame) = output {
+            sink.lock().unwrap().push(frame);
+        }
+    });
+    let renderer = Arc::new(cap_editor::Renderer::spawn(
+        constants.clone(),
+        frame_cb,
+        layers_rx,
+    )?);
+    let (_project_tx, project_rx) = tokio::sync::watch::channel(config);
+    let (audio_output, _audio_sink) = cap_editor::AudioOutput::new_offline();
+    let playback = cap_editor::Playback {
+        renderer,
+        render_constants: constants,
+        start_frame_number: start_frame,
+        project: project_rx,
+        segment_medias: segments,
+        music: cap_editor::MusicTracks::new(),
+        audio_output: Arc::new(audio_output),
+        telemetry: None,
+    };
+    let handle = playback
+        .start(fps, XY::new(resolution.0, resolution.1))
+        .await
+        .map_err(|e| format!("playback start: {e:?}"))?;
+    tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+    handle.stop();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let frames = std::mem::take(&mut *delivered.lock().unwrap());
+    Ok(frames
+        .into_iter()
+        .map(|frame| {
+            let view = video_code::PackedFrame {
+                data: &frame.data,
+                width: frame.width as usize,
+                height: frame.height as usize,
+                stride: frame.padded_bytes_per_row as usize,
+                order: video_code::PixelOrder::Rgba,
+            };
+            (
+                frame.frame_number,
+                read_expecting(&view, &expect(frame.frame_number)),
+            )
+        })
+        .collect())
 }

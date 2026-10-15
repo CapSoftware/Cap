@@ -98,10 +98,90 @@ pub struct RecordedSpec {
 }
 
 impl RecordedSpec {
-    /// Key for the fixture cache.
+    /// Key for the fixture cache: the spec plus the recording code that made
+    /// the fixture ([`product_source_hash`]).
     pub fn cache_key(&self) -> String {
-        crate::fixture::cache_key(&self.name, self)
+        crate::fixture::cache_key(&self.name, &(self, product_source_hash()))
     }
+}
+
+/// Workspace crates whose code shapes a recorded fixture (capture pipeline,
+/// muxers, encoders, timestamps, audio conversion).
+const RECORDING_SOURCE_CRATES: &[&str] = &[
+    "recording",
+    "cap-muxer",
+    "cap-muxer-protocol",
+    "enc-ffmpeg",
+    "enc-avfoundation",
+    "enc-mediafoundation",
+    "media-info",
+    "media",
+    "timestamp",
+    "audio",
+    "frame-converter",
+    "project",
+];
+
+/// Hash of the product sources that recorded fixtures are made by. Recorded
+/// fixtures are product output: keying them by the spec alone would let a
+/// cached fixture recorded by older code (the CI fixture cache is keyed by
+/// the generator sources only) hide a regression in the recording pipeline.
+/// With this in the key, any change to those crates, to Cargo.lock or to
+/// this recorder harness re-records the fixtures.
+pub fn product_source_hash() -> u64 {
+    static HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *HASH.get_or_init(|| {
+        fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n != "target") {
+                        collect(&path, out);
+                    }
+                } else if path
+                    .extension()
+                    .is_some_and(|e| e == "rs" || e == "toml" || e == "wgsl" || e == "metal")
+                {
+                    out.push(path);
+                }
+            }
+        }
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest
+            .join("../..")
+            .canonicalize()
+            .unwrap_or_else(|_| manifest.join("../.."));
+        let mut files = Vec::new();
+        for name in RECORDING_SOURCE_CRATES {
+            collect(&root.join("crates").join(name), &mut files);
+        }
+        files.push(root.join("Cargo.lock"));
+        files.push(root.join("crates/verify/src/pipeline.rs"));
+        files.sort();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |bytes: &[u8]| {
+            for &byte in bytes {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for file in &files {
+            let Ok(contents) = std::fs::read(file) else {
+                continue;
+            };
+            feed(
+                file.strip_prefix(&root)
+                    .unwrap_or(file)
+                    .to_string_lossy()
+                    .as_bytes(),
+            );
+            feed(&contents);
+        }
+        hash
+    })
 }
 
 fn bgra_frame(marker: FrameMarker, width: u32, height: u32) -> ffmpeg::frame::Video {
@@ -152,6 +232,23 @@ fn audio_chunk(track: &[f32], chunk_t: f64, info: &AudioInfo) -> ffmpeg::frame::
     frame
 }
 
+/// Emitters wait for this before their first frame, so every device starts
+/// delivering only once all pipelines are built. Emitting from the pipeline
+/// epoch instead queued the frames of a slow setup and delivered them as a
+/// burst, which the recorder (rightly) treats as stale overlap and drops.
+type StartGate = tokio::sync::watch::Receiver<Option<std::time::Instant>>;
+
+async fn started(mut gate: StartGate) -> std::time::Instant {
+    loop {
+        if let Some(base) = *gate.borrow() {
+            return base;
+        }
+        if gate.changed().await.is_err() {
+            return std::time::Instant::now();
+        }
+    }
+}
+
 struct VideoLeg {
     pipeline: OutputPipeline,
     emit: tokio::task::JoinHandle<()>,
@@ -167,15 +264,16 @@ async fn video_leg(
     video: &RecordedVideo,
     duration: f64,
     timestamps: Timestamps,
+    start: StartGate,
 ) -> anyhow::Result<VideoLeg> {
     let info = VideoInfo::from_raw(RawVideoFormat::Bgra, video.width, video.height, video.fps);
     let (tx, rx) = flume::bounded::<FFmpegVideoFrame>(32);
-    let base = timestamps.instant();
     let slots = video
         .delivery
         .slots(video.fps, duration - video.start_delay);
     let (fps, width, height, delay) = (video.fps, video.width, video.height, video.start_delay);
     let emit = tokio::spawn(async move {
+        let base = started(start).await;
         for slot in slots {
             let t = delay + f64::from(slot) / f64::from(fps);
             let at = base + Duration::from_secs_f64(t);
@@ -214,7 +312,7 @@ async fn record_segment(
     std::fs::create_dir_all(dir.join(&seg))?;
     let rel = |file: &str| RelativePathBuf::from(format!("{seg}/{file}"));
     let timestamps = Timestamps::now();
-    let base = timestamps.instant();
+    let (start_tx, start) = tokio::sync::watch::channel(None);
 
     let screen = video_leg(
         dir,
@@ -224,6 +322,7 @@ async fn record_segment(
         &spec.screen,
         spec.duration,
         timestamps,
+        start.clone(),
     )
     .await?;
     let camera = match &spec.camera {
@@ -236,6 +335,7 @@ async fn record_segment(
                 camera,
                 spec.duration,
                 timestamps,
+                start.clone(),
             )
             .await?,
         ),
@@ -252,8 +352,10 @@ async fn record_segment(
         let track = marker_track(AudioSource::Mic, spec.duration);
         let (mut tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
         let duration = spec.duration;
+        let gate = start.clone();
         let emit = tokio::spawn(async move {
             use futures::SinkExt;
+            let base = started(gate).await;
             let first = (delay / AUDIO_CHUNK_SECS).ceil() as usize;
             let last = (duration / AUDIO_CHUNK_SECS) as usize;
             for k in first..last {
@@ -283,8 +385,10 @@ async fn record_segment(
         let schedule =
             audio_code::standard_schedule(AudioSource::System, 0.1, spec.duration - 0.1, 0.5);
         let (mut tx, rx) = futures::channel::mpsc::channel::<AudioFrame>(32);
+        let gate = start.clone();
         let emit = tokio::spawn(async move {
             use futures::SinkExt;
+            let base = started(gate).await;
             for placement in schedule {
                 let first = (placement.time_secs / AUDIO_CHUNK_SECS).floor() as usize;
                 let last = ((placement.time_secs + audio_code::MARKER_SECS) / AUDIO_CHUNK_SECS)
@@ -313,6 +417,8 @@ async fn record_segment(
             .map_err(|e| anyhow!("system audio pipeline: {e}"))?;
         system = Some((pipeline, emit, rel("system_audio.ogg")));
     }
+
+    let _ = start_tx.send(Some(std::time::Instant::now() + Duration::from_millis(50)));
 
     // Wait for every device to finish delivering, keeping the audio senders
     // open (real devices deliver until stop), then stop like the recorder.
@@ -441,8 +547,12 @@ pub struct InstantSpec {
 }
 
 impl InstantSpec {
+    /// Key for the fixture cache, including [`product_source_hash`].
     pub fn cache_key(&self) -> String {
-        crate::fixture::cache_key(&format!("instant-{}", self.name), self)
+        crate::fixture::cache_key(
+            &format!("instant-{}", self.name),
+            &(self, product_source_hash()),
+        )
     }
 }
 

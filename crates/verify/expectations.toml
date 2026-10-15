@@ -210,3 +210,22 @@ class = "sync"
 platforms = ["macos"]
 reason = "NEW: crash recovery rewrites recording-meta.json without any track start_time, so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay (runners: 83 to 104 ms; developer Mac: ~440 ms)"
 link = ""
+
+[[xfail]]
+case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. Deterministic, 3 of 3 runs on Apple silicon"
+link = ""
+
+[[xfail]]
+case = "export/basic/colour/mp4*/*"
+class = "colour-level"
+reason = "NEW: the export path converts rendered RGBA to NV12 with BT.601 coefficients (crates/rendering/src/shaders/rgba_to_nv12.wgsl) but the encoder tags the stream BT.709 (enc-ffmpeg h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes 14 luma levels too bright, Cb -8.9 (about (236,58,38)). Screen video whose decode matrix matches passes through unchanged"
+link = ""
+
+[[xfail]]
+case = "export/basic/colour/mp4*/*"
+class = "colour-matrix"
+reason = "NEW: see colour-level: BT.601 coefficients in an export tagged BT.709"
+link = ""

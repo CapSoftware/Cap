@@ -235,3 +235,71 @@ fn edits_sequential() {
     }
     common::assert_passed(failures);
 }
+
+/// The real-time playback loop (`cap_editor::Playback`), not just the decode
+/// and render path: every frame it delivers must show what the model puts at
+/// that frame number. Frames may be dropped under load (macOS CI presents at
+/// a few fps); at least `MIN_DELIVERED` must arrive.
+#[test]
+fn realtime_loop() {
+    const MIN_DELIVERED: usize = 8;
+    let rt = common::runtime();
+    let mut failures = Vec::new();
+    let project = common::project(&catalog::basic(report::tier()));
+    for (edit, apply, start_fraction) in [
+        ("full", no_edit as fn(&mut ProjectConfiguration), 0.0),
+        ("cuts-speeds-reorder", cuts, 0.25),
+        ("transition", transition, 0.2),
+    ] {
+        for decoder in Decoder::all() {
+            let id = format!(
+                "playback/{}/{edit}/realtime30-from{:.0}/{}",
+                project.name,
+                start_fraction * 100.0,
+                decoder.label()
+            );
+            if !report::selected(&id) {
+                continue;
+            }
+            let mut config = project.config();
+            apply(&mut config);
+            let model = project.model(&config);
+            let total = model.output_frames(30);
+            let first = (f64::from(total) * start_fraction) as u32;
+            let seconds = f64::from(total - first) / 30.0 + 0.5;
+            let mut case = Case::new(&id);
+            match rt.block_on(common::realtime_playback(
+                &project,
+                config,
+                decoder,
+                RES,
+                30,
+                first,
+                seconds,
+                &|f| model.expect(f, 30),
+            )) {
+                Err(e) => case.problem("error", e),
+                Ok(delivered) => {
+                    let delivered: Vec<_> =
+                        delivered.into_iter().filter(|(f, _)| *f < total).collect();
+                    if delivered.len() < MIN_DELIVERED {
+                        case.problem(
+                            "dropped",
+                            format!(
+                                "real-time playback delivered {} frames, expected at least {MIN_DELIVERED}",
+                                delivered.len()
+                            ),
+                        );
+                    }
+                    let frames: Vec<u32> = delivered.iter().map(|(f, _)| *f).collect();
+                    let readouts: Vec<_> = delivered.into_iter().map(|(_, r)| r).collect();
+                    common::check_requests(&mut case, &model, &frames, &readouts, 30);
+                }
+            }
+            if let Err(message) = report::settle(case) {
+                failures.push(message);
+            }
+        }
+    }
+    common::assert_passed(failures);
+}

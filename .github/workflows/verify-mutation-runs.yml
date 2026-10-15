@@ -32,11 +32,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: lin-p, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "P01 P02 R12" }
-          - { name: mac-01, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "D01 D02 D07" }
-          - { name: mac-02, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "D08 D09 D10" }
-          - { name: mac-03, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "C01 C02 C03" }
-          - { name: mac-04, runner: macos-15, platform: macos, target: aarch64-apple-darwin, ids: "C04 C05" }
+          - { name: after-lin-1, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "R06 R07 R08 R10 R11" }
+          - { name: after-lin-2, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "R12 E01 E04 E05 E02" }
+          - { name: after-lin-3, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "A02 A07 A08 A09 A10" }
+          - { name: after-lin-4, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "P01 P02 T08 A13 A14" }
+          - { name: after-lin-5, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "C01 C02 C03 C04 C05" }
+          - { name: after-lin-6, runner: ubuntu-24.04, platform: linux, target: x86_64-unknown-linux-gnu, ids: "K02 K03 K05" }
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REPEAT: "1"
@@ -97,14 +98,13 @@ jobs:
 
   gpui:
     name: ${{ matrix.name }}
-    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: gpui-none, ids: "" }
+          - { name: after-gpui, ids: "U07 U10" }
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_INCREMENTAL: "1"
