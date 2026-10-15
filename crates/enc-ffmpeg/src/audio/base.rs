@@ -1,12 +1,17 @@
 use super::buffered_resampler::BufferedResampler;
 use crate::base::{EncoderBase, PacketSink};
-use ffmpeg::{codec::encoder, frame};
+use ffmpeg::{
+    Packet, Rational, Rescale,
+    codec::{Capabilities, encoder},
+    frame,
+};
 use std::time::Duration;
 
 pub struct AudioEncoderBase {
     inner: EncoderBase,
     encoder: encoder::Audio,
     resampler: BufferedResampler,
+    input_end: Option<i64>,
 }
 
 impl AudioEncoderBase {
@@ -15,6 +20,7 @@ impl AudioEncoderBase {
             inner: EncoderBase::new(stream_index),
             encoder,
             resampler,
+            input_end: None,
         }
     }
 
@@ -33,6 +39,7 @@ impl AudioEncoderBase {
         self.resampler.add_frame(frame);
 
         while let Some(frame) = self.resampler.get_frame(self.encoder.frame_size() as usize) {
+            self.track_input_end(&frame);
             self.inner.send_frame(&frame, output, &mut self.encoder)?;
         }
 
@@ -40,10 +47,64 @@ impl AudioEncoderBase {
     }
 
     pub fn flush<S: PacketSink + ?Sized>(&mut self, output: &mut S) -> Result<(), ffmpeg::Error> {
+        let mut frames = Vec::new();
         while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
-            self.inner.send_frame(&frame, output, &mut self.encoder)?;
+            self.track_input_end(&frame);
+            frames.push(frame);
         }
 
-        self.inner.process_eof(output, &mut self.encoder)
+        // Encoders that only take full frames (AudioToolbox) get the last one
+        // padded by libavcodec, and their packet durations count that padding,
+        // so the track would end up to a frame after the input did.
+        let pads_final_frame = self.encoder.codec().is_some_and(|codec| {
+            !codec
+                .capabilities()
+                .intersects(Capabilities::SMALL_LAST_FRAME | Capabilities::VARIABLE_FRAME_SIZE)
+        });
+        let mut output = EndTrimmedSink {
+            output,
+            end: self.input_end.filter(|_| pads_final_frame),
+            time_base: self.encoder.time_base(),
+        };
+        for frame in &frames {
+            self.inner
+                .send_frame(frame, &mut output, &mut self.encoder)?;
+        }
+        self.inner.process_eof(&mut output, &mut self.encoder)
+    }
+
+    fn track_input_end(&mut self, frame: &frame::Audio) {
+        if let Some(pts) = frame.pts() {
+            let end = pts + frame.samples() as i64;
+            self.input_end = Some(self.input_end.map_or(end, |current| current.max(end)));
+        }
+    }
+}
+
+struct EndTrimmedSink<'a, S: PacketSink + ?Sized> {
+    output: &'a mut S,
+    end: Option<i64>,
+    time_base: Rational,
+}
+
+impl<S: PacketSink + ?Sized> PacketSink for EndTrimmedSink<'_, S> {
+    fn stream_time_base(&self, stream_index: usize) -> Rational {
+        self.output.stream_time_base(stream_index)
+    }
+
+    fn write_packet(&mut self, mut packet: Packet) -> Result<(), ffmpeg::Error> {
+        if let (Some(end), Some(pts)) = (self.end, packet.pts()) {
+            let end = end.rescale(
+                self.time_base,
+                self.output.stream_time_base(packet.stream()),
+            );
+            if pts >= end {
+                return Ok(());
+            }
+            if pts + packet.duration() > end {
+                packet.set_duration(end - pts);
+            }
+        }
+        self.output.write_packet(packet)
     }
 }

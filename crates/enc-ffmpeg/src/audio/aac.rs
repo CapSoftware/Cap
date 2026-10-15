@@ -44,7 +44,41 @@ impl AACEncoder {
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, AACEncoderError> {
-        let codec = encoder::find_by_name("aac").ok_or(AACEncoderError::CodecNotFound)?;
+        Self::init_with_codec("aac", ffmpeg::Dictionary::new(), input_config, output)
+    }
+
+    // A plain MP4's edit list trims AudioToolbox's 2112-sample encoder priming.
+    // Fragmented recording outputs keep priming in the timeline, so they stay on
+    // FFmpeg's encoder: AudioToolbox would start their audio ~23 ms later.
+    pub fn init_for_export(
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        #[cfg(target_os = "macos")]
+        {
+            // AudioToolbox defaults to constant bitrate, which fills silence up to
+            // the full 320 kbps; average bitrate keeps silent stretches near-free.
+            let mut options = ffmpeg::Dictionary::new();
+            options.set("aac_at_mode", "abr");
+            match Self::init_with_codec("aac_at", options, input_config, output) {
+                Ok(encoder) => return Ok(encoder),
+                Err(error) => {
+                    tracing::warn!(%error, "AudioToolbox AAC encoder unavailable, using FFmpeg's");
+                }
+            }
+        }
+
+        Self::init(input_config, output)
+    }
+
+    fn init_with_codec(
+        name: &str,
+        options: ffmpeg::Dictionary,
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        let codec = encoder::find_by_name(name).ok_or(AACEncoderError::CodecNotFound)?;
+        let audio_codec = codec.audio()?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         let thread_count = thread::available_parallelism()
             .map(|v| v.get())
@@ -53,27 +87,41 @@ impl AACEncoder {
         let mut encoder = encoder_ctx.encoder().audio()?;
 
         let rate = {
-            let mut rates = codec
-                .audio()
-                .unwrap()
+            let mut rates = audio_codec
                 .rates()
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
             rates.sort();
 
-            let Some(&rate) = rates
-                .iter()
-                .find(|r| **r >= input_config.rate())
-                .or(rates.first())
-            else {
-                return Err(AACEncoderError::RateNotSupported(input_config.rate()));
-            };
-            rate
+            if rates.is_empty() {
+                input_config.rate()
+            } else {
+                let Some(&rate) = rates
+                    .iter()
+                    .find(|r| **r >= input_config.rate())
+                    .or(rates.first())
+                else {
+                    return Err(AACEncoderError::RateNotSupported(input_config.rate()));
+                };
+                rate
+            }
+        };
+
+        let sample_format = {
+            let formats = audio_codec
+                .formats()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            match formats.first() {
+                Some(&first) if !formats.contains(&Self::SAMPLE_FORMAT) => first,
+                _ => Self::SAMPLE_FORMAT,
+            }
         };
 
         let mut output_config = input_config;
-        output_config.sample_format = Self::SAMPLE_FORMAT;
+        output_config.sample_format = sample_format;
         output_config.sample_rate = rate as u32;
 
         let resampler = BufferedResampler::new(input_config, output_config)
@@ -85,7 +133,7 @@ impl AACEncoder {
         encoder.set_channel_layout(output_config.channel_layout());
         encoder.set_time_base(FFRational(1, output_config.rate()));
 
-        let encoder = encoder.open()?;
+        let encoder = encoder.open_with(options)?;
 
         let mut output_stream = output.add_stream(codec)?;
         output_stream.set_time_base(FFRational(1, output_config.rate()));
@@ -285,6 +333,233 @@ mod tests {
     #[test]
     fn queued_audio_packets_match_direct_writes() {
         assert_eq!(encode_audio(true), encode_audio_through_queue());
+    }
+
+    const CLICK_AT: usize = 24_000;
+
+    fn click_frame(start: usize, samples: usize) -> frame::Audio {
+        let mut audio =
+            frame::Audio::new(Sample::F32(Type::Packed), samples, ChannelLayout::STEREO);
+        audio.set_rate(48_000);
+        audio.set_pts(Some(start as i64));
+        for (index, sample) in audio.data_mut(0)[..samples * 2 * size_of::<f32>()]
+            .chunks_exact_mut(2 * size_of::<f32>())
+            .enumerate()
+        {
+            let position = start + index;
+            let value = if (CLICK_AT..CLICK_AT + 48).contains(&position) {
+                0.9_f32
+            } else {
+                0.0
+            };
+            sample[..4].copy_from_slice(&value.to_le_bytes());
+            sample[4..].copy_from_slice(&value.to_le_bytes());
+        }
+        audio
+    }
+
+    fn encode_click_for_export(path: &std::path::Path) -> i32 {
+        let mut output = format::output(path).unwrap();
+        let mut encoder = AACEncoder::init_for_export(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        let initial_padding = unsafe {
+            (*output
+                .stream(encoder.stream_index())
+                .unwrap()
+                .parameters()
+                .as_ptr())
+            .initial_padding
+        };
+        output.write_header().unwrap();
+
+        let mut position = 0;
+        while position < 48_000 {
+            let samples = 960.min(48_000 - position);
+            encoder
+                .send_frame(click_frame(position, samples), Duration::MAX, &mut output)
+                .unwrap();
+            position += samples;
+        }
+
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        initial_padding
+    }
+
+    fn decode_first_channel(path: &std::path::Path) -> (Vec<f32>, i64) {
+        use ffmpeg::Rescale;
+
+        let mut input = format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let stream_index = stream.index();
+        let time_base = stream.time_base();
+        let mut decoder = context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let mut decoded = frame::Audio::empty();
+        let mut samples = Vec::new();
+        let mut track_end = i64::MIN;
+
+        for (stream, packet) in input.packets() {
+            if stream.index() != stream_index {
+                continue;
+            }
+            if let Some(pts) = packet.pts() {
+                track_end =
+                    track_end.max((pts + packet.duration()).rescale(time_base, (1, 48_000)));
+            }
+            decoder.send_packet(&packet).unwrap();
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                samples.extend_from_slice(decoded.plane::<f32>(0));
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            samples.extend_from_slice(decoded.plane::<f32>(0));
+        }
+        (samples, track_end)
+    }
+
+    #[test]
+    fn export_encoder_keeps_audio_aligned_in_mp4() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("click.mp4");
+        encode_click_for_export(&path);
+
+        let (samples, track_end) = decode_first_channel(&path);
+        let click = samples
+            .iter()
+            .position(|sample| sample.abs() > 0.3)
+            .expect("the encoded click was not found");
+        assert!(
+            click.abs_diff(CLICK_AT) < 64,
+            "click decoded at sample {click}, encoded at {CLICK_AT}"
+        );
+        assert_eq!(track_end, 48_000);
+    }
+
+    #[test]
+    fn export_encoder_spends_almost_nothing_on_silence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("silence.mp4");
+        let mut output = format::output(&path).unwrap();
+        let mut encoder = AACEncoder::init_for_export(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+        for start in (0..480_000).step_by(960) {
+            let mut audio =
+                frame::Audio::new(Sample::F32(Type::Packed), 960, ChannelLayout::STEREO);
+            audio.set_rate(48_000);
+            audio.set_pts(Some(start));
+            audio.data_mut(0)[..960 * 2 * size_of::<f32>()].fill(0);
+            encoder
+                .send_frame(audio, Duration::MAX, &mut output)
+                .unwrap();
+        }
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(encoder);
+        drop(output);
+
+        let mut input = format::input(&path).unwrap();
+        let stream_index = input
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .unwrap()
+            .index();
+        let bytes = input
+            .packets()
+            .filter(|(stream, _)| stream.index() == stream_index)
+            .map(|(_, packet)| packet.size())
+            .sum::<usize>();
+        assert!(bytes < 40_000, "10 s of silence took {bytes} bytes");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn export_encoder_uses_audiotoolbox_on_macos() {
+        let directory = tempfile::tempdir().unwrap();
+        let initial_padding = encode_click_for_export(&directory.path().join("click.mp4"));
+        assert_eq!(initial_padding, 2112);
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_export_aac_encoder() {
+        type Init =
+            fn(AudioInfo, &mut format::context::Output) -> Result<AACEncoder, AACEncoderError>;
+
+        fn voice_like_frame(start: usize, samples: usize, noise: &mut u32) -> frame::Audio {
+            let mut audio =
+                frame::Audio::new(Sample::F32(Type::Packed), samples, ChannelLayout::STEREO);
+            audio.set_rate(48_000);
+            audio.set_pts(Some(start as i64));
+            for (index, sample) in audio.data_mut(0)[..samples * 2 * size_of::<f32>()]
+                .chunks_exact_mut(size_of::<f32>())
+                .enumerate()
+            {
+                *noise ^= *noise << 13;
+                *noise ^= *noise >> 17;
+                *noise ^= *noise << 5;
+                let time = (start + index / 2) as f32 / 48_000.0;
+                let value = 0.3 * (std::f32::consts::TAU * 220.0 * time).sin()
+                    + 0.15 * (std::f32::consts::TAU * 1_330.0 * time).sin()
+                    + 0.1 * (*noise as f32 / u32::MAX as f32 - 0.5);
+                sample.copy_from_slice(&value.to_le_bytes());
+            }
+            audio
+        }
+
+        let seconds = std::env::var("CAP_AAC_BENCH_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60usize);
+        let samples = seconds * 48_000;
+        let directory = tempfile::tempdir().unwrap();
+        let encoders: [(&str, Init); 2] = [
+            ("init (FFmpeg aac)", AACEncoder::init),
+            ("init_for_export", AACEncoder::init_for_export),
+        ];
+        for round in 0..3 {
+            for (label, init) in encoders {
+                let path = directory.path().join(format!("{round}.mp4"));
+                let mut output = format::output(&path).unwrap();
+                let mut encoder = init(
+                    AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+                    &mut output,
+                )
+                .unwrap();
+                output.write_header().unwrap();
+                let mut noise = 0x9e37_79b9_u32;
+                let frames = (0..samples)
+                    .step_by(960)
+                    .map(|position| {
+                        voice_like_frame(position, 960.min(samples - position), &mut noise)
+                    })
+                    .collect::<Vec<_>>();
+                let started = std::time::Instant::now();
+                for frame in frames {
+                    encoder
+                        .send_frame(frame, Duration::MAX, &mut output)
+                        .unwrap();
+                }
+                encoder.flush(&mut output).unwrap();
+                output.write_trailer().unwrap();
+                let wall = started.elapsed().as_secs_f64();
+                println!(
+                    "round {round} {label}: {seconds}s of 48 kHz stereo in {wall:.3}s ({:.0}x realtime)",
+                    seconds as f64 / wall
+                );
+            }
+        }
     }
 
     #[test]
