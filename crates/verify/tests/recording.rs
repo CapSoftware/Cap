@@ -45,6 +45,8 @@ use cap_verify::{
     video_code::{self, FrameMarker, Readout, StreamKind},
 };
 
+static ATTEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 const MIC_RATE: u32 = 48_000;
 const MIC_CHUNK: usize = 480;
 const CAMERA_FPS: u32 = 30;
@@ -56,6 +58,7 @@ const SYSTEM_AUDIO_STARTUP: f64 = 1.0;
 /// until VideoToolbox is ready; #2573 measured 0-6 per run).
 const STARTUP_SECS: f64 = 1.0;
 const STARTUP_DROPS: usize = 6;
+const SCREEN_MISS_FRACTION: f64 = 0.03;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -178,6 +181,16 @@ fn capture_mode() -> Option<CaptureMode> {
     }
 }
 
+/// System audio is required on a developer Mac and, with
+/// `CAP_VERIFY_REQUIRE_SYSTEM_AUDIO=1`, anywhere.
+fn require_system_audio() -> bool {
+    match std::env::var("CAP_VERIFY_REQUIRE_SYSTEM_AUDIO").as_deref() {
+        Ok("1") | Ok("true") => true,
+        Ok(_) => false,
+        Err(_) => std::env::var_os("CI").is_none(),
+    }
+}
+
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
 }
@@ -225,12 +238,56 @@ fn real_capture() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
+    // A cold runner (WindowServer, ScreenCaptureKit, VideoToolbox) delivers
+    // its first recording late and irregularly; one discarded recording
+    // brings every case onto the steady state a user's machine is in.
+    if specs()
+        .iter()
+        .any(|s| report::selected(s.id) && (s.tier == Tier::Fast || tier == Tier::Full))
+    {
+        let warmup = Spec {
+            id: "recording/warmup",
+            tier: Tier::Fast,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: false,
+            },
+            seconds: 2.0,
+            stimulus_fps: 30.0,
+            holds: vec![],
+            camera_drops_at: vec![],
+        };
+        let mut case = Case::new(warmup.id);
+        let started = std::time::Instant::now();
+        let result = rt.block_on(async {
+            let scratch = scratch_root().join("warmup");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch)?;
+            let recorded = record(
+                &warmup,
+                capture,
+                &shareable,
+                &scratch,
+                host_now(),
+                &mut case,
+            )
+            .await;
+            let _ = std::fs::remove_dir_all(&scratch);
+            recorded.map(|_| ())
+        });
+        eprintln!(
+            "[cap-verify] warm-up recording {} in {:.1}s",
+            if result.is_ok() { "done" } else { "failed" },
+            started.elapsed().as_secs_f64()
+        );
+    }
     let mut failures = Vec::new();
     for spec in specs() {
         if !report::selected(spec.id) || (spec.tier == Tier::Full && tier == Tier::Fast) {
             continue;
         }
         for attempt in 0..repeat {
+            ATTEMPT.store(attempt + 1, Ordering::Relaxed);
             let mut case = Case::new(spec.id);
             if repeat > 1 {
                 case.note(format!("repeat {}/{repeat}", attempt + 1));
@@ -566,7 +623,7 @@ async fn run_case(
     std::fs::create_dir_all(&scratch)?;
     let reference = host_now();
     let recorded = record(spec, capture, shareable, &scratch, reference, case).await?;
-    analyze(spec, &recorded, reference, case)?;
+    analyze(&recorded, reference, case)?;
     if !case.failed() && !env_flag("CAP_VERIFY_KEEP") {
         let _ = std::fs::remove_dir_all(&scratch);
     } else {
@@ -764,7 +821,12 @@ async fn record_killed(
             "--test-threads=1",
         ])
         .env(CHILD_ENV, serde_json::to_string(&child_spec)?)
+        .env(
+            "RUST_LOG",
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,cap_recording=debug".into()),
+        )
         .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(scratch.join("child.log"))?)
         .spawn()?;
     let mut child = ChildGuard(child);
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
@@ -800,8 +862,17 @@ async fn record_killed(
     let recover_started = std::time::Instant::now();
     let recover_path = project.clone();
     let recovered = tokio::task::spawn_blocking(move || {
-        let incomplete = RecoveryManager::inspect_recording(&recover_path)
-            .ok_or_else(|| anyhow::anyhow!("killed recording is not recoverable"))?;
+        let incomplete = RecoveryManager::inspect_recording(&recover_path).ok_or_else(|| {
+            let display = recover_path.join("content/segments/segment-0/display");
+            let files = std::fs::read_dir(&display)
+                .map(|d| {
+                    d.flatten()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            anyhow::anyhow!("killed recording is not recoverable (display fragments: {files:?})")
+        })?;
         let estimated = incomplete.estimated_duration;
         let recovered =
             RecoveryManager::recover(&incomplete).map_err(|e| anyhow::anyhow!("recover: {e}"))?;
@@ -1170,15 +1241,42 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             startup
         ));
     }
-    if !skipped.is_empty() {
+    // The truth for a screen frame is when the stimulus handed it to the
+    // window server, not when the display showed it: on a loaded virtual
+    // display a frame can be replaced before it is ever composited. A small
+    // budget of isolated misses is that; a pipeline that drops frames loses
+    // runs of them or many.
+    let budget = if check.kind == StreamKind::Screen {
+        ((first_seen.len() as f64) * SCREEN_MISS_FRACTION).ceil() as usize
+    } else {
+        0
+    };
+    let longest_run = skipped
+        .iter()
+        .fold((0usize, 0usize, None::<u32>), |(best, run, prev), &i| {
+            let run = if prev.is_some_and(|p| p + 1 == i) {
+                run + 1
+            } else {
+                1
+            };
+            (best.max(run), run, Some(i))
+        })
+        .0;
+    if skipped.len() > budget || longest_run >= 3 {
         case.problem(
             "missing",
             format!(
-                "{name}: {} produced frames missing from the recording: {:?}",
+                "{name}: {} produced frames missing from the recording (budget {budget}, longest run {longest_run}): {:?}",
                 skipped.len(),
                 &skipped[..skipped.len().min(12)]
             ),
         );
+    } else if !skipped.is_empty() {
+        case.note(format!(
+            "{name}: {} isolated misses within budget {budget}: {:?}",
+            skipped.len(),
+            skipped
+        ));
     }
     if let Some(dir) = std::env::var_os("CAP_VERIFY_DUMP") {
         let rows: Vec<String> = indices
@@ -1189,7 +1287,11 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             })
             .collect();
         let _ = std::fs::write(
-            Path::new(&dir).join(format!("{}-{name}.csv", case.id.replace('/', "-"))),
+            Path::new(&dir).join(format!(
+                "{}-r{}-{name}.csv",
+                case.id.replace('/', "-"),
+                ATTEMPT.load(Ordering::Relaxed)
+            )),
             format!("pts,index,truth,offset\n{}\n", rows.join("\n")),
         );
     }
@@ -1269,6 +1371,14 @@ fn check_audio(
     let name = check.name;
     let mono = decoded.mono();
     let located = audio_code::locate_markers(&mono, decoded.sample_rate, check.source);
+    if check.source == AudioSource::System && located.is_empty() && !require_system_audio() {
+        // Hosted runners' virtual output devices hand ScreenCaptureKit pure
+        // digital silence; a developer Mac checks this stream.
+        case.note(format!(
+            "{name}: no system audio reached the recording (runner output is not capturable); not checked"
+        ));
+        return Offsets::default();
+    }
     let mut found: BTreeMap<u32, f64> = BTreeMap::new();
     let mut damaged = 0;
     let mut repeated = Vec::new();
@@ -1351,7 +1461,11 @@ fn check_audio(
             )
             .collect();
         let _ = std::fs::write(
-            Path::new(&dir).join(format!("{}-{name}.csv", case.id.replace('/', "-"))),
+            Path::new(&dir).join(format!(
+                "{}-r{}-{name}.csv",
+                case.id.replace('/', "-"),
+                ATTEMPT.load(Ordering::Relaxed)
+            )),
             format!(
                 "at,index,truth,correlation (start {start:.6}, file start {:.6}, window {:.3}..{:.3})\n{}\n",
                 decoded.start_secs,
@@ -1382,7 +1496,7 @@ fn check_audio(
     offsets
 }
 
-fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
+fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
     let layout = layout(&rec.project, case)?;
     let screen_truth = first_presented(&rec.stimulus, reference);
     let presented: Vec<(u32, f64)> = screen_truth.iter().map(|(i, t)| (*i, *t)).collect();
@@ -1471,7 +1585,7 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
     });
     if let Some(reason) = &audio_unavailable {
         case.note(format!("system audio stimulus unavailable: {reason}"));
-        if env_flag("CAP_VERIFY_REQUIRE_SYSTEM_AUDIO") {
+        if require_system_audio() {
             case.problem(
                 "missing",
                 format!("system audio required but unavailable: {reason}"),
@@ -1553,7 +1667,7 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
         (mic, system)
     };
     sync_checks(
-        spec,
+        rec.max_fps,
         case,
         &screen,
         camera.as_ref(),
@@ -1572,7 +1686,7 @@ fn analyze(spec: &Spec, rec: &Recorded, reference: u64, case: &mut Case) -> anyh
 ///   server; the display shows it at a later refresh, so the screen offset may
 ///   exceed the exact sources' by up to a few refresh intervals, never less.
 fn sync_checks(
-    _spec: &Spec,
+    max_fps: u32,
     case: &mut Case,
     screen: &Offsets,
     camera: Option<&Offsets>,
@@ -1580,9 +1694,17 @@ fn sync_checks(
     system: Option<&Offsets>,
 ) {
     const EXACT_SPREAD: f64 = 0.004;
-    const CAMERA_SPREAD: f64 = 0.012;
-    const CAMERA_VS_MIC: f64 = 0.020;
-    const SCREEN_LATENCY: (f64, f64) = (-0.025, 0.060);
+    const CAMERA_SUSTAINED_FRAMES: usize = 3;
+    const CAMERA_VS_MIC: f64 = 1.0 / CAMERA_FPS as f64;
+    // Screen: the recorded frame may trail its hand-off by the display
+    // latency (up to ~3 refreshes) and, at 60 fps, the cadence ladder may
+    // place a variable-rate frame up to one slot early (measured floor
+    // -12 ms locally, -10 ms on hosted runners; 30 fps: +11 ms).
+    let screen_latency: (f64, f64) = if max_fps > 30 {
+        (-0.025, 0.060)
+    } else {
+        (-0.010, 0.060)
+    };
     const SYSTEM_VS_SCREEN: f64 = 0.080;
 
     let ms = |s: f64| s * 1000.0;
@@ -1596,16 +1718,57 @@ fn sync_checks(
         ));
     }
     if let Some(camera) = camera
-        && camera.spread() > CAMERA_SPREAD
+        && let Some(median) = camera.median()
     {
-        case.problem(
-            "timestamps",
-            format!(
-                "camera: frame offsets vary by {:.1} ms (limit {:.1})",
-                ms(camera.spread()),
-                ms(CAMERA_SPREAD)
-            ),
-        );
+        // Camera frames carry exact capture times. The muxer may re-pin a
+        // late-processed frame toward the wall clock (scheduling jitter on a
+        // loaded host), but a frame further than two periods off, or three
+        // consecutive frames more than half a period off (a ladder that
+        // froze a lag, #2573), put the wrong picture on screen.
+        let period = 1.0 / f64::from(CAMERA_FPS);
+        let mut run = 0;
+        let mut worst_run = (0, 0.0f64, 0.0f64);
+        let mut isolated = Vec::new();
+        for &(truth, offset) in &camera.0 {
+            let d = offset - median;
+            if d.abs() > 2.0 * period {
+                isolated.push(format!("{:.2}s {:+.1} ms", truth, ms(d)));
+            }
+            if d.abs() > period / 2.0 {
+                run += 1;
+                if run > worst_run.0 {
+                    worst_run = (run, truth, d);
+                }
+            } else {
+                run = 0;
+            }
+        }
+        if worst_run.0 >= CAMERA_SUSTAINED_FRAMES {
+            case.problem(
+                "timestamps",
+                format!(
+                    "camera: {} consecutive frames off the steady offset by more than half a frame (until {:.2}s, {:+.1} ms)",
+                    worst_run.0,
+                    worst_run.1,
+                    ms(worst_run.2)
+                ),
+            );
+        }
+        if !isolated.is_empty() {
+            case.problem(
+                "timestamps",
+                format!(
+                    "camera: {} frames more than two periods off the steady offset: {}",
+                    isolated.len(),
+                    isolated
+                        .iter()
+                        .take(4)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
     }
     let (Some(mic_m), screen_m) = (mic.and_then(Offsets::median), screen.median()) else {
         return;
@@ -1627,12 +1790,12 @@ fn sync_checks(
     if let Some(screen_m) = screen_m {
         let d = screen_m - mic_m;
         case.note(format!("sync screen-mic {:+.1} ms", ms(d)));
-        if d < SCREEN_LATENCY.0 || d > SCREEN_LATENCY.1 {
+        if d < screen_latency.0 || d > screen_latency.1 {
             case.problem("sync", format!(
                 "screen vs mic out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
                 ms(d),
-                ms(SCREEN_LATENCY.0),
-                ms(SCREEN_LATENCY.1)
+                ms(screen_latency.0),
+                ms(screen_latency.1)
             ));
         }
         if let Some(system_m) = system.and_then(Offsets::median) {

@@ -474,9 +474,16 @@ mod app {
         use cpal::host::coreaudio::StreamInstantExt;
 
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or("no default output device")?;
+        let device = match std::env::var("CAP_VERIFY_AUDIO_OUTPUT") {
+            Ok(name) if !name.is_empty() => host
+                .output_devices()
+                .map_err(|e| format!("output devices: {e}"))?
+                .find(|d| d.name().is_ok_and(|n| n == name))
+                .ok_or_else(|| format!("no output device named {name}"))?,
+            _ => host
+                .default_output_device()
+                .ok_or("no default output device")?,
+        };
         let config = device
             .default_output_config()
             .map_err(|e| format!("output config: {e}"))?;

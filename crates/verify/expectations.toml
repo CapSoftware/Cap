@@ -102,3 +102,21 @@ case = "seek/*/storm*/ffmpeg"
 class = "stale"
 reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1-4 source frames old, and seeks near the start show frame 0 (up to 67 source frames stale)"
 link = ""
+
+# Real-capture recording oracle (tests/recording.rs). Measured on hosted
+# macos-15/macos-26 runners (display capture) and a developer Mac (window
+# capture); every run of every case failed with this class.
+
+[[xfail]]
+case = "recording/instant/*"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: Instant mode starts the video track at its first encoded frame but the audio track at the recording start, and finalize muxes both at pts 0, so the screen plays early by the video start-up delay (runners: screen 24 to 68 ms ahead of mic and system audio; developer Mac, window capture: 360 to 430 ms)"
+link = ""
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: crash recovery rewrites recording-meta.json without any track start_time, so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay (runners: 83 to 104 ms; developer Mac: ~440 ms)"
+link = ""
