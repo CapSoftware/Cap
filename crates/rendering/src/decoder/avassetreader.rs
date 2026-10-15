@@ -928,9 +928,23 @@ impl AVAssetReaderDecoder {
                 max_requested_frame + FRAME_CACHE_SIZE as u32
             };
 
+            // The last frame each other pooled reader vended is the answer for a
+            // request that lands in the gap after it, and the reader can never
+            // vend it again; keep it cached while requests alternate between
+            // readers.
+            let pinned_frames: Vec<u32> = this
+                .decoders
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| index != decoder_idx)
+                .filter_map(|(_, decoder)| decoder.prev_vended)
+                .collect();
+
             if was_reset {
                 *last_sent_frame.borrow_mut() = None;
-                cache.retain(|&f, _| f >= cache_min && f <= cache_max);
+                cache.retain(|f, _| {
+                    (*f >= cache_min && *f <= cache_max) || pinned_frames.contains(f)
+                });
                 cache_bytes = cache
                     .values()
                     .map(CachedFrame::byte_len)
@@ -1029,14 +1043,28 @@ impl AVAssetReaderDecoder {
                             )
                         {
                             if let Some(last_active) = &last_active_frame {
-                                let frame_to_remove = if requested_frame > *last_active {
-                                    *cache.keys().next().unwrap()
+                                let from_oldest = if requested_frame > *last_active {
+                                    true
                                 } else if requested_frame < *last_active {
-                                    *cache.keys().next_back().unwrap()
+                                    false
                                 } else {
-                                    let min = *cache.keys().min().unwrap();
-                                    let max = *cache.keys().max().unwrap();
-                                    if current_frame > max { min } else { max }
+                                    current_frame > *cache.keys().next_back().unwrap()
+                                };
+                                let unpinned = |frame: &&u32| {
+                                    Some(**frame) != vended_before
+                                        && !pinned_frames.contains(*frame)
+                                };
+                                let frame_to_remove = if from_oldest {
+                                    *cache
+                                        .keys()
+                                        .find(unpinned)
+                                        .unwrap_or_else(|| cache.keys().next().unwrap())
+                                } else {
+                                    *cache
+                                        .keys()
+                                        .rev()
+                                        .find(unpinned)
+                                        .unwrap_or_else(|| cache.keys().next_back().unwrap())
                                 };
                                 if let Some(removed) = cache.remove(&frame_to_remove) {
                                     cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
