@@ -55,6 +55,8 @@ runs:
         shared-key: ${{ inputs.target }}
         cache-bin: "false"
         cache-workspace-crates: "true"
+        # Save the dependency build even when a test fails.
+        cache-on-failure: "true"
         save-if: ${{ inputs.save-cache }}
 
     # Unchanged workspace crates are reused from the cache instead of being
