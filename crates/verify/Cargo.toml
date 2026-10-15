@@ -31,6 +31,7 @@ cidre = { workspace = true }
 
 [dev-dependencies]
 cap-editor = { path = "../editor", features = ["test-hooks"] }
+cap-audio = { path = "../audio" }
 cap-export = { path = "../export" }
 cap-rendering = { path = "../rendering" }
 tempfile = "3"

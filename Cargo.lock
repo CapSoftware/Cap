@@ -2156,6 +2156,7 @@ name = "cap-verify"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cap-audio",
  "cap-editor",
  "cap-enc-avfoundation",
  "cap-export",
