@@ -629,3 +629,32 @@ mutation(
       "        progress((offset as f64 / file_size as f64).min(1.0));\n", 1)],
     ["linux"], ["gpui"],
 )
+
+# ---------------------------------------------------------------- editor real-time playback loop
+PB = "crates/editor/src/playback.rs"
+mutation(
+    "P01", "playback", "playback prefetch decodes one frame ahead of the frame number it is stored under",
+    "stale/shifted prefetch (play-start latency work, #2492)",
+    PB,
+    [("                    let prefetch_time = frame_num as f64 / fps_f64;\n",
+      "                    let prefetch_time = (frame_num + 1) as f64 / fps_f64;\n", 1)],
+    ["linux"],
+)
+mutation(
+    "P02", "playback", "real-time playback renders transitions with the blend progress reversed",
+    "transition blend weights (preview only)",
+    PB,
+    [("        progress: progress as f32,\n    })\n}\n",
+      "        progress: 1.0 - progress as f32,\n    })\n}\n", 1)],
+    ["linux"],
+)
+
+mutation(
+    "R12", "render", "export NV12 conversion drops the limited-range luma offset (picture 16 levels darker)",
+    "colour range (full vs limited)",
+    "crates/rendering/src/shaders/rgba_to_nv12.wgsl",
+    [("    return u32(clamp(16.0 + 65.481 * r + 128.553 * g + 24.966 * b, 0.0, 255.0));\n",
+      "    return u32(clamp(65.481 * r + 128.553 * g + 24.966 * b, 0.0, 255.0));\n", 1)],
+    ["linux"],
+    RENDER_ENGINE,
+)
