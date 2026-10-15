@@ -116,7 +116,6 @@ jobs:
         shard: ${{ fromJSON(inputs.shard-list) }}
     env:
       CAP_VERIFY_SHARD: ${{ inputs.shards > 1 && format('{0}/{1}', matrix.shard, inputs.shards) || '' }}
-      CAP_VERIFY_TRACE_BLEND: ${{ inputs.platform == 'macos' && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
