@@ -9,7 +9,7 @@ use cap_verify::{
     catalog,
     fixture::{FixtureSpec, Rng},
     media,
-    report::{self, Case, Tier},
+    report::{self, Tier},
 };
 use common::{Decoder, Player};
 
@@ -47,7 +47,9 @@ fn run_project(
         edit(&mut config);
         let model = project.model(&config);
         let requests = make(model.output_frames(fps), &project);
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
         case.note(format!("{} requests", requests.len()));
         let result = rt.block_on(async {
             let mut player = Player::open(&project, config, decoder, RES).await?;
@@ -298,7 +300,9 @@ fn cold_open() {
             .iter()
             .map(|p| (f64::from(total - 1) * p) as u32)
             .collect();
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, decoder) else {
+            continue;
+        };
         let mut readouts = Vec::new();
         for &frame in &frames {
             let result = rt.block_on(async {

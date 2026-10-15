@@ -7,7 +7,7 @@ use cap_project::{ProjectConfiguration, SceneMode, SceneSegment};
 use cap_verify::{
     catalog,
     fixture::FixtureSpec,
-    report::{self, Case, Tier},
+    report::{self, Tier},
 };
 use common::{Decoder, ExportRun, Format};
 
@@ -68,7 +68,9 @@ fn run_project(
                 let mut config = project.config();
                 (variant.apply)(&mut config);
                 let model = project.model(&config);
-                let mut case = Case::new(&id);
+                let Some(mut case) = common::begin(&id, &project, decoder) else {
+                    continue;
+                };
                 let dir = common::scratch_dir(&id);
                 let ext = match format {
                     Format::Gif => "gif",

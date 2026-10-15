@@ -180,15 +180,64 @@ pub fn check_decoders(case: &mut Case, decoder: Decoder, segments: &[cap_editor:
             let kind = status.decoder_type.to_string();
             used.push(format!("{stream}{i}={kind}"));
             if !kind.starts_with(decoder.expected_type()) {
-                case.problem(format!(
-                    "segment {i} {stream} decoded by {kind}, expected {} (fallback reason: {})",
-                    decoder.expected_type(),
-                    status.fallback_reason.as_deref().unwrap_or("none")
-                ));
+                case.problem(
+                    "decoder-fallback",
+                    format!(
+                        "segment {i} {stream} decoded by {kind}, expected {} (fallback reason: {})",
+                        decoder.expected_type(),
+                        status.fallback_reason.as_deref().unwrap_or("none")
+                    ),
+                );
             }
         }
     }
     case.note(format!("decoders: {}", used.join(" ")));
+}
+
+/// Why `decoder` cannot run on this machine at all, probed once per
+/// process. Only Windows has such a case: the Media Foundation decoder
+/// needs a D3D11 device with video support, which GPU-less VMs (hosted CI
+/// runners, where D3D11 falls back to WARP) cannot create, so the product
+/// falls back to FFmpeg there. Any other Media Foundation failure stays a
+/// `decoder-fallback` test failure.
+pub fn decoder_unsupported(project: &Project, decoder: Decoder) -> Option<String> {
+    if decoder != Decoder::Default || !cfg!(target_os = "windows") {
+        return None;
+    }
+    static PROBE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PROBE
+        .get_or_init(|| {
+            let meta = project.meta.studio_meta()?;
+            let segments = runtime()
+                .block_on(cap_editor::create_segments(&project.meta, meta, false))
+                .ok()?;
+            let reason = segments
+                .first()?
+                .decoders
+                .screen_decoder_status()
+                .fallback_reason
+                .clone()?;
+            reason.contains("D3D11CreateDevice").then(|| {
+                format!(
+                    "Media Foundation needs a D3D11 device with video support and this machine has none (WARP has no video decode): {reason}"
+                )
+            })
+        })
+        .clone()
+}
+
+/// Starts a case, or settles it as unsupported and returns `None` when this
+/// machine cannot run `decoder` (see [`decoder_unsupported`]).
+pub fn begin(id: &str, project: &Project, decoder: Decoder) -> Option<Case> {
+    let mut case = Case::new(id);
+    if let Some(reason) = decoder_unsupported(project, decoder) {
+        case.unsupported(reason);
+        if case.unsupported.is_some() {
+            let _ = report::settle(case);
+            return None;
+        }
+    }
+    Some(case)
 }
 
 /// Opens the project's decoders the way the exporter does and checks them.
@@ -200,7 +249,7 @@ pub async fn probe_decoders(case: &mut Case, project: &Project, decoder: Decoder
     };
     match cap_editor::create_segments(&project.meta, meta, decoder == Decoder::Ffmpeg).await {
         Ok(segments) => check_decoders(case, decoder, &segments),
-        Err(e) => case.problem(format!("decoder probe failed: {e}")),
+        Err(e) => case.problem("error", format!("decoder probe failed: {e}")),
     }
 }
 
@@ -472,6 +521,15 @@ impl Player {
     /// mid-run fallback is caught too).
     pub fn check_decoders(&self, case: &mut Case, decoder: Decoder) {
         check_decoders(case, decoder, &self.segments);
+        case.note(format!(
+            "render adapter: {}{}",
+            self.constants.adapter_name(),
+            if self.constants.is_software_adapter {
+                " (software)"
+            } else {
+                ""
+            }
+        ));
     }
 
     pub fn prefer_sequential(&self) {
