@@ -31,7 +31,7 @@ runs:
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends \
-          libasound2-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
+          libasound2-dev libasound2-plugins libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
           libx11-dev libxrandr-dev libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev \
           libxcb-xfixes0-dev libxfixes-dev libwayland-dev libxkbcommon-dev \
           libdbus-1-dev libudev-dev libva-dev mesa-vulkan-drivers libvulkan1 >/dev/null
