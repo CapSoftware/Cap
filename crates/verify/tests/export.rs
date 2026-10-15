@@ -7,7 +7,7 @@ use cap_project::{ProjectConfiguration, SceneMode, SceneSegment};
 use cap_verify::{
     catalog,
     fixture::FixtureSpec,
-    report::{self, Tier},
+    report::{self, Case, Tier},
 };
 use common::{Decoder, ExportRun, Format};
 
