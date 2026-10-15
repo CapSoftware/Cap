@@ -31,6 +31,7 @@ mod app {
 
     use cap_verify::{
         audio_code::{self, AudioSource, MarkerPlacement},
+        sched,
         stimulus::{StimulusEvent, StimulusSpec, host_add_secs, host_now, host_secs},
         video_code::{self, FrameMarker, PixelOrder, StreamKind},
     };
@@ -115,7 +116,7 @@ mod app {
             created: None,
             idle_tick: 0,
             last_idle: None,
-            thread: unsafe { mach_thread_self() },
+            thread: sched::current_thread(),
             wake: (String::new(), None),
             presented_at: None,
         };
@@ -254,92 +255,17 @@ mod app {
         presented_at: Option<(u32, Instant)>,
     }
 
-    #[repr(C)]
-    struct ThreadExtendedInfo {
-        user_time: u64,
-        system_time: u64,
-        cpu_usage: i32,
-        policy: i32,
-        run_state: i32,
-        flags: i32,
-        sleep_time: i32,
-        cur_pri: i32,
-        priority: i32,
-        max_priority: i32,
-        name: [u8; 64],
-    }
-
-    unsafe extern "C" {
-        fn mach_thread_self() -> u32;
-        fn thread_info(thread: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
-        fn thread_policy_set(thread: u32, flavor: u32, policy: *const i32, count: u32) -> i32;
-        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
-    }
-
     /// Hosted runners start jobs at utility QoS (scheduler base priority 20)
     /// and children inherit it, so under recording load the stimulus loses
     /// the CPU to the capture and encoder services for 50-190 ms at a time.
     /// The pictures a user records come from foreground apps; the stimulus
     /// asks for the same treatment (user-interactive QoS) and a time
-    /// constraint matching its frame period, so it keeps its schedule.
-    /// Returns the kernel status of each request (0 = applied).
+    /// constraint matching its frame period, so it keeps its schedule
+    /// (`cap_verify::sched`, shared with the synthetic camera and
+    /// microphone). Returns the kernel status of each request (0 = applied).
     fn raise_priority(fps: f64) -> (i32, i32) {
-        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-        const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
-        #[repr(C)]
-        struct TimeConstraint {
-            period: u32,
-            computation: u32,
-            constraint: u32,
-            preemptible: i32,
-        }
-        let qos = unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
-        let info = cidre::mach::TimeBaseInfo::new();
-        let ticks =
-            |secs: f64| (secs * 1e9 * f64::from(info.denom) / f64::from(info.numer)).round() as u32;
-        let period = 1.0 / fps;
-        let policy = TimeConstraint {
-            period: ticks(period),
-            computation: ticks(0.010),
-            constraint: ticks(period),
-            preemptible: 1,
-        };
-        let realtime = unsafe {
-            thread_policy_set(
-                mach_thread_self(),
-                THREAD_TIME_CONSTRAINT_POLICY,
-                (&raw const policy).cast(),
-                (std::mem::size_of::<TimeConstraint>() / 4) as u32,
-            )
-        };
-        (qos, realtime)
-    }
-
-    fn sched_info(thread: u32) -> Option<ThreadExtendedInfo> {
-        const THREAD_EXTENDED_INFO: i32 = 5;
-        let mut info = ThreadExtendedInfo {
-            user_time: 0,
-            system_time: 0,
-            cpu_usage: 0,
-            policy: 0,
-            run_state: 0,
-            flags: 0,
-            sleep_time: 0,
-            cur_pri: 0,
-            priority: 0,
-            max_priority: 0,
-            name: [0; 64],
-        };
-        let mut count = (std::mem::size_of::<ThreadExtendedInfo>() / 4) as u32;
-        let status = unsafe {
-            thread_info(
-                thread,
-                THREAD_EXTENDED_INFO,
-                (&raw mut info).cast(),
-                &mut count,
-            )
-        };
-        (status == 0).then_some(info)
+        let realtime = sched::request_realtime(1.0 / fps, 0.010);
+        (realtime.qos_status, realtime.policy_status)
     }
 
     impl App {
@@ -598,7 +524,7 @@ mod app {
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
             let now = Instant::now();
             if let Some((index, at)) = self.presented_at.take()
-                && let Some(info) = sched_info(self.thread)
+                && let Some(info) = sched::thread_state(self.thread)
             {
                 self.log.write(&StimulusEvent::Sched {
                     index,
@@ -606,8 +532,8 @@ mod app {
                     wake_late_us: self.wake.1,
                     post_present_us: now.saturating_duration_since(at).as_micros() as i64,
                     cur_pri: info.cur_pri,
-                    base_pri: info.priority,
-                    cpu_us: (info.user_time + info.system_time) / 1000,
+                    base_pri: info.base_pri,
+                    cpu_us: info.cpu_us,
                 });
             }
             if let Some(due) = self.idle_due(now) {
