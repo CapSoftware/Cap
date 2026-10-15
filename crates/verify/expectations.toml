@@ -224,7 +224,7 @@ case = "recording/instant/gated"
 class = "sync"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run, from -19 to +16 ms on runners (3 of 10 outside the -10..+60 ms window) to +2 to +385 ms on a developer Mac (7 of 8 outside), with 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms"
+reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run: runners -22 to +16 ms (6 of 20 runs below the -10 ms floor), developer Mac +2 to +385 ms (3 of 13 above +75 ms); logs show 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms"
 link = ""
 
 [[xfail]]

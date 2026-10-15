@@ -1806,14 +1806,15 @@ fn sync_checks(
     const CAMERA_SUSTAINED_FRAMES: usize = 3;
     const CAMERA_VS_MIC: f64 = 1.0 / CAMERA_FPS as f64;
     // Screen: the recorded frame may trail its hand-off by the display
-    // latency (up to ~3 refreshes) and, at 60 fps, the cadence ladder may
+    // latency (up to 4 refreshes plus half a refresh of phase: the
+    // paravirtual runner display measured up to +54 ms) and, at 60 fps, the cadence ladder may
     // place a variable-rate frame (20 fps content) up to two 16.7 ms slots
     // early (measured floor: -29 ms on a developer Mac, -17 ms on hosted
     // runners; at 30 fps capture the floor is +5 ms).
     let screen_latency: (f64, f64) = if max_fps > 30 {
-        (-0.040, 0.060)
+        (-0.040, 0.075)
     } else {
-        (-0.010, 0.060)
+        (-0.010, 0.075)
     };
     const SYSTEM_VS_MIC: f64 = 0.030;
     // System audio truth adds the output device's latency (measured -4 to
