@@ -30,6 +30,7 @@ impl Default for super::CommandState {
 
 impl super::CommandEncoder {
     // Cap-local patch to the vendored wgpu-hal; reapply it whenever vendor/wgpu-hal is replaced.
+    // The other local patch is the per-wait event in dx12/device.rs `Device::wait`.
     // wgpu-core opens a HAL command buffer for every pass, plus one for the barriers it
     // records ahead of it. Barriers are no-ops on Metal, so the MTLCommandBuffer is only
     // created once something is actually encoded and empty ones are never committed
