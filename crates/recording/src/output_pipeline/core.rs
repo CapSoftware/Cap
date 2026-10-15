@@ -1317,7 +1317,9 @@ impl VideoDriftTracker {
         // How long after its capture time the frame reached the mux loop. Its
         // minimum since the last source clock discontinuity is the clocks'
         // base offset plus the quickest hand-off.
-        let lag_secs = wall_clock_elapsed.as_secs_f64() - capture_elapsed.as_secs_f64();
+        let lag_secs = (wall_clock_elapsed.as_nanos() as i128 - capture_elapsed.as_nanos() as i128)
+            as f64
+            / 1e9;
         let min_lag_secs = match self.min_capture_lag_secs {
             Some(min) if !discontinuity => min,
             _ => lag_secs,
@@ -1441,8 +1443,14 @@ fn stamped_on_host_clock(timestamp: &Timestamp) -> bool {
     }
 }
 
+// Offsets capture times so ones before the recording's base (a source clock
+// reset behind it) keep their order; only differences between capture times
+// and the minimum hand-off lag are used, so the offset cancels.
+const CAPTURE_TIME_OFFSET_NS: i128 = 1 << 62;
+
 fn capture_elapsed(raw_ns: i64, total_pause: Duration) -> Duration {
-    Duration::from_nanos(raw_ns.max(0) as u64).saturating_sub(total_pause)
+    let ns = i128::from(raw_ns) - total_pause.as_nanos() as i128 + CAPTURE_TIME_OFFSET_NS;
+    Duration::from_nanos(ns.clamp(0, i128::from(u64::MAX)) as u64)
 }
 
 // The next item, and whether the mux loop had to wait for it (nothing was
@@ -5125,6 +5133,56 @@ mod tests {
                 assert!(
                     output[k].saturating_sub(output[k - 1]).abs_diff(capture(1)) <= EXACT,
                     "frame {k} keeps the capture cadence after the reset"
+                );
+            }
+        }
+
+        #[test]
+        fn clock_reset_behind_the_recording_base_keeps_advancing() {
+            // After the anchor the source clock restarts 5 s before the
+            // recording's base, so raw capture times turn negative.
+            let raw = |ns: i64| capture_elapsed(ns, Duration::ZERO);
+            let frame_ns = 1_000_000_000 / FPS as i64;
+            let mut frames: Vec<Frame> = (0..120i64)
+                .map(|i| Frame {
+                    capture: raw(i * frame_ns),
+                    ..frame(
+                        capture(i as u64),
+                        capture(i as u64) + Duration::from_millis(10),
+                    )
+                })
+                .collect();
+            let last_wall = frames.last().unwrap().wall;
+            for k in 0..60i64 {
+                frames.push(Frame {
+                    capture: raw(-5_000_000_000 + k * frame_ns),
+                    wall: last_wall + capture(1) + capture(k as u64),
+                    discontinuity: k == 0,
+                    waited: true,
+                });
+            }
+            let mut tracker = VideoDriftTracker::new();
+            let output: Vec<Duration> = frames
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    tracker.waited_for_frame(f.waited);
+                    calculate_video_timestamp(
+                        &mut tracker,
+                        Timestamp::Instant(Instant::now()),
+                        capture(i.min(119) as u64),
+                        f.capture,
+                        f.wall,
+                        f.discontinuity,
+                    )
+                })
+                .collect();
+            for k in 121..180 {
+                assert!(
+                    output[k].saturating_sub(output[k - 1]).abs_diff(capture(1)) <= EXACT,
+                    "frame {k}: {:?} after {:?}",
+                    output[k],
+                    output[k - 1]
                 );
             }
         }
