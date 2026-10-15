@@ -260,19 +260,28 @@
     "linux": {
       "runner": "ubuntu-24.04",
       "target": "x86_64-unknown-linux-gnu",
-      "shards": 2,
+      "shards": {
+        "fast": 2,
+        "full": 3
+      },
       "archive": false
     },
     "macos": {
       "runner": "macos-15",
       "target": "aarch64-apple-darwin",
-      "shards": 2,
+      "shards": {
+        "fast": 2,
+        "full": 3
+      },
       "archive": false
     },
     "windows": {
       "runner": "windows-2022",
       "target": "x86_64-pc-windows-msvc",
-      "shards": 3,
+      "shards": {
+        "fast": 3,
+        "full": 4
+      },
       "archive": false
     }
   }

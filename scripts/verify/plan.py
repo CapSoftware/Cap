@@ -180,7 +180,9 @@ def matrix(config, names, tier):
         suites = [s["name"] for s in config["suites"] if s["name"] in names and platform in s["platforms"][tier]]
         if not suites:
             continue
-        runner = config["runners"][platform]
+        runner = dict(config["runners"][platform])
+        if isinstance(runner["shards"], dict):
+            runner["shards"] = runner["shards"][tier]
         include.append({
             "platform": platform,
             "runner": runner["runner"],
@@ -242,7 +244,8 @@ def cmd_test(_args):
         (["apps/web/app/page.tsx", "README.md"], []),
         (["crates/verify/tests/seek.rs"], ["seek"]),
         (["crates/verify/tests/seek.rs", "crates/verify/tests/export.rs"], ["export", "seek"]),
-        (["crates/verify/src/oracle.rs"], ["verify-self", "export", "playback", "seek"]),
+        (["crates/verify/src/oracle.rs"], ["verify-self", "export", "playback", "seek", "audio"]),
+        (["crates/verify/src/audio_model.rs"], ["audio"]),
         (["crates/rendering/src/decoder/ffmpeg.rs"], [s["name"] for s in config["suites"]]),
         (["crates/video-decode/src/ffmpeg.rs"], [s["name"] for s in config["suites"]]),
         (["Cargo.lock"], [s["name"] for s in config["suites"]]),
