@@ -48,6 +48,9 @@ def junit_failures(paths):
                 node = case.find(tag)
                 if node is not None:
                     text = (node.text or node.get("message") or "").strip()
+                    kind = node.get("type") or ""
+                    if "timeout" in kind.lower() and "timed out" not in text:
+                        text = f"{text}\n(test timed out: {kind})"
                     out.append((f"{case.get('classname', '')} {case.get('name', '')}".strip(), text))
                     break
     return out
@@ -57,6 +60,8 @@ def crash_excerpt(msg, limit):
     """The first panic (message and a few lines after it), else the tail."""
     lines = msg.splitlines()
     for i, line in enumerate(lines):
+        if "timed out" in line:
+            return [line for line in lines if "[cap-verify]" in line or "timed out" in line][-limit:]
         if "panicked at" in line or "error:" in line.lower():
             excerpt = []
             for follow in lines[i:i + 12]:
@@ -112,8 +117,13 @@ def render(records, title, junit, flaky, text):
     unmeasured = [r for r in records if r.get("unobserved")]
     if unmeasured:
         head += f"; {len(unmeasured)} with classes not measured because an earlier check failed"
-    recorded = {r["case"] for r in records}
-    crashed = [(name, msg) for name, msg in junit if not any(c in msg for c in recorded)]
+    # A failed test is explained only by a failing case it recorded. A test
+    # that timed out or crashed after recording passing or expected cases
+    # still failed: the cases after the last record never ran.
+    failing = {r["case"] for r in bad}
+    crashed = [(name, msg) for name, msg in junit if not any(c in msg for c in failing)]
+    if crashed:
+        head += f"; {len(crashed)} test(s) FAILED without a failing case (timed out or crashed, later cases not run)"
     out = []
     if text:
         out.append(f"== engine verify {title}: {head}")
