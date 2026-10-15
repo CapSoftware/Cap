@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,6 @@ pub(crate) mod queue;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
-const MAX_CONCURRENT_PARTS: usize = 4;
 const MAX_SEGMENT_UPLOADS: usize = 6;
 const SEGMENT_URL_PREFETCH: u32 = 20;
 const SEGMENT_UPLOAD_ATTEMPTS: u32 = 3;
@@ -1646,6 +1645,7 @@ async fn multipart_initiate(
 }
 
 async fn multipart_presign(
+    client: &reqwest::Client,
     video_id: &str,
     upload_id: &str,
     part_number: u32,
@@ -1666,7 +1666,8 @@ async fn multipart_presign(
         body.insert("md5Sum".into(), json!(md5_sum));
     }
 
-    let response = auth::authed_request(
+    let response = auth::authed_request_with(
+        client,
         reqwest::Method::POST,
         "/api/upload/multipart/presign-part",
         Some(Value::Object(body)),
@@ -1770,75 +1771,19 @@ async fn upload_parts(
         upload_id,
         is_drive,
         use_md5: auth::is_server_url_custom(),
+        api: auth::api_client()?,
+        storage: reqwest::Client::new(),
     };
     upload_file_parts(
         &transport,
         file_path,
         file_size,
         chunk_size_for(file_size),
-        PartConcurrency::new(is_drive, MAX_CONCURRENT_PARTS),
         progress,
         cancel,
         replacement_source,
     )
     .await
-}
-
-const PARTS_UNKNOWN: u8 = 0;
-const PARTS_CONCURRENT: u8 = 1;
-const PARTS_SEQUENTIAL: u8 = 2;
-
-/// How many parts may be in flight. Drive resumable sessions take
-/// Content-Range bytes strictly in order, and a part is Drive when either the
-/// initiate response or its own presigned URL says so. Parts therefore go one
-/// at a time until the first presigned URL proves the upload is S3-style, and
-/// any Drive URL drops the upload back to one part at a time for good.
-struct PartConcurrency {
-    is_drive: bool,
-    max: usize,
-    mode: AtomicU8,
-    changed: tokio::sync::Notify,
-}
-
-impl PartConcurrency {
-    fn new(is_drive: bool, max: usize) -> Self {
-        Self {
-            is_drive,
-            max: max.max(1),
-            mode: AtomicU8::new(if is_drive {
-                PARTS_SEQUENTIAL
-            } else {
-                PARTS_UNKNOWN
-            }),
-            changed: tokio::sync::Notify::new(),
-        }
-    }
-
-    fn observe_url(&self, url: &str) {
-        let changed = if self.is_drive || is_google_drive_resumable_url(url) {
-            self.mode.swap(PARTS_SEQUENTIAL, Ordering::AcqRel) != PARTS_SEQUENTIAL
-        } else {
-            self.mode
-                .compare_exchange(
-                    PARTS_UNKNOWN,
-                    PARTS_CONCURRENT,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-        };
-        if changed {
-            self.changed.notify_one();
-        }
-    }
-
-    fn limit(&self) -> usize {
-        if self.mode.load(Ordering::Acquire) == PARTS_CONCURRENT {
-            self.max
-        } else {
-            1
-        }
-    }
 }
 
 struct PartChunk {
@@ -1867,11 +1812,17 @@ trait PartTransport: Sync {
     ) -> impl Future<Output = Result<UploadedPart, AuthApiError>> + Send;
 }
 
+/// Every part of one upload goes through the same two clients, so parts after
+/// the first reuse the open API and storage connections. The clients live only
+/// as long as the upload, so a later upload never starts on a pooled
+/// connection from an earlier network.
 struct LivePartTransport<'a> {
     video_id: &'a str,
     upload_id: &'a str,
     is_drive: bool,
     use_md5: bool,
+    api: reqwest::Client,
+    storage: reqwest::Client,
 }
 
 impl PartTransport for LivePartTransport<'_> {
@@ -1883,6 +1834,7 @@ impl PartTransport for LivePartTransport<'_> {
         let md5 = self.use_md5.then(|| md5_base64(&chunk.bytes));
         let url = checked_upload_step(cancel, || {
             multipart_presign(
+                &self.api,
                 self.video_id,
                 self.upload_id,
                 chunk.part_number,
@@ -1901,7 +1853,7 @@ impl PartTransport for LivePartTransport<'_> {
         cancel: &AtomicBool,
     ) -> Result<UploadedPart, AuthApiError> {
         put_presigned_part(
-            multipart_upload_client(),
+            &self.storage,
             &presigned.url,
             chunk,
             total_size,
@@ -1913,119 +1865,78 @@ impl PartTransport for LivePartTransport<'_> {
     }
 }
 
+/// Part requests only observe cancellation between requests, so this races
+/// them against the cancel flag to drop an in-flight part promptly.
 async fn upload_part_chunk(
     transport: &impl PartTransport,
-    concurrency: &PartConcurrency,
-    chunk: PartChunk,
+    chunk: &PartChunk,
     total_size: u64,
     cancel: &AtomicBool,
-) -> (PartChunk, Result<UploadedPart, AuthApiError>) {
-    let result = async {
-        let presigned = transport.presign(&chunk, cancel).await?;
-        concurrency.observe_url(&presigned.url);
-        transport.put(&presigned, &chunk, total_size, cancel).await
+) -> Result<UploadedPart, AuthApiError> {
+    tokio::select! {
+        biased;
+        () = wait_for_export_cancel(cancel) => Err(AuthApiError::Other("Export cancelled".into())),
+        result = async {
+            let presigned = transport.presign(chunk, cancel).await?;
+            transport.put(&presigned, chunk, total_size, cancel).await
+        } => result,
     }
-    .await;
-    (chunk, result)
 }
 
-/// Resolves once `cancel` is set. Part PUTs only observe cancellation between
-/// requests, so the pipeline races this to drop in-flight parts promptly.
 async fn wait_for_export_cancel(cancel: &AtomicBool) {
     while !cancel.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Reads, replacement checks and part numbering stay strictly in order; only
-/// the presign and PUT of different parts overlap.
-#[allow(clippy::too_many_arguments)]
+/// Parts go strictly one at a time, so an interrupted connection only ever
+/// loses the one part that was in flight.
 async fn upload_file_parts(
     transport: &impl PartTransport,
     file_path: &Path,
     file_size: u64,
     chunk_size: u64,
-    concurrency: PartConcurrency,
     progress: &impl Fn(f64),
     cancel: &AtomicBool,
     mut replacement_source: Option<&mut ReplacementUploadSource>,
 ) -> Result<Vec<UploadedPart>, AuthApiError> {
-    let concurrency = &concurrency;
     let mut parts = Vec::new();
     let mut failed = Vec::new();
-    let mut in_flight = FuturesUnordered::new();
     let mut offset = 0u64;
     let mut part_number = 1u32;
-    let mut settled = 0u64;
 
-    loop {
-        while in_flight.len() < concurrency.limit() && offset < file_size {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(AuthApiError::Other("Export cancelled".into()));
-            }
-            let size = (file_size - offset).min(chunk_size) as usize;
-            let chunk = read_chunk(file_path, offset, size)?;
-            if let Some(source) = &mut replacement_source {
-                source.check_chunk(part_number, offset, &chunk, file_size)?;
-            }
-            in_flight.push(upload_part_chunk(
-                transport,
-                concurrency,
-                PartChunk {
-                    part_number,
-                    offset,
-                    bytes: chunk.into(),
-                },
-                file_size,
-                cancel,
-            ));
-            offset += size as u64;
-            part_number += 1;
+    while offset < file_size {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AuthApiError::Other("Export cancelled".into()));
         }
-        let next = tokio::select! {
-            biased;
-            () = wait_for_export_cancel(cancel) => {
-                return Err(AuthApiError::Other("Export cancelled".into()));
-            }
-            next = in_flight.next() => Some(next),
-            // A presigned URL can raise the limit while parts are still in flight.
-            () = concurrency.changed.notified(), if offset < file_size => None,
+        let size = (file_size - offset).min(chunk_size) as usize;
+        let chunk = read_chunk(file_path, offset, size)?;
+        if let Some(source) = &mut replacement_source {
+            source.check_chunk(part_number, offset, &chunk, file_size)?;
+        }
+        let chunk = PartChunk {
+            part_number,
+            offset,
+            bytes: chunk.into(),
         };
-        let Some(next) = next else {
-            continue;
-        };
-        let Some((chunk, result)) = next else {
-            break;
-        };
-        settled += chunk.bytes.len() as u64;
-        match result {
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(error) => {
                 check_export_cancelled(cancel)?;
-                tracing::warn!(
-                    part_number = chunk.part_number,
-                    error = %error,
-                    "chunk upload failed; will retry"
-                );
+                tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
                 failed.push((chunk, error));
             }
         }
-        progress((settled as f64 / file_size as f64).min(0.99));
+        offset += size as u64;
+        part_number += 1;
+        progress((offset as f64 / file_size as f64).min(0.99));
     }
 
-    failed.sort_by_key(|(chunk, _)| chunk.part_number);
     for (chunk, first_error) in failed {
         if cancel.load(Ordering::Relaxed) {
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
-        let (_, result) = tokio::select! {
-            biased;
-            () = wait_for_export_cancel(cancel) => {
-                return Err(AuthApiError::Other("Export cancelled".into()));
-            }
-            result = upload_part_chunk(transport, concurrency, chunk, file_size, cancel) => result,
-        };
-        match result {
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(_) => {
                 check_export_cancelled(cancel)?;
@@ -2042,11 +1953,6 @@ async fn upload_file_parts(
     let mut parts = deduped.into_values().collect::<Vec<_>>();
     parts.sort_by_key(|part| part.part_number);
     Ok(parts)
-}
-
-fn multipart_upload_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
 }
 
 async fn put_presigned_part(
