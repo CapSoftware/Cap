@@ -3,9 +3,9 @@
 # [[region]]: high-risk code. A pull request whose diff touches one gets a
 # "needs deep review" warning (job summary, annotation, and the
 # needs-deep-review label where the token may add labels), and Engine verify
-# runs the FULL tier (real capture too, on macos-15 and macos-26, once its
-# pull-request trigger is enabled). Paths are globs relative to the
-# repository root; `/**` matches everything below a directory.
+# plus real capture run the FULL tier (real capture on macos-15 and
+# macos-26). Paths are globs relative to the repository root; `/**` matches
+# everything below a directory.
 #
 # [[guard]]: a protective guard whose removal changes no output of the suites
 # today (an equivalent mutant), so only a sentinel notices. The sentinel is a

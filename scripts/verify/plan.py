@@ -56,7 +56,7 @@ def risk_report(regions, touched):
     md = ["## Needs deep review", ""]
     notes = []
     if regions:
-        md.append("This change touches high-risk engine code. A pull request that does runs the FULL Engine verify tier:")
+        md.append("This change touches high-risk engine code. A pull request that does runs the FULL tier, with real capture on both macOS versions:")
         md.append("")
         for name, hits in regions:
             md.append(f"- **{name}**: " + ", ".join(f"`{h}`" for h in hits[:6]) + (" ..." if len(hits) > 6 else ""))
