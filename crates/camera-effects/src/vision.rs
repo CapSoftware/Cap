@@ -108,12 +108,13 @@ impl InstanceMaskObservation {
     #[objc::msg_send(instanceMask)]
     fn instance_mask(&self) -> &cv::PixelBuf;
 
+    /// Returns a +1 buffer (`CF_RETURNS_RETAINED`): one per call.
     #[objc::msg_send(generateMaskForInstances:error:)]
     unsafe fn generate_mask_err<'ear>(
         &self,
         instances: &ns::IndexSet,
         error: *mut Option<&'ear ns::Error>,
-    ) -> Option<&'ear cv::PixelBuf>;
+    ) -> Option<arc::Retained<cv::PixelBuf>>;
 }
 
 /// Person instance masks separate everyone in frame, so only the presenter
@@ -415,7 +416,7 @@ fn primary_person_mask(
     let mut error = None;
     let mask = unsafe { observation.generate_mask_err(&instances, &mut error) }
         .ok_or_else(|| format!("Vision instance mask failed: {error:?}"))?;
-    read_mask(mask, output, dimensions)
+    read_mask(&mask, output, dimensions)
 }
 
 fn read_mask(
