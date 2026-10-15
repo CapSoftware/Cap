@@ -3087,6 +3087,18 @@ pub mod synthetic {
 
     const STREAM_ID: u32 = 1;
 
+    impl Message<crate::feeds::Stall> for MicrophoneFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
     pub struct SyntheticMicrophone {
         feed: ActorRef<MicrophoneFeed>,
         sample_rate: u32,
@@ -3147,6 +3159,30 @@ pub mod synthetic {
                     timestamp,
                 })
                 .await;
+        }
+
+        /// Hands samples over the way the capture callback does
+        /// (`enqueue_microphone_samples`: `try_send`, never waiting).
+        pub fn try_push(&self, samples: &[f32], timestamp: Timestamp) -> crate::feeds::Admission {
+            let data = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+            crate::feeds::Admission::of(
+                self.feed
+                    .tell(MicrophoneSamples {
+                        stream_id: STREAM_ID,
+                        data,
+                        format: SampleFormat::F32,
+                        sample_rate: self.sample_rate,
+                        channels: self.channels,
+                        info: None,
+                        timestamp,
+                    })
+                    .try_send(),
+            )
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
         }
     }
 }

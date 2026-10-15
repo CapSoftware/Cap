@@ -1834,6 +1834,18 @@ impl Message<Unlock> for CameraFeed {
 pub mod synthetic {
     use super::*;
 
+    impl Message<crate::feeds::Stall> for CameraFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
     pub struct SyntheticCamera {
         feed: ActorRef<CameraFeed>,
         _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
@@ -1882,6 +1894,17 @@ pub mod synthetic {
 
         pub async fn push_native(&self, frame: NativeCameraFrame) {
             let _ = self.feed.tell(NewNativeFrame(frame)).await;
+        }
+
+        /// Hands a frame over the way the macOS capture callback does
+        /// (`try_send`, never waiting for mailbox capacity).
+        pub fn try_push_native(&self, frame: NativeCameraFrame) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(NewNativeFrame(frame)).try_send())
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
         }
 
         pub async fn push(&self, frame: FFmpegVideoFrame) {
