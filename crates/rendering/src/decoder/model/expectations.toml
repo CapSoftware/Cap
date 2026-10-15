@@ -418,16 +418,16 @@ case = "decoder-model/avf/vfr/keyframe-seeks/playback"
 class = "future"
 seeds = "28 53 59"
 flaky = true
-reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek Seeds 28, 53 and 59 fail in every run, but their first wrong answer is a future frame in some macos-15 runs (38730081267, 38732325087, 38740252853) and a stale frame in others (38743345280), so each class is flaky for these seeds"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
 
 [[xfail]]
 case = "decoder-model/avf/vfr/keyframe-seeks/playback"
 class = "stale"
 seeds = "28 53 59"
 flaky = true
-reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek Seeds 28, 53 and 59 fail in every run, but their first wrong answer is a future frame in some macos-15 runs (38730081267, 38732325087, 38740252853) and a stale frame in others (38743345280), so each class is flaky for these seeds"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
 
 [[xfail]]
 case = "decoder-model/avf/vfr/keyframe-seeks/playback"

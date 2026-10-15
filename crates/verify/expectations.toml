@@ -25,23 +25,46 @@
 # no open PR fixes.
 
 [[xfail]]
-case = "export/jitter-camera-*/full/mp460/avf"
+case = "*/jitter-camera-*/full/*60*/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames; full tier 120 s: 5146 frames, up to 2232 source frames = 74 s ahead)"
+reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames; full tier 120 s: 5146 frames, up to 2232 source frames = 74 s ahead; offline playback of the 120 s fixture: 2618 frames, up to 1726 ahead). Export and playback of the 120 s fixture pass with #2595's decoder changes (measured on Apple silicon)"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
-case = "export/jitter-camera-120s/full/mp460/ffmpeg"
+case = "export/jitter-camera-120s/full/mp460/avf"
+class = "nondeterministic"
+platforms = ["macos"]
+reason = "Two exports of the 120 s jitter-camera project differ in 258 to 5518 output frames, first just after the camera runaway starts (frame 1585; first difference 1622-3818). Every baseline run: 3 of 3 full runs and 3 of 3 on Apple silicon. Root cause is the IOSurface source lifetime bug (see the */basic/transition/*/avf future entry and native/rendering/iosurface-source-lifetime/recycled-pool): with sources retained the runaway stays but both exports are identical (0 of 3 in sol-avf proof runs 38762654200, 38764973044, 38764978019). #2595's decoder changes also remove it, by removing the runaway (2 of 2 on Apple silicon)"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1 https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "export/jitter-camera-120s/full/mp460/avf"
+class = "unreadable"
+platforms = ["macos"]
+flaky = true
+reason = "One camera frame with a torn picture whose marker checksum fails (frame 5574 at 92.9 s in 38763192776), 2 of 3 full runs (38763178760, 38763192776), 0 of 3 on Apple silicon. A torn picture is what the IOSurface source lifetime bug produces when the pool repaints a source while the GPU samples it (native/rendering/iosurface-source-lifetime/recycled-pool reproduces the repaint deterministically); with sources retained it did not occur in 3 of 3 sol-avf proof runs. Attribution by mechanism and absence, not by a deterministic repro of this frame"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
+case = "playback/jitter-camera-120s/full/seq60-from0/avf"
 class = "stale"
-reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames"
+platforms = ["macos"]
+flaky = true
+reason = "The last screen frame of the 120 s offline playback (output 7199, 119.983 s) shows source 3598 for 3599 in 1 of 3 full runs (38763192776). Mechanism: when the request stream pauses for 250 ms or more, the AVAssetReader decoder's idle timeout (IDLE_READER_TIMEOUT, crates/rendering/src/decoder/avassetreader.rs) clears its cache and reader state, and the final request is then answered with the newest frame before it. Reproduced on Apple silicon by pausing 300 ms before the last request (1 of 1); a 100 ms pause does not reproduce it"
+link = ""
+
+[[xfail]]
+case = "*/jitter-camera-120s/full/*/ffmpeg"
+class = "stale"
+reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames, identical in the MP4 export and in offline playback on every platform"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "export/backward-hold/backward-jumps/mp460/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579)"
+reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Deterministic (42 of 42 in probe 38762089521, with or without the IOSurface fix); passes with #2595's decoder changes (measured on Apple silicon)"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
@@ -54,8 +77,8 @@ link = ""
 case = "export/camera-pts-late/full/mp430/avf"
 class = "future"
 platforms = ["macos"]
-reason = "A camera file whose pts start 2 s in runs ahead from the first output frame instead of holding its first frame"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "A camera file whose pts start 2 s in runs ahead from the first output frame instead of holding its first frame: before the track's first sample every request steps the reader one sample further. Passes with #2595's decoder changes (requests before the first keyframe are answered with the first frame from the cache), measured on Apple silicon"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "export/camera-pts-late/full/mp430/ffmpeg"
@@ -74,15 +97,23 @@ link = "https://github.com/CapSoftware/Cap/pull/2603"
 case = "seek/seek-*/storm30/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (frame 349 shows 237)"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (frame 349 shows 237). Both storm30 cases pass with #2595's decoder changes (measured on Apple silicon); #2603 fixes the wrong-GOP part"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/seek-*/storm30/avf"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "Full-tier seek storm: a few seeks are answered one or two source frames ahead (seek-gop frame 4 shows 5 for 3). Pool position capping: after a read the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame is reused for it without a reset and answers with its next sample (same mechanism as seek/seek-native/keyframes60/avf, minimal repro there). Whether a storm reaches that state depends on request timing: the decoder's 250 ms idle timeout (IDLE_READER_TIMEOUT) clears its cache and readers when requests pause, and with a 300 ms pause every 7 requests the seek-native storm has no ahead answer (measured on Apple silicon; 7 ahead without pauses). seek-gop: 3 of 3 full runs and locally; seek-native: 1 of 3 full runs (38763178760) and locally. Both storms pass with #2595's decoder changes (measured on Apple silicon)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "seek/vfr-holds/storm60/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217)"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217). Passes with #2595's decoder changes (measured on Apple silicon)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "seek/vfr-holds/storm60/avf"
@@ -170,8 +201,9 @@ link = ""
 case = "*/basic/transition/*60*/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "NEW: during a cross-fade both clips read the same AVAssetReader decoder at two positions; at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Same frame in export and in offline playback, deterministic (3 of 3)"
-link = ""
+flaky = true
+reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run (every full run, 2 of 2 on Apple silicon) but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Both cases pass with #2595's decoder changes (cache_eviction_victim keeps every reader's previous vend), measured on Apple silicon"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "*/basic/transition/*/avf"
@@ -182,11 +214,19 @@ reason = "AVFoundation cross-fades sometimes show the incoming clip up to 6 sour
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
-case = "audio/audio-mix-8s-a2/transition/mp4-app30"
+case = "export/rec-studio/across-segments/mp430/avf"
 class = "future"
 platforms = ["macos"]
 flaky = true
-reason = "Same AVFoundation cross-fade corruption in the app export of the audio mix project: frame 93 shows source 162 for 155. 2 of 4 macos-15 runs (38730081267, 38732325087). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
+reason = "One isolated frame of the recorded Studio fixture's last cut (1.5x) shows a later picture of the same clip (frame 155: source 148 for 142) while its neighbours are right; 1 of 4 macos-15 runs (push run 38763177849; passed in the three full runs). Same signature as the AVFoundation cross-fade flakes: the IOSurface source lifetime bug (YuvToRgbaConverter releases the decoded CVPixelBuffer before its GPU work is submitted, so the pool repaints it with a later frame; native/rendering/iosurface-source-lifetime/recycled-pool). Attributed by signature; no deterministic repro of this frame"
+link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
+
+[[xfail]]
+case = "audio/audio-mix-*-a2/transition/mp4-*"
+class = "future"
+platforms = ["macos"]
+flaky = true
+reason = "Same AVFoundation cross-fade corruption in the app export of the audio mix project: frame 93 shows source 162 for 155. 2 of 4 macos-15 runs (38730081267, 38732325087); the 30 s full-tier fixture's plain MP4 export in 2 of 3 full runs (38763192776, 38763206608: 2-3 blend frames up to 7 ahead). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted, so the AVAssetReader pixel buffer pool recycles the IOSurface and the GPU samples a later frame painted into it; reproduced deterministically by native/rendering/iosurface-source-lifetime/recycled-pool (crates/rendering/tests/expectations.toml). Fixed on fixavf/s2 (8cafa9bfb, 905e0933d): remove this entry with that fix"
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
@@ -198,27 +238,26 @@ reason = "One camera frame (output frame 48) with a torn picture whose marker ch
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
-case = "audio/audio-mix-8s-a2/long-crossfade/mp4-*"
+case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "stale"
 platforms = ["linux", "windows"]
-reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so 12 blend frames take a side up to 49 source frames stale (frame 61: 80 for 129). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux (app and plain MP4) and Windows (app MP4) in run 38743345280"
+reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so 12 blend frames take a side up to 49 source frames stale (frame 61: 80 for 129). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux (app and plain MP4) and Windows (app MP4) in run 38743345280, and identical for the 30 s full-tier fixture (same cuts) on every full run"
 link = ""
 
 [[xfail]]
-case = "audio/audio-mix-8s-a2/long-crossfade/mp4-app30"
+case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "future"
 platforms = ["macos"]
 flaky = true
-reason = "AVFoundation source lifetime corruption during the 1.8 s same-clip cross-fade: 4 blend frames show the incoming side up to 7 source frames ahead (frame 81: 156 for 149), 1 of 1 macos-15 runs so far (38743345280). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted; see native/rendering/iosurface-source-lifetime/recycled-pool. Fixed on fixavf/s2 (8cafa9bfb, 905e0933d)"
+reason = "AVFoundation source lifetime corruption during the 1.8 s same-clip cross-fade: 4 blend frames show the incoming side up to 7 source frames ahead (frame 81: 156 for 149), 1 of 1 macos-15 runs so far (38743345280); the 30 s full-tier fixture in 3 of 3 full runs (38763178760, 38763192776, 38763206608: 3-6 blend frames up to 7 ahead, app or plain MP4). Root cause: YuvToRgbaConverter does not keep the decoded CVPixelBuffer alive until its GPU work is submitted; see native/rendering/iosurface-source-lifetime/recycled-pool. Fixed on fixavf/s2 (8cafa9bfb, 905e0933d)"
 link = "https://github.com/CapSoftware/Cap/commit/e60df0ebf244d3a0a77b152135e998406c392af1"
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/avf"
 class = "future"
 platforms = ["macos"]
-flaky = true
-reason = "On the macos-15 runner (paravirtual VideoToolbox) the wrong-GOP seek also produced one answer a frame ahead (1 of 66); not seen on Apple silicon hardware"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+reason = "Pool position capping: after a read, the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame still looks usable for it (crates/rendering/src/decoder/multi_position.rs, find_best_decoder_for_time_with_reuse_threshold: position <= request), is reused without a reset, and answers with the next sample it decodes. Here output frame 1 (0.017 s) shows source 1 for source 0. Minimal: seek 0, seek 8.8 s, seek 0.017 s (CAP_VERIFY_SEEK_SCRIPT='seek-native@60:0,8.8,0.016667' cargo test -p cap-verify --test seek script -- --nocapture). Deterministic: every macos-15 run (38732325087 through 38763178760) and 4 of 4 on Apple silicon; gone with #2595's decoder changes (reader_passed_request resets such a reader), measured on Apple silicon"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/ffmpeg"
@@ -255,6 +294,12 @@ link = ""
 case = "editing/export/multi-segment/seed-7"
 class = "stale"
 reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the 10 frames after the transition show source frame 0 instead of 20-29 (deterministic). Same mechanism as the seek/*/storm*/ffmpeg xfail: backward seeks near the start answer frame 0"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-10"
+class = "stale"
+reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic: 2 of 2 full runs (38763178760, 38763192776) and reproduced with the FFmpeg decoder on macOS"
 link = ""
 
 [[xfail]]
