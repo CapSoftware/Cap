@@ -9,5 +9,6 @@ pub mod fixture_avf;
 pub mod media;
 pub mod model;
 pub mod oracle;
+pub mod pipeline;
 pub mod report;
 pub mod video_code;

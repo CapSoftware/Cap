@@ -29,6 +29,7 @@ pub fn init() {
 
 /// A ready fixture project plus its decoded source truth.
 pub struct Project {
+    pub name: String,
     pub path: PathBuf,
     pub meta: RecordingMeta,
     pub truth: SourceTruth,
@@ -38,9 +39,29 @@ pub fn project(spec: &FixtureSpec) -> Project {
     init();
     let path = fixture::ensure_fixture(spec, fixture::write_fixture)
         .unwrap_or_else(|e| panic!("fixture {}: {e:?}", spec.name));
+    load(&spec.name, path)
+}
+
+fn load(name: &str, path: PathBuf) -> Project {
     let meta = RecordingMeta::load_for_project(&path).expect("fixture meta");
     let truth = SourceTruth::read(&path).expect("fixture truth");
-    Project { path, meta, truth }
+    Project {
+        name: name.to_string(),
+        path,
+        meta,
+        truth,
+    }
+}
+
+/// A fixture recorded through the real recording pipeline (real time on
+/// first use, cached afterwards).
+pub fn recorded(spec: &cap_verify::pipeline::RecordedSpec) -> Project {
+    init();
+    let path = fixture::ensure_fixture_keyed(spec.cache_key(), |dir| {
+        runtime().block_on(cap_verify::pipeline::record_studio(spec, dir))
+    })
+    .unwrap_or_else(|e| panic!("recorded fixture {}: {e:?}", spec.name));
+    load(&format!("rec-{}", spec.name), path)
 }
 
 impl Project {
@@ -60,6 +81,24 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
         .iter()
         .map(|&(start, end, timescale)| TimelineSegment {
             recording_clip: 0,
+            start,
+            end,
+            timescale,
+            name: None,
+            speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
+        })
+        .collect();
+}
+
+/// Replaces the timeline with `(clip, start, end, timescale)` segments.
+pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, f64)]) {
+    let timeline = config.timeline.as_mut().expect("timeline");
+    timeline.segments = cuts
+        .iter()
+        .map(|&(clip, start, end, timescale)| TimelineSegment {
+            recording_clip: clip,
             start,
             end,
             timescale,

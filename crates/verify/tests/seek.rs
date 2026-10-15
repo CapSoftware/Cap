@@ -26,11 +26,20 @@ fn run(
     edit: fn(&mut ProjectConfiguration),
     make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
 ) -> Vec<String> {
-    let project = common::project(&spec);
+    run_project(common::project(&spec), name, fps, edit, make)
+}
+
+fn run_project(
+    project: common::Project,
+    name: &str,
+    fps: u32,
+    edit: fn(&mut ProjectConfiguration),
+    make: &dyn Fn(u32, &common::Project) -> Vec<Request>,
+) -> Vec<String> {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for decoder in Decoder::all() {
-        let id = format!("seek/{}/{name}{fps}/{}", spec.name, decoder.label());
+        let id = format!("seek/{}/{name}{fps}/{}", project.name, decoder.label());
         if !report::selected(&id) {
             continue;
         }
@@ -273,7 +282,7 @@ fn cold_open() {
     let rt = common::runtime();
     let mut failures = Vec::new();
     for decoder in Decoder::all() {
-        let id = format!("seek/{}/cold-open30/{}", spec.name, decoder.label());
+        let id = format!("seek/{}/cold-open30/{}", project.name, decoder.label());
         if !report::selected(&id) {
             continue;
         }

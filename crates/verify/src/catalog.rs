@@ -228,3 +228,44 @@ pub fn backward_hold(_tier: Tier) -> FixtureSpec {
         }],
     }
 }
+
+/// Recorded through the real pipeline: two recording segments (pause and
+/// resume), the first with a jittery camera that is the last device to
+/// start, a static-screen hold, a mic that starts late and loopback-style
+/// system audio; the second screen and mic only. (A camera that starts
+/// before the mic is covered by `early_camera`.)
+pub fn recorded_studio(_tier: Tier) -> crate::pipeline::RecordedSpec {
+    use crate::pipeline::{Delivery, RecordedSegment, RecordedSpec, RecordedVideo};
+    let screen = |delivery| RecordedVideo {
+        width: SCREEN_W,
+        height: SCREEN_H,
+        fps: 30,
+        delivery,
+        start_delay: 0.0,
+    };
+    RecordedSpec {
+        name: "studio".into(),
+        segments: vec![
+            RecordedSegment {
+                duration: 6.0,
+                screen: screen(Delivery::Holds(vec![(2.0, 1.5)])),
+                camera: Some(RecordedVideo {
+                    width: CAMERA_W,
+                    height: CAMERA_H,
+                    fps: 30,
+                    delivery: Delivery::Jittery { seed: 0x5EED_0003 },
+                    start_delay: 0.3,
+                }),
+                mic_delay: Some(0.15),
+                system_audio: true,
+            },
+            RecordedSegment {
+                duration: 4.0,
+                screen: screen(Delivery::Steady),
+                camera: None,
+                mic_delay: Some(0.1),
+                system_audio: false,
+            },
+        ],
+    }
+}
