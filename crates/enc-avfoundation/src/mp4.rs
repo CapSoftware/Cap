@@ -30,6 +30,7 @@ pub struct MP4Encoder {
     expected_width: usize,
     expected_height: usize,
     dimension_mismatch_count: u64,
+    rescale_session: Option<RescaleSession>,
     last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
@@ -432,6 +433,7 @@ impl MP4Encoder {
             expected_width: video_config.width as usize,
             expected_height: video_config.height as usize,
             dimension_mismatch_count: 0,
+            rescale_session: None,
             config: video_config,
             audio_input,
             audio_resampler,
@@ -478,26 +480,52 @@ impl MP4Encoder {
             return Err(QueueFrameError::NotReadyForMore);
         }
 
-        if let Some(image_buf) = frame.image_buf() {
-            let frame_width = image_buf.width();
-            let frame_height = image_buf.height();
-            if frame_width != self.expected_width || frame_height != self.expected_height {
+        // Continuity Camera can open at the size the feed reported from its
+        // first frame and then switch resolution, so frames are scaled to
+        // the writer's size rather than dropped; dropping every frame left
+        // camera.mp4 empty (#2116).
+        let frame_dimensions = frame
+            .image_buf()
+            .map(|image_buf| (image_buf.width(), image_buf.height()));
+        let frame = match frame_dimensions {
+            Some((frame_width, frame_height))
+                if frame_width != self.expected_width || frame_height != self.expected_height =>
+            {
                 self.dimension_mismatch_count += 1;
-                if self.dimension_mismatch_count <= 5
-                    || self.dimension_mismatch_count.is_multiple_of(100)
-                {
-                    warn!(
-                        expected_width = self.expected_width,
-                        expected_height = self.expected_height,
-                        frame_width,
-                        frame_height,
-                        mismatch_count = self.dimension_mismatch_count,
-                        "Frame dimension mismatch, dropping frame to protect writer"
-                    );
+                let should_log = self.dimension_mismatch_count <= 5
+                    || self.dimension_mismatch_count.is_multiple_of(100);
+                match self.rescale_to_writer_size(&frame) {
+                    Ok(scaled) => {
+                        if should_log {
+                            warn!(
+                                expected_width = self.expected_width,
+                                expected_height = self.expected_height,
+                                frame_width,
+                                frame_height,
+                                mismatch_count = self.dimension_mismatch_count,
+                                "Frame dimension mismatch, scaling frame to the writer's size"
+                            );
+                        }
+                        scaled
+                    }
+                    Err(error) => {
+                        if should_log {
+                            warn!(
+                                expected_width = self.expected_width,
+                                expected_height = self.expected_height,
+                                frame_width,
+                                frame_height,
+                                mismatch_count = self.dimension_mismatch_count,
+                                error,
+                                "Frame dimension mismatch, dropping frame to protect writer"
+                            );
+                        }
+                        return Ok(());
+                    }
                 }
-                return Ok(());
             }
-        }
+            _ => frame,
+        };
 
         if !self.session_started {
             self.session_started = true;
@@ -827,6 +855,54 @@ impl MP4Encoder {
         self.last_timestamp = Some(timestamp);
 
         Ok(())
+    }
+
+    fn rescale_to_writer_size(
+        &mut self,
+        frame: &cm::SampleBuf,
+    ) -> Result<arc::R<cm::SampleBuf>, String> {
+        let source = frame.image_buf().ok_or("frame has no image buffer")?;
+        let session = match &mut self.rescale_session {
+            Some(RescaleSession(session)) => session,
+            slot => {
+                let mut session = vt::PixelTransferSession::new()
+                    .map_err(|error| format!("pixel transfer session: {error:?}"))?;
+                session
+                    .set_realtime(true)
+                    .map_err(|error| format!("pixel transfer realtime: {error:?}"))?;
+                session
+                    .set_scaling_letter_box()
+                    .map_err(|error| format!("pixel transfer scaling: {error:?}"))?;
+                &mut slot.insert(RescaleSession(session)).0
+            }
+        };
+
+        let surface_properties = cf::Dictionary::new();
+        let attributes = cf::Dictionary::with_keys_values(
+            &[cv::pixel_buffer::keys::io_surf_props().as_ref()],
+            &[surface_properties.as_ref()],
+        )
+        .ok_or("pixel buffer attributes")?;
+        let scaled = cv::PixelBuf::new(
+            self.expected_width,
+            self.expected_height,
+            source.pixel_format(),
+            Some(&attributes),
+        )
+        .map_err(|error| format!("scaled pixel buffer: {error:?}"))?;
+        session
+            .transfer(source, &scaled)
+            .map_err(|error| format!("pixel transfer: {error:?}"))?;
+
+        let format_desc = cm::VideoFormatDesc::with_image_buf(&scaled)
+            .map_err(|error| format!("scaled format description: {error:?}"))?;
+        let timing = SampleTimingInfo {
+            duration: frame.duration(),
+            pts: frame.pts(),
+            dts: cm::Time::invalid(),
+        };
+        cm::SampleBuf::with_image_buf(&scaled, true, None, std::ptr::null(), &format_desc, &timing)
+            .map_err(|error| format!("scaled sample buffer: {error:?}"))
     }
 
     fn write_pending_frame(
@@ -1730,6 +1806,37 @@ mod tests {
     /// locking into nominal-CFR output and doubling the recording's length.
     /// The encoder must keep the written duration close to the real span even
     /// for such inputs.
+    #[test]
+    fn frames_larger_than_the_writer_are_scaled_not_dropped() {
+        let output = test_output_path("camera_resolution_change");
+        let config = VideoInfo::from_raw(RawVideoFormat::Nv12, 1280, 720, 30);
+        let mut encoder = MP4Encoder::init(output.clone(), config, None, None).unwrap();
+        let first = create_pixel_buffer_pool(1280, 720);
+        let switched = create_pixel_buffer_pool(1920, 1080);
+
+        const FRAME_US: i64 = 33_333;
+        for i in 0..60i64 {
+            let pool = if i < 5 { &first } else { &switched };
+            let frame = create_test_video_frame(pool, i * FRAME_US, FRAME_US);
+            let timestamp = Duration::from_micros((i * FRAME_US) as u64);
+            assert!(
+                queue_video_frame_with_retry(&mut encoder, frame, timestamp).unwrap(),
+                "frame {i} never queued"
+            );
+        }
+
+        encoder
+            .finish(Some(Duration::from_micros((60 * FRAME_US) as u64)))
+            .unwrap();
+        let appended = encoder.video_frames_appended;
+        let _ = std::fs::remove_file(&output);
+
+        assert!(
+            appended >= 55,
+            "only {appended} of 60 frames reached the writer after the camera switched to 1080p"
+        );
+    }
+
     #[test]
     fn non_monotonic_sawtooth_input_does_not_stretch_duration() {
         let output = test_output_path("sawtooth_duration");
@@ -4349,6 +4456,11 @@ impl SampleBufExt for cm::SampleBuf {
         }
     }
 }
+
+// Only used through `&mut MP4Encoder`, which callers already serialise behind
+// a mutex; the CF object itself has an atomic refcount.
+struct RescaleSession(arc::R<vt::PixelTransferSession>);
+unsafe impl Send for RescaleSession {}
 
 fn rebuild_video_sample_buf(
     frame: &cm::SampleBuf,
