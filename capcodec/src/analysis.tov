@@ -1,0 +1,1282 @@
+export type ScrollHint = { x: int, y: int, w: int, h: int, dx: int, dy: int }
+
+export class SideInfo {
+  dirty: int[] = []
+  cursorX = -1
+  cursorY = -1
+  scroll: ScrollHint[] = []
+}
+
+type RawScroll = { rect: int[], dx: int, dy: int }
+type RawSide = { frame?: int, dirty?: int[][], cursor?: int[], scroll?: RawScroll[] }
+
+export function parseSideInfo(line: string): SideInfo throws SyntaxError {
+  const raw: RawSide = try JSON.parse(line)
+  const s = new SideInfo()
+  const dirty = raw.dirty ?? []
+  for (const r of dirty) {
+    if (r.length < 4) continue
+    s.dirty.push(r[0]!)
+    s.dirty.push(r[1]!)
+    s.dirty.push(r[2]!)
+    s.dirty.push(r[3]!)
+  }
+  const c = raw.cursor
+  if (c !== undefined && c.length >= 2) {
+    s.cursorX = c[0]!
+    s.cursorY = c[1]!
+  }
+  const sc = raw.scroll ?? []
+  for (const h of sc) {
+    if (h.rect.length < 4) continue
+    s.scroll.push({ x: h.rect[0]!, y: h.rect[1]!, w: h.rect[2]!, h: h.rect[3]!, dx: h.dx, dy: h.dy })
+  }
+  return s
+}
+
+export function markRects(changed: Uint8Array, mbw: int, mbh: int, rects: int[]): int {
+  let n = 0
+  for (let i = 0; i + 3 < rects.length; i += 4) {
+    const x0 = rects[i]!
+    const y0 = rects[i + 1]!
+    const w = rects[i + 2]!
+    const h = rects[i + 3]!
+    if (w <= 0 || h <= 0) continue
+    let mx0 = x0 >> 4
+    let my0 = y0 >> 4
+    let mx1 = (x0 + w - 1) >> 4
+    let my1 = (y0 + h - 1) >> 4
+    if (mx0 < 0) mx0 = 0
+    if (my0 < 0) my0 = 0
+    if (mx1 >= mbw) mx1 = mbw - 1
+    if (my1 >= mbh) my1 = mbh - 1
+    for (let my = my0; my <= my1; my++) {
+      for (let mx = mx0; mx <= mx1; mx++) {
+        const k = my * mbw + mx
+        if (changed[k]! === 0) {
+          changed[k] = 1
+          n++
+        }
+      }
+    }
+  }
+  return n
+}
+
+export function diffMb(src: Uint8Array, so: int, ss: int, frame: Uint8Array, fo: int, fs: int, w: int, h: int, noise: int): bool {
+  if (noise === 0 && w === 16) {
+    for (let y = 0; y < h; y++) {
+      if (u8x16.load(src, so + y * ss).ne(u8x16.load(frame, fo + y * fs)).mask() !== 0) return true
+    }
+    return false
+  }
+  if (noise === 0 && w === 8) {
+    let acc = i16x8.splat(0)
+    for (let y = 0; y < h; y++) acc |= i16x8.loadU8(src, so + y * ss) ^ i16x8.loadU8(frame, fo + y * fs)
+    return acc.ne(i16x8.splat(0)).mask() !== 0
+  }
+  if (noise === 0) {
+    for (let y = 0; y < h; y++) {
+      const a = so + y * ss
+      const b = fo + y * fs
+      for (let x = 0; x < w; x++) {
+        if (src[a + x]! !== frame[b + x]!) return true
+      }
+    }
+    return false
+  }
+  if (noise > 255 || h > 16 || (w !== 16 && w !== 8)) return diffNoisy(src, so, ss, frame, fo, fs, w, h, noise)
+  if (w === 16 && h === 16) return noisy16(src, so, ss, frame, fo, fs, noise)
+  const budget = (noise * w * h) >> 1
+  if (w === 16) {
+    let top = u8x32.splat(0)
+    let sum = u32x8.splat(0)
+    let y = 0
+    while (y + 2 <= h) {
+      const p = u8x32.concat(u8x16.load(src, so + y * ss), u8x16.load(src, so + (y + 1) * ss))
+      const q = u8x32.concat(u8x16.load(frame, fo + y * fs), u8x16.load(frame, fo + (y + 1) * fs))
+      top = top.max(p.absDiff(q))
+      sum = sum + u8x32.sadParts(p, q)
+      y += 2
+    }
+    if (y < h) {
+      const p = u8x32.concat(u8x16.load(src, so + y * ss), u8x16.splat(0))
+      const q = u8x32.concat(u8x16.load(frame, fo + y * fs), u8x16.splat(0))
+      top = top.max(p.absDiff(q))
+      sum = sum + u8x32.sadParts(p, q)
+    }
+    return top.gt(u8x32.splat(noise)).mask() !== 0 || sum.sum() > budget
+  }
+  let top = i16x8.splat(0)
+  let sum = i16x8.splat(0)
+  for (let y = 0; y < h; y++) {
+    const d = (i16x8.loadU8(src, so + y * ss) - i16x8.loadU8(frame, fo + y * fs)).abs()
+    top = top.max(d)
+    sum = sum + d
+  }
+  return top.gt(i16x8.splat(noise)).mask() !== 0 || sum.sum() > budget
+}
+
+function noisy16(src: Uint8Array, so: int, ss: int, frame: Uint8Array, fo: int, fs: int, noise: int): bool {
+  let top = u8x32.splat(0)
+  let sum = u32x8.splat(0)
+  for (let y = 0; y < 16; y += 2) {
+    const p = u8x32.concat(u8x16.load(src, so + y * ss), u8x16.load(src, so + (y + 1) * ss))
+    const q = u8x32.concat(u8x16.load(frame, fo + y * fs), u8x16.load(frame, fo + (y + 1) * fs))
+    top = top.max(p.absDiff(q))
+    sum = sum + u8x32.sadParts(p, q)
+  }
+  return top.gt(u8x32.splat(noise)).mask() !== 0 || sum.sum() > noise * 128
+}
+
+function noisyChroma(u: Uint8Array, uo: int, v: Uint8Array, vo: int, ss: int, frame: Uint8Array, fu: int, fv: int, fs: int,
+  noise: int): bool {
+  let top = i16x16.splat(0)
+  let sum = i16x16.splat(0)
+  for (let y = 0; y < 8; y++) {
+    const p = i16x16.concat(i16x8.loadU8(u, uo + y * ss), i16x8.loadU8(v, vo + y * ss))
+    const q = i16x16.concat(i16x8.loadU8(frame, fu + y * fs), i16x8.loadU8(frame, fv + y * fs))
+    const d = (p - q).abs()
+    top = top.max(d)
+    sum = sum + d
+  }
+  const budget = noise * 32
+  return top.gt(i16x16.splat(noise)).mask() !== 0 || sum.low().sum() > budget || sum.high().sum() > budget
+}
+
+function noisyPair(src: Uint8Array, so: int, ss: int, frame: Uint8Array, fo: int, fs: int, noise: int): int {
+  let top = u8x32.splat(0)
+  let sum = u32x8.splat(0)
+  for (let y = 0; y < 16; y++) {
+    const p = u8x32.load(src, so + y * ss)
+    const q = u8x32.load(frame, fo + y * fs)
+    top = top.max(p.absDiff(q))
+    sum = sum + u8x32.sadParts(p, q)
+  }
+  const m = top.gt(u8x32.splat(noise)).mask()
+  const z = top.ne(u8x32.splat(0)).mask()
+  const budget = noise * 128
+  const a = (m & 0xffff) !== 0 || sum.low().sum() > budget ? 1 : 0
+  const b = (m >> 16) !== 0 || sum.high().sum() > budget ? 2 : 0
+  const c = (z & 0xffff) !== 0 ? 4 : 0
+  const e = (z >> 16) !== 0 ? 8 : 0
+  return a | b | c | e
+}
+
+function noisyChromaPair(u: Uint8Array, uo: int, v: Uint8Array, vo: int, ss: int, frame: Uint8Array, fu: int, fv: int,
+  fs: int, noise: int): int {
+  let top = u8x32.splat(0)
+  let sum = u32x8.splat(0)
+  for (let y = 0; y < 8; y++) {
+    const p = u8x32.concat(u8x16.load(u, uo + y * ss), u8x16.load(v, vo + y * ss))
+    const q = u8x32.concat(u8x16.load(frame, fu + y * fs), u8x16.load(frame, fv + y * fs))
+    top = top.max(p.absDiff(q))
+    sum = sum + u8x32.sadParts(p, q)
+  }
+  const m = top.gt(u8x32.splat(noise)).mask()
+  const z = top.ne(u8x32.splat(0)).mask()
+  const budget = noise * 32
+  const a = (m & 0xff00ff) !== 0 || int(sum.lane(0)) > budget || int(sum.lane(4)) > budget ? 1 : 0
+  const b = (m & 0xff00ff00) !== 0 || int(sum.lane(2)) > budget || int(sum.lane(6)) > budget ? 2 : 0
+  const c = (z & 0xff00ff) !== 0 ? 4 : 0
+  const e = (z & 0xff00ff00) !== 0 ? 8 : 0
+  return a | b | c | e
+}
+
+function samePair(src: Uint8Array, so: int, ss: int, frame: Uint8Array, fo: int, fs: int): bool {
+  const zero = u8x32.splat(0)
+  for (let y = 0; y < 16; y += 4) {
+    const s = so + y * ss
+    const f = fo + y * fs
+    const acc = (u8x32.load(src, s) ^ u8x32.load(frame, f)) | (u8x32.load(src, s + ss) ^ u8x32.load(frame, f + fs)) |
+      (u8x32.load(src, s + 2 * ss) ^ u8x32.load(frame, f + 2 * fs)) |
+      (u8x32.load(src, s + 3 * ss) ^ u8x32.load(frame, f + 3 * fs))
+    if (acc.eq(zero).mask() !== 0xffffffff) return false
+  }
+  return true
+}
+
+function sameChromaPair(u: Uint8Array, uo: int, v: Uint8Array, vo: int, ss: int, frame: Uint8Array, fu: int, fv: int,
+  fs: int): bool {
+  const zero = u8x16.splat(0)
+  for (let y = 0; y < 8; y += 4) {
+    let acc = zero
+    for (let r = y; r < y + 4; r++) {
+      acc = acc | (u8x16.load(u, uo + r * ss) ^ u8x16.load(frame, fu + r * fs)) |
+        (u8x16.load(v, vo + r * ss) ^ u8x16.load(frame, fv + r * fs))
+    }
+    if (acc.eq(zero).mask() !== 0xffff) return false
+  }
+  return true
+}
+
+export function changeMap(sy: Uint8Array, syo: int, sys: int, su: Uint8Array, suo: int, sv: Uint8Array, svo: int, scs: int,
+  f: Uint8Array, fyo: int, fys: int, fuo: int, fvo: int, fcs: int, w: int, h: int, noise: int, out: Uint8Array): int {
+  const mbw = (w + 15) >> 4
+  const mbh = (h + 15) >> 4
+  let n = 0
+  for (let mby = 0; mby < mbh; mby++) {
+    const py = mby * 16
+    const cy = mby * 8
+    const row = mby * mbw
+    let mbx = 0
+    if (noise <= 255 && py + 16 <= h) {
+      while ((mbx + 2) * 16 <= w) {
+        const so = syo + py * sys + mbx * 16
+        const fo = fyo + py * fys + mbx * 16
+        const sc = cy * scs + mbx * 8
+        const fc = cy * fcs + mbx * 8
+        let d = samePair(sy, so, sys, f, fo, fys) ? 0 : noisyPair(sy, so, sys, f, fo, fys, noise)
+        if (d === 0 ? !sameChromaPair(su, suo + sc, sv, svo + sc, scs, f, fuo + fc, fvo + fc, fcs) : (d & 3) !== 3) {
+          d |= noisyChromaPair(su, suo + sc, sv, svo + sc, scs, f, fuo + fc, fvo + fc, fcs, noise)
+        }
+        if (d !== 0) {
+          if ((d & 4) !== 0) out[row + mbx] = (d & 1) !== 0 ? 1 : 2
+          if ((d & 8) !== 0) out[row + mbx + 1] = (d & 2) !== 0 ? 1 : 2
+          n += (d & 1) + ((d >> 1) & 1)
+        }
+        mbx += 2
+      }
+    }
+    for (; mbx < mbw; mbx++) {
+      const c = mbChange(sy, syo, sys, su, suo, sv, svo, scs, f, fyo, fys, fuo, fvo, fcs, w, h, noise, mbx, mby)
+      if (c !== 0) {
+        out[row + mbx] = c
+        if (c === 1) n++
+      }
+    }
+  }
+  return n
+}
+
+export function mbChange(sy: Uint8Array, syo: int, sys: int, su: Uint8Array, suo: int, sv: Uint8Array, svo: int, scs: int,
+  f: Uint8Array, fyo: int, fys: int, fuo: int, fvo: int, fcs: int, w: int, h: int, noise: int, mbx: int, mby: int): int {
+  const vector = noise <= 255
+  const px = mbx * 16
+  const py = mby * 16
+  const bw = px + 16 <= w ? 16 : w - px
+  const bh = py + 16 <= h ? 16 : h - py
+  const so = syo + py * sys + px
+  const fo = fyo + py * fys + px
+  const lumaSame = !diffMb(sy, so, sys, f, fo, fys, bw, bh, 0)
+  if (!lumaSame && (noise === 0 || (vector && bw === 16 && bh === 16 ? noisy16(sy, so, sys, f, fo, fys, noise) :
+    diffMb(sy, so, sys, f, fo, fys, bw, bh, noise)))) return 1
+  const cw = w >> 1
+  const ch = h >> 1
+  const cx = mbx * 8
+  const cy = mby * 8
+  const cbw = cx + 8 <= cw ? 8 : cw - cx
+  const cbh = cy + 8 <= ch ? 8 : ch - cy
+  const sc = cy * scs + cx
+  const fc = cy * fcs + cx
+  const chromaSame = !diffMb(su, suo + sc, scs, f, fuo + fc, fcs, cbw, cbh, 0) &&
+    !diffMb(sv, svo + sc, scs, f, fvo + fc, fcs, cbw, cbh, 0)
+  if (!chromaSame && (noise === 0 || (vector && cbw === 8 && cbh === 8 ?
+    noisyChroma(su, suo + sc, sv, svo + sc, scs, f, fuo + fc, fvo + fc, fcs, noise) :
+    diffMb(su, suo + sc, scs, f, fuo + fc, fcs, cbw, cbh, noise) || diffMb(sv, svo + sc, scs, f, fvo + fc, fcs, cbw, cbh, noise)))) {
+    return 1
+  }
+  return lumaSame && chromaSame ? 0 : 2
+}
+
+function diffNoisy(src: Uint8Array, so: int, ss: int, frame: Uint8Array, fo: int, fs: int, w: int, h: int, noise: int): bool {
+  const budget = (noise * w * h) >> 1
+  let sum = 0
+  for (let y = 0; y < h; y++) {
+    const a = so + y * ss
+    const b = fo + y * fs
+    for (let x = 0; x < w; x++) {
+      const d = int(src[a + x]!) - int(frame[b + x]!)
+      const ad = d < 0 ? -d : d
+      if (ad > noise) return true
+      sum += ad
+    }
+    if (sum > budget) return true
+  }
+  return false
+}
+
+export function copyRect(dst: Uint8Array, dO: int, ds: int, src: Uint8Array, so: int, ss: int, w: int, h: int) {
+  if (w === 16) {
+    for (let y = 0; y < h; y++) u8x16.load(src, so + y * ss).store(dst, dO + y * ds)
+    return
+  }
+  if (w === 8) {
+    for (let y = 0; y < h; y++) copyRow8(dst, dO + y * ds, src, so + y * ss)
+    return
+  }
+  if (w === 4) {
+    for (let y = 0; y < h; y++) copyRow4(dst, dO + y * ds, src, so + y * ss)
+    return
+  }
+  for (let y = 0; y < h; y++) {
+    const a = dO + y * ds
+    const b = so + y * ss
+    for (let x = 0; x < w; x++) dst[a + x] = src[b + x]!
+  }
+}
+
+function copyRow8(dst: Uint8Array, a: int, src: Uint8Array, b: int) {
+  u8x16.loadLow(src, b).storeLow(dst, a)
+}
+
+function copyRow4(dst: Uint8Array, a: int, src: Uint8Array, b: int) {
+  const p0 = src[b]!
+  const p1 = src[b + 1]!
+  const p2 = src[b + 2]!
+  const p3 = src[b + 3]!
+  dst[a] = p0
+  dst[a + 1] = p1
+  dst[a + 2] = p2
+  dst[a + 3] = p3
+}
+
+export function copyBytes(dst: Uint8Array, d: int, src: Uint8Array, s: int, n: int) {
+  let x = 0
+  while (x + 16 <= n) {
+    u8x16.load(src, s + x).store(dst, d + x)
+    x += 16
+  }
+  if (x + 8 <= n) {
+    copyRow8(dst, d + x, src, s + x)
+    x += 8
+  }
+  while (x < n) {
+    dst[d + x] = src[s + x]!
+    x++
+  }
+}
+
+export function fillBytes(dst: Uint8Array, d: int, n: int, v: int) {
+  const s = u8x16.splat(v)
+  let x = 0
+  while (x + 16 <= n) {
+    s.store(dst, d + x)
+    x += 16
+  }
+  while (x < n) {
+    dst[d + x] = v
+    x++
+  }
+}
+
+export const AQ_FLAT = 0
+export const AQ_TEXT = 1
+export const AQ_TEXTURE = 2
+export const AQ_NORMAL = 3
+
+function laneMin(v: u8x16): int {
+  const a = v.min(v.swizzle([8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7]))
+  const b = a.min(a.swizzle([4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11]))
+  const c = b.min(b.swizzle([2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13]))
+  return c.min(c.swizzle([1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14])).lane(0)
+}
+
+function laneMax(v: u8x16): int {
+  const a = v.max(v.swizzle([8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7]))
+  const b = a.max(a.swizzle([4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11]))
+  const c = b.max(b.swizzle([2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13]))
+  return c.max(c.swizzle([1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14])).lane(0)
+}
+
+const NEXT_COLUMN = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 31,
+]
+
+// Two rows per register: rows y and y + 1 against their right neighbours and against rows y + 1 and y + 2. The last
+// pair compares row 15 with itself, which counts nothing; a lane counts at most 16 hits, so byte lanes hold them.
+export function classifyMb(p: Uint8Array, o: int, stride: int): int {
+  const t48 = u8x32.splat(48)
+  const t6 = u8x32.splat(6)
+  const keep15 = u8x32(
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0,
+  )
+  let lo = u8x32.splat(255)
+  let hi = u8x32.splat(0)
+  let strong = u8x32.splat(0)
+  let edges = u8x32.splat(0)
+  let r = u8x16.load(p, o)
+  for (let y = 0; y < 16; y += 2) {
+    const a = o + y * stride
+    const r1 = u8x16.load(p, a + stride)
+    const r2 = y < 14 ? u8x16.load(p, a + 2 * stride) : r1
+    const pair = u8x32.concat(r, r1)
+    lo = lo.min(pair)
+    hi = hi.max(pair)
+    const dh = pair.absDiff(pair.swizzle(NEXT_COLUMN)) & keep15
+    const dv = pair.absDiff(u8x32.concat(r1, r2))
+    strong = strong - dh.ge(t48) - dv.ge(t48)
+    edges = edges - dh.ge(t6) - dv.ge(t6)
+    r = r2
+  }
+  const ns = strong.sum()
+  const nm = edges.sum() - ns
+  const range = laneMax(hi.low().max(hi.high())) - laneMin(lo.low().min(lo.high()))
+  if (range < 12 && ns === 0) return AQ_FLAT
+  if (ns >= 10 && range >= 80 && ns * 2 >= nm) return AQ_TEXT
+  if (nm >= 160 && ns < 10) return AQ_TEXTURE
+  return AQ_NORMAL
+}
+
+export function mbActivity(p: Uint8Array, o: int, stride: int): int {
+  const t32 = u8x16.splat(32)
+  const zero = u8x16.splat(0)
+  const keep15 = u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0)
+  let a = 0
+  let r = u8x16.load(p, o)
+  for (let y = 0; y < 16; y++) {
+    a += u8x16.sad(r.absDiff(u8x16.load(p, o + y * stride + 1)).min(t32) & keep15, zero)
+    if (y < 15) {
+      const nx = u8x16.load(p, o + (y + 1) * stride)
+      a += u8x16.sad(r.absDiff(nx).min(t32), zero)
+      r = nx
+    }
+  }
+  return a
+}
+
+function classifyMbRef(p: Uint8Array, o: int, stride: int): int {
+  let strong = 0
+  let medium = 0
+  let lo = 255
+  let hi = 0
+  for (let y = 0; y < 16; y++) {
+    const r = o + y * stride
+    for (let x = 0; x < 16; x++) {
+      const v = int(p[r + x]!)
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+      if (x < 15) {
+        const d = v - int(p[r + x + 1]!)
+        const a = d < 0 ? -d : d
+        if (a >= 48) {
+          strong++
+        } else if (a >= 6) {
+          medium++
+        }
+      }
+      if (y < 15) {
+        const d = v - int(p[r + x + stride]!)
+        const a = d < 0 ? -d : d
+        if (a >= 48) {
+          strong++
+        } else if (a >= 6) {
+          medium++
+        }
+      }
+    }
+  }
+  if (hi - lo < 12 && strong === 0) return AQ_FLAT
+  if (strong >= 10 && hi - lo >= 80 && strong * 2 >= medium) return AQ_TEXT
+  if (medium >= 160 && strong < 10) return AQ_TEXTURE
+  return AQ_NORMAL
+}
+
+function hashLanes(p: Uint8Array, o: int): i32x4 {
+  const v = u8x16.load(p, o)
+  return i16x8.madd(v.widenLow(), i16x8(3, 5, 7, 11, 13, 17, 19, 23)) +
+    i16x8.madd(v.widenHigh(), i16x8(29, 31, 37, 41, 43, 47, 53, 59))
+}
+
+function hashStep(p: Uint8Array, o: int): int {
+  return hashLanes(p, o).sum()
+}
+
+function hashSteps4(p: Uint8Array, o0: int, o1: int, o2: int, o3: int): u32x4 {
+  const s0 = hashLanes(p, o0)
+  const s1 = hashLanes(p, o1)
+  const s2 = hashLanes(p, o2)
+  const s3 = hashLanes(p, o3)
+  const a = i32x4.shuffle(s0, s1, [0, 1, 4, 5]) + i32x4.shuffle(s0, s1, [2, 3, 6, 7])
+  const b = i32x4.shuffle(s2, s3, [0, 1, 4, 5]) + i32x4.shuffle(s2, s3, [2, 3, 6, 7])
+  return u32x4.bitcast(i32x4.shuffle(a, b, [0, 2, 4, 6]) + i32x4.shuffle(a, b, [1, 3, 5, 7]))
+}
+
+function hashTail(p: Uint8Array, o: int, x0: int, w: int, h0: int): int {
+  let h = h0
+  for (let x = x0; x < w; x++) h = ((h ^ int(p[o + x]!)) * 16777619) & 0xffffffff
+  return h
+}
+
+function rowHash(p: Uint8Array, o: int, w: int): int {
+  let h = 1469598103
+  let x = 0
+  while (x + 16 <= w) {
+    h = (h * 16777619 + hashStep(p, o + x)) & 0xffffffff
+    x += 16
+  }
+  return hashTail(p, o, x, w, h)
+}
+
+export function rowHashes(out: Uint32Array, at: int, p: Uint8Array, o: int, stride: int, w: int, n: int) {
+  const wv = w - w % 16
+  let i = 0
+  while (i + 4 <= n) {
+    const o0 = o + i * stride
+    const o1 = o0 + stride
+    const o2 = o1 + stride
+    const o3 = o2 + stride
+    const m = u32x4.splat(16777619)
+    let h = u32x4.splat(1469598103)
+    for (let x = 0; x < wv; x += 16) h = h * m + hashSteps4(p, o0 + x, o1 + x, o2 + x, o3 + x)
+    out[at + i] = hashTail(p, o0, wv, w, h.lane(0))
+    out[at + i + 1] = hashTail(p, o1, wv, w, h.lane(1))
+    out[at + i + 2] = hashTail(p, o2, wv, w, h.lane(2))
+    out[at + i + 3] = hashTail(p, o3, wv, w, h.lane(3))
+    i += 4
+  }
+  for (; i < n; i++) out[at + i] = rowHash(p, o + i * stride, w)
+}
+
+export function scrollSpan(w: int, h: int, y0: int, frameH: int, maxShift: int): int[] {
+  if (w < 32 || h < 48) return []
+  const ylo = y0 - maxShift < 0 ? 0 : y0 - maxShift
+  const yhi = y0 + h + maxShift > frameH ? frameH : y0 + h + maxShift
+  return [ylo, yhi]
+}
+
+export function estimateScroll(cur: Uint8Array, cs: int, cOff: int, prev: Uint8Array, ps: int, pOff: int,
+  x0: int, y0: int, w: int, h: int, frameH: int, maxShift: int): int {
+  const span = scrollSpan(w, h, y0, frameH, maxShift)
+  if (span.length === 0) return 0
+  const ylo = span[0]!
+  const prevHashes = new Uint32Array(span[1]! - ylo)
+  rowHashes(prevHashes, 0, prev, pOff + ylo * ps + x0, ps, w, prevHashes.length)
+  const curHashes = new Uint32Array(h)
+  rowHashes(curHashes, 0, cur, cOff + y0 * cs + x0, cs, w, h)
+  return matchScroll(prevHashes, ylo, curHashes, y0)
+}
+
+export function matchScroll(prevHashes: Uint32Array, ylo: int, curHashes: Uint32Array, y0: int): int {
+  const h = curHashes.length
+  const yhi = ylo + prevHashes.length
+  let prevRows: Map<int, int> = new Map()
+  for (let y = ylo; y < yhi; y++) {
+    const k = prevHashes[y - ylo]!
+    if (!prevRows.has(k)) prevRows.set(k, y)
+  }
+  let votes: Map<int, int> = new Map()
+  let flat = 0
+  for (let y = y0; y < y0 + h; y++) {
+    const k = curHashes[y - y0]!
+    const py = prevRows.get(k)
+    if (py === undefined) continue
+    const d = py - y
+    if (d === 0) {
+      flat++
+      continue
+    }
+    votes.set(d, (votes.get(d) ?? 0) + 1)
+  }
+  let best = 0
+  let bestN = 0
+  for (const d of votes.keys()) {
+    const n = votes.get(d) ?? 0
+    if (n > bestN) {
+      bestN = n
+      best = d
+    }
+  }
+  if (bestN * 3 < h) return 0
+  return best
+}
+
+function profileRef(p: Uint8Array, off: int, stride: int, x0: int, y0: int, w: int, h: int, horizontal: bool): int[] {
+  let out: int[] = []
+  if (horizontal) {
+    const acc = new Int32Array(w)
+    const w8 = w & ~7
+    for (let y = y0; y < y0 + h; y += 2) {
+      const r = off + y * stride + x0
+      for (let x = 0; x < w8; x += 8) (i32x8.load(acc, x) + i32x8.loadU8(p, r + x)).store(acc, x)
+      for (let x = w8; x < w; x++) acc[x] = acc[x]! + int(p[r + x]!)
+    }
+    for (let x = 0; x < w; x++) out.push(acc[x]!)
+  } else {
+    const even = u8x16(255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0)
+    const zero = u8x16.splat(0)
+    const w16 = w & ~15
+    for (let y = y0; y < y0 + h; y++) {
+      const r = off + y * stride + x0
+      let s = 0
+      for (let x = 0; x < w16; x += 16) s += u8x16.sad(u8x16.load(p, r + x) & even, zero)
+      for (let x = w16; x < w; x += 2) s += int(p[r + x]!)
+      out.push(s)
+    }
+  }
+  return out
+}
+
+function flushColumns(sums: Int32Array, part: Int16Array, n: int) {
+  for (let x = 0; x < n; x += 4) {
+    const s = i32x4.load(sums, x) + i32x4.loadI16(part, x)
+    s.store(sums, x)
+  }
+  part.fill(0)
+}
+
+function profile(p: Uint8Array, off: int, stride: int, x0: int, y0: int, w: int, h: int, horizontal: bool): int[] {
+  let out: int[] = []
+  const wv = w - w % 16
+  if (horizontal) {
+    const sums = new Int32Array(w)
+    const part = new Int16Array(wv)
+    let rows = 0
+    for (let y = y0; y < y0 + h; y += 2) {
+      const r = off + y * stride + x0
+      for (let x = 0; x < wv; x += 16) {
+        const v = u8x16.load(p, r + x)
+        const lo = i16x8.load(part, x) + v.widenLow()
+        const hi = i16x8.load(part, x + 8) + v.widenHigh()
+        lo.store(part, x)
+        hi.store(part, x + 8)
+      }
+      for (let x = wv; x < w; x++) sums[x] = sums[x]! + int(p[r + x]!)
+      rows++
+      if (rows === 128) {
+        flushColumns(sums, part, wv)
+        rows = 0
+      }
+    }
+    flushColumns(sums, part, wv)
+    for (let x = 0; x < w; x++) out.push(sums[x]!)
+    return out
+  }
+  const even = i16x8.splat(255)
+  for (let y = y0; y < y0 + h; y++) {
+    const r = off + y * stride + x0
+    let acc = i32x4.splat(0)
+    let x = 0
+    while (x < wv) {
+      const end = x + 2048 < wv ? x + 2048 : wv
+      let part = i16x8.splat(0)
+      for (; x < end; x += 16) part = part + (i16x8.bitcast(u8x16.load(p, r + x)) & even)
+      acc = acc + part.widenLow() + part.widenHigh()
+    }
+    let s = acc.sum()
+    for (let xx = wv; xx < w; xx += 2) s += int(p[r + xx]!)
+    out.push(s)
+  }
+  return out
+}
+
+function profileCost(cur: int[], prev: int[], off: int): int {
+  let lo = 0
+  let hi = cur.length
+  if (off < 0) lo = -off
+  if (off + hi > prev.length) hi = prev.length - off
+  const len = hi - lo
+  if (len <= 0 || len * 3 < cur.length) return -1
+  let s = 0
+  for (let i = lo; i < hi; i++) {
+    const a = cur[i]!
+    const b = prev[i + off]!
+    s += a > b ? a - b : b - a
+  }
+  return Math.trunc(s * 64 / len)
+}
+
+function decimate4(v: int[]): int[] {
+  let out: int[] = []
+  for (let i = 0; i + 3 < v.length; i += 4) out.push(v[i]! + v[i + 1]! + v[i + 2]! + v[i + 3]!)
+  return out
+}
+
+export function estimateShift(cur: Uint8Array, cs: int, cOff: int, prev: Uint8Array, ps: int, pOff: int,
+  x0: int, y0: int, w: int, h: int, frameW: int, frameH: int, horizontal: bool, maxShift: int): int {
+  if (w < 64 || h < 64) return 0
+  const pc = profile(cur, cOff, cs, x0, y0, w, h, horizontal)
+  const pp = horizontal ? profile(prev, pOff, ps, 0, y0, frameW, h, true) : profile(prev, pOff, ps, x0, 0, w, frameH, false)
+  const c0 = horizontal ? x0 : y0
+  const zero = profileCost(pc, pp, c0)
+  if (zero <= 0) return 0
+  const pc4 = decimate4(pc)
+  const pp4 = decimate4(pp)
+  const range = maxShift >> 2
+  let best = 0
+  let bestCost = profileCost(pc4, pp4, c0 >> 2)
+  for (let d = -range; d <= range; d++) {
+    if (d === 0) continue
+    const c = profileCost(pc4, pp4, (c0 >> 2) + d)
+    if (c >= 0 && (bestCost < 0 || c < bestCost)) {
+      bestCost = c
+      best = d * 4
+    }
+  }
+  if (best === 0) return 0
+  let fine = best
+  let fineCost = profileCost(pc, pp, c0 + best)
+  for (let d = best - 4; d <= best + 4; d++) {
+    if (d === best || d === 0) continue
+    const c = profileCost(pc, pp, c0 + d)
+    if (c >= 0 && (fineCost < 0 || c < fineCost)) {
+      fineCost = c
+      fine = d
+    }
+  }
+  if (fineCost < 0 || fineCost * 2 > zero) return 0
+  return fine
+}
+
+function fitWeight(sc: int, sc2: int, sr: int, sr2: int, n: int): int[] {
+  const mc = f64(sc) / f64(n)
+  const mr = f64(sr) / f64(n)
+  const vc = f64(sc2) / f64(n) - mc * mc
+  const vr = f64(sr2) / f64(n) - mr * mr
+  let w = 64
+  if (vr > 4.0 && vc > 0.0) w = Math.round(64.0 * Math.sqrt(vc / vr))
+  if (w > 127) w = 127
+  if (w < 0) w = 0
+  let o = Math.round(mc - f64(w) * mr / 64.0)
+  if (o > 127) o = 127
+  if (o < -128) o = -128
+  return [w, o]
+}
+
+function lumaFitRef(frame: Uint8Array, frameOff: int, w: int, h: int, refY: Uint8Array, yorg: int, ys: int): int[] {
+  let sc = 0
+  let sc2 = 0
+  let sr = 0
+  let sr2 = 0
+  let n = 0
+  for (let y = 2; y < h; y += 4) {
+    const fo = frameOff + y * w
+    const ro = yorg + y * ys
+    for (let x = 1; x < w; x += 4) {
+      const c = int(frame[fo + x]!)
+      const r = int(refY[ro + x]!)
+      sc += c
+      sc2 += c * c
+      sr += r
+      sr2 += r * r
+      n++
+    }
+  }
+  if (n === 0) return []
+  const lw = fitWeight(sc, sc2, sr, sr2, n)
+  let plain = 0
+  let weighted = 0
+  for (let y = 2; y < h; y += 4) {
+    const fo = frameOff + y * w
+    const ro = yorg + y * ys
+    for (let x = 1; x < w; x += 4) {
+      const c = int(frame[fo + x]!)
+      const r = int(refY[ro + x]!)
+      const pv = ((r * lw[0]! + 32) >> 6) + lw[1]!
+      const p = pv < 0 ? 0 : pv > 255 ? 255 : pv
+      plain += c > r ? c - r : r - c
+      weighted += c > p ? c - p : p - c
+    }
+  }
+  if (weighted * 5 >= plain * 4 || (lw[0]! === 64 && lw[1]! === 0)) return []
+  return lw
+}
+
+function samples4(p: Uint8Array, o: int): i32x4 {
+  return (i32x4.bitcast(u8x16.load(p, o)) >> 8) & i32x4.splat(255)
+}
+
+function lumaFit(frame: Uint8Array, frameOff: int, w: int, h: int, refY: Uint8Array, yorg: int, ys: int): int[] {
+  const wv = w - w % 16
+  let sc = 0
+  let sc2 = 0
+  let sr = 0
+  let sr2 = 0
+  let n = 0
+  for (let y = 2; y < h; y += 4) {
+    const fo = frameOff + y * w
+    const ro = yorg + y * ys
+    let vc = i32x4.splat(0)
+    let vc2 = i32x4.splat(0)
+    let vr = i32x4.splat(0)
+    let vr2 = i32x4.splat(0)
+    for (let x = 0; x < wv; x += 16) {
+      const c = samples4(frame, fo + x)
+      const r = samples4(refY, ro + x)
+      vc = vc + c
+      vc2 = vc2 + c * c
+      vr = vr + r
+      vr2 = vr2 + r * r
+    }
+    sc += vc.sum()
+    sc2 += vc2.sum()
+    sr += vr.sum()
+    sr2 += vr2.sum()
+    n += wv >> 2
+    for (let x = wv + 1; x < w; x += 4) {
+      const c = int(frame[fo + x]!)
+      const r = int(refY[ro + x]!)
+      sc += c
+      sc2 += c * c
+      sr += r
+      sr2 += r * r
+      n++
+    }
+  }
+  if (n === 0) return []
+  const lw = fitWeight(sc, sc2, sr, sr2, n)
+  const wt = i32x4.splat(lw[0]!)
+  const off = i32x4.splat(lw[1]!)
+  const rnd = i32x4.splat(32)
+  const zero = i32x4.splat(0)
+  const top = i32x4.splat(255)
+  let plain = 0
+  let weighted = 0
+  for (let y = 2; y < h; y += 4) {
+    const fo = frameOff + y * w
+    const ro = yorg + y * ys
+    let vp = i32x4.splat(0)
+    let vw = i32x4.splat(0)
+    for (let x = 0; x < wv; x += 16) {
+      const c = samples4(frame, fo + x)
+      const r = samples4(refY, ro + x)
+      const p = (((r * wt + rnd) >> 6) + off).max(zero).min(top)
+      vp = vp + (c - r).abs()
+      vw = vw + (c - p).abs()
+    }
+    plain += vp.sum()
+    weighted += vw.sum()
+    for (let x = wv + 1; x < w; x += 4) {
+      const c = int(frame[fo + x]!)
+      const r = int(refY[ro + x]!)
+      const pv = ((r * lw[0]! + 32) >> 6) + lw[1]!
+      const p = pv < 0 ? 0 : pv > 255 ? 255 : pv
+      plain += c > r ? c - r : r - c
+      weighted += c > p ? c - p : p - c
+    }
+  }
+  if (weighted * 5 >= plain * 4 || (lw[0]! === 64 && lw[1]! === 0)) return []
+  return lw
+}
+
+export function weightFit(frame: Uint8Array, frameOff: int, w: int, h: int, refY: Uint8Array, refU: Uint8Array,
+  refV: Uint8Array, yorg: int, ys: int, corg: int, cs: int, out: Int32Array) {
+  out[0] = 0
+  const lw = lumaFit(frame, frameOff, w, h, refY, yorg, ys)
+  if (lw.length === 0) return
+  out[0] = 1
+  out[1] = lw[0]!
+  out[2] = lw[1]!
+  const cwIn = w >> 1
+  const chIn = h >> 1
+  let gainC = false
+  for (let pl = 0; pl < 2; pl++) {
+    const base = frameOff + w * h + pl * cwIn * chIn
+    const rp = pl === 0 ? refU : refV
+    let a = 0
+    let a2 = 0
+    let b = 0
+    let b2 = 0
+    let m = 0
+    for (let y = 1; y < chIn; y += 2) {
+      const ro = corg + y * cs
+      for (let x = 1; x < cwIn; x += 2) {
+        const c = int(frame[base + y * cwIn + x]!)
+        const r = int(rp[ro + x]!)
+        a += c
+        a2 += c * c
+        b += r
+        b2 += r * r
+        m++
+      }
+    }
+    const cwt = m > 0 ? fitWeight(a, a2, b, b2, m) : [64, 0]
+    let e0 = 0
+    let e1 = 0
+    for (let y = 1; y < chIn; y += 2) {
+      const ro = corg + y * cs
+      for (let x = 1; x < cwIn; x += 2) {
+        const c = int(frame[base + y * cwIn + x]!)
+        const r = int(rp[ro + x]!)
+        const pv = ((r * cwt[0]! + 32) >> 6) + cwt[1]!
+        const p = pv < 0 ? 0 : pv > 255 ? 255 : pv
+        e0 += c > r ? c - r : r - c
+        e1 += c > p ? c - p : p - c
+      }
+    }
+    const gain = e1 * 5 < e0 * 4
+    if (gain) gainC = true
+    out[3 + pl * 2] = gain ? cwt[0]! : 64
+    out[4 + pl * 2] = gain ? cwt[1]! : 0
+  }
+  out[7] = gainC ? 1 : 0
+}
+
+test("a horizontal push is found from column profiles", () => {
+  const w = 256
+  const h = 96
+  let prev: u8[] = []
+  let cur: u8[] = []
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const v = ((x * x * 31 + x * 7) % 211) + ((y * 17 + x * y) % 13)
+      const vv = v > 255 ? 255 : v
+      prev.push(u8(vv))
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const sx = x + 37 < w ? x + 37 : w - 1
+      cur.push(prev[y * w + sx]!)
+    }
+  }
+  const tc = new Uint8Array(cur)
+  const tp = new Uint8Array(prev)
+  expect(estimateShift(tc, w, 0, tp, w, 0, 0, 0, w, h, w, h, true, 128)).toBe(37)
+  expect(estimateShift(tp, w, 0, tp, w, 0, 0, 0, w, h, w, h, true, 128)).toBe(0)
+})
+
+test("vector profiles and interleaved row hashes match the scalar ones", () => {
+  const w = 2103
+  const h = 300
+  const p = new Uint8Array(w * h)
+  let x = 11
+  for (let i = 0; i < w * h; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    p[i] = i % 7 === 0 ? 255 : (x >> 9) & 255
+  }
+  let bad = 0
+  for (const cw of [16, 37, 160, 187, 2090]) {
+    for (const horizontal of [true, false]) {
+      const a = profile(p, 3, w, 5, 2, cw, 290, horizontal)
+      const b = profileRef(p, 3, w, 5, 2, cw, 290, horizontal)
+      if (a.length !== b.length) bad++
+      for (let i = 0; i < a.length; i++) {
+        if (a[i]! !== b[i]!) bad++
+      }
+    }
+    for (let n = 0; n < 7; n++) {
+      const hs = new Uint32Array(n + 2)
+      rowHashes(hs, 2, p, 4 + w, w, cw, n)
+      for (let i = 0; i < n; i++) {
+        if (hs[i + 2]! !== rowHash(p, 4 + w + i * w, cw)) bad++
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("a vertical scroll is found from row hashes computed in chunks", () => {
+  const w = 96
+  const h = 200
+  const prev = new Uint8Array(w * h)
+  const cur = new Uint8Array(w * h)
+  let x = 5
+  for (let i = 0; i < w * h; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    prev[i] = (x >> 9) & 255
+  }
+  for (let y = 0; y < h; y++) {
+    for (let xx = 0; xx < w; xx++) cur[y * w + xx] = prev[(y + 23 < h ? y + 23 : y) * w + xx]!
+  }
+  expect(estimateScroll(cur, w, 0, prev, w, 0, 0, 0, w, h, h, 64)).toBe(23)
+  const span = scrollSpan(w, h, 0, h, 64)
+  const ph = new Uint32Array(span[1]! - span[0]!)
+  const ch = new Uint32Array(h)
+  for (let r = 0; r < h; r += 37) {
+    const n = r + 37 < h ? 37 : h - r
+    rowHashes(ph, r, prev, r * w, w, w, n)
+    rowHashes(ch, r, cur, r * w, w, w, n)
+  }
+  expect(matchScroll(ph, span[0]!, ch, 0)).toBe(23)
+  expect(scrollSpan(31, h, 0, h, 64).length).toBe(0)
+})
+
+test("vector weighted-prediction sampling matches the scalar one", () => {
+  let bad = 0
+  let fitted = 0
+  let x = 3
+  for (const w of [1, 15, 16, 37, 160, 203, 1920]) {
+    for (const gain of [0, 40, 64, 90]) {
+      const h = 45
+      const ys = w + 37
+      const yorg = 2 * ys + 19
+      const frame = new Uint8Array(5 + w * h)
+      const ref = new Uint8Array(yorg + h * ys + 16)
+      for (let y = 0; y < h; y++) {
+        for (let xx = 0; xx < ys; xx++) {
+          x = (x * 1103515245 + 12345) & 0x7fffffff
+          const r = (x >> 9) & 255
+          ref[yorg + y * ys + xx] = r
+          if (xx < w) {
+            const v = gain === 0 ? (x >> 17) & 255 : ((r * gain) >> 6) + ((x >> 20) & 3) + 7
+            frame[5 + y * w + xx] = v > 255 ? 255 : v
+          }
+        }
+      }
+      const a = lumaFit(frame, 5, w, h, ref, yorg, ys)
+      const b = lumaFitRef(frame, 5, w, h, ref, yorg, ys)
+      if (a.length !== b.length) bad++
+      for (let i = 0; i < a.length && i < b.length; i++) {
+        if (a[i]! !== b[i]!) bad++
+      }
+      if (b.length > 0) fitted++
+    }
+  }
+  expect(bad).toBe(0)
+  expect(fitted >= 6).toBe(true)
+})
+
+test("vector macroblock classification matches the scalar one", () => {
+  let p: u8[] = []
+  let x = 7
+  for (let i = 0; i < 48 * 48; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    const k = Math.trunc(i / 48)
+    const v = k % 4 === 0 ? 255 : k % 4 === 1 ? 200 + ((x >> 9) & 7) : k % 4 === 2 ? (x >> 9) & 255 : 30 + (x >> 12) % 70
+    p.push(u8(v))
+  }
+  let bad = 0
+  let classes = 0
+  const tp = new Uint8Array(p)
+  for (let y = 0; y < 32; y += 3) {
+    for (let xx = 0; xx < 32; xx += 5) {
+      const o = y * 48 + xx
+      const c = classifyMb(tp, o, 48)
+      if (c !== classifyMbRef(tp, o, 48)) bad++
+      classes |= 1 << c
+    }
+  }
+  const flat = new Uint8Array(48 * 48)
+  for (let i = 0; i < 48 * 48; i++) flat[i] = i % 48 < 24 ? 40 : 220
+  if (classifyMb(flat, 0, 48) !== classifyMbRef(flat, 0, 48)) bad++
+  if (classifyMb(flat, 16, 48) !== classifyMbRef(flat, 16, 48)) bad++
+  const steps: int[] = [0, 5, 6, 7, 47, 48, 49, 11, 80]
+  const q = new Uint8Array(16 * 16)
+  for (let seed = 0; seed < 4000; seed++) {
+    x = (seed * 2654435761 + 17) & 0x7fffffff
+    for (let i = 0; i < 256; i++) {
+      x = (x * 1103515245 + 12345) & 0x7fffffff
+      const base = i === 0 ? 100 : int(q[i % 16 === 0 ? i - 16 : i - 1]!)
+      const d = steps[(x >> 8) % (seed % 9 + 1)]!
+      const v = ((x >> 4) & 1) === 0 ? base + d : base - d
+      q[i] = v < 0 ? 0 : v > 255 ? 255 : v
+    }
+    const c = classifyMb(q, 0, 16)
+    if (c !== classifyMbRef(q, 0, 16)) bad++
+    classes |= 1 << c
+  }
+  expect(bad).toBe(0)
+  expect(classes).toBe(15)
+})
+
+test("vector macroblock difference tests find every changed pixel", () => {
+  const a = new Uint8Array(40 * 20)
+  const b = new Uint8Array(40 * 20)
+  let x = 3
+  for (let i = 0; i < 40 * 20; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    a[i] = (x >> 9) & 255
+    b[i] = a[i]!
+  }
+  let bad = 0
+  for (const w of [16, 8]) {
+    for (const h of [w, 4]) {
+      if (diffMb(a, 41, 40, b, 41, 40, w, h, 0)) bad++
+      for (let y = 0; y < h; y++) {
+        for (let xx = 0; xx < w; xx++) {
+          const i = 41 + y * 40 + xx
+          b[i] = a[i]! ^ ((y & 1) === 1 ? 128 : 1)
+          if (!diffMb(a, 41, 40, b, 41, 40, w, h, 0)) bad++
+          b[i] = a[i]!
+        }
+      }
+      b[41 + h * 40] = a[41 + h * 40]! ^ 1
+      b[41 + w] = a[41 + w]! ^ 1
+      if (diffMb(a, 41, 40, b, 41, 40, w, h, 0)) bad++
+      b[41 + h * 40] = a[41 + h * 40]!
+      b[41 + w] = a[41 + w]!
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("vector noise comparisons agree with the scalar one", () => {
+  const a = new Uint8Array(40 * 20)
+  const b = new Uint8Array(40 * 20)
+  let seed = 12345
+  let bad = 0
+  let same = 0
+  let differ = 0
+  for (let t = 0; t < 300; t++) {
+    const amp = t % 5
+    for (let i = 0; i < a.length; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff
+      const v = (seed >> 8) & 255
+      const r = (seed >> 3) & 31
+      const d = r === 0 && t % 7 === 0 ? 40 : (r % (2 * amp + 1)) - amp
+      a[i] = v
+      b[i] = v + d < 0 ? 0 : v + d > 255 ? 255 : v + d
+    }
+    for (let noise = 1; noise <= 4; noise++) {
+      for (let s = 0; s < 6; s++) {
+        const w = s < 3 ? 16 : 8
+        const h = s % 3 === 0 ? w : s % 3 === 1 ? w >> 1 : 7
+        const want = diffNoisy(a, 41, 40, b, 41, 40, w, h, noise)
+        if (diffMb(a, 41, 40, b, 41, 40, w, h, noise) !== want) bad++
+        if (want) {
+          differ++
+        } else {
+          same++
+        }
+      }
+    }
+  }
+  expect(`${bad} ${same > 100} ${differ > 100}`).toBe("0 true true")
+})
+
+function perturb(src: Uint8Array, ss: int, dst: Uint8Array, dOff: int, ds: int, w: int, h: int, amp: int, spike: bool,
+  seed: int): int {
+  let s = seed
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      s = (s * 1103515245 + 12345) & 0x7fffffff
+      const v = (s >> 8) & 255
+      const r = (s >> 3) & 31
+      const d = ((s >> 11) & 255) === 0 && spike ? 40 : (r % (2 * amp + 1)) - amp
+      src[y * ss + x] = v
+      dst[dOff + y * ds + x] = v + d < 0 ? 0 : v + d > 255 ? 255 : v + d
+    }
+  }
+  return s
+}
+
+function restore(src: Uint8Array, ss: int, dst: Uint8Array, dOff: int, ds: int, x0: int, y0: int, w: int, h: int) {
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) dst[dOff + y * ds + x] = src[y * ss + x]!
+  }
+}
+
+test("the change map agrees with comparing each macroblock", () => {
+  const w = 56
+  const h = 40
+  const mbw = 4
+  const mbh = 3
+  const cw = w >> 1
+  const ch = h >> 1
+  const sy = new Uint8Array(64 * h)
+  const su = new Uint8Array(32 * ch)
+  const sv = new Uint8Array(32 * ch)
+  const fuo = 5 + w * h
+  const fvo = fuo + cw * ch
+  const f = new Uint8Array(fvo + cw * ch)
+  const out = new Uint8Array(mbw * mbh)
+  let seed = 777
+  let bad = 0
+  let same = 0
+  let differ = 0
+  let split = 0
+  let similar = 0
+  for (let t = 0; t < 480; t++) {
+    const amp = t % 4
+    const spike = t % 5 === 0
+    seed = perturb(sy, 64, f, 5, w, w, h, amp, spike && t % 3 !== 0, seed)
+    seed = perturb(su, 32, f, fuo, cw, cw, ch, t % 3 === 0 ? 0 : amp, spike && t % 2 === 0, seed)
+    seed = perturb(sv, 32, f, fvo, cw, cw, ch, t % 3 === 1 ? 0 : amp, spike && t % 2 === 1, seed)
+    const keepY = seed >> 4
+    const keepC = seed >> 16
+    for (let mb = 0; mb < mbw * mbh; mb++) {
+      const x = (mb % mbw) * 16
+      const y = Math.trunc(mb / mbw) * 16
+      const bw = x + 16 <= w ? 16 : w - x
+      const bh = y + 16 <= h ? 16 : h - y
+      if (((keepY >> mb) & 1) !== 0) restore(sy, 64, f, 5, w, x, y, bw, bh)
+      if (((keepC >> mb) & 1) !== 0) {
+        restore(su, 32, f, fuo, cw, x >> 1, y >> 1, bw >> 1, bh >> 1)
+        restore(sv, 32, f, fvo, cw, x >> 1, y >> 1, bw >> 1, bh >> 1)
+      }
+    }
+    for (const noise of [0, 1, 2, 3, 4, 300]) {
+      out.fill(0)
+      const n = changeMap(sy, 0, 64, su, 0, sv, 0, 32, f, 5, w, fuo, fvo, cw, w, h, noise, out)
+      let count = 0
+      for (let mby = 0; mby < mbh; mby++) {
+        let prev = false
+        for (let mbx = 0; mbx < mbw; mbx++) {
+          const bw = mbx * 16 + 16 <= w ? 16 : w - mbx * 16
+          const bh = mby * 16 + 16 <= h ? 16 : h - mby * 16
+          const so = mby * 16 * 64 + mbx * 16
+          const fo = 5 + mby * 16 * w + mbx * 16
+          const sc = mby * 8 * 32 + mbx * 8
+          const fc = mby * 8 * cw + mbx * 8
+          const want = diffMb(sy, so, 64, f, fo, w, bw, bh, noise) ||
+            diffMb(su, sc, 32, f, fuo + fc, cw, bw >> 1, bh >> 1, noise) ||
+            diffMb(sv, sc, 32, f, fvo + fc, cw, bw >> 1, bh >> 1, noise)
+          const exact = !diffMb(sy, so, 64, f, fo, w, bw, bh, 0) &&
+            !diffMb(su, sc, 32, f, fuo + fc, cw, bw >> 1, bh >> 1, 0) &&
+            !diffMb(sv, sc, 32, f, fvo + fc, cw, bw >> 1, bh >> 1, 0)
+          const got = int(out[mby * mbw + mbx]!)
+          if (got !== (want ? 1 : exact ? 0 : 2)) bad++
+          if (got !== mbChange(sy, 0, 64, su, 0, sv, 0, 32, f, 5, w, fuo, fvo, cw, w, h, noise, mbx, mby)) bad++
+          if (!want && !exact) similar++
+          if (want) count++
+          if (bw === 16 && bh === 16) {
+            if (want) {
+              differ++
+            } else {
+              same++
+            }
+            if (mbx % 2 === 1 && want !== prev) split++
+          }
+          prev = want
+        }
+      }
+      if (count !== n) bad++
+    }
+  }
+  expect(`${bad} ${same > 50} ${differ > 50} ${split > 50} ${similar > 50}`).toBe("0 true true true true")
+})
+
+test("dirty rects mark overlapping macroblocks", () => {
+  const ch = new Uint8Array(12)
+  const n = markRects(ch, 4, 3, [8, 8, 20, 4, 60, 40, 100, 100])
+  expect(n).toBe(3)
+  expect(ch[0]!).toBe(1)
+  expect(ch[1]!).toBe(1)
+  expect(ch[11]!).toBe(1)
+})
+
+test("vector row and column profiles match the scalar sums at every width and offset", () => {
+  const stride = 83
+  let seed = 7
+  let px: u8[] = []
+  for (let i = 0; i < stride * 61; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    const v = i % 5 === 0 ? 255 : (seed >> 9) & 255
+    px.push(u8(v))
+  }
+  const p = new Uint8Array(px)
+  let bad = 0
+  for (let w = 1; w <= 70; w += 3) {
+    for (let x0 = 0; x0 < 5; x0++) {
+      for (let y0 = 0; y0 < 3; y0++) {
+        const h = 50 - y0
+        const ph = profile(p, 1, stride, x0, y0, w, h, true)
+        const pv = profile(p, 1, stride, x0, y0, w, h, false)
+        for (let x = 0; x < w; x++) {
+          let s = 0
+          for (let y = y0; y < y0 + h; y += 2) s += int(p[1 + y * stride + x0 + x]!)
+          if (ph[x]! !== s) bad++
+        }
+        for (let y = y0; y < y0 + h; y++) {
+          let s = 0
+          for (let x = 0; x < w; x += 2) s += int(p[1 + y * stride + x0 + x]!)
+          if (pv[y - y0]! !== s) bad++
+        }
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("side info lines parse with null cursors", () => {
+  try {
+    const s = try parseSideInfo("{\"frame\":3,\"t_ms\":100.0,\"dirty\":[[0,0,16,16]],\"cursor\":null,\"scroll\":[{\"rect\":[0,0,64,64],\"dx\":0,\"dy\":-40}]}")
+    expect(s.dirty.length).toBe(4)
+    expect(s.cursorX).toBe(-1)
+    expect(s.scroll[0]!.dy).toBe(-40)
+  } catch (e) {
+    expect(e.message).toBe("")
+  }
+})

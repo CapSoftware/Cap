@@ -677,8 +677,25 @@ pub(crate) fn send_with_stall_budget_flume<T>(
     source: &'static str,
     health_tx: &HealthSender,
 ) -> StallSendOutcome {
+    send_with_stall_budget_flume_for(
+        tx,
+        frame,
+        source,
+        health_tx,
+        Duration::from_millis(STALL_BUDGET_MS),
+    )
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn send_with_stall_budget_flume_for<T>(
+    tx: &flume::Sender<T>,
+    frame: T,
+    source: &'static str,
+    health_tx: &HealthSender,
+    budget: Duration,
+) -> StallSendOutcome {
     let start = Instant::now();
-    let deadline = start + Duration::from_millis(STALL_BUDGET_MS);
+    let deadline = start + budget;
     match tx.send_deadline(frame, deadline) {
         Ok(()) => StallSendOutcome::Sent,
         Err(flume::SendTimeoutError::Timeout(_)) => {
@@ -1129,6 +1146,7 @@ struct VideoDriftTracker {
     #[cfg(target_os = "linux")]
     capture_timeline: CaptureInstantTimeline,
     anchor: Option<(f64, f64)>,
+    anchor_deferred: bool,
     capped_frame_count: u64,
     clamp_warning_logged: bool,
 }
@@ -1139,9 +1157,17 @@ impl VideoDriftTracker {
             #[cfg(target_os = "linux")]
             capture_timeline: CaptureInstantTimeline::default(),
             anchor: None,
+            anchor_deferred: false,
             capped_frame_count: 0,
             clamp_warning_logged: false,
         }
+    }
+
+    // The anchor freezes its frame's source time into every later timestamp, so
+    // it must not land on a frame the source clock still holds a slot behind a
+    // skip; the next frame settles onto the real source time.
+    fn defer_anchor(&mut self, deferred: bool) {
+        self.anchor_deferred = deferred;
     }
 
     // Post-warmup video PTS are pinned to the wall clock, but anchored at the
@@ -1168,7 +1194,9 @@ impl VideoDriftTracker {
         let wall_clock_secs = wall_clock_elapsed.as_secs_f64();
         let max_allowed_secs = wall_clock_secs + VIDEO_WALL_CLOCK_TOLERANCE_SECS;
 
-        if self.anchor.is_none() && (wall_clock_secs < 2.0 || camera_secs < 2.0) {
+        if self.anchor.is_none()
+            && (self.anchor_deferred || wall_clock_secs < 2.0 || camera_secs < 2.0)
+        {
             let result_secs = camera_secs.min(max_allowed_secs);
             if result_secs < camera_secs {
                 self.capped_frame_count += 1;
@@ -2927,7 +2955,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut frame_count = 0u64;
         let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
         let mut drift_tracker = VideoDriftTracker::new();
-        let mut source_clock = SourceClockState::new("video");
+        let source_clock = SourceClockState::new("video");
+        #[cfg(target_os = "macos")]
+        let source_clock = source_clock.detecting_skipped_frames();
+        let mut source_clock = source_clock;
         let mut dropped_during_pause: u64 = 0;
         let mut last_frame = None;
         let mut first_frame_offset = None;
@@ -3066,6 +3097,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             "Timeline resync detected (anomaly collapsed jump); wall-clock anchor covers the gap"
                         );
                     }
+                    drift_tracker.defer_anchor(source_clock.lag_pending());
                     let duration = calculate_video_timestamp(
                         &mut drift_tracker,
                         timestamp,
@@ -3132,7 +3164,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let timestamp = frame.timestamp();
                         if let Some(gate) = &start_gate {
                             if !gate.admits_video(timestamp) {
-                                held_before_start += 1;
                                 continue;
                             }
                             wall_clock_origin = gate
@@ -3194,6 +3225,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
 
                         let resynced = anomaly_tracker.take_resync_flag();
+                        drift_tracker.defer_anchor(source_clock.lag_pending());
                         let duration = calculate_video_timestamp(
                             &mut drift_tracker,
                             timestamp,
@@ -4568,6 +4600,134 @@ pub trait VideoMuxer: Muxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "linux"))]
+    mod video_skipped_frames {
+        use super::*;
+
+        const FRAME_NS: u64 = 16_666_666;
+        const LATENCY: Duration = Duration::from_millis(30);
+
+        fn source_frames(total: u64, skips: &[(u64, u64)]) -> Vec<Duration> {
+            (0..total)
+                .filter(|frame| {
+                    !skips
+                        .iter()
+                        .any(|&(start, count)| *frame >= start && *frame < start + count)
+                })
+                .map(|frame| Duration::from_nanos(frame * 1_000_000_000 / 60))
+                .collect()
+        }
+
+        fn mux_chain(frames: &[Duration], mut source: SourceClockState) -> Vec<Duration> {
+            let timestamps = Timestamps::now();
+            let master = MasterClock::new(timestamps, 48_000);
+            let mut anomaly = TimestampAnomalyTracker::new("video");
+            let mut drift = VideoDriftTracker::new();
+            frames
+                .iter()
+                .map(|&elapsed| {
+                    let timestamp = Timestamp::Instant(timestamps.instant() + elapsed);
+                    let remap = remap_video_timestamp(&mut source, &master, timestamp, FRAME_NS);
+                    let wall = elapsed + LATENCY;
+                    let raw_duration = anomaly
+                        .process_timestamp(
+                            Timestamp::Instant(timestamps.instant() + remap.duration()),
+                            timestamps,
+                            wall,
+                        )
+                        .unwrap();
+                    drift.defer_anchor(source.lag_pending());
+                    calculate_video_timestamp(
+                        &mut drift,
+                        timestamp,
+                        raw_duration,
+                        wall,
+                        anomaly.take_resync_flag()
+                            || matches!(remap.outcome, SourceClockOutcome::HardReset),
+                    )
+                })
+                .collect()
+        }
+
+        fn settled_offset_ms(frames: &[Duration], output: &[Duration]) -> f64 {
+            let index = frames
+                .iter()
+                .position(|frame| *frame >= Duration::from_secs(5))
+                .unwrap();
+            (output[index].as_secs_f64() - frames[index].as_secs_f64()) * 1000.0
+        }
+
+        fn video_source() -> SourceClockState {
+            SourceClockState::new("video").detecting_skipped_frames()
+        }
+
+        #[test]
+        fn startup_skips_keep_video_on_source_time_after_anchor() {
+            let reference = source_frames(420, &[]);
+            let reference_offset =
+                settled_offset_ms(&reference, &mux_chain(&reference, video_source()));
+            for dropped in [1, 2, 4, 5, 8] {
+                let frames = source_frames(420, &[(1, dropped)]);
+                let offset = settled_offset_ms(&frames, &mux_chain(&frames, video_source()));
+                assert!(
+                    (offset - reference_offset).abs() < 0.5,
+                    "dropped={dropped}: settled offset {offset:.3}ms vs {reference_offset:.3}ms"
+                );
+            }
+        }
+
+        #[test]
+        fn startup_skips_without_detection_shift_video_early() {
+            let reference = source_frames(420, &[]);
+            let reference_offset = settled_offset_ms(
+                &reference,
+                &mux_chain(&reference, SourceClockState::new("legacy")),
+            );
+            for dropped in [1, 2, 4] {
+                let frames = source_frames(420, &[(1, dropped)]);
+                let offset = settled_offset_ms(
+                    &frames,
+                    &mux_chain(&frames, SourceClockState::new("legacy")),
+                );
+                let shift = reference_offset - offset;
+                assert!(
+                    (shift - dropped as f64 * FRAME_NS as f64 / 1e6).abs() < 0.5,
+                    "dropped={dropped}: shift {shift:.3}ms"
+                );
+            }
+        }
+
+        #[test]
+        fn skip_on_anchor_frame_defers_anchor_to_source_time() {
+            let reference = source_frames(420, &[]);
+            let reference_offset =
+                settled_offset_ms(&reference, &mux_chain(&reference, video_source()));
+            for start in 118..124 {
+                for dropped in [1, 2, 4] {
+                    let frames = source_frames(420, &[(start, dropped)]);
+                    let output = mux_chain(&frames, video_source());
+                    let offset = settled_offset_ms(&frames, &output);
+                    assert!(
+                        (offset - reference_offset).abs() < 0.5,
+                        "skip {start}+{dropped}: settled offset {offset:.3}ms vs {reference_offset:.3}ms"
+                    );
+                    for pair in output.windows(2) {
+                        assert!(pair[1] > pair[0]);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn timeline_without_skips_matches_legacy_smoothing() {
+            let frames = source_frames(420, &[]);
+            assert_eq!(
+                mux_chain(&frames, video_source()),
+                mux_chain(&frames, SourceClockState::new("legacy"))
+            );
+        }
+    }
 
     #[cfg(target_os = "linux")]
     mod video_cadence {
@@ -7329,17 +7489,19 @@ mod tests {
             let (tx, rx) = flume::bounded::<u32>(1);
             tx.try_send(1).expect("priming send should succeed");
             let (health_tx, mut health_rx) = new_health_channel();
+            let budget = Duration::from_secs(5);
 
             let drain_handle = std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(10));
-                rx.recv().expect("receiver should drain priming value");
+                assert_eq!(rx.recv().expect("receiver should drain priming value"), 1);
                 rx
             });
 
-            let outcome = send_with_stall_budget_flume(&tx, 2, "test-source", &health_tx);
+            let outcome =
+                send_with_stall_budget_flume_for(&tx, 2, "test-source", &health_tx, budget);
 
-            let _rx = drain_handle.join().unwrap();
+            let rx = drain_handle.join().unwrap();
             assert_eq!(outcome, StallSendOutcome::Sent);
+            assert_eq!(rx.recv().expect("recovered send should be queued"), 2);
             assert!(
                 drain_health_events(&mut health_rx).is_empty(),
                 "Stalled must not be emitted when send completes within budget"

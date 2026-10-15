@@ -1172,6 +1172,63 @@ mod mac {
         false
     }
 
+    pub struct ScreenGeometry {
+        pub id: u32,
+        pub frame: (f64, f64, f64, f64),
+        pub visible: (f64, f64, f64, f64),
+    }
+
+    pub fn screen_geometries() -> Vec<ScreenGeometry> {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSRect, NSString};
+
+        let mut geometries = Vec::new();
+        unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return geometries;
+            }
+            let enumerator: *mut AnyObject = msg_send![screens, objectEnumerator];
+            if enumerator.is_null() {
+                return geometries;
+            }
+            let number_key = NSString::from_str("NSScreenNumber");
+            loop {
+                let screen: *mut AnyObject = msg_send![enumerator, nextObject];
+                if screen.is_null() {
+                    break;
+                }
+                let description: *mut AnyObject = msg_send![screen, deviceDescription];
+                if description.is_null() {
+                    continue;
+                }
+                let number: *mut AnyObject = msg_send![description, objectForKey: &*number_key];
+                if number.is_null() {
+                    continue;
+                }
+                let id: u32 = msg_send![number, unsignedIntValue];
+                let frame: NSRect = msg_send![screen, frame];
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                geometries.push(ScreenGeometry {
+                    id,
+                    frame: (
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    ),
+                    visible: (
+                        visible.origin.x,
+                        visible.origin.y,
+                        visible.size.width,
+                        visible.size.height,
+                    ),
+                });
+            }
+        }
+        geometries
+    }
+
     /// `orderFrontRegardless` on the retained handle: bring a restored window
     /// forward without activating the app -- the dev loop relaunches on every
     /// rebuild and must not steal focus from whatever the user is typing in.
@@ -1439,10 +1496,24 @@ mod mac {
         const K_EVENT_HOT_KEY_PRESSED: u32 = 5;
         const KVK_ESCAPE: u32 = 53;
         const SIGNATURE: u32 = 0x4361_7047;
+        /// `kEventParamDirectObject` (`'----'`) / `typeEventHotKeyID` (`'hkid'`) /
+        /// `eventNotHandledErr`.
+        const K_EVENT_PARAM_DIRECT_OBJECT: u32 = 0x2d2d_2d2d;
+        const TYPE_EVENT_HOT_KEY_ID: u32 = 0x686b_6964;
+        const EVENT_NOT_HANDLED_ERR: OsStatus = -9874;
 
         #[link(name = "Carbon", kind = "framework")]
         unsafe extern "C" {
             fn GetEventDispatcherTarget() -> *mut c_void;
+            fn GetEventParameter(
+                event: *mut c_void,
+                name: u32,
+                desired_type: u32,
+                actual_type: *mut u32,
+                buffer_size: usize,
+                actual_size: *mut usize,
+                data: *mut c_void,
+            ) -> OsStatus;
             fn InstallEventHandler(
                 target: *mut c_void,
                 handler: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> OsStatus,
@@ -1470,9 +1541,32 @@ mod mac {
 
         extern "C" fn escape_pressed(
             _call_ref: *mut c_void,
-            _event: *mut c_void,
+            event: *mut c_void,
             _user_data: *mut c_void,
         ) -> OsStatus {
+            // The dispatcher target sees every hot key in the process before
+            // its own target does, including global-hotkey's app shortcuts on
+            // the application target. Claiming those swallowed every shortcut
+            // once the first picker had installed this handler, so anything
+            // that is not this Escape goes on to its own handler.
+            let mut pressed = EventHotKeyId {
+                signature: 0,
+                id: 0,
+            };
+            let status = unsafe {
+                GetEventParameter(
+                    event,
+                    K_EVENT_PARAM_DIRECT_OBJECT,
+                    TYPE_EVENT_HOT_KEY_ID,
+                    std::ptr::null_mut(),
+                    std::mem::size_of::<EventHotKeyId>(),
+                    std::ptr::null_mut(),
+                    (&raw mut pressed).cast(),
+                )
+            };
+            if status != 0 || pressed.signature != SIGNATURE {
+                return EVENT_NOT_HANDLED_ERR;
+            }
             ESCAPE_TX.with(|tx| {
                 if let Some(sender) = tx.borrow().as_ref() {
                     let _ = sender.send(());

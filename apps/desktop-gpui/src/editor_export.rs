@@ -432,11 +432,7 @@ fn format_estimate_range(range: [f64; 2], time: bool) -> String {
 }
 
 fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
-    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg).ok()?;
-    let mut rgba = decoded.into_rgba8();
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    let rgba = cap_gpui_kernels::codec::decode_jpeg_to_bgra(bytes)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(rgba)
     ])))
@@ -2867,6 +2863,26 @@ fn matches_compression(current: ExportCompression, expected: ExportCompression) 
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
 
+// The NV12 readback wait sleeps in 1 ms steps (`frame_pipeline.rs`), which the
+// default 15.6 ms Windows timer resolution stretches to most of a frame each.
+#[cfg(windows)]
+struct TimerResolution;
+
+#[cfg(windows)]
+impl TimerResolution {
+    fn hold_one_millisecond() -> Self {
+        unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
+        Self
+    }
+}
+
+#[cfg(windows)]
+impl Drop for TimerResolution {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Media::timeEndPeriod(1) };
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_export(
     project_path: PathBuf,
@@ -2887,6 +2903,8 @@ async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
+    #[cfg(windows)]
+    let _timer_resolution = TimerResolution::hold_one_millisecond();
 
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {

@@ -29,6 +29,7 @@ import {
 	Clock,
 	Copy,
 	Download,
+	FolderInput,
 	Globe2,
 	Lock,
 	MousePointer2,
@@ -88,6 +89,13 @@ const SharingDialog = dynamic(
 	() =>
 		import("@/app/(org)/dashboard/caps/components/SharingDialog").then(
 			(m) => m.SharingDialog,
+		),
+	{ ssr: false },
+);
+const MoveItemsDialog = dynamic(
+	() =>
+		import("@/app/(org)/dashboard/caps/components/MoveItemsDialog").then(
+			(m) => m.MoveItemsDialog,
 		),
 	{ ssr: false },
 );
@@ -155,6 +163,7 @@ export const ShareHeader = ({
 	branding,
 	canManageSharePageBranding = false,
 	canDownload = false,
+	canMoveToFolder = false,
 	hasEdits = false,
 	views,
 	dashboardDestination = null,
@@ -186,6 +195,7 @@ export const ShareHeader = ({
 	branding?: SharePageBranding | null;
 	canManageSharePageBranding?: boolean;
 	canDownload?: boolean;
+	canMoveToFolder?: boolean;
 	hasEdits?: boolean;
 	/**
 	 * Shown to every viewer, not just the owner. The sidebar's analytics row is
@@ -202,6 +212,8 @@ export const ShareHeader = ({
 		queryKey: ["videoStatus", data.id],
 		queryFn: skipToken,
 	});
+	const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+	const [moveDialogMounted, setMoveDialogMounted] = useState(false);
 	const [isEditing, setIsEditing] = useState(false);
 	const [displayTitle, setDisplayTitle] = useState(data.name);
 	const [editValue, setEditValue] = useState(data.name);
@@ -867,6 +879,20 @@ export const ShareHeader = ({
 			)}
 			{isOwner && (
 				<>
+					{moveDialogMounted && (
+						<MoveItemsDialog
+							open={moveDialogOpen}
+							onOpenChange={setMoveDialogOpen}
+							location={{ type: "personal" }}
+							rootLabel="My Caps"
+							organizationId={data.orgId ?? undefined}
+							item={{
+								type: "videos",
+								videoIds: [data.id],
+								currentFolderId: data.folderId,
+							}}
+						/>
+					)}
 					{settingsDialogMounted && (
 						<SettingsDialog
 							isOpen={isSettingsDialogOpen}
@@ -1173,6 +1199,20 @@ export const ShareHeader = ({
 															Sharing & access
 														</p>
 													</DropdownMenuItem>
+													{canMoveToFolder && (
+														<DropdownMenuItem
+															onClick={() => {
+																setMoveDialogMounted(true);
+																setMoveDialogOpen(true);
+															}}
+															className="flex items-center gap-2 rounded-lg"
+														>
+															<FolderInput className="size-3" />
+															<p className="text-sm text-gray-12">
+																Move to folder
+															</p>
+														</DropdownMenuItem>
+													)}
 													<DropdownMenuItem
 														onClick={() => setIsSettingsDialogOpen(true)}
 														className="flex items-center gap-2 rounded-lg"

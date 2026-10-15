@@ -75,7 +75,7 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path};
+pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
@@ -560,6 +560,13 @@ impl RecordingSegmentDecoders {
         self.camera
             .as_ref()
             .map(AsyncVideoDecoderHandle::decoder_status)
+    }
+
+    pub fn prefer_sequential_access(&self) {
+        self.screen.prefer_sequential_access();
+        if let Some(camera) = &self.camera {
+            camera.prefer_sequential_access();
+        }
     }
 
     pub fn screen_video_dimensions(&self) -> (u32, u32) {
@@ -2246,6 +2253,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     })
 }
 
+#[derive(Clone, Debug)]
 pub struct SharedWgpuDevice {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -2860,7 +2868,7 @@ fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
     }
 }
 
-/// Screen Studio blur semantics: the user amount scales the LENGTH of the
+/// Length-based blur semantics: the user amount scales the LENGTH of the
 /// smear (linear in the per-frame delta, no response curve) and the shader
 /// outputs the fully blurred result — strength is a pure on/off gate, never a
 /// crossfade with the sharp frame. Per frame the dominant delta wins: a size
@@ -3024,9 +3032,9 @@ fn notch_bounds(
 }
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-/// Velocity is measured strictly against the previous frame (Screen Studio
-/// samples frame f vs f-1); averaging over more frames lags peaks and lets
-/// blur linger after motion stops.
+/// Velocity is measured strictly against the previous frame (frame f vs
+/// f-1); averaging over more frames lags peaks and lets blur linger after
+/// motion stops.
 const DISPLAY_MOTION_SAMPLE_FRAMES: u32 = 1;
 /// Skip blur when the per-frame delta is under ~1px — a sub-pixel kernel is
 /// visually the identity, so there is no pop at the boundary.
@@ -3699,7 +3707,7 @@ impl ProjectUniforms {
         };
         let cursor_interp_fn = |time: f32| -> Option<InterpolatedCursorPosition> {
             if cursor.raw {
-                interpolate_cursor(cursor_events, time, None)
+                precomputed_cursor.interpolate_raw(cursor_events, time)
             } else {
                 variant
                     .as_deref()
@@ -5383,7 +5391,7 @@ mod tests {
 
     #[test]
     fn display_zoom_blur_is_symmetric_in_and_out() {
-        // Screen Studio treats zoom-in and zoom-out identically: the radial
+        // Zoom-in and zoom-out are treated identically: the radial
         // amount is |1 - diag ratio| either way.
         let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
         let large = motion_bounds(XY::new(-960.0, -540.0), XY::new(2880.0, 1620.0));
@@ -5958,48 +5966,173 @@ mod style_image_tests {
 mod nv12_flush_tests {
     use super::*;
 
+    async fn nv12_test_constants(is_software_adapter: bool) -> Option<RenderVideoConstants> {
+        let instance = create_wgpu_instance_sync();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("graphics device");
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "nv12-flush",
+            "display": { "path": "display.mp4", "fps": 60 },
+            "camera": null,
+            "audio": null,
+            "cursor": null
+        }))
+        .expect("recording metadata");
+        Some(RenderVideoConstants {
+            adapter_name: adapter.get_info().name,
+            _instance: instance,
+            _adapter: adapter,
+            device,
+            queue,
+            options: RenderOptions {
+                screen_size: XY::new(4, 4),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            meta: recording_meta
+                .studio_meta()
+                .expect("studio metadata")
+                .clone(),
+            recording_meta,
+            frozen_recorded_cursors: None,
+            background_textures: Arc::new(BackgroundTextureCache::default()),
+            is_software_adapter,
+        })
+    }
+
+    #[tokio::test]
+    async fn nv12_frames_keep_their_contents_while_the_next_frame_renders() {
+        let Some(constants) = nv12_test_constants(false).await else {
+            eprintln!("No graphics adapter available for NV12 overlap regression test");
+            return;
+        };
+        let project = ProjectConfiguration::default();
+        let cursor = CursorEvents {
+            clicks: vec![],
+            moves: vec![],
+        };
+        let frames = DecodedSegmentFrames {
+            screen_size: XY::new(4, 4),
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut session = RenderSession::new(&constants.device, 4, 4);
+        let mut converter = frame_pipeline::RgbaToNv12Converter::new(&constants.device);
+        let mut received = Vec::new();
+
+        for frame_number in 0..5u32 {
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                60,
+                XY::new(4, 4),
+                &cursor,
+                &frames,
+                1.0,
+                &zoom,
+            );
+            let mut encoder = constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            let target = if session.current_is_left {
+                &session.textures.0
+            } else {
+                &session.textures.1
+            };
+            let level = f64::from(40 + 40 * frame_number) / 255.0;
+            let view = target.create_view(&Default::default());
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("NV12 overlap test frame"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: level,
+                            g: level,
+                            b: level,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            }));
+            if let Some(frame) = frame_pipeline::finish_encoder_nv12_pooled(
+                &mut session,
+                &mut converter,
+                &constants.device,
+                &constants.queue,
+                &uniforms,
+                encoder,
+                Some(&mut renderer.nv12_buffer_pool),
+            )
+            .await
+            .expect("NV12 readback submission")
+            {
+                received.push(frame);
+            }
+        }
+        renderer.session = Some(session);
+        renderer.nv12_converter = Some(converter);
+        received.push(
+            renderer
+                .flush_pipeline_nv12()
+                .await
+                .expect("last frame remains pending")
+                .expect("last frame readback completes"),
+        );
+
+        assert_eq!(
+            received
+                .iter()
+                .map(|frame| frame.frame_number)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4]
+        );
+        let lumas = received
+            .iter()
+            .map(|frame| {
+                let data: &[u8] = frame.data.as_ref();
+                let stride = frame.y_stride as usize;
+                let luma = (0..frame.height as usize)
+                    .flat_map(|row| &data[row * stride..row * stride + frame.width as usize])
+                    .copied()
+                    .collect::<Vec<_>>();
+                assert!(
+                    luma.iter().all(|value| *value == luma[0]),
+                    "frame {} mixes contents: {luma:?}",
+                    frame.frame_number
+                );
+                luma[0]
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            lumas.windows(2).all(|pair| pair[0] < pair[1]),
+            "each frame keeps its own contents: {lumas:?}"
+        );
+    }
+
     #[tokio::test]
     async fn nv12_flush_drains_the_active_readback_pipeline() {
         for software in [true, false] {
-            let instance = create_wgpu_instance_sync();
-            let Ok(adapter) = instance
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-            else {
+            let Some(constants) = nv12_test_constants(software).await else {
                 eprintln!("No graphics adapter available for NV12 flush regression test");
                 return;
-            };
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
-                .await
-                .expect("graphics device");
-            let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
-                "pretty_name": "nv12-flush",
-                "display": { "path": "display.mp4", "fps": 60 },
-                "camera": null,
-                "audio": null,
-                "cursor": null
-            }))
-            .expect("recording metadata");
-            let constants = RenderVideoConstants {
-                adapter_name: adapter.get_info().name,
-                _instance: instance,
-                _adapter: adapter,
-                device,
-                queue,
-                options: RenderOptions {
-                    screen_size: XY::new(4, 4),
-                    camera_size: None,
-                    preserve_screen_alpha: false,
-                },
-                meta: recording_meta
-                    .studio_meta()
-                    .expect("studio metadata")
-                    .clone(),
-                recording_meta,
-                frozen_recorded_cursors: None,
-                background_textures: Arc::new(BackgroundTextureCache::default()),
-                is_software_adapter: software,
             };
             let mut project = ProjectConfiguration::default();
             project.background.padding = 0.0;
@@ -6949,6 +7082,13 @@ pub struct RendererLayers {
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
+    realtime_camera_effects: bool,
+}
+
+fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 impl RendererLayers {
@@ -6992,60 +7132,82 @@ impl RendererLayers {
         include_overlays: bool,
     ) -> Self {
         let layers_phase = readiness::Phase::start("layers.new");
-        let shared_yuv_pipelines = readiness::measure("layers.shared_yuv", || {
-            Arc::new(yuv_converter::YuvConverterPipelines::new(device))
-        });
-        let shared_composite_pipeline = readiness::measure("layers.shared_composite", || {
-            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
-        });
+        // Each layer compiles its own shaders and pipelines, and none reads
+        // another's, so they build side by side; only the layers that share
+        // the YUV and composite pipelines wait for those.
+        let layers = std::thread::scope(|scope| {
+            let background = scope
+                .spawn(|| readiness::measure("layers.background", || BackgroundLayer::new(device)));
+            let background_blur = scope
+                .spawn(|| readiness::measure("layers.background_blur", || BlurLayer::new(device)));
+            let background_color_grade = scope.spawn(|| {
+                readiness::measure("layers.background_color_grade", || {
+                    ColorGradeLayer::new(device)
+                })
+            });
+            let click_ripple = scope.spawn(|| {
+                readiness::measure("layers.click_ripple", || ClickRippleLayer::new(device))
+            });
+            let cursor =
+                scope.spawn(|| readiness::measure("layers.cursor", || CursorLayer::new(device)));
+            let mask = scope.spawn(|| readiness::measure("layers.mask", || MaskLayer::new(device)));
+            let overlays =
+                scope.spawn(|| include_overlays.then(|| OverlayLayers::new(device, queue)));
+            let camera3d = scope
+                .spawn(|| readiness::measure("layers.camera3d", || Camera3DLayer::new(device)));
+            let shared_yuv_pipelines = scope.spawn(|| {
+                readiness::measure("layers.shared_yuv", || {
+                    Arc::new(yuv_converter::YuvConverterPipelines::new(device))
+                })
+            });
+            let shared_composite_pipeline = readiness::measure("layers.shared_composite", || {
+                Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
+            });
+            let shared_yuv_pipelines = join_layer(shared_yuv_pipelines);
 
-        let layers = Self {
-            background: readiness::measure("layers.background", || BackgroundLayer::new(device)),
-            background_blur: readiness::measure("layers.background_blur", || {
-                BlurLayer::new(device)
-            }),
-            background_color_grade: readiness::measure("layers.background_color_grade", || {
-                ColorGradeLayer::new(device)
-            }),
-            frame: readiness::measure("layers.frame", || {
-                FrameLayer::new(device, shared_composite_pipeline.clone())
-            }),
-            notch: readiness::measure("layers.notch", || {
-                NotchLayer::new(device, shared_composite_pipeline.clone())
-            }),
-            display: readiness::measure("layers.display", || {
-                DisplayLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines.clone(),
-                    shared_composite_pipeline.clone(),
-                    prefer_cpu_conversion,
-                )
-            }),
-            click_ripple: readiness::measure("layers.click_ripple", || {
-                ClickRippleLayer::new(device)
-            }),
-            cursor: readiness::measure("layers.cursor", || CursorLayer::new(device)),
-            camera: readiness::measure("layers.camera", || {
-                CameraLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines.clone(),
-                    shared_composite_pipeline.clone(),
-                )
-            }),
-            camera_only: readiness::measure("layers.camera_only", || {
-                CameraLayer::new_with_all_shared_pipelines(
-                    device,
-                    shared_yuv_pipelines,
-                    shared_composite_pipeline,
-                )
-            }),
-            mask: readiness::measure("layers.mask", || MaskLayer::new(device)),
-            overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
-            camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
-            camera_blur_processor: None,
-            camera_blur_init_failed: false,
-            camera_blur_unavailable: false,
-        };
+            Self {
+                background: join_layer(background),
+                background_blur: join_layer(background_blur),
+                background_color_grade: join_layer(background_color_grade),
+                frame: readiness::measure("layers.frame", || {
+                    FrameLayer::new(device, shared_composite_pipeline.clone())
+                }),
+                notch: readiness::measure("layers.notch", || {
+                    NotchLayer::new(device, shared_composite_pipeline.clone())
+                }),
+                display: readiness::measure("layers.display", || {
+                    DisplayLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines.clone(),
+                        shared_composite_pipeline.clone(),
+                        prefer_cpu_conversion,
+                    )
+                }),
+                click_ripple: join_layer(click_ripple),
+                cursor: join_layer(cursor),
+                camera: readiness::measure("layers.camera", || {
+                    CameraLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines.clone(),
+                        shared_composite_pipeline.clone(),
+                    )
+                }),
+                camera_only: readiness::measure("layers.camera_only", || {
+                    CameraLayer::new_with_all_shared_pipelines(
+                        device,
+                        shared_yuv_pipelines,
+                        shared_composite_pipeline,
+                    )
+                }),
+                mask: join_layer(mask),
+                overlays: join_layer(overlays),
+                camera3d: join_layer(camera3d),
+                camera_blur_processor: None,
+                camera_blur_init_failed: false,
+                camera_blur_unavailable: false,
+                realtime_camera_effects: false,
+            }
+        });
         layers_phase.finish("returned");
         layers
     }
@@ -7057,11 +7219,22 @@ impl RendererLayers {
         Ok(())
     }
 
+    /// Editor playback: camera segmentation runs beside rendering and each
+    /// frame composites with the newest finished mask, refined against that
+    /// frame. Seeks still wait for an exact mask. Exports keep the default,
+    /// where every frame waits for its own mask.
+    pub fn set_realtime_camera_effects(&mut self, realtime: bool) {
+        self.realtime_camera_effects = realtime;
+        if let Some(processor) = &mut self.camera_blur_processor {
+            configure_camera_blur_processor(processor, realtime);
+        }
+    }
+
     fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
         if self.camera_blur_processor.is_none() && !self.camera_blur_init_failed {
             match cap_camera_effects::BlurProcessor::new(device, wgpu::TextureFormat::Rgba8Unorm) {
                 Ok(mut processor) => {
-                    processor.set_frame_synchronous(true);
+                    configure_camera_blur_processor(&mut processor, self.realtime_camera_effects);
                     self.camera_blur_processor = Some(processor);
                 }
                 Err(e) => {
@@ -7922,6 +8095,16 @@ async fn produce_transition_texture(
     Ok(incoming_encoder)
 }
 
+fn configure_camera_blur_processor(
+    processor: &mut cap_camera_effects::BlurProcessor,
+    realtime: bool,
+) {
+    processor.set_frame_synchronous(!realtime);
+    if realtime {
+        processor.set_inference_interval(std::time::Duration::ZERO);
+    }
+}
+
 fn reset_camera_blur_for_dimensions(
     processor: &mut cap_camera_effects::BlurProcessor,
     dimensions: (u32, u32),
@@ -8249,6 +8432,224 @@ mod project_uniforms_tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn raw_precomputed_cursor_preserves_rendered_pixels() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: vec![
+                cursor_move(0.0, 0.1, 0.5),
+                cursor_move(0.0, 0.2, 0.5),
+                cursor_move(250.0, 0.3, 0.4),
+                cursor_move(800.0, 0.8, 0.6),
+                cursor_move(1500.0, 0.4, 0.3),
+                cursor_move(1800.0, 0.6, 0.5),
+            ],
+            clicks: vec![cap_project::CursorClickEvent {
+                active_modifiers: Vec::new(),
+                cursor_num: 0,
+                cursor_id: "primary".to_string(),
+                time_ms: 300.0,
+                down: true,
+            }],
+        };
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for base_raw in [true, false] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = base_raw;
+            project.cursor.set_cursor_type(CursorType::Circle);
+            project.cursor.motion_blur = 0.6;
+            project.cursor.rotation_amount = 1.0;
+            project.cursor.stop_movement_in_last_seconds = Some(0.5);
+            project.cursor.ripple.enabled = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": 2.0, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            if !base_raw {
+                let mut style_cursor = project.cursor.clone();
+                style_cursor.raw = true;
+                project.timeline = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "segments": [{ "start": 0.0, "end": 2.0, "timescale": 1.0 }],
+                        "zoomSegments": [],
+                        "styleSegments": [{
+                            "start": 0.0, "end": 2.0,
+                            "overrides": { "cursor": style_cursor }
+                        }]
+                    }))
+                    .unwrap(),
+                );
+            }
+            let cursor = PrecomputedCursorTimeline::new(
+                &events,
+                (!base_raw).then_some(SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+                Some(project.cursor.click_spring_config()),
+            );
+            let zoom = ZoomTransformTimeline::from_project(&project, &events, 2.0, size);
+            let mut legacy_renderer = FrameRenderer::new(&constants);
+            let mut indexed_renderer = FrameRenderer::new(&constants);
+            let mut hidden_renderer = FrameRenderer::new(&constants);
+            let mut legacy_layers = RendererLayers::new(&constants.device, &constants.queue);
+            let mut indexed_layers = RendererLayers::new(&constants.device, &constants.queue);
+            let mut hidden_layers = RendererLayers::new(&constants.device, &constants.queue);
+            for frame_number in [0, 24, 36, 75, 105] {
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let legacy = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    &events,
+                    &frames,
+                    2.0,
+                    &zoom,
+                );
+                let indexed = ProjectUniforms::new_with_precomputed_cursor(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    size,
+                    &events,
+                    &frames,
+                    2.0,
+                    &zoom,
+                    &cursor,
+                );
+                let legacy = legacy_renderer
+                    .render_immediate(frames.clone(), legacy, &events, true, &mut legacy_layers)
+                    .await
+                    .unwrap();
+                let indexed = indexed_renderer
+                    .render_immediate(frames.clone(), indexed, &events, true, &mut indexed_layers)
+                    .await
+                    .unwrap();
+                assert!(
+                    legacy.data == indexed.data,
+                    "raw={base_raw} frame={frame_number}: rendered cursor pixels changed"
+                );
+                if frame_number == 24 {
+                    let mut hidden = ProjectUniforms::new(
+                        &constants,
+                        &project,
+                        frame_number,
+                        60,
+                        size,
+                        &events,
+                        &frames,
+                        2.0,
+                        &zoom,
+                    );
+                    hidden.project.cursor.hide = true;
+                    let hidden = hidden_renderer
+                        .render_immediate(frames, hidden, &events, true, &mut hidden_layers)
+                        .await
+                        .unwrap();
+                    assert!(
+                        legacy.data != hidden.data,
+                        "raw={base_raw}: the fixture must draw a cursor"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_raw_cursor_uniform_preparation() {
+        use std::hint::black_box;
+
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        println!("raw_uniforms adapter={}", constants.adapter_name());
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for duration_secs in [60, 600, 3600] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.raw = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": duration_secs, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            let project = Arc::new(project);
+            let events = CursorEvents {
+                moves: (0..=duration_secs * 60)
+                    .map(|index| {
+                        cursor_move(
+                            index as f64 * 1000.0 / 60.0,
+                            (index % 479) as f64 / 479.0,
+                            (index % 283) as f64 / 283.0,
+                        )
+                    })
+                    .collect(),
+                clicks: Vec::new(),
+            };
+            let cursor = PrecomputedCursorTimeline::new(&events, None, None);
+            let zoom =
+                ZoomTransformTimeline::from_project(&project, &events, duration_secs as f64, size);
+            let mut samples = Vec::new();
+            for index in 0..544 {
+                let frame_number = (duration_secs - 3) * 60 + index % 120;
+                let time = frame_number as f32 / 60.0;
+                let frames = DecodedSegmentFrames {
+                    screen_size: size,
+                    screen_frame: Some(source.clone()),
+                    camera_frame: None,
+                    segment_time: time,
+                    recording_time: time,
+                    segment_has_camera: false,
+                };
+                let started = Instant::now();
+                let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                    black_box(&constants),
+                    black_box(&project),
+                    black_box(frame_number),
+                    60,
+                    size,
+                    black_box(&events),
+                    black_box(&frames),
+                    duration_secs as f64,
+                    black_box(&zoom),
+                    black_box(&cursor),
+                );
+                let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                drop(black_box(uniforms));
+                if index >= 32 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "raw_uniforms duration_secs={duration_secs} moves={} frames={} p50_us={:.3} p95_us={:.3}",
+                events.moves.len(),
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+            );
+        }
     }
 
     #[tokio::test]

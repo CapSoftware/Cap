@@ -10,7 +10,7 @@ STATE_FILE="$PWD/target/dev-restore.json"
 BIN="$PWD/target/debug/cap-gpui"
 BUILD=cargo
 
-WATCH_PATHS=(src assets Cargo.toml ../desktop/src-tauri/sounds)
+WATCH_PATHS=(src kernels/src kernels/Cargo.toml assets Cargo.toml ../desktop/src-tauri/sounds)
 [ -d resources ] && WATCH_PATHS+=(resources)
 for crate in camera scap-targets recording timestamp utils project rendering editor export; do
 	[ -d "../../crates/$crate/src" ] && WATCH_PATHS+=("../../crates/$crate/src")
@@ -79,7 +79,7 @@ while true; do
 	if [ "$CURRENT" != "$LAST" ]; then
 		LAST="$CURRENT"
 		echo "[dev] building..."
-		if "$BUILD" build --config profile.dev.package.cap-desktop-gpui.incremental=true; then
+		if "$BUILD" build; then
 			if [ -n "$APP_PID" ] || gpui_owns_session || instance_live; then
 				stop_app
 				start_app

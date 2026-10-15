@@ -69,12 +69,17 @@ function validateArguments(target, args, platform) {
 		/^(?:aarch64|x86_64)-apple-darwin$/.test(target ?? "");
 	for (let index = 0; index < args.length && valid; index++) {
 		const argument = args[index];
-		if (argument === "--config" || argument === "-c") {
+		if (
+			argument === "--config" ||
+			argument === "-c" ||
+			argument === "--bundles" ||
+			argument === "-b"
+		) {
 			const value = args[++index];
 			valid = Boolean(value) && !value.startsWith("-");
 		} else {
 			valid =
-				/^--config=.+/.test(argument) ||
+				/^--(?:config|bundles)=.+/.test(argument) ||
 				argument === "--verbose" ||
 				/^-v{1,2}$/.test(argument);
 		}
@@ -147,6 +152,7 @@ export async function buildMacosPackages(
 	target,
 	args = [],
 	{
+		bundleOnly = false,
 		platform = process.platform,
 		env = process.env,
 		signal,
@@ -179,7 +185,7 @@ export async function buildMacosPackages(
 		signal?.throwIfAborted();
 		let outputTail = "";
 		const command =
-			attempt === 0
+			attempt === 0 && !bundleOnly
 				? ["build:tauri", ...commandArguments]
 				: [
 						"dotenv",

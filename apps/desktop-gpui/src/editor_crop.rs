@@ -2311,9 +2311,7 @@ async fn decode_display_frame(
     };
     // gpui's `RenderImage` is BGRA behind an `RgbaImage`, which is the same
     // swap `editor_window::frame_image` does for the player's frames.
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    cap_gpui_kernels::frame::swap_red_blue(&mut rgba);
     let buffer = image::RgbaImage::from_raw(width, height, rgba)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(buffer)

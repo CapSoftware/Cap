@@ -29,6 +29,19 @@ export function advancePlaybackPosition(
 	);
 }
 
+// Collapsing the auto-sized script editor to measure it briefly makes the
+// scroller's content shorter than its viewport, and the browser clamps
+// scrollTop to 0 during that forced layout. Resuming playback then started
+// from the top: https://github.com/CapSoftware/Cap/issues/2081
+export function preserveScrollTop(
+	container: { scrollTop: number } | undefined,
+	mutate: () => void,
+) {
+	const scrollTop = container?.scrollTop;
+	mutate();
+	if (container && scrollTop !== undefined) container.scrollTop = scrollTop;
+}
+
 export type TeleprompterPlaybackState = {
 	requested: boolean;
 	recordingPaused: boolean;

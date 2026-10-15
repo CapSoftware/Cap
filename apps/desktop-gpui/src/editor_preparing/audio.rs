@@ -174,13 +174,16 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            static NEXT_DIRECTORY: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "cap-gpui-preparing-audio-{}-{nonce}",
-                std::process::id()
+                "cap-gpui-preparing-audio-{}-{nonce}-{}",
+                std::process::id(),
+                NEXT_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ));
             std::fs::create_dir(&path).unwrap();
             Self(path)
