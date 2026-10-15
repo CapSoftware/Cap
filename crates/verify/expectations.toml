@@ -283,3 +283,10 @@ case = "export/basic/colour-red/mp430/*"
 class = "colour-matrix"
 reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb about 9 code values low"
 link = ""
+
+[[xfail]]
+case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. Deterministic, 3 of 3 runs on Apple silicon"
+link = ""

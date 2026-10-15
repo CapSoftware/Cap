@@ -112,6 +112,7 @@ enum Mapping {
         outgoing: (usize, f64),
         incoming: (usize, f64),
         crossfade: bool,
+        progress: f64,
     },
 }
 
@@ -276,6 +277,7 @@ impl ReferenceModel {
                     outgoing: (k - 1, prev.start + out_tick * prev.timescale),
                     incoming: (k, segment.start + elapsed * segment.timescale),
                     crossfade: segment.crossfade,
+                    progress: (elapsed / segment.transition_in).clamp(0.0, 1.0),
                 });
             }
             if t >= start + segment.transition_in && t < start + segment.duration() - next_in {
@@ -405,6 +407,7 @@ impl ReferenceModel {
                 outgoing,
                 incoming,
                 crossfade,
+                progress,
             }) => {
                 if !crossfade {
                     return unchecked("fade-through-black transition");
@@ -429,6 +432,7 @@ impl ReferenceModel {
                         ) => StreamExpectation::Blend {
                             outgoing: (sa, aa),
                             incoming: (sb, ab),
+                            progress,
                         },
                         (StreamExpectation::Absent, StreamExpectation::Absent) => {
                             StreamExpectation::Absent

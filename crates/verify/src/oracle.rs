@@ -21,6 +21,11 @@ pub enum StreamExpectation {
     Blend {
         outgoing: (u8, Vec<u32>),
         incoming: (u8, Vec<u32>),
+        /// Transition progress (0 = all outgoing). The measured blend weight
+        /// must be within `BLEND_PROGRESS_TOLERANCE` of it (the tolerance
+        /// covers blending in linear light, where the code's luma weight is
+        /// a gamma curve of the progress).
+        progress: f64,
     },
     /// Not checked, with the reason.
     Unchecked { reason: String },
@@ -62,7 +67,13 @@ pub enum MismatchKind {
     Missing,
     /// The stream should be hidden and is visible.
     Unexpected,
+    /// A transition frame blends the right two frames with the wrong weight.
+    BlendWeight,
 }
+
+/// Largest allowed difference between a transition frame's measured blend
+/// weight and the transition progress.
+pub const BLEND_PROGRESS_TOLERANCE: f64 = 0.35;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mismatch {
@@ -90,6 +101,8 @@ pub struct StreamReport {
     pub unreadable: u32,
     pub missing: u32,
     pub unexpected: u32,
+    #[serde(default)]
+    pub blend_weight: u32,
     pub max_ahead: i64,
     pub max_stale: i64,
     /// Source frames the model shows that never appeared.
@@ -107,6 +120,7 @@ impl StreamReport {
             + self.unreadable
             + self.missing
             + self.unexpected
+            + self.blend_weight
     }
 
     pub fn passed(&self) -> bool {
@@ -126,6 +140,7 @@ impl StreamReport {
             ("unreadable", self.unreadable),
             ("missing", self.missing),
             ("unexpected", self.unexpected),
+            ("blended with the wrong weight", self.blend_weight),
         ] {
             if n > 0 {
                 parts.push(format!("{n} {label}"));
@@ -148,15 +163,19 @@ impl StreamReport {
                 .mismatches
                 .iter()
                 .take(4)
-                .map(|m| {
-                    format!(
+                .map(|m| match (&m.kind, &m.detail) {
+                    (MismatchKind::BlendWeight, Some(detail)) => format!(
+                        "#{} frame {} ({:.3}s) {detail}",
+                        m.position, m.output_frame, m.time_secs
+                    ),
+                    _ => format!(
                         "#{} frame {} ({:.3}s) expected {} got {}",
                         m.position,
                         m.output_frame,
                         m.time_secs,
                         m.expected.map_or("-".into(), |(s, i)| format!("{s}:{i}")),
                         m.observed.map_or("-".into(), |(s, i)| format!("{s}:{i}")),
-                    )
+                    ),
                 })
                 .collect();
             text.push_str(&format!("; {}", shown.join("; ")));
@@ -255,8 +274,31 @@ pub fn check_stream_at(
                     }
                 }
             }
-            StreamExpectation::Blend { outgoing, incoming } => {
+            StreamExpectation::Blend {
+                outgoing,
+                incoming,
+                progress: expected_progress,
+            } => {
                 report.checked += 1;
+                if let Readout::Blend {
+                    progress: observed, ..
+                } = readout
+                    && (observed - expected_progress).abs() > BLEND_PROGRESS_TOLERANCE
+                {
+                    report.blend_weight += 1;
+                    report.mismatches.push(Mismatch {
+                        position,
+                        output_frame: frame,
+                        time_secs,
+                        kind: MismatchKind::BlendWeight,
+                        expected: None,
+                        observed: None,
+                        delta: None,
+                        detail: Some(format!(
+                            "transition blend weight {observed:.2}, expected progress {expected_progress:.2}"
+                        )),
+                    });
+                }
                 let sides: Vec<(u8, u32)> = match readout {
                     Readout::Blend {
                         outgoing: o,
@@ -428,7 +470,10 @@ pub fn read_expecting(
     expectation: &StreamExpectation,
 ) -> Readout {
     use crate::video_code::{self, BLEND_TOLERANCE, FrameMarker};
-    let StreamExpectation::Blend { outgoing, incoming } = expectation else {
+    let StreamExpectation::Blend {
+        outgoing, incoming, ..
+    } = expectation
+    else {
         return video_code::read_stream(img, kind);
     };
     let cells = match video_code::read_cells(img, kind) {
