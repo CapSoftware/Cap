@@ -136,6 +136,11 @@ jobs:
               export CAP_VERIFY_FIXTURE_DIR="$GITHUB_WORKSPACE/verify-fixtures-run$run"
               mkdir -p "$CAP_VERIFY_REPORT_DIR"
               start=$(date +%s)
+              if [ "$test" = export ]; then
+                # Real-time fixtures (recording pipeline, Instant) are recorded
+                # first without concurrent rendering; the full run reuses them.
+                CAP_VERIFY_REPORT_DIR="$OUT/run$run/prerecord" cargo test --locked -p cap-verify --test export instant_output recorded -- --nocapture --test-threads=1 > "$OUT/run$run/prerecord.log" 2>&1
+              fi
               cargo test --locked -p cap-verify --test "$test" -- --nocapture > "$OUT/run$run/$test.log" 2>&1
               code=$?
               secs=$(( $(date +%s) - start ))
