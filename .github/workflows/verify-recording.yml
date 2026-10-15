@@ -5,10 +5,13 @@ name: Verify recording (real capture)
 # frame and audio marker against the host-clock truth. See
 # crates/verify/tests/recording.rs.
 
-# Pull requests (and pushes to the suite branches) that touch the capture,
-# encode, timestamp or verify code run the FAST tier once on macos-15; the
-# FULL tier runs on macos-15 and macos-26 nightly and on dispatch, and for a
-# pull request that touches a high-risk region of scripts/verify/guards.toml.
+# Pushes to the suite branches that touch the capture, encode, timestamp or
+# verify code run the FAST tier once on macos-15; the FULL tier runs on
+# macos-15 and macos-26 nightly and on dispatch. Pull requests are not
+# triggered yet: real capture becomes a blocking pull-request check (FAST on
+# macos-15, path-filtered, FULL on both macOS versions for a pull request that
+# touches a high-risk region of scripts/verify/guards.toml, see the Scope job)
+# once a 5-repeat full tier per macOS version shows zero unexplained failures.
 on:
   workflow_dispatch:
     inputs:
@@ -27,27 +30,6 @@ on:
         default: false
   schedule:
     - cron: "41 3 * * *"
-  pull_request:
-    paths:
-      - "crates/recording/**"
-      - "crates/scap-*/**"
-      - "crates/enc-avfoundation/**"
-      - "crates/timestamp/**"
-      - "crates/camera*/**"
-      - "crates/media-info/**"
-      - "crates/verify/**"
-      - "crates/project/**"
-      - "Cargo.lock"
-      - ".github/workflows/verify-recording.yml"
-      - "crates/enc-ffmpeg/**"
-      - "crates/audio/**"
-      - "crates/editor/src/audio*.rs"
-      - "crates/rendering/src/decoder/**"
-      - "crates/video-decode/**"
-      - "apps/desktop-gpui/src/upload*"
-      - "apps/desktop-gpui/src/upload/**"
-      - "scripts/verify/guards.toml"
-
   push:
     branches:
       - ci/verify-ci
