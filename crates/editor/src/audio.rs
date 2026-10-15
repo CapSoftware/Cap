@@ -1498,11 +1498,12 @@ struct ProgressiveTimeline {
     retired: Mutex<Retired>,
 }
 
-/// A replaced cached render, released only once this render is ready so
-/// freeing its buffer never competes with the start of playback.
+/// A replaced cached render, released only once this render stops working
+/// (finished, stopped or parked), so freeing its buffer never competes with
+/// the start of playback.
 #[derive(Default)]
 struct Retired {
-    ready: bool,
+    idle: bool,
     render: Option<CachedProgressiveRender>,
 }
 
@@ -1571,7 +1572,7 @@ impl ProgressiveTimeline {
 
     fn retire(&self, previous: Option<CachedProgressiveRender>) {
         let mut retired = lock(&self.retired);
-        if retired.ready {
+        if retired.idle {
             drop(retired);
             drop(previous);
         } else {
@@ -1579,10 +1580,12 @@ impl ProgressiveTimeline {
         }
     }
 
-    fn mark_ready(&self) {
+    /// Releases the retired render. `idle` marks a render that will not
+    /// resume, so later retirements are released at once.
+    fn release_retired(&self, idle: bool) {
         let previous = {
             let mut retired = lock(&self.retired);
-            retired.ready = true;
+            retired.idle |= idle;
             retired.render.take()
         };
         drop(previous);
@@ -2946,7 +2949,6 @@ fn spawn_progressive_render(
                 if !*sent {
                     *sent = true;
                     let _ = ready_tx.send(());
-                    timeline.mark_ready();
                 }
             };
 
@@ -3064,6 +3066,7 @@ fn spawn_progressive_render(
                 );
             }
             drop(renderer);
+            timeline.release_retired(true);
             control.finish(completed);
         });
 
@@ -3098,6 +3101,7 @@ impl RenderControl {
             if self.timeline.readers.load(Ordering::Acquire) > 0 {
                 return true;
             }
+            self.timeline.release_retired(false);
             self.wait_for_wake();
         }
     }
@@ -5072,7 +5076,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_render_is_released_once_the_next_render_is_ready() {
+    fn a_stale_render_is_released_once_the_next_render_finishes() {
         let _reuse = CACHE_RELEASE.read().unwrap_or_else(PoisonError::into_inner);
         let mut fixture = ProgressiveFixture::new();
         let output_info = stereo_48k();
