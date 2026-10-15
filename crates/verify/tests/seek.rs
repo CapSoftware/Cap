@@ -51,7 +51,7 @@ fn run(
         let frames: Vec<u32> = requests.iter().map(|r| r.0).collect();
         match result {
             Ok(readouts) => common::check_requests(&mut case, &model, &frames, &readouts, fps),
-            Err(e) => case.problem(e),
+            Err(e) => case.problem("error", e),
         }
         if let Err(message) = report::settle(case) {
             failures.push(message);
@@ -237,7 +237,7 @@ fn cold_open() {
             });
             match result {
                 Ok(readout) => readouts.push(readout),
-                Err(e) => case.problem(e),
+                Err(e) => case.problem("error", e),
             }
         }
         if readouts.len() == frames.len() {

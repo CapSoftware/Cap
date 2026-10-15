@@ -1,0 +1,97 @@
+# Strict expected failures for the engine verification suite
+# (`cargo test -p cap-verify`), same shape as the decoder model's
+# crates/rendering/src/decoder/model/expectations.toml:
+#
+#   [[xfail]]
+#   case = "<case id as printed by the suite, * globs allowed>"
+#   class = "<stale | future | wrong-segment | unreadable | missing | unexpected
+#             | frame-count | timestamps | nondeterministic | error>"
+#   reason = "<what is wrong>"
+#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
+#   platforms = ["macos"]   (optional; absent = every platform)
+#   flaky = true            (optional; timing-dependent, may pass. State the
+#                            measured rate in the reason.)
+#
+# A listed class that no longer occurs fails the run with "remove this
+# xfail", so fixes stay locked in. A class that occurs and is not listed
+# fails the run. CAP_VERIFY_BLESS=<dir> writes draft entries for every
+# failing case instead of failing; review them before pasting here.
+#
+# Recorded on origin/main 5705ee851. "NEW:" marks bugs the suite found that
+# no open PR fixes.
+
+[[xfail]]
+case = "export/jitter-camera-*/full/mp460/avf"
+class = "future"
+platforms = ["macos"]
+reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "export/backward-hold/backward-jumps/mp460/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "export/early-camera/full/*"
+class = "future"
+reason = "NEW: the auto-calculated clip camera offset repeats the decoder's start-time alignment, so a camera that started before the latest track plays (latest - camera.start) ahead (1.0 s here). Real when the mic is slow to start"
+link = ""
+
+[[xfail]]
+case = "export/camera-pts-late/full/mp430/avf"
+class = "future"
+platforms = ["macos"]
+reason = "A camera file whose pts start 2 s in runs ahead from the first output frame instead of holding its first frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "export/camera-pts-late/full/mp430/ffmpeg"
+class = "future"
+reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames)"
+link = ""
+
+[[xfail]]
+case = "seek/seek-*/keyframes60/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "Wrong-GOP seek: the reader starts on the keyframe time rounded to 10 ms, decodes the previous GOP and shows its last frame under the keyframe's number (requests between the keyframe pts and the next slot show keyframe - 1)"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/seek-*/storm30/avf"
+class = "stale"
+platforms = ["macos"]
+reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (frame 349 shows 237)"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/vfr-holds/storm60/avf"
+class = "future"
+platforms = ["macos"]
+reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217)"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/vfr-holds/storm60/avf"
+class = "stale"
+platforms = ["macos"]
+flaky = true
+reason = "Same storm, an additional stale answer in 3 of 4 runs on main (timing-dependent reader reuse)"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/vfr-holds/into-holds60/avf"
+class = "stale"
+platforms = ["macos"]
+flaky = true
+reason = "Camera one frame stale after a seek into a hold, 3 of 4 runs on main"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "seek/*/storm*/ffmpeg"
+class = "stale"
+reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1-4 source frames old, and seeks near the start show frame 0 (up to 67 source frames stale)"
+link = ""

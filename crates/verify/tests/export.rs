@@ -61,7 +61,7 @@ fn run(
                 };
                 let first = dir.path().join(format!("a.{ext}"));
                 match rt.block_on(common::export(&project, config.clone(), &run, &first)) {
-                    Err(e) => case.problem(format!("export failed: {e}")),
+                    Err(e) => case.problem("error", format!("export failed: {e}")),
                     Ok(path) => {
                         let frames = common::read_output(&path);
                         common::check_sequence(
@@ -74,7 +74,9 @@ fn run(
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
                             match rt.block_on(common::export(&project, config, &run, &second)) {
-                                Err(e) => case.problem(format!("second export failed: {e}")),
+                                Err(e) => {
+                                    case.problem("error", format!("second export failed: {e}"))
+                                }
                                 Ok(path) => {
                                     let again = common::read_output(&path);
                                     let differing: Vec<usize> = frames
@@ -85,7 +87,9 @@ fn run(
                                         .map(|(i, _)| i)
                                         .collect();
                                     if !differing.is_empty() || frames.len() != again.len() {
-                                        case.problem(format!(
+                                        case.problem(
+                                            "nondeterministic",
+                                            format!(
                                             "nondeterministic: {} of {} frames differ between two exports (first {:?})",
                                             differing.len(),
                                             frames.len(),

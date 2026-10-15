@@ -74,7 +74,7 @@ fn sequential(
         });
         match result {
             Ok(readouts) => common::check_requests(&mut case, &model, &frames, &readouts, fps),
-            Err(e) => case.problem(e),
+            Err(e) => case.problem("error", e),
         }
         if let Err(message) = report::settle(case) {
             failures.push(message);

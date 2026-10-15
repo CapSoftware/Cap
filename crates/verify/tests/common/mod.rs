@@ -217,11 +217,14 @@ pub fn check_sequence(
 ) {
     let expected_count = model.output_frames(fps);
     if frames.len() as u32 != expected_count {
-        case.problem(format!(
-            "output has {} frames, the model expects {expected_count} ({:.3}s at {fps} fps)",
-            frames.len(),
-            model.duration()
-        ));
+        case.problem(
+            "frame-count",
+            format!(
+                "output has {} frames, the model expects {expected_count} ({:.3}s at {fps} fps)",
+                frames.len(),
+                model.duration()
+            ),
+        );
     }
     if check_timestamps {
         let off_grid: Vec<(usize, f64)> = frames
@@ -232,9 +235,10 @@ pub fn check_sequence(
             .take(5)
             .collect();
         if !off_grid.is_empty() {
-            case.problem(format!(
-                "output timestamps off the {fps} fps grid: {off_grid:?}"
-            ));
+            case.problem(
+                "timestamps",
+                format!("output timestamps off the {fps} fps grid: {off_grid:?}"),
+            );
         }
     }
     let n = frames.len().min(expected_count as usize);
