@@ -67,21 +67,32 @@ jobs:
           persist-credentials: false
 
       - name: Setup
+        id: setup
         uses: ./.github/actions/engine-verify-setup
         with:
           target: ${{ inputs.target }}
           tier: ${{ inputs.tier }}
-          save-cache: ${{ inputs.save-cache }}
 
       - name: Build archive
         shell: bash
         run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --archive "$RUNNER_TEMP/verify.tar.zst"
 
       - name: Record sources of the cached build
-        if: inputs.save-cache
+        if: inputs.save-cache && steps.setup.outputs.build-cache-hit != 'true'
         shell: bash
         run: |
-          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/.fingerprint/cap-verify-srcmanifest
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: inputs.save-cache && steps.setup.outputs.build-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -114,7 +125,6 @@ jobs:
           target: ${{ inputs.target }}
           tier: ${{ inputs.tier }}
           rust-cache: ${{ !inputs.archive }}
-          save-cache: ${{ inputs.save-cache && matrix.shard == 1 }}
 
       - name: Report location
         shell: bash
@@ -128,10 +138,21 @@ jobs:
         run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --no-run
 
       - name: Record sources of the cached build
-        if: ${{ !inputs.archive && inputs.save-cache && matrix.shard == 1 }}
+        if: ${{ !inputs.archive && inputs.save-cache && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true' }}
         shell: bash
         run: |
-          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/.fingerprint/cap-verify-srcmanifest
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
+      - name: Save build cache
+        if: ${{ !inputs.archive && inputs.save-cache && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
 
       - name: Download archive
         if: inputs.archive

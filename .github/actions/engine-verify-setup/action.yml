@@ -10,10 +10,13 @@ inputs:
   rust-cache:
     description: Restore the Rust build cache (build jobs only)
     default: "true"
-  save-cache:
-    description: Save the Rust cache at the end of the job
-    default: "false"
 outputs:
+  build-cache-key:
+    description: Key to save the build cache under
+    value: ${{ steps.build-key.outputs.key }}
+  build-cache-hit:
+    description: Whether the build cache was restored exactly
+    value: ${{ steps.build-cache.outputs.cache-hit }}
   fixtures-hit:
     description: Whether the fixture cache was restored exactly
     value: ${{ steps.fixtures.outputs.cache-hit }}
@@ -47,17 +50,34 @@ runs:
       with:
         tool: cargo-nextest@0.9
 
-    - name: Rust cache
+    # One cache entry per OS per day (saved by main, nightly and the CI dev
+    # branches), restored by PRs. Unlike swatinem/rust-cache it includes the
+    # workspace crates and is refreshed daily even when Cargo.lock is
+    # unchanged, so a PR only rebuilds what changed since the last save. The
+    # chain restarts every ISO week so stale artifacts cannot pile up.
+    - name: Build cache key
+      id: build-key
       if: inputs.rust-cache == 'true'
-      uses: swatinem/rust-cache@v2
+      shell: bash
+      run: |
+        base="verify-build-v2-${{ inputs.target }}-$(date -u +%G-W%V)"
+        echo "base=$base" >> "$GITHUB_OUTPUT"
+        echo "key=$base-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore build cache
+      id: build-cache
+      if: inputs.rust-cache == 'true'
+      uses: actions/cache/restore@v4
       with:
-        prefix-key: v1-verify
-        shared-key: ${{ inputs.target }}
-        cache-bin: "false"
-        cache-workspace-crates: "true"
-        # Save the dependency build even when a test fails.
-        cache-on-failure: "true"
-        save-if: ${{ inputs.save-cache }}
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/ci-verify/
+        key: ${{ steps.build-key.outputs.key }}
+        restore-keys: |
+          ${{ steps.build-key.outputs.base }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-
+          ${{ steps.build-key.outputs.base }}-
 
     # Unchanged workspace crates are reused from the cache instead of being
     # rebuilt because the checkout touched every file (scripts/verify/mtime.py).
@@ -65,7 +85,7 @@ runs:
       if: inputs.rust-cache == 'true'
       shell: bash
       run: |
-        "$(command -v python3 || command -v python)" scripts/verify/mtime.py apply target/ci-verify/.fingerprint/cap-verify-srcmanifest
+        "$(command -v python3 || command -v python)" scripts/verify/mtime.py apply target/ci-verify/verify-src-manifest.txt
 
     - name: Native dependencies
       shell: bash
