@@ -506,6 +506,42 @@ fn source_thread_qos() {
     unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
 }
 
+// Scratch proof only (SP/out/sol-camera-lag.md): a QoS request alone leaves the
+// source thread on the utility timer tier, whose coalescing holds a 33 ms sleep
+// for up to 150 ms. The stimulus's time constraint for the camera period keeps
+// the synthetic camera on schedule. Returns the kernel status (0 = applied).
+fn source_thread_time_constraint(period_secs: f64, computation_secs: f64) -> i32 {
+    const THREAD_TIME_CONSTRAINT_POLICY: u32 = 2;
+    #[repr(C)]
+    struct TimeConstraint {
+        period: u32,
+        computation: u32,
+        constraint: u32,
+        preemptible: i32,
+    }
+    unsafe extern "C" {
+        fn mach_thread_self() -> u32;
+        fn thread_policy_set(thread: u32, flavor: u32, policy: *const i32, count: u32) -> i32;
+    }
+    let info = cidre::mach::TimeBaseInfo::new();
+    let ticks =
+        |secs: f64| (secs * 1e9 * f64::from(info.denom) / f64::from(info.numer)).round() as u32;
+    let policy = TimeConstraint {
+        period: ticks(period_secs),
+        computation: ticks(computation_secs),
+        constraint: ticks(period_secs),
+        preemptible: 1,
+    };
+    unsafe {
+        thread_policy_set(
+            mach_thread_self(),
+            THREAD_TIME_CONSTRAINT_POLICY,
+            (&raw const policy).cast(),
+            (std::mem::size_of::<TimeConstraint>() / 4) as u32,
+        )
+    }
+}
+
 fn sleep_until_host_blocking(host: u64) {
     let secs = host_secs(host, host_now());
     if secs > 0.0 {
@@ -603,6 +639,8 @@ fn start_feeds(
             let handle = handle.clone();
             tokio::task::spawn_blocking(move || {
                 source_thread_qos();
+                let realtime = source_thread_time_constraint(1.0 / f64::from(CAMERA_FPS), 0.010);
+                eprintln!("[cap-verify] synthetic camera time constraint status {realtime}");
                 let mut lag = SourceLag::default();
                 let origin = host_now();
                 let base = host_secs(origin, reference);
