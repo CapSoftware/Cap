@@ -193,4 +193,20 @@ link = ""
 case = "captions/app/segmentation/unicode"
 class = "caption-segments"
 reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
+# Real-capture recording oracle (tests/recording.rs). Measured on hosted
+# macos-15/macos-26 runners (display capture) and a developer Mac (window
+# capture); every run of every case failed with this class.
+
+[[xfail]]
+case = "recording/instant/*"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: Instant mode starts the video track at its first encoded frame but the audio track at the recording start, and finalize muxes both at pts 0, so the screen plays early by the video start-up delay (runners: screen 24 to 68 ms ahead of mic and system audio; developer Mac, window capture: 360 to 430 ms)"
+link = ""
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "sync"
+platforms = ["macos"]
+reason = "NEW: crash recovery rewrites recording-meta.json without any track start_time, so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay (runners: 83 to 104 ms; developer Mac: ~440 ms)"
 link = ""

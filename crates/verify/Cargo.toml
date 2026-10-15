@@ -28,9 +28,22 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [target.'cfg(target_os = "macos")'.dependencies]
 cap-enc-avfoundation = { path = "../enc-avfoundation" }
 cidre = { workspace = true }
+cpal = { workspace = true }
+softbuffer = "0.4"
+winit = "0.30"
 
 [dev-dependencies]
+cap-recording = { path = "../recording", features = ["test-utils"] }
 cap-editor = { path = "../editor", features = ["test-hooks"] }
 cap-export = { path = "../export" }
 cap-rendering = { path = "../rendering" }
 tempfile = "3"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+scap-targets = { path = "../scap-targets" }
+
+[[bin]]
+name = "cap-verify-stimulus"
+path = "src/bin/stimulus.rs"
+test = false

@@ -3,7 +3,7 @@ use cap_audio::estimate_input_latency;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
-    BufferSize, Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
+    BufferSize, Device, SampleFormat, StreamError, SupportedStreamConfig,
     SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
@@ -159,7 +159,6 @@ pub struct MicrophoneSamples {
     pub format: SampleFormat,
     pub sample_rate: u32,
     pub channels: u16,
-    pub info: InputCallbackInfo,
     pub timestamp: Timestamp,
 }
 
@@ -1419,7 +1418,6 @@ impl MicrophoneFeed {
                                 format: data.sample_format(),
                                 sample_rate: effective_sample_rate.sample_rate,
                                 channels: callback_channels,
-                                info: info.clone(),
                                 timestamp: timestamp - capture_latency,
                             };
 
@@ -3073,6 +3071,78 @@ impl Message<Unlock> for MicrophoneFeed {
         });
         #[cfg(windows)]
         self.prepare_unlocked_recovery();
+    }
+}
+
+/// Test-only microphone feeds driven by a synthetic device instead of
+/// hardware, so recording tests exercise the real feed, lock and pipeline
+/// paths with samples whose capture times are known exactly.
+#[cfg(feature = "test-utils")]
+pub mod synthetic {
+    use super::*;
+
+    const STREAM_ID: u32 = 1;
+
+    pub struct SyntheticMicrophone {
+        feed: ActorRef<MicrophoneFeed>,
+        sample_rate: u32,
+        channels: u16,
+        _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl SyntheticMicrophone {
+        /// A feed attached to an f32 input device named `name`.
+        pub fn spawn(name: &str, sample_rate: u32, channels: u16) -> Self {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let (error_tx, _) = flume::unbounded();
+            let mut feed = MicrophoneFeed::new(error_tx);
+            feed.input_id_counter = STREAM_ID;
+            feed.state = State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState {
+                    id: STREAM_ID,
+                    label: name.to_string(),
+                    config: SupportedStreamConfig::new(
+                        channels,
+                        cpal::SampleRate(sample_rate),
+                        cpal::SupportedBufferSize::Unknown,
+                        SampleFormat::F32,
+                    ),
+                    buffer_size_frames: None,
+                    done_tx,
+                }),
+            });
+            Self {
+                feed: MicrophoneFeed::spawn(feed),
+                sample_rate,
+                channels,
+                _done_rx: std::sync::Mutex::new(done_rx),
+            }
+        }
+
+        pub async fn lock(&self) -> anyhow::Result<MicrophoneFeedLock> {
+            self.feed
+                .ask(Lock)
+                .await
+                .map_err(|error| anyhow::anyhow!("synthetic microphone lock: {error}"))
+        }
+
+        /// Delivers interleaved f32 samples whose first frame was captured at
+        /// `timestamp`.
+        pub async fn push(&self, samples: &[f32], timestamp: Timestamp) {
+            let data = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+            let _ = self
+                .feed
+                .tell(MicrophoneSamples {
+                    stream_id: STREAM_ID,
+                    data,
+                    format: SampleFormat::F32,
+                    sample_rate: self.sample_rate,
+                    channels: self.channels,
+                    timestamp,
+                })
+                .await;
+        }
     }
 }
 
