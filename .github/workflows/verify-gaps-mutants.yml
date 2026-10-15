@@ -1,0 +1,73 @@
+name: Verify gaps mutants (scratch)
+
+# Scratch workflow for the mutation gap track. Never merged.
+on:
+  push:
+    branches:
+      - scratch/verify-gaps-mutants-2
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "1"
+  CARGO_PROFILE_CI_VERIFY_INCREMENTAL: "true"
+  RUST_BACKTRACE: "1"
+  CAP_VERIFY_TIER: fast
+
+jobs:
+  mutants:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-recording
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            specs: "-:export:recorded_epoch_audio_head C01:export:recorded_epoch_audio_head -:export:recorded_epoch_audio_head"
+    env:
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free disk (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: fast
+
+      - name: Desktop dependencies (macOS)
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Frameworks for the ci-verify profile (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks" target/ci-verify/Frameworks
+
+      - name: Gap tests and mutants
+        shell: bash
+        run: |
+          mkdir -p "$CAP_VERIFY_SCRATCH"
+          scripts/verify/mutation/gaps.sh "${{ matrix.specs }}" "$RUNNER_TEMP/gaps"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gaps-${{ matrix.name }}
+          path: ${{ runner.temp }}/gaps
+          if-no-files-found: ignore
+          retention-days: 7
