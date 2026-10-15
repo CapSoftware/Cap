@@ -123,6 +123,54 @@ pub fn read_log(path: &Path) -> anyhow::Result<Vec<StimulusEvent>> {
         .collect()
 }
 
+/// The stimulus's real-time sentinel log, next to its event log.
+pub const SENTINEL_FILE: &str = "sentinel.txt";
+/// The sentinel's wake period.
+pub const SENTINEL_PERIOD_SECS: f64 = 0.002;
+
+/// Every wake of the stimulus's real-time sentinel thread (host ticks) and
+/// the scheduling it ran under.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug)]
+pub struct SentinelLog {
+    pub realtime: crate::sched::Realtime,
+    pub end: Option<crate::sched::ThreadState>,
+    pub wakes: Vec<u64>,
+}
+
+#[cfg(target_os = "macos")]
+impl SentinelLog {
+    pub fn read(path: &std::path::Path) -> anyhow::Result<Self> {
+        #[derive(serde::Deserialize)]
+        struct Header {
+            first: Option<u64>,
+            realtime: crate::sched::Realtime,
+            end: Option<crate::sched::ThreadState>,
+        }
+        let text = std::fs::read_to_string(path)?;
+        let mut lines = text.lines();
+        let header: Header = serde_json::from_str(lines.next().unwrap_or_default())?;
+        let mut wakes = Vec::new();
+        if let Some(mut at) = header.first {
+            wakes.push(at);
+            for line in lines {
+                at += line.trim().parse::<u64>()?;
+                wakes.push(at);
+            }
+        }
+        Ok(Self {
+            realtime: header.realtime,
+            end: header.end,
+            wakes,
+        })
+    }
+
+    /// Gaps between consecutive wakes: (start host, seconds).
+    pub fn gaps(&self) -> impl Iterator<Item = (u64, f64)> + '_ {
+        self.wakes.windows(2).map(|w| (w[0], host_secs(w[1], w[0])))
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn host_now() -> u64 {
     cidre::mach::abs_time()

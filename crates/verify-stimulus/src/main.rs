@@ -79,6 +79,7 @@ mod app {
         let log = Arc::new(Log {
             file: Mutex::new(File::create(&log_path)?),
         });
+        let sentinel = Sentinel::start(log_path.with_file_name(SENTINEL_FILE));
 
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         let event_loop = EventLoop::<Command>::with_user_event()
@@ -135,10 +136,77 @@ mod app {
         result?;
         drop(observer);
         drop(audio);
+        sentinel.finish()?;
         if let Some(error) = app.error {
             anyhow::bail!(error);
         }
         Ok(())
+    }
+
+    use cap_verify::stimulus::{SENTINEL_FILE, SENTINEL_PERIOD_SECS};
+
+    /// A real-time thread that only wakes every `SENTINEL_PERIOD_SECS` and
+    /// records each wake (host ticks), for the whole life of the stimulus.
+    /// At priority 97 it preempts every timeshare thread of every process,
+    /// so a long gap between its wakes means the machine itself did not run
+    /// (the hypervisor descheduled the virtual CPUs, or the kernel did not
+    /// schedule), not that the recorder was busy.
+    struct Sentinel {
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        thread: std::thread::JoinHandle<(sched::Realtime, Option<sched::ThreadState>, Vec<u64>)>,
+        path: PathBuf,
+    }
+
+    impl Sentinel {
+        fn start(path: PathBuf) -> Self {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let thread = {
+                let stop = stop.clone();
+                std::thread::Builder::new()
+                    .name("verify-sentinel".into())
+                    .spawn(move || {
+                        let realtime = sched::request_realtime(SENTINEL_PERIOD_SECS, 0.0005);
+                        let me = sched::current_thread();
+                        let mut wakes = Vec::with_capacity(64 * 1024);
+                        let mut last = host_now();
+                        wakes.push(last);
+                        while !stop.load(Ordering::Acquire) {
+                            sched::wait_until(host_add_secs(last, SENTINEL_PERIOD_SECS));
+                            last = host_now();
+                            wakes.push(last);
+                        }
+                        (realtime, sched::thread_state(me), wakes)
+                    })
+                    .expect("spawn sentinel")
+            };
+            Self { stop, thread, path }
+        }
+
+        /// Writes a JSON header line (scheduling, timebase, first wake),
+        /// then one line per wake: ticks since the previous wake.
+        fn finish(self) -> anyhow::Result<()> {
+            self.stop.store(true, Ordering::Release);
+            let (realtime, end, wakes) = self
+                .thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("sentinel panicked"))?;
+            let info = cidre::mach::TimeBaseInfo::new();
+            let mut out = serde_json::json!({
+                "period_secs": SENTINEL_PERIOD_SECS,
+                "timebase": [info.numer, info.denom],
+                "first": wakes.first(),
+                "realtime": realtime,
+                "end": end,
+            })
+            .to_string();
+            out.push('\n');
+            for w in wakes.windows(2) {
+                out.push_str(&(w[1] - w[0]).to_string());
+                out.push('\n');
+            }
+            std::fs::write(&self.path, out)?;
+            Ok(())
+        }
     }
 
     /// Stops the observer stream when dropped.

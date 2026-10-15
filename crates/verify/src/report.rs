@@ -62,6 +62,9 @@ pub struct Case {
     started: Instant,
     pub streams: Vec<StreamReport>,
     pub problems: Vec<String>,
+    /// The class of each entry of `problems` (a stream report's classes,
+    /// comma-separated).
+    pub problem_classes: Vec<String>,
     /// Failure classes seen (see `expectations.toml`).
     pub classes: BTreeSet<String>,
     /// First problem per class (the draft reason when blessing).
@@ -84,6 +87,7 @@ impl Case {
             started: Instant::now(),
             streams: Vec::new(),
             problems: Vec::new(),
+            problem_classes: Vec::new(),
             classes: Default::default(),
             class_problems: Default::default(),
             notes: Vec::new(),
@@ -115,6 +119,7 @@ impl Case {
         self.class_problems
             .entry(class.to_string())
             .or_insert_with(|| text.clone());
+        self.problem_classes.push(class.to_string());
         self.problems.push(text);
     }
 
@@ -134,6 +139,7 @@ impl Case {
 
     pub fn stream(&mut self, report: StreamReport) {
         if !report.passed() {
+            let mut classes = Vec::new();
             for (class, n) in [
                 ("stale", report.stale),
                 ("future", report.ahead),
@@ -148,8 +154,10 @@ impl Case {
                     self.class_problems
                         .entry(class.to_string())
                         .or_insert_with(|| report.summary());
+                    classes.push(class);
                 }
             }
+            self.problem_classes.push(classes.join(","));
             self.problems.push(report.summary());
         }
         self.streams.push(report);
