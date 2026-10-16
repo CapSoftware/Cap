@@ -1,0 +1,21 @@
+name: Instant mixer full main control
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer-base]
+    paths: [.github/workflows/fix-instant-mixer-full.yml]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  engine:
+    uses: ./.github/workflows/engine-verify.yml
+    with:
+      tier: full
+      proof-all: true
+  capture:
+    uses: ./.github/workflows/verify-recording.yml
+    with:
+      tier: full
+      repeat: "3"
+      runners: hosted
+      proof-run: true

@@ -46,6 +46,20 @@ on:
         type: choice
         options: [hosted, blacksmith, both]
         default: hosted
+  workflow_call:
+    inputs:
+      proof-run:
+        type: boolean
+        default: false
+      repeat:
+        type: string
+        default: "3"
+      tier:
+        type: string
+        default: full
+      runners:
+        type: string
+        default: hosted
   schedule:
     - cron: "41 3 * * *"
   pull_request:
@@ -91,6 +105,9 @@ jobs:
           set -euo pipefail
           files="$RUNNER_TEMP/changed.txt"
           hosted='["macos-15","macos-26"]'
+          if [[ "${{ inputs.proof-run }}" == true ]]; then
+            EVENT=workflow_dispatch
+          fi
           case "$EVENT" in
             schedule) run=true; runners="$hosted"; tier=full ;;
             workflow_dispatch)

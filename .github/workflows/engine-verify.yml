@@ -51,6 +51,9 @@ on:
       tier:
         type: string
         default: full
+      proof-all:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -125,11 +128,15 @@ jobs:
           MQ_HEAD: ${{ github.event.merge_group.head_sha }}
           BASE: ${{ inputs.base }}
           SUITES: ${{ inputs.suites }}
+          FORCE_ALL: ${{ inputs.proof-all }}
         run: |
           set -euo pipefail
           files="$RUNNER_TEMP/changed.txt"
           scope=files
           max=300
+          if [[ "$FORCE_ALL" == true ]]; then
+            scope=all
+          else
           case "$EVENT" in
             pull_request)
               gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$files"
@@ -150,6 +157,7 @@ jobs:
                 scope=all
               fi ;;
           esac
+          fi
           echo "scope=$scope" >> "$GITHUB_OUTPUT"
           echo "max=$max" >> "$GITHUB_OUTPUT"
           [[ -f "$files" ]] && { echo "$(wc -l < "$files") changed files"; head -50 "$files"; } || true
