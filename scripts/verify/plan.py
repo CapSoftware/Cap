@@ -266,6 +266,11 @@ def matrix(config, names, tier):
             "archive": runner.get("archive", False),
             "suites": ",".join(suites),
         })
+    include += [
+        dict(entry, runner="blacksmith-6vcpu-macos-26")
+        for entry in include
+        if entry["platform"] == "macos"
+    ]
     return {"include": include}
 
 

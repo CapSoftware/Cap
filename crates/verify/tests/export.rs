@@ -889,6 +889,15 @@ fn colour() {
         ("colour-red", [220u8, 40, 40]),
         ("colour-black", [0, 0, 0]),
         ("colour-white", [255, 255, 255]),
+        ("colour-grey", [128, 128, 128]),
+        ("colour-darkgrey", [64, 64, 64]),
+        ("colour-primaryred", [255, 0, 0]),
+        ("colour-green", [40, 200, 60]),
+        ("colour-blue", [30, 60, 210]),
+        ("colour-yellow", [240, 220, 30]),
+        ("colour-cyan", [0, 190, 200]),
+        ("colour-magenta", [200, 30, 180]),
+        ("colour-skin", [224, 172, 140]),
     ] {
         let id = case_id(&spec.name, name, Format::Mp4, 30, Decoder::Default);
         if !report::selected(&id) {
