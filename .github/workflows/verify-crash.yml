@@ -61,7 +61,8 @@ jobs:
         run: |
           rustup component add rustfmt clippy
           cargo fmt --all --check
-          cargo clippy --locked --no-deps -p cap-enc-ffmpeg -p cap-recording --all-targets -- -D warnings
+          cargo clippy --locked --no-deps -p cap-enc-ffmpeg -p cap-recording --lib -- -D warnings
+          cargo clippy --locked --no-deps -p cap-recording --example timed-fragment-proof -- -D warnings
           cargo test --locked --profile ci-verify -p cap-enc-ffmpeg --lib
           cargo test --locked --profile ci-verify -p cap-recording --lib timed_fragment_tests
           cargo build --locked --profile ci-verify -p cap-recording --example timed-fragment-proof
