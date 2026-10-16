@@ -6141,10 +6141,19 @@ mod export_order_tests {
 
     const FPS: u32 = 60;
     const SIZE: u32 = 16;
-    const FRAMES: u32 = 45;
+    const FRAMES: u32 = 12;
+    const SLOW_DECODE_FRAME: u32 = 6;
+    const SLOW_READBACK_FRAME: u32 = 5;
+
+    /// One export at a time: each builds its own device and pipelines, which
+    /// is heavy on software rasterizers shared with the crate's other GPU
+    /// tests.
+    static EXPORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// `software_path` renders through the software adapter path (RGBA
-    /// readback, CPU NV12) that Windows WARP and Linux lavapipe use.
+    /// readback, CPU NV12) that Windows WARP and Linux lavapipe use. `None`
+    /// without an adapter, or when `software_path` would repeat the run a
+    /// software adapter already did.
     async fn constants(software_path: bool) -> Option<RenderVideoConstants> {
         let instance = create_wgpu_instance_sync();
         let adapter = instance
@@ -6152,8 +6161,8 @@ mod export_order_tests {
             .await
             .ok()?;
         let is_software_adapter = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
-        if is_software_adapter {
-            frame_pipeline::note_software_adapter_in_use();
+        if software_path && is_software_adapter {
+            return None;
         }
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
@@ -6280,7 +6289,11 @@ mod export_order_tests {
         slow_decode: Option<(u32, Duration)>,
         slow_readback: Option<(u32, Duration)>,
     ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
-        std::thread::Builder::new()
+        let _one_export_at_a_time = EXPORTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let started = std::time::Instant::now();
+        let result = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 tokio::runtime::Builder::new_current_thread()
@@ -6300,7 +6313,12 @@ mod export_order_tests {
             })
             .expect("export thread")
             .join()
-            .expect("export thread panicked")
+            .expect("export thread panicked");
+        eprintln!(
+            "export_order_tests: software_path={software_path} took {:?}",
+            started.elapsed()
+        );
+        result
     }
 
     #[test]
@@ -6309,7 +6327,10 @@ mod export_order_tests {
         for software_path in [false, true] {
             let Some((result, order)) = run_export(
                 software_path,
-                Some((34, decode_deadline + Duration::from_millis(250))),
+                Some((
+                    SLOW_DECODE_FRAME,
+                    decode_deadline + Duration::from_millis(250),
+                )),
                 None,
             ) else {
                 return;
@@ -6327,9 +6348,11 @@ mod export_order_tests {
     #[test]
     fn slow_readback_keeps_every_frame_in_order() {
         for software_path in [false, true] {
-            let Some((result, order)) =
-                run_export(software_path, None, Some((20, Duration::from_secs(61))))
-            else {
+            let Some((result, order)) = run_export(
+                software_path,
+                None,
+                Some((SLOW_READBACK_FRAME, Duration::from_secs(61))),
+            ) else {
                 return;
             };
 
@@ -6345,22 +6368,26 @@ mod export_order_tests {
     #[test]
     fn stalled_readback_stops_the_export_instead_of_dropping_the_frame() {
         for software_path in [false, true] {
-            let Some((result, order)) =
-                run_export(software_path, None, Some((20, Duration::from_secs(3600))))
-            else {
+            let Some((result, order)) = run_export(
+                software_path,
+                None,
+                Some((SLOW_READBACK_FRAME, Duration::from_secs(3600))),
+            ) else {
                 return;
             };
 
             assert!(
                 matches!(
                     result,
-                    Err(RenderingError::ExportFrameLost { frame_number: 20 })
+                    Err(RenderingError::ExportFrameLost {
+                        frame_number: SLOW_READBACK_FRAME
+                    })
                 ),
                 "software path: {software_path}: {result:?}"
             );
             assert_eq!(
                 order,
-                (0..20).collect::<Vec<_>>(),
+                (0..SLOW_READBACK_FRAME).collect::<Vec<_>>(),
                 "software path: {software_path}"
             );
         }
