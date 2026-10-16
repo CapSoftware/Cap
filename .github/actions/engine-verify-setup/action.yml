@@ -139,12 +139,9 @@ runs:
         $warp = Get-ChildItem -Recurse -Path (Join-Path $dir 'pkg') -Filter 'd3d10warp.dll' |
           Where-Object { $_.FullName -match '\\(x64|amd64)\\' } | Select-Object -First 1
         if (-not $warp) { throw 'no x64 d3d10warp.dll in the package' }
-        foreach ($t in 'target\ci-verify', 'target\ci-verify\deps') {
-          New-Item -ItemType Directory -Force -Path $t | Out-Null
-          Copy-Item $warp.FullName $t
-        }
-        Add-Content -Path $env:GITHUB_PATH -Value $warp.DirectoryName
         scripts/verify/win-gpu-diag.ps1 -Preload $warp.FullName
+        scripts/verify/win-gpu-diag.ps1 -Preload $warp.FullName -DebugLayer
+        scripts/verify/win-gpu-diag.ps1 -DebugLayer
 
     - name: FFmpeg DLLs on PATH (Windows)
       if: runner.os == 'Windows'

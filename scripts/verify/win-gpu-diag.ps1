@@ -2,11 +2,13 @@
 # graphics DLLs, display devices, and the DXGI adapters with whether
 # D3D12CreateDevice (feature level 11_0, what wgpu asks for) succeeds on each.
 #
-#   win-gpu-diag.ps1 [-Preload <dll>]...
+#   win-gpu-diag.ps1 [-Preload <dll>]... [-DebugLayer]
 #
 # -Preload loads a DLL first (e.g. a NuGet d3d10warp.dll), the way a copy next
 # to the test executable would be picked up by the D3D12 runtime.
-param([string[]]$Preload = @())
+# -DebugLayer enables the D3D12 debug layer and a DXGI debug factory first, as
+# wgpu does in builds with debug assertions (InstanceFlags::debugging()).
+param([string[]]$Preload = @(), [switch]$DebugLayer)
 
 $ErrorActionPreference = 'Continue'
 
@@ -15,7 +17,7 @@ Write-Host "os: $($cv.ProductName) | InstallationType=$($cv.InstallationType) | 
 $cs = Get-CimInstance Win32_ComputerSystem
 Write-Host "machine: $($cs.Manufacturer) | $($cs.Model) | hypervisor=$($cs.HypervisorPresent)"
 
-foreach ($dll in 'd3d12.dll', 'D3D12Core.dll', 'd3d10warp.dll', 'd3d11.dll', 'dxgi.dll', 'dxcore.dll', 'dcomp.dll', 'vulkan-1.dll', 'opengl32.dll') {
+foreach ($dll in 'd3d12.dll', 'D3D12Core.dll', 'd3d12SDKLayers.dll', 'DXGIDebug.dll', 'd3d10warp.dll', 'd3d11.dll', 'dxgi.dll', 'dxcore.dll', 'dcomp.dll', 'vulkan-1.dll', 'opengl32.dll') {
     $path = Join-Path $env:WINDIR "System32\$dll"
     if (Test-Path $path) {
         Write-Host "dll: $dll present ($((Get-Item $path).VersionInfo.FileVersion))"
@@ -47,6 +49,12 @@ public static class CapDxDiag {
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     delegate int CreateFactory1(ref Guid riid, out IntPtr factory);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int CreateFactory2(uint flags, ref Guid riid, out IntPtr factory);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int GetDebugInterface(ref Guid riid, out IntPtr debug);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate void EnableDebugLayer(IntPtr self);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     delegate int CreateDevice(IntPtr adapter, int minLevel, ref Guid riid, out IntPtr device);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -89,7 +97,7 @@ public static class CapDxDiag {
         return string.Format("'{0}' vendor=0x{1:X4} device=0x{2:X4} flags={3}{4}", d.Description, d.VendorId, d.DeviceId, d.Flags, (d.Flags & 2) != 0 ? " (SOFTWARE)" : "");
     }
 
-    public static void Run() {
+    public static void Run(bool debugLayer) {
         IntPtr dxgi = LoadLibraryW("dxgi.dll");
         if (dxgi == IntPtr.Zero) { Console.WriteLine("dxgi: dxgi.dll failed to load, error " + Marshal.GetLastWin32Error()); return; }
         IntPtr d3d12 = LoadLibraryW("d3d12.dll");
@@ -97,10 +105,21 @@ public static class CapDxDiag {
         CreateDevice create = d3d12 == IntPtr.Zero ? null :
             Marshal.GetDelegateForFunctionPointer<CreateDevice>(GetProcAddress(d3d12, "D3D12CreateDevice"));
 
-        CreateFactory1 createFactory = Marshal.GetDelegateForFunctionPointer<CreateFactory1>(GetProcAddress(dxgi, "CreateDXGIFactory1"));
         Guid iidFactory4 = new Guid("1bc6ea02-ef36-464f-bf0c-21ca39e5168a");
         IntPtr factory;
-        int hr = createFactory(ref iidFactory4, out factory);
+        int hr;
+        if (debugLayer && d3d12 != IntPtr.Zero) {
+            Guid iidDebug = new Guid("344488b7-6846-474b-b989-f027448245e0");
+            IntPtr debug;
+            hr = Marshal.GetDelegateForFunctionPointer<GetDebugInterface>(GetProcAddress(d3d12, "D3D12GetDebugInterface"))(ref iidDebug, out debug);
+            if (hr < 0) Console.WriteLine(string.Format("debug: D3D12GetDebugInterface failed 0x{0:X8}", hr));
+            else { Slot<EnableDebugLayer>(debug, 3)(debug); Console.WriteLine("debug: D3D12 debug layer enabled"); }
+            hr = Marshal.GetDelegateForFunctionPointer<CreateFactory2>(GetProcAddress(dxgi, "CreateDXGIFactory2"))(1, ref iidFactory4, out factory);
+            Console.WriteLine(string.Format("debug: CreateDXGIFactory2(DEBUG) hr=0x{0:X8}", hr));
+            if (hr < 0) hr = Marshal.GetDelegateForFunctionPointer<CreateFactory1>(GetProcAddress(dxgi, "CreateDXGIFactory1"))(ref iidFactory4, out factory);
+        } else {
+            hr = Marshal.GetDelegateForFunctionPointer<CreateFactory1>(GetProcAddress(dxgi, "CreateDXGIFactory1"))(ref iidFactory4, out factory);
+        }
         if (hr < 0) { Console.WriteLine(string.Format("dxgi: CreateDXGIFactory1(IDXGIFactory4) failed 0x{0:X8}", hr)); return; }
 
         // What wgpu's DX12 backend sees: IDXGIFactory1::EnumAdapters1 (vtable 12).
@@ -132,4 +151,5 @@ public static class CapDxDiag {
 foreach ($dll in $Preload) {
     Write-Host "preload: $dll -> $([CapDxDiag]::Load($dll))"
 }
-[CapDxDiag]::Run()
+Write-Host "mode: debug-layer=$([bool]$DebugLayer)"
+[CapDxDiag]::Run([bool]$DebugLayer)
