@@ -23,10 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { config: base, copy: a, forced: "none 2000 2000 1200" }
-          - { config: base, copy: b, forced: "none 3000 600" }
+          - { config: base, copy: a, forced: "" }
+          - { config: base, copy: b, forced: "" }
           - { config: noidle, copy: a, forced: "" }
-          - { config: pr2638, copy: a, forced: "none 2000 1200" }
+          - { config: pr2638, copy: a, forced: "" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,21 +45,26 @@ jobs:
           tier: full
       - name: Build
         run: scripts/verify/run.sh full --suites export --no-run
-      - name: Repeat the 120 s jitter export alongside the whole export suite
+      - name: Repeat the 120 s jitter export alongside two concurrent export suites
         env:
           NO_IDLE: ${{ matrix.config == 'noidle' && '1' || '' }}
         run: |
           set +e
           if [ -n "$NO_IDLE" ]; then export AVFDBG_NO_IDLE=1; fi
           P="$RUNNER_TEMP/probe"
-          for i in $(seq 1 5); do
-            mkdir -p "$P/suite-$i"
-            export CAP_VERIFY_REPORT_DIR="$P/suite-$i/report"
-            export AVFDBG_DIR="$RUNNER_TEMP/trace/suite-$i"
-            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
-              > "$P/suite-$i/log.txt" 2>&1
-            python3 -I probe-patches/summarize.py "suite rep $i" "$CAP_VERIFY_REPORT_DIR" "$AVFDBG_DIR" "$P/suite-$i/trace"
-            rm -r "$AVFDBG_DIR"
+          for i in $(seq 1 6); do
+            for k in x y; do
+              (
+                mkdir -p "$P/suite-$i$k"
+                export CAP_VERIFY_REPORT_DIR="$P/suite-$i$k/report"
+                export AVFDBG_DIR="$RUNNER_TEMP/trace/suite-$i$k"
+                cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
+                  > "$P/suite-$i$k/log.txt" 2>&1
+                python3 -I probe-patches/summarize.py "suite rep $i$k" "$CAP_VERIFY_REPORT_DIR" "$AVFDBG_DIR" "$P/suite-$i$k/trace"
+                rm -r "$AVFDBG_DIR"
+              ) &
+            done
+            wait
           done
           true
       - name: Jitter export alone, forced idle teardown at a camera request
