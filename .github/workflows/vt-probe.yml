@@ -1,6 +1,9 @@
 name: VT encoder probe (scratch, not for merge)
 on:
   workflow_dispatch:
+  push:
+    branches: [scratch/mac-encoder-probe]
+    paths: [".github/workflows/vt-probe.yml"]
 jobs:
   probe:
     runs-on: blacksmith-6vcpu-macos-15
