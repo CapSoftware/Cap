@@ -1,0 +1,68 @@
+name: Instant mixer sparse sample regression
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+jobs:
+  compare:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Link native framework
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Preserve same strict PCM probe on both product versions
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixer-regression"
+          cp crates/recording/src/sources/audio_mixer.rs "$RUNNER_TEMP/mixer-regression/candidate.rs"
+          git fetch origin 9be7b7b3dba6ef37e126c0558620c18fff2477eb --depth=1
+          git show 9be7b7b3dba6ef37e126c0558620c18fff2477eb:crates/recording/src/sources/audio_mixer.rs > "$RUNNER_TEMP/mixer-regression/main.rs"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "mixer-regression"
+          candidate = (root / "candidate.rs").read_text()
+          start = candidate.index("    struct PcmProbe {")
+          end = candidate.index("    #[tokio::test]\n    async fn mix_sources()", start)
+          tests = candidate[start:end]
+          main = (root / "main.rs").read_text()
+          at = main.index("    #[tokio::test]\n    async fn mix_sources()")
+          (root / "main.rs").write_text(main[:at] + tests + main[at:])
+          for arm in ["main", "candidate"]:
+              path = root / f"{arm}.rs"
+              source = path.read_text().replace(
+                  "        assert_eq!(\n            probe.peaks(0),\n            [14_400, 28_800, 43_200],",
+                  '        eprintln!("SPARSE output_samples={} peaks={:?}", probe.pcm.len(), probe.peaks(0));\n        assert_eq!(\n            probe.peaks(0),\n            [14_400, 28_800, 43_200],'
+              )
+              path.write_text(source)
+          PY
+      - name: Compare unchanged strict sparse probe
+        run: |
+          set +e
+          set -o pipefail
+          failed=0
+          for arm in main candidate; do
+            cp "$RUNNER_TEMP/mixer-regression/$arm.rs" crates/recording/src/sources/audio_mixer.rs
+            cargo test -p cap-recording --lib --profile ci-verify --locked pcm_sparse_system_and_pause_resume_preserve_later_gaps -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-regression/$arm.log"
+            status=$?
+            echo "ARM=$arm EXIT=$status"
+            if [ "$status" != 0 ]; then failed=1; fi
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-sparse-comparison
+          path: ${{ runner.temp }}/mixer-regression
+          retention-days: 7
