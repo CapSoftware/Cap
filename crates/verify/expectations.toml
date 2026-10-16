@@ -601,20 +601,6 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 # #2641 (bug B1), #2643 (bug C), #2644 (bug E).
 
 [[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "loss-time"
-bound = { count = 1, secs = [2.5, 20.5] }
-reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/static-screen"
-class = "missing"
-bound = { count = 1 }
-reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2641"
-
-[[xfail]]
 case = "crash/recorder-kill/oop/r*"
 class = "loss-time"
 platforms = ["macos"]
