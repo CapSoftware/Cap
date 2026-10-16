@@ -23,6 +23,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
+      sync: ${{ steps.filter.outputs.sync }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
     steps:
       - name: Checkout
@@ -65,6 +66,24 @@ jobs:
               - 'scripts/sync-desktop-versions.mjs'
               - 'scripts/verify-gpui-release-inputs.mjs'
               - 'scripts/verify-windows-stack.mjs'
+            sync:
+              - '.github/workflows/ci.yml'
+              - 'crates/audio/**'
+              - 'crates/editor/**'
+              - 'crates/enc-avfoundation/**'
+              - 'crates/enc-ffmpeg/**'
+              - 'crates/enc-mediafoundation/**'
+              - 'crates/export/**'
+              - 'crates/media-info/**'
+              - 'crates/project/**'
+              - 'crates/recording/**'
+              - 'crates/render-farm/**'
+              - 'crates/rendering/**'
+              - 'crates/rnnoise/**'
+              - 'crates/timestamp/**'
+              - 'scripts/recording-reliability.py'
+              - 'scripts/recording-reliability-owned-process.cs'
+              - 'scripts/test-recording-reliability.py'
             tauri-plugins:
               - 'Cargo.lock'
               - 'bun.lock'
@@ -188,51 +207,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-  clippy:
-    name: Clippy
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-2022
-    runs-on: ${{ matrix.settings.runner }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          targets: ${{ matrix.settings.target }}
-          components: clippy
-
-      - uses: ./.github/actions/setup-rust-cache
-        with:
-          target: ${{ matrix.settings.target }}
-          prefix-key: v1-rust-clippy
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Run setup
-        shell: bash
-        run: node scripts/setup.js
-        env:
-          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
-
-      - name: Test desktop installation and storage helpers
-        shell: bash
-        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
-
-      # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
-      # plus the cap-muxer and cap-cli sidecars built from this workspace.
-      - name: Run Clippy
-        run: cargo clippy --workspace --exclude cap-desktop --all-features --locked -- -D warnings
-
   lint-biome:
     name: Lint (Biome)
     runs-on: ubuntu-latest
@@ -248,46 +222,14 @@ jobs:
       - name: Run Biome
         run: biome ci . || true
 
-  rust-tests:
-    name: Rust tests (Linux)
+  # One job per platform so each macOS PR run takes a single runner and shares
+  # one checkout, native-deps setup and cache restore. Main runs every step so
+  # the cache it saves covers every step a PR can run.
+  desktop:
+    name: Desktop
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    timeout-minutes: 60
-    runs-on: ubuntu-24.04
-    env:
-      RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
-      LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Linux desktop dependencies
-        uses: ./.github/actions/install-desktop-deps
-
-      - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
-
-      - uses: ./.github/actions/setup-rust-cache
-        with:
-          target: x86_64-unknown-linux-gnu
-          prefix-key: v1-rust-tests
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Run setup
-        run: node scripts/setup.js
-
-      - name: Test desktop regressions
-        run: |
-          cargo test --locked -p cap-utils -p cap-cli-install --lib
-          cargo test --locked -p cap --bin cap record::tests
-          cargo test --locked -p cap-recording --lib -- --test-threads=1
-          cargo test --locked -p cap-enc-ffmpeg
-
-  build-gpui:
-    name: Build GPUI Desktop
-    needs: changes
-    if: needs.changes.outputs.gpui == 'true'
-    timeout-minutes: 90
+    if: needs.changes.outputs.gpui == 'true' || needs.changes.outputs.sync == 'true'
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -300,9 +242,12 @@ jobs:
             runner: ubuntu-24.04
     runs-on: ${{ matrix.settings.runner }}
     env:
-      # Full debuginfo for the opt-level 2 dependency tree is most of the
+      # Full debuginfo for the opt-level 2 GPUI dependency tree is most of the
       # target dir and the link time, and nothing in CI reads it.
       CARGO_PROFILE_DEV_DEBUG: "0"
+      RUN_GPUI: ${{ needs.changes.outputs.gpui == 'true' || github.ref == 'refs/heads/main' }}
+      RUN_RUST: ${{ needs.changes.outputs.rust == 'true' || github.ref == 'refs/heads/main' }}
+      RUN_SYNC: ${{ needs.changes.outputs.sync == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -318,17 +263,25 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         uses: ./.github/actions/install-desktop-deps
 
-      - name: Rust setup
+      - name: GPUI Rust setup
         uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: ${{ matrix.settings.target }}
 
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.settings.target }}
+          components: clippy
+
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
-          prefix-key: v1-rust-gpui
+          prefix-key: v1-rust-desktop
           save-cache: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: apps/desktop-gpui -> target
+          workspaces: |
+            . -> target
+            apps/desktop-gpui -> target
 
       - name: Run setup
         shell: bash
@@ -336,16 +289,46 @@ jobs:
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      - name: Add FFmpeg DLLs to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
+      # plus the cap-muxer and cap-cli sidecars built from this workspace.
+      - name: Run Clippy
+        if: env.RUN_RUST == 'true' && runner.os != 'Linux'
+        run: cargo clippy --workspace --exclude cap-desktop --all-features --locked -- -D warnings
+
+      - name: Test desktop installation and storage helpers
+        if: env.RUN_RUST == 'true'
+        shell: bash
+        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
+
+      # The A/V sync steps below run cap-recording and cap-enc-ffmpeg too.
+      - name: Test Linux desktop regressions
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux'
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug
+        run: |
+          cargo test --locked -p cap --bin cap record::tests
+          if [[ "$RUN_SYNC" != "true" ]]; then
+            cargo test --locked -p cap-recording --lib -- --test-threads=1
+            cargo test --locked -p cap-enc-ffmpeg
+          fi
+
       # The test build compiles every line the binary build does (the app has
-      # no cfg(not(test)) code), so a separate binary build only repeated the
-      # app crate's compile and link. Release builds still produce the binary.
+      # no cfg(not(test)) code). Release builds still produce the binary.
       - name: Prepare GPUI dependency
+        if: env.RUN_GPUI == 'true'
         shell: bash
         run: |
           node scripts/sync-desktop-versions.mjs
           ./scripts/prepare-gpui-dependency.sh
 
       - name: Test GPUI desktop
+        if: env.RUN_GPUI == 'true'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -364,6 +347,173 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+
+      # A/V sync: unit + property tests for the timestamp pipeline, then the
+      # synthetic device matrix driven through the real recording pipeline.
+      # The nightly sync-tests workflow runs the same matrix with more cases.
+      - name: Setup Python
+        if: env.RUN_SYNC == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: RNNoise lifecycle regression tests
+        if: env.RUN_SYNC == 'true'
+        run: cargo test --locked -p cap-rnnoise --lib
+
+      - name: Recording metadata and harness regression tests
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: |
+          cargo test --locked -p cap-project --lib
+          python -B scripts/test-recording-reliability.py
+
+      - name: Compile recording process supervisor (Windows)
+        if: env.RUN_SYNC == 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Type -Path scripts/recording-reliability-owned-process.cs
+
+      - name: Install software Vulkan driver (Linux)
+        if: env.RUN_SYNC == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      # Hosted Windows runners have no audio endpoint, so WASAPI loopback
+      # capture cannot run without a virtual sound card. Scream 3.6 provides a
+      # signed null render device; later releases hang headless runners on a
+      # PnP consent prompt.
+      - name: Install virtual audio device (Windows)
+        if: env.RUN_SYNC == 'true' && runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/duncanthrax/scream/releases/download/3.6/Scream3.6.zip -OutFile Scream3.6.zip
+          $expected = "25ea5e778b4e6995a98d448b9b5f6d321f681663f1aeeec69d8e63183d008b19"
+          $actual = (Get-FileHash -Algorithm SHA256 Scream3.6.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Scream3.6.zip SHA-256 mismatch: got $actual, expected $expected" }
+          Expand-Archive -Path Scream3.6.zip -DestinationPath Scream
+          $cert = (Get-AuthenticodeSignature Scream\Install\driver\Scream.sys).SignerCertificate
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new("TrustedPublisher", "LocalMachine")
+          $store.Open("ReadWrite")
+          $store.Add($cert)
+          $store.Close()
+          Scream\Install\helpers\devcon.exe install Scream\Install\driver\Scream.inf *Scream
+          if ($LASTEXITCODE -gt 1) { throw "devcon install failed with exit code $LASTEXITCODE" }
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+
+      - name: Timestamp pipeline unit + property tests
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: |
+          cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
+          cargo test --locked -p cap-camera-effects --lib
+          cargo test --locked -p cap-recording --lib -- --test-threads=1
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects
+          cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
+
+      - name: Editor audio playback and export regressions
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: |
+          cargo test --locked -p cap-audio --lib
+          cargo test --locked -p cap-export --lib
+          cargo test --locked -p cap-editor --lib audio::tests::
+          cargo test --locked -p cap-editor --lib audio_output::tests::
+          cargo test --locked -p cap-editor --lib playback::tests::
+
+      - name: Render farm engine
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: cargo test --locked -p cap-render-farm
+
+      - name: Instant mode scenario harness
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: cargo test --locked -p cap-recording --test instant_mode_scenarios
+
+      # The hardware harnesses only run on developer machines, but they must
+      # keep compiling: nothing else builds the full test target set.
+      - name: Compile recording test harnesses
+        if: env.RUN_SYNC == 'true'
+        shell: bash
+        run: cargo check --locked -p cap-recording --tests
+
+      - name: AVFoundation encoder tests (macOS)
+        if: env.RUN_SYNC == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: cargo test --locked -p cap-enc-avfoundation
+
+      - name: WASAPI loopback endpoint tests (Windows)
+        if: env.RUN_SYNC == 'true' && runner.os == 'Windows'
+        shell: bash
+        env:
+          CAP_REQUIRE_AUDIO_ENDPOINT: "1"
+        run: cargo test --locked -p cap-recording --test windows_loopback -- --nocapture
+
+      - name: Synthetic device matrix
+        id: matrix
+        if: env.RUN_SYNC == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          CAP_SYNC_MATRIX_REPORT: ${{ github.workspace }}/sync-matrix-${{ matrix.settings.runner }}.json
+          CAP_SYNC_MATRIX_RANDOM_CASES: "6"
+        run: cargo test --locked -p cap-recording --test sync_matrix -- --nocapture
+
+      # Linux-only: the Windows WARP adapter composites blank frames and the
+      # macOS runners' paravirtualized Metal cannot sustain a wall-clock
+      # playback measurement.
+      - name: Editor playback sync harness
+        if: env.RUN_SYNC == 'true' && runner.os == 'Linux'
+        shell: bash
+        run: cargo run --locked -p cap -- --log-level info selftest playback --duration 30 --json
+
+      - name: Report A/V sync findings
+        if: always() && env.RUN_SYNC == 'true'
+        shell: bash
+        run: |
+          REPORT="${{ github.workspace }}/sync-matrix-${{ matrix.settings.runner }}.json"
+          {
+            echo "## A/V sync matrix: ${{ matrix.settings.runner }}"
+            echo ""
+            if [ -f "$REPORT" ]; then
+              PYTHONIOENCODING=utf-8 python3 - "$REPORT" << 'PYEOF'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print(f"Randomized seed: `{report.get('seed')}` (rerun with CAP_SYNC_MATRIX_SEED)")
+          print()
+          print("| Case | Result | Detail |")
+          print("| --- | --- | --- |")
+          for case in report.get("cases", []):
+              if not case["pass"]:
+                  verdict = "FAIL"
+              elif "skipped:" in case["detail"]:
+                  verdict = "SKIP"
+              else:
+                  verdict = "PASS"
+              detail = case["detail"].replace("|", "\\|")
+              print(f"| {case['name']} | {verdict} | {detail} |")
+          PYEOF
+            else
+              echo "No report produced, the matrix crashed before writing results."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload A/V sync findings
+        if: always() && env.RUN_SYNC == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sync-matrix-${{ matrix.settings.runner }}
+          path: ${{ github.workspace }}/sync-matrix-${{ matrix.settings.runner }}.json
+          if-no-files-found: ignore
+
+      - name: Fail on A/V sync matrix failures
+        if: steps.matrix.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Synthetic sync matrix reported failures; see the job summary." >&2
+          exit 1
 
   tauri-plugins:
     name: Verify Tauri plugin versions
