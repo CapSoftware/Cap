@@ -83,6 +83,9 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           tier: full
+      - name: Install scoped Rust validation tools
+        shell: pwsh
+        run: rustup component add rustfmt clippy
       - name: Build and run retained interleaved probes
         shell: pwsh
         run: python scripts/verify/crash-windows-retention.py
