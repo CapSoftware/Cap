@@ -379,7 +379,8 @@ impl MFDecoder {
                                 if let Some(cached) =
                                     cached_frame_for(&cache, last_decoded_frame, frame)
                                 {
-                                    let _ = reply.send(cached.to_decoded_frame());
+                                    let _ =
+                                        reply.send(cached.to_decoded_frame().with_matrix(matrix));
                                     readahead_target =
                                         readahead_target.max(frame + readahead_frames);
                                     cache_min = frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
