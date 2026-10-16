@@ -183,12 +183,58 @@ fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u3
 }
 
 pub struct FFmpegDecoder {
-    input: avformat::context::Input,
+    input: DecoderInput,
     decoder: avcodec::decoder::Video,
     stream_index: usize,
     hw_device: Option<HwDevice>,
     start_time: i64,
     _temp_file: Option<NamedTempFile>,
+}
+
+/// The decoder's packet source. Test builds with the `scripted` feature can
+/// substitute scripted media; otherwise this is always the opened file.
+enum DecoderInput {
+    File(avformat::context::Input),
+    #[cfg(feature = "scripted")]
+    Scripted(crate::scripted::Demuxer),
+}
+
+impl DecoderInput {
+    fn seek(&mut self, position: i64) -> Result<(), ffmpeg::Error> {
+        match self {
+            Self::File(input) => input.seek(position, ..position),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => demuxer.seek(position),
+        }
+    }
+
+    fn packets(&mut self) -> DecoderPackets<'_> {
+        match self {
+            Self::File(input) => DecoderPackets::File(input.packets()),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => DecoderPackets::Scripted(demuxer),
+        }
+    }
+}
+
+enum DecoderPackets<'a> {
+    File(PacketIter<'a>),
+    #[cfg(feature = "scripted")]
+    Scripted(&'a mut crate::scripted::Demuxer),
+}
+
+impl Iterator for DecoderPackets<'_> {
+    type Item = (usize, ffmpeg::Packet);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::File(packets) => packets
+                .next()
+                .map(|(stream, packet)| (stream.index(), packet)),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => None,
+        }
+    }
 }
 
 fn combine_fragmented_segments(dir_path: &std::path::Path) -> Result<NamedTempFile, String> {
@@ -246,6 +292,19 @@ impl FFmpegDecoder {
         hw_device_type: Option<AVHWDeviceType>,
     ) -> Result<Self, String> {
         let path = path.into();
+
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(&path) {
+            let demuxer = crate::scripted::Demuxer::new(state);
+            return Ok(FFmpegDecoder {
+                decoder: demuxer.open_decoder()?,
+                start_time: demuxer.start_time(),
+                input: DecoderInput::Scripted(demuxer),
+                stream_index: 0,
+                hw_device: None,
+                _temp_file: None,
+            });
+        }
 
         let (effective_path, temp_file): (PathBuf, Option<NamedTempFile>) = if path.is_dir() {
             let temp = combine_fragmented_segments(&path)?;
@@ -312,7 +371,7 @@ impl FFmpegDecoder {
         }
 
         Ok(FFmpegDecoder {
-            input,
+            input: DecoderInput::File(input),
             decoder,
             stream_index,
             hw_device,
@@ -327,7 +386,7 @@ impl FFmpegDecoder {
         let position = rescale::Rescale::rescale(&timestamp_us, (1, 1_000_000), rescale::TIME_BASE);
 
         self.decoder.flush();
-        self.input.seek(position, ..position)
+        self.input.seek(position)
     }
 
     pub fn frames(&mut self) -> FramesIter<'_> {
@@ -356,7 +415,7 @@ unsafe impl Send for FFmpegDecoder {}
 
 pub struct FramesIter<'a> {
     decoder: &'a mut avcodec::decoder::Video,
-    packets: PacketIter<'a>,
+    packets: DecoderPackets<'a>,
     stream_index: usize,
     hw_device: Option<&'a mut HwDevice>,
 }
@@ -371,6 +430,11 @@ impl<'a> Iterator for FramesIter<'a> {
     type Item = Result<avframe::Video, avutil::error::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        #[cfg(feature = "scripted")]
+        if let DecoderPackets::Scripted(demuxer) = &mut self.packets {
+            return demuxer.next_frame().map(Ok);
+        }
+
         let mut frame = avframe::Video::empty();
 
         loop {
@@ -393,7 +457,7 @@ impl<'a> Iterator for FramesIter<'a> {
 
             let (stream, packet) = self.packets.next()?;
 
-            if stream.index() != self.stream_index {
+            if stream != self.stream_index {
                 continue;
             };
 

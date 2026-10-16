@@ -6,6 +6,11 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+# Read-only decoder status accessors for the cap-verify suite (production
+# baseline only). Never enabled by the app.
+verify-hooks = []
+
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
@@ -63,6 +68,8 @@ windows_0_58 = { package = "windows", version = "0.58", features = [
 ] }
 
 [dev-dependencies]
+cap-video-decode = { path = "../video-decode", features = ["scripted"] }
+cap-verify-expect = { path = "../verify-expect" }
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
 

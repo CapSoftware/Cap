@@ -340,6 +340,19 @@ pub struct SegmentVideoPaths {
     pub camera: Option<PathBuf>,
 }
 
+#[cfg(feature = "verify-hooks")]
+impl RecordingSegmentDecoders {
+    pub fn screen_decoder_status(&self) -> &decoder::DecoderStatus {
+        self.screen.decoder_status()
+    }
+
+    pub fn camera_decoder_status(&self) -> Option<&decoder::DecoderStatus> {
+        self.camera
+            .as_ref()
+            .map(decoder::AsyncVideoDecoderHandle::decoder_status)
+    }
+}
+
 impl RecordingSegmentDecoders {
     pub async fn new(
         _recording_meta: &RecordingMeta,

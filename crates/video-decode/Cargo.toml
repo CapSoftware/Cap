@@ -6,6 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+# Test-only: lets decoder model tests register scripted media in place of files.
+scripted = []
+
 [dependencies]
 ffmpeg.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }

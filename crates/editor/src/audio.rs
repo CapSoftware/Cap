@@ -1274,6 +1274,26 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         }
     }
 
+    /// Blocks until the next `samples` reads are rendered (or the render
+    /// finished or failed). Returns false on timeout or failure.
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn wait_until_rendered(&self, samples: usize, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let ready = match &self.mode {
+                PrerenderedAudioBufferMode::Progressive(buffer) => buffer.rendered(samples),
+                PrerenderedAudioBufferMode::Streaming(buffer) => buffer.rendered(samples),
+            };
+            match ready {
+                Some(ready) if !ready && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                Some(ready) => return ready,
+                None => return false,
+            }
+        }
+    }
+
     pub fn set_playhead(&mut self, playhead_secs: f64) {
         match &mut self.mode {
             PrerenderedAudioBufferMode::Progressive(buffer) => buffer.set_playhead(playhead_secs),
@@ -1420,6 +1440,35 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         }
     }
 
+    /// Whether the next `samples` reads are rendered; `None` once the
+    /// render can no longer produce them.
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, samples: usize) -> Option<bool> {
+        let timeline = &self.timeline;
+        let start = self.read_position.min(timeline.samples.len());
+        let end = (self.read_position + samples).min(timeline.samples.len());
+        if start >= end || timeline.complete.load(Ordering::Acquire) {
+            return Some(true);
+        }
+        let primary_end = timeline.primary_end.load(Ordering::Acquire);
+        let wrap_end = timeline.wrap_end.load(Ordering::Acquire);
+        let primary = timeline.primary_start;
+        let covered = if start >= primary {
+            primary_end >= end
+        } else if end <= primary {
+            wrap_end >= end
+        } else {
+            wrap_end >= primary && primary_end >= end
+        };
+        if covered {
+            Some(true)
+        } else if timeline.stop.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(false)
+        }
+    }
+
     pub fn set_playhead(&mut self, playhead_secs: f64) {
         let sample_position = (playhead_secs * self.sample_rate as f64) as usize * self.channels;
         self.read_position = sample_position.min(self.timeline.samples.len());
@@ -1479,6 +1528,13 @@ struct StreamingAudioBuffer<T: FromSampleBytes> {
 }
 
 impl<T: FromSampleBytes> StreamingAudioBuffer<T> {
+    /// This renderer produces samples inside `fill` itself, so every read
+    /// is rendered by the time it is made.
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, _samples: usize) -> Option<bool> {
+        Some(true)
+    }
+
     const PROCESSING_SAMPLES_COUNT: usize = 1024;
     const READY_WINDOW_SECS: f64 = 0.25;
     const BUFFER_SECS: usize = 2;

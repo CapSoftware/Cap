@@ -23,6 +23,11 @@ pub struct KeyframeIndex {
 
 impl KeyframeIndex {
     pub fn build(path: &Path) -> Result<Self, String> {
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(path) {
+            return Ok(Self::from_script(&state.script));
+        }
+
         let build_start = std::time::Instant::now();
 
         let mut input = avformat::input(path)
@@ -109,6 +114,28 @@ impl KeyframeIndex {
             width,
             height,
         })
+    }
+
+    #[cfg(feature = "scripted")]
+    fn from_script(script: &crate::scripted::Script) -> Self {
+        let fps = script.avg_fps();
+        let keyframes = script
+            .frames
+            .iter()
+            .filter(|frame| frame.keyframe)
+            .map(|frame| {
+                let secs = script.secs(frame.pts);
+                ((secs * fps).round() as u32, secs)
+            })
+            .collect();
+        Self {
+            keyframes,
+            fps,
+            duration_secs: script.duration_secs(),
+            pixel_format: Some(cv::PixelFormat::_420V),
+            width: crate::scripted::FRAME_WIDTH,
+            height: crate::scripted::FRAME_HEIGHT,
+        }
     }
 
     pub fn nearest_keyframe_before(&self, target_frame: u32) -> Option<(u32, f64)> {
@@ -226,8 +253,7 @@ pub struct AVAssetReaderDecoder {
     path: PathBuf,
     pixel_format: cv::PixelFormat,
     tokio_handle: TokioHandle,
-    track_output: R<av::AssetReaderTrackOutput>,
-    reader: R<av::AssetReader>,
+    source: ReaderSource,
     width: u32,
     height: u32,
     keyframe_index: Option<Arc<KeyframeIndex>>,
@@ -294,7 +320,7 @@ impl AVAssetReaderDecoder {
 
         let seek_time = compute_seek_time(keyframe_index.as_ref(), start_time);
 
-        let (track_output, reader) = Self::get_reader_track_output(
+        let source = Self::get_reader_track_output(
             &path,
             seek_time,
             &tokio_handle,
@@ -307,8 +333,7 @@ impl AVAssetReaderDecoder {
             path,
             pixel_format,
             tokio_handle,
-            track_output,
-            reader,
+            source,
             width,
             height,
             keyframe_index,
@@ -317,11 +342,11 @@ impl AVAssetReaderDecoder {
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
-        self.reader.cancel_reading();
+        self.source.cancel_reading();
 
         let seek_time = compute_seek_time(self.keyframe_index.as_ref(), requested_time);
 
-        (self.track_output, self.reader) = Self::get_reader_track_output(
+        self.source = Self::get_reader_track_output(
             &self.path,
             seek_time,
             &self.tokio_handle,
@@ -370,7 +395,20 @@ impl AVAssetReaderDecoder {
         pixel_format: cv::PixelFormat,
         width: u32,
         height: u32,
-    ) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
+    ) -> Result<ReaderSource, String> {
+        let time_range = cm::TimeRange {
+            start: cm::Time::with_secs(time as f64, 100),
+            duration: cm::Time::infinity(),
+        };
+
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(path) {
+            return Ok(ReaderSource::Scripted(crate::scripted::AvfReader::start(
+                state,
+                time_range.start,
+            )));
+        }
+
         let asset = av::UrlAsset::with_url(
             &ns::Url::with_fs_path_str(
                 path.to_str()
@@ -383,11 +421,6 @@ impl AVAssetReaderDecoder {
 
         let mut reader = av::AssetReader::with_asset(&asset)
             .map_err(|e| format!("AssetReader::with_asset: {e}"))?;
-
-        let time_range = cm::TimeRange {
-            start: cm::Time::with_secs(time as f64, 100),
-            duration: cm::Time::infinity(),
-        };
 
         reader.set_time_range(time_range);
 
@@ -424,12 +457,15 @@ impl AVAssetReaderDecoder {
             .start_reading()
             .map_err(|e| format!("reader.start_reading: {e}"))?;
 
-        Ok((reader_track_output, reader))
+        Ok(ReaderSource::Native {
+            track_output: reader_track_output,
+            reader,
+        })
     }
 
     pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
-            track_output: &mut self.track_output,
+            source: &mut self.source,
         }
     }
 
@@ -442,15 +478,38 @@ impl AVAssetReaderDecoder {
     }
 }
 
+enum ReaderSource {
+    Native {
+        track_output: R<av::AssetReaderTrackOutput>,
+        reader: R<av::AssetReader>,
+    },
+    #[cfg(feature = "scripted")]
+    Scripted(crate::scripted::AvfReader),
+}
+
+impl ReaderSource {
+    fn cancel_reading(&mut self) {
+        match self {
+            Self::Native { reader, .. } => reader.cancel_reading(),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => {}
+        }
+    }
+}
+
 pub struct FramesIter<'a> {
-    track_output: &'a mut av::AssetReaderTrackOutput,
+    source: &'a mut ReaderSource,
 }
 
 impl<'a> Iterator for FramesIter<'a> {
     type Item = ns::ExResult<'static, arc::R<cm::SampleBuf>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.track_output.next_sample_buf().transpose()
+        match self.source {
+            ReaderSource::Native { track_output, .. } => track_output.next_sample_buf().transpose(),
+            #[cfg(feature = "scripted")]
+            ReaderSource::Scripted(reader) => reader.next_sample_buf().map(Ok),
+        }
     }
 }
 

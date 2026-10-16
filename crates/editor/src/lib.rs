@@ -7,6 +7,10 @@ mod segments;
 mod telemetry;
 
 pub use audio::{AudioRenderer, MusicTracks};
+#[cfg(feature = "test-hooks")]
+pub use audio::AudioSegment;
+#[cfg(feature = "test-hooks")]
+pub use audio_output::{OfflineAudioSink, PlaySpec};
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
 };

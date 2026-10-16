@@ -266,13 +266,9 @@ fn drain_source_commands<T: FromSampleBytes>(
     }
 }
 
-/// Renders one output block from the active source: applies the video
-/// playhead sync policy, fills the buffer and acknowledges the first
-/// consumed block. Shared by the live cpal callback and the headless sink so
-/// harnesses exercise the exact production logic.
-fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
+/// Re-anchors the audio on the video playhead when it jumps or drifts.
+fn sync_video_playhead<T: FromSampleBytes + cpal::FromSample<f32>>(
     source: &mut ActiveSource<T>,
-    buffer: &mut [T],
     latency_secs: f64,
 ) {
     if source.playhead_rx.has_changed().unwrap_or(false) {
@@ -287,6 +283,18 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
 
         source.last_video_playhead = video_playhead;
     }
+}
+
+/// Renders one output block from the active source: applies the video
+/// playhead sync policy, fills the buffer and acknowledges the first
+/// consumed block. Shared by the live cpal callback and the headless sink so
+/// harnesses exercise the exact production logic.
+fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
+    source: &mut ActiveSource<T>,
+    buffer: &mut [T],
+    latency_secs: f64,
+) {
+    sync_video_playhead(source, latency_secs);
 
     source.buffer.fill(buffer);
 
@@ -474,6 +482,96 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
     }
 
     info!("Headless audio output thread finished");
+}
+
+/// A sink with no device and no clock, for verification harnesses: the
+/// caller pulls every block, and each pull first waits until the samples it
+/// reads are rendered, so the PCM depends only on the sequence of plays,
+/// seeks and pulls, never on render speed. Sources are built by the same
+/// `install_source` as the device and headless sinks.
+#[cfg(feature = "test-hooks")]
+pub struct OfflineAudioSink {
+    source_rx: std_mpsc::Receiver<SourceCommand<f32>>,
+    active: Option<ActiveSource<f32>>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl AudioOutput {
+    /// Output at [`HEADLESS_SAMPLE_RATE`] / [`HEADLESS_CHANNELS`] whose blocks
+    /// are pulled through the returned sink. `play` returns once the source
+    /// is installed.
+    pub fn new_offline() -> (Self, OfflineAudioSink) {
+        let (control_tx, control_rx) = std_mpsc::channel();
+        let (source_tx, source_rx) = std_mpsc::channel();
+        if let Err(e) = std::thread::Builder::new()
+            .name("cap-audio-offline".into())
+            .spawn(move || control_thread_offline(control_rx, source_tx))
+        {
+            error!("Failed to spawn offline audio output thread: {e}");
+        }
+        (
+            Self {
+                control_tx,
+                next_generation: AtomicU64::new(0),
+            },
+            OfflineAudioSink {
+                source_rx,
+                active: None,
+            },
+        )
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl OfflineAudioSink {
+    /// Renders the next interleaved block. Returns false (and silence) when
+    /// no source is installed or its samples did not render within
+    /// `timeout`.
+    pub fn pull(&mut self, block: &mut [f32], timeout: Duration) -> bool {
+        drain_source_commands(&mut self.active, &self.source_rx);
+        let Some(source) = self.active.as_mut() else {
+            block.fill(0.0);
+            return false;
+        };
+        sync_video_playhead(source, 0.0);
+        let rendered = source.buffer.wait_until_rendered(block.len(), timeout);
+        render_source_block(source, block, 0.0);
+        rendered
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn control_thread_offline(
+    control_rx: std_mpsc::Receiver<ControlMsg>,
+    source_tx: std_mpsc::Sender<SourceCommand<f32>>,
+) {
+    let output_info = AudioInfo::new_raw(
+        AudioData::SAMPLE_FORMAT,
+        HEADLESS_SAMPLE_RATE,
+        HEADLESS_CHANNELS,
+    );
+    while let Ok(msg) = control_rx.recv() {
+        match msg {
+            ControlMsg::Play {
+                spec,
+                generation,
+                result_tx,
+            } => {
+                let (ack_tx, _ack_rx) = std_mpsc::channel();
+                let ok = install_source::<f32>(spec, generation, ack_tx, output_info, false, &source_tx)
+                    .inspect_err(|e| error!("Failed to install offline audio source: {e}"))
+                    .is_ok();
+                let _ = result_tx.send(ok);
+            }
+            ControlMsg::StopPlayback { generation } => {
+                let _ = source_tx.send(SourceCommand::Remove {
+                    generation: Some(generation),
+                });
+            }
+            ControlMsg::EnsureStream => {}
+            ControlMsg::Shutdown => break,
+        }
+    }
 }
 
 fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation: u64) -> bool {
