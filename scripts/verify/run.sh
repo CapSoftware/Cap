@@ -115,7 +115,7 @@ if [[ "$mode" == archive || "$mode" == from-archive ]] && [[ $have_nextest == 0 
 fi
 
 if [[ "$mode" == check-selection ]]; then
-  list=(cargo nextest list --cargo-profile "$profile" "${cargo_args[@]}" --message-format oneline)
+  list=(cargo nextest list --color never --cargo-profile "$profile" "${cargo_args[@]}" --message-format oneline)
   line="$("${list[@]}" -E "$filter" 2>/dev/null | head -n 1)"
   [[ -n "$line" ]] || { echo "::error::no test listed for $filter"; exit 1; }
   selected() { "${list[@]}" -E "binary_id($1) and test(=$2)" 2>/dev/null | grep -c . || true; }
