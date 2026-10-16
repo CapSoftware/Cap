@@ -1006,6 +1006,12 @@ mod test {
                 .send(AudioFrame::new(impulse(24_000, 6_720, 1), at(260)))
                 .await
                 .unwrap();
+            mic.send(AudioFrame::new(
+                AudioMixer::INFO.wrap_frame(&vec![0; 2_560 * 8]),
+                at(700),
+            ))
+            .await
+            .unwrap();
             assert!(mixer.tick(timestamps, at(300)).unwrap());
             let mut samples = Vec::new();
             while let Ok(Some(frame)) = receiver.try_next() {
@@ -1022,8 +1028,11 @@ mod test {
                         .iter()
                         .enumerate()
                         .max_by(|(_, a), (_, b)| a[channel].abs().total_cmp(&b[channel].abs()))
+                        .map(|(index, sample)| {
+                            assert!(sample[channel].abs() > 0.01);
+                            index
+                        })
                         .unwrap()
-                        .0
                 })
                 .collect();
             let delta = peaks[1] as i64 - peaks[0] as i64;
