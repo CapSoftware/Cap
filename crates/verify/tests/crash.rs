@@ -644,15 +644,86 @@ fn decode_markers(path: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
     Ok(out)
 }
 
-/// Every frame inside the physically complete fragments, per writer
-/// directory in order.
-fn on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
-    let mut frames = Vec::new();
+/// The frames of every physically complete fragment, per fragment, writer
+/// directories in order.
+fn fragments_on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<Vec<(u32, f64)>>> {
+    let mut out = Vec::new();
     for dir in writer_dirs(display) {
-        let fragments = complete_fragments(&dir);
-        frames.extend(decode_fragments(&dir, &fragments, scratch)?);
+        for fragment in complete_fragments(&dir) {
+            out.push(decode_fragments(
+                &dir,
+                std::slice::from_ref(&fragment),
+                scratch,
+            )?);
+        }
     }
-    Ok(frames)
+    Ok(out)
+}
+
+/// Every frame inside the physically complete fragments, in order.
+fn on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
+    Ok(fragments_on_disk(display, scratch)?.concat())
+}
+
+/// A fragment covers the capture time from its first frame to the first
+/// frame of the next one, and the encoders must start a new one once
+/// `GOP_SECS` have passed: the span may exceed `GOP_SECS` only by the
+/// interval before the frame that closed it.
+fn check_fragment_spans(case: &mut Case, fragments: &[Vec<(u32, f64)>], handed: &[Handed]) {
+    let time: BTreeMap<u32, f64> = handed.iter().map(|h| (h.index, h.secs)).collect();
+    let next_after = |index: u32| handed.iter().find(|h| h.index > index).map(|h| h.secs);
+    let mut worst = 0.0f64;
+    for fragment in fragments {
+        let (Some(first), Some(last)) = (fragment.first(), fragment.last()) else {
+            continue;
+        };
+        let (Some(&start), Some(&end)) = (time.get(&first.0), time.get(&last.0)) else {
+            continue;
+        };
+        let Some(next) = next_after(last.0) else {
+            continue;
+        };
+        let span = next - start;
+        worst = worst.max(span);
+        if span > GOP_SECS + (next - end) + 1e-6 {
+            case.problem(
+                "fragment-span",
+                format!(
+                    "fragment of frames {}..={} covers {span:.2}s of capture, more than {GOP_SECS}s plus the {:.2}s before the frame that closed it",
+                    first.0,
+                    last.0,
+                    next - end
+                ),
+            );
+        }
+    }
+    case.note(format!(
+        "longest complete fragment covers {worst:.2}s of capture"
+    ));
+}
+
+/// Out-of-process only: after the recorder died, the orphaned cap-muxer
+/// sees EOF and must finish the fragment it had open (nothing it received
+/// may be lost).
+fn check_open_fragment(case: &mut Case, display: &Path) {
+    for dir in writer_dirs(display) {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("segment_")
+                && name.ends_with(".m4s.tmp")
+                && !fragment_complete(&path)
+            {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                case.problem(
+                    "open-fragment-lost",
+                    format!(
+                        "the orphaned cap-muxer left {name} incomplete ({size} bytes): the packets it had received are lost"
+                    ),
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,7 +1074,12 @@ fn recorder_kill(
         handed.last().map(|h| h.index),
         if stopped { " while stopping" } else { "" }
     ));
-    let physical = on_disk(&display, &scratch)?;
+    if arm == Arm::OutOfProcess {
+        check_open_fragment(case, &display);
+    }
+    let fragments = fragments_on_disk(&display, &scratch)?;
+    check_fragment_spans(case, &fragments, &handed);
+    let physical = fragments.concat();
     let recovered = match finalize(&display, &scratch.join("recovered.mp4")) {
         Ok(frames) => frames,
         Err(e) if physical.is_empty() => {
