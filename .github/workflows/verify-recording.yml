@@ -43,6 +43,7 @@ on:
     branches:
       - ci/verify-recording
       - scratch/crash-rec-oop
+      - scratch/crash-rec-b2
     paths:
       - "crates/verify/**"
       - "crates/recording/**"
@@ -60,16 +61,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["blacksmith-6vcpu-macos-15"]
-        oop: ["0", "1"]
+        runner: ["blacksmith-6vcpu-macos-15", "blacksmith-6vcpu-macos-26"]
+        oop: ["0"]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
-      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '3' }}
-      CAP_VERIFY_CASE: ${{ inputs.case_filter || 'recording/studio-*' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || 'recording/studio-recovery/*,recording/studio-screen/fragmented' }}
       CAP_VERIFY_OOP_MUXER: ${{ matrix.oop }}
       CAP_MUXER_BIN: ${{ github.workspace }}/target/debug/cap-muxer
       CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
