@@ -9,7 +9,6 @@ use std::{
 
 use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use specta::Type;
 
 use crate::DisplayNotch;
@@ -2619,15 +2618,29 @@ pub struct ProjectConfiguration {
 pub const TEXT_SIZE_VERSION: u32 = 1;
 pub const TEXT_ANIM_VERSION: u32 = 1;
 
-fn camera_config_needs_migration(value: &Value) -> bool {
-    value
-        .get("camera")
-        .and_then(|camera| camera.as_object())
-        .is_some_and(|camera| {
-            camera.contains_key("zoom_size")
-                || camera.contains_key("advanced_shadow")
-                || camera.contains_key("rounding_type")
-        })
+/// The keys [`ProjectConfiguration::load`] migrates on presence, read in a pass
+/// that skips every value instead of building a JSON tree of a file that can
+/// hold a whole transcript. A key counts as present even when it is null.
+#[derive(Deserialize)]
+struct MigrationKeys {
+    #[serde(rename = "screenMotionBlur", default, deserialize_with = "key_present")]
+    screen_motion_blur: bool,
+    #[serde(default)]
+    camera: Option<LegacyCameraKeys>,
+}
+
+#[derive(Deserialize)]
+struct LegacyCameraKeys {
+    #[serde(default, deserialize_with = "key_present")]
+    zoom_size: bool,
+    #[serde(default, deserialize_with = "key_present")]
+    advanced_shadow: bool,
+    #[serde(default, deserialize_with = "key_present")]
+    rounding_type: bool,
+}
+
+fn key_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 impl Default for ProjectConfiguration {
@@ -2806,16 +2819,16 @@ impl ProjectConfiguration {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
         let config_str = std::fs::read_to_string(&config_path)?;
-        let parsed_value = serde_json::from_str::<Value>(&config_str).ok();
-        let missing_screen_motion_blur = parsed_value.as_ref().is_some_and(|value| {
-            value
-                .as_object()
-                .is_some_and(|object| !object.contains_key("screenMotionBlur"))
-        });
-        let needs_camera_migration = parsed_value
+        let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
+        let missing_screen_motion_blur = migration_keys
             .as_ref()
-            .map(camera_config_needs_migration)
-            .unwrap_or(false);
+            .is_some_and(|keys| !keys.screen_motion_blur);
+        let needs_camera_migration = migration_keys
+            .as_ref()
+            .and_then(|keys| keys.camera.as_ref())
+            .is_some_and(|camera| {
+                camera.zoom_size || camera.advanced_shadow || camera.rounding_type
+            });
         let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
@@ -2865,6 +2878,17 @@ impl ProjectConfiguration {
             config.text_anim_version = TEXT_ANIM_VERSION;
         }
 
+        // Auto-calculated camera offsets used to repeat the camera decoder's
+        // start-time alignment, playing the camera ahead by the same amount.
+        // The correct automatic value is always 0; user-entered offsets stay.
+        let mut needs_clip_offset_repair = false;
+        for clip in &mut config.clips {
+            if clip.offsets_auto_calculated && clip.offsets.camera != 0.0 {
+                clip.offsets.camera = 0.0;
+                needs_clip_offset_repair = true;
+            }
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -2873,6 +2897,7 @@ impl ProjectConfiguration {
             || needs_motion_blur_clamp
             || needs_screen_motion_blur_migration
             || needs_text_size_migration
+            || needs_clip_offset_repair
         {
             match config.write(project_path) {
                 Ok(_) => {
@@ -3024,6 +3049,7 @@ mod notch_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
@@ -4147,6 +4173,151 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 0.0);
         assert_eq!(config.screen_motion_blur, 0.0);
+    }
+
+    #[test]
+    fn load_rewrites_a_missing_screen_motion_blur_and_null_legacy_camera_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config_with_motion_blur_values(dir.path(), 1.0, None);
+        ProjectConfiguration::load(dir.path()).unwrap();
+        let written = std::fs::read_to_string(dir.path().join("project-config.json")).unwrap();
+        assert!(written.contains("\"screenMotionBlur\""));
+
+        for (legacy_key, key, null) in [
+            ("zoom_size", "zoomSize", true),
+            ("zoom_size", "zoomSize", false),
+            ("advanced_shadow", "advancedShadow", false),
+            ("rounding_type", "roundingType", false),
+        ] {
+            let mut value = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+            let camera = value["camera"].as_object_mut().unwrap();
+            let current = camera.remove(key).unwrap();
+            camera.insert(
+                legacy_key.to_string(),
+                if null { Value::Null } else { current },
+            );
+            let path = dir.path().join("project-config.json");
+            std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+            ProjectConfiguration::load(dir.path()).unwrap();
+
+            let written: Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(
+                !written["camera"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key(legacy_key),
+                "{legacy_key} (null: {null}) was not migrated"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_load_with_long_transcript() {
+        use std::time::Instant;
+
+        for (transcript, segments) in [("30 min", 600_u32), ("60 min", 1200)] {
+            let captions: Vec<_> = (0..segments)
+                .map(|i| {
+                    let start = f64::from(i) * 3.0;
+                    serde_json::json!({
+                        "id": format!("caption-{i}"),
+                        "start": start,
+                        "end": start + 2.5,
+                        "text": "the quick brown fox jumps over the lazy dog",
+                        "words": (0..8).map(|w| serde_json::json!({
+                            "text": format!("word{w}"),
+                            "start": start + f64::from(w) * 0.3,
+                            "end": start + f64::from(w) * 0.3 + 0.25,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [{"recordingClip": 0, "start": 0.0, "end": f64::from(segments) * 3.0, "timescale": 1.0}],
+                    "zoomSegments": [],
+                    "captionSegments": captions,
+                },
+                "captions": {"segments": captions, "settings": {}},
+            }))
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            config.write(dir.path()).unwrap();
+            let bytes = std::fs::metadata(dir.path().join("project-config.json"))
+                .unwrap()
+                .len();
+            let mut runs: Vec<f64> = (0..21)
+                .map(|_| {
+                    let start = Instant::now();
+                    ProjectConfiguration::load(dir.path()).unwrap();
+                    start.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            runs.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                serde_json::json!({"transcript": transcript, "bytes": bytes, "median_ms": runs[10]})
+            );
+        }
+    }
+
+    #[test]
+    fn load_resets_auto_calculated_camera_offsets_and_keeps_user_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ProjectConfiguration {
+            clips: vec![
+                ClipConfiguration {
+                    index: 0,
+                    offsets: ClipOffsets {
+                        camera: 1.0,
+                        mic: 0.25,
+                        system_audio: 0.5,
+                    },
+                    offsets_auto_calculated: true,
+                },
+                ClipConfiguration {
+                    index: 1,
+                    offsets: ClipOffsets {
+                        camera: -0.2,
+                        mic: 0.1,
+                        system_audio: 0.0,
+                    },
+                    offsets_auto_calculated: false,
+                },
+            ],
+            ..Default::default()
+        };
+        config.write(dir.path()).unwrap();
+
+        let loaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let written: ProjectConfiguration = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("project-config.json")).unwrap(),
+        )
+        .unwrap();
+
+        for clips in [&loaded.clips, &written.clips] {
+            assert_eq!(
+                [
+                    clips[0].offsets.camera,
+                    clips[0].offsets.mic,
+                    clips[0].offsets.system_audio
+                ],
+                [0.0, 0.25, 0.5]
+            );
+            assert!(clips[0].offsets_auto_calculated);
+            assert_eq!(
+                [
+                    clips[1].offsets.camera,
+                    clips[1].offsets.mic,
+                    clips[1].offsets.system_audio
+                ],
+                [-0.2, 0.1, 0.0]
+            );
+            assert!(!clips[1].offsets_auto_calculated);
+        }
     }
 
     #[test]

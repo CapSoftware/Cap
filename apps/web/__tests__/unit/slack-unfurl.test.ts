@@ -1,11 +1,19 @@
 import { Video } from "@cap/web-domain";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PublicShareVideo } from "@/lib/public-share-video";
 import {
 	buildSlackVideoBlock,
 	parseSlackEventPayload,
 	processSlackEvent,
 } from "@/lib/slack/unfurl";
+
+const { webEnv } = vi.hoisted(() => ({
+	webEnv: { WEB_URL: "https://cap.so" },
+}));
+
+vi.mock("@cap/env", () => ({
+	serverEnv: () => webEnv,
+}));
 
 const video: PublicShareVideo = {
 	id: Video.VideoId.make("abc123"),
@@ -38,6 +46,10 @@ const payload = {
 };
 
 describe("Slack video unfurls", () => {
+	beforeEach(() => {
+		webEnv.WEB_URL = "https://cap.so";
+	});
+
 	it("parses link and uninstall events without accepting malformed payloads", () => {
 		expect(parseSlackEventPayload(payload)).toEqual(payload);
 		expect(
@@ -109,6 +121,47 @@ describe("Slack video unfurls", () => {
 			},
 			unfurls: {
 				"https://cap.so/s/abc123": {
+					blocks: [expect.objectContaining({ type: "video" })],
+				},
+			},
+		});
+	});
+
+	it("unfurls a share link on the configured self-hosted host", async () => {
+		webEnv.WEB_URL = "https://video.example.com";
+		const sendUnfurl = vi.fn(async () => undefined);
+		await processSlackEvent({
+			payload: {
+				...payload,
+				event: {
+					...payload.event,
+					links: [
+						{
+							domain: "video.example.com",
+							url: "https://video.example.com/s/abc123",
+						},
+					],
+				},
+			},
+			webUrl: "https://video.example.com",
+			dependencies: {
+				deleteInstallation: vi.fn(async () => undefined),
+				getInstallationToken: vi.fn(async () => "xoxb-token"),
+				getVideo: vi.fn(async () => video),
+				sendUnfurl,
+			},
+		});
+
+		expect(sendUnfurl).toHaveBeenCalledWith({
+			token: "xoxb-token",
+			event: {
+				channel: "C123",
+				messageTs: "123.456",
+				unfurlId: "U123",
+				source: "conversations_history",
+			},
+			unfurls: {
+				"https://video.example.com/s/abc123": {
 					blocks: [expect.objectContaining({ type: "video" })],
 				},
 			},

@@ -75,7 +75,7 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use layers::{BackgroundTextureCache, clean_background_path};
+pub use layers::{BackgroundTextureCache, clean_background_path, new_font_system};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
     ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
@@ -563,6 +563,13 @@ impl RecordingSegmentDecoders {
         self.camera
             .as_ref()
             .map(AsyncVideoDecoderHandle::decoder_status)
+    }
+
+    pub fn prefer_sequential_access(&self) {
+        self.screen.prefer_sequential_access();
+        if let Some(camera) = &self.camera {
+            camera.prefer_sequential_access();
+        }
     }
 
     pub fn screen_video_dimensions(&self) -> (u32, u32) {
@@ -6907,7 +6914,7 @@ impl<'a> FrameRenderer<'a> {
                 let r = src_row[col * 4] as i32;
                 let g = src_row[col * 4 + 1] as i32;
                 let b = src_row[col * 4 + 2] as i32;
-                y_row[col] = ((16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)) as u8).clamp(16, 235);
+                y_row[col] = cpu_yuv::bt709_luma(r, g, b);
             }
         }
 
@@ -6938,10 +6945,7 @@ impl<'a> FrameRenderer<'a> {
                     + src_row1[col * 8 + 6] as i32
                     + 2)
                     / 4;
-                uv_row[col * 2] =
-                    ((128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)) as u8).clamp(16, 240);
-                uv_row[col * 2 + 1] =
-                    ((128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)) as u8).clamp(16, 240);
+                [uv_row[col * 2], uv_row[col * 2 + 1]] = cpu_yuv::bt709_chroma(r, g, b);
             }
         }
 

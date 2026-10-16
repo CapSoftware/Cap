@@ -17,6 +17,8 @@ use crate::{DecodedFrame, PixelFormat};
 #[cfg(target_os = "windows")]
 use cap_video_decode::FrameTextures;
 
+use crate::cpu_yuv::YuvMatrix;
+
 use super::{
     DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, ManagedVideoControl, ManagedVideoError,
     ManagedVideoInput, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame,
@@ -30,6 +32,7 @@ struct ProcessedFrame {
     width: u32,
     height: u32,
     format: PixelFormat,
+    matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
     #[cfg(target_os = "linux")]
@@ -40,9 +43,10 @@ impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
         #[cfg(target_os = "linux")]
         if let Some(cuda) = &self.cuda {
-            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda), Arc::clone(&self.data));
+            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda), Arc::clone(&self.data))
+                .with_matrix(self.matrix);
         }
-        match self.format {
+        let frame = match self.format {
             PixelFormat::Rgba => {
                 DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
             }
@@ -60,7 +64,8 @@ impl ProcessedFrame {
                 self.y_stride,
                 self.uv_stride,
             ),
-        }
+        };
+        frame.with_matrix(self.matrix)
     }
 }
 
@@ -163,6 +168,7 @@ impl CachedFrame {
                             width: frame.width(),
                             height: frame.height(),
                             format: PixelFormat::Nv12,
+                            matrix: YuvMatrix::from_color_space(frame.color_space()),
                             y_stride: cuda.y_pitch as u32,
                             uv_stride: cuda.uv_pitch as u32,
                             cuda: Some(Arc::new(cuda)),
@@ -180,6 +186,7 @@ impl CachedFrame {
                         width: frame.width(),
                         height: frame.height(),
                         format: pixel_format,
+                        matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride,
                         uv_stride,
                         #[cfg(target_os = "linux")]
@@ -193,6 +200,7 @@ impl CachedFrame {
                         width: frame.width(),
                         height: frame.height(),
                         format: PixelFormat::Rgba,
+                        matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride: frame.width() * 4,
                         uv_stride: 0,
                         #[cfg(target_os = "linux")]
@@ -1698,6 +1706,7 @@ mod cache_tests {
             width: 2,
             height: 2,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: 2,
             uv_stride: 2,
             #[cfg(target_os = "linux")]
