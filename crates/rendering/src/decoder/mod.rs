@@ -731,6 +731,24 @@ pub(super) fn record_pts_hole(
     }
 }
 
+/// How long an offline export waits for one decoded frame or one GPU readback
+/// before it stops with an error. Deadlines shorter than this only log there:
+/// export output must not depend on how loaded the machine is.
+pub(crate) const EXPORT_STALL_LIMIT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameDeadline {
+    /// Playback: a missed deadline returns no frame so the caller can move on.
+    Drop,
+    /// Offline export: a missed deadline keeps waiting for the same reply.
+    Wait,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DecodeStalled {
+    pub waited: Duration,
+}
+
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
@@ -767,8 +785,15 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        self.get_frame_with_timeout(time, self.normal_timeout_ms(), self.max_fallback_distance)
-            .await
+        self.get_frame_with_timeout(
+            time,
+            self.normal_timeout_ms(),
+            self.max_fallback_distance,
+            FrameDeadline::Drop,
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     pub async fn get_frame_initial(&self, time: f32) -> Option<DecodedFrame> {
@@ -777,8 +802,32 @@ impl AsyncVideoDecoderHandle {
             Self::INITIAL_SEEK_TIMEOUT_MS,
             self.max_fallback_distance
                 .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
+            FrameDeadline::Drop,
         )
         .await
+        .ok()
+        .flatten()
+    }
+
+    /// Offline export: the decode deadline only triggers a warning. The same
+    /// request keeps waiting, so a slow machine gets the same frame later
+    /// instead of none. `Err` only after `EXPORT_STALL_LIMIT`.
+    pub(crate) async fn get_frame_for_export(
+        &self,
+        time: f32,
+        initial: bool,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        let (timeout_ms, max_fallback_distance) = if initial {
+            (
+                Self::INITIAL_SEEK_TIMEOUT_MS,
+                self.max_fallback_distance
+                    .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
+            )
+        } else {
+            (self.normal_timeout_ms(), self.max_fallback_distance)
+        };
+        self.get_frame_with_timeout(time, timeout_ms, max_fallback_distance, FrameDeadline::Wait)
+            .await
     }
 
     async fn get_frame_with_timeout(
@@ -786,24 +835,25 @@ impl AsyncVideoDecoderHandle {
         time: f32,
         timeout_ms: u64,
         max_fallback_distance: u32,
-    ) -> Option<DecodedFrame> {
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
         #[cfg(target_os = "macos")]
         if let Some(fallback) = &self.fallback {
             if let Some(result) = fallback.decoder.get() {
                 return match result {
                     Ok(decoder) => {
                         decoder
-                            .request_frame(time, timeout_ms, max_fallback_distance)
+                            .request_frame(time, timeout_ms, max_fallback_distance, deadline)
                             .await
                     }
-                    Err(_) => None,
+                    Err(_) => Ok(None),
                 };
             }
-            if let Some(frame) = self
-                .request_frame(time, timeout_ms, max_fallback_distance)
+            if let Ok(Some(frame)) = self
+                .request_frame(time, timeout_ms, max_fallback_distance, deadline)
                 .await
             {
-                return Some(frame);
+                return Ok(Some(frame));
             }
             let result = fallback
                 .decoder
@@ -829,16 +879,16 @@ impl AsyncVideoDecoderHandle {
             return match result {
                 Ok(decoder) => {
                     decoder
-                        .request_frame(time, timeout_ms, max_fallback_distance)
+                        .request_frame(time, timeout_ms, max_fallback_distance, deadline)
                         .await
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Software video decoder fallback failed");
-                    None
+                    Ok(None)
                 }
             };
         }
-        self.request_frame(time, timeout_ms, max_fallback_distance)
+        self.request_frame(time, timeout_ms, max_fallback_distance, deadline)
             .await
     }
 
@@ -847,8 +897,9 @@ impl AsyncVideoDecoderHandle {
         time: f32,
         timeout_ms: u64,
         max_fallback_distance: u32,
-    ) -> Option<DecodedFrame> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
         if self
@@ -864,24 +915,68 @@ impl AsyncVideoDecoderHandle {
                 time = adjusted_time,
                 "decoder thread is gone; frame request dropped"
             );
-            return None;
+            return Ok(None);
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
-            Ok(result) => result.ok(),
-            Err(_) => {
-                tracing::warn!(
-                    time = adjusted_time,
-                    timeout_ms = timeout_ms,
-                    "Frame decode request timed out"
-                );
-                None
+        let started = tokio::time::Instant::now();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut rx).await {
+                Ok(result) => return Ok(result.ok()),
+                Err(_) if deadline == FrameDeadline::Wait => {
+                    let waited = started.elapsed();
+                    if waited >= EXPORT_STALL_LIMIT {
+                        tracing::error!(
+                            time = adjusted_time,
+                            waited_ms = waited.as_millis() as u64,
+                            "Frame decode request stalled"
+                        );
+                        return Err(DecodeStalled { waited });
+                    }
+                    tracing::warn!(
+                        time = adjusted_time,
+                        timeout_ms = timeout_ms,
+                        waited_ms = waited.as_millis() as u64,
+                        "Frame decode is slow; still waiting for the same frame"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        time = adjusted_time,
+                        timeout_ms = timeout_ms,
+                        "Frame decode request timed out"
+                    );
+                    return Ok(None);
+                }
             }
         }
     }
 
     pub fn get_time(&self, time: f32) -> f32 {
         time + self.offset as f32
+    }
+
+    /// A handle served by a test thread instead of a real decoder.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        sender: mpsc::Sender<VideoDecoderMessage>,
+        video_width: u32,
+        video_height: u32,
+    ) -> Self {
+        Self {
+            sender,
+            offset: 0.0,
+            status: DecoderStatus {
+                decoder_type: DecoderType::FFmpegSoftware,
+                video_width,
+                video_height,
+                fallback_reason: None,
+            },
+            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+            #[cfg(target_os = "macos")]
+            fallback: None,
+            #[cfg(target_os = "macos")]
+            sequential_access: None,
+        }
     }
 
     pub fn decoder_status(&self) -> &DecoderStatus {
@@ -2303,11 +2398,14 @@ mod managed_worker_tests {
         };
         let cloned = decoder.clone();
         let (first, second) = tokio::join!(
-            decoder.get_frame_with_timeout(0.0, 200, 2),
-            cloned.get_frame_with_timeout(0.0, 200, 2)
+            decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
+            cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
         );
-        let first = first.unwrap();
-        assert_eq!(frame_pixels(&first), frame_pixels(&second.unwrap()));
+        let first = first.unwrap().unwrap();
+        assert_eq!(
+            frame_pixels(&first),
+            frame_pixels(&second.unwrap().unwrap())
+        );
         assert_eq!(decoder.decoder_type(), DecoderType::FFmpegSoftware);
         assert_eq!(cloned.decoder_type(), DecoderType::FFmpegSoftware);
         assert!(decoder.fallback_reason().is_some());
