@@ -657,34 +657,6 @@ pub async fn render_video_to_channel(
     recordings: &ProjectRecordingsMeta,
     frame_windows: Option<FrameWindows>,
 ) -> Result<(), RenderingError> {
-    frame_pipeline::offline_export(render_rgba_export(
-        constants,
-        project,
-        sender,
-        recording_meta,
-        meta,
-        render_segments,
-        fps,
-        resolution_base,
-        recordings,
-        frame_windows,
-    ))
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn render_rgba_export(
-    constants: &RenderVideoConstants,
-    project: &ProjectConfiguration,
-    sender: mpsc::Sender<(RenderedFrame, u32)>,
-    recording_meta: &RecordingMeta,
-    meta: &StudioRecordingMeta,
-    render_segments: Vec<RenderSegment>,
-    fps: u32,
-    resolution_base: XY<u32>,
-    recordings: &ProjectRecordingsMeta,
-    frame_windows: Option<FrameWindows>,
-) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
@@ -754,6 +726,7 @@ async fn render_rgba_export(
     let mut last_frame_number = 0u32;
 
     let mut frame_renderer = FrameRenderer::new(constants);
+    frame_renderer.use_export_deadlines();
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -1261,38 +1234,6 @@ pub async fn render_video_to_channel_nv12(
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
 ) -> Result<(), RenderingError> {
-    frame_pipeline::offline_export(render_nv12_export(
-        constants,
-        project,
-        sender,
-        recording_meta,
-        meta,
-        render_segments,
-        fps,
-        resolution_base,
-        recordings,
-        frame_windows,
-        stop_after_frames_sent,
-        startup_breakdown_ms,
-    ))
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn render_nv12_export(
-    constants: &RenderVideoConstants,
-    project: &ProjectConfiguration,
-    sender: mpsc::Sender<(Nv12RenderedFrame, u32)>,
-    recording_meta: &RecordingMeta,
-    meta: &StudioRecordingMeta,
-    render_segments: Vec<RenderSegment>,
-    fps: u32,
-    resolution_base: XY<u32>,
-    recordings: &ProjectRecordingsMeta,
-    frame_windows: Option<FrameWindows>,
-    stop_after_frames_sent: Option<u32>,
-    startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
-) -> Result<(), RenderingError> {
     let ffmpeg_init_start = Instant::now();
     ffmpeg::init().unwrap();
     let ffmpeg_init_ms = ffmpeg_init_start.elapsed().as_millis() as u64;
@@ -1367,6 +1308,7 @@ async fn render_nv12_export(
 
     let renderer_setup_start = Instant::now();
     let mut frame_renderer = FrameRenderer::new(constants);
+    frame_renderer.use_export_deadlines();
     #[cfg(target_os = "macos")]
     if !zero_copy_export_disabled() {
         frame_renderer.enable_nv12_surface_output();
@@ -6706,6 +6648,7 @@ pub struct FrameRenderer<'a> {
     bgra_surface_converter: Option<RgbaToBgraSurfaceConverter>,
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
+    export_deadlines: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -6723,7 +6666,15 @@ impl<'a> FrameRenderer<'a> {
             bgra_surface_converter: None,
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
+            export_deadlines: false,
         }
+    }
+
+    /// Offline export: a slow GPU readback is waited for up to the export
+    /// stall limit instead of failing at the playback deadline, because a
+    /// failed readback costs the export a frame.
+    pub(crate) fn use_export_deadlines(&mut self) {
+        self.export_deadlines = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -6738,6 +6689,14 @@ impl<'a> FrameRenderer<'a> {
     }
 
     fn new_nv12_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
+        let mut converter = self.new_nv12_output_converter();
+        if self.export_deadlines {
+            converter.use_export_deadlines();
+        }
+        converter
+    }
+
+    fn new_nv12_output_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
         #[cfg(target_os = "macos")]
         {
             let mut converter = frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
@@ -6763,9 +6722,10 @@ impl<'a> FrameRenderer<'a> {
     }
 
     pub fn prepare_output_size(&mut self, width: u32, height: u32) {
-        let session = self
-            .session
-            .get_or_insert_with(|| RenderSession::new(&self.constants.device, width, height));
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(&self.constants.device, width, height)
+                .with_export_deadlines(self.export_deadlines)
+        });
         session.update_texture_size(&self.constants.device, width, height);
     }
 
@@ -6812,6 +6772,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
 
             session.update_texture_size(
@@ -6889,6 +6850,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7060,6 +7022,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7197,6 +7160,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7282,6 +7246,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -7477,6 +7442,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
 
             session.update_texture_size(
