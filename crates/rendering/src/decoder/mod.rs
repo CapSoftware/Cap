@@ -22,6 +22,8 @@ mod ffmpeg;
 mod frame_converter;
 #[cfg(target_os = "windows")]
 mod media_foundation;
+#[cfg(test)]
+mod model;
 #[cfg(target_os = "macos")]
 pub mod multi_position;
 
