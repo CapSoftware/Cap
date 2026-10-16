@@ -541,6 +541,9 @@ impl OutOfProcessFragmentedM4SMuxer {
 
                 let subprocess_result = subprocess.finish();
 
+                #[cfg(feature = "test-hooks")]
+                cap_enc_ffmpeg::finalize_test_hook::wait(&base_path, "oop-before-manifest-finalize")?;
+
                 tracker.flush_pending_segments();
                 tracker.finalize(final_ts);
 

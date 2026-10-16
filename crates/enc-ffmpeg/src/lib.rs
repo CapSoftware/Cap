@@ -1,6 +1,9 @@
 mod base;
 pub use base::{EncodedPacket, EncodedPacketStats, PacketQueue, PacketSink};
 
+#[cfg(feature = "test-hooks")]
+pub mod finalize_test_hook;
+
 mod file_sync;
 pub use file_sync::sync_media_file;
 

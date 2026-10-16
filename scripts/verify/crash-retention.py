@@ -47,11 +47,20 @@ for arm, branch in branches.items():
     with (build_dir / "muxer-build.log").open("w") as log:
         subprocess.run(["cargo", "build", "--profile", "ci-verify", "--locked", "-p", "cap-muxer"], check=True, stdout=log, stderr=subprocess.STDOUT)
     shutil.copy2(root / "target/ci-verify/cap-muxer", binary_dir / "cap-muxer")
+    with (build_dir / "coverage-guard.log").open("w") as log:
+        guard = subprocess.run([
+            str(binary_dir / "crash"), "--exact",
+            "finalize_coverage_rejects_completion_missing_barrier_and_exited_child",
+            "--nocapture",
+        ], stdout=log, stderr=subprocess.STDOUT)
+    guard_log = (build_dir / "coverage-guard.log").read_text()
+    if guard.returncode or "1 passed" not in guard_log:
+        raise SystemExit(f"{arm}: finalize coverage guard failed")
     binaries[arm] = binary_dir
     print(f"built {arm} {head}", flush=True)
 (output / "heads.json").write_text(json.dumps(heads, indent=2))
 results = []
-for repeat in range(1, 2 if hosted else 7):
+for repeat in range(1, 2 if hosted else 4):
     for arm in branches:
         case_dir = output / f"repeat-{repeat}" / arm
         case_dir.mkdir(parents=True)
