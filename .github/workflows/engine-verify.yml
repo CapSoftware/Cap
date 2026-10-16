@@ -21,6 +21,7 @@ on:
       - main
       - ci/engine-verify
       - ci/verify-ci
+      - ci/fixproof-crash-ev-all
   workflow_dispatch:
     inputs:
       tier:
@@ -95,7 +96,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'verify-full') }}
         run: |
-          tier=fast
+          tier=full
           if [[ -n "$INPUT_TIER" ]]; then
             tier="$INPUT_TIER"
           elif [[ "$EVENT" == schedule || "$EVENT" == merge_group || "$FULL_LABEL" == true ]]; then
