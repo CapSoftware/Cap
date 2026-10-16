@@ -760,8 +760,8 @@ pub fn judge_with(
 }
 
 /// Rewrites `xfails` so that this platform's run passes exactly, without
-/// touching what other platforms or cases that did not run expect. Reasons
-/// and links of replaced entries are kept; new failures get the reason
+/// touching what other platforms or cases that did not run expect. Links
+/// of replaced entries are kept; new proposals get the reason
 /// `TODO: <problem>` from `problems`.
 pub fn bless(
     xfails: &[Xfail],
@@ -899,16 +899,11 @@ pub fn bless_with(
             } else {
                 Bound::new()
             },
-            reason: previous.map_or_else(
-                || {
-                    format!(
-                        "TODO: {}",
-                        problems
-                            .get(&(case.clone(), class.clone()))
-                            .map_or("describe the failure", |p| p.as_str())
-                    )
-                },
-                |x| x.reason.clone(),
+            reason: format!(
+                "TODO: {}",
+                problems
+                    .get(&(case.clone(), class.clone()))
+                    .map_or("describe the failure", |p| p.as_str())
             ),
             link: previous.map_or_else(String::new, |x| x.link.clone()),
         };
@@ -1308,8 +1303,15 @@ mod tests {
             .iter()
             .filter(|x| x.case == "b" && x.applies_on("macos"))
             .collect();
-        assert_eq!(b_mac.len(), 1);
-        assert_eq!(b_mac[0].seeds, Some(set(&[2, 3, 40])));
+        assert_eq!(b_mac.len(), 2);
+        assert!(
+            b_mac
+                .iter()
+                .any(|x| x.seeds == Some(set(&[40])) && x.reason == "r")
+        );
+        assert!(b_mac.iter().any(|x| {
+            x.seeds == Some(set(&[2, 3])) && x.reason == "TODO: describe the failure"
+        }));
         let d = blessed.iter().find(|x| x.case == "d").unwrap();
         assert_eq!(d.reason, "TODO: 3 frames missing");
         assert_eq!(d.platforms, vec!["macos"]);
@@ -1321,12 +1323,14 @@ mod tests {
     }
 
     #[test]
-    fn bless_merges_platforms_back() {
+    fn bless_requires_an_explanation_on_a_new_platform() {
         let xfails = vec![entry("a", "stale", &["linux", "windows"], None)];
         let ran = Ran::from([("a".to_string(), None)]);
         let observed = Observed::from([(("a".into(), "stale".into()), set(&[]))]);
         let blessed = bless(&xfails, "macos", &ran, &observed, &BTreeMap::new());
-        assert_eq!(blessed, vec![entry("a", "stale", &[], None)]);
+        let mut proposed = entry("a", "stale", &["macos"], None);
+        proposed.reason = "TODO: describe the failure".into();
+        assert_eq!(blessed, vec![xfails[0].clone(), proposed]);
     }
 
     fn measured(case: &str, class: &str, metrics: &[(&str, f64, f64)]) -> Evidence {
