@@ -17,10 +17,8 @@ const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 const FPS: i32 = 30;
 
-/// pts, dts, keyframe, payload.
 type EncodedPacket = (i64, i64, bool, Vec<u8>);
 
-/// libx264 packets for `count` gray frames with a keyframe every `gop`.
 fn encode(count: i64, gop: u32) -> (Vec<u8>, Vec<EncodedPacket>) {
     ffmpeg::init().unwrap();
     let codec = codec::encoder::find_by_name("libx264").expect("libx264");
@@ -76,6 +74,7 @@ fn an_orphaned_muxer_finishes_its_open_fragment() {
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("display");
     let mut child = Command::new(env!("CARGO_BIN_EXE_cap-muxer"))
+        .env("CAP_MUXER_LOG", "warn")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
