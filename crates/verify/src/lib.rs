@@ -15,5 +15,6 @@ pub mod pipeline;
 pub mod report;
 #[cfg(target_os = "macos")]
 pub mod sched;
+pub mod sentinel;
 pub mod stimulus;
 pub mod video_code;

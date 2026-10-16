@@ -64,7 +64,7 @@ fn bless_command(inputs: &[String]) -> ExitCode {
                     continue;
                 }
             };
-            if record.outcome == Outcome::Unsupported {
+            if matches!(record.outcome, Outcome::Unsupported | Outcome::Inconclusive) {
                 continue;
             }
             let run = runs

@@ -57,9 +57,20 @@ pub struct CaseResult {
     pub outcome: String,
 }
 
+/// Classes that measure wall-clock behaviour of the runner as much as of Cap
+/// (real-time playback delivering fewer frames than it should). Only these
+/// may become inconclusive, and only under proven starvation.
+const WALL_CLOCK_CLASSES: &[&str] = &["dropped"];
+
+/// Set by scripts/verify/retry.py when it reruns a test once.
+fn retrying() -> bool {
+    std::env::var("CAP_VERIFY_RETRY").as_deref() == Ok("1")
+}
+
 pub struct Case {
     pub id: String,
     started: Instant,
+    machine: crate::sentinel::Mark,
     pub streams: Vec<StreamReport>,
     pub problems: Vec<String>,
     /// The class of each entry of `problems` (a stream report's classes,
@@ -85,6 +96,7 @@ impl Case {
         Self {
             id,
             started: Instant::now(),
+            machine: crate::sentinel::mark(),
             streams: Vec::new(),
             problems: Vec::new(),
             problem_classes: Vec::new(),
@@ -211,6 +223,7 @@ fn write_result(
     result: &CaseResult,
     classes: &BTreeMap<String, String>,
     unobserved: &BTreeMap<String, String>,
+    machine: &crate::sentinel::Window,
 ) {
     use cap_verify_expect::{Outcome, Record};
     let record = Record {
@@ -227,6 +240,7 @@ fn write_result(
             "unsupported" => Outcome::Unsupported,
             "xfail" => Outcome::Xfail,
             "XPASS" => Outcome::Xpass,
+            "inconclusive" => Outcome::Inconclusive,
             _ => Outcome::Fail,
         },
         failures: classes
@@ -243,6 +257,7 @@ fn write_result(
     let extra = serde_json::json!({
         "streams": result.streams,
         "notes": result.notes,
+        "machine": machine,
     });
     cap_verify_expect::write_records(&[(record, extra)]);
 }
@@ -283,10 +298,32 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
         .collect();
     let verdict =
         cap_verify_expect::judge_observing(&xfails, platform, &ran, &observed, &unobserved);
-    let unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
+    let mut unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
     let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
+    // Machine starvation excuses only wall-clock classes, and only until the
+    // retry: content, frame identity, timestamps and sync never.
+    let machine = crate::sentinel::window(case.machine);
+    case.notes.push(machine.describe());
+    let wall_clock_only = !unexpected.is_empty()
+        && unexpected
+            .iter()
+            .all(|class| WALL_CLOCK_CLASSES.contains(&class.as_str()));
+    let environment = String::from("environment");
+    let inconclusive = wall_clock_only && machine.starved() && !retrying();
+    if wall_clock_only && machine.starved() && retrying() {
+        case.problem(
+            "environment",
+            format!(
+                "inconclusive again on retry ({}): the machine starved this case twice",
+                machine.describe()
+            ),
+        );
+        unexpected = vec![&environment];
+    }
     let outcome = if case.unsupported.is_some() && !failed {
         "unsupported"
+    } else if inconclusive {
+        "inconclusive"
     } else if !unexpected.is_empty() {
         "FAIL"
     } else if !fixed.is_empty() {
@@ -332,12 +369,22 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
         repro: repro.clone(),
         outcome: outcome.to_string(),
     };
-    write_result(&result, &case.class_problems, &case.unobserved);
+    write_result(&result, &case.class_problems, &case.unobserved, &machine);
     eprintln!(
         "[cap-verify] {outcome} {} in {:.1}s\n  {summary}",
         result.id, result.seconds
     );
     match outcome {
+        "inconclusive" => Err(format!(
+            "case {} inconclusive: {} failed while the machine starved the process ({}); retried once by scripts/verify/retry.py\n  repro: {repro}",
+            result.id,
+            unexpected
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            machine.describe()
+        )),
         "FAIL" => Err(format!(
             "case {} failed ({}):\n  {summary}\n  repro: {repro}",
             result.id,

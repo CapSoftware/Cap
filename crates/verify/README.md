@@ -124,8 +124,21 @@ blessed failure is a bug that the suite keeps checking.
   and cached; workspace crates are not optimised. A platform with
   `shards > 1` in `suites.json` uploads a nextest archive, and shard jobs run
   partitions of it.
-- **No retries.** A failed test is rerun once only so that the summary can
-  label it flaky. The job still fails.
+- **No retries, except for a proven machine stall.** Every test process
+  runs a starvation sentinel (`crates/verify/src/sentinel.rs`): a
+  high-priority thread that sleeps 2 ms and records how late it wakes, plus
+  the process CPU time over wall time. Each case record carries that series
+  (`machine`), and `sentinel-<pid>.log` keeps it for tests that are killed.
+  A wake gap of 100 ms or more proves the runner stopped scheduling the
+  process. Only wall-clock failures are excused by it: a real-time playback
+  case that delivered too few frames becomes `inconclusive`, and a test
+  killed at its timeout or by wgpu's 6.3 s queue drain is retryable when its
+  sentinel log shows the gap. `scripts/verify/retry.py` reruns those tests
+  once with `CAP_VERIFY_RETRY=1`; a case that is inconclusive again fails as
+  `environment`, and the job passes only if every failure was retryable and
+  every retry passed. Content, frame identity, timestamps and sync never
+  become inconclusive. Any other failed test is rerun once only so that the
+  summary can label it flaky; the job still fails.
 - **Summary.** Each job summary lists the failing cases, their exact frames
   or samples, and a repro command. The report records are uploaded as the
   `verify-report-*` artifacts, which `bless.sh --run` reads.

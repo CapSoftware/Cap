@@ -102,7 +102,25 @@ def details(r):
     return lines
 
 
-def render(records, title, junit, flaky, text):
+def retried(dirs):
+    """Tests retried after a proven machine stall -> (evidence, passed)."""
+    out = {}
+    for d in dirs:
+        path = os.path.join(d, "retried.txt")
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                test, _, evidence = line.strip().partition(": ")
+                if evidence == "failed again on retry":
+                    out[test] = (out.get(test, ("", True))[0], False)
+                elif test:
+                    out[test] = (evidence, out.get(test, ("", True))[1])
+    return out
+
+
+def render(records, title, junit, flaky, text, retries=None):
+    retries = retries or {}
     counts = {}
     for r in records:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
@@ -121,7 +139,15 @@ def render(records, title, junit, flaky, text):
     # that timed out or crashed after recording passing or expected cases
     # still failed: the cases after the last record never ran.
     failing = {r["case"] for r in bad}
-    crashed = [(name, msg) for name, msg in junit if not any(c in msg for c in failing)]
+    crashed = [
+        (name, msg)
+        for name, msg in junit
+        if not any(c in msg for c in failing) and not retries.get(name, ("", False))[1]
+    ]
+    inconclusive = [r for r in records if r["outcome"] == "inconclusive"]
+    if inconclusive or retries:
+        passed = sum(1 for _, ok in retries.values() if ok)
+        head += f"; {len(inconclusive)} inconclusive under a proven machine stall, {passed} of {len(retries)} retried tests passed"
     if crashed:
         head += f"; {len(crashed)} test(s) FAILED without a failing case (timed out or crashed, later cases not run)"
     out = []
@@ -132,6 +158,8 @@ def render(records, title, junit, flaky, text):
             out.extend("    " + line for line in details(r))
             if r.get("repro"):
                 out.append(f"    repro: {r['repro']}")
+        for test, (evidence, ok) in retries.items():
+            out.append(f"RETRIED {test}: {evidence}: {'passed on retry' if ok else 'FAILED again (environment)'}")
         for name, msg in crashed:
             out.append(f"TEST FAILED {name}")
             out.extend("    " + line for line in crash_excerpt(msg, 15))
@@ -162,6 +190,14 @@ def render(records, title, junit, flaky, text):
             out.append("")
         if len(bad) > MAX_CASES:
             out.append(f"... and {len(bad) - MAX_CASES} more (see the report artifact)")
+    if retries:
+        out.append("### Retried after a proven machine stall")
+        out.append("The starvation sentinel recorded the runner not scheduling the test; only wall-clock failures are retried, once.")
+        out.extend(
+            f"- `{test}`: {evidence}: {'passed on retry' if ok else '**failed again (environment)**'}"
+            for test, (evidence, ok) in retries.items()
+        )
+        out.append("")
     if crashed:
         out.append("### Tests that failed without a case record")
         for name, msg in crashed[:MAX_CASES]:
@@ -213,7 +249,16 @@ def main():
     if args.flaky and os.path.exists(args.flaky):
         with open(args.flaky) as f:
             flaky = [line.strip() for line in f if line.strip()]
-    print(render(load_records(args.dirs), args.title, junit_failures(args.junit), flaky, args.text))
+    print(
+        render(
+            load_records(args.dirs),
+            args.title,
+            junit_failures(args.junit),
+            flaky,
+            args.text,
+            retried(args.dirs),
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -649,6 +649,9 @@ pub enum Outcome {
     Fail,
     Xpass,
     Unsupported,
+    /// A wall-clock class failed while the machine starved the process
+    /// (cap-verify's sentinel); the test is retried once. Never blessed.
+    Inconclusive,
 }
 
 /// One case's result, written as a JSON line to `CAP_VERIFY_REPORT_DIR`.

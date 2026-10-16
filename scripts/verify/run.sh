@@ -147,11 +147,37 @@ if [[ $have_nextest == 1 ]]; then
   shard=()
   [[ -n "$partition" ]] && shard=(--partition "$partition")
   "${run[@]}" ${shard[@]+"${shard[@]}"} -E "$filter" ${extra[@]+"${extra[@]}"} || status=$?
-  # No retries: a test that fails is rerun once only to label it flaky in the
-  # summary. The run still fails.
   junit="${CARGO_TARGET_DIR:-$root/target}/nextest/$nextest_profile/junit.xml"
-  if [[ $status != 0 && -n "${CAP_VERIFY_FLAKY_FILE:-}" && -f "$junit" ]]; then
-    cp "$junit" "$CAP_VERIFY_REPORT_DIR/junit.xml"
+  [[ $status != 0 && -f "$junit" ]] && cp "$junit" "$CAP_VERIFY_REPORT_DIR/junit.xml"
+  # Starvation retry: a test whose only failures are wall-clock classes
+  # under a proven machine stall (inconclusive cases, or a timeout with the
+  # sentinel's evidence) runs once more with CAP_VERIFY_RETRY=1. The run
+  # passes only if every failed test was retryable and every retry passed;
+  # a case inconclusive again fails as `environment`. See retry.py.
+  if [[ $status != 0 && -f "$CAP_VERIFY_REPORT_DIR/junit.xml" ]]; then
+    retry_plan="$("$py" scripts/verify/retry.py "$CAP_VERIFY_REPORT_DIR/junit.xml" "$CAP_VERIFY_REPORT_DIR")"
+    blocking="$(sed -n 's/^blocking\t//p' <<<"$retry_plan")"
+    retried=0
+    retry_failed=0
+    while IFS=$'\t' read -r binary name evidence; do
+      [[ -z "$binary" || "$binary" == blocking ]] && continue
+      retried=$((retried + 1))
+      echo "retrying $binary $name once: $evidence"
+      echo "$binary $name: $evidence" >>"$CAP_VERIFY_REPORT_DIR/retried.txt"
+      if ! CAP_VERIFY_RETRY=1 CAP_VERIFY_REPORT_DIR="$CAP_VERIFY_REPORT_DIR/retry" \
+        "${run[@]}" -E "binary_id($binary) and test(=$name)"; then
+        retry_failed=$((retry_failed + 1))
+        echo "$binary $name: failed again on retry" >>"$CAP_VERIFY_REPORT_DIR/retried.txt"
+      fi
+    done <<<"$retry_plan"
+    if [[ $retried -gt 0 && "${blocking:-1}" == 0 && $retry_failed == 0 ]]; then
+      echo "every failure was a proven machine stall and passed on retry"
+      status=0
+    fi
+  fi
+  # No other retries: any other failed test is rerun once only to label it
+  # flaky in the summary. The run still fails.
+  if [[ $status != 0 && -n "${CAP_VERIFY_FLAKY_FILE:-}" && -f "$CAP_VERIFY_REPORT_DIR/junit.xml" ]]; then
     : >"$CAP_VERIFY_FLAKY_FILE"
     while IFS=$'\t' read -r binary name; do
       [[ -z "$binary" ]] && continue
