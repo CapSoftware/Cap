@@ -48,6 +48,7 @@ jobs:
           CAP_VERIFY_HOST: blacksmith
         run: |
           set -u
+          set +e
           mkdir -p "$RUNNER_TEMP/probe/reports"
           for i in $(seq 1 10); do
             variants="instant"
