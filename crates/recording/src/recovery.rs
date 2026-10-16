@@ -5,7 +5,7 @@ use std::{
 };
 
 use cap_enc_ffmpeg::RelocatableSource;
-use cap_enc_ffmpeg::fragmented_mp4::tail_is_complete;
+use cap_enc_ffmpeg::fragmented_mp4::{read_fragment_prefix, tail_is_complete};
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
     concatenate_m4s_segments_with_init_validated, concatenate_video_fragments, get_media_duration,
@@ -23,6 +23,7 @@ use tracing::{debug, warn};
 use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
 use crate::studio_recording::CompletedRecording;
 
+mod prefix;
 mod preparing_observer;
 mod preparing_projection;
 #[cfg(unix)]
@@ -146,6 +147,18 @@ pub enum RecoveryError {
 }
 
 pub struct RecoveryManager;
+
+/// Track start times the recorder writes beside an in-progress segment
+/// (`crate::studio_recording::SegmentStartTimes`); the in-progress meta has
+/// no segments, so this is what recovery aligns the tracks with.
+pub const SEGMENT_START_TIMES_FILE: &str = "start-times.json";
+
+fn persisted_start_times(segment_dir: &Path) -> Option<crate::studio_recording::SegmentStartTimes> {
+    let raw = std::fs::read(segment_dir.join(SEGMENT_START_TIMES_FILE)).ok()?;
+    serde_json::from_slice(&raw)
+        .inspect_err(|error| warn!(%error, "Ignoring unreadable segment start times"))
+        .ok()
+}
 
 const EXPORT_SEEK_PROBE_SAMPLE_COUNT: usize = 8;
 
@@ -369,7 +382,7 @@ impl RecoveryManager {
                 .unwrap_or(0);
 
             let display_dir = segment_path.join("display");
-            let display_info = Self::find_complete_fragments_with_init(&display_dir);
+            let display_info = Self::find_studio_fragments_with_init(&display_dir);
             let mut display_fragments = display_info.fragments;
             let mut display_init_segment = display_info.init_segment;
 
@@ -391,7 +404,7 @@ impl RecoveryManager {
 
             let camera_dir = segment_path.join("camera");
             let (camera_fragments, camera_init_segment) = {
-                let camera_info = Self::find_complete_fragments_with_init(&camera_dir);
+                let camera_info = Self::find_studio_fragments_with_init(&camera_dir);
                 if camera_info.fragments.is_empty() {
                     (
                         Self::probe_single_file(&segment_path.join("camera.mp4")).map(|p| vec![p]),
@@ -442,6 +455,60 @@ impl RecoveryManager {
             recoverable_segments,
             estimated_duration: total_duration,
         })
+    }
+
+    fn find_studio_fragments_with_init(dir: &Path) -> FragmentsInfo {
+        let mut info = Self::find_complete_fragments_with_init(dir);
+        let Some(init) = info.init_segment.clone().or_else(|| {
+            let path = dir.join("init.mp4");
+            path.is_file().then_some(path)
+        }) else {
+            return info;
+        };
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let Some(final_name) = name.strip_suffix(".tmp") else {
+                    continue;
+                };
+                if Self::m4s_fragment_index(&dir.join(final_name)).is_none()
+                    || dir.join(final_name).exists()
+                    || !entry.file_type().is_ok_and(|kind| kind.is_file())
+                {
+                    continue;
+                }
+                // A malformed or empty tail has nothing to recover. Any other
+                // read error keeps the fragment listed: staged finalization
+                // refuses to publish a recording with a pending `.tmp`, so
+                // the recording stays retryable instead of losing it.
+                match read_fragment_prefix(&init, &path) {
+                    Ok(_) => info.fragments.push(path),
+                    Err(error)
+                        if !matches!(
+                            error.kind(),
+                            std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof
+                        ) =>
+                    {
+                        warn!(path = %path.display(), %error, "Fragment prefix unreadable; keeping it for a retry");
+                        info.fragments.push(path);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        info.fragments.sort_by_key(|path| {
+            let path = if path.extension().is_some_and(|extension| extension == "tmp") {
+                path.with_extension("")
+            } else {
+                path.clone()
+            };
+            Self::m4s_fragment_index(&path)
+        });
+        info.init_segment = Some(init);
+        info
     }
 
     fn find_complete_fragments(dir: &Path) -> Vec<PathBuf> {
@@ -570,6 +637,12 @@ impl RecoveryManager {
                 if manifest_type == "m4s_segments" && init_segment.is_some() {
                     let listed: std::collections::HashSet<_> = entries
                         .iter()
+                        .filter(|entry| {
+                            entry
+                                .get("is_complete")
+                                .and_then(|complete| complete.as_bool())
+                                .unwrap_or(false)
+                        })
                         .filter_map(|entry| entry.get("path").and_then(|path| path.as_str()))
                         .filter_map(|path| recovery_child_path(dir, path))
                         .collect();
@@ -620,6 +693,7 @@ impl RecoveryManager {
     fn collect_respawn_groups(
         dir: &Path,
         health_tx: Option<&HealthSender>,
+        recover_complete_prefixes: bool,
     ) -> Vec<(u32, PathBuf, Vec<PathBuf>)> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
@@ -649,7 +723,7 @@ impl RecoveryManager {
                 continue;
             }
 
-            Self::rescue_pending_tmp_fragments(&respawn_dir, health_tx);
+            Self::rescue_pending_tmp_fragments(&respawn_dir, health_tx, recover_complete_prefixes);
 
             let Ok(dir_entries) = std::fs::read_dir(&respawn_dir) else {
                 debug!(
@@ -702,7 +776,25 @@ impl RecoveryManager {
         groups
     }
 
-    fn rescue_pending_tmp_fragments(dir: &Path, health_tx: Option<&HealthSender>) {
+    fn rescue_pending_tmp_fragments(
+        dir: &Path,
+        health_tx: Option<&HealthSender>,
+        recover_complete_prefixes: bool,
+    ) {
+        Self::rescue_pending_tmp_fragments_with_copy(
+            dir,
+            health_tx,
+            recover_complete_prefixes,
+            Self::copy_recovered_prefix,
+        );
+    }
+
+    fn rescue_pending_tmp_fragments_with_copy(
+        dir: &Path,
+        health_tx: Option<&HealthSender>,
+        recover_complete_prefixes: bool,
+        copy: impl Fn(&Path, &Path, u64) -> std::io::Result<()>,
+    ) {
         const MIN_VALID_TMP_SIZE: u64 = 100;
 
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -724,12 +816,47 @@ impl RecoveryManager {
                 continue;
             }
             let corrupt_marker = dir.join(format!("{name}.corrupt"));
-            if corrupt_marker.exists() {
+            if corrupt_marker.exists()
+                && (!recover_complete_prefixes
+                    || std::fs::read_to_string(&corrupt_marker).ok().as_deref()
+                        != Some("truncated_fragment"))
+            {
                 continue;
             }
             let final_name = name.trim_end_matches(".tmp");
             let final_path = dir.join(final_name);
             if final_path.exists() {
+                continue;
+            }
+            if recover_complete_prefixes && dir.join("init.mp4").is_file() {
+                match read_fragment_prefix(&dir.join("init.mp4"), &path) {
+                    Ok(prefix) => match copy(&path, &final_path, prefix.length) {
+                        Ok(()) => {
+                            finalization_info!(
+                                "Recovered complete fragment prefix from {}",
+                                path.display()
+                            );
+                        }
+                        Err(error) => {
+                            warn!(path = %path.display(), %error, "Could not copy recoverable fragment prefix");
+                        }
+                    },
+                    Err(error) => {
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            let _ = std::fs::write(&corrupt_marker, "truncated_fragment");
+                        }
+                        warn!(path = %path.display(), %error, "Cannot recover fragment prefix");
+                        if let Some(health_tx) = health_tx {
+                            emit_health(
+                                health_tx,
+                                PipelineHealthEvent::RecoveryFragmentCorrupt {
+                                    path: path.display().to_string(),
+                                    reason: error.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
                 continue;
             }
             match tail_is_complete(&path) {
@@ -783,6 +910,39 @@ impl RecoveryManager {
                 }
             }
         }
+    }
+
+    fn copy_recovered_prefix(
+        source: &Path,
+        destination: &Path,
+        length: u64,
+    ) -> std::io::Result<()> {
+        use std::io::Read;
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(std::io::Error::other)?
+            .as_nanos();
+        let temporary =
+            destination.with_extension(format!("recovery-{}-{nonce}", std::process::id()));
+        let result = (|| {
+            let source = std::fs::File::open(source)?;
+            let mut output = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            if std::io::copy(&mut source.take(length), &mut output)? != length {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Fragment changed during recovery",
+                ));
+            }
+            output.sync_all()?;
+            drop(output);
+            prefix::publish(&temporary, destination)
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        result
     }
 
     fn is_video_file(path: &Path) -> bool {
@@ -922,7 +1082,16 @@ impl RecoveryManager {
         let mut total = Duration::ZERO;
 
         for fragment in fragments {
-            if let Some(duration) = get_media_duration(fragment) {
+            let prefix_duration = fragment
+                .extension()
+                .is_some_and(|extension| extension == "tmp")
+                .then(|| {
+                    read_fragment_prefix(&fragment.with_file_name("init.mp4"), fragment)
+                        .ok()
+                        .map(|prefix| prefix.duration)
+                })
+                .flatten();
+            if let Some(duration) = prefix_duration.or_else(|| get_media_duration(fragment)) {
                 total += duration;
             }
         }
@@ -1103,9 +1272,30 @@ impl RecoveryManager {
                 }
             }
             validate_recovery_manifests(&staged.join("content"))?;
+            let segments = staged.join("content/segments");
+            for entry in std::fs::read_dir(segments)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    for track in ["display", "camera"] {
+                        let directory = entry.path().join(track);
+                        Self::rescue_pending_tmp_fragments(&directory, None, true);
+                    }
+                }
+            }
             let analyzing = Instant::now();
             let staged_recording = Self::analyze_incomplete(&staged, &staged_meta)
                 .ok_or(RecoveryError::NoRecoverableSegments)?;
+            if staged_recording.recoverable_segments.iter().any(|segment| {
+                segment
+                    .display_fragments
+                    .iter()
+                    .chain(segment.camera_fragments.iter().flatten())
+                    .any(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            }) {
+                return Err(RecoveryError::Validation(
+                    "Failed to stage a complete fragment prefix".into(),
+                ));
+            }
             debug!(
                 elapsed_ms = analyzing.elapsed().as_secs_f64() * 1000.0,
                 "Studio finalization staged analysis ready"
@@ -1206,7 +1396,7 @@ impl RecoveryManager {
                 segment.index
             ));
             if video_validation == VideoValidation::Full || segment.display_init_segment.is_none() {
-                for (_, init, fragments) in Self::collect_respawn_groups(&display_dir, None) {
+                for (_, init, fragments) in Self::collect_respawn_groups(&display_dir, None, true) {
                     validate_recovery_video_inputs(
                         &fragments,
                         Some(&init),
@@ -1226,14 +1416,13 @@ impl RecoveryManager {
                     video_validation,
                 )?;
             }
-            for path in segment
+            let audio = segment
                 .mic_fragments
                 .iter()
                 .flatten()
                 .chain(segment.system_audio_fragments.iter().flatten())
-            {
-                validate_recovered_track(path, ffmpeg::media::Type::Audio)?;
-            }
+                .collect::<Vec<_>>();
+            validate_recovered_audio_in_order(&audio)?;
         }
         Ok(())
     }
@@ -1333,6 +1522,257 @@ impl RecoveryManager {
         Ok(())
     }
 
+    fn finalize_segment_video(
+        recording: &IncompleteRecording,
+        segment: &RecoverableSegment,
+        segment_dir: &Path,
+        video_validation: VideoValidation,
+    ) -> Result<(), RecoveryError> {
+        let video_started = Instant::now();
+        let display_output = segment_dir.join("display.mp4");
+        let display_dir = segment_dir.join("display");
+
+        if segment.display_fragments.len() == 1 && segment.display_init_segment.is_none() {
+            let source = &segment.display_fragments[0];
+            if source != &display_output {
+                finalization_info!("Moving single display fragment to {:?}", display_output);
+                std::fs::rename(source, &display_output)?;
+            }
+            Self::validate_required_video(&display_output, "display", video_validation)?;
+            if display_dir.exists()
+                && let Err(e) = std::fs::remove_dir_all(&display_dir)
+            {
+                debug!("Failed to clean up display dir {:?}: {e}", display_dir);
+            }
+        } else if !segment.display_fragments.is_empty() {
+            let finalize_result = if display_dir.exists() {
+                Self::finalize_to_progressive_mp4_with_validation(
+                    &display_dir,
+                    &display_output,
+                    None,
+                    video_validation,
+                    true,
+                )
+                .map(|_| ())
+            } else {
+                Self::finalize_fragments_to_progressive_mp4(
+                    &segment.display_fragments,
+                    segment.display_init_segment.as_deref(),
+                    &display_output,
+                    "display",
+                    video_validation,
+                )
+            };
+
+            match finalize_result {
+                Ok(()) => {}
+                Err(err) => {
+                    if let Err(e) = std::fs::remove_file(&display_output)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        debug!(
+                            "Failed to remove invalid display output {:?}: {e}",
+                            display_output
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+
+            if display_dir.exists()
+                && let Err(e) = std::fs::remove_dir_all(&display_dir)
+            {
+                debug!("Failed to clean up display dir {:?}: {e}", display_dir);
+            }
+        }
+
+        // Sync invariant: the remuxed display track must match the media
+        // span the recorder persisted from its capture timestamps.
+        if display_output.is_file()
+            && let Some(expected) =
+                Self::expected_display_duration_from_config(&recording.project_path, segment.index)
+        {
+            crate::output_validation::check_display_sync_span(&display_output, expected);
+        }
+
+        if let Some(camera_frags) = &segment.camera_fragments {
+            let camera_output = segment_dir.join("camera.mp4");
+            if camera_frags.len() == 1 && segment.camera_init_segment.is_none() {
+                if camera_frags[0] != camera_output {
+                    std::fs::rename(&camera_frags[0], &camera_output)?;
+                }
+                Self::validate_required_video(&camera_output, "camera", video_validation)?;
+            } else {
+                Self::finalize_fragments_to_progressive_mp4(
+                    camera_frags,
+                    segment.camera_init_segment.as_deref(),
+                    &camera_output,
+                    "camera",
+                    video_validation,
+                )?;
+            }
+            let camera_dir = segment_dir.join("camera");
+            if camera_dir.exists() {
+                std::fs::remove_dir_all(camera_dir)?;
+            }
+        }
+
+        debug!(
+            segment = segment.index,
+            elapsed_ms = video_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio finalization segment video ready"
+        );
+        Ok(())
+    }
+
+    fn finalize_segment_audio(
+        segment: &RecoverableSegment,
+        segment_dir: &Path,
+    ) -> Result<(), RecoveryError> {
+        let audio_started = Instant::now();
+
+        if let Some(mic_frags) = &segment.mic_fragments {
+            let mic_output =
+                segment_dir.join(finalized_audio_name(segment_dir, "audio-input", mic_frags));
+            if mic_frags.len() == 1 {
+                let source = &mic_frags[0];
+                let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
+                if mic_output
+                    .extension()
+                    .is_some_and(|extension| extension == "m4a")
+                {
+                    finalize_m4a(source, &mic_output)?;
+                } else if source != &mic_output {
+                    if is_ogg {
+                        finalization_info!("Moving single mic fragment to {:?}", mic_output);
+                        std::fs::rename(source, &mic_output)?;
+                    } else {
+                        finalization_info!("Transcoding single mic fragment to {:?}", mic_output);
+                        concatenate_audio_to_ogg(mic_frags, &mic_output)
+                            .map_err(RecoveryError::AudioConcat)?;
+                        if let Err(e) = std::fs::remove_file(source) {
+                            debug!("Failed to remove mic source {:?}: {e}", source);
+                        }
+                    }
+                    let mic_dir = segment_dir.join("audio-input");
+                    if mic_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&mic_dir)
+                    {
+                        debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
+                    }
+                }
+            } else if mic_frags.len() > 1 {
+                finalization_info!(
+                    "Concatenating {} mic fragments to {:?}",
+                    mic_frags.len(),
+                    mic_output
+                );
+                concatenate_audio_to_ogg(mic_frags, &mic_output)
+                    .map_err(RecoveryError::AudioConcat)?;
+
+                for fragment in mic_frags {
+                    if let Err(e) = std::fs::remove_file(fragment) {
+                        debug!("Failed to remove mic fragment {:?}: {e}", fragment);
+                    }
+                }
+                let mic_dir = segment_dir.join("audio-input");
+                if mic_dir.exists()
+                    && let Err(e) = std::fs::remove_dir_all(&mic_dir)
+                {
+                    debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
+                }
+            }
+        }
+
+        if let Some(system_frags) = &segment.system_audio_fragments {
+            let system_output = segment_dir.join(finalized_audio_name(
+                segment_dir,
+                "system_audio",
+                system_frags,
+            ));
+            if system_frags.len() == 1 {
+                let source = &system_frags[0];
+                let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
+                if system_output
+                    .extension()
+                    .is_some_and(|extension| extension == "m4a")
+                {
+                    finalize_m4a(source, &system_output)?;
+                } else if source != &system_output {
+                    if is_ogg {
+                        finalization_info!(
+                            "Moving single system audio fragment to {:?}",
+                            system_output
+                        );
+                        std::fs::rename(source, &system_output)?;
+                    } else {
+                        finalization_info!(
+                            "Transcoding single system audio fragment to {:?}",
+                            system_output
+                        );
+                        concatenate_audio_to_ogg(system_frags, &system_output)
+                            .map_err(RecoveryError::AudioConcat)?;
+                        if let Err(e) = std::fs::remove_file(source) {
+                            debug!("Failed to remove system audio source {:?}: {e}", source);
+                        }
+                    }
+                    let system_dir = segment_dir.join("system_audio");
+                    if system_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&system_dir)
+                    {
+                        debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
+                    }
+                }
+            } else if system_frags.len() > 1 {
+                finalization_info!(
+                    "Concatenating {} system audio fragments to {:?}",
+                    system_frags.len(),
+                    system_output
+                );
+                concatenate_audio_to_ogg(system_frags, &system_output)
+                    .map_err(RecoveryError::AudioConcat)?;
+
+                for fragment in system_frags {
+                    if let Err(e) = std::fs::remove_file(fragment) {
+                        debug!("Failed to remove system audio fragment {:?}: {e}", fragment);
+                    }
+                }
+                let system_dir = segment_dir.join("system_audio");
+                if system_dir.exists()
+                    && let Err(e) = std::fs::remove_dir_all(&system_dir)
+                {
+                    debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
+                }
+            }
+        }
+        debug!(
+            segment = segment.index,
+            elapsed_ms = audio_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio finalization segment audio remuxed"
+        );
+        Ok(())
+    }
+
+    fn validate_segment_audio(
+        segment: &RecoverableSegment,
+        segment_dir: &Path,
+        video_validation: VideoValidation,
+    ) -> [Option<Result<(), RecoveryError>>; 2] {
+        [
+            ("audio-input", segment.mic_fragments.as_deref()),
+            ("system_audio", segment.system_audio_fragments.as_deref()),
+        ]
+        .map(|(stem, fragments)| {
+            fragments.map(|fragments| {
+                validate_recovery_track(
+                    &segment_dir.join(finalized_audio_name(segment_dir, stem, fragments)),
+                    ffmpeg::media::Type::Audio,
+                    video_validation,
+                )
+            })
+        })
+    }
+
     fn finalize_staged(
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
@@ -1343,235 +1783,50 @@ impl RecoveryManager {
             return Err(RecoveryError::NoRecoverableSegments);
         }
 
+        let mut audio_validations = Vec::with_capacity(recording.recoverable_segments.len());
         for segment in &recording.recoverable_segments {
             let segment_dir = recording
                 .project_path
                 .join("content/segments")
                 .join(format!("segment-{}", segment.index));
 
-            let video_started = Instant::now();
-            let display_output = segment_dir.join("display.mp4");
-            let display_dir = segment_dir.join("display");
-
-            if segment.display_fragments.len() == 1 && segment.display_init_segment.is_none() {
-                let source = &segment.display_fragments[0];
-                if source != &display_output {
-                    finalization_info!("Moving single display fragment to {:?}", display_output);
-                    std::fs::rename(source, &display_output)?;
-                }
-                Self::validate_required_video(&display_output, "display", video_validation)?;
-                if display_dir.exists()
-                    && let Err(e) = std::fs::remove_dir_all(&display_dir)
-                {
-                    debug!("Failed to clean up display dir {:?}: {e}", display_dir);
-                }
-            } else if !segment.display_fragments.is_empty() {
-                let finalize_result = if display_dir.exists() {
-                    Self::finalize_to_progressive_mp4_with_validation(
-                        &display_dir,
-                        &display_output,
-                        None,
-                        video_validation,
-                    )
-                    .map(|_| ())
-                } else {
-                    Self::finalize_fragments_to_progressive_mp4(
-                        &segment.display_fragments,
-                        segment.display_init_segment.as_deref(),
-                        &display_output,
-                        "display",
-                        video_validation,
-                    )
-                };
-
-                match finalize_result {
-                    Ok(()) => {}
-                    Err(err) => {
-                        if let Err(e) = std::fs::remove_file(&display_output)
-                            && e.kind() != std::io::ErrorKind::NotFound
-                        {
-                            debug!(
-                                "Failed to remove invalid display output {:?}: {e}",
-                                display_output
-                            );
-                        }
-                        return Err(err);
-                    }
-                }
-
-                if display_dir.exists()
-                    && let Err(e) = std::fs::remove_dir_all(&display_dir)
-                {
-                    debug!("Failed to clean up display dir {:?}: {e}", display_dir);
-                }
-            }
-
-            // Sync invariant: the remuxed display track must match the media
-            // span the recorder persisted from its capture timestamps.
-            if display_output.is_file()
-                && let Some(expected) = Self::expected_display_duration_from_config(
-                    &recording.project_path,
-                    segment.index,
-                )
-            {
-                crate::output_validation::check_display_sync_span(&display_output, expected);
-            }
-
-            if let Some(camera_frags) = &segment.camera_fragments {
-                let camera_output = segment_dir.join("camera.mp4");
-                if camera_frags.len() == 1 && segment.camera_init_segment.is_none() {
-                    if camera_frags[0] != camera_output {
-                        std::fs::rename(&camera_frags[0], &camera_output)?;
-                    }
-                    Self::validate_required_video(&camera_output, "camera", video_validation)?;
-                } else {
-                    Self::finalize_fragments_to_progressive_mp4(
-                        camera_frags,
-                        segment.camera_init_segment.as_deref(),
-                        &camera_output,
-                        "camera",
-                        video_validation,
-                    )?;
-                }
-                let camera_dir = segment_dir.join("camera");
-                if camera_dir.exists() {
-                    std::fs::remove_dir_all(camera_dir)?;
-                }
-            }
-
-            debug!(
-                segment = segment.index,
-                elapsed_ms = video_started.elapsed().as_secs_f64() * 1000.0,
-                "Studio finalization segment video ready"
-            );
-            let audio_started = Instant::now();
-
-            if let Some(mic_frags) = &segment.mic_fragments {
-                let mic_output =
-                    segment_dir.join(finalized_audio_name(&segment_dir, "audio-input", mic_frags));
-                if mic_frags.len() == 1 {
-                    let source = &mic_frags[0];
-                    let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
-                    if mic_output
-                        .extension()
-                        .is_some_and(|extension| extension == "m4a")
-                    {
-                        finalize_m4a(source, &mic_output)?;
-                    } else if source != &mic_output {
-                        if is_ogg {
-                            finalization_info!("Moving single mic fragment to {:?}", mic_output);
-                            std::fs::rename(source, &mic_output)?;
-                        } else {
-                            finalization_info!(
-                                "Transcoding single mic fragment to {:?}",
-                                mic_output
-                            );
-                            concatenate_audio_to_ogg(mic_frags, &mic_output)
-                                .map_err(RecoveryError::AudioConcat)?;
-                            if let Err(e) = std::fs::remove_file(source) {
-                                debug!("Failed to remove mic source {:?}: {e}", source);
-                            }
-                        }
-                        let mic_dir = segment_dir.join("audio-input");
-                        if mic_dir.exists()
-                            && let Err(e) = std::fs::remove_dir_all(&mic_dir)
-                        {
-                            debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
-                        }
-                    }
-                } else if mic_frags.len() > 1 {
-                    finalization_info!(
-                        "Concatenating {} mic fragments to {:?}",
-                        mic_frags.len(),
-                        mic_output
-                    );
-                    concatenate_audio_to_ogg(mic_frags, &mic_output)
-                        .map_err(RecoveryError::AudioConcat)?;
-
-                    for fragment in mic_frags {
-                        if let Err(e) = std::fs::remove_file(fragment) {
-                            debug!("Failed to remove mic fragment {:?}: {e}", fragment);
-                        }
-                    }
-                    let mic_dir = segment_dir.join("audio-input");
-                    if mic_dir.exists()
-                        && let Err(e) = std::fs::remove_dir_all(&mic_dir)
-                    {
-                        debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
-                    }
-                }
-            }
-
-            if let Some(system_frags) = &segment.system_audio_fragments {
-                let system_output = segment_dir.join(finalized_audio_name(
+            let (video, audio) = std::thread::scope(|scope| {
+                let audio = std::thread::Builder::new()
+                    .name("studio-audio-finalize".into())
+                    .stack_size(AUDIO_FINALIZE_STACK_SIZE)
+                    .spawn_scoped(scope, || {
+                        Self::finalize_segment_audio(segment, &segment_dir).map(|()| {
+                            Self::validate_segment_audio(segment, &segment_dir, video_validation)
+                        })
+                    })
+                    .ok();
+                let video = Self::finalize_segment_video(
+                    recording,
+                    segment,
                     &segment_dir,
-                    "system_audio",
-                    system_frags,
-                ));
-                if system_frags.len() == 1 {
-                    let source = &system_frags[0];
-                    let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
-                    if system_output
-                        .extension()
-                        .is_some_and(|extension| extension == "m4a")
-                    {
-                        finalize_m4a(source, &system_output)?;
-                    } else if source != &system_output {
-                        if is_ogg {
-                            finalization_info!(
-                                "Moving single system audio fragment to {:?}",
-                                system_output
-                            );
-                            std::fs::rename(source, &system_output)?;
-                        } else {
-                            finalization_info!(
-                                "Transcoding single system audio fragment to {:?}",
-                                system_output
-                            );
-                            concatenate_audio_to_ogg(system_frags, &system_output)
-                                .map_err(RecoveryError::AudioConcat)?;
-                            if let Err(e) = std::fs::remove_file(source) {
-                                debug!("Failed to remove system audio source {:?}: {e}", source);
-                            }
-                        }
-                        let system_dir = segment_dir.join("system_audio");
-                        if system_dir.exists()
-                            && let Err(e) = std::fs::remove_dir_all(&system_dir)
-                        {
-                            debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
-                        }
-                    }
-                } else if system_frags.len() > 1 {
-                    finalization_info!(
-                        "Concatenating {} system audio fragments to {:?}",
-                        system_frags.len(),
-                        system_output
-                    );
-                    concatenate_audio_to_ogg(system_frags, &system_output)
-                        .map_err(RecoveryError::AudioConcat)?;
-
-                    for fragment in system_frags {
-                        if let Err(e) = std::fs::remove_file(fragment) {
-                            debug!("Failed to remove system audio fragment {:?}: {e}", fragment);
-                        }
-                    }
-                    let system_dir = segment_dir.join("system_audio");
-                    if system_dir.exists()
-                        && let Err(e) = std::fs::remove_dir_all(&system_dir)
-                    {
-                        debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
-                    }
+                    video_validation,
+                );
+                (video, audio.map(|handle| handle.join()))
+            });
+            video?;
+            audio_validations.push(match audio {
+                Some(Ok(audio)) => audio?,
+                Some(Err(_)) => {
+                    return Err(RecoveryError::Validation(
+                        "Studio audio finalization panicked".into(),
+                    ));
                 }
-            }
-            debug!(
-                segment = segment.index,
-                elapsed_ms = audio_started.elapsed().as_secs_f64() * 1000.0,
-                "Studio finalization segment audio remuxed"
-            );
+                None => {
+                    Self::finalize_segment_audio(segment, &segment_dir)?;
+                    Default::default()
+                }
+            });
         }
 
         let validating = Instant::now();
-        for segment in &recording.recoverable_segments {
+        for (segment, [mic_validation, system_validation]) in
+            recording.recoverable_segments.iter().zip(audio_validations)
+        {
             let dir = recording
                 .project_path
                 .join(format!("content/segments/segment-{}", segment.index));
@@ -1582,39 +1837,40 @@ impl RecoveryManager {
                     video_validation,
                 )?;
             }
-            for (fragments, name, kind) in [
+            for (fragments, audio_stem, kind, validated) in [
                 (
-                    segment.camera_fragments.as_ref(),
-                    "camera.mp4".to_string(),
+                    segment.camera_fragments.as_deref(),
+                    None,
                     ffmpeg::media::Type::Video,
+                    None,
                 ),
                 (
-                    segment.mic_fragments.as_ref(),
-                    finalized_audio_name(
-                        &dir,
-                        "audio-input",
-                        segment.mic_fragments.as_deref().unwrap_or_default(),
-                    ),
+                    segment.mic_fragments.as_deref(),
+                    Some("audio-input"),
                     ffmpeg::media::Type::Audio,
+                    mic_validation,
                 ),
                 (
-                    segment.system_audio_fragments.as_ref(),
-                    finalized_audio_name(
-                        &dir,
-                        "system_audio",
-                        segment
-                            .system_audio_fragments
-                            .as_deref()
-                            .unwrap_or_default(),
-                    ),
+                    segment.system_audio_fragments.as_deref(),
+                    Some("system_audio"),
                     ffmpeg::media::Type::Audio,
+                    system_validation,
                 ),
             ] {
-                if fragments.is_some()
+                if let Some(fragments) = fragments
                     && (kind != ffmpeg::media::Type::Video
                         || video_validation == VideoValidation::Full)
                 {
-                    validate_recovery_track(&dir.join(name), kind, video_validation)?;
+                    match validated {
+                        Some(result) => result?,
+                        None => {
+                            let name = audio_stem.map_or_else(
+                                || "camera.mp4".to_string(),
+                                |stem| finalized_audio_name(&dir, stem, fragments),
+                            );
+                            validate_recovery_track(&dir.join(name), kind, video_validation)?;
+                        }
+                    }
                 }
             }
         }
@@ -1817,7 +2073,7 @@ impl RecoveryManager {
                     "Missing required Instant audio".into(),
                 ));
             }
-            Self::rescue_pending_tmp_fragments(&display, None);
+            Self::rescue_pending_tmp_fragments(&display, None, false);
             let video = Self::find_complete_fragments_with_init(&display);
             if video_validation == VideoValidation::Full || video.init_segment.is_none() {
                 validate_recovery_video_inputs(
@@ -1827,7 +2083,13 @@ impl RecoveryManager {
                     video_validation,
                 )?;
             }
-            Self::finalize_instant_staged(&display, &audio, &final_output, video_validation)?;
+            let final_audio_validation = Self::finalize_instant_staged(
+                &display,
+                &audio,
+                &final_output,
+                video_validation,
+                expected_audio,
+            )?;
             if video_validation == VideoValidation::Full {
                 validate_recovery_track(
                     &final_output,
@@ -1836,7 +2098,10 @@ impl RecoveryManager {
                 )?;
             }
             if expected_audio {
-                validate_recovered_track(&final_output, ffmpeg::media::Type::Audio)?;
+                match final_audio_validation {
+                    Some(result) => result?,
+                    None => validate_recovered_track(&final_output, ffmpeg::media::Type::Audio)?,
+                }
             }
             sync_recovery_input(&final_output)?;
             Self::require_no_track_failure(project)?;
@@ -1862,17 +2127,20 @@ impl RecoveryManager {
         audio_dir: &Path,
         output: &Path,
         video_validation: VideoValidation,
-    ) -> Result<PathBuf, RecoveryError> {
+        validate_output_audio: bool,
+    ) -> Result<Option<Result<(), RecoveryError>>, RecoveryError> {
         if !audio_dir.exists() {
-            return Self::finalize_to_progressive_mp4_with_validation(
+            Self::finalize_to_progressive_mp4_with_validation(
                 display_dir,
                 output,
                 None,
                 video_validation,
-            );
+                false,
+            )?;
+            return Ok(None);
         }
 
-        Self::rescue_pending_tmp_fragments(audio_dir, None);
+        Self::rescue_pending_tmp_fragments(audio_dir, None, false);
         let audio_info = Self::find_complete_fragments_with_init(audio_dir);
         if audio_info.fragments.is_empty() {
             return Err(RecoveryError::Validation(
@@ -1881,13 +2149,6 @@ impl RecoveryManager {
         }
 
         let parent = output.parent().unwrap_or_else(|| Path::new("."));
-        validate_recovery_track_inputs(
-            &audio_info.fragments,
-            audio_info.init_segment.as_deref(),
-            parent,
-            ffmpeg::media::Type::Audio,
-            VideoValidation::Full,
-        )?;
         std::fs::create_dir_all(parent)?;
         let stem = output
             .file_stem()
@@ -1898,23 +2159,80 @@ impl RecoveryManager {
         let merged_output = parent.join(format!("{stem}.merged.mp4"));
 
         let result = (|| {
-            Self::finalize_to_progressive_mp4_with_validation(
-                display_dir,
-                &video_output,
-                None,
-                video_validation,
-            )?;
-            Self::finalize_audio_fragments_to_progressive_mp4(
-                &audio_info.fragments,
-                audio_info.init_segment.as_deref(),
-                &audio_output,
-                "audio",
-            )?;
+            let finalize_audio = || {
+                let validated = validate_recovery_track_inputs(
+                    &audio_info.fragments,
+                    audio_info.init_segment.as_deref(),
+                    parent,
+                    ffmpeg::media::Type::Audio,
+                    VideoValidation::Full,
+                );
+                validated.map(|()| {
+                    Self::finalize_audio_fragments_to_progressive_mp4(
+                        &audio_info.fragments,
+                        audio_info.init_segment.as_deref(),
+                        &audio_output,
+                        "audio",
+                    )
+                })
+            };
+            let (audio, video) = std::thread::scope(|scope| {
+                let audio = std::thread::Builder::new()
+                    .name("instant-audio-finalize".into())
+                    .stack_size(AUDIO_FINALIZE_STACK_SIZE)
+                    .spawn_scoped(scope, finalize_audio)
+                    .ok();
+                let video = Self::finalize_to_progressive_mp4_with_validation(
+                    display_dir,
+                    &video_output,
+                    None,
+                    video_validation,
+                    false,
+                );
+                let audio = match audio {
+                    Some(handle) => handle.join().unwrap_or_else(|_| {
+                        Err(RecoveryError::Validation(
+                            "Instant audio finalization panicked".into(),
+                        ))
+                    }),
+                    None => finalize_audio(),
+                };
+                (audio, video)
+            });
+            let audio_concat = audio?;
+            video?;
+            audio_concat?;
             merge_video_audio(&video_output, &audio_output, &merged_output)
                 .map_err(RecoveryError::MediaMerge)?;
-            Self::validate_required_video(&merged_output, "display", video_validation)?;
+            let (video, audio) = std::thread::scope(|scope| {
+                let audio = validate_output_audio
+                    .then(|| {
+                        std::thread::Builder::new()
+                            .name("instant-audio-validate".into())
+                            .stack_size(AUDIO_FINALIZE_STACK_SIZE)
+                            .spawn_scoped(scope, || {
+                                validate_recovered_track(&merged_output, ffmpeg::media::Type::Audio)
+                            })
+                            .ok()
+                    })
+                    .flatten();
+                let video = Self::check_required_video(&merged_output, "display", video_validation);
+                (video, audio.and_then(|handle| handle.join().ok()))
+            });
+            let audio = match video? {
+                Ok(()) => audio,
+                Err(seek_error) => {
+                    Self::normalize_required_video(
+                        &merged_output,
+                        "display",
+                        video_validation,
+                        &seek_error,
+                    )?;
+                    None
+                }
+            };
             replace_file(&merged_output, output)?;
-            Ok(output.to_path_buf())
+            Ok(audio)
         })();
 
         for path in [&video_output, &audio_output, &merged_output] {
@@ -1936,6 +2254,7 @@ impl RecoveryManager {
             output,
             health_tx,
             VideoValidation::Full,
+            true,
         )
     }
 
@@ -1944,15 +2263,17 @@ impl RecoveryManager {
         output: &Path,
         health_tx: Option<&HealthSender>,
         video_validation: VideoValidation,
+        recover_complete_prefixes: bool,
     ) -> Result<PathBuf, RecoveryError> {
-        Self::rescue_pending_tmp_fragments(fragmented_dir, health_tx);
+        Self::rescue_pending_tmp_fragments(fragmented_dir, health_tx, recover_complete_prefixes);
 
         let info = Self::find_complete_fragments_with_init(fragmented_dir);
         if info.fragments.is_empty() {
             return Err(RecoveryError::NoRecoverableSegments);
         }
 
-        let respawn_groups = Self::collect_respawn_groups(fragmented_dir, health_tx);
+        let respawn_groups =
+            Self::collect_respawn_groups(fragmented_dir, health_tx, recover_complete_prefixes);
 
         if respawn_groups.is_empty() {
             Self::finalize_fragments_to_progressive_mp4(
@@ -2090,6 +2411,17 @@ impl RecoveryManager {
         label: &str,
         video_validation: VideoValidation,
     ) -> Result<(), RecoveryError> {
+        if let Err(seek_error) = Self::check_required_video(path, label, video_validation)? {
+            Self::normalize_required_video(path, label, video_validation, &seek_error)?;
+        }
+        Ok(())
+    }
+
+    fn check_required_video(
+        path: &Path,
+        label: &str,
+        video_validation: VideoValidation,
+    ) -> Result<Result<(), String>, RecoveryError> {
         finalization_info!("Validating finalized {} video: {:?}", label, path);
 
         if video_validation == VideoValidation::Full {
@@ -2118,20 +2450,27 @@ impl RecoveryManager {
                 if let Some(track_result) = track_result {
                     track_result?;
                 }
+                Ok(Ok(()))
             }
-            Err(seek_error) => {
-                finalization_info!(
-                    "Finalized {} video failed seek validation, normalizing via remux: {}",
-                    label,
-                    seek_error
-                );
-                Self::normalize_recovered_video(path, label)?;
-                if video_validation == VideoValidation::Bounded {
-                    validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
-                }
-            }
+            Err(seek_error) => Ok(Err(seek_error)),
         }
+    }
 
+    fn normalize_required_video(
+        path: &Path,
+        label: &str,
+        video_validation: VideoValidation,
+        seek_error: &str,
+    ) -> Result<(), RecoveryError> {
+        finalization_info!(
+            "Finalized {} video failed seek validation, normalizing via remux: {}",
+            label,
+            seek_error
+        );
+        Self::normalize_recovered_video(path, label)?;
+        if video_validation == VideoValidation::Bounded {
+            validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
+        }
         Ok(())
     }
 
@@ -2202,7 +2541,10 @@ impl RecoveryManager {
                     }
                 };
 
-                let display_start_time = original_segment.and_then(|s| s.display.start_time);
+                let persisted = persisted_start_times(&segment_dir);
+                let display_start_time = original_segment
+                    .and_then(|s| s.display.start_time)
+                    .or(persisted.map(|times| times.display));
 
                 let get_start_time_or_fallback = |original_time: Option<f64>| -> Option<f64> {
                     start_time_or_display_fallback(original_time, display_start_time)
@@ -2225,7 +2567,8 @@ impl RecoveryManager {
                             start_time: get_start_time_or_fallback(
                                 original_segment
                                     .and_then(|s| s.camera.as_ref())
-                                    .and_then(|c| c.start_time),
+                                    .and_then(|c| c.start_time)
+                                    .or(persisted.and_then(|times| times.camera)),
                             ),
                             device_id: original_segment
                                 .and_then(|s| s.camera.as_ref())
@@ -2248,7 +2591,8 @@ impl RecoveryManager {
                                 start_time: get_start_time_or_fallback(
                                     original_segment
                                         .and_then(|s| s.mic.as_ref())
-                                        .and_then(|m| m.start_time),
+                                        .and_then(|m| m.start_time)
+                                        .or(persisted.and_then(|times| times.mic)),
                                 ),
                                 device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
@@ -2273,7 +2617,8 @@ impl RecoveryManager {
                                 start_time: get_start_time_or_fallback(
                                     original_segment
                                         .and_then(|s| s.system_audio.as_ref())
-                                        .and_then(|a| a.start_time),
+                                        .and_then(|a| a.start_time)
+                                        .or(persisted.and_then(|times| times.system_audio)),
                                 ),
                                 device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
@@ -3648,6 +3993,65 @@ fn validate_recovered_track(path: &Path, kind: ffmpeg::media::Type) -> Result<()
     validate_recovery_track(path, kind, VideoValidation::Full)
 }
 
+const MAX_AUDIO_VALIDATION_WORKERS: usize = 4;
+
+const AUDIO_FINALIZE_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+fn validate_recovered_audio_in_order(paths: &[&PathBuf]) -> Result<(), RecoveryError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let workers = std::thread::available_parallelism()
+        .map_or(1, |count| count.get())
+        .min(MAX_AUDIO_VALIDATION_WORKERS)
+        .min(paths.len());
+    if workers <= 1 {
+        for path in paths {
+            validate_recovered_track(path, ffmpeg::media::Type::Audio)?;
+        }
+        return Ok(());
+    }
+    let next = AtomicUsize::new(0);
+    let drain = || {
+        let mut results = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some(path) = paths.get(index) else {
+                break;
+            };
+            results.push((
+                index,
+                validate_recovered_track(path, ffmpeg::media::Type::Audio),
+            ));
+        }
+        results
+    };
+    let mut results = std::thread::scope(|scope| {
+        let helpers = (1..workers)
+            .filter_map(|_| {
+                std::thread::Builder::new()
+                    .name("studio-audio-validate".into())
+                    .stack_size(AUDIO_FINALIZE_STACK_SIZE)
+                    .spawn_scoped(scope, drain)
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        let mut results = drain();
+        for helper in helpers {
+            match helper.join() {
+                Ok(helper_results) => results.extend(helper_results),
+                Err(_) => {
+                    return Err(RecoveryError::Validation(
+                        "Studio audio validation panicked".into(),
+                    ));
+                }
+            }
+        }
+        Ok(results)
+    })?;
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().try_for_each(|(_, result)| result)
+}
+
 fn full_validation_decode_threads() -> usize {
     std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
 }
@@ -4955,7 +5359,8 @@ mod clean_studio_snapshot_tests {
 mod tests {
     use super::{
         RecoveryManager, RecoveryPurpose, StudioRecordingStatus, VideoValidation, replace_file,
-        start_time_or_display_fallback, valid_recovered_audio, validate_recovery_track,
+        start_time_or_display_fallback, valid_recovered_audio, validate_recovered_audio_in_order,
+        validate_recovery_track,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -5071,6 +5476,60 @@ mod tests {
             fragment.extend_from_slice(&[0; 64]);
         }
         fragment
+    }
+
+    #[test]
+    fn recovery_keeps_a_completed_fragment_listed_pending_after_an_earlier_valid_fragment() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        for name in ["segment_001.m4s", "segment_002.m4s"] {
+            fs::write(dir.path().join(name), &fragment).unwrap();
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": true, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": false, "file_size": null}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+        assert_eq!(
+            recovered.fragments,
+            ["segment_001.m4s", "segment_002.m4s"].map(|name| dir.path().join(name))
+        );
+    }
+
+    #[test]
+    fn recovery_still_rejects_pending_and_mismatched_fragments_that_are_not_complete() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        fs::write(dir.path().join("segment_001.m4s"), &fragment).unwrap();
+        fs::write(dir.path().join("segment_002.m4s"), &fragment).unwrap();
+        fs::write(
+            dir.path().join("segment_003.m4s"),
+            &fragment[..fragment.len() - 1],
+        )
+        .unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": true, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": true, "file_size": fragment.len() + 1},
+                {"path": "segment_003.m4s", "is_complete": false, "file_size": null}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+        assert_eq!(recovered.fragments, [dir.path().join("segment_001.m4s")]);
     }
 
     #[test]
@@ -5249,6 +5708,43 @@ mod tests {
 
         assert!(bytes.len() < 500);
         assert!(valid_recovered_audio(&path));
+    }
+
+    #[test]
+    fn parallel_audio_validation_reports_the_first_failure_in_track_order() {
+        let dir = tempdir().unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&68u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&8000u32.to_le_bytes());
+        bytes.extend_from_slice(&16000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&32u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 32]);
+        let tracks = ["valid-0", "missing-1", "valid-2", "missing-3", "missing-4"]
+            .map(|name| dir.path().join(format!("{name}.wav")));
+        for path in tracks
+            .iter()
+            .filter(|path| path.to_string_lossy().contains("valid-"))
+        {
+            fs::write(path, &bytes).unwrap();
+        }
+        let tracks = tracks.iter().collect::<Vec<_>>();
+
+        for _ in 0..16 {
+            let error = validate_recovered_audio_in_order(&tracks)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("missing-1.wav"), "{error}");
+        }
+        assert!(validate_recovered_audio_in_order(&[tracks[0], tracks[2]]).is_ok());
+        assert!(validate_recovered_audio_in_order(&[]).is_ok());
     }
 
     #[test]
@@ -6624,3 +7120,155 @@ mod transactional_recovery_tests {
 
 #[cfg(test)]
 mod preparing_canonical_probe;
+
+#[cfg(test)]
+mod timed_fragment_tests {
+    use super::*;
+
+    fn boxed(kind: &[u8; 4], values: &[u32]) -> Vec<u8> {
+        let mut bytes = (8 + values.len() as u32 * 4).to_be_bytes().to_vec();
+        bytes.extend(kind);
+        bytes.extend(values.iter().flat_map(|value| value.to_be_bytes()));
+        bytes
+    }
+
+    fn container(kind: &[u8; 4], children: &[Vec<u8>]) -> Vec<u8> {
+        let payload = children.concat();
+        let mut bytes = (8 + payload.len() as u32).to_be_bytes().to_vec();
+        bytes.extend(kind);
+        bytes.extend(payload);
+        bytes
+    }
+
+    fn fixture(directory: &Path) -> (PathBuf, Vec<u8>) {
+        let track = container(
+            b"trak",
+            &[
+                boxed(b"tkhd", &[0, 0, 0, 1]),
+                container(b"mdia", &[boxed(b"mdhd", &[0, 0, 0, 30])]),
+            ],
+        );
+        let defaults = container(b"mvex", &[boxed(b"trex", &[0, 1, 1, 1, 4, 0])]);
+        std::fs::write(
+            directory.join("init.mp4"),
+            container(b"moov", &[track, defaults]),
+        )
+        .unwrap();
+        let moof = container(
+            b"moof",
+            &[container(
+                b"traf",
+                &[
+                    boxed(b"tfhd", &[0x20000, 1]),
+                    boxed(b"tfdt", &[0, 0]),
+                    boxed(b"trun", &[1, 60, 76]),
+                ],
+            )],
+        );
+        assert_eq!(moof.len(), 68);
+        let mut complete = moof;
+        complete.extend(boxed(b"mdat", &[42; 60]));
+        let path = directory.join("segment_001.m4s.tmp");
+        let mut partial = complete.clone();
+        partial.extend(boxed(b"moof", &[0; 10]));
+        partial.extend(&boxed(b"mdat", &[0; 60])[..24]);
+        std::fs::write(&path, partial).unwrap();
+        (path, complete)
+    }
+
+    #[test]
+    fn discovers_pending_prefix_without_mutating_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = fixture(directory.path());
+        let before = recovery_snapshot(directory.path()).unwrap();
+        let info = RecoveryManager::find_studio_fragments_with_init(directory.path());
+        assert_eq!(info.fragments, [source]);
+        assert_eq!(recovery_snapshot(directory.path()).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_pending_fragment_stays_listed_for_a_retry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = fixture(directory.path());
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&source).is_ok() {
+            // Permissions do not apply (running as root).
+            return;
+        }
+        let info = RecoveryManager::find_studio_fragments_with_init(directory.path());
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(info.fragments, [source]);
+    }
+
+    #[test]
+    fn studio_recovery_keeps_complete_prefix_and_original_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, complete) = fixture(directory.path());
+        let original = std::fs::read(&source).unwrap();
+        let marker = directory.path().join("segment_001.m4s.tmp.corrupt");
+        std::fs::write(&marker, "truncated_fragment").unwrap();
+        RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, true);
+        let output = directory.path().join("segment_001.m4s");
+        assert_eq!(std::fs::read(&output).unwrap(), complete);
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, true);
+        assert_eq!(std::fs::read(&output).unwrap(), complete);
+        assert_eq!(
+            RecoveryManager::find_studio_fragments_with_init(directory.path()).fragments,
+            [output]
+        );
+    }
+
+    #[test]
+    fn instant_recovery_keeps_existing_partial_tail_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = fixture(directory.path());
+        let original = std::fs::read(&source).unwrap();
+        RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, false);
+        assert!(!directory.path().join("segment_001.m4s").exists());
+        assert_eq!(std::fs::read(source).unwrap(), original);
+    }
+
+    #[test]
+    fn failed_prefix_copy_does_not_quarantine_valid_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, complete) = fixture(directory.path());
+        let original = std::fs::read(&source).unwrap();
+        RecoveryManager::rescue_pending_tmp_fragments_with_copy(
+            directory.path(),
+            None,
+            true,
+            |_, _, _| Err(std::io::Error::other("injected storage failure")),
+        );
+        assert!(
+            !directory
+                .path()
+                .join("segment_001.m4s.tmp.corrupt")
+                .exists()
+        );
+        assert!(!directory.path().join("segment_001.m4s").exists());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, true);
+        assert_eq!(
+            std::fs::read(directory.path().join("segment_001.m4s")).unwrap(),
+            complete
+        );
+    }
+
+    #[test]
+    fn prefix_copy_never_overwrites_an_existing_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, complete) = fixture(directory.path());
+        let output = directory.path().join("segment_001.m4s");
+        std::fs::write(&output, b"existing").unwrap();
+        assert!(
+            RecoveryManager::copy_recovered_prefix(&source, &output, complete.len() as u64)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(output).unwrap(), b"existing");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 3);
+    }
+}

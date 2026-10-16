@@ -342,6 +342,27 @@ pub struct PreparedMask {
     pub output_size: XY<u32>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FrameFetch {
+    Playback,
+    PlaybackInitial,
+    Export { initial: bool },
+}
+
+impl FrameFetch {
+    async fn frame(
+        self,
+        decoder: &AsyncVideoDecoderHandle,
+        time: f32,
+    ) -> Result<Option<DecodedFrame>, decoder::DecodeStalled> {
+        match self {
+            Self::Playback => Ok(decoder.get_frame(time).await),
+            Self::PlaybackInitial => Ok(decoder.get_frame_initial(time).await),
+            Self::Export { initial } => decoder.get_frame_for_export(time, initial).await,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
@@ -427,65 +448,16 @@ impl RecordingSegmentDecoders {
         needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
-        let (camera_request_time, recording_time) =
-            segment_timing::segment_frame_times(segment_time, self.segment_offset, offsets);
-        let (screen_width, screen_height) = self.screen_video_dimensions();
-        let screen_size = XY::new(screen_width, screen_height);
-
-        if needs_display {
-            let (screen, camera) = tokio::join!(
-                self.screen.get_frame(segment_time),
-                OptionFuture::from(
-                    needs_camera
-                        .then(|| self
-                            .camera
-                            .as_ref()
-                            .map(|d| d.get_frame(camera_request_time)))
-                        .flatten()
-                )
-            );
-
-            let camera_frame = camera.flatten();
-
-            if screen.is_none() {
-                tracing::warn!(segment_time, "screen decoder returned no frame");
-            }
-
-            Some(DecodedSegmentFrames {
-                screen_size,
-                screen_frame: Some(screen?),
-                camera_frame,
-                segment_time,
-                recording_time,
-                segment_has_camera: self.camera.is_some(),
-            })
-        } else {
-            let camera_frame = OptionFuture::from(
-                needs_camera
-                    .then(|| {
-                        self.camera
-                            .as_ref()
-                            .map(|d| d.get_frame(camera_request_time))
-                    })
-                    .flatten(),
-            )
-            .await
-            .flatten();
-
-            tracing::debug!(
-                segment_time,
-                "get_frames: skipping display decoding (needs_display=false)"
-            );
-
-            Some(DecodedSegmentFrames {
-                screen_size,
-                screen_frame: None,
-                camera_frame,
-                segment_time,
-                recording_time,
-                segment_has_camera: self.camera.is_some(),
-            })
-        }
+        self.fetch_frames(
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            FrameFetch::Playback,
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     pub async fn get_frames_initial(
@@ -495,60 +467,97 @@ impl RecordingSegmentDecoders {
         needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
+        self.fetch_frames(
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            FrameFetch::PlaybackInitial,
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Offline export variant: screen and camera requests wait past their
+    /// playback deadlines for the same frame (see `EXPORT_STALL_LIMIT`).
+    async fn get_frames_for_export(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        needs_display: bool,
+        offsets: ClipOffsets,
+        initial: bool,
+    ) -> Result<Option<DecodedSegmentFrames>, decoder::DecodeStalled> {
+        self.fetch_frames(
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            FrameFetch::Export { initial },
+        )
+        .await
+    }
+
+    async fn fetch_frames(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        needs_display: bool,
+        offsets: ClipOffsets,
+        fetch: FrameFetch,
+    ) -> Result<Option<DecodedSegmentFrames>, decoder::DecodeStalled> {
         let (camera_request_time, recording_time) =
             segment_timing::segment_frame_times(segment_time, self.segment_offset, offsets);
         let (screen_width, screen_height) = self.screen_video_dimensions();
         let screen_size = XY::new(screen_width, screen_height);
+        let camera = needs_camera.then_some(self.camera.as_ref()).flatten();
 
         if needs_display {
             let (screen, camera) = tokio::join!(
-                self.screen.get_frame_initial(segment_time),
-                OptionFuture::from(
-                    needs_camera
-                        .then(|| self
-                            .camera
-                            .as_ref()
-                            .map(|d| d.get_frame_initial(camera_request_time)))
-                        .flatten()
-                )
+                fetch.frame(&self.screen, segment_time),
+                OptionFuture::from(camera.map(|d| fetch.frame(d, camera_request_time)))
             );
 
-            let camera_frame = camera.flatten();
+            let camera_frame = camera.transpose()?.flatten();
+            let screen = screen?;
 
-            Some(DecodedSegmentFrames {
+            if screen.is_none() && fetch != FrameFetch::PlaybackInitial {
+                tracing::warn!(segment_time, "screen decoder returned no frame");
+            }
+
+            let Some(screen) = screen else {
+                return Ok(None);
+            };
+
+            Ok(Some(DecodedSegmentFrames {
                 screen_size,
-                screen_frame: Some(screen?),
+                screen_frame: Some(screen),
                 camera_frame,
                 segment_time,
                 recording_time,
                 segment_has_camera: self.camera.is_some(),
-            })
+            }))
         } else {
-            let camera_frame = OptionFuture::from(
-                needs_camera
-                    .then(|| {
-                        self.camera
-                            .as_ref()
-                            .map(|d| d.get_frame_initial(camera_request_time))
-                    })
-                    .flatten(),
-            )
-            .await
-            .flatten();
+            let camera_frame =
+                OptionFuture::from(camera.map(|d| fetch.frame(d, camera_request_time)))
+                    .await
+                    .transpose()?
+                    .flatten();
 
             tracing::debug!(
                 segment_time,
-                "get_frames_initial: skipping display decoding (needs_display=false)"
+                "get_frames: skipping display decoding (needs_display=false)"
             );
 
-            Some(DecodedSegmentFrames {
+            Ok(Some(DecodedSegmentFrames {
                 screen_size,
                 screen_frame: None,
                 camera_frame,
                 segment_time,
                 recording_time,
                 segment_has_camera: self.camera.is_some(),
-            })
+            }))
         }
     }
 
@@ -618,6 +627,14 @@ pub enum RenderingError {
         frame_number: u32,
         consecutive_failures: u32,
     },
+    #[error(
+        "Export stopped because frame {frame_number} took more than {waited_secs} seconds to decode. Close other apps that are using the computer heavily and try again."
+    )]
+    FrameDecodeStalled { frame_number: u32, waited_secs: u64 },
+    #[error(
+        "Export stopped because frame {frame_number} was lost while rendering. Try exporting again."
+    )]
+    ExportFrameLost { frame_number: u32 },
 }
 
 pub struct RenderSegment {
@@ -709,6 +726,7 @@ pub async fn render_video_to_channel(
     let mut last_frame_number = 0u32;
 
     let mut frame_renderer = FrameRenderer::new(constants);
+    frame_renderer.use_export_deadlines();
 
     let mut layers = RendererLayers::new_with_options(
         &constants.device,
@@ -733,7 +751,8 @@ pub async fn render_video_to_channel(
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
-    let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
+    let mut prefetched_decode: Option<PrefetchedDecode> = None;
+    let mut in_flight = InFlightFrame::default();
 
     loop {
         let Some(current_frame_number) = next_frame else {
@@ -811,7 +830,7 @@ pub async fn render_video_to_channel(
             }
         };
         let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
-            tokio::join!(
+            let (incoming, outgoing) = tokio::join!(
                 incoming_decode,
                 decode_timeline_source_frames(
                     project,
@@ -822,10 +841,12 @@ pub async fn render_video_to_channel(
                     is_initial_frame,
                     fps,
                 )
-            )
+            );
+            (incoming, outgoing?)
         } else {
             (incoming_decode.await, None)
         };
+        let segment_frames = segment_frames?;
 
         if let Some(segment_frames) = segment_frames {
             consecutive_failures = 0;
@@ -956,37 +977,42 @@ pub async fn render_video_to_channel(
 
             match render_result {
                 Ok(Some(frame)) if frame.width > 0 && frame.height > 0 => {
+                    in_flight.rendered(current_frame_number, Some(frame.frame_number))?;
                     last_successful_frame = Some(frame.clone());
                     sender.send((frame, current_frame_number)).await?;
                 }
-                Ok(Some(_)) => {
+                Ok(Some(frame)) => {
+                    in_flight.rendered(current_frame_number, Some(frame.frame_number))?;
                     tracing::warn!(
-                        frame_number = current_frame_number,
+                        frame_number = frame.frame_number,
                         "Rendered frame has zero dimensions"
                     );
                     if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        let fallback = last_frame.held_as(frame.frame_number, fps);
                         sender.send((fallback, current_frame_number)).await?;
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => in_flight.rendered(current_frame_number, None)?,
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
                         error = %e,
                         "Frame rendering failed"
                     );
-                    if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                        sender.send((fallback, current_frame_number)).await?;
-                    } else {
+                    if last_successful_frame.is_none() {
                         return Err(e);
+                    }
+                    // A substitute must not overtake the frame still in the GPU.
+                    if let Some(frame) = in_flight.drain(frame_renderer.flush_pipeline().await)?
+                        && frame.width > 0
+                        && frame.height > 0
+                    {
+                        last_successful_frame = Some(frame.clone());
+                        sender.send((frame, current_frame_number)).await?;
+                    }
+                    if let Some(ref last_frame) = last_successful_frame {
+                        let fallback = last_frame.held_as(current_frame_number, fps);
+                        sender.send((fallback, current_frame_number)).await?;
                     }
                 }
             }
@@ -1020,7 +1046,7 @@ pub async fn render_video_to_channel(
                 });
             }
 
-            if let Some(ref last_frame) = last_successful_frame {
+            if last_successful_frame.is_some() {
                 tracing::warn!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
@@ -1032,11 +1058,18 @@ pub async fn render_video_to_channel(
                     },
                     "Frame decode failed after retries - using previous frame"
                 );
-                let mut fallback = last_frame.clone();
-                fallback.frame_number = current_frame_number;
-                fallback.target_time_ns =
-                    (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                sender.send((fallback, current_frame_number)).await?;
+                // A substitute must not overtake the frame still in the GPU.
+                if let Some(frame) = in_flight.drain(frame_renderer.flush_pipeline().await)?
+                    && frame.width > 0
+                    && frame.height > 0
+                {
+                    last_successful_frame = Some(frame.clone());
+                    sender.send((frame, current_frame_number)).await?;
+                }
+                if let Some(ref last_frame) = last_successful_frame {
+                    let fallback = last_frame.held_as(current_frame_number, fps);
+                    sender.send((fallback, current_frame_number)).await?;
+                }
             } else {
                 tracing::error!(
                     frame_number = current_frame_number,
@@ -1053,7 +1086,7 @@ pub async fn render_video_to_channel(
         }
     }
 
-    if let Some(Ok(final_frame)) = frame_renderer.flush_pipeline().await
+    if let Some(final_frame) = in_flight.drain(frame_renderer.flush_pipeline().await)?
         && final_frame.width > 0
         && final_frame.height > 0
     {
@@ -1275,6 +1308,7 @@ pub async fn render_video_to_channel_nv12(
 
     let renderer_setup_start = Instant::now();
     let mut frame_renderer = FrameRenderer::new(constants);
+    frame_renderer.use_export_deadlines();
     #[cfg(target_os = "macos")]
     if !zero_copy_export_disabled() {
         frame_renderer.enable_nv12_surface_output();
@@ -1315,7 +1349,8 @@ pub async fn render_video_to_channel_nv12(
     let mut consecutive_failures = 0u32;
     const MAX_CONSECUTIVE_FAILURES: u32 = 200;
 
-    let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
+    let mut prefetched_decode: Option<PrefetchedDecode> = None;
+    let mut in_flight = InFlightFrame::default();
 
     let mut channel_frames_sent = 0u32;
     let mut stopped_after_frame_limit = false;
@@ -1401,7 +1436,7 @@ pub async fn render_video_to_channel_nv12(
             }
         };
         let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
-            tokio::join!(
+            let (incoming, outgoing) = tokio::join!(
                 incoming_decode,
                 decode_timeline_source_frames(
                     project,
@@ -1412,10 +1447,12 @@ pub async fn render_video_to_channel_nv12(
                     is_initial_frame,
                     fps,
                 )
-            )
+            );
+            (incoming, outgoing?)
         } else {
             (incoming_decode.await, None)
         };
+        let segment_frames = segment_frames?;
         let this_decode_ms = decode_wall_start.elapsed().as_millis() as u64;
         loop_stats::add(&loop_stats::DECODE, decode_wall_start.elapsed());
 
@@ -1663,6 +1700,7 @@ pub async fn render_video_to_channel_nv12(
 
             match render_result {
                 Ok(Some(frame)) if frame.width > 0 && frame.height > 0 => {
+                    in_flight.rendered(current_frame_number, Some(frame.frame_number))?;
                     if record_first_frame_nv12_phases {
                         if let Some(ref slot) = startup_breakdown_ms
                             && let Ok(mut guard) = slot.lock()
@@ -1693,16 +1731,14 @@ pub async fn render_video_to_channel_nv12(
                         break;
                     }
                 }
-                Ok(Some(_)) => {
+                Ok(Some(frame)) => {
+                    in_flight.rendered(current_frame_number, Some(frame.frame_number))?;
                     tracing::warn!(
-                        frame_number = current_frame_number,
+                        frame_number = frame.frame_number,
                         "Rendered NV12 frame has zero dimensions"
                     );
                     if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone_metadata_with_data();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        let fallback = last_frame.held_as(frame.frame_number, fps);
                         sender.send((fallback, current_frame_number)).await?;
                         channel_frames_sent += 1;
                         if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
@@ -1711,26 +1747,38 @@ pub async fn render_video_to_channel_nv12(
                         }
                     }
                 }
-                Ok(None) => {}
+                Ok(None) => in_flight.rendered(current_frame_number, None)?,
                 Err(e) => {
                     tracing::error!(
                         frame_number = current_frame_number,
                         error = %e,
                         "NV12 frame rendering failed"
                     );
+                    if last_successful_frame.is_none() {
+                        return Err(e);
+                    }
+                    // A substitute must not overtake the frame still in the GPU.
+                    if let Some(frame) =
+                        in_flight.drain(frame_renderer.flush_pipeline_nv12().await)?
+                        && frame.width > 0
+                        && frame.height > 0
+                    {
+                        last_successful_frame = Some(frame.clone_metadata_with_data());
+                        sender.send((frame, current_frame_number)).await?;
+                        channel_frames_sent += 1;
+                        if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
+                            stopped_after_frame_limit = true;
+                            break;
+                        }
+                    }
                     if let Some(ref last_frame) = last_successful_frame {
-                        let mut fallback = last_frame.clone_metadata_with_data();
-                        fallback.frame_number = current_frame_number;
-                        fallback.target_time_ns =
-                            (current_frame_number as u64 * 1_000_000_000) / fps as u64;
+                        let fallback = last_frame.held_as(current_frame_number, fps);
                         sender.send((fallback, current_frame_number)).await?;
                         channel_frames_sent += 1;
                         if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
                             stopped_after_frame_limit = true;
                             break;
                         }
-                    } else {
-                        return Err(e);
                     }
                 }
             }
@@ -1764,7 +1812,7 @@ pub async fn render_video_to_channel_nv12(
                 });
             }
 
-            if let Some(ref last_frame) = last_successful_frame {
+            if last_successful_frame.is_some() {
                 tracing::warn!(
                     frame_number = current_frame_number,
                     segment_time = segment_time,
@@ -1776,15 +1824,27 @@ pub async fn render_video_to_channel_nv12(
                     },
                     "Frame decode failed after retries - using previous NV12 frame"
                 );
-                let mut fallback = last_frame.clone_metadata_with_data();
-                fallback.frame_number = current_frame_number;
-                fallback.target_time_ns =
-                    (current_frame_number as u64 * 1_000_000_000) / fps as u64;
-                sender.send((fallback, current_frame_number)).await?;
-                channel_frames_sent += 1;
-                if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
-                    stopped_after_frame_limit = true;
-                    break;
+                // A substitute must not overtake the frame still in the GPU.
+                if let Some(frame) = in_flight.drain(frame_renderer.flush_pipeline_nv12().await)?
+                    && frame.width > 0
+                    && frame.height > 0
+                {
+                    last_successful_frame = Some(frame.clone_metadata_with_data());
+                    sender.send((frame, current_frame_number)).await?;
+                    channel_frames_sent += 1;
+                    if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
+                        stopped_after_frame_limit = true;
+                        break;
+                    }
+                }
+                if let Some(ref last_frame) = last_successful_frame {
+                    let fallback = last_frame.held_as(current_frame_number, fps);
+                    sender.send((fallback, current_frame_number)).await?;
+                    channel_frames_sent += 1;
+                    if stop_after_frames_sent.is_some_and(|m| channel_frames_sent >= m) {
+                        stopped_after_frame_limit = true;
+                        break;
+                    }
                 }
             } else {
                 tracing::error!(
@@ -1803,7 +1863,7 @@ pub async fn render_video_to_channel_nv12(
     }
 
     if !stopped_after_frame_limit
-        && let Some(final_frame) = frame_renderer.flush_pipeline_nv12().await.transpose()?
+        && let Some(final_frame) = in_flight.drain(frame_renderer.flush_pipeline_nv12().await)?
         && final_frame.width > 0
         && final_frame.height > 0
     {
@@ -1823,6 +1883,97 @@ pub async fn render_video_to_channel_nv12(
     }
 
     Ok(())
+}
+
+type PrefetchedDecode = (
+    u32,
+    f64,
+    usize,
+    Result<Option<DecodedSegmentFrames>, RenderingError>,
+);
+
+/// A frame the offline export loops send to the encoder.
+trait ExportFrame: Sized {
+    fn frame_number(&self) -> u32;
+    /// A copy of this picture shown at `frame_number`, for a frame that has
+    /// no picture of its own.
+    fn held_as(&self, frame_number: u32, fps: u32) -> Self;
+}
+
+impl ExportFrame for RenderedFrame {
+    fn frame_number(&self) -> u32 {
+        self.frame_number
+    }
+
+    fn held_as(&self, frame_number: u32, fps: u32) -> Self {
+        let mut held = self.clone();
+        held.frame_number = frame_number;
+        held.target_time_ns = (frame_number as u64 * 1_000_000_000) / fps as u64;
+        held
+    }
+}
+
+impl ExportFrame for Nv12RenderedFrame {
+    fn frame_number(&self) -> u32 {
+        self.frame_number
+    }
+
+    fn held_as(&self, frame_number: u32, fps: u32) -> Self {
+        let mut held = self.clone_metadata_with_data();
+        held.frame_number = frame_number;
+        held.target_time_ns = (frame_number as u64 * 1_000_000_000) / fps as u64;
+        held
+    }
+}
+
+/// The export renderer is pipelined one frame deep: rendering frame N submits
+/// it and returns frame N-1. This tracks the frame the GPU still holds, so a
+/// substitute frame is never sent ahead of it and a frame the renderer dropped
+/// (a session reset after a readback failure) stops the export instead of
+/// leaving a gap or shifting every later timestamp.
+#[derive(Debug, Default)]
+struct InFlightFrame(Option<u32>);
+
+impl InFlightFrame {
+    fn rendered(&mut self, submitted: u32, returned: Option<u32>) -> Result<(), RenderingError> {
+        let expected = self.0.replace(submitted);
+        Self::check(expected, returned)
+    }
+
+    fn drain<F: ExportFrame>(
+        &mut self,
+        flushed: Option<Result<F, RenderingError>>,
+    ) -> Result<Option<F>, RenderingError> {
+        let expected = self.0.take();
+        let frame = match flushed.transpose() {
+            Ok(frame) => frame,
+            Err(error) => {
+                if let Some(frame_number) = expected {
+                    tracing::error!(frame_number, %error, "In-flight export frame readback failed");
+                    return Err(RenderingError::ExportFrameLost { frame_number });
+                }
+                return Err(error);
+            }
+        };
+        Self::check(expected, frame.as_ref().map(ExportFrame::frame_number))?;
+        Ok(frame)
+    }
+
+    fn check(expected: Option<u32>, returned: Option<u32>) -> Result<(), RenderingError> {
+        match (expected, returned) {
+            (Some(expected), Some(returned)) if expected == returned => Ok(()),
+            (None, None) => Ok(()),
+            (expected, returned) => {
+                let frame_number = expected.or(returned).unwrap_or_default();
+                tracing::error!(
+                    ?expected,
+                    ?returned,
+                    "Export renderer lost a frame; stopping instead of writing it out of order"
+                );
+                Err(RenderingError::ExportFrameLost { frame_number })
+            }
+        }
+    }
 }
 
 struct TransitionExportContext<'a> {
@@ -1845,7 +1996,7 @@ async fn decode_timeline_source_frames(
     current_frame_number: u32,
     is_initial_frame: bool,
     fps: u32,
-) -> Option<DecodedSegmentFrames> {
+) -> Result<Option<DecodedSegmentFrames>, RenderingError> {
     let render_segment = &render_segments[source.segment.recording_clip as usize];
     let clip_config = project
         .clips
@@ -2009,11 +2160,16 @@ async fn recover_initial_frames_with_backtrack(
     offsets: cap_project::ClipOffsets,
     current_frame_number: u32,
     fps: u32,
-) -> Option<DecodedSegmentFrames> {
+) -> Result<Option<DecodedSegmentFrames>, RenderingError> {
+    let stalled = |stall: decoder::DecodeStalled| RenderingError::FrameDecodeStalled {
+        frame_number: current_frame_number,
+        waited_secs: stall.waited.as_secs(),
+    };
     for recovery_time in initial_decode_recovery_times(segment_time as f32, fps) {
         let Some(_) = decoders
-            .get_frames(recovery_time, needs_camera, needs_display, offsets)
+            .get_frames_for_export(recovery_time, needs_camera, needs_display, offsets, false)
             .await
+            .map_err(stalled)?
         else {
             continue;
         };
@@ -2027,16 +2183,26 @@ async fn recover_initial_frames_with_backtrack(
         );
 
         if let Some(recovered) = decoders
-            .get_frames(segment_time as f32, needs_camera, needs_display, offsets)
+            .get_frames_for_export(
+                segment_time as f32,
+                needs_camera,
+                needs_display,
+                offsets,
+                false,
+            )
             .await
+            .map_err(stalled)?
         {
-            return Some(recovered);
+            return Ok(Some(recovered));
         }
     }
 
-    None
+    Ok(None)
 }
 
+/// Offline export decode. A decode that is merely slow is waited for (see
+/// `EXPORT_STALL_LIMIT`); retries and `Ok(None)` are only for requests the
+/// decoder answered without a frame.
 #[allow(clippy::too_many_arguments)]
 async fn decode_segment_frames_with_retry(
     decoders: &RecordingSegmentDecoders,
@@ -2047,7 +2213,7 @@ async fn decode_segment_frames_with_retry(
     current_frame_number: u32,
     is_initial_frame: bool,
     fps: u32,
-) -> Option<DecodedSegmentFrames> {
+) -> Result<Option<DecodedSegmentFrames>, RenderingError> {
     let mut result = None;
     let mut retry_count = 0u32;
     let max_retries = if is_initial_frame {
@@ -2066,15 +2232,19 @@ async fn decode_segment_frames_with_retry(
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
 
-        result = if is_initial_frame {
-            decoders
-                .get_frames_initial(segment_time as f32, needs_camera, needs_display, offsets)
-                .await
-        } else {
-            decoders
-                .get_frames(segment_time as f32, needs_camera, needs_display, offsets)
-                .await
-        };
+        result = decoders
+            .get_frames_for_export(
+                segment_time as f32,
+                needs_camera,
+                needs_display,
+                offsets,
+                is_initial_frame,
+            )
+            .await
+            .map_err(|stall| RenderingError::FrameDecodeStalled {
+                frame_number: current_frame_number,
+                waited_secs: stall.waited.as_secs(),
+            })?;
 
         if result.is_none() {
             retry_count += 1;
@@ -2103,7 +2273,7 @@ async fn decode_segment_frames_with_retry(
         .await;
     }
 
-    result
+    Ok(result)
 }
 
 pub fn get_duration(
@@ -5962,6 +6132,286 @@ mod style_image_tests {
     }
 }
 
+/// Offline export under load: a decode or GPU readback that misses its
+/// playback deadline must not change which frames are written or their order.
+#[cfg(test)]
+mod export_order_tests {
+    use super::*;
+    use std::time::Duration;
+
+    const FPS: u32 = 60;
+    const SIZE: u32 = 16;
+    const FRAMES: u32 = 12;
+    const SLOW_DECODE_FRAME: u32 = 6;
+    const SLOW_READBACK_FRAME: u32 = 5;
+
+    /// One export at a time: each builds its own device and pipelines, which
+    /// is heavy on software rasterizers shared with the crate's other GPU
+    /// tests.
+    static EXPORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `software_path` renders through the software adapter path (RGBA
+    /// readback, CPU NV12) that Windows WARP and Linux lavapipe use. `None`
+    /// without an adapter, or when `software_path` would repeat the run a
+    /// software adapter already did.
+    async fn constants(software_path: bool) -> Option<RenderVideoConstants> {
+        let instance = create_wgpu_instance_sync();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let is_software_adapter = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        if software_path && is_software_adapter {
+            return None;
+        }
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("graphics device");
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "export-order",
+            "display": { "path": "display.mp4", "fps": FPS },
+            "camera": null,
+            "audio": null,
+            "cursor": null
+        }))
+        .expect("recording metadata");
+        Some(RenderVideoConstants {
+            adapter_name: adapter.get_info().name,
+            _instance: instance,
+            _adapter: adapter,
+            device,
+            queue,
+            options: RenderOptions {
+                screen_size: XY::new(SIZE, SIZE),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            meta: recording_meta
+                .studio_meta()
+                .expect("studio metadata")
+                .clone(),
+            recording_meta,
+            frozen_recorded_cursors: None,
+            background_textures: Arc::new(BackgroundTextureCache::default()),
+            is_software_adapter: is_software_adapter || software_path,
+        })
+    }
+
+    /// Answers every request with that source frame. Requests for
+    /// `slow_frame` are answered only after `delay`, like a decoder on a
+    /// starved machine.
+    fn scripted_decoder(slow_frame: Option<(u32, Duration)>) -> AsyncVideoDecoderHandle {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        std::thread::spawn(move || {
+            while let Ok(decoder::VideoDecoderMessage::GetFrame(time, _, reply)) = receiver.recv() {
+                let frame = (time * FPS as f32).round() as u32;
+                if let Some((slow, delay)) = slow_frame
+                    && slow == frame
+                {
+                    std::thread::sleep(delay);
+                }
+                let level = (frame * 5 % 256) as u8;
+                let _ = reply.send(DecodedFrame::new(
+                    vec![level; (SIZE * SIZE * 4) as usize],
+                    SIZE,
+                    SIZE,
+                ));
+            }
+        });
+        AsyncVideoDecoderHandle::for_test(sender, SIZE, SIZE)
+    }
+
+    /// Exports `FRAMES` frames and returns the encoder-side frame order.
+    async fn export(
+        constants: &RenderVideoConstants,
+        screen: AsyncVideoDecoderHandle,
+    ) -> (Result<(), RenderingError>, Vec<u32>) {
+        let project = ProjectConfiguration {
+            timeline: Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{
+                        "recordingSegment": 0,
+                        "timescale": 1.0,
+                        "start": 0.0,
+                        "end": FRAMES as f64 / FPS as f64
+                    }],
+                    "zoomSegments": []
+                }))
+                .expect("timeline"),
+            ),
+            ..Default::default()
+        };
+        let segments = vec![RenderSegment {
+            cursor: Arc::new(CursorEvents {
+                clicks: vec![],
+                moves: vec![],
+            }),
+            keyboard: Arc::new(Default::default()),
+            decoders: RecordingSegmentDecoders {
+                screen,
+                camera: None,
+                segment_offset: 0.0,
+            },
+            render_display: true,
+        }];
+        let recordings = ProjectRecordingsMeta { segments: vec![] };
+        let (sender, mut receiver) = mpsc::channel(8);
+        let render = render_video_to_channel_nv12(
+            constants,
+            &project,
+            sender,
+            &constants.recording_meta,
+            &constants.meta,
+            segments,
+            FPS,
+            XY::new(SIZE, SIZE),
+            &recordings,
+            None,
+            None,
+            None,
+        );
+        let collect = async {
+            let mut order = Vec::new();
+            while let Some((frame, _)) = receiver.recv().await {
+                order.push(frame.frame_number);
+            }
+            order
+        };
+        tokio::join!(render, collect)
+    }
+
+    /// Runs an export on its own thread: the unoptimized export future needs
+    /// more stack than a test thread has, and the readback delay seam is per
+    /// thread.
+    fn run_export(
+        software_path: bool,
+        slow_decode: Option<(u32, Duration)>,
+        slow_readback: Option<(u32, Duration)>,
+    ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
+        let _one_export_at_a_time = EXPORTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let started = std::time::Instant::now();
+        let result = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime")
+                    .block_on(async move {
+                        let Some(constants) = constants(software_path).await else {
+                            eprintln!("No graphics adapter available for export order test");
+                            return None;
+                        };
+                        if let Some((frame_number, delay)) = slow_readback {
+                            frame_pipeline::readback_delay::inject(frame_number, delay);
+                        }
+                        Some(export(&constants, scripted_decoder(slow_decode)).await)
+                    })
+            })
+            .expect("export thread")
+            .join()
+            .expect("export thread panicked");
+        eprintln!(
+            "export_order_tests: software_path={software_path} took {:?}",
+            started.elapsed()
+        );
+        result
+    }
+
+    #[test]
+    fn slow_decode_keeps_every_frame_in_order() {
+        let decode_deadline = Duration::from_secs(2);
+        for software_path in [false, true] {
+            let Some((result, order)) = run_export(
+                software_path,
+                Some((
+                    SLOW_DECODE_FRAME,
+                    decode_deadline + Duration::from_millis(250),
+                )),
+                None,
+            ) else {
+                return;
+            };
+
+            result.expect("a slow decode is waited for, not substituted");
+            assert_eq!(
+                order,
+                (0..FRAMES).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn slow_readback_keeps_every_frame_in_order() {
+        for software_path in [false, true] {
+            let Some((result, order)) = run_export(
+                software_path,
+                None,
+                Some((SLOW_READBACK_FRAME, Duration::from_secs(61))),
+            ) else {
+                return;
+            };
+
+            result.expect("a slow readback is waited for, not dropped");
+            assert_eq!(
+                order,
+                (0..FRAMES).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn stalled_readback_stops_the_export_instead_of_dropping_the_frame() {
+        for software_path in [false, true] {
+            let Some((result, order)) = run_export(
+                software_path,
+                None,
+                Some((SLOW_READBACK_FRAME, Duration::from_secs(3600))),
+            ) else {
+                return;
+            };
+
+            assert!(
+                matches!(
+                    result,
+                    Err(RenderingError::ExportFrameLost {
+                        frame_number: SLOW_READBACK_FRAME
+                    })
+                ),
+                "software path: {software_path}: {result:?}"
+            );
+            assert_eq!(
+                order,
+                (0..SLOW_READBACK_FRAME).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_flight_frame_must_come_out_next() {
+        let mut in_flight = InFlightFrame::default();
+        in_flight.rendered(0, None).unwrap();
+        in_flight.rendered(1, Some(0)).unwrap();
+        assert!(matches!(
+            in_flight.rendered(2, None),
+            Err(RenderingError::ExportFrameLost { frame_number: 1 })
+        ));
+
+        let mut in_flight = InFlightFrame::default();
+        in_flight.rendered(5, None).unwrap();
+        assert!(matches!(
+            in_flight.rendered(6, Some(4)),
+            Err(RenderingError::ExportFrameLost { frame_number: 5 })
+        ));
+    }
+}
+
 #[cfg(test)]
 mod nv12_flush_tests {
     use super::*;
@@ -6225,6 +6675,7 @@ pub struct FrameRenderer<'a> {
     bgra_surface_converter: Option<RgbaToBgraSurfaceConverter>,
     nv12_buffer_pool: NV12BufferPool,
     transition_compositor: Option<TransitionCompositor>,
+    export_deadlines: bool,
 }
 
 impl<'a> FrameRenderer<'a> {
@@ -6242,7 +6693,15 @@ impl<'a> FrameRenderer<'a> {
             bgra_surface_converter: None,
             nv12_buffer_pool: NV12BufferPool::new(6),
             transition_compositor: None,
+            export_deadlines: false,
         }
+    }
+
+    /// Offline export: a slow GPU readback is waited for up to the export
+    /// stall limit instead of failing at the playback deadline, because a
+    /// failed readback costs the export a frame.
+    pub(crate) fn use_export_deadlines(&mut self) {
+        self.export_deadlines = true;
     }
 
     /// NV12 frames come back as IOSurface-backed CVPixelBuffers instead of
@@ -6257,6 +6716,14 @@ impl<'a> FrameRenderer<'a> {
     }
 
     fn new_nv12_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
+        let mut converter = self.new_nv12_output_converter();
+        if self.export_deadlines {
+            converter.use_export_deadlines();
+        }
+        converter
+    }
+
+    fn new_nv12_output_converter(&self) -> frame_pipeline::RgbaToNv12Converter {
         #[cfg(target_os = "macos")]
         {
             let mut converter = frame_pipeline::RgbaToNv12Converter::new(&self.constants.device);
@@ -6282,9 +6749,10 @@ impl<'a> FrameRenderer<'a> {
     }
 
     pub fn prepare_output_size(&mut self, width: u32, height: u32) {
-        let session = self
-            .session
-            .get_or_insert_with(|| RenderSession::new(&self.constants.device, width, height));
+        let session = self.session.get_or_insert_with(|| {
+            RenderSession::new(&self.constants.device, width, height)
+                .with_export_deadlines(self.export_deadlines)
+        });
         session.update_texture_size(&self.constants.device, width, height);
     }
 
@@ -6331,6 +6799,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
 
             session.update_texture_size(
@@ -6408,6 +6877,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -6579,6 +7049,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -6716,6 +7187,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -6801,6 +7273,7 @@ impl<'a> FrameRenderer<'a> {
                     incoming.uniforms.output_size.0,
                     incoming.uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
             session.update_texture_size(
                 &self.constants.device,
@@ -6911,7 +7384,7 @@ impl<'a> FrameRenderer<'a> {
                 let r = src_row[col * 4] as i32;
                 let g = src_row[col * 4 + 1] as i32;
                 let b = src_row[col * 4 + 2] as i32;
-                y_row[col] = ((16 + ((65 * r + 129 * g + 25 * b + 128) >> 8)) as u8).clamp(16, 235);
+                y_row[col] = cpu_yuv::bt709_luma(r, g, b);
             }
         }
 
@@ -6942,10 +7415,7 @@ impl<'a> FrameRenderer<'a> {
                     + src_row1[col * 8 + 6] as i32
                     + 2)
                     / 4;
-                uv_row[col * 2] =
-                    ((128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)) as u8).clamp(16, 240);
-                uv_row[col * 2 + 1] =
-                    ((128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)) as u8).clamp(16, 240);
+                [uv_row[col * 2], uv_row[col * 2 + 1]] = cpu_yuv::bt709_chroma(r, g, b);
             }
         }
 
@@ -6996,6 +7466,7 @@ impl<'a> FrameRenderer<'a> {
                     uniforms.output_size.0,
                     uniforms.output_size.1,
                 )
+                .with_export_deadlines(self.export_deadlines)
             });
 
             session.update_texture_size(

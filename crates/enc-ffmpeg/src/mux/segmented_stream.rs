@@ -198,6 +198,15 @@ impl SegmentedVideoEncoder {
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
     ) -> Result<Self, InitError> {
+        Self::init_with_timed_fragments(base_path, video_config, config, false)
+    }
+
+    pub fn init_with_timed_fragments(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
+    ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
 
         let manifest_path = base_path.join("dash_manifest.mpd");
@@ -231,6 +240,11 @@ impl SegmentedVideoEncoder {
             set_opt("use_template", "1");
             set_opt("single_file", "0");
             set_opt("hls_playlist", "1");
+            if timed_fragments {
+                set_opt("frag_type", "duration");
+                set_opt("frag_duration", "2");
+                set_opt("streaming", "1");
+            }
         }
 
         let mut builder = H264EncoderBuilder::new(video_config)
