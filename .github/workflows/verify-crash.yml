@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   verify:
+    if: inputs.suites != 'vt-crash'
     name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -39,3 +40,13 @@ jobs:
       target: ${{ matrix.target }}
       tier: ${{ inputs.tier || 'full' }}
       suites: ${{ inputs.suites }}
+
+  vt-crash:
+    if: inputs.suites == 'vt-crash'
+    uses: ./.github/workflows/engine-verify-os.yml
+    with:
+      platform: macos
+      runner: macos-15
+      target: aarch64-apple-darwin
+      tier: full
+      suites: crash
