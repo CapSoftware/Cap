@@ -673,6 +673,13 @@ def cmd_run(args):
             "benches": {name: {"runs": [], "failures": [], "better": BENCHES[name]["better"]} for name in names},
         }
 
+    # Logs are written inside work, which is deleted at the end unless --keep-work.
+    def save_log(kind, label, name, run, out_dir):
+        log = out_root / kind / label / name / f"{run}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(out_dir / "output.log", log)
+        return log
+
     schedule = [("warmup", rep) for rep in range(args.warmup)] + [("rep", rep) for rep in range(args.reps)]
     for phase, rep in schedule:
         for name in names:
@@ -690,12 +697,12 @@ def cmd_run(args):
                 if phase == "warmup":
                     continue
                 if code != 0:
-                    log = out_root / "failures" / label / name / f"{phase}{rep}.log"
-                    log.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(out_dir / "output.log", log)
+                    log = save_log("failures", label, name, f"{phase}{rep}", out_dir)
                     results["benches"][name]["failures"].append({"rep": rep, "exit": code, "log": str(log)})
                     continue
                 results["benches"][name]["runs"].append(metrics)
+                if args.keep_logs:
+                    save_log("logs", label, name, f"{phase}{rep}", out_dir)
                 if artifact and args.keep_outputs:
                     kept = out_root / "artifacts" / label / f"{name}{artifact.suffix}"
                     kept.parent.mkdir(parents=True, exist_ok=True)
