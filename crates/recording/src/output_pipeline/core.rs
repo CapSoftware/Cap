@@ -2091,6 +2091,17 @@ impl SharedWallClockPause {
             (false, Some(pause)) => pause.end = Some(instant.max(pause.start)),
             _ => {}
         }
+        // The wall-clock total `check` reports advances here too, with the
+        // same instants: a static screen sends no video frame through
+        // `check` across Pause and Resume, and video must still remove
+        // exactly the pause mixed audio removes.
+        if paused {
+            inner.pause_started_at.get_or_insert(instant);
+        } else if let Some(started) = inner.pause_started_at.take() {
+            inner.total_pause_duration = inner
+                .total_pause_duration
+                .saturating_add(instant.saturating_duration_since(started));
+        }
         self.flag.store(paused, Ordering::Release);
     }
 
@@ -4062,6 +4073,11 @@ impl PreparedAudioSources {
                     .is_err()
                     {
                         warn!("Mixed audio sources did not stop within the stop deadline");
+                        // Dropping a source with its cleanup scope would run
+                        // the stop that just hung again, as scope cleanup.
+                        for source in &mut self.erased_audio_sources {
+                            source.cleanup_scope = None;
+                        }
                     }
                     self.erased_audio_sources.clear();
                 }
@@ -6259,6 +6275,24 @@ mod tests {
 
     mod shared_pause_state {
         use super::*;
+
+        #[test]
+        fn wall_clock_pause_counts_pauses_no_frame_observed() {
+            let pause = SharedWallClockPause::new(Arc::new(AtomicBool::new(false)));
+            let start = Instant::now();
+            pause.set_paused_at(true, start);
+            pause.set_paused_at(false, start + Duration::from_millis(300));
+            assert_eq!(pause.total_pause_duration(), Duration::from_millis(300));
+            assert_eq!(
+                pause.captured_pause_duration(start + Duration::from_secs(1)),
+                Duration::from_millis(300)
+            );
+            assert_eq!(pause.check(), (false, Duration::from_millis(300)));
+            pause.set_paused_at(true, start + Duration::from_secs(1));
+            assert!(pause.check().0);
+            pause.set_paused_at(false, start + Duration::from_millis(1_200));
+            assert_eq!(pause.check(), (false, Duration::from_millis(500)));
+        }
 
         fn frame_ts(index: u64) -> Duration {
             Duration::from_nanos(index * 33_333_333 + 400)
