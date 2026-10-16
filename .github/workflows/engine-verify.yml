@@ -102,7 +102,9 @@ jobs:
             tier=full
           fi
           save=false
-          if [[ "$EVENT" == schedule || ( "$EVENT" == push && "$GITHUB_REF" =~ ^refs/heads/(main|ci/engine-verify|ci/verify-ci)$ ) ]]; then
+          # Pushes and manual runs on the suite branches save caches too, so a
+          # proof batch never runs cold twice (pull requests only restore).
+          if [[ "$EVENT" == schedule || ( ( "$EVENT" == push || "$EVENT" == workflow_dispatch ) && "$GITHUB_REF" =~ ^refs/heads/(main|ci/engine-verify|ci/verify-ci)$ ) ]]; then
             save=true
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"

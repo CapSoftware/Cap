@@ -182,7 +182,7 @@
 	],
 	"runners": {
 		"linux": {
-			"runner": "ubuntu-24.04",
+			"runner": "blacksmith-8vcpu-ubuntu-2404",
 			"target": "x86_64-unknown-linux-gnu",
 			"shards": {
 				"fast": 2,
@@ -200,7 +200,7 @@
 			"archive": false
 		},
 		"windows": {
-			"runner": "windows-2022",
+			"runner": "blacksmith-8vcpu-windows-2025",
 			"target": "x86_64-pc-windows-msvc",
 			"shards": {
 				"fast": 3,

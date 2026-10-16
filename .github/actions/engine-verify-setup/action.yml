@@ -63,8 +63,15 @@ runs:
         # runner.environment separates GitHub-hosted from self-hosted
         # (Blacksmith) builds: their paths and toolchains differ, so one's
         # target directory would only force a rebuild on the other.
-        base="verify-build-v3-${{ inputs.target }}-${{ runner.environment }}-$(date -u +%G-W%V)"
+        # A new week starts a new chain, seeded from last week's newest cache
+        # of the same provider so the first build of the week stays warm.
+        py="$(command -v python3 || command -v python)"
+        week="$("$py" -c 'import datetime as d; y, w, _ = d.datetime.now(d.timezone.utc).isocalendar(); print(f"{y}-W{w:02d}")')"
+        last_week="$("$py" -c 'import datetime as d; y, w, _ = (d.datetime.now(d.timezone.utc) - d.timedelta(days=7)).isocalendar(); print(f"{y}-W{w:02d}")')"
+        provider="verify-build-v3-${{ inputs.target }}-${{ runner.environment }}"
+        base="$provider-$week"
         echo "base=$base" >> "$GITHUB_OUTPUT"
+        echo "previous=$provider-$last_week" >> "$GITHUB_OUTPUT"
         echo "key=$base-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
     - name: Restore build cache
@@ -81,6 +88,7 @@ runs:
         restore-keys: |
           ${{ steps.build-key.outputs.base }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-
           ${{ steps.build-key.outputs.base }}-
+          ${{ steps.build-key.outputs.previous }}-
 
     # Unchanged workspace crates are reused from the cache instead of being
     # rebuilt because the checkout touched every file (scripts/verify/mtime.py).
