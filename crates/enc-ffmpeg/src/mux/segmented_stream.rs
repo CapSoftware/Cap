@@ -501,6 +501,9 @@ impl SegmentedVideoEncoder {
             tracing::warn!(%error, "Video trailer publication failed");
         });
 
+        #[cfg(feature = "test-hooks")]
+        crate::finalize_test_hook::wait(&self.base_path, "inproc-before-manifest-finalize")?;
+
         self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
         self.flush_pending_segments();

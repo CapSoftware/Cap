@@ -30,7 +30,7 @@ cap-enc-avfoundation = { path = "../enc-avfoundation" }
 cidre = { workspace = true }
 
 [dev-dependencies]
-cap-recording = { path = "../recording", features = ["test-utils"] }
+cap-recording = { path = "../recording", features = ["test-utils", "test-hooks"] }
 cap-editor = { path = "../editor", features = ["test-hooks"] }
 cap-audio = { path = "../audio" }
 cap-export = { path = "../export" }

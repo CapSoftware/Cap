@@ -205,6 +205,7 @@ mod source {
 struct TracedMuxer<M> {
     inner: M,
     trace: Option<std::fs::File>,
+    output_path: PathBuf,
 }
 
 #[cfg(target_os = "macos")]
@@ -230,18 +231,24 @@ where
         };
         let inner = M::setup(
             config,
-            output_path,
+            output_path.clone(),
             video_config,
             audio_config,
             pause_flag,
             tasks,
         )
         .await?;
-        Ok(Self { inner, trace })
+        Ok(Self {
+            inner,
+            trace,
+            output_path,
+        })
     }
 
     fn stop(&mut self) {
         self.inner.stop();
+        std::fs::write(self.output_path.join("mux-video-stopped"), b"stopped")
+            .expect("write EOF acknowledgement");
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -417,8 +424,19 @@ async fn record(
         }
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
+    #[cfg(not(target_os = "macos"))]
     log.line("stop");
     drop(tx);
+    #[cfg(target_os = "macos")]
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !display.join("mux-video-stopped").exists() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .context("waiting for mux-video EOF")?;
+    #[cfg(target_os = "macos")]
+    log.line("stop");
     let finished = pipeline.stop().await;
     if let Some(health) = health.as_mut() {
         while let Ok(event) = health.try_recv() {
@@ -521,9 +539,14 @@ impl ChildRecorder {
         arm: Arm,
         seconds: f64,
         step: u32,
+        hold_finalize: bool,
     ) -> anyhow::Result<Self> {
         let exe = std::env::current_exe()?;
         let mut command = Command::new(exe);
+        command.env_remove("CAP_VERIFY_FINALIZE_BARRIER");
+        if hold_finalize {
+            command.env("CAP_VERIFY_FINALIZE_BARRIER", display);
+        }
         if let Ok(muxer) = cap_recording::oop_muxer::resolve_muxer_binary() {
             command.env(cap_recording::oop_muxer::ENV_BIN_PATH, muxer);
         }
@@ -578,12 +601,59 @@ impl ChildRecorder {
 
     /// SIGKILL (TerminateProcess on Windows); returns the cap-muxer child
     /// pids it left behind.
-    fn kill(mut self) -> anyhow::Result<Vec<u32>> {
+    fn kill(mut self) -> anyhow::Result<(Vec<u32>, std::process::ExitStatus)> {
         let orphans = muxer_children(self.child.id());
         self.child.kill()?;
-        self.child.wait()?;
-        Ok(orphans)
+        let status = self.child.wait()?;
+        Ok((orphans, status))
     }
+}
+
+impl Drop for ChildRecorder {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FinalizeCoverageMiss(String);
+
+impl std::fmt::Display for FinalizeCoverageMiss {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "finalize coverage miss: {}", self.0)
+    }
+}
+
+impl std::error::Error for FinalizeCoverageMiss {}
+
+fn validate_finalize_kill(truth: &str, barrier_entered: bool, running: bool) -> anyhow::Result<()> {
+    if !barrier_entered || !running || truth.lines().any(|line| line == "done") {
+        return Err(FinalizeCoverageMiss(format!(
+            "barrier_entered={barrier_entered}, running={running}, done={}",
+            truth.lines().any(|line| line == "done")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+#[test]
+fn finalize_coverage_rejects_completion_missing_barrier_and_exited_child() {
+    for (truth, entered, running) in [
+        ("stop\ndone\n", true, true),
+        ("stop\n", false, true),
+        ("stop\n", true, false),
+    ] {
+        assert!(
+            validate_finalize_kill(truth, entered, running)
+                .unwrap_err()
+                .is::<FinalizeCoverageMiss>()
+        );
+    }
+    validate_finalize_kill("stop\n", true, true).unwrap();
 }
 
 /// `cap-muxer` processes whose parent is `pid`.
@@ -1193,12 +1263,12 @@ fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
         fresh(&scratch)?;
         let display = scratch.join("display");
         let truth = scratch.join("truth.txt");
-        let mut child = ChildRecorder::spawn(&display, &truth, arm, 5.0, 1)?;
+        let mut child = ChildRecorder::spawn(&display, &truth, arm, 5.0, 1, false)?;
         let n = 2 * GOP + k;
         child.wait_until(Duration::from_secs(40), |handed, _| {
             handed.last().is_some_and(|h| h.index >= n)
         })?;
-        let orphans = child.kill()?;
+        let (orphans, _) = child.kill()?;
         wait_for_exit(&orphans, case);
         let physical = on_disk(&display, &scratch)?;
         let done = physical.iter().any(|f| f.0 == 2 * GOP - 1);
@@ -1266,19 +1336,65 @@ fn recorder_kill(
     fresh(&scratch)?;
     let display = scratch.join("display");
     let truth = scratch.join("truth.txt");
-    let mut child = ChildRecorder::spawn(&display, &truth, arm, seconds, step)?;
+    let hold_finalize = matches!(point, KillPoint::Finalize(_));
+    let mut child = ChildRecorder::spawn(&display, &truth, arm, seconds, step, hold_finalize)?;
     let timeout = Duration::from_secs_f64(seconds + 30.0);
     match point {
         KillPoint::Frame(n) => child.wait_until(timeout, |handed, _| {
             handed.last().is_some_and(|h| h.index >= n)
         })?,
         KillPoint::Finalize(ms) => {
-            child.wait_until(timeout, |_, stopped| stopped)?;
+            child
+                .wait_until(timeout, |_, stopped| {
+                    stopped && (!hold_finalize || display.join("finalize-entered.json").exists())
+                })
+                .map_err(|error| FinalizeCoverageMiss(format!("{error:#}")))?;
             std::thread::sleep(Duration::from_millis(ms));
         }
     }
-    let orphans = child.kill()?;
+    let pid = child.child.id();
+    if matches!(point, KillPoint::Finalize(_)) {
+        let barrier = if hold_finalize {
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(
+                display.join("finalize-entered.json"),
+            )?)?
+        } else {
+            serde_json::Value::Null
+        };
+        let entered = !hold_finalize || barrier["pid"].as_u64() == Some(u64::from(pid));
+        validate_finalize_kill(
+            &std::fs::read_to_string(&truth)?,
+            entered,
+            child.child.try_wait()?.is_none(),
+        )?;
+        case.note(format!("finalize barrier: {barrier}"));
+    }
+    let kill_unix_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+        .as_nanos();
+    let (orphans, status) = child.kill()?;
     wait_for_exit(&orphans, case);
+    if matches!(point, KillPoint::Finalize(_)) {
+        let truth_after = std::fs::read_to_string(&truth)?;
+        #[cfg(unix)]
+        let killed = {
+            use std::os::unix::process::ExitStatusExt;
+            status.signal() == Some(9)
+        };
+        #[cfg(not(unix))]
+        let killed = !status.success();
+        validate_finalize_kill(&truth_after, true, killed)?;
+        std::fs::write(
+            scratch.join("kill.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "pid": pid,
+                "status": status.to_string(),
+                "kill_unix_nanos": kill_unix_nanos,
+                "barrier_held": hold_finalize,
+                "done": truth_after.lines().any(|line| line == "done"),
+            }))?,
+        )?;
+    }
     let (handed, stopped, _) = read_truth(&truth)?;
     case.note(format!(
         "killed after frame {:?}{}",
@@ -1600,7 +1716,12 @@ fn crash_safety() {
             let mut case = Case::new(&id);
             case.note(format!("seed {seed}, point {point:?}"));
             if let Err(e) = recorder_kill(arm, &name, point, SECONDS, 1, &mut case) {
-                case.problem("error", format!("{e:#}"));
+                let class = if e.is::<FinalizeCoverageMiss>() {
+                    "harness"
+                } else {
+                    "error"
+                };
+                case.problem(class, format!("{e:#}"));
             }
             settle(case);
         }

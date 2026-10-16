@@ -9,6 +9,7 @@ workspace = true
 [features]
 default = []
 test-utils = []
+test-hooks = ["cap-enc-ffmpeg/test-hooks"]
 memory-profiling = ["dep:dhat"]
 
 [dependencies]
