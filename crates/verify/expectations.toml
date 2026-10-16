@@ -678,11 +678,3 @@ platforms = ["macos"]
 bound = { count = 1 }
 reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
 link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/*"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60], outside-pending = 0 }
-reason = "Bug A: kill timing can expose a physically complete fragment still listed as pending before the next manifest rescan. Only frames inside those complete pending fragments are excused; at most one 60-frame fragment. Coordinator family decision 2026-10-16. Remove when #2640 lands."
-link = "https://github.com/CapSoftware/Cap/pull/2640"
