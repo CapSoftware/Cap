@@ -823,11 +823,17 @@ impl AudioMixer {
                 match self.output.try_send(frame) {
                     Ok(()) => break,
                     Err(err) if err.is_full() => {
-                        anyhow::ensure!(
-                            self.drain_deadline
-                                .is_none_or(|deadline| Instant::now() < deadline),
-                            "Audio mixer output did not drain before the stop deadline"
-                        );
+                        // At stop, a consumer that stopped draining costs the
+                        // audio not yet delivered, never the recording.
+                        if self
+                            .drain_deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                        {
+                            warn!(
+                                "Audio mixer output did not drain before the stop deadline; dropping the rest"
+                            );
+                            return Ok(false);
+                        }
                         frame = err.into_inner();
                         std::thread::sleep(Duration::from_millis(1));
                     }
