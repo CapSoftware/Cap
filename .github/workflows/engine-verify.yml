@@ -1,0 +1,32 @@
+name: Engine verify
+run-name: Nightly bisect 94923f891
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        type: choice
+        options: [full]
+        default: full
+permissions:
+  contents: read
+jobs:
+  linux:
+    uses: ./.github/workflows/engine-verify-os.yml
+    with:
+      platform: linux
+      runner: blacksmith-8vcpu-ubuntu-2404
+      target: x86_64-unknown-linux-gnu
+      tier: full
+      suites: editing
+      shards: 3
+      shard-list: "[1,2,3]"
+  macos:
+    uses: ./.github/workflows/engine-verify-os.yml
+    with:
+      platform: macos
+      runner: blacksmith-6vcpu-macos-15
+      target: aarch64-apple-darwin
+      tier: full
+      suites: export,playback,decoder-model-avf
+      shards: 2
+      shard-list: "[1,2]"
