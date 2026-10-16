@@ -711,7 +711,11 @@ impl AudioMixer {
                             .context("Audio mixer watermark split failed")?;
                         source.buffer.push_front(AudioFrame::new(
                             remaining,
-                            buffer.timestamp + samples_duration(samples, source.info.sample_rate),
+                            start_timestamp
+                                + samples_duration(
+                                    source.samples_supplied + samples,
+                                    source.info.sample_rate,
+                                ),
                         ));
                         buffer.inner.set_samples(samples);
                     }
@@ -1286,6 +1290,23 @@ mod test {
             assert_eq!(probe.pcm.len(), (chunk as usize + 1) * 960);
         }
         assert_eq!(probe.deliveries[0].1, 20);
+    }
+
+    #[test]
+    fn pcm_watermark_splits_do_not_accumulate_timestamp_rounding() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 50_001, Some(49_999));
+        for sample in 0..50_001 {
+            let timestamp = Timestamp::Instant(
+                probe.mixer.timestamps.instant()
+                    + Duration::from_nanos(sample * 1_000_000_000 / 48_000),
+            );
+            probe.send_at(1, timestamp, 1, None);
+            probe.tick(sample / 48);
+        }
+        assert_eq!(probe.peaks(0), [49_999]);
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+        assert_eq!(probe.pcm.len(), 50_001);
     }
 
     #[test]
