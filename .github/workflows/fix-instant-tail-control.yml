@@ -16,9 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos
-            runner: blacksmith-6vcpu-macos-15
-            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: mixer-tail-control
+          name: mixer-tail-control-windows
           path: |
             ${{ runner.temp }}/tail-control/*.log
             ${{ runner.temp }}/tail-control/control.json
