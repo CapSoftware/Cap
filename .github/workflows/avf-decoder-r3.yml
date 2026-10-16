@@ -1,0 +1,79 @@
+name: AVF decoder r3 diagnostics
+on:
+  push:
+    branches: [ci/fixproof-avf-decoder-r3]
+    paths: [.github/workflows/avf-decoder-r3.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [control, candidate]
+        platform: [linux, windows]
+        include:
+          - platform: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+          - platform: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CAP_VERIFY_HOST: blacksmith
+      CAP_VERIFY_TIER: full
+      CAP_VERIFY_REQUIRE_SUPPORTED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.variant == 'control' && '4b2e72bbf86226d406ae4d1b9c46c2b988729cf2' || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Provenance
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/avf-r3"
+          git rev-parse HEAD > "$RUNNER_TEMP/avf-r3/head.txt"
+      - name: Decoder model
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          CAP_VERIFY_CARGO_PROFILE: ci-verify
+          CAP_VERIFY_NEXTEST_PROFILE: ci
+          CAP_VERIFY_LOCKED: '1'
+          CAP_VERIFY_REPORT_DIR: ${{ runner.temp }}/avf-r3/model
+        run: scripts/verify/run.sh full --suites decoder-model-ffmpeg > "$RUNNER_TEMP/avf-r3/model.log" 2>&1
+      - name: Build playback
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          cargo test --locked --profile ci-verify -p cap-verify --test playback --no-run --message-format=json > "$RUNNER_TEMP/avf-r3/build.jsonl" 2> "$RUNNER_TEMP/avf-r3/build.log"
+          python -c 'import json,sys; rows=[json.loads(line) for line in open(sys.argv[1])]; paths=[r["executable"] for r in rows if r.get("reason")=="compiler-artifact" and r.get("executable") and r["target"]["name"]=="playback"]; assert len(paths)==1, paths; print(paths[0])' "$RUNNER_TEMP/avf-r3/build.jsonl" > "$RUNNER_TEMP/avf-r3/binary.txt"
+      - name: Five playback repeats
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          CAP_VERIFY_CASE: playback/basic/full/realtime30-from0/ffmpeg
+        run: |
+          binary="$(cat "$RUNNER_TEMP/avf-r3/binary.txt")"
+          result=0
+          cd crates/verify
+          for round in 1 2 3 4 5; do
+            export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/avf-r3/repeat-$round"
+            mkdir -p "$CAP_VERIFY_REPORT_DIR"
+            "$binary" --test-threads=1 --nocapture > "$CAP_VERIFY_REPORT_DIR/test.log" 2>&1 || result=1
+          done
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: avf-r3-${{ matrix.platform }}-${{ matrix.variant }}
+          path: ${{ runner.temp }}/avf-r3
+          retention-days: 14

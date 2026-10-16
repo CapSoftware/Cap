@@ -48,30 +48,6 @@
 require_bound = true
 
 [[xfail]]
-case = "export/jitter-camera-40s/full/mp460/avf"
-class = "future"
-platforms = ["macos"]
-bound = { camera-frames = [500, 560], delta = 320, frame = [1580, 2399] }
-reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead from output frame 1585 on (530 camera frames ahead, up to 298 source frames, every run; the screen is never affected)"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "export/jitter-camera-120s/full/mp460/avf"
-class = "future"
-platforms = ["macos"]
-bound = { camera-frames = [5000, 5250], delta = 2232, frame = [1585, 7199] }
-reason = "Same camera runaway on the 120 s fixture (full tier): from output frame 1585, 5146 camera frames ahead, up to 2232 source frames (74 s); 5081 to 5201 in the runs whose exports differ (see the nondeterministic entry). The screen is never affected"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "playback/jitter-camera-120s/full/seq60-from0/avf"
-class = "future"
-platforms = ["macos"]
-bound = { camera-frames = [2300, 2800], delta = 1900, frame = [2480, 7199] }
-reason = "Same camera runaway in offline playback of the 120 s fixture: from output frame 2490, 2485 to 2618 camera frames ahead, up to 1419 to 1726 source frames (the count varies with the decoder's request batching)"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
 case = "playback/jitter-camera-120s/full/seq60-from0/avf"
 class = "stale"
 platforms = ["macos"]
@@ -81,119 +57,11 @@ reason = "The last output frame of the 120 s offline playback (7199, 119.983 s) 
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
-case = "export/jitter-camera-120s/full/mp460/avf"
-class = "nondeterministic"
-platforms = ["macos"]
-flaky = true
-bound = { count = 1, frames = [1, 5615], frame = [1585, 7199] }
-reason = "Two exports of the 120 s jitter-camera project can differ, only inside the camera runaway of the future entry above (from output frame 1585 on; first difference measured at 1723 or later). Mechanism (scratch/jitter-probe3, runs 38847126270, 38849423910, 38849597307, instrumented decoder): export asks for camera frames one at a time (every batch held one request in 116 traced exports, so try_recv batching is not involved); when more than 250 ms pass between two camera requests the AVAssetReader decoder's idle timeout (IDLE_READER_TIMEOUT, crates/rendering/src/decoder/avassetreader.rs:48, teardown at :728-744) drops every reader, and inside the runaway the re-created reader answers that request correctly, so the runaway restarts from there and every later answer changes (a 390 ms stall before camera request 1105: answer 1105 in one export, 2345 in the other). A forced teardown at camera request 2000 gives 5094 wrong frames, identical in both runs; with the teardown disabled 0 of 12 samples differed although request gaps reached 439 ms. Under suite load the gap is wall-clock, hence flaky (3 of 8 runs beside the export suite; alone 16 of 16 identical). #2638 removes the runaway and with it this class (20 of 20 identical). Bound: same frame count, differences only at or after the runaway's first frame; the future entry bounds the wrong frames themselves (5000 to 5250 camera frames from frame 1585, at most 2232 ahead), and a camera that falls back to FFmpeg after a slow re-created reader fails as stale"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "*/jitter-camera-120s/full/*/ffmpeg"
-class = "stale"
-bound = { camera-frames = 1551, delta = 90, frame = [2493, 6767] }
-reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames, output frames 2493 to 6767, identical in the MP4 export and in offline playback on every platform that runs it"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "export/backward-hold/backward-jumps/mp460/avf"
-class = "stale"
-platforms = ["macos"]
-flaky = true
-bound = { camera-frames = 1, delta = 1, frame = [2579, 2579] }
-reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Every run in probe 38762089521 (42 of 42) and on hosted macOS, but it passed on blacksmith-6vcpu-macos-15 in push run 38846099909: whether the previous vend is still cached depends on the decoder's wall-clock idle timeout, so it is flaky there"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "export/camera-pts-late/full/mp430/avf"
-class = "future"
-platforms = ["macos"]
-bound = { camera-frames = 127, delta = 53, frame = [8, 134] }
-reason = "A camera file whose pts start 2 s in runs ahead instead of holding its first frame: before the track's first sample every request steps the reader one sample further (127 camera frames, output frames 8 to 134, up to 53 source frames ahead)"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
 case = "export/camera-pts-late/full/mp430/ffmpeg"
 class = "future"
 bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
 reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
 link = ""
-
-[[xfail]]
-case = "seek/seek-gop/keyframes60/avf"
-class = "stale"
-platforms = ["macos"]
-bound = { screen-frames = 3, camera-frames = 3, delta = 1, frame = [351, 701] }
-reason = "Wrong-GOP seek: the reader starts on the keyframe time rounded to 10 ms, decodes the previous GOP and shows its last frame under the keyframe's number (requests between the keyframe pts and the next slot show keyframe - 1): 3 seeks, one source frame stale"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/seek-native/keyframes60/avf"
-class = "stale"
-platforms = ["macos"]
-bound = { screen-frames = 8, camera-frames = 8, delta = 44, frame = [45, 705] }
-reason = "Wrong-GOP seek on the native fixture (see seek/seek-gop/keyframes60/avf): 8 seeks show a frame of the previous GOP, up to 44 source frames stale"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/seek-gop/storm30/avf"
-class = "stale"
-platforms = ["macos"]
-bound = { screen-frames = 30, camera-frames = 30, delta = 450, frame = [1, 900] }
-reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (seek 349 shows 237): 20 of 3000 full-tier seeks (1 in the fast tier), up to 352 source frames stale. Which earlier seek's frame answers depends on timing, so the bound is the mechanism's: any frame of the fixture (450), at most 1% of the seeks"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/seek-native/storm30/avf"
-class = "stale"
-platforms = ["macos"]
-bound = { screen-frames = 40, camera-frames = 40, delta = 450, frame = [1, 900] }
-reason = "Same reader reuse as seek/seek-gop/storm30/avf on the native fixture: 7 to 28 of 3000 full-tier seeks (2 in the fast tier), up to 243 to 287 source frames stale between runs; bounded like seek/seek-gop/storm30/avf"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/seek-*/storm30/avf"
-class = "future"
-platforms = ["macos"]
-flaky = true
-bound = { screen-frames = 12, camera-frames = 12, delta = 2, frame = [1, 900] }
-reason = "Full-tier seek storm: a few seeks are answered one or two source frames ahead (seek-gop frame 4 shows 5 for 3; 3 seeks on seek-gop, 11 on seek-native). Pool position capping: after a read the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame is reused for it without a reset and answers with its next sample (same mechanism as seek/seek-native/keyframes60/avf, minimal repro there). Whether a storm reaches that state depends on request timing: the decoder's 250 ms idle timeout (IDLE_READER_TIMEOUT) clears its cache and readers when requests pause, and with a 300 ms pause every 7 requests the seek-native storm has no ahead answer (measured on Apple silicon; 7 ahead without pauses). seek-gop: 3 of 3 full runs and locally; seek-native: 1 of 3 full runs (38763178760) and locally"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/vfr-holds/storm60/avf"
-class = "future"
-platforms = ["macos"]
-bound = { screen-frames = 72, camera-frames = 14, delta = 253, frame = [1, 1800] }
-reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217): 72 screen and 14 camera seeks of the full storm (8 and 2 in the fast tier), up to 253 source frames ahead"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/vfr-holds/storm60/avf"
-class = "stale"
-platforms = ["macos"]
-flaky = true
-bound = { screen-frames = 60, camera-frames = 40, delta = 536, frame = [1, 1800] }
-reason = "Same storm, stale answers from reused readers: 52 to 53 screen and 35 to 36 camera seeks in full runs, 0 screen and 2 camera in the fast tier, up to 536 source frames stale (timing-dependent reader reuse; 3 of 4 runs on main)"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/vfr-holds/into-holds60/avf"
-class = "stale"
-platforms = ["macos"]
-flaky = true
-bound = { camera-frames = 1, delta = 1, frame = [149, 149] }
-reason = "NEW: AVAssetReader camera answers one frame stale when a region is revisited after other seeks (see seek/vfr-holds/revisit60/avf for the deterministic sequence): output frame 149, one source frame. Fails 12 of 13 runs on main; it passed once under parallel load, probably because the decoder's wall-clock paths (250 ms idle reader drop, 100 ms scrub cooldown) change which branch answers"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/vfr-holds/revisit60/avf"
-class = "stale"
-platforms = ["macos"]
-bound = { camera-frames = 1, delta = 1, frame = [149, 149] }
-reason = "NEW: seeks to 2.0 s, 3.5 s, 1.2 s, 2.3 s (each + 29 playback frames, 60 fps): the camera request at 2.483 s (slot 74, CFR camera) is answered with slot 73. Deterministic on runners: every run on main and with #2603; FFmpeg is correct. Repro: CAP_VERIFY_SEEK_SCRIPT='vfr-holds@60:2.0+29,3.5+29,1.2+29,2.3+29' cargo test -p cap-verify --test seek script -- --nocapture"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/seek-gop/storm30/ffmpeg"
@@ -325,29 +193,12 @@ reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late 
 link = ""
 
 [[xfail]]
-case = "*/basic/transition/*60*/avf"
-class = "stale"
-platforms = ["macos"]
-flaky = true
-bound = { screen-frames = 1, delta = 1, frame = [149, 149] }
-reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Bound: that one screen frame, one source frame stale"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
 case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "stale"
 platforms = ["linux", "windows"]
 bound = { screen-frames = 18, delta = 49, frame = [61, 115] }
 reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 18 frames, output frames 61 to 110, 6 of them where the stale side is the weaker one, inside the 1.8 s transition at output frames 61 to 115). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
 link = ""
-
-[[xfail]]
-case = "seek/seek-native/keyframes60/avf"
-class = "future"
-platforms = ["macos"]
-bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [1, 1] }
-reason = "Pool position capping: after a read, the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame still looks usable for it (find_best_decoder_for_time_with_reuse_threshold: position <= request), is reused without a reset, and answers with the next sample it decodes. Here output frame 1 (0.017 s) shows source 1 for source 0. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-native@60:0,8.8,0.016667' cargo test -p cap-verify --test seek script -- --nocapture. Deterministic on every macOS runner"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/ffmpeg"
@@ -440,19 +291,6 @@ class = "stale"
 bound = { screen-frames = 31, camera-frames = 31, delta = 89, frame = [60, 90] }
 reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the start. Seek 6.1 s, seek 0, seek 2.0 s and play: 31 of 122 frames show source frame 0 (up to 89 frames stale, about 1 s frozen). A request at grid 0..2 is answered by the first-frame shortcut (ffmpeg.rs, requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE) without resetting the reader, which stays near 6 s, and last_sent_frame becomes frame 0; the next request is then not 'far forward' of frame 0 (< FRAME_CACHE_SIZE), so no reset happens, the reader vends frames past the request and the answer falls back to last_sent_frame (frame 0) until playback outruns FRAME_CACHE_SIZE. Main decoder on Linux and on Windows without a D3D11 video device; macOS AVAssetReader passes. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-gop@60:6.1,0.0167,2.0667' (third request shows frame 0 for 61)"
 link = ""
-
-[[xfail]]
-case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
-class = "stale"
-platforms = ["macos"]
-flaky = true
-bound = { screen-frames = 2, camera-frames = 2, delta = 1, frame = [126, 127] }
-reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon, 2 of 4 full runs on runners, where the loop presents fewer frames, so it is timing dependent there"
-link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-# Real capture (crates/verify/tests/recording.rs, verify-recording workflow).
-# Sync classes are per pair (sync-screen-mic is screen minus mic, negative =
-# the screen plays early).
 
 [[xfail]]
 case = "recording/instant/screen-mic-system"
