@@ -48,10 +48,10 @@ jobs:
               cp "$p" "$RUNNER_TEMP/bin/$1/deps/$t"
             done
           }
-          cargo test --profile ci-verify --locked -p cap-verify --test seek --test playback --test export --no-run 2>&1 | tee "$RUNNER_TEMP/build-fix.log"
+          CARGO_TERM_COLOR=never cargo test --profile ci-verify --locked -p cap-verify --test seek --test playback --test export --no-run 2>&1 | tee "$RUNNER_TEMP/build-fix.log"
           keep fix
           git apply -R probe/product.patch
-          cargo test --profile ci-verify --locked -p cap-verify --test seek --test playback --test export --no-run 2>&1 | tee "$RUNNER_TEMP/build-base.log"
+          CARGO_TERM_COLOR=never cargo test --profile ci-verify --locked -p cap-verify --test seek --test playback --test export --no-run 2>&1 | tee "$RUNNER_TEMP/build-base.log"
           keep base
           git apply probe/product.patch
           ls -la "$RUNNER_TEMP"/bin/*/deps
