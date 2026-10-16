@@ -258,6 +258,33 @@ platforms = ["macos"]
 reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay: runners 59 to 104 ms (all runs), developer Mac 317 to 555 ms (all runs)"
 link = ""
 
+# Crash recovery on the software (libx264) encoder path. Blacksmith macOS VMs
+# have no VideoToolbox hardware H.264 encoder (VTCompressionSessionCreate with
+# RequireHardwareAcceleratedVideoEncoder returns -12903, probe run
+# 38847791287), so h264_videotoolbox fails to open and every recording falls
+# back to libx264 (`get_codec_and_options`, crates/enc-ffmpeg/src/video/h264.rs),
+# which real Macs also use when the hardware encoder is busy or for targets
+# above its estimated capacity (for example 4K at 60 fps). Its GOP is a frame
+# count: g = 2 s x nominal fps (keyint 120, keyint_min 61 at 60 fps), scenecut=0,
+# and ScreenCaptureKit delivers a variable rate (about 33 fps for this
+# stimulus), so the DASH muxer, which cuts only at keyframes, writes 3.68 s
+# segments instead of 2 s, and the segment in progress is a 0-byte .tmp at the
+# crash (run 38845236912: segment_001 120 frames 3.68 s, segment_002.m4s.tmp
+# empty). Recovery keeps only the complete segments: 4.5 to 4.8 s lost against
+# the 3 s budget in 9 of 10 runs (flaky: the loss depends on where the crash
+# falls inside the segment). With the hardware encoder (hosted runners, real
+# Apple silicon Macs) segments stay near 2 s. On a static screen the same
+# rule makes a software-encoded segment last 120 delivered frames, which can
+# be minutes.
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "missing"
+platforms = ["macos"]
+hosts = ["blacksmith"]
+flaky = true
+reason = "NEW: software (libx264) encoder path: keyframes every 120 frames regardless of the variable capture rate make 3.7 s segments, and the in-progress segment is empty at a crash, so recovery loses 4.5 to 4.8 s (budget 3 s), 9 of 10 Blacksmith runs"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
+
 # First picture after a static screen. During a scripted hold ScreenCaptureKit
 # delivers only Idle status buffers; its first Complete frame after the hold
 # arrives 70 to 82 ms after the new picture was presented (steady state 23 to

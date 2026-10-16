@@ -5,12 +5,14 @@ name: Verify recording (real capture)
 # frame and audio marker against the host-clock truth. See
 # crates/verify/tests/recording.rs.
 #
-# Runners: Blacksmith macOS (M4 Pro VM, 6 vCPU, logged-in GUI session, no
-# concurrency cap) by default; GitHub-hosted macOS (5 concurrent jobs for the
-# whole org) on dispatch with runners=hosted or both. Blacksmith needs Screen
-# Recording granted in TCC to the binaries that capture and their runner
-# ancestry, and an audio device (BlackHole), which also makes system audio
-# capturable there.
+# Runners: GitHub-hosted macOS by default. Blacksmith macOS (M4 Pro VM,
+# 6 vCPU, no concurrency cap) on dispatch with runners=blacksmith or both: its
+# VMs have no VideoToolbox hardware H.264 encoder (probe run 38847791287), so
+# every recording there takes the software (libx264) encoder path instead of
+# the hardware path real Macs use. That makes it extra coverage for the
+# software path, not a replacement for hosted runners. Blacksmith needs
+# Screen Recording and Microphone granted in TCC, its display woken, and an
+# audio device (BlackHole); the setup step below does that.
 
 on:
   workflow_dispatch:
@@ -33,10 +35,10 @@ on:
         type: boolean
         default: false
       runners:
-        description: "blacksmith (default), hosted (GitHub macOS, fallback) or both"
+        description: "hosted (GitHub macOS, default), blacksmith (software encoder path) or both"
         type: choice
-        options: [blacksmith, hosted, both]
-        default: blacksmith
+        options: [hosted, blacksmith, both]
+        default: hosted
   push:
     branches:
       - ci/verify-recording
@@ -57,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJSON(inputs.runners == 'hosted' && '["macos-15","macos-26"]' || inputs.runners == 'both' && '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26","macos-15","macos-26"]' || '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]') }}
+        runner: ${{ fromJSON(inputs.runners == 'blacksmith' && '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]' || inputs.runners == 'both' && '["macos-15","macos-26","blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]' || '["macos-15","macos-26"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -78,6 +80,7 @@ jobs:
       # latency not in the truth), so by default the stimulus stays silent
       # there too; dispatch system_audio=true plays and requires it.
       CAP_VERIFY_AUDIO_OUTPUT: ${{ startsWith(matrix.runner, 'blacksmith-') && 'BlackHole 2ch' || matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+      CAP_VERIFY_HOST: ${{ startsWith(matrix.runner, 'blacksmith-') && 'blacksmith' || 'github-hosted' }}
       CAP_VERIFY_STIMULUS_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && !inputs.system_audio && '0' || '' }}
       CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && inputs.system_audio && '1' || '' }}
     steps:

@@ -133,6 +133,11 @@ pub struct Xfail {
     /// means all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
+    /// Hosts the entry applies to, matched against `CAP_VERIFY_HOST` (set by
+    /// CI: `github-hosted`, `blacksmith`); empty means every host. For
+    /// defects only one machine class reaches, with the reason in `reason`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
     /// Timing-dependent: the case may pass or fail with this class. Use only
     /// with a measured flake rate in the reason.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -184,13 +189,21 @@ pub fn load_expectations() -> Vec<Xfail> {
 /// Entries that apply to `id` on this platform.
 pub fn xfails_for(id: &str) -> Vec<Xfail> {
     let platform = platform();
+    let host = std::env::var("CAP_VERIFY_HOST")
+        .ok()
+        .filter(|h| !h.is_empty());
     load_expectations()
         .into_iter()
         .filter(|x| {
             glob_match(&x.case, id)
                 && (x.platforms.is_empty() || x.platforms.iter().any(|p| p == platform))
+                && host_matches(&x.hosts, host.as_deref())
         })
         .collect()
+}
+
+fn host_matches(hosts: &[String], host: Option<&str>) -> bool {
+    hosts.is_empty() || host.is_some_and(|host| hosts.iter().any(|h| h == host))
 }
 
 fn repro_command(id: &str) -> String {
@@ -344,6 +357,7 @@ fn bless(case: &Case) {
             reason: reason.clone(),
             link: String::new(),
             platforms: vec![platform().to_string()],
+            hosts: Vec::new(),
             flaky: false,
         };
         if let Ok(text) = toml::to_string(&entry) {
@@ -354,7 +368,17 @@ fn bless(case: &Case) {
 
 #[cfg(test)]
 mod tests {
-    use super::glob_match;
+    use super::{glob_match, host_matches};
+
+    #[test]
+    fn host_scoped_entries_apply_only_on_their_hosts() {
+        let blacksmith = vec!["blacksmith".to_string()];
+        assert!(host_matches(&[], None));
+        assert!(host_matches(&[], Some("github-hosted")));
+        assert!(host_matches(&blacksmith, Some("blacksmith")));
+        assert!(!host_matches(&blacksmith, Some("github-hosted")));
+        assert!(!host_matches(&blacksmith, None));
+    }
 
     #[test]
     fn globs() {
