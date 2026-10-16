@@ -60,6 +60,8 @@ env:
   # A case this runner cannot run fails unless scripts/verify/suites.json
   # allows it as unsupported on this platform (with the reason).
   CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+  CAP_VERIFY_TRACE_BLEND: "2"
+  CAP_VERIFY_CASE: "editing/export/basic/seed-1"
   # Machine class for host-scoped expectations (crates/verify-expect hosts).
   CAP_VERIFY_HOST: ${{ startsWith(inputs.runner, 'blacksmith-') && 'blacksmith' || 'github-hosted' }}
 
