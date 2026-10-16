@@ -1,23 +1,195 @@
 use crate::{
-    feeds::camera::{self, CameraFeedLock},
-    output_pipeline::{NativeCameraFrame, SetupCtx, VideoSource},
+    feeds::camera::{self, CameraFeedLock, DropLog, NativeCameraIngress, NativeCameraIngressDrops},
+    output_pipeline::{
+        HealthSender, NativeCameraFrame, PipelineHealthEvent, SetupCtx, VideoSource, emit_health,
+    },
 };
 use anyhow::anyhow;
-use cap_media_info::VideoInfo;
+use cap_media_info::{Pixel, VideoInfo};
 use futures::{FutureExt, channel::mpsc, future::BoxFuture};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// How long the recording may stop draining camera frames (a runtime stall)
+/// before the ingress queue fills.
+const INGRESS_TIME_BUDGET_SECS: usize = 2;
+/// The camera feed's actor mailbox (kameo's default bounded mailbox). After a
+/// stall the feed hands its whole backlog over in one burst, so the ingress
+/// queue must take that many frames at once.
+const CAMERA_FEED_MAILBOX_FRAMES: usize = 64;
+/// Upper bound on the pixel data the ingress queue can keep alive. On macOS a
+/// queued frame retains a capture pool surface (the pool grows per retained
+/// buffer); on Windows it is a heap copy of the frame.
+const INGRESS_BYTE_BUDGET: usize = 256 * 1024 * 1024;
+/// The previous fixed capacity; never go below it.
+const MIN_INGRESS_FRAMES: usize = 8;
+
+fn frame_bytes(info: &VideoInfo) -> usize {
+    let pixels = info.width as usize * info.height as usize;
+    match info.pixel_format {
+        Pixel::NV12 | Pixel::NV21 | Pixel::YUV420P | Pixel::YUVJ420P => pixels * 3 / 2,
+        Pixel::UYVY422 | Pixel::YUYV422 | Pixel::YUV422P | Pixel::YUVJ422P | Pixel::NV16 => {
+            pixels * 2
+        }
+        _ => pixels * 4,
+    }
+}
+
+/// Frames the native ingress queue holds: the time budget at the camera's
+/// frame rate (at least one full feed mailbox), capped by the byte budget.
+pub(crate) fn native_ingress_capacity(info: &VideoInfo) -> usize {
+    let by_time = (info.fps().max(1) as usize).saturating_mul(INGRESS_TIME_BUDGET_SECS);
+    let by_bytes = INGRESS_BYTE_BUDGET / frame_bytes(info).max(1);
+    by_time
+        .max(CAMERA_FEED_MAILBOX_FRAMES)
+        .min(by_bytes)
+        .max(MIN_INGRESS_FRAMES)
+}
 
 pub struct NativeCamera {
     feed_lock: Arc<CameraFeedLock>,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped: Arc<AtomicBool>,
+}
+
+/// Camera frames this recording lost, by boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct IngressSummary {
+    pub received: u64,
+    pub sent: u64,
+    pub feed: NativeCameraIngressDrops,
+    pub forwarder_full: u64,
+}
+
+impl IngressSummary {
+    fn lost(&self) -> u64 {
+        self.feed.mailbox_full + self.feed.fanout_full + self.forwarder_full
+    }
+}
+
+/// Reports every camera frame this recording loses: in the feed (its mailbox
+/// or this recording's ingress queue) and between this source and the
+/// encoder. The first loss at each boundary is logged at warn and sent as a
+/// health event at once; later losses at most every five seconds; the totals
+/// at the end.
+pub(crate) struct IngressReporter {
+    feed: Option<Arc<NativeCameraIngress>>,
+    start: NativeCameraIngressDrops,
+    seen: NativeCameraIngressDrops,
+    health_tx: Option<HealthSender>,
+    feed_log: DropLog,
+    forwarder_log: DropLog,
+    summary: IngressSummary,
+}
+
+impl IngressReporter {
+    pub(crate) fn new(
+        feed: Option<Arc<NativeCameraIngress>>,
+        health_tx: Option<HealthSender>,
+    ) -> Self {
+        let start = feed.as_ref().map(|feed| feed.drops()).unwrap_or_default();
+        Self {
+            feed,
+            start,
+            seen: start,
+            health_tx,
+            feed_log: DropLog::default(),
+            forwarder_log: DropLog::default(),
+            summary: IngressSummary::default(),
+        }
+    }
+
+    fn received(&mut self) {
+        self.summary.received += 1;
+        self.poll_feed(Instant::now());
+    }
+
+    fn sent(&mut self) {
+        self.summary.sent += 1;
+    }
+
+    fn poll_feed(&mut self, now: Instant) {
+        let Some(feed) = &self.feed else {
+            return;
+        };
+        let current = feed.drops();
+        let new = current.since(self.seen);
+        if new == NativeCameraIngressDrops::default() {
+            return;
+        }
+        self.seen = current;
+        self.summary.feed = current.since(self.start);
+        if let Some(dropped) = self
+            .feed_log
+            .record(new.mailbox_full + new.fanout_full, now)
+        {
+            tracing::warn!(
+                dropped,
+                mailbox_full = self.summary.feed.mailbox_full,
+                ingress_full = self.summary.feed.fanout_full,
+                "Native camera frames lost before the recording received them"
+            );
+            self.emit("camera-ingress:feed");
+        }
+    }
+
+    fn forwarder_full(&mut self, now: Instant) {
+        self.summary.forwarder_full += 1;
+        if let Some(dropped) = self.forwarder_log.record(1, now) {
+            tracing::warn!(
+                dropped,
+                total = self.summary.forwarder_full,
+                "Native camera encoder queue full, frames dropped"
+            );
+            self.emit("camera-ingress:encoder-queue");
+        }
+    }
+
+    fn emit(&self, source: &str) {
+        let Some(health_tx) = &self.health_tx else {
+            return;
+        };
+        let lost = self.summary.lost();
+        let offered =
+            self.summary.received + self.summary.feed.mailbox_full + self.summary.feed.fanout_full;
+        emit_health(
+            health_tx,
+            PipelineHealthEvent::FrameDropRateHigh {
+                source: source.to_string(),
+                rate_pct: 100.0 * lost as f64 / offered.max(1) as f64,
+            },
+        );
+    }
+
+    fn finish(mut self, elapsed: Duration) -> IngressSummary {
+        self.poll_feed(Instant::now());
+        let summary = self.summary;
+        if summary.lost() > 0 {
+            tracing::warn!(
+                received = summary.received,
+                sent = summary.sent,
+                mailbox_full = summary.feed.mailbox_full,
+                ingress_full = summary.feed.fanout_full,
+                encoder_queue_full = summary.forwarder_full,
+                ?elapsed,
+                "Native camera source finished with lost frames"
+            );
+        } else {
+            tracing::info!(
+                "Native camera source finished: {} received, {} sent, 0 dropped in {:?}",
+                summary.received,
+                summary.sent,
+                elapsed
+            );
+        }
+        summary
+    }
 }
 
 async fn forward_native_frames<T: Send + 'static>(
@@ -26,11 +198,9 @@ async fn forward_native_frames<T: Send + 'static>(
     stop_rx: oneshot::Receiver<()>,
     stopped: Arc<AtomicBool>,
     required: bool,
-) -> anyhow::Result<()> {
+    mut report: IngressReporter,
+) -> anyhow::Result<IngressSummary> {
     tracing::debug!("Native camera source task started");
-    let mut frame_count: u64 = 0;
-    let mut sent_count: u64 = 0;
-    let mut dropped_count: u64 = 0;
     let start = std::time::Instant::now();
     let mut video_tx = video_tx;
     let mut stop_rx = stop_rx.fuse();
@@ -50,33 +220,16 @@ async fn forward_native_frames<T: Send + 'static>(
             result = rx.recv_async() => {
                 match result {
                     Ok(frame) => {
-                        frame_count += 1;
+                        report.received();
                         match video_tx.try_send(frame) {
-                            Ok(()) => {
-                                sent_count += 1;
-                                if sent_count.is_multiple_of(30) {
-                                    tracing::debug!(
-                                        "Native camera source: sent {} frames, dropped {} in {:?}",
-                                        sent_count,
-                                        dropped_count,
-                                        start.elapsed()
-                                    );
-                                }
-                            }
+                            Ok(()) => report.sent(),
                             Err(e) => {
                                 if e.is_full() {
-                                    dropped_count += 1;
-                                    if dropped_count.is_multiple_of(30) {
-                                        tracing::warn!(
-                                            "Native camera source: encoder can't keep up, dropped {} frames so far",
-                                            dropped_count
-                                        );
-                                    }
+                                    report.forwarder_full(Instant::now());
                                 } else if e.is_disconnected() {
                                     tracing::debug!(
-                                        "Native camera source: pipeline closed after {} sent, {} dropped",
-                                        sent_count,
-                                        dropped_count
+                                        "Native camera source: pipeline closed after {:?}",
+                                        report.summary
                                     );
                                     if required && !stopped.load(Ordering::Acquire) {
                                         return Err(anyhow!("Native camera encoder disconnected before Stop"));
@@ -89,7 +242,7 @@ async fn forward_native_frames<T: Send + 'static>(
                     Err(e) => {
                         tracing::debug!(
                             "Native camera feed disconnected (rx closed) after {} frames in {:?}: {e}",
-                            frame_count,
+                            report.summary.received,
                             start.elapsed()
                         );
                         if required && !stopped.load(Ordering::Acquire) {
@@ -104,14 +257,7 @@ async fn forward_native_frames<T: Send + 'static>(
 
     drop(video_tx);
 
-    tracing::info!(
-        "Native camera source finished: {} received, {} sent, {} dropped in {:?}",
-        frame_count,
-        sent_count,
-        dropped_count,
-        start.elapsed()
-    );
-    Ok(())
+    Ok(report.finish(start.elapsed()))
 }
 
 impl VideoSource for NativeCamera {
@@ -121,12 +267,14 @@ impl VideoSource for NativeCamera {
     async fn setup(
         feed_lock: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
-        _ctx: &mut SetupCtx,
+        ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
-        let (tx, rx) = flume::bounded(8);
+        let capacity = native_ingress_capacity(feed_lock.video_info());
+        tracing::debug!(capacity, "Native camera ingress queue");
+        let (tx, rx) = flume::bounded(capacity);
 
         tokio::time::timeout(
             CAMERA_SENDER_ATTACH_TIMEOUT,
@@ -140,9 +288,15 @@ impl VideoSource for NativeCamera {
         let stopped = Arc::new(AtomicBool::new(false));
         let stopped_clone = stopped.clone();
 
-        let task = forward_native_frames(rx, video_tx, stop_rx, stopped_clone, cfg!(windows));
+        let report = IngressReporter::new(
+            Some(feed_lock.native_ingress().clone()),
+            Some(ctx.health_tx().clone()),
+        );
+        let task =
+            forward_native_frames(rx, video_tx, stop_rx, stopped_clone, cfg!(windows), report)
+                .map(|result| result.map(drop));
         #[cfg(windows)]
-        _ctx.tasks().spawn("native-camera", task);
+        ctx.tasks().spawn("native-camera", task);
         #[cfg(not(windows))]
         drop(tokio::spawn(task));
 
@@ -187,6 +341,7 @@ mod forwarding_tests {
             stopped,
             Arc::new(AtomicBool::new(false)),
             true,
+            IngressReporter::new(None, None),
         )
         .await;
         assert!(
@@ -210,6 +365,7 @@ mod forwarding_tests {
             stopped,
             Arc::new(AtomicBool::new(false)),
             true,
+            IngressReporter::new(None, None),
         )
         .await
         .unwrap();
@@ -227,6 +383,7 @@ mod forwarding_tests {
             stopped,
             Arc::new(AtomicBool::new(false)),
             true,
+            IngressReporter::new(None, None),
         ));
         sender.send_async(17_u8).await.unwrap();
         assert_eq!(frames.next().await, Some(17));
@@ -249,6 +406,7 @@ mod forwarding_tests {
             stopped,
             Arc::new(AtomicBool::new(false)),
             true,
+            IngressReporter::new(None, None),
         )
         .await;
         assert!(
@@ -271,8 +429,97 @@ mod forwarding_tests {
             stopped,
             Arc::new(AtomicBool::new(false)),
             false,
+            IngressReporter::new(None, None),
         )
         .await
         .unwrap();
+    }
+
+    fn info(format: cap_media_info::RawVideoFormat, w: u32, h: u32, fps: u32) -> VideoInfo {
+        VideoInfo::from_raw(format, w, h, fps)
+    }
+
+    #[test]
+    fn ingress_capacity_is_sized_by_time_and_bounded_by_bytes() {
+        use cap_media_info::RawVideoFormat::{Bgra, Nv12, Uyvy};
+        let cases = [
+            (info(Nv12, 1280, 720, 30), 64),
+            (info(Nv12, 1920, 1080, 30), 64),
+            (info(Nv12, 1280, 720, 60), 120),
+            (info(Nv12, 1920, 1080, 60), 86),
+            (info(Uyvy, 1920, 1080, 30), 64),
+            (info(Nv12, 3840, 2160, 30), 21),
+            (info(Bgra, 3840, 2160, 30), MIN_INGRESS_FRAMES),
+        ];
+        for (info, expected) in cases {
+            let capacity = native_ingress_capacity(&info);
+            assert_eq!(
+                capacity,
+                expected,
+                "{}x{}@{} {:?}",
+                info.width,
+                info.height,
+                info.fps(),
+                info.pixel_format
+            );
+            assert!(
+                capacity == MIN_INGRESS_FRAMES
+                    || capacity * frame_bytes(&info) <= INGRESS_BYTE_BUDGET
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn encoder_queue_overflow_is_counted() {
+        let (sender, receiver) = flume::bounded(16);
+        let (video, frames) = mpsc::channel(1);
+        let (_stop, stopped) = oneshot::channel();
+        for frame in 0..10_u8 {
+            sender.send_async(frame).await.unwrap();
+        }
+        drop(sender);
+        let summary = forward_native_frames(
+            receiver,
+            video,
+            stopped,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            IngressReporter::new(None, None),
+        )
+        .await
+        .unwrap();
+        // futures mpsc holds its buffer plus one slot per sender.
+        assert_eq!(summary.received, 10);
+        assert_eq!(summary.sent, 2);
+        assert_eq!(summary.forwarder_full, 8);
+        drop(frames);
+    }
+
+    #[tokio::test]
+    async fn feed_losses_count_from_the_recording_start() {
+        let ingress = Arc::new(NativeCameraIngress::default());
+        ingress.record_mailbox_full();
+        let report = IngressReporter::new(Some(ingress.clone()), None);
+        ingress.record_mailbox_full();
+        ingress.record_mailbox_full();
+        let (sender, receiver) = flume::bounded(4);
+        let (video, mut frames) = mpsc::channel(4);
+        let (_stop, stopped) = oneshot::channel();
+        sender.send_async(1_u8).await.unwrap();
+        drop(sender);
+        let summary = forward_native_frames(
+            receiver,
+            video,
+            stopped,
+            Arc::new(AtomicBool::new(false)),
+            false,
+            report,
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.feed.mailbox_full, 2);
+        assert_eq!(summary.feed.fanout_full, 0);
+        assert_eq!(summary.sent, 1);
+        assert_eq!(futures::StreamExt::next(&mut frames).await, Some(1));
     }
 }
