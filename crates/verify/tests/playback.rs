@@ -9,7 +9,7 @@ use cap_project::ProjectConfiguration;
 use cap_verify::{
     catalog,
     fixture::{FixtureSpec, Rng},
-    report::{self, Case, Tier},
+    report::{self, Tier},
 };
 use common::Decoder;
 
@@ -272,8 +272,11 @@ fn realtime_loop() {
             let total = model.output_frames(30);
             let first = (f64::from(total) * start_fraction) as u32;
             let seconds = f64::from(total - first) / 30.0 + 0.5;
-            let mut case = Case::new(&id);
+            let Some(mut case) = common::begin(&id, &project, decoder) else {
+                continue;
+            };
             match rt.block_on(common::realtime_playback(
+                &mut case,
                 &project,
                 config,
                 decoder,

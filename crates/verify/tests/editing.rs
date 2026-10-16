@@ -205,6 +205,15 @@ fn mapping_case(name: &str, mix: OpMix, seeds: u64, check: Check) {
     if failed > 3 {
         case.problem(check.class(), format!("{failed} sequences failed in total"));
     }
+    if failed > 0 {
+        // The share of the (seeded, deterministic) sequences that fail: the
+        // signature an expectation bounds.
+        case.measure(
+            check.class(),
+            "failed-per-mille",
+            (failed as f64 * 10_000.0 / seeds as f64).round() / 10.0,
+        );
+    }
     finish(case);
 }
 
@@ -465,6 +474,7 @@ fn hold_past_end_export() {
             if frames == expected {
                 case.note(format!("{frames} frames for the {duration:.3}s timeline"));
             } else {
+                case.measure("frame-count", "missing", expected as f64 - frames as f64);
                 case.problem(
                     "frame-count",
                     format!(

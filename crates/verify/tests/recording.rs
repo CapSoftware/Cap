@@ -318,6 +318,19 @@ fn require_system_audio() -> bool {
     }
 }
 
+/// `CAP_VERIFY_STIMULUS_AUDIO=0` keeps the stimulus silent, so the system
+/// audio track carries no markers and is not checked (unless system audio
+/// is required). On a host whose output device does reach
+/// ScreenCaptureKit but whose system-audio timing is not yet characterised
+/// (Blacksmith with BlackHole), this keeps the run equivalent to hosted
+/// runners, where the output devices give ScreenCaptureKit only silence.
+fn stimulus_plays_system_audio() -> bool {
+    !matches!(
+        std::env::var("CAP_VERIFY_STIMULUS_AUDIO").as_deref(),
+        Ok("0") | Ok("false")
+    )
+}
+
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
 }
@@ -436,10 +449,15 @@ fn real_capture() {
             continue;
         }
         if !spec.mic && !require_system_audio() {
-            eprintln!(
-                "[cap-verify] {}: skipped, system audio is its only audio and this host's output is not capturable",
-                spec.id
+            // Recorded, so the summary shows it (and CI's
+            // CAP_VERIFY_REQUIRE_SUPPORTED fails it unless allowlisted).
+            let mut case = Case::new(spec.id);
+            case.unsupported(
+                "system audio is this case's only audio and this host does not play and require system audio (CAP_VERIFY_REQUIRE_SYSTEM_AUDIO unset)",
             );
+            if let Err(e) = report::settle(case) {
+                failures.push(e);
+            }
             continue;
         }
         for attempt in 0..repeat {
@@ -1892,7 +1910,7 @@ async fn record(
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
-        audio: spec.system_audio,
+        audio: spec.system_audio && stimulus_plays_system_audio(),
         warmup: match capture {
             CaptureMode::Display => 2.0,
             CaptureMode::Window => 2.0,
@@ -2261,7 +2279,7 @@ fn layout(project: &Path, case: &mut Case) -> anyhow::Result<Layout> {
             .collect();
             if !unplaced.is_empty() {
                 case.problem(
-                    "sync",
+                    "start-time",
                     format!(
                         "recording-meta.json has no start_time for {}: the editor aligns them at 0 instead of where they started",
                         unplaced.join(", ")
@@ -2365,6 +2383,11 @@ enum Injection {
     /// the width of any screen sync window, so a working sync measurement
     /// reports it from any in-window baseline.
     Late,
+    /// The last second of the screen track is lost (a final segment that
+    /// never reached the file).
+    TruncateEnd,
+    /// The first second of the screen track is lost (a late start).
+    LateStart,
 }
 
 thread_local! {
@@ -2373,11 +2396,13 @@ thread_local! {
     static INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-const INJECTIONS: [Injection; 4] = [
+const INJECTIONS: [Injection; 6] = [
     Injection::DropRun,
     Injection::Freeze,
     Injection::Stale,
     Injection::Late,
+    Injection::TruncateEnd,
+    Injection::LateStart,
 ];
 const INJECTED_LATENESS: f64 = 0.15;
 
@@ -2388,6 +2413,8 @@ impl Injection {
             Injection::Freeze => "freeze over 3 frames",
             Injection::Stale => "re-emit a stale frame",
             Injection::Late => "screen 150 ms late",
+            Injection::TruncateEnd => "lose the last second",
+            Injection::LateStart => "start one second late",
         }
     }
 
@@ -2396,7 +2423,8 @@ impl Injection {
         match self {
             Injection::DropRun | Injection::Freeze => ("missing", "screen:"),
             Injection::Stale => ("timestamps", "screen:"),
-            Injection::Late => ("sync", "screen vs"),
+            Injection::Late => ("sync-screen-mic", "screen vs"),
+            Injection::TruncateEnd | Injection::LateStart => ("coverage", "screen:"),
         }
     }
 
@@ -2439,6 +2467,16 @@ impl Injection {
             Injection::Late => {
                 for (pts, _) in frames.iter_mut() {
                     *pts += INJECTED_LATENESS;
+                }
+            }
+            Injection::TruncateEnd => {
+                if let Some(last) = frames.last().map(|(pts, _)| *pts) {
+                    frames.retain(|(pts, _)| *pts < last - 1.0);
+                }
+            }
+            Injection::LateStart => {
+                if let Some(first) = frames.first().map(|(pts, _)| *pts) {
+                    frames.retain(|(pts, _)| *pts > first + 1.0);
                 }
             }
             Injection::DropRun | Injection::Freeze => {
@@ -2502,7 +2540,16 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
     let mut caught = Vec::new();
     for injection in INJECTIONS {
         let (class, prefix) = injection.expected();
-        if injection == Injection::Late && case.classes.contains("sync") {
+        if injection == Injection::TruncateEnd && rec.loss_budget.is_some() {
+            caught.push(format!(
+                "{}: n/a (a crash case may lose its end within its loss budget)",
+                injection.label()
+            ));
+            continue;
+        }
+        if injection == Injection::Late
+            && case.classes.iter().any(|c| c.starts_with("sync-screen-"))
+        {
             caught.push(format!("{}: n/a (already out of sync)", injection.label()));
             continue;
         }
@@ -2569,7 +2616,18 @@ struct VideoCheck<'a> {
     /// the first picture after each scripted hold (a change after a static
     /// screen, the moment a viewer is waiting for).
     required: Vec<(u32, String)>,
+    /// (recording start, end of the kept span) in truth seconds: the
+    /// recording must hold the pictures shown from shortly after the start
+    /// to the end (see `START_COVERAGE_SECS`).
+    window: (f64, f64),
 }
+
+/// How late after the recording starts its first picture may be: the
+/// documented start-up drops (`STARTUP_DROPS` frames at the slowest capture
+/// rate, 30 fps: 200 ms) plus the display's presentation latency (up to
+/// 75 ms, see `sync_checks`). Measured on hosted macOS 15 and 26: the first
+/// recorded picture is the first one presented, 9 to 69 ms after the start.
+const START_COVERAGE_SECS: f64 = 0.3;
 
 fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Result<Offsets> {
     let mut frames: Vec<(f64, Readout)> = Vec::new();
@@ -2683,6 +2741,56 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
     let (Some(&lo), Some(&hi)) = (first_seen.keys().next(), first_seen.keys().next_back()) else {
         return Ok(Offsets::default());
     };
+    // Start and end coverage, from the stimulus's truth: missing pictures
+    // between the first and last recorded ones are counted below, so a late
+    // start or a lost final segment needs its own check.
+    let countable = |i: &u32| !check.not_sent.contains(i) && !(check.may_skip)(*i);
+    let (start, end) = check.window;
+    if let Some((&first_due, &due_at)) = check
+        .truth
+        .iter()
+        .find(|(i, t)| **t >= start + START_COVERAGE_SECS && countable(i))
+        && lo > first_due
+    {
+        let late = check.truth.get(&lo).map_or(f64::NAN, |t| t - start);
+        case.measure(
+            "coverage",
+            &format!("{name}-start-late-ms"),
+            (late * 1000.0).round(),
+        );
+        case.problem(
+            "coverage",
+            format!(
+                "{name}: the recording starts {:.0} ms after the recording start (first recorded index {lo}); index {first_due}, shown {:.0} ms after the start, is missing (allowed {:.0} ms)",
+                late * 1000.0,
+                (due_at - start) * 1000.0,
+                START_COVERAGE_SECS * 1000.0
+            ),
+        );
+        implicate(case, Some(due_at));
+    }
+    if let Some((&last_due, &due_at)) = check
+        .truth
+        .iter()
+        .rev()
+        .find(|(i, t)| **t <= end && **t >= start && countable(i))
+        && hi < last_due
+    {
+        let lost = check
+            .truth
+            .range(hi + 1..=last_due)
+            .filter(|(i, _)| countable(i))
+            .count();
+        case.measure("coverage", &format!("{name}-end-lost"), lost as f64);
+        case.problem(
+            "coverage",
+            format!(
+                "{name}: the recording ends at index {hi}; {lost} pictures shown before the stop are missing (last due: index {last_due}, {:.0} ms before the end of the kept span)",
+                (end - due_at) * 1000.0
+            ),
+        );
+        implicate(case, Some(due_at));
+    }
     let mut skipped = Vec::new();
     let mut startup = Vec::new();
     let mut explained = 0;
@@ -2735,6 +2843,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
             && *index < hi
             && !first_seen.contains_key(index)
         {
+            case.count("missing-after-hold", &format!("{name}-pictures"), 1.0);
             case.problem(
                 "missing-after-hold",
                 format!("{name}: {what} (index {index}) is missing from the recording"),
@@ -2743,6 +2852,7 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         }
     }
     if skipped.len() > budget || longest_run >= 3 {
+        case.count("missing", &format!("{name}-frames"), skipped.len() as f64);
         case.problem(
             "missing",
             format!(
@@ -2933,6 +3043,7 @@ fn check_audio(
         ));
     }
     if damaged > 0 {
+        case.count("unreadable", &format!("{name}-markers"), f64::from(damaged));
         case.problem(
             "unreadable",
             format!("{name}: {damaged} markers inside the track located but undecodable"),
@@ -2962,6 +3073,16 @@ fn check_audio(
         .map(|(i, _)| *i)
         .collect();
     if !missing.is_empty() {
+        case.count("missing", &format!("{name}-markers"), missing.len() as f64);
+        for i in &missing {
+            if let Some(t) = check.truth.get(i) {
+                case.measure(
+                    "missing",
+                    &format!("{name}-after-start-s"),
+                    ((t - check.window.0) * 100.0).round() / 100.0,
+                );
+            }
+        }
         case.problem(
             "missing",
             format!(
@@ -3064,6 +3185,15 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         .windows(2)
         .map(|w| (w[0].0, w[1].1 - w[0].1))
         .collect();
+    // The span whose pictures and markers must all be in the recording. A
+    // crash-recovery case has its own end check against its loss budget
+    // (below), so the video end coverage does not apply there.
+    let end = rec.stopped - rec.loss_budget.unwrap_or(0.3);
+    let coverage_end = if rec.loss_budget.is_some() {
+        f64::NEG_INFINITY
+    } else {
+        end
+    };
     let screen = check_video(
         case,
         &layout.display,
@@ -3079,6 +3209,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
             }),
             allow_duplicates: true,
             required: after_holds(rec, &screen_truth),
+            window: (rec.started, coverage_end),
         },
     )?;
     let camera = match (&layout.camera, &rec.camera) {
@@ -3095,6 +3226,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     may_skip: Box::new(|_| false),
                     allow_duplicates: false,
                     required: Vec::new(),
+                    window: (rec.started, coverage_end),
                 },
             )?)
         }
@@ -3107,12 +3239,16 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         }
         _ => None,
     };
-    let end = rec.stopped - rec.loss_budget.unwrap_or(0.3);
     let window = (rec.started + 0.3, end);
     if rec.loss_budget.is_some() {
         let last_presented = screen_truth.range(1..).next_back().map(|(_, t)| *t);
         match (screen.last_truth(), last_presented) {
             (Some(last), Some(presented)) if last < end.min(presented) => {
+                case.measure(
+                    "missing",
+                    "screen-lost-s",
+                    ((rec.stopped - last) * 100.0).round() / 100.0,
+                );
                 case.problem(
                     "missing",
                     format!(
@@ -3277,6 +3413,11 @@ fn sync_checks(
     if let Some(mic) = mic
         && mic.spread() > EXACT_SPREAD
     {
+        case.measure(
+            "timestamps",
+            "mic-spread-ms",
+            (ms(mic.spread()) * 10.0).round() / 10.0,
+        );
         case.problem("timestamps", format!(
             "mic: marker offsets vary by {:.1} ms (limit {:.1}): audio timing is not continuous",
             ms(mic.spread()),
@@ -3386,7 +3527,7 @@ fn sync_checks(
     // camera-clock).
     if let (Some((pre, post)), Some(mic_m)) = (&camera_parts, mic_m) {
         for (part, class, label) in [
-            (pre, "sync", "before the drift anchor"),
+            (pre, "sync-camera-mic", "before the drift anchor"),
             (post, "camera-clock", "past the drift anchor"),
         ] {
             let Some(camera_m) = part.median() else {
@@ -3395,6 +3536,7 @@ fn sync_checks(
             let d = camera_m - mic_m;
             case.note(format!("sync camera-mic {label} {:+.1} ms", ms(d)));
             if d.abs() > CAMERA_VS_MIC {
+                case.measure(class, "camera-mic-ms", (ms(d) * 10.0).round() / 10.0);
                 case.problem(
                     class,
                     format!(
@@ -3412,8 +3554,13 @@ fn sync_checks(
         let d = system_m - mic_m;
         case.note(format!("sync system-mic {:+.1} ms", ms(d)));
         if d.abs() > SYSTEM_VS_MIC {
+            case.measure(
+                "sync-system-mic",
+                "offset-ms",
+                (ms(d) * 10.0).round() / 10.0,
+            );
             case.problem(
-                "sync",
+                "sync-system-mic",
                 format!(
                     "system audio vs mic out of sync: {:+.1} ms (limit +-{:.0})",
                     ms(d),
@@ -3436,8 +3583,16 @@ fn sync_checks(
             ms(d)
         ));
         if d < screen_latency.0 - slack(name) || d > screen_latency.1 + slack(name) {
+            // One class per pair, so a known offset of one source cannot
+            // excuse another's.
+            let class = if name == "mic" {
+                "sync-screen-mic"
+            } else {
+                "sync-screen-system"
+            };
+            case.measure(class, "offset-ms", (ms(d) * 10.0).round() / 10.0);
             case.problem(
-                "sync",
+                class,
                 format!(
                     "screen vs {name} out of sync: {:+.1} ms (allowed {:+.0}..{:+.0}: display latency)",
                     ms(d),

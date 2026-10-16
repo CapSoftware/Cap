@@ -5,223 +5,352 @@
 #   [[xfail]]
 #   case = "<case id as printed by the suite, * globs allowed>"
 #   class = "<stale | future | wrong-segment | unreadable | missing | unexpected
-#             | frame-count | timestamps | nondeterministic | error
-#             | mapping | coverage | duration | caption-track | caption-frame
-#             | caption-words | caption-segments | caption-migration
-#             | caption-roundtrip>"
+#             | frame-count | timestamps | nondeterministic | error | coverage
+#             | frames-missing | audio-mic | audio-system | sync-mic | sync-system
+#             | sync-screen-mic | sync-screen-system | sync-system-mic
+#             | sync-camera-mic | start-time | missing-after-hold | colour-level
+#             | colour-matrix | caption-* | mapping | duration>"
+#   bound = { <metric> = <max> or [<min>, <max>], ... }
 #   reason = "<what is wrong>"
 #   link = "<PR or issue that fixes it; empty when no fix exists yet>"
 #   platforms = ["macos"]   (optional; absent = every platform)
 #   flaky = true            (optional; timing-dependent, may pass. State the
 #                            measured rate in the reason.)
+#   starved = true          (optional, flaky only: excuses the failure only
+#                            when the case's starvation sentinel saw the
+#                            machine stall during the case)
+#
+# Every entry carries the bound of its documented mechanism. The suite
+# measures each failing class, and an entry excuses a failure only when every
+# measurement lies inside its bound; a measured metric the bound does not
+# name must be zero. Metrics:
+# - frame classes (stale, future, unreadable, missing, ...): <stream>-frames
+#   (frames affected per stream), frame (range of output frames or seek
+#   positions affected), delta (largest source-frame error);
+# - classes from a single check: count (number of problems), plus the
+#   check's own measurement: offset-ms (A/V offset, audio minus screen, or
+#   screen minus audio for sync-screen-*), spread-ms, missing, unexpected,
+#   drift-ms, luma / cb / cr (code values), off-periods (frame periods off
+#   the timestamp grid), <stream>-start-late-ms, <stream>-end-lost.
 #
 # A listed class that no longer occurs fails the run with "remove this
-# xfail", so fixes stay locked in. A class that occurs and is not listed
-# fails the run. scripts/verify/bless.sh rewrites this file from a local run
-# or from a CI run's report artifacts (`--run <id>`, every platform), keeping
-# reasons and links; new entries get a TODO reason. Review the diff.
+# xfail", so fixes stay locked in. A class that occurs and is not listed, or
+# that occurs outside its bound, fails the run. scripts/verify/bless.sh
+# rewrites this file from a local run or from a CI run's report artifacts
+# (`--run <id>`, every platform), keeping reasons, links and bounds; new
+# entries get a TODO reason and their measured range as the bound. Review the
+# diff.
 #
-# Recorded on origin/main 5705ee851. "NEW:" marks bugs the suite found that
-# no open PR fixes.
+# "NEW:" marks bugs the suite found that no open PR fixed when they were
+# recorded. #2638 fixes the AVAssetReader and pts-hole decoder entries
+# (it supersedes #2595 and #2603), #2636 the decode-deadline entries, #2635
+# the Windows audio trim entry.
+
+require_bound = true
 
 [[xfail]]
-case = "*/jitter-camera-*/full/*60*/avf"
+case = "export/jitter-camera-40s/full/mp460/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead (40 s fixture: 531 camera frames ahead, up to 298 source frames; full tier 120 s: 5146 frames, up to 2232 source frames = 74 s ahead; offline playback of the 120 s fixture: 2618 frames, up to 1726 ahead). Export and playback of the 120 s fixture pass with #2595's decoder changes (measured on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { camera-frames = [500, 560], delta = 320, frame = [1580, 2399] }
+reason = "Camera runaway: with a jittery ~12 fps camera at 30 fps nominal exported at 60 fps, the pts-hole map evicts the hole it just recorded once 64 wider ones are tracked, and the reader drifts ahead from output frame 1585 on (530 camera frames ahead, up to 298 source frames, every run; the screen is never affected)"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "export/jitter-camera-120s/full/mp460/avf"
+class = "future"
+platforms = ["macos"]
+bound = { camera-frames = [4950, 5350], delta = 2400, frame = [1580, 7199] }
+reason = "Same camera runaway on the 120 s fixture (full tier): from output frame 1585, 5146 camera frames ahead, up to 2232 source frames (74 s); 5081 to 5201 in the runs whose exports differ (see the nondeterministic entry). The screen is never affected"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "playback/jitter-camera-120s/full/seq60-from0/avf"
+class = "future"
+platforms = ["macos"]
+bound = { camera-frames = [2300, 2800], delta = 1900, frame = [2480, 7199] }
+reason = "Same camera runaway in offline playback of the 120 s fixture: from output frame 2490, 2485 to 2618 camera frames ahead, up to 1419 to 1726 source frames (the count varies with the decoder's request batching)"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "playback/jitter-camera-120s/full/seq60-from0/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "The last screen frame of the 120 s offline playback (output 7199, 119.983 s) shows source 3598 for 3599 in 1 of 3 full runs (38763192776). Mechanism: when the request stream pauses for 250 ms or more, the AVAssetReader decoder's idle timeout (IDLE_READER_TIMEOUT, crates/rendering/src/decoder/avassetreader.rs) clears its cache and reader state, and the final request is then answered with the newest frame before it. Reproduced on Apple silicon by pausing 300 ms before the last request (1 of 1); a 100 ms pause does not reproduce it"
-link = ""
+bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [7199, 7199] }
+reason = "The last output frame of the 120 s offline playback (7199, 119.983 s) shows the source frame before the right one in 1 of 3 full runs (38763192776). Mechanism: when the request stream pauses for 250 ms or more, the AVAssetReader decoder's idle timeout (IDLE_READER_TIMEOUT, crates/rendering/src/decoder/avassetreader.rs) clears its cache and reader state, and the final request is then answered with the newest frame before it. Reproduced on Apple silicon by pausing 300 ms before the last request (1 of 1); a 100 ms pause does not reproduce it. Bound: only the final frame, one source frame stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "export/jitter-camera-120s/full/mp460/avf"
 class = "nondeterministic"
 platforms = ["macos"]
 flaky = true
-reason = "Two exports of the 120 s jitter-camera project can differ (4001 of 7200 frames, first at frame 3163, in 1 of 3 runs on blacksmith-6vcpu-macos-15, 38838622145) inside the camera runaway of the future entry above. The decoder drains requests in batches with try_recv, so a batch's makeup depends on timing, and the reader's pool position is capped to the batch's newest request (update_decoder_position(decoder_idx, capped)); once the pts-hole map has lost the hold, that decides which reader answers, so the wrong answers themselves vary. Measured on blacksmith-6vcpu-macos-15: alone the case is identical in 16 of 16 runs (5146 wrong frames, probe 38843099696); run beside the rest of the export suite it differs in 3 of 8 (5134 and 5201 wrong frames, probe 38844461913). The IOSurface part of this nondeterminism is gone with #2625 (0 of 3 sol-avf proof runs, 0 of 5 in probe 38784185050); #2595's decoder changes remove the runaway and with it this class (5 of 5 identical exports in that probe's decoder configuration, 2 of 2 on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { count = 1, frames = [1, 5620], frame = [1580, 7199] }
+reason = "Two exports of the 120 s jitter-camera project can differ, only inside the camera runaway of the future entry above (from output frame 1585 on; 4001 of 7200 frames from frame 3163, and 2333 from frame 4747, in 2 of 11 Blacksmith full runs). The decoder drains requests in batches with try_recv, so a batch's makeup depends on timing, and the reader's pool position is capped to the batch's newest request (update_decoder_position(decoder_idx, capped)); once the pts-hole map has lost the hold, that decides which reader answers. Measured on blacksmith-6vcpu-macos-15: alone the case is identical in 16 of 16 runs (probe 38843099696); beside the rest of the export suite it differs in 3 of 8 (probe 38844461913). #2638 removes the runaway and with it this class. Bound: differences only at or after the runaway's first frame, same frame count"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "*/jitter-camera-120s/full/*/ffmpeg"
 class = "stale"
-reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames, identical in the MP4 export and in offline playback on every platform"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { camera-frames = 1551, delta = 90, frame = [2493, 6767] }
+reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames, output frames 2493 to 6767, identical in the MP4 export and in offline playback on every platform that runs it"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "export/backward-hold/backward-jumps/mp460/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Deterministic (42 of 42 in probe 38762089521, with or without the IOSurface fix); passes with #2595's decoder changes (measured on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+flaky = true
+bound = { camera-frames = 1, delta = 1, frame = [2579, 2579] }
+reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Every run in probe 38762089521 (42 of 42) and on hosted macOS, but it passed on blacksmith-6vcpu-macos-15 in push run 38846099909: whether the previous vend is still cached depends on the decoder's wall-clock idle timeout, so it is flaky there"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "export/camera-pts-late/full/mp430/avf"
 class = "future"
 platforms = ["macos"]
-reason = "A camera file whose pts start 2 s in runs ahead from the first output frame instead of holding its first frame: before the track's first sample every request steps the reader one sample further. Passes with #2595's decoder changes (requests before the first keyframe are answered with the first frame from the cache), measured on Apple silicon"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { camera-frames = 127, delta = 53, frame = [8, 134] }
+reason = "A camera file whose pts start 2 s in runs ahead instead of holding its first frame: before the track's first sample every request steps the reader one sample further (127 camera frames, output frames 8 to 134, up to 53 source frames ahead)"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "export/camera-pts-late/full/mp430/ffmpeg"
 class = "future"
-reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames)"
+bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
+reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
 link = ""
 
 [[xfail]]
-case = "seek/seek-*/keyframes60/avf"
+case = "seek/seek-gop/keyframes60/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "Wrong-GOP seek: the reader starts on the keyframe time rounded to 10 ms, decodes the previous GOP and shows its last frame under the keyframe's number (requests between the keyframe pts and the next slot show keyframe - 1)"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+bound = { screen-frames = 3, camera-frames = 3, delta = 1, frame = [351, 701] }
+reason = "Wrong-GOP seek: the reader starts on the keyframe time rounded to 10 ms, decodes the previous GOP and shows its last frame under the keyframe's number (requests between the keyframe pts and the next slot show keyframe - 1): 3 seeks, one source frame stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
-case = "seek/seek-*/storm30/avf"
+case = "seek/seek-native/keyframes60/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (frame 349 shows 237). Both storm30 cases pass with #2595's decoder changes (measured on Apple silicon); #2603 fixes the wrong-GOP part"
-link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+bound = { screen-frames = 8, camera-frames = 8, delta = 44, frame = [45, 705] }
+reason = "Wrong-GOP seek on the native fixture (see seek/seek-gop/keyframes60/avf): 8 seeks show a frame of the previous GOP, up to 44 source frames stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "seek/seek-gop/storm30/avf"
+class = "stale"
+platforms = ["macos"]
+bound = { screen-frames = 20, camera-frames = 20, delta = 352, frame = [1, 900] }
+reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (seek 349 shows 237): 20 of 3000 full-tier seeks (1 in the fast tier), up to 352 source frames stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "seek/seek-native/storm30/avf"
+class = "stale"
+platforms = ["macos"]
+bound = { screen-frames = 28, camera-frames = 28, delta = 243, frame = [1, 900] }
+reason = "Same reader reuse as seek/seek-gop/storm30/avf on the native fixture: 28 of 3000 full-tier seeks (2 in the fast tier), up to 243 source frames stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/seek-*/storm30/avf"
 class = "future"
 platforms = ["macos"]
 flaky = true
-reason = "Full-tier seek storm: a few seeks are answered one or two source frames ahead (seek-gop frame 4 shows 5 for 3). Pool position capping: after a read the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame is reused for it without a reset and answers with its next sample (same mechanism as seek/seek-native/keyframes60/avf, minimal repro there). Whether a storm reaches that state depends on request timing: the decoder's 250 ms idle timeout (IDLE_READER_TIMEOUT) clears its cache and readers when requests pause, and with a 300 ms pause every 7 requests the seek-native storm has no ahead answer (measured on Apple silicon; 7 ahead without pauses). seek-gop: 3 of 3 full runs and locally; seek-native: 1 of 3 full runs (38763178760) and locally. Both storms pass with #2595's decoder changes (measured on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { screen-frames = 12, camera-frames = 12, delta = 2, frame = [1, 900] }
+reason = "Full-tier seek storm: a few seeks are answered one or two source frames ahead (seek-gop frame 4 shows 5 for 3; 3 seeks on seek-gop, 11 on seek-native). Pool position capping: after a read the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame is reused for it without a reset and answers with its next sample (same mechanism as seek/seek-native/keyframes60/avf, minimal repro there). Whether a storm reaches that state depends on request timing: the decoder's 250 ms idle timeout (IDLE_READER_TIMEOUT) clears its cache and readers when requests pause, and with a 300 ms pause every 7 requests the seek-native storm has no ahead answer (measured on Apple silicon; 7 ahead without pauses). seek-gop: 3 of 3 full runs and locally; seek-native: 1 of 3 full runs (38763178760) and locally"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/vfr-holds/storm60/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217). Passes with #2595's decoder changes (measured on Apple silicon)"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { screen-frames = 72, camera-frames = 14, delta = 253, frame = [1, 1800] }
+reason = "Seek storm over long VFR holds: AVAssetReader shows a frame from the far side of a hold (expected 60, got 217): 72 screen and 14 camera seeks of the full storm (8 and 2 in the fast tier), up to 253 source frames ahead"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/vfr-holds/storm60/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "Same storm, an additional stale answer in 3 of 4 runs on main (timing-dependent reader reuse)"
-link = "https://github.com/CapSoftware/Cap/pull/2603"
+bound = { screen-frames = 60, camera-frames = 40, delta = 536, frame = [1, 1800] }
+reason = "Same storm, stale answers from reused readers: 52 to 53 screen and 35 to 36 camera seeks in full runs, 0 screen and 2 camera in the fast tier, up to 536 source frames stale (timing-dependent reader reuse; 3 of 4 runs on main)"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/vfr-holds/into-holds60/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: AVAssetReader camera answers one frame stale when a region is revisited after other seeks (see seek/vfr-holds/revisit60/avf for the deterministic sequence). This longer sequence fails 12 of 13 runs on main; it passed once under parallel load, probably because the decoder's wall-clock paths (250 ms idle reader drop, 100 ms scrub cooldown) change which branch answers"
-link = ""
+bound = { camera-frames = 1, delta = 1, frame = [149, 149] }
+reason = "NEW: AVAssetReader camera answers one frame stale when a region is revisited after other seeks (see seek/vfr-holds/revisit60/avf for the deterministic sequence): output frame 149, one source frame. Fails 12 of 13 runs on main; it passed once under parallel load, probably because the decoder's wall-clock paths (250 ms idle reader drop, 100 ms scrub cooldown) change which branch answers"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/vfr-holds/revisit60/avf"
 class = "stale"
 platforms = ["macos"]
-reason = "NEW: seeks to 2.0 s, 3.5 s, 1.2 s, 2.3 s (each + 29 playback frames, 60 fps): the camera request at 2.483 s (slot 74, CFR camera) is answered with slot 73. Deterministic: 3 of 3 on main and 3 of 3 with #2603; FFmpeg is correct. Repro: CAP_VERIFY_SEEK_SCRIPT='vfr-holds@60:2.0+29,3.5+29,1.2+29,2.3+29' cargo test -p cap-verify --test seek script -- --nocapture"
+bound = { camera-frames = 1, delta = 1, frame = [149, 149] }
+reason = "NEW: seeks to 2.0 s, 3.5 s, 1.2 s, 2.3 s (each + 29 playback frames, 60 fps): the camera request at 2.483 s (slot 74, CFR camera) is answered with slot 73. Deterministic on runners: every run on main and with #2603; FFmpeg is correct. Repro: CAP_VERIFY_SEEK_SCRIPT='vfr-holds@60:2.0+29,3.5+29,1.2+29,2.3+29' cargo test -p cap-verify --test seek script -- --nocapture"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "seek/seek-gop/storm30/ffmpeg"
+class = "stale"
+bound = { screen-frames = 71, camera-frames = 71, delta = 81, frame = [1, 900] }
+reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1 to 4 source frames old, and seeks near the start are answered by the first-frame shortcut with frame 0 (71 of 3000 full-tier seeks, 1 in the fast tier, up to 81 source frames stale)"
 link = ""
 
 [[xfail]]
-case = "seek/*/storm*/ffmpeg"
+case = "seek/seek-native/storm30/ffmpeg"
 class = "stale"
-reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1-4 source frames old, and seeks near the start show frame 0 (up to 67 source frames stale)"
+bound = { screen-frames = 65, camera-frames = 65, delta = 83, frame = [1, 900] }
+reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut as seek/seek-gop/storm30/ffmpeg on the native fixture: 62 to 65 of 3000 full-tier seeks (9 in the fast tier), up to 83 source frames stale"
 link = ""
 
-# Instant mode (fixtures recorded through the real Instant muxers and
-# finalize_instant_output). Needs confirmation with real capture devices
-# (recording track); the product anchors the Instant audio track at the
-# recording epoch on Linux only.
+[[xfail]]
+case = "seek/vfr-holds/storm60/ffmpeg"
+class = "stale"
+bound = { screen-frames = 38, camera-frames = 67, delta = 76, frame = [1, 1800] }
+reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut over long VFR holds: 38 screen and 67 camera seeks of the full storm (7 and 11 in the fast tier), up to 76 source frames stale"
+link = ""
+
+# Decode deadline under machine starvation. These apply only to a case the
+# starvation sentinel saw stall (starved = true) and only with the signature
+# of the mechanism; the same symptom on a healthy machine is a failure.
 
 [[xfail]]
 case = "export/*"
 class = "timestamps"
 platforms = ["windows"]
 flaky = true
-reason = "NEW: under load an offline export reorders frames. A screen decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) makes the render loop emit a fallback frame (crates/rendering/src/lib.rs, the decode-failure fallback) ahead of the frame still waiting for its GPU readback, so the output order becomes 32, 34, 33 and the encoder's monotonic pts repair (EncoderBase::update_pts via queue_frame_reusable, crates/enc-ffmpeg/src/video/h264.rs) shifts every later frame by one slot: frames 33 onward sit off the 60 fps grid while the count stays right. Reproduced deterministically by delaying the two screen responses at 34/60 past the deadline (sol-starved-export.md). Seen on a starved windows-2022 runner (Engine verify 38818870844, windows shard 4, export/basic/camera-hidden/mp460/ffmpeg); the code is shared, but no macOS or Linux run has missed a decode deadline. Fix branch fix/export-frame-order-under-load (frames are retried in order, never substituted)"
-link = ""
+starved = true
+bound = { count = 1, frames = [1, 7200], off-periods = [0.95, 1.05], frame = [1, 7199] }
+reason = "NEW: under load an offline export reorders frames. A screen decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) makes the render loop emit a fallback frame (crates/rendering/src/lib.rs, the decode-failure fallback) ahead of the frame still waiting for its GPU readback, so the output order becomes 32, 34, 33 and the encoder's monotonic pts repair (EncoderBase::update_pts via queue_frame_reusable, crates/enc-ffmpeg/src/video/h264.rs) shifts every later frame by exactly one slot: the frames after the swap sit one frame period off the grid while the count stays right. Reproduced deterministically by delaying the two screen responses at 34/60 past the deadline (sol-starved-export.md). Seen on a starved windows-2022 runner (Engine verify 38818870844, windows shard 4, export/basic/camera-hidden/mp460/ffmpeg). Bound: only under a sentinel-proven stall, and every off-grid frame exactly one period off"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
 
 [[xfail]]
 case = "playback/backward-hold/backward-jumps/seq30-from0/ffmpeg"
 class = "error"
 platforms = ["windows"]
 flaky = true
-reason = "NEW: under load offline playback gets no frame at all: a decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) leaves the request unanswered (\"decoders returned no frame for clip 0 at 5.000s\"). Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 3.1 s, 38 gaps over 100 ms); same deadline as the export frame reorder entry, fix branch fix/export-frame-order-under-load"
-link = ""
+starved = true
+bound = { count = 1 }
+reason = "NEW: under load offline playback gets no frame at all: a decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) leaves the request unanswered (\"decoders returned no frame for clip 0 at 5.000s\"). Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 3.1 s, 38 gaps over 100 ms); same deadline as the export frame reorder entry. Bound: one error, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
 
 [[xfail]]
 case = "export/early-camera/full/mp430/ffmpeg"
 class = "frame-count"
 platforms = ["windows"]
 flaky = true
-reason = "NEW: under load an offline export loses its first frame: when the first decodes miss their 2,000 ms deadline the render loop advances before any usable frame exists (crates/rendering/src/lib.rs, initial decode failure path; sol-starved-export.md), so the export has 179 of 180 frames and every frame shows the source one or two frames ahead. Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 4.2 s, 133 gaps over 100 ms); fix branch fix/export-frame-order-under-load"
-link = ""
+starved = true
+bound = { count = 1, missing = 1 }
+reason = "NEW: under load an offline export loses its first frame: when the first decodes miss their 2,000 ms deadline the render loop advances before any usable frame exists (crates/rendering/src/lib.rs, initial decode failure path; sol-starved-export.md), so the export has 179 of 180 frames. Seen once on a starved windows-2022 runner (Engine verify 38841241061, windows shard 1, sentinel longest wake gap 4.2 s, 133 gaps over 100 ms). Bound: exactly one frame, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
 
 [[xfail]]
 case = "export/early-camera/full/mp430/ffmpeg"
 class = "future"
 platforms = ["windows"]
 flaky = true
-reason = "NEW: same initial decode-deadline loss as the frame-count entry: with the first frame gone every later frame shows the source one or two frames ahead (146 of 178 screen frames). Seen once on a starved windows-2022 runner (Engine verify 38841241061); fix branch fix/export-frame-order-under-load"
-link = ""
+starved = true
+bound = { screen-frames = 179, camera-frames = 179, delta = 2, frame = [0, 179] }
+reason = "NEW: same initial decode-deadline loss as the frame-count entry: with the first frame gone every later frame shows the source one or two frames ahead (146 of 178 screen frames). Seen once on a starved windows-2022 runner (Engine verify 38841241061). Bound: at most two source frames ahead, only under a sentinel-proven stall"
+link = "https://github.com/CapSoftware/Cap/pull/2636"
 
-[[xfail]]
-case = "export/instant*/output/mp4/native"
-class = "timestamps"
-platforms = ["macos", "windows"]
-flaky = true
-reason = "On macOS and Windows the Instant video timestamps follow the muxer's processing clock, not the capture timestamps: after the 2 s warmup VideoDriftTracker::calculate_timestamp (crates/recording/src/output_pipeline/core.rs) returns anchor_source + (wall clock when the frame is processed - anchor wall clock), and the anchor is the first frame processed after the first 2 s segment rollover. Any delay between capture and processing (late delivery, a muxer stall) moves frames by that delay, and a stall at the anchor shifts every later frame (860 ms in one fresh recording, frames 62-75 compressed into 35 ms). Linux uses CaptureInstantTimeline (capture cadence bounded by the wall clock) and is not affected. Fresh fixtures: 22 of 105 case runs on macos-15/26 (instant probe run 38735811849, every Instant variant), 1 of 7 in run 38735816076; spread 17-860 ms against the 16.7 ms limit. Windows shares the code path: on a starved windows-2022 runner (Engine verify 38818870844, windows shard 4, where the same tests ran 3 to 4.5 times slower than in other shards) the spread was 173.9 and 17.3 ms with the test emitter 273.5 and 17.6 ms late; 0 of 102 fresh Windows recordings otherwise (probes 38782202975, 38785649744)"
-link = ""
+# Instant mode (fixtures recorded through the real Instant muxers and
+# finalize_instant_output). Each audio source is its own class, so a known
+# loss or offset of one source cannot hide the other's.
 
 [[xfail]]
 case = "export/instant-ungated-system-continuous-mic-late/output/mp4/native"
-class = "sync"
+class = "sync-mic"
 platforms = ["windows"]
 flaky = true
-reason = "NEW: the recorder deletes real audio samples when audio delivery latency falls. AudioGapTracker::detect_overlap (crates/recording/src/output_pipeline/core.rs, called from process_audio_frame) compares a frame's capture time against a wall-clock delta, so a delivery catch-up reads as overlap and the frame is trimmed; every later sample plays early. The saved Windows outputs lost exactly 279, 250 and 842 samples (5.8, 5.2 and 17.5 ms; mic and system shifted together, one step), reproduced deterministically by feeding those delivery schedules to the real function (sol-windows-audio-offset.md). Seen 3 times on windows-2022 (38764978019, 38780016448, 38804993000), about 1 in 35 recordings, and 0 of 102 in probes 38782202975 and 38785649744; never on macOS (30 recordings, -0.3 to +2.9 ms) or Linux (16, 0.0 ms), whose delivery in this harness does not catch up the same way. Fixed by #2635"
+bound = { count = 1, offset-ms = [-25, -5] }
+reason = "NEW: the recorder deletes real audio samples when audio delivery latency falls. AudioGapTracker::detect_overlap (crates/recording/src/output_pipeline/core.rs, called from process_audio_frame) compares a frame's capture time against a wall-clock delta, so a delivery catch-up reads as overlap and the frame is trimmed; every later sample plays early. The saved Windows outputs lost exactly 279, 250 and 842 samples (5.8, 5.2 and 17.5 ms; mic and system shifted together, one step), reproduced deterministically by feeding those delivery schedules to the real function (sol-windows-audio-offset.md). Seen 3 times on windows-2022 (38764978019, 38780016448, 38804993000), about 1 in 35 recordings, and 0 of 102 in probes 38782202975 and 38785649744. Bound: audio early by one trim, 5 to 25 ms"
+link = "https://github.com/CapSoftware/Cap/pull/2635"
+
+[[xfail]]
+case = "export/instant-ungated-system-continuous-mic-late/output/mp4/native"
+class = "sync-system"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, offset-ms = [-25, -5] }
+reason = "NEW: same sample deletion as the sync-mic entry: mic and system audio are mixed before the trim, so both shift together by the trimmed samples (5 to 18 ms measured)"
 link = "https://github.com/CapSoftware/Cap/pull/2635"
 
 [[xfail]]
 case = "export/instant-ungated-mic-late/output/mp4/native"
-class = "sync"
+class = "sync-mic"
 platforms = ["macos", "windows"]
-reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4"
+bound = { count = 1, offset-ms = [-210, -190] }
+reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4 (-198.7 to -201.1 ms measured). Bound: early by the mic's start delay"
 link = ""
 
 [[xfail]]
 case = "export/instant-ungated-system-loopback/output/mp4/native"
-class = "sync"
+class = "sync-system"
 platforms = ["macos", "windows"]
-reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-*/output/mp4/native"
-class = "sync"
-reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (13 ms with the gate opening between frames; 30-33 ms when it opens on a frame)"
+bound = { count = 1, offset-ms = [-270, -250] }
+reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here; -253.7 to -260.2 ms measured)"
 link = ""
 
 [[xfail]]
 case = "export/instant-gated-system-only/output/mp4/native"
-class = "audio"
-flaky = true
-reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early)"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "audio"
+class = "sync-system"
 platforms = ["macos", "windows"]
-reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings; same on windows-2022). On macOS the mic markers are damaged too: in 8 of 15 fresh recordings (probe run 38735811849) the last 20-35 ms of every mic marker is replaced by the tail of a system-audio marker, so no mic payload decodes (the chirps are intact and are identified by their timing pattern, which keeps sync measured), and once a decoded mic marker sat 68 ms early. Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers (3 of 3 CI runs), which points at the FirstFrame anchor path"
+bound = { count = 1, offset-ms = [-240, -215] }
+reason = "NEW: same first-sample anchor behind the start gate, loopback-only system audio: the first sound after the gate becomes audio zero, so the system audio is early by the time from the gate to the first sound (-226.7 ms in every run on macOS and Windows; Linux, which anchors Instant audio at the recording epoch, is only up to one frame late, see the gated sync-system entry)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-*mic*/output/mp4/native"
+class = "sync-mic"
+bound = { count = 1, offset-ms = [5, 34] }
+reason = "NEW: after the start gate opens, the screen and audio pipelines each take their own first admitted frame as zero, so audio is late by up to one video frame (33.3 ms at 30 fps; 12.6 to 17.2 ms measured with the gate opening between frames)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-system-*/output/mp4/native"
+class = "sync-system"
+bound = { count = 1, offset-ms = [5, 34] }
+reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (13.3 to 15.1 ms measured; on macOS and Windows the loopback-only variant is the first-sample anchor entry instead)"
+link = ""
+
+[[xfail]]
+case = "export/instant-gated-system-only/output/mp4/native"
+class = "audio-system"
+flaky = true
+bound = { count = 1, missing = 2, lost = 2 }
+reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early). Bound: at most 2 markers lost, none unexpected"
 link = ""
 
 [[xfail]]
 case = "export/instant/output/mp4/native"
-class = "sync"
-reason = "NEW: see instant-gated-*: audio up to one frame late after the start gate"
+class = "audio-system"
+platforms = ["macos", "windows"]
+bound = { count = 1, missing = 11, lost = 11 }
+reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11 in every run, macOS and Windows). Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers, which points at the FirstFrame anchor path. The mic is its own class (audio-mic) and must stay intact"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "audio-mic"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, missing = 11 }
+reason = "NEW: in the same mixed track the mic markers are damaged but present: in 8 of 15 fresh macOS recordings (probe run 38735811849) the last 20 to 35 ms of every mic marker is replaced by the tail of a system-audio marker, so no mic payload decodes. Every damaged chirp is still identified by the schedule's timing pattern, which keeps sync measured. Bound: payloads only (lost, markers neither decoded nor identified by timing, must be 0: a silenced mic fails)"
+link = ""
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync-mic"
+bound = { count = 1, offset-ms = [5, 34] }
+reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
 link = ""
 
 [[xfail]]
@@ -229,106 +358,123 @@ case = "*/basic/transition/*60*/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run (every full run, 2 of 2 on Apple silicon) but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Both cases pass with #2595's decoder changes (cache_eviction_victim keeps every reader's previous vend), measured on Apple silicon"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { screen-frames = 1, delta = 1, frame = [149, 149] }
+reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Bound: that one screen frame, one source frame stale"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "stale"
 platforms = ["linux", "windows"]
-reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so 12 blend frames take a side up to 49 source frames stale (frame 61: 80 for 129). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux (app and plain MP4) and Windows (app MP4) in run 38743345280, and identical for the 30 s full-tier fixture (same cuts) on every full run"
+bound = { screen-frames = 16, delta = 49, frame = [61, 94] }
+reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 12 frames with the dominant side checked, output frames 61 to 94). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
 link = ""
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/avf"
 class = "future"
 platforms = ["macos"]
-reason = "Pool position capping: after a read, the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame still looks usable for it (crates/rendering/src/decoder/multi_position.rs, find_best_decoder_for_time_with_reuse_threshold: position <= request), is reused without a reset, and answers with the next sample it decodes. Here output frame 1 (0.017 s) shows source 1 for source 0. Minimal: seek 0, seek 8.8 s, seek 0.017 s (CAP_VERIFY_SEEK_SCRIPT='seek-native@60:0,8.8,0.016667' cargo test -p cap-verify --test seek script -- --nocapture). Deterministic: every macos-15 run (38732325087 through 38763178760) and 4 of 4 on Apple silicon; gone with #2595's decoder changes (reader_passed_request resets such a reader), measured on Apple silicon"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
+bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [1, 1] }
+reason = "Pool position capping: after a read, the reader's pool position is capped to the newest request (crates/rendering/src/decoder/avassetreader.rs, update_decoder_position(decoder_idx, capped)), so a reader that already decoded past a frame still looks usable for it (find_best_decoder_for_time_with_reuse_threshold: position <= request), is reused without a reset, and answers with the next sample it decodes. Here output frame 1 (0.017 s) shows source 1 for source 0. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-native@60:0,8.8,0.016667' cargo test -p cap-verify --test seek script -- --nocapture. Deterministic on every macOS runner"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/seek-native/keyframes60/ffmpeg"
 class = "stale"
 platforms = ["linux", "windows"]
-reason = "NEW: FFmpeg decoder. Off macOS this fixture is libx264 (the AVFoundation encoder is unavailable), so its keyframe set and shuffled request order differ from macOS. Requests 366 (6.1 s), 1, 124 (all 60 fps seeks): 124 shows source frame 0 for 61, the first-frame shortcut bug of seek/seek-gop/home-then-play30/ffmpeg. Request 490 shows 243 for 244: the 2-frame backward lookback tolerance. seek-gop/keyframes60/ffmpeg passes on both. Identical on Linux and Windows, 3 of 3 runs each"
+bound = { screen-frames = 2, camera-frames = 2, delta = 61, frame = [124, 490] }
+reason = "NEW: FFmpeg decoder. Off macOS this fixture is libx264 (the AVFoundation encoder is unavailable), so its keyframe set and shuffled request order differ from macOS. Request 124 shows source frame 0 for 61, the first-frame shortcut bug of seek/seek-gop/home-then-play30/ffmpeg; request 490 shows 243 for 244: the 2-frame backward lookback tolerance. Identical on Linux and Windows"
 link = ""
 
 [[xfail]]
 case = "editing/mapping/duration-covered"
 class = "coverage"
-reason = "NEW: a fullscreen text segment (a hold) left past the end of the clips (place a text card near the end, then trim or delete clips; clip edits do not ripple text segments) still adds its length to TimelineConfiguration::duration(), but get_frame_mapping returns None from the content end on, so the hold and the time before it have no source frame. Minimal repro: Hold at 0.92 of a 7 s clip, then trim the clip end"
+bound = { count = [1, 4], failed-per-mille = [95, 98] }
+reason = "NEW: a fullscreen text segment (a hold) left past the end of the clips (place a text card near the end, then trim or delete clips; clip edits do not ripple text segments) still adds its length to TimelineConfiguration::duration(), but get_frame_mapping returns None from the content end on, so the hold and the time before it have no source frame. Deterministic seeds: 97 of 1000 fast-tier and 1925 of 20000 full-tier sequences fail, the ones that leave a hold past the end (failed-per-mille 97.0 and 96.3). Minimal repro: Hold at 0.92 of a 7 s clip, then trim the clip end"
 link = ""
 
 [[xfail]]
 case = "editing/export/hold-past-end"
 class = "frame-count"
+bound = { count = 1, missing = 30 }
 reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fullscreen text at 5.4 s and the clip trimmed to 3.2 s give a 4.2 s timeline, but the export stops at the first unmapped frame: 96 frames instead of 126, and the text card is never rendered"
 link = ""
 
 [[xfail]]
 case = "captions/app/segmentation/unicode"
 class = "caption-segments"
-reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
+bound = { count = [1, 3] }
+reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). The case reports the first three failing token streams; an unexpected error from the product would add a problem beyond them. Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
 link = ""
 
 [[xfail]]
 case = "captions/legacy-migration/ends-at-timeline-end"
 class = "caption-migration"
+bound = { count = 1 }
 reason = "NEW (minor): loading a legacy (output-timed) project drops a caption that ends exactly at the timeline end: synchronize_captions maps each end through source_start + (end - start) / timescale, which rounds just below the timeline end after a clip transition (clips 41/15 s and 82/15 s, 0.2 s transition: 7.9999999 < 8.0), so the end does not map and the whole caption is discarded"
 link = ""
 
 [[xfail]]
 case = "editing/export/multi-segment/seed-7"
 class = "stale"
-reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the 10 frames after the transition show source frame 0 instead of 20-29 (deterministic). Same mechanism as the seek/*/storm*/ffmpeg xfail: backward seeks near the start answer frame 0"
+bound = { screen-frames = 26, camera-frames = 14, delta = 29, frame = [135, 157] }
+reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the frames after the transition show source frame 0 instead of 20-29 (deterministic: 22 screen and 10 camera frames, output frames 135 to 157, with the dominant side of each blend checked). Same mechanism as the seek/*/storm*/ffmpeg entries: backward seeks near the start answer frame 0"
+link = ""
+
+[[xfail]]
+case = "editing/export/multi-segment/seed-7"
+class = "unreadable"
+bound = { screen-frames = 1, frame = [141, 141] }
+reason = "FFmpeg decoder (full tier): one blend frame of the transition back into clip 0 mixes two stale frames and its marker is unreadable (same bug as the stale entry above)"
 link = ""
 
 [[xfail]]
 case = "editing/export/basic/seed-10"
 class = "stale"
-reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic: 2 of 2 full runs (38763178760, 38763192776) and reproduced with the FFmpeg decoder on macOS"
+bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [107, 109] }
+reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic"
 link = ""
 
 [[xfail]]
 case = "editing/export/same-clip-transition/forward/ffmpeg"
 class = "stale"
-reason = "NEW: FFmpeg decoder, cross-fade between two parts of the same recording clip (0-2 s, then 3-5.5 s, 0.8 s transition): the export reads one decoder at two positions interleaved and every third blend frame takes the far side from the near position (frame 37: incoming should be source 90, shows 35; up to 55 source frames stale). Deterministic; AVAssetReader passes this case (its 60 fps variant is the */basic/transition/*60*/avf xfail)"
+bound = { screen-frames = 8, camera-frames = 8, delta = 55, frame = [37, 58] }
+reason = "NEW: FFmpeg decoder, cross-fade between two parts of the same recording clip (0-2 s, then 3-5.5 s, 0.8 s transition): the export reads one decoder at two positions interleaved and every third blend frame takes the far side from the near position (frame 37: incoming should be source 90, shows 35; up to 55 source frames stale). 6 frames where the wrong side dominates; the two-sided blend check finds 2 more where it is the weaker side (weights 0.08 and 0.21, measured on Apple silicon). Deterministic; AVAssetReader passes this case (its 60 fps variant is the */basic/transition/*60*/avf xfail)"
 link = ""
 
 [[xfail]]
 case = "editing/export/basic/seed-5"
 class = "stale"
+bound = { screen-frames = 2, camera-frames = 2, delta = 2, frame = [52, 54] }
 reason = "FFmpeg decoder, same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frame 53 one source frame stale"
 link = ""
 
 [[xfail]]
 case = "editing/export/basic/seed-23"
 class = "stale"
-reason = "FFmpeg decoder (full tier), same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frames up to 70 source frames stale"
-link = ""
-
-[[xfail]]
-case = "editing/export/multi-segment/seed-7"
-class = "unreadable"
-reason = "FFmpeg decoder (full tier): one blend frame of the transition back into clip 0 mixes two stale frames and its marker is unreadable (same bug as the stale entry above)"
+bound = { screen-frames = 6, camera-frames = 6, delta = 70, frame = [7, 12] }
+reason = "FFmpeg decoder (full tier), same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frames 7 to 11 up to 70 source frames stale"
 link = ""
 
 [[xfail]]
 case = "seek/seek-gop/home-then-play30/ffmpeg"
 class = "stale"
+bound = { screen-frames = 31, camera-frames = 31, delta = 89, frame = [60, 90] }
 reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the start. Seek 6.1 s, seek 0, seek 2.0 s and play: 31 of 122 frames show source frame 0 (up to 89 frames stale, about 1 s frozen). A request at grid 0..2 is answered by the first-frame shortcut (ffmpeg.rs, requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE) without resetting the reader, which stays near 6 s, and last_sent_frame becomes frame 0; the next request is then not 'far forward' of frame 0 (< FRAME_CACHE_SIZE), so no reset happens, the reader vends frames past the request and the answer falls back to last_sent_frame (frame 0) until playback outruns FRAME_CACHE_SIZE. Main decoder on Linux and on Windows without a D3D11 video device; macOS AVAssetReader passes. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-gop@60:6.1,0.0167,2.0667' (third request shows frame 0 for 61)"
 link = ""
 
 [[xfail]]
 case = "export/basic/colour-red/mp430/*"
 class = "colour-level"
-reason = "NEW: export converts rendered RGBA to NV12 with BT.601 coefficients (GPU: crates/rendering/src/shaders/rgba_to_nv12.wgsl; software adapters: convert_rgba_to_nv12 in crates/rendering/src/lib.rs) but the encoder tags the stream BT.709 (crates/enc-ffmpeg/src/video/h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes about 13 luma code values too bright. Screen video whose decode matrix matches passes through unchanged"
+bound = { count = 1, luma = [10, 16] }
+reason = "NEW: export converts rendered RGBA to NV12 with BT.601 coefficients (GPU: crates/rendering/src/shaders/rgba_to_nv12.wgsl; software adapters: convert_rgba_to_nv12 in crates/rendering/src/lib.rs) but the encoder tags the stream BT.709 (crates/enc-ffmpeg/src/video/h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes 12.8 luma code values too bright on every platform. Screen video whose decode matrix matches passes through unchanged"
 link = ""
 
 [[xfail]]
 case = "export/basic/colour-red/mp430/*"
 class = "colour-matrix"
-reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb about 9 code values low"
+bound = { count = 1, cb = [-11, -7], cr = [-2, 2] }
+reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb 8.9 code values low (Cr -0.1)"
 link = ""
 
 [[xfail]]
@@ -336,38 +482,46 @@ case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
 class = "stale"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon; passed on the macos-15 runner in run 38743345280, where the loop presents fewer frames, so it is timing dependent there"
-link = ""
+bound = { screen-frames = 2, camera-frames = 2, delta = 1, frame = [126, 127] }
+reason = "NEW: the real-time playback loop (cap_editor::Playback prefetch, AVAssetReader) shows source frame 58 instead of 59 for the last two output frames of the 0.5x segment that follows the 2x segment (4.200 s and 4.233 s, screen and camera); offline frame stepping and export of the same timeline show 59. 3 of 3 runs on Apple silicon, 2 of 4 full runs on runners, where the loop presents fewer frames, so it is timing dependent there"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 # Real capture (crates/verify/tests/recording.rs, verify-recording workflow).
+# Sync classes are per pair (sync-screen-mic is screen minus mic, negative =
+# the screen plays early).
 
 [[xfail]]
 case = "recording/instant/screen-mic-system"
-class = "sync"
+class = "sync-screen-mic"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: the Instant screen track starts at its first encoded frame (the VideoToolbox encoder starts after the audio pipeline), so the screen plays early against mic and system audio: runners 34 to 92 ms (10 of 10 runs), developer Mac 340 to 570 ms (8 of 8). The offset is the encoder start delay, which varies: in Verify recording 38818894595 (macos-26, one repeat) screen-mic was -8.5 ms, inside the allowed -10..+75 ms, so the check passed; flaky until the screen track is anchored to the recording start"
+bound = { count = 1, offset-ms = [-200, -10] }
+reason = "NEW: the Instant screen track starts at its first encoded frame (the VideoToolbox encoder starts after the audio pipeline), so the screen plays early against mic and system audio by the encoder start delay: runners -131 to -24 ms (median -53 to -74 over 20 recordings, fix-video-timestamps probes), developer Mac 340 to 570 ms. The delay varies: in Verify recording 38818894595 (macos-26) screen-mic was -8.5 ms, inside the allowed -10..+75 ms, so the check passed; flaky until the screen track is anchored to the recording start. Bound: screen early by at most 200 ms on runners"
 link = ""
 
 [[xfail]]
 case = "recording/instant/long-holds"
-class = "sync"
+class = "sync-screen-mic"
 platforms = ["macos"]
-reason = "NEW: same as recording/instant/screen-mic-system on a 30 s recording with screen holds (developer Mac: screen 375 ms early)"
+flaky = true
+bound = { count = 1, offset-ms = [-200, -10] }
+reason = "NEW: same encoder start delay as recording/instant/screen-mic-system on a 30 s recording with screen holds: -61 to -68 ms on runners (developer Mac: screen 375 ms early); flaky for the same reason"
 link = ""
 
 [[xfail]]
 case = "recording/instant/late-mic"
-class = "sync"
+class = "sync-screen-mic"
 platforms = ["macos"]
-reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's: runners 974 to 1040 ms (10 of 10), developer Mac 677 to 728 ms (5 of 5)"
+bound = { count = 1, offset-ms = [900, 1100] }
+reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
 link = ""
 
 [[xfail]]
 case = "recording/instant/system-only"
-class = "sync"
+class = "sync-screen-system"
 platforms = ["macos"]
-reason = "NEW: Instant with system audio and no microphone: the first ScreenCaptureKit audio buffer becomes audio zero, so system audio plays 140 to 184 ms early (developer Mac, 8 of 8). Skipped on hosted runners, whose output devices give ScreenCaptureKit only silence"
+bound = { count = 1, offset-ms = [100, 250] }
+reason = "NEW: Instant with system audio and no microphone: the first ScreenCaptureKit audio buffer becomes audio zero, so system audio plays 140 to 184 ms early (developer Mac, 8 of 8). Runs only where system audio is played and required (CAP_VERIFY_REQUIRE_SYSTEM_AUDIO); elsewhere it reports unsupported"
 link = ""
 
 [[xfail]]
@@ -375,15 +529,17 @@ case = "recording/instant/system-only"
 class = "unreadable"
 platforms = ["macos"]
 flaky = true
+bound = { count = 1, system-markers = 1 }
 reason = "NEW: Instant system-only: one system-audio marker inside the track does not decode (a discontinuity inside the marker) in 4 of 5 developer-Mac runs"
 link = ""
 
 [[xfail]]
 case = "recording/instant/gated"
-class = "sync"
+class = "sync-screen-mic"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run: runners -22 to +16 ms (6 of 20 runs below the -10 ms floor), developer Mac +2 to +385 ms (3 of 13 above +75 ms); logs show 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms"
+bound = { count = 1, offset-ms = [-150, 150] }
+reason = "NEW: the app's Instant start (start gate armed by the start cue): the screen-to-audio offset varies run to run: runners -55 to +16 ms (6 of 20 runs below the -10 ms floor), developer Mac +2 to +385 ms (3 of 13 above +75 ms); logs show 'Start gate admitted first audio frame at the arm point' followed by overlap trims of up to 124 ms. Bound: the trim size, 150 ms either way"
 link = ""
 
 [[xfail]]
@@ -391,7 +547,8 @@ case = "recording/instant/gated"
 class = "missing"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: gated Instant with microphone and system audio loses an audio marker near the start in 2 of 5 developer-Mac runs (and 3 of 3 in an earlier batch); not seen on runners, where system audio is silent"
+bound = { count = 1, mic-markers = 1, mic-after-start-s = [0, 1] }
+reason = "NEW: gated Instant with microphone and system audio loses an audio marker near the start in 2 of 5 developer-Mac runs (and 3 of 3 in an earlier batch); not seen on runners. Bound: one mic marker within the first second after the gate"
 link = ""
 
 [[xfail]]
@@ -399,7 +556,8 @@ case = "recording/instant/gated"
 class = "unreadable"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: see the gated Instant missing-marker entry: the damaged marker straddles the admission point"
+bound = { count = 1, mic-markers = 1 }
+reason = "NEW: see the gated Instant missing-marker entry: the damaged marker straddles the admission point (one marker)"
 link = ""
 
 [[xfail]]
@@ -407,15 +565,51 @@ case = "recording/instant/gated"
 class = "timestamps"
 platforms = ["macos"]
 flaky = true
-reason = "NEW: gated Instant microphone timeline not continuous after the gate opens: marker offsets vary by 5 to 852 ms within one recording (4 of 8 developer-Mac runs)"
+bound = { count = 1, mic-spread-ms = [4, 130] }
+reason = "NEW: gated Instant microphone timeline not continuous after the gate opens: marker offsets vary by 5 to 124 ms within one recording on runners (overlap trims after admission; 852 ms once on a developer Mac). Bound: the trim size"
 link = ""
 
 [[xfail]]
 case = "recording/studio-recovery/*"
-class = "sync"
+class = "start-time"
 platforms = ["macos"]
-reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0 and the screen plays early by its start-up delay: runners 59 to 104 ms (all runs), developer Mac 317 to 555 ms (all runs)"
+bound = { count = 1 }
+reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0"
 link = ""
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "sync-screen-mic"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-150, -10] }
+reason = "NEW: consequence of the start-time entry: aligned at 0, the screen plays early by its start-up delay: runners -55 to -104 ms; -33.4 ms once (inside the window, so the check passed). Bound: screen early by at most 150 ms"
+link = ""
+
+# Crash recovery on the software (libx264) encoder path. Blacksmith macOS VMs
+# have no VideoToolbox hardware H.264 encoder (VTCompressionSessionCreate with
+# RequireHardwareAcceleratedVideoEncoder returns -12903, probe run
+# 38847791287), so h264_videotoolbox fails to open and every recording falls
+# back to libx264 (`get_codec_and_options`, crates/enc-ffmpeg/src/video/h264.rs),
+# which real Macs also use when the hardware encoder is busy or for targets
+# above its estimated capacity (for example 4K at 60 fps). Its GOP is a frame
+# count: g = 2 s x nominal fps (keyint 120, keyint_min 61 at 60 fps), scenecut=0,
+# and ScreenCaptureKit delivers a variable rate (about 33 fps for this
+# stimulus), so the DASH muxer, which cuts only at keyframes, writes 3.68 s
+# segments instead of 2 s, and the segment in progress is a 0-byte .tmp at the
+# crash (run 38845236912: segment_001 120 frames 3.68 s, segment_002.m4s.tmp
+# empty). Recovery keeps only the complete segments. With the hardware encoder
+# (hosted runners, real Apple silicon Macs) segments stay near 2 s.
+
+[[xfail]]
+case = "recording/studio-recovery/*"
+class = "missing"
+platforms = ["macos"]
+flaky = true
+hosts = ["blacksmith"]
+bound = { count = 1, screen-lost-s = [3, 5.5] }
+reason = "NEW: software (libx264) encoder path: keyframes every 120 frames regardless of the variable capture rate make 3.7 s segments, and the in-progress segment is empty at a crash, so recovery loses 4.5 to 4.8 s against the 3 s budget in 9 of 10 Blacksmith runs (flaky: the loss depends on where the crash falls inside the segment). Bound: at most one 3.7 s segment plus the 1 s since the last presented picture"
+link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
 
 # First picture after a static screen. During a scripted hold ScreenCaptureKit
 # delivers only Idle status buffers; its first Complete frame after the hold
@@ -428,20 +622,25 @@ link = ""
 # capture callback and Cap drops nothing. The stimulus presents through the
 # standard Core Animation path, so a user's first change after a static screen
 # is affected the same way: it is recorded ~50 to 80 ms late and anything
-# shown for less than that is lost.
+# shown for less than that is lost. Whether a given post-hold picture is lost
+# depends on whether the 70 to 82 ms resume outlasts that picture, so the
+# entries are bounded by the number of holds.
 
 [[xfail]]
 case = "recording/studio-screen/mp4-holds"
 class = "missing-after-hold"
 platforms = ["macos"]
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs"
+bound = { count = 3, screen-pictures = 3 }
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs. Bound: one picture per hold"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 
 [[xfail]]
 case = "recording/instant/long-holds"
 class = "missing-after-hold"
 platforms = ["macos"]
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6, at least one per run 6 of 6"
+flaky = true
+bound = { count = 2, screen-pictures = 2 }
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6. Flaky: when ScreenCaptureKit happens to resume within the picture's 67 ms both pictures are caught (fix-video-timestamps track). Bound: one picture per hold (2 holds)"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 
 [[xfail]]
@@ -449,35 +648,6 @@ case = "recording/studio-camera/long"
 class = "missing-after-hold"
 platforms = ["macos"]
 flaky = true
-reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture)"
+bound = { count = 1, screen-pictures = 1 }
+reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
-
-# Camera timestamps past the drift anchor. The synthetic camera hands every
-# frame over with its exact capture time; until two seconds into the track
-# the recorder writes exactly that time, after it the recorder writes the
-# processing wall clock instead (VideoDriftTracker::calculate_timestamp in
-# crates/recording/src/output_pipeline/core.rs: pts = anchor + wall-clock
-# delta). Frame-level logs (run 38753929239): before the anchor written pts
-# minus source time is 0.00 ms for every frame; past it, -1.1 to +4.9 ms and
-# +71 ms for the first frame after a source gap (the frame's source time was
-# snapped onto the skipped slot, the wall clock ignores it), equal to each
-# frame's processing delay (2.5 to 8.5 ms). Every camera recording shows it:
-# offset spread 5.0 to 450 ms across 56 runs (exact stamping stays within
-# 1.7 ms of file rounding). User impact: camera frames jitter by the
-# recorder's processing delay, which under load reached +293 ms at the end
-# of a recording and froze a 57 ms lag into the track for seconds.
-
-[[xfail]]
-case = "recording/studio-camera/startup-drops"
-class = "camera-clock"
-platforms = ["macos"]
-reason = "NEW: camera frames past the 2 s drift anchor are stamped from the processing wall clock instead of their capture time (see above); offsets vary by 5 to 97 ms, 28 of 28 runs"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38753929239"
-
-[[xfail]]
-case = "recording/studio-camera/long"
-class = "camera-clock"
-platforms = ["macos"]
-reason = "NEW: camera frames past the 2 s drift anchor are stamped from the processing wall clock instead of their capture time (see above); offsets vary by 6.7 to 450 ms, 28 of 28 runs"
-link = "https://github.com/CapSoftware/Cap/actions/runs/38753929239"
-

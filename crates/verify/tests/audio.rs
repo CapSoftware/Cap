@@ -370,7 +370,7 @@ fn studio_sound_music_is_additive() {
         .expect("segments");
     let segments = rt.block_on(cap_editor::get_audio_segments(&media));
     let music = cap_editor::load_music_tracks_uncached(&config, &project.path);
-    let source = cap_audio::AudioData::from_file(&project.path.join(audio_fixture::MUSIC_FILE))
+    let source = cap_audio::AudioData::from_file(project.path.join(audio_fixture::MUSIC_FILE))
         .expect("music source");
     assert_eq!(source.channels(), 2);
     let frames =

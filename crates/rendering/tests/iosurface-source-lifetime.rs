@@ -274,6 +274,9 @@ fn settle(wrong: &[String]) {
         } else {
             [(CLASS.to_string(), summary.clone())].into()
         },
+        measures: Default::default(),
+        excused: Default::default(),
+        starved: false,
         summary: summary.clone(),
         repro: repro.clone(),
         seconds: 0.0,

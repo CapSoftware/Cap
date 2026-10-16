@@ -87,6 +87,11 @@ pub struct Case {
     /// Set when this runner cannot run the case at all (for example no
     /// D3D11 video device for Media Foundation on a GPU-less Windows VM).
     pub unsupported: Option<String>,
+    /// Measured size of each failing class: class -> metric -> range. An
+    /// expected failure excuses a class only inside its entry's bound.
+    measures: BTreeMap<String, cap_verify_expect::Metrics>,
+    /// Additive metrics (counts): (class, metric) -> total.
+    counts: BTreeMap<(String, String), f64>,
 }
 
 impl Case {
@@ -105,15 +110,55 @@ impl Case {
             notes: Vec::new(),
             unobserved: Default::default(),
             unsupported: None,
+            measures: Default::default(),
+            counts: Default::default(),
         }
     }
 
+    /// Records one measurement of a failing class (an offset, a spread, a
+    /// count of affected items); the record keeps its range per metric.
+    pub fn measure(&mut self, class: &str, metric: &str, value: f64) {
+        self.measures
+            .entry(class.to_string())
+            .or_default()
+            .entry(metric.to_string())
+            .and_modify(|r| r.include(value))
+            .or_insert(cap_verify_expect::Range::at(value));
+    }
+
+    /// Adds to a counted metric of a class (totals across checks).
+    pub fn count(&mut self, class: &str, metric: &str, n: f64) {
+        *self
+            .counts
+            .entry((class.to_string(), metric.to_string()))
+            .or_insert(0.0) += n;
+    }
+
+    /// [`Case::problem`] with one measurement of its size.
+    pub fn problem_measured(
+        &mut self,
+        class: &str,
+        metric: &str,
+        value: f64,
+        text: impl Into<String>,
+    ) {
+        self.measure(class, metric, value);
+        self.problem(class, text);
+    }
+
     /// Marks the case as impossible on this machine. With
-    /// `CAP_VERIFY_REQUIRE_SUPPORTED=1` (runners that must have every path)
-    /// it is a failure of class `unsupported` instead.
+    /// `CAP_VERIFY_REQUIRE_SUPPORTED=1` (CI) it is a failure of class
+    /// `unsupported` unless the case matches one of the comma-separated globs
+    /// in `CAP_VERIFY_UNSUPPORTED_ALLOW` (the per-platform allowlist in
+    /// scripts/verify/suites.json, each with its reason).
     pub fn unsupported(&mut self, reason: impl Into<String>) {
         let reason = reason.into();
-        if std::env::var("CAP_VERIFY_REQUIRE_SUPPORTED").as_deref() == Ok("1") {
+        let allowed = std::env::var("CAP_VERIFY_UNSUPPORTED_ALLOW")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .any(|glob| !glob.is_empty() && glob_match(glob, &self.id));
+        if std::env::var("CAP_VERIFY_REQUIRE_SUPPORTED").as_deref() == Ok("1") && !allowed {
             self.problem(
                 "unsupported",
                 format!("unsupported on this machine: {reason}"),
@@ -127,6 +172,7 @@ impl Case {
     /// `nondeterministic`, ...).
     pub fn problem(&mut self, class: &str, text: impl Into<String>) {
         let text = text.into();
+        self.count(class, "count", 1.0);
         self.classes.insert(class.to_string());
         self.class_problems
             .entry(class.to_string())
@@ -151,17 +197,33 @@ impl Case {
 
     pub fn stream(&mut self, report: StreamReport) {
         if !report.passed() {
+            use crate::oracle::MismatchKind;
+            let stream = report.stream.map_or("stream", |s| s.name());
             let mut classes = Vec::new();
-            for (class, n) in [
-                ("stale", report.stale),
-                ("future", report.ahead),
-                ("wrong-segment", report.wrong_segment),
-                ("unreadable", report.unreadable),
-                ("missing", report.missing),
-                ("unexpected", report.unexpected),
-                ("blend", report.blend_weight),
+            for (class, n, kind) in [
+                ("stale", report.stale, MismatchKind::Stale),
+                ("future", report.ahead, MismatchKind::Ahead),
+                (
+                    "wrong-segment",
+                    report.wrong_segment,
+                    MismatchKind::WrongSegment,
+                ),
+                ("unreadable", report.unreadable, MismatchKind::Unreadable),
+                ("missing", report.missing, MismatchKind::Missing),
+                ("unexpected", report.unexpected, MismatchKind::Unexpected),
+                ("blend", report.blend_weight, MismatchKind::BlendWeight),
             ] {
                 if n > 0 {
+                    // Signature metrics: frames affected (in total and per
+                    // stream), the output frames they fall on, and the
+                    // largest source-frame error.
+                    self.count(class, &format!("{stream}-frames"), f64::from(n));
+                    for m in report.mismatches.iter().filter(|m| m.kind == kind) {
+                        self.measure(class, "frame", f64::from(m.output_frame));
+                        if let Some(delta) = m.delta {
+                            self.measure(class, "delta", delta.unsigned_abs() as f64);
+                        }
+                    }
                     self.classes.insert(class.to_string());
                     self.class_problems
                         .entry(class.to_string())
@@ -224,6 +286,8 @@ fn write_result(
     classes: &BTreeMap<String, String>,
     unobserved: &BTreeMap<String, String>,
     machine: &crate::sentinel::Window,
+    measures: &BTreeMap<String, cap_verify_expect::Metrics>,
+    excused: &BTreeMap<String, String>,
 ) {
     use cap_verify_expect::{Outcome, Record};
     let record = Record {
@@ -250,6 +314,9 @@ fn write_result(
         seeds_ran: None,
         unobserved: unobserved.clone(),
         problems: classes.clone(),
+        measures: measures.clone(),
+        excused: excused.clone(),
+        starved: machine.starved(),
         summary: result.summary.clone(),
         repro: result.repro.clone(),
         seconds: result.seconds,
@@ -285,6 +352,36 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
     let failed = case.failed();
     let repro = repro_command(&case.id);
     let platform = platform();
+    // Per-stream frame counts are zero for every stream the case checked
+    // but that a frame class did not hit, so a bound can pin them.
+    let stream_names: BTreeSet<&'static str> = case
+        .streams
+        .iter()
+        .filter_map(|s| s.stream.map(|k| k.name()))
+        .collect();
+    let frame_classes: BTreeSet<String> = case
+        .counts
+        .keys()
+        .filter(|(_, metric)| {
+            stream_names
+                .iter()
+                .any(|name| *metric == format!("{name}-frames"))
+        })
+        .map(|(class, _)| class.clone())
+        .collect();
+    for class in frame_classes {
+        for name in &stream_names {
+            case.count(&class, &format!("{name}-frames"), 0.0);
+        }
+    }
+    for ((class, metric), total) in std::mem::take(&mut case.counts) {
+        case.measures
+            .entry(class)
+            .or_default()
+            .insert(metric, cap_verify_expect::Range::at(total));
+    }
+    case.measures
+        .retain(|class, _| case.classes.contains(class));
     let ran = cap_verify_expect::Ran::from([(case.id.clone(), None)]);
     let observed: cap_verify_expect::Observed = case
         .classes
@@ -296,14 +393,45 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
         .keys()
         .map(|class| (case.id.clone(), class.clone()))
         .collect();
-    let verdict =
-        cap_verify_expect::judge_observing(&xfails, platform, &ran, &observed, &unobserved);
-    let mut unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
-    let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
     // Machine starvation excuses only wall-clock classes, and only until the
-    // retry: content, frame identity, timestamps and sync never.
+    // retry: content, frame identity, timestamps and sync never (except
+    // through a `starved` expectation with its own bound).
     let machine = crate::sentinel::window(case.machine);
     case.notes.push(machine.describe());
+    let evidence = cap_verify_expect::Evidence {
+        unobserved,
+        measures: case
+            .measures
+            .iter()
+            .map(|(class, metrics)| ((case.id.clone(), class.clone()), metrics.clone()))
+            .collect(),
+        starved: if machine.starved() {
+            BTreeSet::from([case.id.clone()])
+        } else {
+            BTreeSet::new()
+        },
+    };
+    let verdict = cap_verify_expect::judge_with(&xfails, platform, &ran, &observed, &evidence);
+    for u in verdict.unexpected.iter().filter(|u| !u.why.is_empty()) {
+        case.notes.push(format!(
+            "{} is listed in {EXPECTATIONS} but not excused: {}",
+            u.class, u.why
+        ));
+    }
+    let excused: BTreeMap<String, String> = verdict
+        .excused
+        .iter()
+        .map(|(_, class, x)| {
+            let kind = match (x.flaky, x.starved) {
+                (_, true) => "flaky, starved",
+                (true, false) => "flaky",
+                (false, false) => "strict",
+            };
+            (class.clone(), kind.to_string())
+        })
+        .collect();
+    let mut unexpected: Vec<&String> = verdict.unexpected.iter().map(|u| &u.class).collect();
+    let fixed: Vec<&Xfail> = verdict.fixed.iter().map(|f| &f.xfail).collect();
     let wall_clock_only = !unexpected.is_empty()
         && unexpected
             .iter()
@@ -336,7 +464,14 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
     let mut summary = if let Some(reason) = case.unsupported.as_ref().filter(|_| !failed) {
         format!("not run: {reason}")
     } else if failed {
-        case.problems.join("\n  ")
+        let mut text = case.problems.join("\n  ");
+        for u in verdict.unexpected.iter().filter(|u| !u.why.is_empty()) {
+            text.push_str(&format!(
+                "\n  ({} has an expectation, but this failure is {})",
+                u.class, u.why
+            ));
+        }
+        text
     } else {
         let streams: Vec<String> = case
             .streams
@@ -350,9 +485,14 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
     }
     for x in &xfails {
         summary.push_str(&format!(
-            "\n  (expected {}{}: {} {})",
+            "\n  (expected {}{}{}: {} {})",
             x.class,
             if x.flaky { ", flaky" } else { "" },
+            if x.starved {
+                ", only under a machine stall"
+            } else {
+                ""
+            },
             x.reason,
             x.link
         ));
@@ -369,7 +509,14 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
         repro: repro.clone(),
         outcome: outcome.to_string(),
     };
-    write_result(&result, &case.class_problems, &case.unobserved, &machine);
+    write_result(
+        &result,
+        &case.class_problems,
+        &case.unobserved,
+        &machine,
+        &case.measures,
+        &excused,
+    );
     eprintln!(
         "[cap-verify] {outcome} {} in {:.1}s\n  {summary}",
         result.id, result.seconds

@@ -45,7 +45,9 @@ pub enum Delivery {
 }
 
 impl Delivery {
-    fn slots(&self, fps: u32, duration: f64) -> Vec<u32> {
+    /// The slots a device with this delivery emits over `duration` seconds:
+    /// the generator's truth for what a recording must contain.
+    pub fn slots(&self, fps: u32, duration: f64) -> Vec<u32> {
         let end = (duration * f64::from(fps)) as u32;
         match self {
             Delivery::Steady => (0..end).collect(),

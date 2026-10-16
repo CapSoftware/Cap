@@ -12,7 +12,7 @@ use std::{
 };
 
 use cap_verify_expect::{
-    Observed, Outcome, Ran, Record, Unobserved, bless_observing, header, load, parse, render,
+    Evidence, Observed, Outcome, Ran, Record, bless_with, header, load, parse, render,
 };
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) {
@@ -40,7 +40,7 @@ fn repo_root() -> PathBuf {
 struct Run {
     ran: Ran,
     observed: Observed,
-    unobserved: Unobserved,
+    evidence: Evidence,
     problems: BTreeMap<(String, String), String>,
 }
 
@@ -77,7 +77,28 @@ fn bless_command(inputs: &[String]) -> ExitCode {
                 ran.get_or_insert_with(BTreeSet::new).extend(seeds);
             }
             for class in record.unobserved.keys() {
-                run.unobserved.insert((record.case.clone(), class.clone()));
+                run.evidence
+                    .unobserved
+                    .insert((record.case.clone(), class.clone()));
+            }
+            if record.starved {
+                run.evidence.starved.insert(record.case.clone());
+            }
+            for (class, metrics) in &record.measures {
+                let entry = run
+                    .evidence
+                    .measures
+                    .entry((record.case.clone(), class.clone()))
+                    .or_default();
+                for (metric, range) in metrics {
+                    entry
+                        .entry(metric.clone())
+                        .and_modify(|r| {
+                            r.include(range.min);
+                            r.include(range.max);
+                        })
+                        .or_insert(*range);
+                }
             }
             for (class, seeds) in &record.failures {
                 run.observed
@@ -99,12 +120,12 @@ fn bless_command(inputs: &[String]) -> ExitCode {
         let before = load(&path);
         let mut entries = before.clone();
         for (platform, run) in platforms {
-            entries = bless_observing(
+            entries = bless_with(
                 &entries,
                 platform,
                 &run.ran,
                 &run.observed,
-                &run.unobserved,
+                &run.evidence,
                 &run.problems,
             );
         }

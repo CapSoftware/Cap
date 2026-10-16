@@ -11,6 +11,12 @@
 //! platforms = ["macos"]                 # optional, absent = every platform
 //! seeds = "0 3-7"                       # optional, seeded suites only
 //! flaky = true                          # optional, may pass (state the rate)
+//! starved = true                        # optional, flaky only: applies only
+//!                                       # when the case's starvation sentinel
+//!                                       # saw the machine stall
+//! bound = { frames = 12, delta = 49 }   # the mechanism's signature: each
+//!                                       # metric's measured range must lie in
+//!                                       # [min, max] (a number is a max)
 //! reason = "what is wrong"
 //! link = "https://github.com/CapSoftware/Cap/pull/2595"  # empty = no fix yet
 //! ```
@@ -19,6 +25,12 @@
 //! listed fails the run, and a listed, non-flaky class (or seed) that no
 //! longer fails also fails the run ("remove this xfail"), so fixes stay
 //! locked in.
+//!
+//! An entry excuses a failure only inside its `bound`: the suite measures
+//! each failing class (frames affected, source-frame error, milliseconds of
+//! offset, ...), and a failure whose measurement falls outside the bound, or
+//! that lacks a bounded metric, is a new failure. A file that starts with
+//! `require_bound = true` rejects unseeded entries without a bound.
 //!
 //! Every suite writes one JSON line per case ([`Record`]) to
 //! `CAP_VERIFY_REPORT_DIR` when it is set. The `cap-verify-expect` binary
@@ -36,6 +48,14 @@ use serde::{Deserialize, Serialize};
 
 pub const PLATFORMS: [&str; 3] = ["linux", "macos", "windows"];
 
+/// The machine class from `CAP_VERIFY_HOST` (see [`Xfail::hosts`]).
+pub fn host() -> Option<String> {
+    std::env::var("CAP_VERIFY_HOST")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+}
+
 pub fn platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -46,8 +66,111 @@ pub fn platform() -> &'static str {
     }
 }
 
+/// A closed range of measured values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Range {
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Range {
+    pub fn at(value: f64) -> Self {
+        Self {
+            min: value,
+            max: value,
+        }
+    }
+
+    pub fn include(&mut self, value: f64) {
+        self.min = self.min.min(value);
+        self.max = self.max.max(value);
+    }
+
+    fn render(&self) -> String {
+        let number = |v: f64| {
+            if v.fract() == 0.0 && v.abs() < 1e15 {
+                format!("{}", v as i64)
+            } else {
+                format!("{v}")
+            }
+        };
+        if self.min == f64::NEG_INFINITY {
+            number(self.max)
+        } else {
+            format!("[{}, {}]", number(self.min), number(self.max))
+        }
+    }
+
+    fn describe(&self) -> String {
+        if self.min == self.max {
+            format!("{}", self.min)
+        } else {
+            format!("{}..{}", self.min, self.max)
+        }
+    }
+}
+
+impl Serialize for Range {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        [self.min, self.max].serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Range {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let [min, max] = <[f64; 2]>::deserialize(deserializer)?;
+        Ok(Self { min, max })
+    }
+}
+
+/// An entry's mechanism bound: metric -> allowed range of its measurement.
+pub type Bound = BTreeMap<String, Range>;
+
+/// Measured metrics of one failing class: metric -> observed range.
+pub type Metrics = BTreeMap<String, Range>;
+
+/// Checks a class's measurements against a bound. The bound is a complete
+/// signature: every bounded metric must have been measured with its whole
+/// observed range inside, and a measured metric the bound does not name must
+/// be exactly zero (a new symptom in the same class is a new failure).
+pub fn within(bound: &Bound, measured: Option<&Metrics>) -> Result<(), String> {
+    let mut outside = Vec::new();
+    for (metric, range) in measured.into_iter().flatten() {
+        if !bound.contains_key(metric) && (range.min != 0.0 || range.max != 0.0) {
+            outside.push(format!(
+                "{metric} {} measured but not bounded",
+                range.describe()
+            ));
+        }
+    }
+    for (metric, allowed) in bound {
+        match measured.and_then(|m| m.get(metric)) {
+            None => outside.push(format!("{metric} not measured")),
+            Some(seen) => {
+                let eps = 1e-9;
+                if seen.min < allowed.min - eps || seen.max > allowed.max + eps {
+                    outside.push(format!(
+                        "{metric} {} outside {}",
+                        seen.describe(),
+                        if allowed.min == f64::NEG_INFINITY {
+                            format!("<= {}", allowed.max)
+                        } else {
+                            format!("{}..{}", allowed.min, allowed.max)
+                        }
+                    ));
+                }
+            }
+        }
+    }
+    if outside.is_empty() {
+        Ok(())
+    } else {
+        Err(outside.join(", "))
+    }
+}
+
 /// One strict expected failure.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Xfail {
     pub case: String,
     pub class: String,
@@ -56,13 +179,25 @@ pub struct Xfail {
     /// `None` means the class must occur (on any seed, for seeded suites).
     pub seeds: Option<BTreeSet<u64>>,
     pub flaky: bool,
+    /// Applies only to cases that ran while the starvation sentinel saw the
+    /// machine stall (flaky entries only).
+    pub starved: bool,
+    /// Machine classes the entry applies to, matched against
+    /// `CAP_VERIFY_HOST` (CI sets `github-hosted` or `blacksmith`); empty
+    /// means every host. For a defect only one class of machine reaches
+    /// (for example the software encoder path of VMs without a hardware
+    /// encoder), with the reason in `reason`.
+    pub hosts: Vec<String>,
+    /// The documented mechanism's bound (empty = unbounded).
+    pub bound: Bound,
     pub reason: String,
     pub link: String,
 }
 
 impl Xfail {
     pub fn applies_on(&self, platform: &str) -> bool {
-        self.platforms.is_empty() || self.platforms.iter().any(|p| p == platform)
+        (self.platforms.is_empty() || self.platforms.iter().any(|p| p == platform))
+            && (self.hosts.is_empty() || host().is_some_and(|h| self.hosts.contains(&h)))
     }
 
     pub fn matches(&self, case: &str, platform: &str) -> bool {
@@ -202,6 +337,12 @@ struct RawXfail {
     seeds: Option<String>,
     #[serde(default)]
     flaky: bool,
+    #[serde(default)]
+    starved: bool,
+    #[serde(default)]
+    hosts: Vec<String>,
+    #[serde(default)]
+    bound: Option<toml::Table>,
     reason: String,
     #[serde(default)]
     link: String,
@@ -211,11 +352,46 @@ struct RawXfail {
 #[serde(deny_unknown_fields)]
 struct RawFile {
     #[serde(default)]
+    require_bound: bool,
+    #[serde(default)]
     xfail: Vec<RawXfail>,
+}
+
+fn parse_bound(case: &str, table: Option<toml::Table>) -> Result<Bound, String> {
+    let mut bound = Bound::new();
+    let number = |v: &toml::Value| match v {
+        toml::Value::Integer(i) => Some(*i as f64),
+        toml::Value::Float(f) => Some(*f),
+        _ => None,
+    };
+    for (metric, value) in table.unwrap_or_default() {
+        let range = match &value {
+            toml::Value::Array(pair) if pair.len() == 2 => {
+                match (number(&pair[0]), number(&pair[1])) {
+                    (Some(min), Some(max)) if min <= max => Range { min, max },
+                    _ => return Err(format!("xfail {case}: bound {metric} must be [min, max]")),
+                }
+            }
+            v => match number(v) {
+                Some(max) => Range {
+                    min: f64::NEG_INFINITY,
+                    max,
+                },
+                None => {
+                    return Err(format!(
+                        "xfail {case}: bound {metric} must be a number or [min, max]"
+                    ));
+                }
+            },
+        };
+        bound.insert(metric, range);
+    }
+    Ok(bound)
 }
 
 pub fn parse(text: &str) -> Result<Vec<Xfail>, String> {
     let file: RawFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    let require_bound = file.require_bound;
     file.xfail
         .into_iter()
         .map(|raw| {
@@ -241,12 +417,28 @@ pub fn parse(text: &str) -> Result<Vec<Xfail>, String> {
                 .map(parse_seeds)
                 .transpose()
                 .map_err(|e| format!("xfail {}: {e}", raw.case))?;
+            let bound = parse_bound(&raw.case, raw.bound)?;
+            if require_bound && bound.is_empty() && seeds.is_none() {
+                return Err(format!(
+                    "xfail {}/{}: a bound is required (the documented mechanism's signature: bound = {{ metric = max }} or [min, max])",
+                    raw.case, raw.class
+                ));
+            }
+            if raw.starved && !raw.flaky {
+                return Err(format!(
+                    "xfail {}/{}: starved entries must be flaky",
+                    raw.case, raw.class
+                ));
+            }
             Ok(Xfail {
                 case: raw.case,
                 class: raw.class,
                 platforms: raw.platforms,
                 seeds,
                 flaky: raw.flaky,
+                starved: raw.starved,
+                hosts: raw.hosts,
+                bound,
                 reason: raw.reason,
                 link: raw.link,
             })
@@ -301,6 +493,21 @@ pub fn render(entries: &[Xfail]) -> String {
         if x.flaky {
             out.push_str("flaky = true\n");
         }
+        if x.starved {
+            out.push_str("starved = true\n");
+        }
+        if !x.hosts.is_empty() {
+            let hosts: Vec<String> = x.hosts.iter().map(|h| quote(h)).collect();
+            let _ = writeln!(out, "hosts = [{}]", hosts.join(", "));
+        }
+        if !x.bound.is_empty() {
+            let parts: Vec<String> = x
+                .bound
+                .iter()
+                .map(|(metric, range)| format!("{metric} = {}", range.render()))
+                .collect();
+            let _ = writeln!(out, "bound = {{ {} }}", parts.join(", "));
+        }
         let _ = writeln!(out, "reason = {}", quote(&x.reason));
         let _ = writeln!(out, "link = {}", quote(&x.link));
         out.push('\n');
@@ -339,9 +546,12 @@ pub struct Unexpected {
     pub class: String,
     /// Seeds not covered by any xfail (empty for unseeded cases).
     pub seeds: BTreeSet<u64>,
+    /// Why matching entries did not excuse it (outside their bound, or the
+    /// machine did not starve); empty when no entry names the class.
+    pub why: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Fixed {
     pub xfail: Xfail,
     pub case: String,
@@ -362,10 +572,12 @@ impl Fixed {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Verdict {
     pub unexpected: Vec<Unexpected>,
     pub fixed: Vec<Fixed>,
+    /// Observed failures each excusing entry accepted: (case, class, entry).
+    pub excused: Vec<(String, String, Xfail)>,
 }
 
 impl Verdict {
@@ -374,15 +586,46 @@ impl Verdict {
     }
 }
 
+/// Measurements of a run's failing classes: `(case, class) -> metrics`.
+pub type Measures = BTreeMap<(String, String), Metrics>;
+
+/// What a run knows beyond pass and fail: classes it could not measure, the
+/// measured size of each failure, and the cases that ran while the machine
+/// starved (the sentinel's evidence).
+#[derive(Clone, Debug, Default)]
+pub struct Evidence {
+    pub unobserved: Unobserved,
+    pub measures: Measures,
+    pub starved: BTreeSet<String>,
+}
+
+/// Whether `x` excuses `class` on `case`: the case must have starved for a
+/// starved entry, and the measurements must lie inside the entry's bound.
+fn excuses(x: &Xfail, case: &str, class: &str, evidence: &Evidence) -> Result<(), String> {
+    if x.starved && !evidence.starved.contains(case) {
+        return Err("applies only under a proven machine stall, and the sentinel saw none".into());
+    }
+    within(
+        &x.bound,
+        evidence
+            .measures
+            .get(&(case.to_string(), class.to_string())),
+    )
+    .map_err(|e| format!("outside the expected bound ({e})"))
+}
+
 fn covered_by<'a>(
     xfails: impl Iterator<Item = &'a Xfail>,
     case: &str,
     class: &str,
     platform: &str,
     seeds: &BTreeSet<u64>,
+    evidence: &Evidence,
 ) -> BTreeSet<u64> {
     let mut covered = BTreeSet::new();
-    for x in xfails.filter(|x| x.class == class && x.matches(case, platform)) {
+    for x in xfails.filter(|x| {
+        x.class == class && x.matches(case, platform) && excuses(x, case, class, evidence).is_ok()
+    }) {
         match &x.seeds {
             None => return seeds.clone(),
             Some(listed) => covered.extend(listed.intersection(seeds).copied()),
@@ -400,7 +643,7 @@ pub type Unobserved = BTreeSet<(String, String)>;
 
 /// Compares the failures of a run with the expectations, on `platform`.
 pub fn judge(xfails: &[Xfail], platform: &str, ran: &Ran, observed: &Observed) -> Verdict {
-    judge_observing(xfails, platform, ran, observed, &Unobserved::new())
+    judge_with(xfails, platform, ran, observed, &Evidence::default())
 }
 
 /// [`judge`] for runs where some classes could not be measured.
@@ -411,32 +654,78 @@ pub fn judge_observing(
     observed: &Observed,
     unobserved: &Unobserved,
 ) -> Verdict {
+    let evidence = Evidence {
+        unobserved: unobserved.clone(),
+        ..Default::default()
+    };
+    judge_with(xfails, platform, ran, observed, &evidence)
+}
+
+/// [`judge`] with measurements, unmeasurable classes and starvation
+/// evidence: an entry excuses a failure only inside its bound.
+pub fn judge_with(
+    xfails: &[Xfail],
+    platform: &str,
+    ran: &Ran,
+    observed: &Observed,
+    evidence: &Evidence,
+) -> Verdict {
     let mut verdict = Verdict::default();
     for ((case, class), seeds) in observed {
-        let has_entry = xfails
+        let named: Vec<&Xfail> = xfails
             .iter()
-            .any(|x| x.class == *class && x.matches(case, platform));
-        if !has_entry {
+            .filter(|x| x.class == *class && x.matches(case, platform))
+            .collect();
+        if named.is_empty() {
             verdict.unexpected.push(Unexpected {
                 case: case.clone(),
                 class: class.clone(),
                 seeds: seeds.clone(),
+                why: String::new(),
             });
             continue;
         }
-        let covered = covered_by(xfails.iter(), case, class, platform, seeds);
+        let covered = covered_by(
+            named.iter().copied(),
+            case,
+            class,
+            platform,
+            seeds,
+            evidence,
+        );
+        let excused_fully = seeds.is_empty()
+            && named
+                .iter()
+                .any(|x| x.seeds.is_none() && excuses(x, case, class, evidence).is_ok());
         let uncovered: BTreeSet<u64> = seeds.difference(&covered).copied().collect();
-        if !uncovered.is_empty() {
+        if !excused_fully && (seeds.is_empty() || !uncovered.is_empty()) {
+            let why: Vec<String> = named
+                .iter()
+                .filter_map(|x| excuses(x, case, class, evidence).err())
+                .collect();
             verdict.unexpected.push(Unexpected {
                 case: case.clone(),
                 class: class.clone(),
                 seeds: uncovered,
+                why: why.join("; "),
             });
+            continue;
+        }
+        if let Some(x) = named
+            .iter()
+            .find(|x| excuses(x, case, class, evidence).is_ok())
+        {
+            verdict
+                .excused
+                .push((case.clone(), class.clone(), (*x).clone()));
         }
     }
     for x in xfails.iter().filter(|x| !x.flaky && x.applies_on(platform)) {
         for (case, ran_seeds) in ran.iter().filter(|(case, _)| glob_match(&x.case, case)) {
-            if unobserved.contains(&(case.clone(), x.class.clone())) {
+            if evidence
+                .unobserved
+                .contains(&(case.clone(), x.class.clone()))
+            {
                 continue;
             }
             let seen = observed.get(&(case.clone(), x.class.clone()));
@@ -497,6 +786,25 @@ pub fn bless_observing(
     unobserved: &Unobserved,
     problems: &BTreeMap<(String, String), String>,
 ) -> Vec<Xfail> {
+    let evidence = Evidence {
+        unobserved: unobserved.clone(),
+        ..Default::default()
+    };
+    bless_with(xfails, platform, ran, observed, &evidence, problems)
+}
+
+/// [`bless`] with measurements: a failure outside every entry's bound gets a
+/// new entry (TODO reason) whose bound is the measured range, to be
+/// reviewed against the mechanism.
+pub fn bless_with(
+    xfails: &[Xfail],
+    platform: &str,
+    ran: &Ran,
+    observed: &Observed,
+    evidence: &Evidence,
+    problems: &BTreeMap<(String, String), String>,
+) -> Vec<Xfail> {
+    let unobserved = &evidence.unobserved;
     let mut out: Vec<Xfail> = Vec::new();
     let mut kept_here: Vec<Xfail> = Vec::new();
     for x in xfails {
@@ -556,10 +864,13 @@ pub fn bless_observing(
         }
     }
     for ((case, class), seeds) in observed {
-        let covered = covered_by(kept_here.iter(), case, class, platform, seeds);
-        let fully = kept_here
-            .iter()
-            .any(|x| x.class == *class && x.matches(case, platform) && x.seeds.is_none());
+        let covered = covered_by(kept_here.iter(), case, class, platform, seeds, evidence);
+        let fully = kept_here.iter().any(|x| {
+            x.class == *class
+                && x.matches(case, platform)
+                && x.seeds.is_none()
+                && excuses(x, case, class, evidence).is_ok()
+        });
         if fully || (!seeds.is_empty() && covered == *seeds) {
             continue;
         }
@@ -573,6 +884,17 @@ pub fn bless_observing(
             platforms: vec![platform.to_string()],
             seeds: (!seeds.is_empty()).then_some(missing),
             flaky: false,
+            starved: false,
+            hosts: Vec::new(),
+            bound: if seeds.is_empty() {
+                evidence
+                    .measures
+                    .get(&(case.clone(), class.clone()))
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Bound::new()
+            },
             reason: previous.map_or_else(
                 || {
                     format!(
@@ -600,6 +922,9 @@ fn coalesce(entries: Vec<Xfail>) -> Vec<Xfail> {
             e.case == x.case
                 && e.class == x.class
                 && e.flaky == x.flaky
+                && e.starved == x.starved
+                && e.hosts == x.hosts
+                && e.bound == x.bound
                 && e.reason == x.reason
                 && e.link == x.link
                 && e.platforms == x.platforms
@@ -620,6 +945,9 @@ fn coalesce(entries: Vec<Xfail>) -> Vec<Xfail> {
                 && e.class == x.class
                 && e.seeds == x.seeds
                 && e.flaky == x.flaky
+                && e.starved == x.starved
+                && e.hosts == x.hosts
+                && e.bound == x.bound
                 && e.reason == x.reason
                 && e.link == x.link
         }) {
@@ -679,6 +1007,16 @@ pub struct Record {
     /// First problem per class, used as the draft reason when blessing.
     #[serde(default)]
     pub problems: BTreeMap<String, String>,
+    /// Measured size of each failing class (see [`within`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub measures: BTreeMap<String, Metrics>,
+    /// Failing classes an expectation excused -> "strict", "flaky" or
+    /// "flaky, starved".
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub excused: BTreeMap<String, String>,
+    /// The case ran while the starvation sentinel saw the machine stall.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starved: bool,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]
@@ -744,6 +1082,9 @@ mod tests {
             platforms: platforms.iter().map(|p| p.to_string()).collect(),
             seeds: seeds.map(set),
             flaky: false,
+            starved: false,
+            hosts: Vec::new(),
+            bound: Bound::new(),
             reason: "r".into(),
             link: String::new(),
         }
@@ -775,6 +1116,9 @@ mod tests {
                             seeds_ran: None,
                             unobserved: BTreeMap::new(),
                             problems: BTreeMap::new(),
+                            measures: BTreeMap::new(),
+                            excused: BTreeMap::new(),
+                            starved: false,
                             summary: "test record".repeat(100),
                             repro: String::new(),
                             seconds: 0.0,
@@ -979,5 +1323,134 @@ mod tests {
         let observed = Observed::from([(("a".into(), "stale".into()), set(&[]))]);
         let blessed = bless(&xfails, "macos", &ran, &observed, &BTreeMap::new());
         assert_eq!(blessed, vec![entry("a", "stale", &[], None)]);
+    }
+
+    fn measured(case: &str, class: &str, metrics: &[(&str, f64, f64)]) -> Evidence {
+        let mut evidence = Evidence::default();
+        evidence.measures.insert(
+            (case.into(), class.into()),
+            metrics
+                .iter()
+                .map(|&(m, min, max)| (m.to_string(), Range { min, max }))
+                .collect(),
+        );
+        evidence
+    }
+
+    #[test]
+    fn bounds_limit_what_an_entry_excuses() {
+        let text = "require_bound = true\n[[xfail]]\ncase = \"a\"\nclass = \"stale\"\nbound = { frames = 12, ms = [-210, -190] }\nreason = \"r\"\n";
+        let xfails = parse(text).unwrap();
+        assert_eq!(xfails[0].bound["frames"].max, 12.0);
+        assert_eq!(xfails[0].bound["ms"].min, -210.0);
+        assert_eq!(parse(&render(&xfails)).unwrap(), xfails);
+        let ran = Ran::from([("a".to_string(), None)]);
+        let observed = Observed::from([(("a".into(), "stale".into()), set(&[]))]);
+        let inside = measured(
+            "a",
+            "stale",
+            &[("frames", 3.0, 12.0), ("ms", -205.0, -195.0)],
+        );
+        let verdict = judge_with(&xfails, "linux", &ran, &observed, &inside);
+        assert!(verdict.ok(), "{verdict:?}");
+        assert_eq!(verdict.excused.len(), 1);
+        let more = measured(
+            "a",
+            "stale",
+            &[("frames", 13.0, 13.0), ("ms", -200.0, -200.0)],
+        );
+        let verdict = judge_with(&xfails, "linux", &ran, &observed, &more);
+        assert_eq!(verdict.unexpected.len(), 1);
+        assert!(
+            verdict.unexpected[0].why.contains("frames 13"),
+            "{verdict:?}"
+        );
+        let early = measured(
+            "a",
+            "stale",
+            &[("frames", 1.0, 1.0), ("ms", -300.0, -200.0)],
+        );
+        assert_eq!(
+            judge_with(&xfails, "linux", &ran, &observed, &early)
+                .unexpected
+                .len(),
+            1
+        );
+        let extra = measured(
+            "a",
+            "stale",
+            &[
+                ("frames", 1.0, 1.0),
+                ("ms", -200.0, -200.0),
+                ("camera-frames", 2.0, 2.0),
+            ],
+        );
+        let verdict = judge_with(&xfails, "linux", &ran, &observed, &extra);
+        assert!(
+            verdict.unexpected[0].why.contains("camera-frames 2"),
+            "{verdict:?}"
+        );
+        let zero = measured(
+            "a",
+            "stale",
+            &[
+                ("frames", 1.0, 1.0),
+                ("ms", -200.0, -200.0),
+                ("camera-frames", 0.0, 0.0),
+            ],
+        );
+        assert!(judge_with(&xfails, "linux", &ran, &observed, &zero).ok());
+        let unmeasured = measured("a", "stale", &[("frames", 1.0, 1.0)]);
+        let verdict = judge_with(&xfails, "linux", &ran, &observed, &unmeasured);
+        assert!(verdict.unexpected[0].why.contains("ms not measured"));
+        assert_eq!(
+            judge(&xfails, "linux", &ran, &observed).unexpected.len(),
+            1,
+            "a bounded entry never excuses an unmeasured failure"
+        );
+        assert!(
+            parse("require_bound = true\n[[xfail]]\ncase = \"a\"\nclass = \"x\"\nreason = \"r\"\n")
+                .is_err()
+        );
+        assert!(
+            parse("require_bound = true\n[[xfail]]\ncase = \"a\"\nclass = \"x\"\nseeds = \"1\"\nreason = \"r\"\n").is_ok(),
+            "seeded entries are bounded by their seeds"
+        );
+    }
+
+    #[test]
+    fn starved_entries_need_the_sentinel() {
+        let text = "[[xfail]]\ncase = \"a\"\nclass = \"error\"\nflaky = true\nstarved = true\nbound = { count = 1 }\nreason = \"r\"\n";
+        let xfails = parse(text).unwrap();
+        assert!(parse(&text.replace("flaky = true\n", "")).is_err());
+        let ran = Ran::from([("a".to_string(), None)]);
+        let observed = Observed::from([(("a".into(), "error".into()), set(&[]))]);
+        let mut evidence = measured("a", "error", &[("count", 1.0, 1.0)]);
+        assert_eq!(
+            judge_with(&xfails, "linux", &ran, &observed, &evidence)
+                .unexpected
+                .len(),
+            1
+        );
+        evidence.starved.insert("a".into());
+        assert!(judge_with(&xfails, "linux", &ran, &observed, &evidence).ok());
+        assert!(judge_with(&xfails, "linux", &ran, &Observed::new(), &evidence).ok());
+    }
+
+    #[test]
+    fn bless_bounds_new_entries_by_their_measurements() {
+        let ran = Ran::from([("a".to_string(), None)]);
+        let observed = Observed::from([(("a".into(), "sync".into()), set(&[]))]);
+        let evidence = measured("a", "sync", &[("ms", -201.0, -199.0)]);
+        let blessed = bless_with(&[], "macos", &ran, &observed, &evidence, &BTreeMap::new());
+        assert_eq!(blessed.len(), 1);
+        assert_eq!(
+            blessed[0].bound["ms"],
+            Range {
+                min: -201.0,
+                max: -199.0
+            }
+        );
+        assert!(judge_with(&blessed, "macos", &ran, &observed, &evidence).ok());
     }
 }

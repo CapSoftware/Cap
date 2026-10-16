@@ -21,7 +21,9 @@
 //! An answer that is not the grid frame but is the sample on screen at the
 //! exact request time is `grid-rounding`: correct for a seek straight to `t`,
 //! but different from what sequential playback shows for the same request.
-//! Other wrong answers are `future` or `stale` and end the sequence. Every
+//! Other wrong answers are `future` or `stale`. The sequence continues after
+//! any wrong answer, so a seed's recorded classes are its full failure set
+//! (an expected first failure cannot hide a later, different one). Every
 //! request also checks that the reader did not decode past the sample after
 //! the answer (`overread`: the reader running ahead of the requests) and that
 //! reader starts and seeks stay within a budget of two per jump in the request
@@ -160,9 +162,10 @@ struct Case {
 }
 
 struct Outcome {
-    /// The first occurrence of each non-terminal class (`GridRounding`,
-    /// `Overread`, `Resets`), then at most one terminal failure that ended
-    /// the sequence.
+    /// The first occurrence of each class over the whole sequence
+    /// (`Future`, `Stale`, `GridRounding`, `Overread`, `Resets`), then at
+    /// most one terminal failure (`Dropped`, `Fallback`, `Unidentified`)
+    /// that ended it.
     failures: Vec<Failure>,
     requests: usize,
     starts: u64,
@@ -235,7 +238,8 @@ impl Oracle {
     }
 }
 
-/// Records the first occurrence of a non-terminal failure class.
+/// Records the first occurrence of a failure class that does not end the
+/// sequence.
 fn note(failures: &mut Vec<Failure>, class: FailureClass, request: usize, detail: String) {
     if !failures.iter().any(|failure| failure.class == class) {
         failures.push(Failure {
@@ -388,9 +392,19 @@ fn run_case(case: &Case, runtime: &tokio::runtime::Runtime, trace: bool) -> Outc
                         describe(Some(got)),
                     );
                 } else if got_index > newest {
-                    return fail(failures, FailureClass::Future, position, describe(Some(got)));
+                    note(
+                        &mut failures,
+                        FailureClass::Future,
+                        position,
+                        describe(Some(got)),
+                    );
                 } else {
-                    return fail(failures, FailureClass::Stale, position, describe(Some(got)));
+                    note(
+                        &mut failures,
+                        FailureClass::Stale,
+                        position,
+                        describe(Some(got)),
+                    );
                 }
             }
             if let Some(&furthest) = vended.iter().max()
@@ -762,6 +776,9 @@ fn write_records(
                 seeds_ran: ran.get(&result.name).cloned().flatten(),
                 unobserved: Default::default(),
                 problems,
+                measures: Default::default(),
+                excused: Default::default(),
+                starved: false,
                 summary: summary.join("\n"),
                 repro,
                 seconds: result.elapsed.as_secs_f64(),

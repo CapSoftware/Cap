@@ -121,6 +121,19 @@ fn run_project(
                                         .map(|(i, _)| i)
                                         .collect();
                                     if !differing.is_empty() || frames.len() != again.len() {
+                                        case.count(
+                                            "nondeterministic",
+                                            "frames",
+                                            differing.len() as f64,
+                                        );
+                                        case.measure(
+                                            "nondeterministic",
+                                            "length-difference",
+                                            again.len() as f64 - frames.len() as f64,
+                                        );
+                                        for &i in &differing {
+                                            case.measure("nondeterministic", "frame", i as f64);
+                                        }
                                         case.problem(
                                             "nondeterministic",
                                             format!(
@@ -414,6 +427,71 @@ fn recorded_studio() {
     common::assert_passed(failures);
 }
 
+/// The recorded Studio fixture against what its sources emitted (the
+/// generator's truth): every emitted screen and camera frame must be in the
+/// files. The export cases above take their truth from those files, so a
+/// recording that lost its start or its final frames would otherwise only
+/// shorten their model.
+#[test]
+fn recorded_studio_coverage() {
+    let id = "export/rec-studio/recording/emitted-frames";
+    if !report::selected(id) {
+        return;
+    }
+    let spec = catalog::recorded_studio(report::tier());
+    let project = common::recorded(&spec);
+    let mut case = Case::new(id);
+    for (i, segment) in spec.segments.iter().enumerate() {
+        let truth = project.truth.segments.get(i);
+        for (name, video, track) in [
+            ("screen", Some(&segment.screen), truth.map(|t| &t.screen)),
+            (
+                "camera",
+                segment.camera.as_ref(),
+                truth.and_then(|t| t.camera.as_ref()),
+            ),
+        ] {
+            let Some(video) = video else {
+                continue;
+            };
+            let emitted = video
+                .delivery
+                .slots(video.fps, segment.duration - video.start_delay);
+            let recorded: std::collections::BTreeSet<u32> = track
+                .map(|t| t.frames.iter().map(|f| f.index).collect())
+                .unwrap_or_default();
+            let missing: Vec<u32> = emitted
+                .iter()
+                .filter(|slot| !recorded.contains(slot))
+                .copied()
+                .collect();
+            if missing.is_empty() {
+                case.note(format!(
+                    "segment {i} {name}: all {} emitted frames recorded",
+                    emitted.len()
+                ));
+            } else {
+                case.count(
+                    "frames-missing",
+                    &format!("{name}-frames"),
+                    missing.len() as f64,
+                );
+                case.problem(
+                    "frames-missing",
+                    format!(
+                        "segment {i} {name}: {} of {} emitted frames are not in the recording (first {:?}, last {:?})",
+                        missing.len(),
+                        emitted.len(),
+                        &missing[..missing.len().min(6)],
+                        missing.last()
+                    ),
+                );
+            }
+        }
+    }
+    common::finish(case);
+}
+
 /// Instant mode: the finalised `output.mp4` is the deliverable. Every
 /// emitted screen frame must appear once, in order, on its own timing, and
 /// every audio marker must be present, within 5 ms of the screen.
@@ -463,6 +541,7 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         .filter_map(|(pts, r)| r.marker().map(|m| (*pts, m.index)))
         .collect();
     if shown.len() != frames.len() {
+        case.count("unreadable", "frames", (frames.len() - shown.len()) as f64);
         case.problem(
             "unreadable",
             format!(
@@ -484,9 +563,12 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         .filter(|w| w[1] <= w[0])
         .map(|w| w[1])
         .collect();
+    // Frames missing from the file: content, never excused by the machine
+    // (`dropped` is the real-time playback class).
     if !missing.is_empty() {
+        case.count("frames-missing", "frames", missing.len() as f64);
         case.problem(
-            "dropped",
+            "frames-missing",
             format!(
                 "{} emitted frames missing from the output (first {:?})",
                 missing.len(),
@@ -495,6 +577,7 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         );
     }
     if !repeated.is_empty() {
+        case.count("stale", "frames", repeated.len() as f64);
         case.problem(
             "stale",
             format!(
@@ -528,12 +611,14 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
     };
     let frame = 1.0 / f64::from(emitted.fps);
     if video_offsets.is_empty() {
+        case.count("frames-missing", "frames", emitted_slots.len() as f64);
         case.problem(
-            "dropped",
+            "frames-missing",
             "no emitted screen frame identified in the output",
         );
         case.unobserved("timestamps", "no emitted screen frame identified");
-        case.unobserved("sync", "no emitted screen frame identified");
+        case.unobserved("sync-mic", "no emitted screen frame identified");
+        case.unobserved("sync-system", "no emitted screen frame identified");
     }
     let video_spread = spread(&video_offsets);
     case.note(format!("video timing spread {:.2} ms", video_spread * 1e3));
@@ -552,6 +637,11 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         ));
     }
     if !video_offsets.is_empty() && video_spread > frame / 2.0 {
+        case.measure(
+            "timestamps",
+            "spread-ms",
+            (video_spread * 1e4).round() / 10.0,
+        );
         case.problem(
             "timestamps",
             format!(
@@ -573,6 +663,10 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         if expected.is_empty() {
             continue;
         }
+        // Each source is its own class, so a silenced mic cannot hide behind
+        // a known system-audio loss (or the other way round).
+        let audio_class = format!("audio-{}", source.name());
+        let sync_class = format!("sync-{}", source.name());
         // Markers are matched by their decoded identity anywhere in the
         // track, so an arbitrarily large A/V offset is still measured.
         let found = audio_code::locate_markers(&mono, audio.sample_rate, source);
@@ -587,8 +681,10 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         let extra = found.len().saturating_sub(expected.len() - absent.len());
         if !absent.is_empty() || extra > 0 {
             let undecoded = found.iter().filter(|f| f.index.is_none()).count();
+            case.count(&audio_class, "missing", absent.len() as f64);
+            case.count(&audio_class, "unexpected", extra as f64);
             case.problem(
-                "audio",
+                &audio_class,
                 format!(
                     "{}: {} markers missing (first {:?}), {} unexpected ({} chirps without a decodable identity)",
                     source.name(),
@@ -642,10 +738,21 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
                 "{}: {added} markers without a decodable identity identified by their timing pattern",
                 source.name()
             ));
+            if !absent.is_empty() {
+                // Markers whose chirp is there but whose payload is damaged
+                // (the audio itself survived) versus markers that are gone.
+                case.count(
+                    &audio_class,
+                    "lost",
+                    absent.len().saturating_sub(added) as f64,
+                );
+            }
+        } else if !absent.is_empty() {
+            case.count(&audio_class, "lost", absent.len() as f64);
         }
         if offsets.is_empty() {
             case.unobserved(
-                "sync",
+                &sync_class,
                 format!(
                     "{}: none of the {} expected markers was identified in the output",
                     source.name(),
@@ -672,8 +779,13 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
             av * 1e3
         );
         if spread(&offsets) > 0.005 {
+            case.measure(
+                &audio_class,
+                "drift-ms",
+                (spread(&offsets) * 1e4).round() / 10.0,
+            );
             case.problem(
-                "audio",
+                &audio_class,
                 format!(
                     "{} marker timing drifts by {:.2} ms",
                     source.name(),
@@ -682,8 +794,9 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
             );
         }
         if av.abs() > 0.005 {
+            case.measure(&sync_class, "offset-ms", (av * 1e4).round() / 10.0);
             case.problem(
-                "sync",
+                &sync_class,
                 format!("{} is {:+.1} ms off the screen", source.name(), av * 1e3),
             );
         }
@@ -901,7 +1014,14 @@ fn colour() {
             alpha: 255,
         };
         config.background.padding = 40.0;
-        let mut case = Case::new(&id);
+        let Some(mut case) = common::begin(&id, &project, Decoder::Default) else {
+            continue;
+        };
+        common::runtime().block_on(common::probe_decoders(
+            &mut case,
+            &project,
+            Decoder::Default,
+        ));
         let dir = common::scratch_dir(&id);
         let run = ExportRun {
             fps: 30,
@@ -933,6 +1053,19 @@ fn colour() {
                 }
                 if errors.is_empty() {
                     case.problem("error", "no YUV frames to measure");
+                }
+                for (_, e, _) in errors
+                    .iter()
+                    .filter(|(_, e, _)| e[0].abs() > COLOUR_LEVEL_TOLERANCE)
+                {
+                    case.measure("colour-level", "luma", e[0]);
+                }
+                for (_, e, _) in errors
+                    .iter()
+                    .filter(|(_, e, _)| e[1].abs().max(e[2].abs()) > COLOUR_MATRIX_TOLERANCE)
+                {
+                    case.measure("colour-matrix", "cb", e[1]);
+                    case.measure("colour-matrix", "cr", e[2]);
                 }
                 if let Some((i, [dy, _, _], colour)) = errors
                     .iter()

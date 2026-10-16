@@ -559,6 +559,11 @@ pub fn check_sequence(
 ) {
     let expected_count = model.output_frames(fps);
     if frames.len() as u32 != expected_count {
+        case.measure(
+            "frame-count",
+            "missing",
+            f64::from(expected_count) - frames.len() as f64,
+        );
         case.problem(
             "frame-count",
             format!(
@@ -574,12 +579,26 @@ pub fn check_sequence(
             .enumerate()
             .filter(|(i, f)| (f.pts_secs - *i as f64 / f64::from(fps)).abs() > 0.5 / f64::from(fps))
             .map(|(i, f)| (i, f.pts_secs))
-            .take(5)
             .collect();
         if !off_grid.is_empty() {
+            // Signature: how many frames, from which frame, and how far off
+            // the grid in frame periods (a one-slot shift is exactly 1).
+            for &(i, pts) in &off_grid {
+                case.measure("timestamps", "frame", i as f64);
+                case.measure(
+                    "timestamps",
+                    "off-periods",
+                    ((pts * f64::from(fps) - i as f64).abs() * 100.0).round() / 100.0,
+                );
+            }
+            case.count("timestamps", "frames", off_grid.len() as f64);
             case.problem(
                 "timestamps",
-                format!("output timestamps off the {fps} fps grid: {off_grid:?}"),
+                format!(
+                    "output timestamps off the {fps} fps grid in {} frames: {:?}",
+                    off_grid.len(),
+                    &off_grid[..off_grid.len().min(5)]
+                ),
             );
         }
     }
@@ -689,6 +708,9 @@ pub fn check_presentation(
             (dy.abs() > COLOUR_LEVEL_TOLERANCE).then_some((i, dy))
         })
         .collect();
+    for (_, dy) in &level {
+        case.measure("colour-level", "luma", *dy);
+    }
     if let Some((i, dy)) = level.first() {
         case.problem(
             "colour-level",
@@ -1089,6 +1111,7 @@ impl RealtimeTelemetry {
 /// oracle. Dropped frames are normal under load; delivered ones must be right.
 #[allow(clippy::too_many_arguments)]
 pub async fn realtime_playback(
+    case: &mut Case,
     project: &Project,
     config: ProjectConfiguration,
     decoder: Decoder,
@@ -1115,6 +1138,8 @@ pub async fn realtime_playback(
         cap_editor::create_segments_without_audio(&project.meta, &meta, decoder == Decoder::Ffmpeg)
             .await?,
     );
+    // The case is labelled by decoder: it must be the decoder that runs.
+    check_decoders(case, decoder, &segments);
     let layers_rx = cap_editor::start_renderer_layers_creation(&constants, &config);
     let layers_rx = cap_editor::finish_renderer_layers_creation(layers_rx).await;
     let delivered: Arc<Mutex<Vec<cap_rendering::RenderedFrame>>> = Default::default();
