@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+#[cfg(test)]
+mod multipart_tests;
 pub(crate) mod queue;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
@@ -1761,6 +1763,7 @@ async fn multipart_initiate(
 }
 
 async fn multipart_presign(
+    client: &reqwest::Client,
     video_id: &str,
     upload_id: &str,
     part_number: u32,
@@ -1781,7 +1784,8 @@ async fn multipart_presign(
         body.insert("md5Sum".into(), json!(md5_sum));
     }
 
-    let response = auth::authed_request(
+    let response = auth::authed_request_with(
+        client,
         reqwest::Method::POST,
         "/api/upload/multipart/presign-part",
         Some(Value::Object(body)),
@@ -1872,7 +1876,7 @@ async fn upload_parts(
     is_drive: bool,
     progress: &impl Fn(f64),
     cancel: &AtomicBool,
-    mut replacement_source: Option<&mut ReplacementUploadSource>,
+    replacement_source: Option<&mut ReplacementUploadSource>,
 ) -> Result<Vec<UploadedPart>, AuthApiError> {
     let file_size = std::fs::metadata(file_path)
         .map_err(|error| AuthApiError::Other(format!("Failed to read export size: {error}")))?
@@ -1880,12 +1884,144 @@ async fn upload_parts(
     if file_size == 0 {
         return Err(AuthApiError::Other("Rendered video is empty".into()));
     }
-    let chunk_size = chunk_size_for(file_size);
+    let transport = LivePartTransport {
+        video_id,
+        upload_id,
+        is_drive,
+        use_md5: auth::is_server_url_custom(),
+        api: auth::api_client()?,
+        storage: reqwest::Client::new(),
+    };
+    upload_file_parts(
+        &transport,
+        file_path,
+        file_size,
+        chunk_size_for(file_size),
+        progress,
+        cancel,
+        replacement_source,
+    )
+    .await
+}
+
+struct PartChunk {
+    part_number: u32,
+    offset: u64,
+    bytes: bytes::Bytes,
+}
+
+struct PresignedPart {
+    url: String,
+    md5: Option<String>,
+}
+
+trait PartTransport: Sync {
+    fn presign(
+        &self,
+        chunk: &PartChunk,
+        cancel: &AtomicBool,
+    ) -> impl Future<Output = Result<PresignedPart, AuthApiError>> + Send;
+    fn put(
+        &self,
+        presigned: &PresignedPart,
+        chunk: &PartChunk,
+        total_size: u64,
+        cancel: &AtomicBool,
+    ) -> impl Future<Output = Result<UploadedPart, AuthApiError>> + Send;
+}
+
+/// Every part of one upload goes through the same two clients, so parts after
+/// the first reuse the open API and storage connections. The clients live only
+/// as long as the upload, so a later upload never starts on a pooled
+/// connection from an earlier network.
+struct LivePartTransport<'a> {
+    video_id: &'a str,
+    upload_id: &'a str,
+    is_drive: bool,
+    use_md5: bool,
+    api: reqwest::Client,
+    storage: reqwest::Client,
+}
+
+impl PartTransport for LivePartTransport<'_> {
+    async fn presign(
+        &self,
+        chunk: &PartChunk,
+        cancel: &AtomicBool,
+    ) -> Result<PresignedPart, AuthApiError> {
+        let md5 = self.use_md5.then(|| md5_base64(&chunk.bytes));
+        let url = checked_upload_step(cancel, || {
+            multipart_presign(
+                &self.api,
+                self.video_id,
+                self.upload_id,
+                chunk.part_number,
+                md5.as_deref(),
+            )
+        })
+        .await?;
+        Ok(PresignedPart { url, md5 })
+    }
+
+    async fn put(
+        &self,
+        presigned: &PresignedPart,
+        chunk: &PartChunk,
+        total_size: u64,
+        cancel: &AtomicBool,
+    ) -> Result<UploadedPart, AuthApiError> {
+        put_presigned_part(
+            &self.storage,
+            &presigned.url,
+            chunk,
+            total_size,
+            self.is_drive,
+            presigned.md5.as_deref(),
+            cancel,
+        )
+        .await
+    }
+}
+
+/// Part requests only observe cancellation between requests, so this races
+/// them against the cancel flag to drop an in-flight part promptly.
+async fn upload_part_chunk(
+    transport: &impl PartTransport,
+    chunk: &PartChunk,
+    total_size: u64,
+    cancel: &AtomicBool,
+) -> Result<UploadedPart, AuthApiError> {
+    tokio::select! {
+        biased;
+        () = wait_for_export_cancel(cancel) => Err(AuthApiError::Other("Export cancelled".into())),
+        result = async {
+            let presigned = transport.presign(chunk, cancel).await?;
+            transport.put(&presigned, chunk, total_size, cancel).await
+        } => result,
+    }
+}
+
+async fn wait_for_export_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::Acquire) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Parts go strictly one at a time, so an interrupted connection only ever
+/// loses the one part that was in flight.
+async fn upload_file_parts(
+    transport: &impl PartTransport,
+    file_path: &Path,
+    file_size: u64,
+    chunk_size: u64,
+    progress: &impl Fn(f64),
+    cancel: &AtomicBool,
+    mut replacement_source: Option<&mut ReplacementUploadSource>,
+) -> Result<Vec<UploadedPart>, AuthApiError> {
     let mut parts = Vec::new();
     let mut failed = Vec::new();
     let mut offset = 0u64;
     let mut part_number = 1u32;
-    let use_md5 = auth::is_server_url_custom();
 
     while offset < file_size {
         if cancel.load(Ordering::Relaxed) {
@@ -1896,24 +2032,17 @@ async fn upload_parts(
         if let Some(source) = &mut replacement_source {
             source.check_chunk(part_number, offset, &chunk, file_size)?;
         }
-        match put_part(
-            video_id,
-            upload_id,
+        let chunk = PartChunk {
             part_number,
             offset,
-            file_size,
-            &chunk,
-            is_drive,
-            use_md5,
-            cancel,
-        )
-        .await
-        {
+            bytes: chunk.into(),
+        };
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
-                failed.push((part_number, offset, chunk, error));
+                failed.push((chunk, error));
             }
         }
         offset += size as u64;
@@ -1921,23 +2050,11 @@ async fn upload_parts(
         progress((offset as f64 / file_size as f64).min(0.99));
     }
 
-    for (part_number, offset, chunk, first_error) in failed {
+    for (chunk, first_error) in failed {
         if cancel.load(Ordering::Relaxed) {
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
-        match put_part(
-            video_id,
-            upload_id,
-            part_number,
-            offset,
-            file_size,
-            &chunk,
-            is_drive,
-            use_md5,
-            cancel,
-        )
-        .await
-        {
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(_) => {
                 check_export_cancelled(cancel)?;
@@ -1956,39 +2073,35 @@ async fn upload_parts(
     Ok(parts)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn put_part(
-    video_id: &str,
-    upload_id: &str,
-    part_number: u32,
-    offset: u64,
+async fn put_presigned_part(
+    client: &reqwest::Client,
+    url: &str,
+    chunk: &PartChunk,
     total_size: u64,
-    chunk: &[u8],
     is_drive: bool,
-    use_md5: bool,
+    md5_sum: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<UploadedPart, AuthApiError> {
-    let md5_sum = use_md5.then(|| md5_base64(chunk));
-    let url = checked_upload_step(cancel, || {
-        multipart_presign(video_id, upload_id, part_number, md5_sum.as_deref())
-    })
-    .await?;
-    let client = reqwest::Client::new();
+    let PartChunk {
+        part_number,
+        offset,
+        ref bytes,
+    } = *chunk;
     let mut attempt = 0u32;
     loop {
         let mut request = client
-            .put(&url)
-            .header("Content-Length", chunk.len())
+            .put(url)
+            .header("Content-Length", bytes.len())
             .timeout(Duration::from_secs(5 * 60))
-            .body(chunk.to_vec());
-        if is_drive || is_google_drive_resumable_url(&url) {
-            let end = offset.saturating_add(chunk.len() as u64).saturating_sub(1);
+            .body(bytes.clone());
+        if is_drive || is_google_drive_resumable_url(url) {
+            let end = offset.saturating_add(bytes.len() as u64).saturating_sub(1);
             request = request.header(
                 "Content-Range",
                 format!("bytes {offset}-{end}/{total_size}"),
             );
         }
-        if let Some(md5_sum) = &md5_sum {
+        if let Some(md5_sum) = md5_sum {
             request = request.header("Content-MD5", md5_sum);
         }
         let response =
@@ -1997,10 +2110,10 @@ async fn put_part(
         match response {
             Ok(response) => {
                 if !upload_status_ok(
-                    &url,
+                    url,
                     response.status(),
                     offset,
-                    chunk.len() as u64,
+                    bytes.len() as u64,
                     total_size,
                 ) {
                     let status = response.status();
@@ -2015,7 +2128,7 @@ async fn put_part(
                     .unwrap_or("")
                     .trim_matches('"')
                     .to_string();
-                let object_identity = if (is_drive || is_google_drive_resumable_url(&url))
+                let object_identity = if (is_drive || is_google_drive_resumable_url(url))
                     && response.status().is_success()
                 {
                     response.json::<Value>().await.ok().and_then(|value| {
@@ -2029,7 +2142,7 @@ async fn put_part(
                 return Ok(UploadedPart {
                     part_number,
                     etag,
-                    size: chunk.len(),
+                    size: bytes.len(),
                     object_identity,
                 });
             }
