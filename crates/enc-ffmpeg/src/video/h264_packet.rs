@@ -404,6 +404,7 @@ mod tests {
     fn libx264_keyframes_follow_capture_time_when_frames_arrive_slowly() {
         let keys = keyframe_times(&["libx264"], 6, 13).expect("libx264");
         let gaps: Vec<f64> = keys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(keys.len() >= 6, "keyframes at {keys:?}");
         assert!(
             gaps.iter().all(|gap| *gap <= 2.0 + 0.2 + 1e-6),
             "a 5 fps capture must still get a keyframe every 2 s plus one frame: {keys:?}"
