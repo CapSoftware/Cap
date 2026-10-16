@@ -13,6 +13,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+unsafe extern "C" {
+    fn clock() -> std::ffi::c_long;
+}
+
+fn cpu_seconds() -> Result<f64> {
+    let value = unsafe { clock() };
+    if value < 0 {
+        return Err("process CPU clock unavailable".into());
+    }
+    Ok(value as f64 / 1_000_000.0)
+}
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 fn option(output: &mut format::context::Output, name: &str, value: &str) -> Result<()> {
@@ -109,7 +121,10 @@ fn replay(
     packets: &[EncodedPacket],
     header: &[u8],
     tb: Rational,
+    capture: bool,
 ) -> Result<serde_json::Value> {
+    let cpu_start = cpu_seconds()?;
+    let wall_start = Instant::now();
     let path = root.join(mode);
     let mut output = output(&path, mode, header, tb)?;
     let stream_tb = output.stream(0).ok_or("stream")?.time_base();
@@ -134,9 +149,10 @@ fn replay(
         packet.write_interleaved(&mut output)?;
         write_nanos += start.elapsed().as_nanos();
         let seconds = source.pts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator());
-        if next_snapshot
-            .peek()
-            .is_some_and(|target| seconds >= *target)
+        if capture
+            && next_snapshot
+                .peek()
+                .is_some_and(|target| seconds >= *target)
         {
             let target = next_snapshot.next().ok_or("snapshot target")?;
             let label = format!("{mode}-at-{target}");
@@ -145,11 +161,32 @@ fn replay(
                 .push(json!({"directory":label,"input_packets":index + 1,"input_pts":seconds}));
         }
     }
-    let label = format!("{mode}-before-trailer");
-    snapshot(&path, &root.join(&label))?;
-    snapshots.push(json!({"directory":label,"input_packets":packets.len(),"input_pts":packets.last().map(|p| p.pts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))}));
+    if capture {
+        let label = format!("{mode}-before-trailer");
+        snapshot(&path, &root.join(&label))?;
+        snapshots.push(json!({"directory":label,"input_packets":packets.len(),"input_pts":packets.last().map(|p| p.pts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator()))}));
+    }
     output.write_trailer()?;
-    Ok(json!({"mode":mode,"snapshots":snapshots,"packet_write_nanos":write_nanos}))
+    let mut recognized_segments = None;
+    if capture {
+        let info = VideoInfo {
+            pixel_format: format::Pixel::NV12,
+            width: 1920,
+            height: 1080,
+            time_base: tb,
+            frame_rate: Rational(30, 1),
+        };
+        let mut tracker = cap_enc_ffmpeg::fragment_manifest::FragmentManifestTracker::new(
+            path.clone(),
+            &info,
+            Duration::from_secs(2),
+        );
+        tracker.flush_pending_segments();
+        recognized_segments = Some(tracker.completed_segments().len());
+    }
+    Ok(
+        json!({"mode":mode,"snapshots":snapshots,"packet_write_nanos":write_nanos,"cpu_seconds":cpu_seconds()? - cpu_start,"wall_seconds":wall_start.elapsed().as_secs_f64(),"recognized_segments":recognized_segments}),
+    )
 }
 
 fn main() -> Result<()> {
@@ -220,9 +257,34 @@ fn main() -> Result<()> {
         let tb = encoder.time_base();
         let mut modes = Vec::new();
         for mode in ["control", "duration", "streaming"] {
-            modes.push(replay(&path, mode, &packets, &header, tb)?);
+            modes.push(replay(&path, mode, &packets, &header, tb, true)?);
         }
-        let record = json!({"codec":codec,"step":step,"fps":30.0 / step as f64,"input_packets":packets.len(),"time_base":[tb.numerator(),tb.denominator()],"keys":packets.iter().filter(|p| p.is_keyframe).map(|p| p.pts).collect::<Vec<_>>(),"modes":modes});
+        let mut benchmarks = Vec::new();
+        if std::env::var_os("FRAGMENT_PROBE_BENCH").is_some() {
+            let bench = path.join("benchmark");
+            fs::create_dir_all(&bench)?;
+            for pair in 0..9 {
+                let order = if pair % 2 == 0 {
+                    ["control", "streaming"]
+                } else {
+                    ["streaming", "control"]
+                };
+                for mode in order {
+                    let mut cpu = 0.0;
+                    let mut wall = 0.0;
+                    for _ in 0..8 {
+                        let measured = replay(&bench, mode, &packets, &header, tb, false)?;
+                        cpu += measured["cpu_seconds"].as_f64().ok_or("CPU measurement")?;
+                        wall += measured["wall_seconds"]
+                            .as_f64()
+                            .ok_or("wall measurement")?;
+                        fs::remove_dir_all(bench.join(mode))?;
+                    }
+                    benchmarks.push(json!({"pair":pair,"warmup":pair == 0,"mode":mode,"batch":8,"cpu_seconds":cpu,"wall_seconds":wall}));
+                }
+            }
+        }
+        let record = json!({"codec":codec,"step":step,"fps":30.0 / step as f64,"input_packets":packets.len(),"time_base":[tb.numerator(),tb.denominator()],"keys":packets.iter().filter(|p| p.is_keyframe).map(|p| p.pts).collect::<Vec<_>>(),"modes":modes,"benchmarks":benchmarks});
         println!("{record}");
         results.push(record);
         fs::write(

@@ -15,6 +15,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: never
+      FRAGMENT_PROBE_BENCH: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +37,7 @@ jobs:
           fi
       - name: Compile diagnostic only
         run: |
+          rustup component add rustfmt
           cargo fmt --all --check
           cargo check --locked -p cap-enc-ffmpeg --example sol-fragment-proof
           cargo build --locked --profile ci-verify -p cap-enc-ffmpeg --example sol-fragment-proof

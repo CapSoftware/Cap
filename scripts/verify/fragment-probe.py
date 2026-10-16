@@ -91,3 +91,30 @@ for record in records:
     print(json.dumps({"fps": record["fps"], "final": {k: {f: v[f] for f in ["packets", "frames", "payload_bytes", "container_bytes", "container_delta_percent", "identical_payload", "identical_decoded_frames", "identical_pts"]} for k, v in final.items()}, "snapshots": [{k: r[k] for k in ["mode", "input_pts", "packets", "lag_seconds", "identical_decoded_prefix"]} for r in rows]}), flush=True)
 
 (root / "provenance.json").write_text(json.dumps({"head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), "ffmpeg": subprocess.check_output(["ffmpeg", "-version"], text=True), "source_sha256": hashlib.sha256(Path("crates/enc-ffmpeg/examples/sol-fragment-proof.rs").read_bytes()).hexdigest()}, indent=2))
+
+mutation_rows = []
+for step in [1, 2, 10, 30]:
+    base = root / f"step-{step}"
+    source_dir = base / "streaming-before-trailer"
+    source = sorted(source_dir.glob("segment_*.m4s*"))[-1]
+    data = source.read_bytes()
+    complete, boxes = prefix(data)
+    mdat = [box for box in boxes if box["type"] == "mdat"][-1]
+    moof = [box for box in boxes if box["type"] == "moof"][-1]
+    previous_end = max([box["offset"] + box["size"] for box in boxes if box["type"] == "mdat" and box["offset"] < moof["offset"]], default=0)
+    source_hashes = [line.split(",")[-1].strip() for line in (source_dir / "framemd5.txt").read_text().splitlines() if line and not line.startswith("#")]
+    for index, cut in enumerate([moof["offset"] + 4, moof["offset"] + moof["size"], mdat["offset"] + 4, mdat["offset"] + 8 + (mdat["size"] - 8) // 2, complete - 1]):
+        destination = base / f"partial-tail-{index}"
+        destination.mkdir(exist_ok=True)
+        for file in source_dir.glob("segment_*.m4s*"):
+            (destination / file.name).write_bytes(file.read_bytes()[:cut] if file == source else file.read_bytes())
+        (destination / "init.mp4").write_bytes((source_dir / "init.mp4").read_bytes())
+        actual_end, _ = prefix(data[:cut])
+        if actual_end != previous_end:
+            raise AssertionError({"step": step, "cut": cut, "actual_end": actual_end, "expected_end": previous_end})
+        result = inspect(destination)
+        if not result["frames"] < len(source_hashes) or result["frame_hashes"] != source_hashes[:result["frames"]]:
+            raise AssertionError({"step": step, "cut": cut, "reason": "prefix decoding differs"})
+        mutation_rows.append({"step": step, "cut": cut, "valid_prefix": actual_end, "recovered_frames": result["frames"], "exact_decoded_prefix": True})
+(root / "partial-tail-checks.json").write_text(json.dumps(mutation_rows, indent=2))
+print(json.dumps({"partial_tail_checks": len(mutation_rows), "result": "pass"}), flush=True)
