@@ -177,14 +177,6 @@ reason = "On macOS and Windows the Instant video timestamps follow the muxer's p
 link = ""
 
 [[xfail]]
-case = "export/instant-ungated-system-continuous-mic-late/output/mp4/native"
-class = "sync"
-platforms = ["windows"]
-flaky = true
-reason = "NEW: the recorder deletes real audio samples when audio delivery latency falls. AudioGapTracker::detect_overlap (crates/recording/src/output_pipeline/core.rs, called from process_audio_frame) compares a frame's capture time against a wall-clock delta, so a delivery catch-up reads as overlap and the frame is trimmed; every later sample plays early. The saved Windows outputs lost exactly 279, 250 and 842 samples (5.8, 5.2 and 17.5 ms; mic and system shifted together, one step), reproduced deterministically by feeding those delivery schedules to the real function (sol-windows-audio-offset.md). Seen 3 times on windows-2022 (38764978019, 38780016448, 38804993000), about 1 in 35 recordings, and 0 of 102 in probes 38782202975 and 38785649744; never on macOS (30 recordings, -0.3 to +2.9 ms) or Linux (16, 0.0 ms), whose delivery in this harness does not catch up the same way. Fixed by #2635"
-link = "https://github.com/CapSoftware/Cap/pull/2635"
-
-[[xfail]]
 case = "export/instant-ungated-mic-late/output/mp4/native"
 class = "sync"
 platforms = ["macos", "windows"]
@@ -209,13 +201,6 @@ case = "export/instant-gated-system-only/output/mp4/native"
 class = "audio"
 flaky = true
 reason = "NEW: gated loopback-only system audio sometimes loses markers (2 of 11 lost in 1 of 2 fresh recordings, with the track 958 ms early)"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "audio"
-platforms = ["macos", "windows"]
-reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11, 3 of 3 recordings; same on windows-2022). On macOS the mic markers are damaged too: in 8 of 15 fresh recordings (probe run 38735811849) the last 20-35 ms of every mic marker is replaced by the tail of a system-audio marker, so no mic payload decodes (the chirps are intact and are identified by their timing pattern, which keeps sync measured), and once a decoded mic marker sat 68 ms early. Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers (3 of 3 CI runs), which points at the FirstFrame anchor path"
 link = ""
 
 [[xfail]]
