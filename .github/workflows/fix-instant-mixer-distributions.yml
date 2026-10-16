@@ -1,0 +1,79 @@
+name: Instant mixer fresh-fixture distributions
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer, ci/fixproof-instant-mixer-base]
+    paths: [.github/workflows/fix-instant-mixer-distributions.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_NEXTEST_PROFILE: ci
+  CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_HOST: blacksmith
+  CAP_VERIFY_CASE: "export/instant*,export/rec-studio/*,crash/*"
+jobs:
+  distributions:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Build
+        id: build
+        run: scripts/verify/run.sh full --suites export,crash --no-run
+      - name: First fresh repetition
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          CAP_VERIFY_FIXTURE_DIR: ${{ runner.temp }}/mixer-distributions/fixtures-1
+          CAP_VERIFY_REPORT_DIR: ${{ runner.temp }}/mixer-distributions/reports-1
+        run: |
+          scripts/verify/run.sh full --suites export,crash --prepare-fixtures
+          scripts/verify/run.sh full --suites export,crash -- --test-threads=1
+      - name: Second fresh repetition
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          CAP_VERIFY_FIXTURE_DIR: ${{ runner.temp }}/mixer-distributions/fixtures-2
+          CAP_VERIFY_REPORT_DIR: ${{ runner.temp }}/mixer-distributions/reports-2
+        run: |
+          scripts/verify/run.sh full --suites export,crash --prepare-fixtures
+          scripts/verify/run.sh full --suites export,crash -- --test-threads=1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: verify-report-${{ matrix.os }}-full-1
+          path: ${{ runner.temp }}/mixer-distributions/reports-1
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: verify-report-${{ matrix.os }}-full-2
+          path: ${{ runner.temp }}/mixer-distributions/reports-2
+          retention-days: 7
