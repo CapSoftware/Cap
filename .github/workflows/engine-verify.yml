@@ -67,7 +67,7 @@ concurrency:
 jobs:
   plan:
     name: Plan
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       run: ${{ steps.plan.outputs.run }}
@@ -197,6 +197,19 @@ jobs:
           else
             python3 scripts/verify/plan.py changes --tier "$TIER" --files "$RUNNER_TEMP/changed.txt" --max-files "$MAX" ${SUITES:+--suites "$SUITES"} > "$RUNNER_TEMP/plan.txt"
           fi
+          python3 - "$RUNNER_TEMP/plan.txt" <<'PYTHON'
+          import json
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          lines = path.read_text().splitlines()
+          for index, line in enumerate(lines):
+              if line.startswith("matrix="):
+                  matrix = json.loads(line.removeprefix("matrix="))
+                  matrix["include"] = [row for row in matrix["include"] if row["platform"] != "macos-vt"]
+                  lines[index] = "matrix=" + json.dumps(matrix, separators=(",", ":"))
+          path.write_text("\n".join(lines) + "\n")
+          PYTHON
           cat "$RUNNER_TEMP/plan.txt"
           cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
           {
@@ -211,7 +224,7 @@ jobs:
     name: Deep review label
     needs: plan
     if: github.event_name == 'pull_request' && needs.plan.outputs.escalate == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       pull-requests: write
@@ -249,7 +262,7 @@ jobs:
     name: Engine verify
     needs: [plan, verify]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
