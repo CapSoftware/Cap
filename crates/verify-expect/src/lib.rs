@@ -200,8 +200,13 @@ pub struct Xfail {
 
 impl Xfail {
     pub fn applies_on(&self, platform: &str) -> bool {
+        self.applies_on_host(platform, host().as_deref())
+    }
+
+    fn applies_on_host(&self, platform: &str, source_host: Option<&str>) -> bool {
         (self.platforms.is_empty() || self.platforms.iter().any(|p| p == platform))
-            && (self.hosts.is_empty() || host().is_some_and(|h| self.hosts.contains(&h)))
+            && (self.hosts.is_empty()
+                || source_host.is_some_and(|h| self.hosts.iter().any(|candidate| candidate == h)))
     }
 
     pub fn matches(&self, case: &str, platform: &str) -> bool {
@@ -623,12 +628,16 @@ fn covered_by<'a>(
     case: &str,
     class: &str,
     platform: &str,
+    source_host: Option<&str>,
     seeds: &BTreeSet<u64>,
     evidence: &Evidence,
 ) -> BTreeSet<u64> {
     let mut covered = BTreeSet::new();
     for x in xfails.filter(|x| {
-        x.class == class && x.matches(case, platform) && excuses(x, case, class, evidence).is_ok()
+        x.class == class
+            && x.applies_on_host(platform, source_host)
+            && glob_match(&x.case, case)
+            && excuses(x, case, class, evidence).is_ok()
     }) {
         match &x.seeds {
             None => return seeds.clone(),
@@ -694,6 +703,7 @@ pub fn judge_with(
             case,
             class,
             platform,
+            host().as_deref(),
             seeds,
             evidence,
         );
@@ -759,9 +769,9 @@ pub fn judge_with(
     verdict
 }
 
-/// Rewrites `xfails` so that this platform's run passes exactly, without
-/// touching what other platforms or cases that did not run expect. Links
-/// of replaced entries are kept; new proposals get the reason
+/// Proposes changes for this platform and host without narrowing entries
+/// for unobserved hosts, platforms or cases. Links of replaced entries
+/// are kept; new proposals get the reason
 /// `TODO: <problem>` from `problems`.
 pub fn bless(
     xfails: &[Xfail],
@@ -794,15 +804,26 @@ pub fn bless_observing(
         unobserved: unobserved.clone(),
         ..Default::default()
     };
-    bless_with(xfails, platform, ran, observed, &evidence, problems)
+    bless_with(
+        xfails,
+        platform,
+        host().as_deref(),
+        ran,
+        observed,
+        &evidence,
+        problems,
+    )
 }
 
 /// [`bless`] with measurements: a failure outside every entry's bound gets a
 /// new entry (TODO reason) whose bound is the measured range, to be
-/// reviewed against the mechanism.
+/// reviewed against the mechanism. Unknown-host observations cannot remove
+/// entries. All-host entries are retained because finite host observations
+/// cannot establish their behavior on every possible host.
 pub fn bless_with(
     xfails: &[Xfail],
     platform: &str,
+    source_host: Option<&str>,
     ran: &Ran,
     observed: &Observed,
     evidence: &Evidence,
@@ -819,9 +840,15 @@ pub fn bless_with(
         let unmeasured = matched
             .iter()
             .any(|(case, _)| unobserved.contains(&((*case).clone(), x.class.clone())));
-        if !x.applies_on(platform) || matched.is_empty() || x.flaky || unmeasured {
+        if source_host.is_none()
+            || x.hosts.is_empty()
+            || !x.applies_on_host(platform, source_host)
+            || matched.is_empty()
+            || x.flaky
+            || unmeasured
+        {
             out.push(x.clone());
-            if x.applies_on(platform) {
+            if x.applies_on_host(platform, source_host) {
                 kept_here.push(x.clone());
             }
             continue;
@@ -847,6 +874,19 @@ pub fn bless_with(
         if !others.is_empty() {
             out.push(x.with_platforms(others));
         }
+        let other_hosts: Vec<String> = x
+            .hosts
+            .iter()
+            .filter(|h| Some(h.as_str()) != source_host)
+            .cloned()
+            .collect();
+        if !other_hosts.is_empty() {
+            out.push(Xfail {
+                platforms: vec![platform.to_string()],
+                hosts: other_hosts,
+                ..x.clone()
+            });
+        }
         if let Some(listed) = &x.seeds {
             for (case, ran_seeds) in &matched {
                 let not_ran: BTreeSet<u64> = listed
@@ -859,6 +899,7 @@ pub fn bless_with(
                         case: (*case).clone(),
                         seeds: Some(not_ran),
                         platforms: vec![platform.to_string()],
+                        hosts: source_host.into_iter().map(str::to_string).collect(),
                         ..x.clone()
                     };
                     out.push(entry.clone());
@@ -868,10 +909,19 @@ pub fn bless_with(
         }
     }
     for ((case, class), seeds) in observed {
-        let covered = covered_by(kept_here.iter(), case, class, platform, seeds, evidence);
+        let covered = covered_by(
+            kept_here.iter(),
+            case,
+            class,
+            platform,
+            source_host,
+            seeds,
+            evidence,
+        );
         let fully = kept_here.iter().any(|x| {
             x.class == *class
-                && x.matches(case, platform)
+                && x.applies_on_host(platform, source_host)
+                && glob_match(&x.case, case)
                 && x.seeds.is_none()
                 && excuses(x, case, class, evidence).is_ok()
         });
@@ -879,9 +929,11 @@ pub fn bless_with(
             continue;
         }
         let missing: BTreeSet<u64> = seeds.difference(&covered).copied().collect();
-        let previous = xfails
-            .iter()
-            .find(|x| x.class == *class && glob_match(&x.case, case));
+        let previous = xfails.iter().find(|x| {
+            x.class == *class
+                && x.applies_on_host(platform, source_host)
+                && glob_match(&x.case, case)
+        });
         let entry = Xfail {
             case: case.clone(),
             class: class.clone(),
@@ -889,7 +941,7 @@ pub fn bless_with(
             seeds: (!seeds.is_empty()).then_some(missing),
             flaky: false,
             starved: false,
-            hosts: Vec::new(),
+            hosts: source_host.into_iter().map(str::to_string).collect(),
             bound: if seeds.is_empty() {
                 evidence
                     .measures
@@ -1055,6 +1107,7 @@ fn write_records_to(dir: &Path, records: &[(Record, serde_json::Value)]) {
         .expect("open report file");
     for (record, extra) in records {
         let mut value = serde_json::to_value(record).expect("serialize report record");
+        value["host"] = serde_json::to_value(host()).expect("serialize report host");
         if let (Some(map), Some(extra)) = (value.as_object_mut(), extra.as_object()) {
             for (k, v) in extra {
                 map.entry(k.clone()).or_insert_with(|| v.clone());
@@ -1082,7 +1135,7 @@ mod tests {
             seeds: seeds.map(set),
             flaky: false,
             starved: false,
-            hosts: Vec::new(),
+            hosts: host().into_iter().collect(),
             bound: Bound::new(),
             reason: "r".into(),
             link: String::new(),
@@ -1122,7 +1175,13 @@ mod tests {
                             repro: String::new(),
                             seconds: 0.0,
                         };
-                        write_records_to(dir, &[(record, serde_json::json!({"writer": writer}))]);
+                        write_records_to(
+                            dir,
+                            &[(
+                                record,
+                                serde_json::json!({"writer": writer, "host": "incorrect"}),
+                            )],
+                        );
                     }
                 });
             }
@@ -1132,6 +1191,8 @@ mod tests {
         let cases: BTreeSet<String> = text
             .lines()
             .map(|line| {
+                let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                assert_eq!(value["host"], serde_json::json!(host()));
                 let record: Record = serde_json::from_str(line).unwrap();
                 assert_eq!(record.outcome, Outcome::Unsupported);
                 record.case
@@ -1333,6 +1394,90 @@ mod tests {
         assert_eq!(blessed, vec![xfails[0].clone(), proposed]);
     }
 
+    #[test]
+    fn bless_preserves_unobserved_host_and_platform_slices() {
+        let xfail = Xfail {
+            hosts: vec!["github-hosted".into(), "local".into()],
+            ..entry("a", "stale", &["macos", "windows"], None)
+        };
+        let ran = Ran::from([("a".into(), None)]);
+        let blessed = bless_with(
+            &[xfail.clone()],
+            "macos",
+            Some("local"),
+            &ran,
+            &Observed::new(),
+            &Evidence::default(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(blessed.len(), 2);
+        assert!(
+            blessed
+                .iter()
+                .any(|x| x.platforms == ["windows"] && x.hosts == xfail.hosts)
+        );
+        assert!(
+            blessed
+                .iter()
+                .any(|x| x.platforms == ["macos"] && x.hosts == ["github-hosted"])
+        );
+        assert!(
+            !blessed
+                .iter()
+                .any(|x| x.applies_on_host("macos", Some("local")))
+        );
+
+        let untested = bless_with(
+            &[xfail.clone()],
+            "macos",
+            Some("blacksmith"),
+            &ran,
+            &Observed::new(),
+            &Evidence::default(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(untested, vec![xfail]);
+    }
+
+    #[test]
+    fn bless_unknown_hosts_cannot_remove_or_narrow_entries() {
+        let xfails = vec![
+            entry("a", "stale", &["macos"], Some(&[1, 2])),
+            Xfail {
+                hosts: Vec::new(),
+                ..entry("b", "stale", &["macos"], None)
+            },
+        ];
+        let ran = Ran::from([("a".into(), Some(set(&[1, 2]))), ("b".into(), None)]);
+        for observed in [
+            Observed::new(),
+            Observed::from([(("a".into(), "stale".into()), set(&[1]))]),
+        ] {
+            let blessed = bless_with(
+                &xfails,
+                "macos",
+                None,
+                &ran,
+                &observed,
+                &Evidence::default(),
+                &BTreeMap::new(),
+            );
+            for entry in &xfails {
+                assert!(blessed.contains(entry));
+            }
+        }
+        let blessed = bless_with(
+            &xfails[1..],
+            "macos",
+            Some("blacksmith"),
+            &ran,
+            &Observed::new(),
+            &Evidence::default(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(blessed, xfails[1..]);
+    }
+
     fn measured(case: &str, class: &str, metrics: &[(&str, f64, f64)]) -> Evidence {
         let mut evidence = Evidence::default();
         evidence.measures.insert(
@@ -1450,7 +1595,15 @@ mod tests {
         let ran = Ran::from([("a".to_string(), None)]);
         let observed = Observed::from([(("a".into(), "sync".into()), set(&[]))]);
         let evidence = measured("a", "sync", &[("ms", -201.0, -199.0)]);
-        let blessed = bless_with(&[], "macos", &ran, &observed, &evidence, &BTreeMap::new());
+        let blessed = bless_with(
+            &[],
+            "macos",
+            host().as_deref(),
+            &ran,
+            &observed,
+            &evidence,
+            &BTreeMap::new(),
+        );
         assert_eq!(blessed.len(), 1);
         assert_eq!(
             blessed[0].bound["ms"],
