@@ -641,6 +641,8 @@ def cmd_run(args):
 
     out_root = Path(args.out).resolve()
     work = out_root / "work"
+    if ctx.source_fixture.is_relative_to(work) or work.is_relative_to(ctx.source_fixture):
+        sys.exit(f"--fixture {ctx.source_fixture} and the work directory {work} overlap; the work directory is deleted before each run")
     for _, bin_dir in variants:
         ctx.bin_dir = Path(bin_dir).resolve()
         try:
