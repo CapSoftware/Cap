@@ -1568,6 +1568,24 @@ fn encoder_service_cpu() -> f64 {
         .sum()
 }
 
+#[cfg(target_os = "macos")]
+fn recording_instructions() -> anyhow::Result<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
+    let result = unsafe {
+        libc::proc_pid_rusage(
+            std::process::id() as i32,
+            libc::RUSAGE_INFO_V4,
+            usage.as_mut_ptr().cast(),
+        )
+    };
+    anyhow::ensure!(
+        result == 0,
+        "cannot read recording instruction counter: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(unsafe { usage.assume_init() }.ri_instructions)
+}
+
 /// Overhead of the out-of-process muxer at a real Studio size: 1920x1080
 /// NV12 at 60 fps for `PERF_SECONDS`, interleaved A/B rounds. Reports CPU
 /// seconds of the recorder and of cap-muxer per recorded second and their
@@ -1621,6 +1639,7 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
             let sample = rt.block_on(async {
                 let info = VideoInfo::from_raw(RawVideoFormat::Nv12, width, height, fps);
                 let (tx, rx) = flume::bounded::<source::Frame>(8);
+                let instruction_start = if delivered_fps.is_some() { recording_instructions()? } else { 0 };
                 let pipeline =
                     source::pipeline_with(&display, arm, rx, Timestamps::now(), info).await?;
                 let before = process_usage(me).map(|u| u.0).unwrap_or(0.0);
@@ -1662,7 +1681,7 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
                 let stopped = Instant::now();
                 pipeline.stop().await.map_err(|e| anyhow!("stop: {e:#}"))?;
                 if let Some(path) = std::env::var_os("CAP_VERIFY_STUDIO_PERF_OUTPUT") {
-                    std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"delivered_fps": delivered_fps,"capture_seconds":seconds,"frames":send_nanos.len(),"enqueue_nanos":send_nanos,"stop_nanos":stopped.elapsed().as_nanos()}))?)?;
+                    std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"delivered_fps": delivered_fps,"capture_seconds":seconds,"frames":send_nanos.len(),"instructions":recording_instructions()?.saturating_sub(instruction_start),"enqueue_nanos":send_nanos,"stop_nanos":stopped.elapsed().as_nanos()}))?)?;
                 }
                 let after = process_usage(me).map(|u| u.0).unwrap_or(0.0);
                 let service = (encoder_service_cpu() - service_before).max(0.0);
