@@ -152,6 +152,7 @@ impl H264PacketEncoder {
         F: FnMut(EncodedPacket) -> Result<(), EncodePacketError>,
     {
         self.update_pts(&mut frame, timestamp);
+        let requested = frame.kind() == ffmpeg::picture::Type::I;
 
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
@@ -166,13 +167,13 @@ impl H264PacketEncoder {
         } else {
             &mut frame
         };
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send);
+        match &mut self.keyframes {
+            Some(keyframes) => keyframes.send(frame_to_send, requested, |frame| {
+                self.encoder.send_frame(frame)
+            }),
+            None => self.encoder.send_frame(frame_to_send),
         }
-
-        self.encoder
-            .send_frame(frame_to_send)
-            .map_err(EncodePacketError::Encode)?;
+        .map_err(EncodePacketError::Encode)?;
 
         self.drain_packets(on_packet)
     }
@@ -188,6 +189,7 @@ impl H264PacketEncoder {
         F: FnMut(EncodedPacket) -> Result<(), EncodePacketError>,
     {
         self.update_pts(frame, timestamp);
+        let requested = frame.kind() == ffmpeg::picture::Type::I;
 
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
@@ -202,13 +204,13 @@ impl H264PacketEncoder {
         } else {
             frame
         };
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send);
+        match &mut self.keyframes {
+            Some(keyframes) => keyframes.send(frame_to_send, requested, |frame| {
+                self.encoder.send_frame(frame)
+            }),
+            None => self.encoder.send_frame(frame_to_send),
         }
-
-        self.encoder
-            .send_frame(frame_to_send)
-            .map_err(EncodePacketError::Encode)?;
+        .map_err(EncodePacketError::Encode)?;
 
         self.drain_packets(on_packet)
     }
@@ -279,6 +281,9 @@ impl H264PacketEncoder {
             let dts = self.packet.dts().unwrap_or(pts);
             let duration = self.packet.duration();
             let is_keyframe = self.packet.is_key();
+            if let Some(keyframes) = &mut self.keyframes {
+                keyframes.observe(pts, is_keyframe);
+            }
             let data = self.packet.data().map(|d| d.to_vec()).unwrap_or_default();
 
             on_packet(EncodedPacket {
@@ -425,6 +430,7 @@ mod tests {
         let Some(keys) = keyframe_times(&["h264_videotoolbox"], 30, 13) else {
             return;
         };
+        assert!(keys.len() >= 6, "keyframes at {keys:?}");
         let gaps: Vec<f64> = keys.windows(2).map(|w| w[1] - w[0]).collect();
         assert!(
             gaps.iter().all(|gap| *gap <= 2.0 + 1.0 + 1e-6),
