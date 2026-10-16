@@ -1,4 +1,4 @@
-name: Instant mixer sparse sample regression
+name: Instant mixer sparse and PCM identity proof
 on:
   push:
     branches: [ci/fixproof-instant-mixer]
@@ -10,8 +10,18 @@ env:
   CARGO_INCREMENTAL: "0"
 jobs:
   compare:
-    runs-on: blacksmith-6vcpu-macos-15
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -19,9 +29,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/engine-verify-setup
         with:
-          target: aarch64-apple-darwin
+          target: ${{ matrix.target }}
           tier: fast
       - name: Link native framework
+        if: runner.os == 'macOS'
         run: |
           mkdir -p target/ci-verify/Frameworks
           ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
@@ -50,22 +61,39 @@ jobs:
               )
               path.write_text(source)
           PY
-      - name: Compare unchanged strict sparse probe
+      - name: Compare strict sparse probe and single-source recordings
         run: |
-          set +e
           set -o pipefail
-          failed=0
+          root="$RUNNER_TEMP/mixer-regression"
           for arm in main candidate; do
-            cp "$RUNNER_TEMP/mixer-regression/$arm.rs" crates/recording/src/sources/audio_mixer.rs
-            cargo test -p cap-recording --lib --profile ci-verify --locked pcm_sparse_system_and_pause_resume_preserve_later_gaps -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-regression/$arm.log"
-            status=$?
-            echo "ARM=$arm EXIT=$status"
-            if [ "$status" != 0 ]; then failed=1; fi
+            cp "$root/$arm.rs" crates/recording/src/sources/audio_mixer.rs
+            status=0
+            cargo test -p cap-recording --lib --profile ci-verify --locked pcm_sparse_system_and_pause_resume_preserve_later_gaps -- --nocapture 2>&1 | tee "$root/$arm.log" || status=$?
+            if [[ "$arm" == main ]]; then test "$status" = 101; else test "$status" = 0; fi
+            cargo run -p cap-verify --example mixer-pcm-identity --profile ci-verify --locked -- "$root/$arm-recordings" > "$root/$arm-recordings.log" 2>&1
           done
-          exit "$failed"
+          python3 - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "mixer-regression"
+          assert "peaks=[14401, 28802, 43203]" in (root / "main.log").read_text()
+          assert "peaks=[14400, 28800, 43200]" in (root / "candidate.log").read_text()
+          results = {}
+          for source in ["mic", "system"]:
+              files = [root / f"{arm}-recordings/{source}.pcm" for arm in ["main", "candidate"]]
+              data = [file.read_bytes() for file in files]
+              assert data[0] == data[1] and data[0], (source, [len(value) for value in data])
+              metadata = [json.loads((root / f"{arm}-recordings/{source}.json").read_text()) for arm in ["main", "candidate"]]
+              assert metadata[0] == metadata[1], (source, metadata)
+              results[source] = {"bytes": len(data[0]), "sha256": hashlib.sha256(data[0]).hexdigest(), "metadata": metadata[0]}
+          (root / "identity.json").write_text(json.dumps(results, indent=2))
+          print(json.dumps(results, indent=2))
+          PYCODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: mixer-sparse-comparison
+          name: mixer-sparse-comparison-${{ matrix.os }}
           path: ${{ runner.temp }}/mixer-regression
           retention-days: 7
