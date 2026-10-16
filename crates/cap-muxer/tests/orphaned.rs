@@ -17,8 +17,11 @@ const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 const FPS: i32 = 30;
 
+/// pts, dts, keyframe, payload.
+type EncodedPacket = (i64, i64, bool, Vec<u8>);
+
 /// libx264 packets for `count` gray frames with a keyframe every `gop`.
-fn encode(count: i64, gop: u32) -> (Vec<u8>, Vec<(i64, i64, bool, Vec<u8>)>) {
+fn encode(count: i64, gop: u32) -> (Vec<u8>, Vec<EncodedPacket>) {
     ffmpeg::init().unwrap();
     let codec = codec::encoder::find_by_name("libx264").expect("libx264");
     let mut context = codec::context::Context::new_with_codec(codec)
