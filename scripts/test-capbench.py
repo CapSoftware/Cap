@@ -135,6 +135,17 @@ class CapbenchTests(unittest.TestCase):
         with self.assertRaises(capbench.InvalidRun):
             capbench.validated_video("thread 'main' panicked", 101)
 
+    def test_runs_missing_a_metric_are_invalid(self):
+        better = capbench.BENCHES["decode-display"]["better"]
+        complete = {key: 1.0 for key in better}
+        self.assertEqual(capbench.missing_metrics(better, complete), [])
+        crashed = {"wall_s": 0.4, "cpu_s": 0.1, "peak_commit_mb": 40.0}
+        self.assertIn("sequential_fps", capbench.missing_metrics(better, crashed))
+        no_job = {key: 1.0 for key in better if key not in capbench.JOB_METRICS}
+        self.assertEqual(capbench.missing_metrics(better, no_job), [])
+        self.assertNotIn("delivered_fps", capbench.BENCHES["record-instant-30"]["better"])
+        self.assertIn("delivered_fps", capbench.BENCHES["record-studio-60"]["better"])
+
     def test_variant_env_is_scoped_per_label(self):
         env = capbench.parse_variant_env(["base", "t4"], ["t4:CAP_EXP_DECODE_THREADS=4", "t4:X=a=b"])
         self.assertEqual(env, {"base": {}, "t4": {"CAP_EXP_DECODE_THREADS": "4", "X": "a=b"}})
