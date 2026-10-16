@@ -28,6 +28,10 @@ on:
         description: "Preserve recordings and raw crash snapshots for passing cases"
         type: boolean
         default: false
+      system_audio:
+        description: "Blacksmith only: play and require system audio through BlackHole (not yet characterised)"
+        type: boolean
+        default: false
       runners:
         description: "blacksmith (default), hosted (GitHub macOS, fallback) or both"
         type: choice
@@ -66,13 +70,16 @@ jobs:
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
       CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
-      # Hosted macos-26 has a virtual output device that gives
-      # ScreenCaptureKit only silence, so system audio is not required
-      # there; Blacksmith gets BlackHole (set up below), which carries the
-      # stimulus's audio to ScreenCaptureKit, so system audio is required
-      # and the system-only case runs.
+      # Hosted runners' output devices give ScreenCaptureKit only silence, so
+      # system audio is not checked there. Blacksmith gets BlackHole (set up
+      # below), which does carry the stimulus's audio on macOS 15 (not on
+      # 26), but its system-audio timing is not characterised yet (run
+      # 38843005408: system audio +31 to +44 ms against the mic, BlackHole
+      # latency not in the truth), so by default the stimulus stays silent
+      # there too; dispatch system_audio=true plays and requires it.
       CAP_VERIFY_AUDIO_OUTPUT: ${{ startsWith(matrix.runner, 'blacksmith-') && 'BlackHole 2ch' || matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
-      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && '1' || '' }}
+      CAP_VERIFY_STIMULUS_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && !inputs.system_audio && '0' || '' }}
+      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && inputs.system_audio && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
 
