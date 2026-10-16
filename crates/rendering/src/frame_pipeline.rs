@@ -11,6 +11,8 @@ use crate::{ProjectUniforms, RenderingError};
 use crate::iosurface_texture::{IOSurfaceTextureCache, import_metal_texture_to_wgpu_with_usage};
 #[cfg(target_os = "macos")]
 use cidre::{arc, cf, cv, io, mtl};
+#[cfg(target_os = "macos")]
+use foreign_types::ForeignType;
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
@@ -876,7 +878,7 @@ impl RgbaToNv12Converter {
 
     /// Arms the pending output after its command buffer has been submitted:
     /// readback mode starts the buffer map, surface mode registers a
-    /// submitted-work-done completion flag.
+    /// native queue completion signal.
     pub fn after_submit(&mut self, queue: &wgpu::Queue) {
         match self.pending.as_mut() {
             Some(PendingNv12Output::Readback(pending)) => {
@@ -892,12 +894,26 @@ impl RgbaToNv12Converter {
             }
             #[cfg(target_os = "macos")]
             Some(PendingNv12Output::Surface(pending)) => {
-                let completed = Arc::new(AtomicBool::new(false));
-                let callback_completed = Arc::clone(&completed);
-                queue.on_submitted_work_done(move || {
-                    callback_completed.store(true, Ordering::Release);
-                });
-                pending.completed = Some(completed);
+                pending.completed = unsafe {
+                    queue.as_hal::<wgpu_hal::api::Metal, _, _>(|queue| {
+                        let queue = queue?.as_raw().lock();
+                        let queue = &*queue.as_ptr().cast::<mtl::CmdQueue>();
+                        let mut marker = queue.new_cmd_buf()?;
+                        let (tx, rx) = oneshot::channel();
+                        let mut tx = Some(tx);
+                        let mut handler =
+                            mtl::CmdBufHandler::new1(move |buffer: &mut mtl::CmdBuf| {
+                                if let Some(tx) = tx.take() {
+                                    let _ =
+                                        tx.send(buffer.status() == mtl::CmdBufStatus::Completed);
+                                }
+                            });
+                        // This queue marker completes after the surface copy without requiring wgpu polling.
+                        marker.add_completed_handler(&mut handler);
+                        marker.commit();
+                        Some(rx)
+                    })
+                };
             }
             #[cfg(target_os = "linux")]
             Some(PendingNv12Output::External(pending)) => {
@@ -1017,7 +1033,7 @@ impl PendingNv12Output {
 #[cfg(target_os = "macos")]
 pub struct PendingNv12Surface {
     pixel_buffer: arc::R<cv::PixelBuf>,
-    completed: Option<Arc<AtomicBool>>,
+    completed: Option<oneshot::Receiver<bool>>,
     width: u32,
     height: u32,
     y_stride: u32,
@@ -1031,30 +1047,24 @@ unsafe impl Send for PendingNv12Surface {}
 
 #[cfg(target_os = "macos")]
 impl PendingNv12Surface {
-    async fn wait(self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
-        let Some(completed) = self.completed.as_ref() else {
-            return Err(RenderingError::BufferMapWaitingFailed);
-        };
+    async fn wait(mut self, device: &wgpu::Device) -> Result<Nv12RenderedFrame, RenderingError> {
+        let completed = self
+            .completed
+            .take()
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
         let started = Instant::now();
         let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
-        let mut poll_count = 0u32;
-        loop {
-            if readback_waited(started, self.frame_number) > timeout_duration {
-                return Err(RenderingError::BufferMapWaitingFailed);
-            }
-            if completed.load(Ordering::Acquire) {
-                break;
-            }
-            device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
-                tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
+        let remaining = timeout_duration
+            .checked_sub(readback_waited(started, self.frame_number))
+            .ok_or(RenderingError::BufferMapWaitingFailed)?;
+        let succeeded = tokio::time::timeout(remaining, completed)
+            .await
+            .map_err(|_| RenderingError::BufferMapWaitingFailed)?
+            .map_err(|_| RenderingError::BufferMapWaitingFailed)?;
+        if !succeeded || readback_waited(started, self.frame_number) > timeout_duration {
+            return Err(RenderingError::BufferMapWaitingFailed);
         }
+        device.poll(wgpu::PollType::Poll)?;
 
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
@@ -2458,6 +2468,43 @@ mod surface_output_tests {
             .wait_with_pool(device, None)
             .await
             .expect("conversion completes")
+    }
+
+    #[tokio::test]
+    async fn surface_completion_wakes_without_device_polling() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = gradient_texture(&device, &queue, 64, 32);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        converter.enable_surface_output();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(
+            converter
+                .submit_conversion(&device, &queue, &mut encoder, &source, 64, 32, 0, 30)
+                .await
+                .expect("surface conversion")
+        );
+        queue.submit([encoder.finish()]);
+        converter.after_submit(&queue);
+        let Some(PendingNv12Output::Surface(mut pending)) = converter.take_pending() else {
+            panic!("expected surface output");
+        };
+        let completed = pending.completed.take().expect("native completion signal");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), completed)
+                .await
+                .expect("native completion without polling")
+                .expect("completion sender")
+        );
+        let (tx, rx) = oneshot::channel();
+        tx.send(false).expect("completion receiver");
+        pending.completed = Some(rx);
+        assert!(matches!(
+            pending.wait(&device).await,
+            Err(RenderingError::BufferMapWaitingFailed)
+        ));
     }
 
     fn assert_surface_matches_cpu(
