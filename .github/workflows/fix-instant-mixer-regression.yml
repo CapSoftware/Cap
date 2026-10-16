@@ -2,7 +2,10 @@ name: Instant mixer sparse and PCM identity proof
 on:
   push:
     branches: [ci/fixproof-instant-mixer]
-    paths: [.github/workflows/fix-instant-mixer-regression.yml]
+    paths:
+      - .github/workflows/fix-instant-mixer-regression.yml
+      - crates/recording/src/sources/audio_mixer.rs
+      - crates/recording/src/output_pipeline/core.rs
   workflow_dispatch:
 permissions:
   contents: read
