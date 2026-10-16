@@ -1,3 +1,4 @@
+use crate::cpu_yuv::YuvMatrix;
 use ::ffmpeg::Rational;
 use std::{
     fmt,
@@ -158,6 +159,7 @@ pub struct DecodedFrame {
     width: u32,
     height: u32,
     format: PixelFormat,
+    matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
     #[cfg(target_os = "macos")]
@@ -283,6 +285,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Rgba,
+            matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
             #[cfg(target_os = "macos")]
@@ -300,6 +303,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Rgba,
+            matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
             #[cfg(target_os = "macos")]
@@ -324,6 +328,7 @@ impl DecodedFrame {
             width: frame.width,
             height: frame.height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: frame.y_pitch as u32,
             uv_stride: frame.uv_pitch as u32,
             cuda_nv12: Some(frame),
@@ -341,6 +346,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
@@ -364,6 +370,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
@@ -388,6 +395,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
@@ -406,6 +414,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Yuv420p,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
@@ -429,6 +438,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Yuv420p,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
@@ -447,6 +457,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -467,6 +478,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -492,6 +504,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -560,6 +573,16 @@ impl DecodedFrame {
 
     pub fn format(&self) -> PixelFormat {
         self.format
+    }
+
+    /// The Y'CbCr matrix to convert this frame's planes to RGB with.
+    pub fn matrix(&self) -> YuvMatrix {
+        self.matrix
+    }
+
+    pub fn with_matrix(mut self, matrix: YuvMatrix) -> Self {
+        self.matrix = matrix;
+        self
     }
 
     pub fn byte_len(&self) -> usize {
@@ -663,6 +686,22 @@ impl DecodedFrame {
 
 pub enum VideoDecoderMessage {
     GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
+}
+
+/// The source's Y'CbCr matrix from its colour tag, for decoders that do not
+/// see FFmpeg frames (Media Foundation). BT.601 when the file cannot be read.
+#[cfg(target_os = "windows")]
+pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
+    ::ffmpeg::format::input(path)
+        .ok()
+        .and_then(|input| {
+            let stream = input.streams().best(::ffmpeg::media::Type::Video)?;
+            let context = ::ffmpeg::codec::Context::from_parameters(stream.parameters()).ok()?;
+            Some(YuvMatrix::from_color_space(
+                context.decoder().video().ok()?.color_space(),
+            ))
+        })
+        .unwrap_or_default()
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
