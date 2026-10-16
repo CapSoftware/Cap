@@ -1,5 +1,6 @@
 name: Instant mixer full main control
 on:
+  workflow_dispatch:
   push:
     branches: [ci/fixproof-instant-mixer-base]
     paths: [.github/workflows/fix-instant-mixer-full.yml]
@@ -13,6 +14,7 @@ jobs:
       tier: full
       proof-all: true
   capture:
+    needs: engine
     uses: ./.github/workflows/verify-recording.yml
     with:
       tier: full
