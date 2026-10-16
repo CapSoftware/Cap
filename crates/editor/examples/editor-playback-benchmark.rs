@@ -467,6 +467,18 @@ async fn main() {
                 .map(|seconds| (seconds * fps as f64).round() as u32)
         })
         .unwrap_or(0);
+    // `--press-gap <secs>` idles between presses, e.g. to exercise the audio
+    // output's idle pause before the next play.
+    let press_gap = arg_value(&args, "--press-gap").map(|value| {
+        value
+            .parse::<f64>()
+            .ok()
+            .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+            .unwrap_or_else(|| {
+                eprintln!("--press-gap expects a non-negative number of seconds, got {value:?}");
+                std::process::exit(2);
+            })
+    });
 
     println!("{}", "=".repeat(64));
     println!("  CAP EDITOR LIVE PLAYBACK BENCHMARK");
@@ -584,6 +596,11 @@ async fn main() {
     let mut measured_elapsed = 0.0f64;
 
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
+        if press_idx > 0
+            && let Some(gap) = press_gap
+        {
+            tokio::time::sleep(gap).await;
+        }
         let playback = Playback {
             renderer: renderer.clone(),
             render_constants: render_constants.clone(),

@@ -13,6 +13,7 @@
         "react": "19.2.0",
         "react-dom": "19.2.0",
         "sharp": "0.35.3",
+        "tsc-rs": "0.6.0",
         "tsdown": "^0.15.6",
         "turbo": "^2.3.4",
         "typescript": "^5.8.3",
@@ -2457,6 +2458,18 @@
     "@total-typescript/ts-reset": ["@total-typescript/ts-reset@0.6.1", "", {}, "sha512-cka47fVSo6lfQDIATYqb/vO1nvFfbPw7uWLayIXIhGETj0wcOOlrlkobOMDNQOFr9QOafegUPq13V2+6vtD7yg=="],
 
     "@ts-rest/core": ["@ts-rest/core@3.52.1", "", { "peerDependencies": { "@types/node": "^18.18.7 || >=20.8.4", "zod": "^3.22.3" }, "optionalPeers": ["@types/node", "zod"] }, "sha512-tAjz7Kxq/grJodcTA1Anop4AVRDlD40fkksEV5Mmal88VoZeRKAG8oMHsDwdwPZz+B/zgnz0q2sF+cm5M7Bc7g=="],
+
+    "@tsc-rs/darwin-arm64": ["@tsc-rs/darwin-arm64@0.6.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-9aToB7RVGciaousuImyOqAx2xGiE9g+kCqrQaoR2uiGKxItPcRY+V/bsCP/VIg4O/qWrz6EU128gbyoxG5SKDA=="],
+
+    "@tsc-rs/darwin-x64": ["@tsc-rs/darwin-x64@0.6.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-OT/KmLYe47I4G7cCueorXeWRihCvOVd0+3dud8AtoQ+s6UrtasM9oz+rxvA9oK+F7eAWnxxrg9OeHAvmQtZVEA=="],
+
+    "@tsc-rs/linux-arm64": ["@tsc-rs/linux-arm64@0.6.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-BG+gJQ3rE2vk/XhkZ5XIg2utrkiBp4Mk5y+CKTuOfy88+P8RgkLmPmPlk/cY3ona7xm61Dg4T5LuNjsY7nxsrQ=="],
+
+    "@tsc-rs/linux-x64": ["@tsc-rs/linux-x64@0.6.0", "", { "os": "linux", "cpu": "x64" }, "sha512-I7OFBKqdLF9TzRYQ9VTRHFqKQiIAnpDo7EkSx/0jtwclYz9piosrual6yC3NP4sFaLSPCIMZkscHnGOs/6aCoA=="],
+
+    "@tsc-rs/win32-arm64": ["@tsc-rs/win32-arm64@0.6.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-/ZQTIaLdn7pSYrvvB0lTTQ9EREYNIRIfWC08qeMXwHIoABxDf0vKW8GdoOrZOB5RAOS6wmZYD9UpDfOW0qbmzg=="],
+
+    "@tsc-rs/win32-x64": ["@tsc-rs/win32-x64@0.6.0", "", { "os": "win32", "cpu": "x64" }, "sha512-0/2p/llHCgdopwRY/jsNpkS4foXHTeOGNsUKu/omX7FxXXhV57kodpDl+fjCZVPsInFHVGynrrN/fb2cfqw0cA=="],
 
     "@tsconfig/bun": ["@tsconfig/bun@1.0.7", "", {}, "sha512-udGrGJBNQdXGVulehc1aWT73wkR9wdaGBtB6yL70RJsqwW/yJhIg6ZbRlPOfIUiFNrnBuYLBi9CSmMKfDC7dvA=="],
 
@@ -5513,6 +5526,8 @@
     "ts-api-utils": ["ts-api-utils@2.5.0", "", { "peerDependencies": { "typescript": ">=4.8.4" } }, "sha512-OJ/ibxhPlqrMM0UiNHJ/0CKQkoKF243/AEmplt3qpRgkW8VG7IfOS41h7V8TjITqdByHzrjcS/2si+y4lIh8NA=="],
 
     "ts-interface-checker": ["ts-interface-checker@0.1.13", "", {}, "sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA=="],
+
+    "tsc-rs": ["tsc-rs@0.6.0", "", { "optionalDependencies": { "@tsc-rs/darwin-arm64": "0.6.0", "@tsc-rs/darwin-x64": "0.6.0", "@tsc-rs/linux-arm64": "0.6.0", "@tsc-rs/linux-x64": "0.6.0", "@tsc-rs/win32-arm64": "0.6.0", "@tsc-rs/win32-x64": "0.6.0" }, "bin": { "tsc-rs": "bin/tsc-rs" } }, "sha512-n2Y3ZF6rylMvIJHVwqDf2r7y4SpR5a81OqG4/FlmcasIl4GJ80fLiBa2xEj/nRAHhheQxzbhw5GSe/oU7ZeImA=="],
 
     "tsconfck": ["tsconfck@3.1.6", "", { "peerDependencies": { "typescript": "^5.0.0" }, "optionalPeers": ["typescript"], "bin": { "tsconfck": "bin/tsconfck.js" } }, "sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w=="],
 
