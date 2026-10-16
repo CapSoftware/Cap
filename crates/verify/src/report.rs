@@ -191,6 +191,18 @@ impl Case {
             .or_insert_with(|| why.into());
     }
 
+    pub fn required_track_absent(&mut self, source: &str) {
+        let classes: &[&str] = match source {
+            "mic" => &["sync-screen-mic", "sync-system-mic", "sync-camera-mic"],
+            "system" => &["sync-screen-system", "sync-system-mic"],
+            "camera" => &["sync-camera-mic", "camera-clock"],
+            _ => &[],
+        };
+        for class in classes {
+            self.unobserved(class, "track absent");
+        }
+    }
+
     pub fn note(&mut self, text: impl Into<String>) {
         self.notes.push(text.into());
     }
@@ -552,5 +564,61 @@ pub fn settle(mut case: Case) -> Result<CaseResult, String> {
             expectations_path().display()
         )),
         _ => Ok(result),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_required_tracks_are_unobserved_not_passes() {
+        let mut case = Case::new("recording/studio-recovery/crash");
+        case.problem("missing", "no mic track recorded");
+        case.required_track_absent("mic");
+        for class in ["sync-screen-mic", "sync-system-mic", "sync-camera-mic"] {
+            assert_eq!(
+                case.unobserved.get(class).map(String::as_str),
+                Some("track absent")
+            );
+        }
+        assert!(!case.unobserved.contains_key("sync-screen-system"));
+        assert!(case.failed());
+        case.required_track_absent("camera");
+        assert_eq!(
+            case.unobserved.get("camera-clock").map(String::as_str),
+            Some("track absent")
+        );
+        case.required_track_absent("system");
+        assert_eq!(
+            case.unobserved
+                .get("sync-screen-system")
+                .map(String::as_str),
+            Some("track absent")
+        );
+    }
+    #[test]
+    fn instant_system_offset_expectation_requires_its_exact_signature() {
+        let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.class == "sync-system" && entry.flaky)
+            .unwrap();
+        let metrics = |offset, mic| {
+            BTreeMap::from([
+                ("count".into(), cap_verify_expect::Range::at(1.0)),
+                ("offset-ms".into(), cap_verify_expect::Range::at(offset)),
+                ("mic-offset-ms".into(), cap_verify_expect::Range::at(mic)),
+            ])
+        };
+        assert!(cap_verify_expect::within(&entry.bound, Some(&metrics(-46.1, 13.9))).is_ok());
+        for (offset, mic) in [(-71.0, 13.9), (-29.0, 13.9), (-46.1, 35.0), (-46.1, -10.0)] {
+            assert!(cap_verify_expect::within(&entry.bound, Some(&metrics(offset, mic))).is_err());
+        }
+        let mut absent = metrics(-46.1, 13.9);
+        absent.remove("mic-offset-ms");
+        assert!(cap_verify_expect::within(&entry.bound, Some(&absent)).is_err());
+        assert!(entry.matches("export/instant/output/mp4/native", "macos"));
+        assert!(!entry.matches("export/instant/output/mp4/native", "linux"));
     }
 }

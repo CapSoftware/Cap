@@ -67,7 +67,7 @@ concurrency:
 jobs:
   plan:
     name: Plan
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       run: ${{ steps.plan.outputs.run }}
@@ -86,6 +86,7 @@ jobs:
           RUSTUP_TOOLCHAIN: stable
         run: |
           python3 scripts/verify/plan.py test > /dev/null
+          python3 scripts/verify/test_diff.py
           if grep -rn --include='expectations*.toml' '^reason = "TODO' crates; then
             echo "::error::blessed expectations still have TODO reasons: describe each failure (and link its fix) before merging"
             exit 1
@@ -211,7 +212,7 @@ jobs:
     name: Deep review label
     needs: plan
     if: github.event_name == 'pull_request' && needs.plan.outputs.escalate == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       pull-requests: write
@@ -249,7 +250,7 @@ jobs:
     name: Engine verify
     needs: [plan, verify]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
