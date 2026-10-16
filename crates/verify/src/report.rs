@@ -600,25 +600,55 @@ mod tests {
     #[test]
     fn instant_system_offset_expectation_requires_its_exact_signature() {
         let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
-        let entry = entries
+        let entries: Vec<_> = entries
             .iter()
-            .find(|entry| entry.class == "sync-system" && entry.flaky)
-            .unwrap();
+            .filter(|entry| entry.class == "sync-system" && entry.flaky)
+            .collect();
+        assert_eq!(entries.len(), 2);
         let metrics = |offset, mic| {
             BTreeMap::from([
                 ("count".into(), cap_verify_expect::Range::at(1.0)),
                 ("offset-ms".into(), cap_verify_expect::Range::at(offset)),
                 ("mic-offset-ms".into(), cap_verify_expect::Range::at(mic)),
+                (
+                    "system-minus-mic-ms".into(),
+                    cap_verify_expect::Range::at(((offset - mic) * 10.0_f64).round() / 10.0),
+                ),
             ])
         };
-        assert!(cap_verify_expect::within(&entry.bound, Some(&metrics(-46.1, 13.9))).is_ok());
-        for (offset, mic) in [(-71.0, 13.9), (-29.0, 13.9), (-46.1, 35.0), (-46.1, -10.0)] {
-            assert!(cap_verify_expect::within(&entry.bound, Some(&metrics(offset, mic))).is_err());
+        let accepts = |metrics: &BTreeMap<String, cap_verify_expect::Range>| {
+            entries
+                .iter()
+                .any(|entry| cap_verify_expect::within(&entry.bound, Some(metrics)).is_ok())
+        };
+        for (offset, mic) in [(-46.1, 13.9), (7.8, 14.5), (-47.1, 13.9), (8.8, 14.5)] {
+            assert!(accepts(&metrics(offset, mic)));
         }
-        let mut absent = metrics(-46.1, 13.9);
-        absent.remove("mic-offset-ms");
-        assert!(cap_verify_expect::within(&entry.bound, Some(&absent)).is_err());
-        assert!(entry.matches("export/instant/output/mp4/native", "macos"));
-        assert!(!entry.matches("export/instant/output/mp4/native", "linux"));
+        for (offset, mic) in [
+            (-47.2, 13.9),
+            (-45.0, 13.9),
+            (6.7, 14.5),
+            (8.9, 14.5),
+            (-25.0, 35.0),
+            (-56.0, 4.0),
+            (0.0, 14.5),
+        ] {
+            assert!(!accepts(&metrics(offset, mic)));
+        }
+        for required in ["mic-offset-ms", "system-minus-mic-ms"] {
+            let mut absent = metrics(-46.1, 13.9);
+            absent.remove(required);
+            assert!(!accepts(&absent));
+        }
+        for entry in &entries {
+            assert!(entry.matches("export/instant/output/mp4/native", "macos"));
+        }
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.matches("export/instant/output/mp4/native", "linux"))
+                .count(),
+            1
+        );
     }
 }

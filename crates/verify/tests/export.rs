@@ -799,10 +799,15 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
         }
         if av.abs() > 0.005 {
             if source == AudioSource::System
-                && av < 0.0
+                && case.id == "export/instant/output/mp4/native"
                 && let Some(mic_offset_ms) = mic_offset_ms
             {
                 case.measure(&sync_class, "mic-offset-ms", mic_offset_ms);
+                case.measure(
+                    &sync_class,
+                    "system-minus-mic-ms",
+                    ((av * 1e3 - mic_offset_ms) * 10.0).round() / 10.0,
+                );
             }
             case.measure(&sync_class, "offset-ms", (av * 1e4).round() / 10.0);
             case.problem(
