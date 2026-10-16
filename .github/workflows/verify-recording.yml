@@ -1,9 +1,16 @@
 name: Verify recording (real capture)
 
 # Records a marker stimulus through Cap's real Studio and Instant pipelines
-# (ScreenCaptureKit + VideoToolbox) on hosted macOS runners and checks every
+# (ScreenCaptureKit + VideoToolbox) on macOS runners and checks every
 # frame and audio marker against the host-clock truth. See
 # crates/verify/tests/recording.rs.
+#
+# Runners: Blacksmith macOS (M4 Pro VM, 6 vCPU, logged-in GUI session, no
+# concurrency cap) by default; GitHub-hosted macOS (5 concurrent jobs for the
+# whole org) on dispatch with runners=hosted or both. Blacksmith needs Screen
+# Recording granted in TCC to the binaries that capture and their runner
+# ancestry, and an audio device (BlackHole), which also makes system audio
+# capturable there.
 
 on:
   workflow_dispatch:
@@ -21,6 +28,11 @@ on:
         description: "Preserve recordings and raw crash snapshots for passing cases"
         type: boolean
         default: false
+      runners:
+        description: "blacksmith (default), hosted (GitHub macOS, fallback) or both"
+        type: choice
+        options: [blacksmith, hosted, both]
+        default: blacksmith
   push:
     branches:
       - ci/verify-recording
@@ -41,7 +53,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-26]
+        runner: ${{ fromJSON(inputs.runners == 'hosted' && '["macos-15","macos-26"]' || inputs.runners == 'both' && '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26","macos-15","macos-26"]' || '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -54,7 +66,13 @@ jobs:
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
       CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
-      CAP_VERIFY_AUDIO_OUTPUT: ${{ matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+      # Hosted macos-26 has a virtual output device that gives
+      # ScreenCaptureKit only silence, so system audio is not required
+      # there; Blacksmith gets BlackHole (set up below), which carries the
+      # stimulus's audio to ScreenCaptureKit, so system audio is required
+      # and the system-only case runs.
+      CAP_VERIFY_AUDIO_OUTPUT: ${{ startsWith(matrix.runner, 'blacksmith-') && 'BlackHole 2ch' || matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && '1' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +114,56 @@ jobs:
           start=$(date +%s)
           cargo test --locked -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
+
+      # Blacksmith runs a logged-in GUI session with SIP disabled, but
+      # ScreenCaptureKit is denied until TCC grants the responsible process
+      # (Runner.Worker), so grant Screen Recording (and Microphone) to every
+      # binary that captures plus the whole runner ancestry, then restart
+      # tccd. It has no audio device: BlackHole provides input and output.
+      - name: Blacksmith capture permissions and audio device
+        if: startsWith(matrix.runner, 'blacksmith-')
+        run: |
+          set -euo pipefail
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for i in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          echo "outputs:"; SwitchAudioSource -a -t output
+          echo "default output: $(SwitchAudioSource -c -t output)"
+
+          cargo test --locked -p cap-verify --test recording --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json, sys
+          for line in sys.stdin:
+              m = json.loads(line)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] in ("recording", "cap-verify-stimulus"):
+                  print(m["executable"])' > "$RUNNER_TEMP/capture-binaries"
+          test "$(wc -l < "$RUNNER_TEMP/capture-binaries")" -ge 2
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          for c in "$(rustup which cargo)" "$HOME/.cargo/bin/cargo"; do echo "$c"; done >> "$RUNNER_TEMP/capture-binaries"
+
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          sudo killall tccd || true
+          sleep 2
 
       - name: Real-capture recording oracle
         run: |
