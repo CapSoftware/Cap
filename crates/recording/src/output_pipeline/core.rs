@@ -4010,12 +4010,16 @@ impl PreparedAudioSources {
                         stop_audio_sources(&mut self.erased_audio_sources, required_scope.as_ref()),
                     )
                     .await;
+                    // A slow device teardown (Bluetooth inputs can take
+                    // seconds) costs at most the audio after this point:
+                    // the mixer closes its inputs at its own drain deadline.
                     if stopped.is_err() {
-                        let error = anyhow!("Mixed audio sources did not stop before the deadline");
+                        warn!("Mixed audio sources did not stop within 1 s; draining what the mixer has");
                         if let Some(scope) = &required_scope {
-                            scope.fail_required(error.to_string());
+                            scope.record_cleanup_error(
+                                "Mixed audio sources did not stop before the deadline".to_string(),
+                            );
                         }
-                        let _ = audio_error.get_or_insert(error);
                     }
                     self.erased_audio_sources.clear();
                 }
@@ -4033,11 +4037,12 @@ impl PreparedAudioSources {
                             match tokio::time::timeout_at(drain_deadline, self.audio_rx.next()).await {
                                 Ok(frame) => frame,
                                 Err(_) => {
-                                    let error = anyhow!("Mixed audio output did not close before the drain deadline");
+                                    warn!(drained, "Mixed audio output did not close before the drain deadline; keeping the audio drained so far");
                                     if let Some(scope) = &required_scope {
-                                        scope.fail_required(error.to_string());
+                                        scope.record_cleanup_error(
+                                            "Mixed audio output did not close before the drain deadline".to_string(),
+                                        );
                                     }
-                                    let _ = audio_error.get_or_insert(error);
                                     break;
                                 }
                             }
