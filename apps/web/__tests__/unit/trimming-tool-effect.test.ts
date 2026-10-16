@@ -32,6 +32,7 @@ describe("TrimmingTool effects", () => {
 	});
 
 	afterEach(() => {
+		root.unmount();
 		container.remove();
 		URL.createObjectURL = originalCreate;
 		URL.revokeObjectURL = originalRevoke;
