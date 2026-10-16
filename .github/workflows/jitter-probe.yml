@@ -1,0 +1,53 @@
+name: Jitter export determinism probe (scratch)
+
+on:
+  push:
+    branches: [scratch/jitter-probe2]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_TIER: full
+
+jobs:
+  probe:
+    name: probe ${{ matrix.copy }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build
+        run: scripts/verify/run.sh full --suites export --no-run
+      - name: Repeat the 120 s jitter export alongside the whole export suite
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/probe"
+          for i in $(seq 1 4); do
+            export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/report-$i"
+            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
+              > "$RUNNER_TEMP/probe/log-$i.txt" 2>&1
+            echo "rep $i: $(grep -h '"export/jitter-camera-120s/full/mp460/avf"' "$CAP_VERIFY_REPORT_DIR"/*.jsonl | grep -o 'nondeterministic: [^(]*\|camera: [0-9]* of [0-9]* frames wrong' | sort -u | tr '\n' ' ')"
+          done
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: jitter-probe-${{ matrix.copy }}
+          path: ${{ runner.temp }}/probe/**/*.jsonl
+          retention-days: 7
