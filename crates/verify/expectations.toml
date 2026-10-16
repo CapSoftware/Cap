@@ -129,14 +129,6 @@ link = ""
 # recording epoch on Linux only.
 
 [[xfail]]
-case = "export/*"
-class = "timestamps"
-platforms = ["windows"]
-flaky = true
-reason = "NEW: under load an offline export reorders frames. A screen decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) makes the render loop emit a fallback frame (crates/rendering/src/lib.rs, the decode-failure fallback) ahead of the frame still waiting for its GPU readback, so the output order becomes 32, 34, 33 and the encoder's monotonic pts repair (EncoderBase::update_pts via queue_frame_reusable, crates/enc-ffmpeg/src/video/h264.rs) shifts every later frame by one slot: frames 33 onward sit off the 60 fps grid while the count stays right. Reproduced deterministically by delaying the two screen responses at 34/60 past the deadline (sol-starved-export.md). Seen on a starved windows-2022 runner (Engine verify 38818870844, windows shard 4, export/basic/camera-hidden/mp460/ffmpeg); the code is shared, but no macOS or Linux run has missed a decode deadline. Fix branch fix/export-frame-order-under-load (frames are retried in order, never substituted)"
-link = ""
-
-[[xfail]]
 case = "export/instant*/output/mp4/native"
 class = "timestamps"
 platforms = ["macos", "windows"]
