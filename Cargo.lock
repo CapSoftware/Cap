@@ -1868,6 +1868,7 @@ dependencies = [
  "cap-muxer-protocol",
  "ffmpeg-next",
  "libc",
+ "tempfile",
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
