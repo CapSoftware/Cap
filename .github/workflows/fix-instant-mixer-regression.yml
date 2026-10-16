@@ -40,8 +40,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mixer-regression"
           cp crates/recording/src/sources/audio_mixer.rs "$RUNNER_TEMP/mixer-regression/candidate.rs"
-          git fetch origin 9be7b7b3dba6ef37e126c0558620c18fff2477eb --depth=1
-          git show 9be7b7b3dba6ef37e126c0558620c18fff2477eb:crates/recording/src/sources/audio_mixer.rs > "$RUNNER_TEMP/mixer-regression/main.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > "$RUNNER_TEMP/mixer-regression/main.rs"
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -50,6 +50,10 @@ jobs:
           start = candidate.index("    struct PcmProbe {")
           end = candidate.index("    #[tokio::test]\n    async fn mix_sources()", start)
           tests = candidate[start:end]
+          for name in ["pcm_first_input_after_grace_drops_and_counts_only_committed_samples", "pcm_watermark_limits_commitment_to_the_shortest_input"]:
+              begin = tests.index("    #[test]\n    fn " + name)
+              finish = tests.index("    #[test]", begin + 1)
+              tests = tests[:begin] + tests[finish:]
           main = (root / "main.rs").read_text()
           at = main.index("    #[tokio::test]\n    async fn mix_sources()")
           (root / "main.rs").write_text(main[:at] + tests + main[at:])
@@ -73,7 +77,7 @@ jobs:
             status=0
             cargo test -p cap-recording --lib --profile ci-verify --locked pcm_delayed_first_delivery_retains_captured_samples -- --nocapture 2>&1 | tee "$root/$arm-delayed.log" || status=$?
             echo "DELAYED_ARM=$arm EXIT=$status"
-            test "$status" = 0
+            if [[ "$arm" == main ]]; then test "$status" = 101; else test "$status" = 0; fi
             cargo run -p cap-verify --example mixer-pcm-identity --profile ci-verify --locked -- "$root/$arm-recordings" > "$root/$arm-recordings.log" 2>&1
           done
           python3 - <<'PYCODE'
@@ -84,6 +88,10 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"]) / "mixer-regression"
           assert "peaks=[14401, 28802, 43203]" in (root / "main.log").read_text()
           assert "peaks=[14400, 28800, 43200]" in (root / "candidate.log").read_text()
+          assert "peaks=[12001]" in (root / "main-delayed.log").read_text()
+          candidate_delayed = (root / "candidate-delayed.log").read_text()
+          for delivery in [400, 800, 1000]:
+              assert f"delivery_ms={delivery} peaks=[12000]" in candidate_delayed
           results = {}
           for source in ["mic", "system"]:
               files = [root / f"{arm}-recordings/{source}.pcm" for arm in ["main", "candidate"]]

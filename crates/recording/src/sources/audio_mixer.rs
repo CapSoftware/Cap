@@ -23,6 +23,7 @@ const MIN_BUFFER_TIMEOUT_WIRED: Duration = Duration::from_millis(20);
 const MIN_BUFFER_TIMEOUT_WIRELESS: Duration = Duration::from_millis(90);
 const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(250);
 const BUFFER_TIMEOUT_HEADROOM: f64 = 2.5;
+const STARTUP_GRACE: Duration = Duration::from_secs(1);
 
 pub const MAX_BUFFERING_TICKS: u32 = 45;
 pub const AUDIO_OUTPUT_FRAMES: u32 = cap_timestamp::AUDIO_OUTPUT_FRAMES as u32;
@@ -41,6 +42,7 @@ struct MixerSource {
     last_input_timestamp: Option<Timestamp>,
     clock_state: SourceClockState,
     samples_supplied: usize,
+    late_samples_dropped: u64,
 }
 
 pub struct AudioMixerBuilder {
@@ -105,6 +107,7 @@ impl AudioMixerBuilder {
             last_input_timestamp: None,
             clock_state: SourceClockState::new(clock_label),
             samples_supplied: 0,
+            late_samples_dropped: 0,
         });
     }
 
@@ -191,6 +194,15 @@ impl AudioMixerBuilder {
             }
 
             std::thread::sleep(Duration::from_millis(5));
+        }
+        for source in &mixer.sources {
+            if source.late_samples_dropped > 0 {
+                info!(
+                    source = source.clock_state.name(),
+                    late_samples_dropped = source.late_samples_dropped,
+                    "AudioMixer: late input sample count"
+                );
+            }
         }
         Ok(())
     }
@@ -573,10 +585,7 @@ impl AudioMixer {
 
                 let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
 
-                source.buffer_last = Some((
-                    timestamp,
-                    Duration::from_secs_f64(frame.samples() as f64 / rate as f64),
-                ));
+                source.buffer_last = Some((timestamp, Duration::from_nanos(frame_duration_ns)));
                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
             }
         }
@@ -585,8 +594,13 @@ impl AudioMixer {
             self.handle_source_format_change(index, old_info, new_info)?;
         }
 
-        if self.start_timestamp.is_none() {
-            self.start_timestamp = self
+        if self.samples_out == 0
+            && self
+                .sources
+                .iter()
+                .all(|source| source.samples_supplied == 0)
+        {
+            let earliest = self
                 .sources
                 .iter()
                 .filter_map(|s| s.buffer.front())
@@ -597,7 +611,8 @@ impl AudioMixer {
                 })
                 .map(|v| v.timestamp);
 
-            if self.start_timestamp.is_some() {
+            if let Some(earliest) = earliest {
+                self.start_timestamp = Some(earliest);
                 self.wall_clock_start = Some(now);
             }
         }
@@ -637,49 +652,79 @@ impl AudioMixer {
             self.force_reset_source(source, starvation_ms);
         }
 
-        for (i, source) in self.sources.iter_mut().enumerate() {
-            let rate = source.info.rate();
-            for buffer in source.buffer.drain(..) {
-                let position =
-                    sample_position(buffer.timestamp, start_timestamp, self.timestamps, rate);
-                while position > source.samples_supplied as i128 {
-                    let samples = ((position - source.samples_supplied as i128) as usize)
-                        .min(samples_for_timeout(rate, source.buffer_timeout));
-                    let silence = silence_frame(source.info, samples);
-                    self.abuffers[i]
-                        .source()
-                        .add(&silence)
-                        .with_context(|| format!("Audio mixer source {i} silence input failed"))?;
-                    source.samples_supplied += samples;
+        let grace_elapsed = now
+            .duration_since(self.timestamps)
+            .saturating_sub(start_timestamp.duration_since(self.timestamps))
+            >= STARTUP_GRACE;
+        let mut watermark = None;
+        let mut waiting_for_input = false;
+        for source in &self.sources {
+            if let Some((timestamp, duration)) = source.buffer_last {
+                let end = timestamp + duration;
+                if watermark.is_none_or(|previous: Timestamp| {
+                    end.duration_since(self.timestamps) < previous.duration_since(self.timestamps)
+                }) {
+                    watermark = Some(end);
                 }
-                let overlap = (source.samples_supplied as i128 - position).max(0) as usize;
-                let frame = if overlap == 0 {
-                    buffer.inner
-                } else if overlap >= buffer.inner.samples() {
-                    continue;
-                } else {
-                    trim_audio_frame_front(&buffer.inner, overlap)
-                        .context("Audio mixer input overlap trim failed")?
-                };
-                let samples = frame.samples();
-                let result = self.abuffers[i].source().add(&frame);
-                if self.required_stop.is_some() {
-                    result
-                        .with_context(|| format!("Audio mixer source {i} filter input failed"))?;
-                }
-                source.samples_supplied += samples;
+            } else if !grace_elapsed {
+                waiting_for_input = true;
             }
-            if source.last_input_timestamp.is_none() {
-                let position = sample_position(now, start_timestamp, self.timestamps, rate)
-                    - samples_for_timeout(rate, source.buffer_timeout) as i128;
-                while position > source.samples_supplied as i128 {
-                    let samples = ((position - source.samples_supplied as i128) as usize)
-                        .min(samples_for_timeout(rate, source.buffer_timeout));
-                    let silence = silence_frame(source.info, samples);
-                    self.abuffers[i].source().add(&silence).with_context(|| {
-                        format!("Audio mixer source {i} startup silence failed")
-                    })?;
+        }
+
+        if let Some(watermark) = watermark.filter(|_| !waiting_for_input) {
+            for (i, source) in self.sources.iter_mut().enumerate() {
+                let rate = source.info.rate();
+                let limit = sample_position(watermark, start_timestamp, self.timestamps, rate)
+                    .max(0) as usize;
+                while let Some(mut buffer) = source.buffer.pop_front() {
+                    let position =
+                        sample_position(buffer.timestamp, start_timestamp, self.timestamps, rate);
+                    let overlap = (source.samples_supplied as i128 - position).max(0) as usize;
+                    if overlap > 0 {
+                        let dropped = overlap.min(buffer.inner.samples());
+                        if source.late_samples_dropped == 0 {
+                            warn!(
+                                source = source.clock_state.name(),
+                                dropped_samples = dropped,
+                                "AudioMixer: dropping input samples that arrived after their time was committed"
+                            );
+                        }
+                        source.late_samples_dropped =
+                            source.late_samples_dropped.saturating_add(dropped as u64);
+                        if dropped == buffer.inner.samples() {
+                            continue;
+                        }
+                        buffer.inner = trim_audio_frame_front(&buffer.inner, dropped)
+                            .context("Audio mixer input overlap trim failed")?;
+                        buffer.timestamp = start_timestamp
+                            + samples_duration(source.samples_supplied, source.info.sample_rate);
+                    }
+                    let gap_end = (position.max(0) as usize).min(limit);
+                    supply_silence(source, &mut self.abuffers[i], i, gap_end)?;
+                    if source.samples_supplied >= limit {
+                        source.buffer.push_front(buffer);
+                        break;
+                    }
+                    let samples = buffer.inner.samples().min(limit - source.samples_supplied);
+                    if samples < buffer.inner.samples() {
+                        let remaining = trim_audio_frame_front(&buffer.inner, samples)
+                            .context("Audio mixer watermark split failed")?;
+                        source.buffer.push_front(AudioFrame::new(
+                            remaining,
+                            buffer.timestamp + samples_duration(samples, source.info.sample_rate),
+                        ));
+                        buffer.inner.set_samples(samples);
+                    }
+                    let result = self.abuffers[i].source().add(&buffer.inner);
+                    if self.required_stop.is_some() {
+                        result.with_context(|| {
+                            format!("Audio mixer source {i} filter input failed")
+                        })?;
+                    }
                     source.samples_supplied += samples;
+                }
+                if source.buffer_last.is_none() {
+                    supply_silence(source, &mut self.abuffers[i], i, limit)?;
                 }
             }
         }
@@ -735,6 +780,30 @@ impl AudioMixer {
     pub fn builder() -> AudioMixerBuilder {
         AudioMixerBuilder::new()
     }
+}
+
+fn samples_duration(samples: usize, rate: u32) -> Duration {
+    Duration::from_nanos((samples as u128 * 1_000_000_000 / u128::from(rate)) as u64)
+}
+
+fn supply_silence(
+    source: &mut MixerSource,
+    input: &mut ffmpeg::filter::Context,
+    index: usize,
+    limit: usize,
+) -> anyhow::Result<()> {
+    while source.samples_supplied < limit {
+        let samples = (limit - source.samples_supplied).min(samples_for_timeout(
+            source.info.rate(),
+            source.buffer_timeout,
+        ));
+        input
+            .source()
+            .add(&silence_frame(source.info, samples))
+            .with_context(|| format!("Audio mixer source {index} silence input failed"))?;
+        source.samples_supplied += samples;
+    }
+    Ok(())
 }
 
 fn sample_position(
@@ -953,6 +1022,7 @@ mod test {
         inputs: Vec<mpsc::Sender<AudioFrame>>,
         output: mpsc::Receiver<AudioFrame>,
         pcm: Vec<[f32; 2]>,
+        deliveries: Vec<(usize, u64)>,
     }
 
     impl PcmProbe {
@@ -971,6 +1041,7 @@ mod test {
                 inputs,
                 output,
                 pcm: Vec::new(),
+                deliveries: Vec::new(),
             }
         }
 
@@ -1009,6 +1080,7 @@ mod test {
                     .unwrap()
             );
             while let Ok(Some(frame)) = self.output.try_next() {
+                self.deliveries.push((self.pcm.len(), millis));
                 for pair in frame.inner.data(0)[..frame.inner.samples() * 8].chunks_exact(8) {
                     self.pcm.push([
                         f32::from_le_bytes(pair[..4].try_into().unwrap()),
@@ -1133,16 +1205,87 @@ mod test {
 
     #[test]
     fn pcm_delayed_first_delivery_retains_captured_samples() {
+        for delivery_ms in [400, 800, 1_000] {
+            let mut probe = PcmProbe::new(2);
+            for chunk in 0..delivery_ms / 20 {
+                probe.send(0, chunk * 20, 960, None);
+                if (chunk + 1) * 20 < delivery_ms {
+                    probe.tick((chunk + 1) * 20);
+                }
+            }
+            probe.send(1, 200, 48_000, Some(2_400));
+            probe.send(0, delivery_ms, 57_600 - delivery_ms as usize * 48, None);
+            probe.tick(delivery_ms);
+            eprintln!(
+                "DELAYED delivery_ms={delivery_ms} peaks={:?}",
+                probe.peaks(1)
+            );
+            assert_eq!(probe.peaks(1), [12_000]);
+        }
+    }
+
+    #[test]
+    fn pcm_first_input_can_precede_the_uncommitted_mixer_origin() {
         let mut probe = PcmProbe::new(2);
-        for chunk in 0..50 {
+        probe.send(0, 200, 24_000, Some(4_800));
+        probe.tick(300);
+        assert!(probe.pcm.is_empty());
+        probe.send(1, 0, 33_600, Some(14_400));
+        probe.tick(400);
+        assert_eq!(probe.peaks(0), [14_400]);
+        assert_eq!(probe.peaks(1), [14_400]);
+    }
+
+    #[test]
+    fn pcm_first_input_after_grace_drops_and_counts_only_committed_samples() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 48_000, None);
+        probe.tick(999);
+        assert!(probe.pcm.is_empty());
+        probe.tick(1_000);
+        assert_eq!(probe.pcm.len(), 48_000);
+        assert_eq!(probe.deliveries[0].1, 1_000);
+        probe.send(1, 200, 48_000, Some(2_400));
+        probe.send(0, 1_000, 9_600, Some(0));
+        probe.tick(1_200);
+        assert!(probe.peaks(1).is_empty());
+        assert_eq!(probe.mixer.sources[1].late_samples_dropped, 38_400);
+        assert_eq!(probe.peaks(0), [48_000]);
+        probe.send(1, 1_200, 960, Some(0));
+        probe.send(0, 1_200, 960, None);
+        probe.tick(1_220);
+        assert_eq!(probe.peaks(1), [57_600]);
+        assert_eq!(probe.mixer.sources[1].late_samples_dropped, 38_400);
+    }
+
+    #[test]
+    fn pcm_watermark_limits_commitment_to_the_shortest_input() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(0, 0, 4_800, Some(4_000));
+        probe.send(1, 0, 960, None);
+        probe.tick(20);
+        assert_eq!(probe.pcm.len(), 960);
+        assert_eq!(probe.mixer.sources[0].samples_supplied, 960);
+        assert_eq!(probe.mixer.sources[1].samples_supplied, 960);
+        probe.send(1, 20, 3_840, Some(3_040));
+        probe.tick(100);
+        assert_eq!(probe.pcm.len(), 4_800);
+        assert_eq!(probe.peaks(0), [4_000]);
+        assert_eq!(probe.peaks(1), [4_000]);
+    }
+
+    #[test]
+    fn pcm_continuous_input_watermarks_add_at_most_one_buffer() {
+        let mut probe = PcmProbe::new(2);
+        for chunk in 0..10 {
             probe.send(0, chunk * 20, 960, None);
             probe.tick(chunk * 20 + 20);
+            assert!(probe.pcm.len() >= chunk as usize * 960);
+            probe.send(1, chunk * 20, 960, None);
+            probe.tick(chunk * 20 + 20);
+            assert_eq!(probe.pcm.len(), (chunk as usize + 1) * 960);
         }
-        probe.send(1, 200, 48_000, Some(2_400));
-        probe.send(0, 1_000, 9_600, None);
-        probe.tick(1_200);
-        eprintln!("DELAYED peaks={:?}", probe.peaks(1));
-        assert_eq!(probe.peaks(1).len(), 1);
+        assert_eq!(probe.deliveries[0].1, 20);
     }
 
     #[test]
