@@ -5962,6 +5962,238 @@ mod style_image_tests {
     }
 }
 
+/// Offline export under load: a decode or GPU readback that misses its
+/// playback deadline must not change which frames are written or their order.
+#[cfg(test)]
+mod export_order_tests {
+    use super::*;
+    use std::time::Duration;
+
+    const FPS: u32 = 60;
+    const SIZE: u32 = 16;
+    const FRAMES: u32 = 45;
+
+    /// `software_path` renders through the software adapter path (RGBA
+    /// readback, CPU NV12) that Windows WARP and Linux lavapipe use.
+    async fn constants(software_path: bool) -> Option<RenderVideoConstants> {
+        let instance = create_wgpu_instance_sync();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let is_software_adapter = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        if is_software_adapter {
+            frame_pipeline::note_software_adapter_in_use();
+        }
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("graphics device");
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "export-order",
+            "display": { "path": "display.mp4", "fps": FPS },
+            "camera": null,
+            "audio": null,
+            "cursor": null
+        }))
+        .expect("recording metadata");
+        Some(RenderVideoConstants {
+            adapter_name: adapter.get_info().name,
+            _instance: instance,
+            _adapter: adapter,
+            device,
+            queue,
+            options: RenderOptions {
+                screen_size: XY::new(SIZE, SIZE),
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            meta: recording_meta
+                .studio_meta()
+                .expect("studio metadata")
+                .clone(),
+            recording_meta,
+            frozen_recorded_cursors: None,
+            background_textures: Arc::new(BackgroundTextureCache::default()),
+            is_software_adapter: is_software_adapter || software_path,
+        })
+    }
+
+    /// Answers every request with that source frame. Requests for
+    /// `slow_frame` are answered only after `delay`, like a decoder on a
+    /// starved machine.
+    fn scripted_decoder(slow_frame: Option<(u32, Duration)>) -> AsyncVideoDecoderHandle {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        std::thread::spawn(move || {
+            while let Ok(decoder::VideoDecoderMessage::GetFrame(time, _, reply)) = receiver.recv() {
+                let frame = (time * FPS as f32).round() as u32;
+                if let Some((slow, delay)) = slow_frame
+                    && slow == frame
+                {
+                    std::thread::sleep(delay);
+                }
+                let level = (frame * 5 % 256) as u8;
+                let _ = reply.send(DecodedFrame::new(
+                    vec![level; (SIZE * SIZE * 4) as usize],
+                    SIZE,
+                    SIZE,
+                ));
+            }
+        });
+        AsyncVideoDecoderHandle::for_test(sender, SIZE, SIZE)
+    }
+
+    /// Exports `FRAMES` frames and returns the encoder-side frame order.
+    async fn export(
+        constants: &RenderVideoConstants,
+        screen: AsyncVideoDecoderHandle,
+    ) -> (Result<(), RenderingError>, Vec<u32>) {
+        let project = ProjectConfiguration {
+            timeline: Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{
+                        "recordingSegment": 0,
+                        "timescale": 1.0,
+                        "start": 0.0,
+                        "end": FRAMES as f64 / FPS as f64
+                    }],
+                    "zoomSegments": []
+                }))
+                .expect("timeline"),
+            ),
+            ..Default::default()
+        };
+        let segments = vec![RenderSegment {
+            cursor: Arc::new(CursorEvents {
+                clicks: vec![],
+                moves: vec![],
+            }),
+            keyboard: Arc::new(Default::default()),
+            decoders: RecordingSegmentDecoders {
+                screen,
+                camera: None,
+                segment_offset: 0.0,
+            },
+            render_display: true,
+        }];
+        let recordings = ProjectRecordingsMeta { segments: vec![] };
+        let (sender, mut receiver) = mpsc::channel(8);
+        let render = render_video_to_channel_nv12(
+            constants,
+            &project,
+            sender,
+            &constants.recording_meta,
+            &constants.meta,
+            segments,
+            FPS,
+            XY::new(SIZE, SIZE),
+            &recordings,
+            None,
+            None,
+            None,
+        );
+        let collect = async {
+            let mut order = Vec::new();
+            while let Some((frame, _)) = receiver.recv().await {
+                order.push(frame.frame_number);
+            }
+            order
+        };
+        tokio::join!(render, collect)
+    }
+
+    /// Runs an export on its own thread: the unoptimized export future needs
+    /// more stack than a test thread has, and the readback delay seam is per
+    /// thread.
+    fn run_export(
+        software_path: bool,
+        slow_decode: Option<(u32, Duration)>,
+        slow_readback: Option<(u32, Duration)>,
+    ) -> Option<(Result<(), RenderingError>, Vec<u32>)> {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime")
+                    .block_on(async move {
+                        let Some(constants) = constants(software_path).await else {
+                            eprintln!("No graphics adapter available for export order test");
+                            return None;
+                        };
+                        if let Some((frame_number, delay)) = slow_readback {
+                            frame_pipeline::readback_delay::inject(frame_number, delay);
+                        }
+                        Some(export(&constants, scripted_decoder(slow_decode)).await)
+                    })
+            })
+            .expect("export thread")
+            .join()
+            .expect("export thread panicked")
+    }
+
+    #[test]
+    fn slow_decode_keeps_every_frame_in_order() {
+        let decode_deadline = Duration::from_secs(2);
+        for software_path in [false, true] {
+            let Some((result, order)) = run_export(
+                software_path,
+                Some((34, decode_deadline + Duration::from_millis(250))),
+                None,
+            ) else {
+                return;
+            };
+
+            result.expect("a slow decode is waited for, not substituted");
+            assert_eq!(
+                order,
+                (0..FRAMES).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn slow_readback_keeps_every_frame_in_order() {
+        for software_path in [false, true] {
+            let Some((result, order)) =
+                run_export(software_path, None, Some((20, Duration::from_secs(61))))
+            else {
+                return;
+            };
+
+            result.expect("a slow readback is waited for, not dropped");
+            assert_eq!(
+                order,
+                (0..FRAMES).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn stalled_readback_stops_the_export_instead_of_dropping_the_frame() {
+        for software_path in [false, true] {
+            let Some((result, order)) =
+                run_export(software_path, None, Some((20, Duration::from_secs(3600))))
+            else {
+                return;
+            };
+
+            assert!(
+                matches!(result, Err(_)),
+                "software path: {software_path}: {result:?}"
+            );
+            assert_eq!(
+                order,
+                (0..20).collect::<Vec<_>>(),
+                "software path: {software_path}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod nv12_flush_tests {
     use super::*;

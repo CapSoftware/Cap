@@ -36,6 +36,44 @@ fn gpu_buffer_wait_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// How long the readback of `frame_number` has been waited for.
+fn readback_waited(started: Instant, frame_number: u32) -> std::time::Duration {
+    #[cfg(test)]
+    {
+        started.elapsed() + readback_delay::injected(frame_number)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = frame_number;
+        started.elapsed()
+    }
+}
+
+/// Test seam: makes one frame's readback look older than it is, to exercise
+/// the readback deadlines without waiting for them.
+#[cfg(test)]
+pub(crate) mod readback_delay {
+    use std::{cell::RefCell, collections::HashMap, time::Duration};
+
+    thread_local! {
+        static DELAYS: RefCell<HashMap<u32, Duration>> = RefCell::new(HashMap::new());
+    }
+
+    pub(crate) fn inject(frame_number: u32, delay: Duration) {
+        DELAYS.with(|delays| delays.borrow_mut().insert(frame_number, delay));
+    }
+
+    pub(super) fn injected(frame_number: u32) -> Duration {
+        DELAYS.with(|delays| {
+            delays
+                .borrow()
+                .get(&frame_number)
+                .copied()
+                .unwrap_or_default()
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FinishEncoderTimings {
     pub wait_previous_duration: std::time::Duration,
@@ -903,10 +941,14 @@ impl PendingNv12External {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
+        let timeout_duration = gpu_buffer_wait_timeout();
         let mut poll_count = 0u32;
-        while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout() {
+        loop {
+            if readback_waited(started, self.frame_number) > timeout_duration {
                 return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            if completed.load(Ordering::Acquire) {
+                break;
             }
             device.poll(wgpu::PollType::Poll)?;
             poll_count += 1;
@@ -979,10 +1021,14 @@ impl PendingNv12Surface {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
+        let timeout_duration = gpu_buffer_wait_timeout();
         let mut poll_count = 0u32;
-        while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout() {
+        loop {
+            if readback_waited(started, self.frame_number) > timeout_duration {
                 return Err(RenderingError::BufferMapWaitingFailed);
+            }
+            if completed.load(Ordering::Acquire) {
+                break;
             }
             device.poll(wgpu::PollType::Poll)?;
             poll_count += 1;
@@ -1050,7 +1096,7 @@ impl PendingNv12Readback {
         let timeout_duration = gpu_buffer_wait_timeout();
 
         loop {
-            if start_time.elapsed() > timeout_duration {
+            if readback_waited(start_time, self.frame_number) > timeout_duration {
                 return Err(self.cancel());
             }
 
@@ -1597,7 +1643,7 @@ impl PendingReadback {
         let timeout_duration = gpu_buffer_wait_timeout();
 
         loop {
-            if start_time.elapsed() > timeout_duration {
+            if readback_waited(start_time, self.frame_number) > timeout_duration {
                 tracing::error!(
                     frame_number = self.frame_number,
                     elapsed_secs = start_time.elapsed().as_secs(),

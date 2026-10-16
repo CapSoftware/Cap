@@ -847,6 +847,30 @@ impl AsyncVideoDecoderHandle {
         time + self.offset as f32
     }
 
+    /// A handle served by a test thread instead of a real decoder.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        sender: mpsc::Sender<VideoDecoderMessage>,
+        video_width: u32,
+        video_height: u32,
+    ) -> Self {
+        Self {
+            sender,
+            offset: 0.0,
+            status: DecoderStatus {
+                decoder_type: DecoderType::FFmpegSoftware,
+                video_width,
+                video_height,
+                fallback_reason: None,
+            },
+            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+            #[cfg(target_os = "macos")]
+            fallback: None,
+            #[cfg(target_os = "macos")]
+            sequential_access: None,
+        }
+    }
+
     pub fn decoder_status(&self) -> &DecoderStatus {
         #[cfg(target_os = "macos")]
         if let Some(Ok(decoder)) = self
