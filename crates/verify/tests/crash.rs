@@ -697,6 +697,7 @@ fn alive(pid: u32) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+#[cfg(unix)]
 fn signal(pid: u32, sig: &str) -> anyhow::Result<()> {
     let status = Command::new("kill")
         .args([&format!("-{sig}"), &pid.to_string()])
