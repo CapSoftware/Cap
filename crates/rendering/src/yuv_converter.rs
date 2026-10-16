@@ -107,6 +107,16 @@ const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
 
+// The 2x2 block kernel only pays off on Linux; on Apple GPUs it measured slower than one invocation per pixel.
+#[cfg(target_os = "linux")]
+const YUV420P_ENTRY_POINT: &str = "main_block";
+#[cfg(target_os = "linux")]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 16;
+#[cfg(not(target_os = "linux"))]
+const YUV420P_ENTRY_POINT: &str = "main";
+#[cfg(not(target_os = "linux"))]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 8;
+
 fn align_dimension(dim: u32) -> u32 {
     dim.div_ceil(TEXTURE_SIZE_PADDING) * TEXTURE_SIZE_PADDING
 }
@@ -394,7 +404,7 @@ impl YuvConverterPipelines {
             label: Some("YUV420P Converter Pipeline"),
             layout: Some(&yuv420p_pipeline_layout),
             module: &yuv420p_shader,
-            entry_point: Some("main"),
+            entry_point: Some(YUV420P_ENTRY_POINT),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -1168,7 +1178,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1239,7 +1253,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(&self.pipelines.yuv420p_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         Ok(self.current_output_view())
