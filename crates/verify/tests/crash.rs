@@ -1212,6 +1212,24 @@ fn process_usage(pid: u32) -> Option<(f64, u64)> {
     Some((secs, rss * 1024))
 }
 
+/// Total CPU seconds of every VideoToolbox encoder service process (the
+/// hardware encoder's host process; shared by every client on the machine).
+#[cfg(target_os = "macos")]
+fn encoder_service_cpu() -> f64 {
+    let Ok(out) = Command::new("pgrep")
+        .args(["-x", "VTEncoderXPCService"])
+        .output()
+    else {
+        return 0.0;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .filter_map(process_usage)
+        .map(|u| u.0)
+        .sum()
+}
+
 /// Overhead of the out-of-process muxer at a real Studio size: 1920x1080
 /// NV12 at 60 fps for `PERF_SECONDS`, interleaved A/B rounds. Reports CPU
 /// seconds of the recorder and of cap-muxer per recorded second and their
@@ -1244,6 +1262,7 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
                 let pipeline =
                     source::pipeline_with(&display, arm, rx, Timestamps::now(), info).await?;
                 let before = process_usage(me).map(|u| u.0).unwrap_or(0.0);
+                let service_before = encoder_service_cpu();
                 let base = Instant::now() + Duration::from_millis(50);
                 let count = (PERF_SECONDS * f64::from(fps)) as u32;
                 let (mut peak_self, mut peak_muxer, mut muxer_cpu) = (0u64, 0u64, 0.0f64);
@@ -1274,15 +1293,16 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
                 drop(tx);
                 pipeline.stop().await.map_err(|e| anyhow!("stop: {e:#}"))?;
                 let after = process_usage(me).map(|u| u.0).unwrap_or(0.0);
+                let service = (encoder_service_cpu() - service_before).max(0.0);
                 anyhow::Ok((
                     (after - before) / PERF_SECONDS,
-                    muxer_cpu / PERF_SECONDS,
+                    muxer_cpu / PERF_SECONDS + service / PERF_SECONDS,
                     peak_self,
                     peak_muxer,
                 ))
             })?;
             case.note(format!(
-                "round {round} {}: recorder {:.3} CPU s/s, cap-muxer {:.3} CPU s/s, recorder peak {} MB, cap-muxer peak {} MB",
+                "round {round} {}: recorder {:.3} CPU s/s, cap-muxer + VideoToolbox service {:.3} CPU s/s, recorder peak {} MB, cap-muxer peak {} MB",
                 arm.label(),
                 sample.0,
                 sample.1,
