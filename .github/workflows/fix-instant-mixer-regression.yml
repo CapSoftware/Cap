@@ -1,5 +1,8 @@
 name: Instant mixer sparse sample regression
 on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-mixer-regression.yml]
   workflow_dispatch:
 permissions:
   contents: read
