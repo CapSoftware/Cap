@@ -1,0 +1,62 @@
+name: Instant mixer gate phase fixture trace
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-mixer-gate-fixture.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_TIER: fast
+  CAP_VERIFY_HOST: blacksmith
+  CAP_VERIFY_CASE: export/instant-gated-system-continuous-mic-late/output/mp4/native
+  CAP_VERIFY_LOG: cap_recording::output_pipeline=info
+jobs:
+  trace:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: fast
+      - name: Prepare source versions and test-only gate trace
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/mixer-gate-fixture"
+          mkdir -p "$root"
+          cp crates/recording/src/sources/audio_mixer.rs "$root/candidate-mixer.rs"
+          cp crates/recording/src/output_pipeline/core.rs "$root/candidate-core.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > "$root/main-mixer.rs"
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/output_pipeline/core.rs > "$root/main-core.rs"
+          python3 scripts/verify/prepare-mixer-gate-fixture.py
+      - name: Record three fresh fixtures for each gate mode and product version
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/mixer-gate-fixture"
+          rustup component add rustfmt
+          for arm in main candidate; do
+            cp "$root/$arm-mixer.rs" crates/recording/src/sources/audio_mixer.rs
+            cp "$root/$arm-core.rs" crates/recording/src/output_pipeline/core.rs
+            cargo fmt --all
+            cargo test -p cap-verify --test export --profile ci-verify --locked --no-run > "$root/$arm-build.log" 2>&1
+            for mode in live fixed; do
+              if [[ "$mode" == fixed ]]; then export CAP_VERIFY_FIXED_ARM=1; else unset CAP_VERIFY_FIXED_ARM; fi
+              for rep in 1 2 3; do
+                export CAP_VERIFY_FIXTURE_DIR="$root/fixtures-$arm-$mode-$rep"
+                export CAP_VERIFY_REPORT_DIR="$root/reports-$arm-$mode-$rep"
+                cargo test -p cap-verify --test export --profile ci-verify --locked instant_output -- --exact --nocapture > "$root/$arm-$mode-$rep.log" 2>&1
+                grep -E 'MIXER_FIXTURE_GATE|A/V offset|Start gate admitted first|test result:' "$root/$arm-$mode-$rep.log"
+                rm -r "$CAP_VERIFY_FIXTURE_DIR"
+              done
+            done
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-gate-fixture-linux
+          path: ${{ runner.temp }}/mixer-gate-fixture
+          retention-days: 7
