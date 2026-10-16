@@ -1224,6 +1224,68 @@ const STATIC_STEP: u32 = 10;
 const STATIC_SECONDS: f64 = 14.0;
 const STATIC_KILL_SECS: f64 = 11.0;
 
+fn check_editor_output(
+    rt: &tokio::runtime::Runtime,
+    case: &mut Case,
+    source: &Path,
+    project_path: &Path,
+) -> anyhow::Result<()> {
+    use cap_project::{MultipleSegment, VideoMeta};
+
+    std::fs::create_dir_all(project_path)?;
+    std::fs::copy(source, project_path.join("display.mp4"))?;
+    cap_verify::fixture::write_project_files(
+        project_path,
+        "timed-fragment-editor",
+        vec![MultipleSegment {
+            display: VideoMeta {
+                path: "display.mp4".into(),
+                fps: FPS,
+                start_time: None,
+                device_id: None,
+            },
+            camera: None,
+            mic: None,
+            system_audio: None,
+            cursor: None,
+            keyboard: None,
+            display_notch: None,
+        }],
+    )?;
+    let project = common::load("timed-fragment-editor", project_path.to_path_buf());
+    let config = project.config();
+    let model = project.model(&config);
+    let total = model.output_frames(FPS);
+    anyhow::ensure!(total > 0, "editor input has no frames");
+    let mut requests: Vec<u32> = (0..total.min(30)).collect();
+    requests.extend([total - 1, total / 2, 0, (total / 2 + 1).min(total - 1)]);
+    for decoder in common::Decoder::all() {
+        let readouts = rt
+            .block_on(async {
+                let mut player =
+                    common::Player::open(&project, config.clone(), decoder, (480, 270)).await?;
+                let mut frames = Vec::new();
+                for (index, frame) in requests.iter().copied().enumerate() {
+                    frames.push(
+                        player
+                            .frame(
+                                frame,
+                                FPS,
+                                index == 0 || index >= 30,
+                                Some(&model.expect(frame, FPS)),
+                            )
+                            .await?,
+                    );
+                }
+                player.check_decoders(case, decoder);
+                Ok::<_, String>(frames)
+            })
+            .map_err(|error| anyhow!(error))?;
+        common::check_requests(case, &model, &requests, &readouts, FPS);
+    }
+    Ok(())
+}
+
 /// Kills at 2*GOP + k for k = 0..=12 and reports the first k at which the
 /// second fragment was complete on disk.
 fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
@@ -1368,6 +1430,15 @@ fn recorder_kill(
         Err(e) => return Err(e),
     };
     check_recovery(case, &recovered, &physical, &handed, &pending);
+    if name.starts_with("idle-") && !recovered.is_empty() {
+        let runtime = common::runtime();
+        check_editor_output(
+            &runtime,
+            case,
+            &scratch.join("recovered.mp4"),
+            &scratch.join("editor"),
+        )?;
+    }
     if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -1704,6 +1775,12 @@ fn crash_safety() {
                 let frames = finalize(&run.display, &scratch.join("final.mp4"))?;
                 check_timeline(&mut case, "inproc", &frames, &run.handed);
                 anyhow::ensure!(frames.len() == run.handed.len(), "sparse stop lost frames");
+                check_editor_output(
+                    &rt,
+                    &mut case,
+                    &scratch.join("final.mp4"),
+                    &scratch.join("editor"),
+                )?;
                 if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
                     std::fs::remove_dir_all(scratch)?;
                 }
