@@ -1496,7 +1496,15 @@ impl Pipeline {
                         firsts[3],
                     );
                     if written != Some(times) {
-                        match write_segment_start_times(&segment_dir, &times) {
+                        // A blocking write and two fsyncs: keep them off the
+                        // runtime workers the capture pipelines run on.
+                        let dir = segment_dir.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            write_segment_start_times(&dir, &times)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(std::io::Error::other(error)));
+                        match result {
                             Ok(()) => written = Some(times),
                             Err(error) => {
                                 failed_writes += 1;
