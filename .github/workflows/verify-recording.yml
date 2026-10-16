@@ -9,9 +9,9 @@ name: Verify recording (real capture)
 # - Scope decides from the diff whether the change reaches the recorder's or
 #   the stimulus's dependency closure or the harness (scripts/verify/plan.py
 #   recording); a pull request that does not is green without running;
-# - one that does runs the FAST tier on Blacksmith macOS 15, or the FULL tier
-#   on Blacksmith macOS 15 and 26 when it touches a high-risk region or an
-#   engine crate; nightly runs FULL on Blacksmith and GitHub-hosted macOS 15
+# - one that does runs the FAST tier on Blacksmith macOS 15, or, once it is
+#   ready for review (not a draft), the FULL tier on Blacksmith macOS 15 and
+#   26 when it touches a high-risk region or an engine crate; nightly runs FULL on Blacksmith and GitHub-hosted macOS 15
 #   and 26, dispatch FULL on the chosen runners.
 #
 # Runners: Blacksmith macOS (M4 Pro VM, 6 vCPU, no concurrency cap) for pull
@@ -86,6 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
           BEFORE: ${{ github.event.before }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_RUNNERS: ${{ inputs.runners }}
@@ -121,7 +122,7 @@ jobs:
               cat "$RUNNER_TEMP/scope.txt"
               run="$(sed -n 's/^run=//p' "$RUNNER_TEMP/scope.txt")"
               python3 scripts/verify/plan.py risk --files "$files" --summary "$GITHUB_STEP_SUMMARY" --output "$RUNNER_TEMP/risk.txt"
-              if grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt"; then
+              if [[ "${DRAFT:-false}" != true ]] && { grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt"; }; then
                 runners="$blacksmith"; tier=full
               else
                 runners='["blacksmith-6vcpu-macos-15"]'; tier=fast
