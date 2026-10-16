@@ -508,7 +508,6 @@ impl AudioMixer {
         let clock_anchor = self.master_clock.timestamps().instant();
         for (index, source) in self.sources.iter_mut().enumerate() {
             let rate = source.info.rate();
-            let buffer_timeout = source.buffer_timeout;
 
             loop {
                 let AudioFrame {
@@ -573,44 +572,6 @@ impl AudioMixer {
                 }
 
                 let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
-
-                if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
-                    let timestamp_elapsed = timestamp.duration_since(self.timestamps);
-                    let buffer_last_elapsed = buffer_last_timestamp.duration_since(self.timestamps);
-
-                    if timestamp_elapsed > buffer_last_elapsed {
-                        let elapsed_since_last_frame =
-                            timestamp_elapsed.saturating_sub(buffer_last_elapsed);
-
-                        if let Some(gap) = elapsed_since_last_frame
-                            .checked_sub(buffer_last_duration)
-                            .filter(|&diff| diff >= buffer_timeout)
-                        {
-                            debug!(?gap, "Gap between last buffer frame, inserting silence");
-
-                            let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
-                            let silence_samples_count = silence_samples_needed.ceil() as usize;
-
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                source.info.sample_format,
-                                silence_samples_count,
-                                source.info.channel_layout(),
-                            );
-
-                            for i in 0..frame.planes() {
-                                frame.data_mut(i).fill(0);
-                            }
-
-                            frame.set_rate(source.info.rate() as u32);
-
-                            let silence_duration =
-                                Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
-                            let timestamp = buffer_last_timestamp + buffer_last_duration;
-                            source.buffer_last = Some((timestamp, silence_duration));
-                            source.buffer.push_back(AudioFrame::new(frame, timestamp));
-                        }
-                    }
-                }
 
                 source.buffer_last = Some((
                     timestamp,
@@ -1018,12 +979,21 @@ mod test {
         }
 
         fn send(&mut self, source: usize, millis: u64, samples: usize, peak: Option<usize>) {
+            self.send_at(source, self.at(millis), samples, peak);
+        }
+
+        fn send_at(
+            &mut self,
+            source: usize,
+            timestamp: Timestamp,
+            samples: usize,
+            peak: Option<usize>,
+        ) {
             let mut bytes = vec![0; samples * 8];
             if let Some(peak) = peak {
                 let offset = peak * 8 + source * 4;
                 bytes[offset..offset + 4].copy_from_slice(&0.5_f32.to_le_bytes());
             }
-            let timestamp = self.at(millis);
             self.inputs[source]
                 .try_send(AudioFrame::new(
                     AudioMixer::INFO.wrap_frame(&bytes),
@@ -1133,6 +1103,32 @@ mod test {
         probe.tick(1_700);
         assert_eq!(probe.peaks(0), [14_400, 28_800, 43_200, 72_000]);
         assert_eq!(probe.peaks(1), [14_400, 72_000]);
+    }
+
+    #[test]
+    fn pcm_thousand_sparse_packets_preserve_samples_without_rounding_drift() {
+        for spacing_ns in [300_000_000, 300_006_944] {
+            let mut probe = PcmProbe::new(2);
+            let mut expected = Vec::new();
+            for packet in 0..=1_001_u64 {
+                let timestamp = Timestamp::Instant(
+                    probe.mixer.timestamps.instant() + Duration::from_nanos(packet * spacing_ns),
+                );
+                probe.send_at(0, timestamp, 960, (packet < 1_001).then_some(0));
+                probe.send_at(1, timestamp, 960, None);
+                probe.tick(packet * spacing_ns / 1_000_000 + 20);
+                if packet < 1_001 {
+                    let fractional_samples = if spacing_ns == 300_000_000 {
+                        0
+                    } else {
+                        (packet + 1) / 3
+                    };
+                    expected.push((packet * 14_400 + fractional_samples) as usize);
+                }
+            }
+            assert_eq!(probe.peaks(0), expected);
+            assert!(probe.peaks(1).is_empty());
+        }
     }
 
     #[test]
@@ -1633,12 +1629,12 @@ mod test {
 
             let source = &mut mixer.sources[0];
 
-            assert_eq!(source.buffer.len(), 3);
+            assert_eq!(source.buffer.len(), 2);
             assert!(source.rx.try_next().is_err());
 
             assert_eq!(
                 source.buffer[1].timestamp.duration_since(mixer.timestamps),
-                ONE_SECOND / 2
+                ONE_SECOND
             );
             assert_eq!(source.buffer[1].samples(), SOURCE_INFO.rate() as usize / 2);
         }
@@ -1714,14 +1710,10 @@ mod test {
 
             let source = &mut mixer.sources[0];
 
-            assert_eq!(source.buffer.len(), 2);
+            assert_eq!(source.buffer.len(), 1);
             assert!(source.rx.try_next().is_err());
 
             let item = &source.buffer[0];
-            assert_eq!(item.timestamp.duration_since(start), ONE_SECOND / 2);
-            assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
-
-            let item = &source.buffer[1];
             assert_eq!(item.timestamp.duration_since(start), ONE_SECOND);
             assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
         }
