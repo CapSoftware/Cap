@@ -81,6 +81,13 @@ jobs:
           target: ${{ inputs.target }}
           tier: ${{ inputs.tier }}
 
+      - name: Regenerate proof fixtures
+        shell: bash
+        run: |
+          if [[ -d "$CAP_VERIFY_FIXTURE_DIR" ]]; then
+            rm -r "$CAP_VERIFY_FIXTURE_DIR"
+          fi
+
       - name: Build archive
         shell: bash
         run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --archive "$RUNNER_TEMP/verify.tar.zst"
@@ -139,6 +146,13 @@ jobs:
         run: |
           echo "CAP_VERIFY_REPORT_DIR=$RUNNER_TEMP/verify-report" >> "$GITHUB_ENV"
           echo "CAP_VERIFY_FLAKY_FILE=$RUNNER_TEMP/verify-report/flaky.txt" >> "$GITHUB_ENV"
+
+      - name: Regenerate proof fixtures
+        shell: bash
+        run: |
+          if [[ -d "$CAP_VERIFY_FIXTURE_DIR" ]]; then
+            rm -r "$CAP_VERIFY_FIXTURE_DIR"
+          fi
 
       - name: Build
         if: ${{ !inputs.archive }}
