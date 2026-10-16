@@ -9249,15 +9249,15 @@ mod tests {
         impl AudioSource for StopFrameSource {
             type Config = Option<AudioFrame>;
 
-            async fn setup(
+            fn setup(
                 final_frame: Self::Config,
                 output: mpsc::Sender<AudioFrame>,
                 _: &mut SetupCtx,
-            ) -> anyhow::Result<Self> {
-                Ok(Self {
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send + 'static {
+                std::future::ready(Ok(Self {
                     output,
                     final_frame,
-                })
+                }))
             }
 
             fn audio_info(&self) -> AudioInfo {
