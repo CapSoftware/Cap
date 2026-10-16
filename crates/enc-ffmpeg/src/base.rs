@@ -98,6 +98,9 @@ pub struct EncoderBase {
     /// capture gap that lands on a fragment cut, playing post-gap content
     /// during the gap. The bool records whether the duration was synthesized.
     held_packet: Option<(Packet, bool)>,
+    /// Pts (encoder ticks) and key flag of each encoded packet, for
+    /// recording encoders that place keyframes on capture time.
+    packet_keys: Option<Vec<(i64, bool)>>,
 }
 
 impl EncoderBase {
@@ -110,7 +113,19 @@ impl EncoderBase {
             stream_index,
             last_written_dts: None,
             held_packet: None,
+            packet_keys: None,
         }
+    }
+
+    pub(crate) fn record_packet_keys(&mut self) {
+        self.packet_keys = Some(Vec::new());
+    }
+
+    pub(crate) fn take_packet_keys(&mut self) -> Vec<(i64, bool)> {
+        self.packet_keys
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
@@ -202,6 +217,9 @@ impl EncoderBase {
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         while packet_available(encoder.receive_packet(&mut self.packet))? {
+            if let (Some(keys), Some(pts)) = (&mut self.packet_keys, self.packet.pts()) {
+                keys.push((pts, self.packet.is_key()));
+            }
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),
