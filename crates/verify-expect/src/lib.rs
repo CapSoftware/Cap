@@ -48,12 +48,16 @@ use serde::{Deserialize, Serialize};
 
 pub const PLATFORMS: [&str; 3] = ["linux", "macos", "windows"];
 
-/// The machine class from `CAP_VERIFY_HOST` (see [`Xfail::hosts`]).
+/// The machine class from `CAP_VERIFY_HOST` (see [`Xfail::hosts`]); `local`
+/// when unset (a developer machine).
 pub fn host() -> Option<String> {
-    std::env::var("CAP_VERIFY_HOST")
-        .ok()
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty())
+    Some(
+        std::env::var("CAP_VERIFY_HOST")
+            .ok()
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "local".to_string()),
+    )
 }
 
 pub fn platform() -> &'static str {
@@ -183,8 +187,8 @@ pub struct Xfail {
     /// machine stall (flaky entries only).
     pub starved: bool,
     /// Machine classes the entry applies to, matched against
-    /// `CAP_VERIFY_HOST` (CI sets `github-hosted` or `blacksmith`); empty
-    /// means every host. For a defect only one class of machine reaches
+    /// `CAP_VERIFY_HOST` (CI sets `github-hosted` or `blacksmith`; `local`
+    /// when unset); empty means every host. For a defect only one class of machine reaches
     /// (for example the software encoder path of VMs without a hardware
     /// encoder), with the reason in `reason`.
     pub hosts: Vec<String>,

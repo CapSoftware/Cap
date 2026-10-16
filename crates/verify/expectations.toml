@@ -43,8 +43,7 @@
 #
 # "NEW:" marks bugs the suite found that no open PR fixed when they were
 # recorded. #2638 fixes the AVAssetReader and pts-hole decoder entries
-# (it supersedes #2595 and #2603), #2636 the decode-deadline entries, #2635
-# the Windows audio trim entry.
+# (it supersedes #2595 and #2603), #2636 the decode-deadline entries.
 
 require_bound = true
 
@@ -60,7 +59,7 @@ link = "https://github.com/CapSoftware/Cap/pull/2638"
 case = "export/jitter-camera-120s/full/mp460/avf"
 class = "future"
 platforms = ["macos"]
-bound = { camera-frames = [4950, 5350], delta = 2400, frame = [1580, 7199] }
+bound = { camera-frames = [5000, 5250], delta = 2232, frame = [1585, 7199] }
 reason = "Same camera runaway on the 120 s fixture (full tier): from output frame 1585, 5146 camera frames ahead, up to 2232 source frames (74 s); 5081 to 5201 in the runs whose exports differ (see the nondeterministic entry). The screen is never affected"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
@@ -86,8 +85,8 @@ case = "export/jitter-camera-120s/full/mp460/avf"
 class = "nondeterministic"
 platforms = ["macos"]
 flaky = true
-bound = { count = 1, frames = [1, 5620], frame = [1580, 7199] }
-reason = "Two exports of the 120 s jitter-camera project can differ, only inside the camera runaway of the future entry above (from output frame 1585 on; 4001 of 7200 frames from frame 3163, and 2333 from frame 4747, in 2 of 11 Blacksmith full runs). The decoder drains requests in batches with try_recv, so a batch's makeup depends on timing, and the reader's pool position is capped to the batch's newest request (update_decoder_position(decoder_idx, capped)); once the pts-hole map has lost the hold, that decides which reader answers. Measured on blacksmith-6vcpu-macos-15: alone the case is identical in 16 of 16 runs (probe 38843099696); beside the rest of the export suite it differs in 3 of 8 (probe 38844461913). #2638 removes the runaway and with it this class. Bound: differences only at or after the runaway's first frame, same frame count"
+bound = { count = 1, frames = [1, 5615], frame = [1585, 7199] }
+reason = "Two exports of the 120 s jitter-camera project can differ, only inside the camera runaway of the future entry above (from output frame 1585 on; first difference measured at 1723 or later). Mechanism (scratch/jitter-probe3, runs 38847126270, 38849423910, 38849597307, instrumented decoder): export asks for camera frames one at a time (every batch held one request in 116 traced exports, so try_recv batching is not involved); when more than 250 ms pass between two camera requests the AVAssetReader decoder's idle timeout (IDLE_READER_TIMEOUT, crates/rendering/src/decoder/avassetreader.rs:48, teardown at :728-744) drops every reader, and inside the runaway the re-created reader answers that request correctly, so the runaway restarts from there and every later answer changes (a 390 ms stall before camera request 1105: answer 1105 in one export, 2345 in the other). A forced teardown at camera request 2000 gives 5094 wrong frames, identical in both runs; with the teardown disabled 0 of 12 samples differed although request gaps reached 439 ms. Under suite load the gap is wall-clock, hence flaky (3 of 8 runs beside the export suite; alone 16 of 16 identical). #2638 removes the runaway and with it this class (20 of 20 identical). Bound: same frame count, differences only at or after the runaway's first frame; the future entry bounds the wrong frames themselves (5000 to 5250 camera frames from frame 1585, at most 2232 ahead), and a camera that falls back to FFmpeg after a slow re-created reader fails as stale"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
@@ -266,24 +265,6 @@ link = "https://github.com/CapSoftware/Cap/pull/2636"
 # loss or offset of one source cannot hide the other's.
 
 [[xfail]]
-case = "export/instant-ungated-system-continuous-mic-late/output/mp4/native"
-class = "sync-mic"
-platforms = ["windows"]
-flaky = true
-bound = { count = 1, offset-ms = [-25, -5] }
-reason = "NEW: the recorder deletes real audio samples when audio delivery latency falls. AudioGapTracker::detect_overlap (crates/recording/src/output_pipeline/core.rs, called from process_audio_frame) compares a frame's capture time against a wall-clock delta, so a delivery catch-up reads as overlap and the frame is trimmed; every later sample plays early. The saved Windows outputs lost exactly 279, 250 and 842 samples (5.8, 5.2 and 17.5 ms; mic and system shifted together, one step), reproduced deterministically by feeding those delivery schedules to the real function (sol-windows-audio-offset.md). Seen 3 times on windows-2022 (38764978019, 38780016448, 38804993000), about 1 in 35 recordings, and 0 of 102 in probes 38782202975 and 38785649744. Bound: audio early by one trim, 5 to 25 ms"
-link = "https://github.com/CapSoftware/Cap/pull/2635"
-
-[[xfail]]
-case = "export/instant-ungated-system-continuous-mic-late/output/mp4/native"
-class = "sync-system"
-platforms = ["windows"]
-flaky = true
-bound = { count = 1, offset-ms = [-25, -5] }
-reason = "NEW: same sample deletion as the sync-mic entry: mic and system audio are mixed before the trim, so both shift together by the trimmed samples (5 to 18 ms measured)"
-link = "https://github.com/CapSoftware/Cap/pull/2635"
-
-[[xfail]]
 case = "export/instant-ungated-mic-late/output/mp4/native"
 class = "sync-mic"
 platforms = ["macos", "windows"]
@@ -331,19 +312,10 @@ link = ""
 
 [[xfail]]
 case = "export/instant/output/mp4/native"
-class = "audio-system"
-platforms = ["macos", "windows"]
-bound = { count = 1, missing = 11, lost = 11 }
-reason = "NEW: mic plus loopback system audio mixed into the Instant audio track behind the start gate: every system-audio marker is missing from output.mp4 (11 of 11 in every run, macOS and Windows). Linux, whose Instant audio pipeline anchors at the recording epoch (AudioAnchor::PipelineEpoch), keeps all 11 system markers, which points at the FirstFrame anchor path. The mic is its own class (audio-mic) and must stay intact"
-link = ""
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "audio-mic"
-platforms = ["macos"]
-flaky = true
-bound = { count = 1, missing = 11 }
-reason = "NEW: in the same mixed track the mic markers are damaged but present: in 8 of 15 fresh macOS recordings (probe run 38735811849) the last 20 to 35 ms of every mic marker is replaced by the tail of a system-audio marker, so no mic payload decodes. Every damaged chirp is still identified by the schedule's timing pattern, which keeps sync measured. Bound: payloads only (lost, markers neither decoded nor identified by timing, must be 0: a silenced mic fails)"
+class = "sync-system"
+platforms = ["linux"]
+bound = { count = 1, offset-ms = [5, 34] }
+reason = "NEW: the gate's per-pipeline zero (see export/instant-gated-*): on Linux, whose Instant audio anchors at the recording epoch and keeps the system markers, system audio is late by up to one video frame (8.5 ms measured)"
 link = ""
 
 [[xfail]]
@@ -366,8 +338,8 @@ link = "https://github.com/CapSoftware/Cap/pull/2638"
 case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
 class = "stale"
 platforms = ["linux", "windows"]
-bound = { screen-frames = 16, delta = 49, frame = [61, 94] }
-reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 12 frames with the dominant side checked, output frames 61 to 94). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
+bound = { screen-frames = 18, delta = 49, frame = [61, 115] }
+reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 18 frames, output frames 61 to 110, 6 of them where the stale side is the weaker one, inside the 1.8 s transition at output frames 61 to 115). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
 link = ""
 
 [[xfail]]
@@ -461,20 +433,6 @@ case = "seek/seek-gop/home-then-play30/ffmpeg"
 class = "stale"
 bound = { screen-frames = 31, camera-frames = 31, delta = 89, frame = [60, 90] }
 reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the start. Seek 6.1 s, seek 0, seek 2.0 s and play: 31 of 122 frames show source frame 0 (up to 89 frames stale, about 1 s frozen). A request at grid 0..2 is answered by the first-frame shortcut (ffmpeg.rs, requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE) without resetting the reader, which stays near 6 s, and last_sent_frame becomes frame 0; the next request is then not 'far forward' of frame 0 (< FRAME_CACHE_SIZE), so no reset happens, the reader vends frames past the request and the answer falls back to last_sent_frame (frame 0) until playback outruns FRAME_CACHE_SIZE. Main decoder on Linux and on Windows without a D3D11 video device; macOS AVAssetReader passes. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-gop@60:6.1,0.0167,2.0667' (third request shows frame 0 for 61)"
-link = ""
-
-[[xfail]]
-case = "export/basic/colour-red/mp430/*"
-class = "colour-level"
-bound = { count = 1, luma = [10, 16] }
-reason = "NEW: export converts rendered RGBA to NV12 with BT.601 coefficients (GPU: crates/rendering/src/shaders/rgba_to_nv12.wgsl; software adapters: convert_rgba_to_nv12 in crates/rendering/src/lib.rs) but the encoder tags the stream BT.709 (crates/enc-ffmpeg/src/video/h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes 12.8 luma code values too bright on every platform. Screen video whose decode matrix matches passes through unchanged"
-link = ""
-
-[[xfail]]
-case = "export/basic/colour-red/mp430/*"
-class = "colour-matrix"
-bound = { count = 1, cb = [-11, -7], cr = [-2, 2] }
-reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb 8.9 code values low (Cr -0.1)"
 link = ""
 
 [[xfail]]
@@ -624,12 +582,15 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38845236912"
 # is affected the same way: it is recorded ~50 to 80 ms late and anything
 # shown for less than that is lost. Whether a given post-hold picture is lost
 # depends on whether the 70 to 82 ms resume outlasts that picture, so the
-# entries are bounded by the number of holds.
+# entries are bounded by the number of holds. Blacksmith VMs resume in time
+# (these cases pass there), so the entries apply to hosted runners and
+# developer Macs only (hosts).
 
 [[xfail]]
 case = "recording/studio-screen/mp4-holds"
 class = "missing-after-hold"
 platforms = ["macos"]
+hosts = ["github-hosted", "local"]
 bound = { count = 3, screen-pictures = 3 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 20 fps picture after each of the 3 holds is never delivered by ScreenCaptureKit (first Complete frame 80 to 82 ms after it was presented); runners 18 of 18 holds in 6 runs. Bound: one picture per hold"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
@@ -639,6 +600,7 @@ case = "recording/instant/long-holds"
 class = "missing-after-hold"
 platforms = ["macos"]
 flaky = true
+hosts = ["github-hosted", "local"]
 bound = { count = 2, screen-pictures = 2 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after a hold is never delivered when the resume takes longer than its 67 ms (first Complete frame 70 to 74 ms after it was presented); runners: hold at 6 s 6 of 6 runs, hold at 18 s 4 of 6. Flaky: when ScreenCaptureKit happens to resume within the picture's 67 ms both pictures are caught (fix-video-timestamps track). Bound: one picture per hold (2 holds)"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
@@ -648,6 +610,7 @@ case = "recording/studio-camera/long"
 class = "missing-after-hold"
 platforms = ["macos"]
 flaky = true
+hosts = ["github-hosted", "local"]
 bound = { count = 1, screen-pictures = 1 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
