@@ -131,10 +131,12 @@ def fresh_fixture(case):
 
 
 def timing_resolution(metric):
+    if metric.endswith("-start-late-ms"):
+        return 1.0
+    if metric in {"secs", "screen-lost-s", "off-periods"} or metric.endswith("-after-start-s"):
+        return 0.01
     if metric.endswith("-ms"):
         return 0.1
-    if metric == "secs":
-        return 0.01
     if metric.endswith("-s"):
         return 1e-9
     return None

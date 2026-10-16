@@ -53,6 +53,19 @@ class ComparisonTests(unittest.TestCase):
     def test_timing_metric_outside_recording_cases_uses_distribution(self):
         self.assertEqual(compare([measured(1, case="playback/basic", metric="warm-up-s")], [measured(2, case="playback/basic", metric="warm-up-s")])[0], "INSUFFICIENT")
 
+    def test_reporter_precision_is_preserved_for_each_timing_unit(self):
+        for metric, base, within, beyond in [
+            ("screen-start-late-ms", 200, 201, 202),
+            ("screen-lost-s", 3.25, 3.26, 3.27),
+            ("mic-after-start-s", 0.11, 0.12, 0.13),
+            ("off-periods", 1, 1.01, 1.02),
+        ]:
+            with self.subTest(metric=metric):
+                records = [measured(base, case="export/basic", metric=metric) for _ in range(3)]
+                self.assertEqual(compare(records[:1], [measured(within, case="export/basic", metric=metric)])[0], "INSUFFICIENT")
+                self.assertEqual(compare(records, [measured(within, case="export/basic", metric=metric) for _ in range(3)])[0], "OVERLAP")
+                self.assertEqual(compare(records, [measured(beyond, case="export/basic", metric=metric) for _ in range(3)])[0], "WORSE")
+
     def test_fresh_crash_counts_use_frame_resolution(self):
         base = [measured(176, case="crash/recorder-kill/oop/random0", cls="loss", metric="frames") for _ in range(3)]
         for value, expected in [(177, "OVERLAP"), (178, "WORSE")]:
