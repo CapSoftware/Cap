@@ -592,7 +592,28 @@ impl AudioMixer {
                     source.last_input_timestamp = None;
                 }
 
-                let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
+                // The remap clamps a packet captured before the master clock's
+                // origin to the origin. Drop only the samples that precede it,
+                // so the rest of the packet keeps its capture time instead of
+                // overlapping the next packet.
+                let (frame, master_ns, frame_duration_ns) = if remap.master_ns == 0
+                    && remap.raw_ns < 0
+                    && rate > 0
+                {
+                    let before_ns = u128::from(remap.raw_ns.unsigned_abs());
+                    let before = (before_ns * rate as u128).div_ceil(1_000_000_000) as usize;
+                    let Some(kept) = trim_audio_frame_front(&frame, before) else {
+                        continue;
+                    };
+                    let first_ns = (before as u128 * 1_000_000_000 / rate as u128)
+                        .saturating_sub(before_ns) as u64;
+                    let kept_ns = (kept.samples() as u128 * 1_000_000_000 / rate as u128) as u64;
+                    (kept, first_ns, kept_ns)
+                } else {
+                    (frame, remap.master_ns, frame_duration_ns)
+                };
+
+                let timestamp = Timestamp::Instant(clock_anchor + Duration::from_nanos(master_ns));
 
                 source.buffer_last = Some((timestamp, Duration::from_nanos(frame_duration_ns)));
                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
@@ -1501,6 +1522,29 @@ mod test {
         assert_eq!(probe.peaks(1), [960]);
         assert_eq!(probe.pcm.len(), 4_800);
         assert!(probe.inputs.iter_mut().all(|input| input.is_closed()));
+    }
+
+    #[test]
+    fn pcm_input_captured_before_the_clock_origin_keeps_its_capture_time() {
+        let mut probe = PcmProbe::new(1);
+        let origin = probe.mixer.timestamps.instant();
+        // 480 samples from 4 ms before the origin: 192 precede it, and the
+        // marker at sample 300 was captured 2.25 ms after it.
+        probe.send_at(
+            0,
+            Timestamp::Instant(origin.checked_sub(Duration::from_millis(4)).unwrap()),
+            480,
+            Some(300),
+        );
+        probe.send_at(
+            0,
+            Timestamp::Instant(origin + Duration::from_millis(6)),
+            480,
+            Some(0),
+        );
+        probe.tick(100);
+        assert_eq!(probe.peaks(0), [108, 288]);
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
     }
 
     #[test]
