@@ -1598,6 +1598,35 @@ fn capture_service_stalls_are_inconclusive_but_hold_resumes_are_not() {
     assert_eq!(compositor_stall(&held, &events), None);
 }
 
+#[test]
+fn observer_silence_excuses_only_a_covered_window() {
+    let truth: Truth = (0..10u32).map(|i| (i, f64::from(i) * 0.05)).collect();
+    let check = |observed: Vec<f64>| VideoCheck {
+        name: "screen",
+        kind: StreamKind::Screen,
+        truth: &truth,
+        not_sent: &[],
+        may_skip: Box::new(|_| false),
+        allow_duplicates: true,
+        required: Vec::new(),
+        window: (0.0, 1.0),
+        observed,
+    };
+    // Picture 4 is on screen from 0.20 to 0.25 s.
+    let around: Vec<f64> = (0..20)
+        .map(|k| f64::from(k) * 0.0167)
+        .filter(|t| !(0.199..=0.251).contains(t))
+        .collect();
+    assert!(check(around.clone()).dropped_for_every_client(4));
+    assert!(!check(around.iter().copied().chain([0.22]).collect()).dropped_for_every_client(4));
+    let only_before: Vec<f64> = around.iter().copied().filter(|t| *t < 0.2).collect();
+    assert!(
+        !check(only_before).dropped_for_every_client(4),
+        "the observer must cover the window"
+    );
+    assert!(!check(Vec::new()).dropped_for_every_client(4));
+}
+
 fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
     let constraint = sched::Constraint {
         period_ms: 33.333,
@@ -2620,6 +2649,38 @@ struct VideoCheck<'a> {
     /// recording must hold the pictures shown from shortly after the start
     /// to the end (see `START_COVERAGE_SECS`).
     window: (f64, f64),
+    /// Frame times (truth seconds, sorted) of the stimulus's own,
+    /// independent ScreenCaptureKit stream (screen only; empty otherwise).
+    observed: Vec<f64>,
+}
+
+/// Margin around a picture's time on screen within which the independent
+/// observer must have frames for its silence in between to count.
+const OBSERVER_COVER_SECS: f64 = 0.5;
+
+impl VideoCheck<'_> {
+    /// A picture the capture service never delivered to any client: the
+    /// stimulus's own capture stream received no frame while it was on
+    /// screen, although that stream delivered frames on both sides of it
+    /// (so it covered exactly that window).
+    fn dropped_for_every_client(&self, index: u32) -> bool {
+        let Some(&shown) = self.truth.get(&index) else {
+            return false;
+        };
+        let Some((_, &replaced)) = self.truth.range(index + 1..).next() else {
+            return false;
+        };
+        let before = self
+            .observed
+            .iter()
+            .any(|&t| t < shown && t >= shown - OBSERVER_COVER_SECS);
+        let after = self
+            .observed
+            .iter()
+            .any(|&t| t > replaced && t <= replaced + OBSERVER_COVER_SECS);
+        let during = self.observed.iter().any(|&t| t >= shown && t <= replaced);
+        before && after && !during
+    }
 }
 
 /// How late after the recording starts its first picture may be: the
@@ -2806,6 +2867,19 @@ fn check_video(case: &mut Case, track: &Track, check: VideoCheck) -> anyhow::Res
         } else {
             skipped.push(index);
         }
+    }
+    // Pictures the capture service dropped for every client (approved
+    // policy): counted and reported, never a threshold change.
+    let (for_every_client, rest): (Vec<u32>, Vec<u32>) = skipped
+        .into_iter()
+        .partition(|&index| check.dropped_for_every_client(index));
+    skipped = rest;
+    if !for_every_client.is_empty() {
+        case.note(format!(
+            "capture-service drops: {name}: {} missing pictures also never reached the stimulus's own capture stream, which covered their window: {:?}",
+            for_every_client.len(),
+            for_every_client
+        ));
     }
     if startup.len() > STARTUP_DROPS {
         skipped.extend(startup.iter().copied());
@@ -3175,6 +3249,15 @@ fn after_holds(rec: &Recorded, truth: &Truth) -> Vec<(u32, String)> {
 fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()> {
     let layout = layout(&rec.project, case)?;
     let screen_truth = first_presented(&rec.stimulus, reference);
+    let mut observed: Vec<f64> = rec
+        .stimulus
+        .iter()
+        .filter_map(|e| match e {
+            StimulusEvent::Observed { host } => Some(host_secs(*host, reference)),
+            _ => None,
+        })
+        .collect();
+    observed.sort_by(f64::total_cmp);
     let presented: Vec<(u32, f64)> = screen_truth.iter().map(|(i, t)| (*i, *t)).collect();
     let capture_interval = 1.0 / f64::from(rec.max_fps);
     // SCK delivers a changed display at most once per minimum frame
@@ -3210,6 +3293,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
             allow_duplicates: true,
             required: after_holds(rec, &screen_truth),
             window: (rec.started, coverage_end),
+            observed,
         },
     )?;
     let camera = match (&layout.camera, &rec.camera) {
@@ -3227,6 +3311,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     allow_duplicates: false,
                     required: Vec::new(),
                     window: (rec.started, coverage_end),
+                    observed: Vec::new(),
                 },
             )?)
         }

@@ -152,6 +152,17 @@ def render(records, title, junit, flaky, text, retries=None):
     ]
     if second:
         head += f"; {len(second)} real-capture case(s) settled on a second attempt after a proven input fault"
+    service = 0
+    for r in records:
+        for n in r.get("notes") or []:
+            n = str(n)
+            if n.startswith("capture-service drops:"):
+                try:
+                    service += int(n.split(": ")[2].split(" ")[0])
+                except (IndexError, ValueError):
+                    service += 1
+    if service:
+        head += f"; {service} missing picture(s) excused because the capture service dropped them for every client"
     unmeasured = [r for r in records if r.get("unobserved")]
     if unmeasured:
         head += f"; {len(unmeasured)} with classes not measured because an earlier check failed"
