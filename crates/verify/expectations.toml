@@ -170,17 +170,17 @@ link = ""
 
 [[xfail]]
 case = "export/instant/output/mp4/native"
-class = "sync-system"
-flaky = true
-bound = { count = 1, offset-ms = [-2.7, 28.3], mic-offset-ms = [5, 34], system-minus-mic-ms = [-7.7, -5.7] }
-reason = "Instant mixer input timing and the gate phase produce a -6.7 ms system-minus-mic mode, within 1 ms. Only this inter-source signature with the microphone inside its unchanged 5 to 34 ms bound is excused. Coordinator decision 09:20, 2026-10-16."
-link = "https://github.com/CapSoftware/Cap/tree/fix/instant-mixer-input-alignment"
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
 class = "sync-mic"
 bound = { count = 1, offset-ms = [5, 34] }
 reason = "NEW: see export/instant-gated-*: mic audio up to one video frame late after the start gate (14.2 to 15.3 ms measured)"
+link = ""
+
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync-system"
+bound = { count = 1, offset-ms = [5, 34], mic-offset-ms = [5, 34], system-minus-mic-ms = [-1, 1] }
+reason = "NEW: the mixer places system audio on the microphone's timeline (system minus mic 0 ms), so it shares the gated mic offset of the sync-mic entry above (13.3 to 15.4 ms measured)"
 link = ""
 
 [[xfail]]
@@ -522,12 +522,3 @@ platforms = ["macos"]
 bound = { count = 1 }
 reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
 link = "https://github.com/CapSoftware/Cap/pull/2643"
-
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-platforms = ["macos"]
-flaky = true
-bound = { count = 1, offset-ms = [-56, -25], mic-offset-ms = [5, 34], system-minus-mic-ms = [-61, -59] }
-reason = "Instant mixer input timing produces a -60 ms system-minus-mic mode, within 1 ms. Only this inter-source signature with the microphone inside its unchanged 5 to 34 ms bound is excused. Coordinator decision 09:20, 2026-10-16."
-link = "https://github.com/CapSoftware/Cap/tree/fix/instant-mixer-input-alignment"
