@@ -242,7 +242,9 @@ fn edits_sequential() {
 /// The real-time playback loop (`cap_editor::Playback`), not just the decode
 /// and render path: every frame it delivers must show what the model puts at
 /// that frame number. Frames may be dropped under load (macOS CI presents at
-/// a few fps); at least `MIN_DELIVERED` must arrive.
+/// a few fps); at least `MIN_DELIVERED` must arrive once the clock has
+/// started. Under a machine stall the starvation sentinel makes a `dropped`
+/// failure inconclusive and the test is retried once.
 #[test]
 fn realtime_loop() {
     const MIN_DELIVERED: usize = 8;
@@ -282,15 +284,22 @@ fn realtime_loop() {
                 &|f| model.expect(f, 30),
             )) {
                 Err(e) => case.problem("error", e),
-                Ok(delivered) => {
+                Ok((delivered, telemetry)) => {
+                    case.note(telemetry.describe());
                     let delivered: Vec<_> =
                         delivered.into_iter().filter(|(f, _)| *f < total).collect();
-                    if delivered.len() < MIN_DELIVERED {
+                    if telemetry.ready_after.is_none() {
+                        case.problem(
+                            "dropped",
+                            "the playback clock never started (warm-up did not finish within 20 s)",
+                        );
+                    } else if delivered.len() < MIN_DELIVERED {
                         case.problem(
                             "dropped",
                             format!(
-                                "real-time playback delivered {} frames, expected at least {MIN_DELIVERED}",
-                                delivered.len()
+                                "real-time playback delivered {} frames after it was ready, expected at least {MIN_DELIVERED} ({})",
+                                delivered.len(),
+                                telemetry.describe()
                             ),
                         );
                     }

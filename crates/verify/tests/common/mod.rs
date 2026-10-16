@@ -1052,10 +1052,39 @@ pub fn assert_passed(failures: Vec<String>) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// What the playback loop reported about one real-time run.
+#[derive(Debug, Default)]
+pub struct RealtimeTelemetry {
+    /// From `Playback::start` to the clock starting (warm-up done), if it did.
+    pub ready_after: Option<std::time::Duration>,
+    pub warmup_buffered: Option<(usize, usize)>,
+    /// Frames the loop skipped on purpose, by reason.
+    pub skipped: std::collections::BTreeMap<String, u64>,
+    pub renderer_dropped: u64,
+}
+
+impl RealtimeTelemetry {
+    pub fn describe(&self) -> String {
+        format!(
+            "playback ready after {}, warm-up buffered {}, skipped {:?}, renderer dropped {}",
+            self.ready_after.map_or("never".to_string(), |d| format!(
+                "{:.0} ms",
+                d.as_secs_f64() * 1000.0
+            )),
+            self.warmup_buffered
+                .map_or("-".to_string(), |(b, t)| format!("{b}/{t}")),
+            self.skipped,
+            self.renderer_dropped
+        )
+    }
+}
+
 /// Runs the editor's real-time playback loop (`cap_editor::Playback`: warm-up,
-/// prefetch, frame cache, wall clock) from `start_frame` for `seconds` of wall
-/// time and returns every frame it delivered, read with `expect(frame number)`
-/// (so transition frames are read as blends).
+/// prefetch, frame cache, wall clock) from `start_frame` and returns every
+/// frame it delivered, read with `expect(frame number)` (so transition frames
+/// are read as blends), plus the loop's telemetry. The `seconds` window starts
+/// when the playback clock starts (warm-up finished), not when `start`
+/// returns, so a slow warm-up does not eat the measured window.
 /// Video only (`create_segments_without_audio`): the audio clock has its own
 /// oracle. Dropped frames are normal under load; delivered ones must be right.
 #[allow(clippy::too_many_arguments)]
@@ -1068,8 +1097,9 @@ pub async fn realtime_playback(
     start_frame: u32,
     seconds: f64,
     expect: &dyn Fn(u32) -> cap_verify::model::FrameExpectation,
-) -> Result<Vec<(u32, FrameReadout)>, String> {
+) -> Result<(Vec<(u32, FrameReadout)>, RealtimeTelemetry), String> {
     use std::sync::{Arc, Mutex};
+    const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
     let meta = project.meta.studio_meta().ok_or("not studio")?.clone();
     let recordings = cap_rendering::ProjectRecordingsMeta::new(&project.path, &meta)?;
     let constants = Arc::new(
@@ -1101,6 +1131,7 @@ pub async fn realtime_playback(
     )?);
     let (_project_tx, project_rx) = tokio::sync::watch::channel(config);
     let (audio_output, _audio_sink) = cap_editor::AudioOutput::new_offline();
+    let (telemetry, mut telemetry_rx) = cap_editor::PlaybackTelemetry::channel();
     let playback = cap_editor::Playback {
         renderer,
         render_constants: constants,
@@ -1109,17 +1140,47 @@ pub async fn realtime_playback(
         segment_medias: segments,
         music: cap_editor::MusicTracks::new(),
         audio_output: Arc::new(audio_output),
-        telemetry: None,
+        telemetry: Some(telemetry),
     };
+    let started = std::time::Instant::now();
     let handle = playback
         .start(fps, XY::new(resolution.0, resolution.1))
         .await
         .map_err(|e| format!("playback start: {e:?}"))?;
-    tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+    let mut report = RealtimeTelemetry::default();
+    let absorb = |event: cap_editor::PlaybackTelemetryEvent, report: &mut RealtimeTelemetry| {
+        use cap_editor::PlaybackTelemetryEvent as E;
+        match event {
+            E::WarmupComplete {
+                buffered_frames,
+                target_frames,
+                ..
+            } => report.warmup_buffered = Some((buffered_frames, target_frames)),
+            E::ClockStarted { .. } => report.ready_after = Some(started.elapsed()),
+            E::FrameSkipped {
+                skipped, reason, ..
+            } => *report.skipped.entry(format!("{reason:?}")).or_default() += u64::from(skipped),
+            E::RendererDropped { .. } => report.renderer_dropped += 1,
+            _ => {}
+        }
+    };
+    let ready_deadline = tokio::time::Instant::now() + READY_TIMEOUT;
+    while report.ready_after.is_none() {
+        match tokio::time::timeout_at(ready_deadline, telemetry_rx.recv()).await {
+            Ok(Some(event)) => absorb(event, &mut report),
+            _ => break,
+        }
+    }
+    if report.ready_after.is_some() {
+        tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+    }
     handle.stop();
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    while let Ok(event) = telemetry_rx.try_recv() {
+        absorb(event, &mut report);
+    }
     let frames = std::mem::take(&mut *delivered.lock().unwrap());
-    Ok(frames
+    let frames = frames
         .into_iter()
         .map(|frame| {
             let view = video_code::PackedFrame {
@@ -1134,5 +1195,6 @@ pub async fn realtime_playback(
                 read_expecting(&view, &expect(frame.frame_number)),
             )
         })
-        .collect())
+        .collect();
+    Ok((frames, report))
 }
