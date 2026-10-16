@@ -1,0 +1,82 @@
+name: Instant mixer alignment proof
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Format and check
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --all --check
+          cargo check -p cap-recording -p cap-verify --profile ci-verify --locked
+          cargo clippy -p cap-recording --lib --profile ci-verify --locked -- -D warnings
+      - name: Mixer unit tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixalign"
+          set -o pipefail
+          cargo test -p cap-recording --lib --profile ci-verify --locked sources::audio_mixer:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixalign/unit.log"
+      - name: Build fixture probe
+        run: scripts/verify/run.sh fast --suites export --no-run
+      - name: Twenty fresh generations
+        env:
+          CAP_VERIFY_TIER: fast
+          CAP_VERIFY_LOG: cap_recording::output_pipeline=debug
+          CAP_VERIFY_HOST: blacksmith
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixalign/reports"
+          for i in $(seq 1 20); do
+            export CAP_VERIFY_CASE="export/instant/output/mp4/native"
+            export CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/mixalign/fixtures/fx-$i"
+            export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/mixalign/reports/report-$i"
+            if (( i % 2 == 0 )); then export CAP_VERIFY_INSTANT_DELAY_MIXER=1; else unset CAP_VERIFY_INSTANT_DELAY_MIXER; fi
+            log="$RUNNER_TEMP/mixalign/reports/log-$i.txt"
+            code=0
+            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast --no-capture \
+              -E 'binary_id(cap-verify::export) and test(=instant_output)' > "$log" 2>&1 || code=$?
+            echo "PROBE generation=$i exit=$code"
+            grep -E 'A/V offset|overlapping audio frame' "$log" || true
+          done
+          python scripts/verify/check-mixer-probe.py "$RUNNER_TEMP/mixalign/reports"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixalign-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/mixalign/unit.log
+            ${{ runner.temp }}/mixalign/reports
+          retention-days: 7
