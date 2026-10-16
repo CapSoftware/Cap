@@ -132,8 +132,8 @@ blessed failure is a bug that the suite keeps checking.
   A wake gap of 100 ms or more proves the runner stopped scheduling the
   process. Only wall-clock failures are excused by it: a real-time playback
   case that delivered too few frames becomes `inconclusive`, and a test
-  killed at its timeout or by wgpu's 6.3 s queue drain is retryable when its
-  sentinel log shows the gap. `scripts/verify/retry.py` reruns those tests
+  killed at its timeout, by wgpu's 6.3 s queue drain or by a lost GPU device is
+  retryable when its sentinel log shows the gap. `scripts/verify/retry.py` reruns those tests
   once with `CAP_VERIFY_RETRY=1`; a case that is inconclusive again fails as
   `environment`, and the job passes only if every failure was retryable and
   every retry passed. Content, frame identity, timestamps and sync never

@@ -10,8 +10,9 @@ is one that wall-clock timing can cause:
   judged in cap_verify::report::settle), or
 - nextest killed it at its timeout and its sentinel log shows such a gap, or
 - it panicked in wgpu-core's queue drop ("We timed out while waiting on the
-  last successful submission", a 6.3 s limit) and its sentinel log shows
-  such a gap.
+  last successful submission", a 6.3 s limit) or on a lost GPU device
+  ("Device with 'cap-rendering-device' label is invalid") and its sentinel
+  log shows such a gap.
 
 A test with any FAIL or XPASS case, or that crashed or timed out without
 starvation evidence, is not retried: it fails the run as before. The retry
@@ -31,6 +32,9 @@ import xml.etree.ElementTree as ET
 
 STARVATION_GAP_MS = 100.0
 QUEUE_DRAIN_PANIC = "We timed out while waiting on the last successful submission"
+# The GPU device was lost (WARP gives up on work that takes too long) and the
+# next wgpu call on it panics instead of reporting an error.
+DEVICE_LOST_PANIC = "Device with 'cap-rendering-device' label is invalid"
 
 
 def records(report_dir):
@@ -95,6 +99,10 @@ def main():
             blocking += 1
         elif timed_out and longest >= STARVATION_GAP_MS:
             print(f"{binary}\t{name}\ttimed out; sentinel longest wake gap {longest:.0f} ms")
+        elif DEVICE_LOST_PANIC in text and longest >= STARVATION_GAP_MS:
+            # Product hazard too (a lost device should be an error, not a
+            # panic), excused only under the sentinel's evidence.
+            print(f"{binary}\t{name}\twgpu device lost; sentinel longest wake gap {longest:.0f} ms")
         elif QUEUE_DRAIN_PANIC in text and longest >= STARVATION_GAP_MS:
             # wgpu-core gives a queue 6.3 s to finish its GPU work when the
             # last handle drops, then panics. A product lifecycle hazard (the
