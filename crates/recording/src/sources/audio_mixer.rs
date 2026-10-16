@@ -553,10 +553,11 @@ impl AudioMixer {
                     0
                 };
 
-                let remap =
-                    source
-                        .clock_state
-                        .remap(&self.master_clock, raw_timestamp, frame_duration_ns);
+                let remap = source.clock_state.remap_preserving_cadence(
+                    &self.master_clock,
+                    raw_timestamp,
+                    frame_duration_ns,
+                );
 
                 if matches!(remap.outcome, SourceClockOutcome::HardReset) {
                     let flushed = source.buffer.len();
@@ -783,7 +784,7 @@ fn sample_position(
 ) -> i128 {
     let nanos = timestamp.duration_since(timestamps).as_nanos() as i128
         - start.duration_since(timestamps).as_nanos() as i128;
-    (nanos * rate as i128 + 500_000_000) / 1_000_000_000
+    (nanos * rate as i128 + 500_000_000).div_euclid(1_000_000_000)
 }
 
 fn silence_frame(info: AudioInfo, samples: usize) -> ffmpeg::frame::Audio {
@@ -1131,6 +1132,17 @@ mod test {
         probe.tick(1_600);
         assert_eq!(probe.peaks(0), [14_400, 28_800, 43_200, 72_000]);
         assert_eq!(probe.peaks(1), [14_400, 72_000]);
+    }
+
+    #[test]
+    fn pcm_sub_timeout_gap_is_not_smoothed_away() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, None);
+        probe.send(0, 0, 960, Some(0));
+        probe.send(0, 30, 960, Some(0));
+        probe.send(0, 50, 2_400, Some(0));
+        probe.tick(100);
+        assert_eq!(probe.peaks(0), [0, 1_440, 2_400]);
     }
 
     #[test]
