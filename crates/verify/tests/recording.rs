@@ -1056,8 +1056,20 @@ fn studio_builder(
         .with_excluded_windows(excluded)
         .with_keyboard_capture(false)
         .with_fragmented(fragmented)
+        .with_out_of_process_muxer(oop_muxer())
         .with_quality(StudioQuality::Balanced);
     (builder, defaults.studio_max_fps(camera, None))
+}
+
+/// `CAP_VERIFY_OOP_MUXER=1` records every fragmented Studio case through the
+/// out-of-process muxer (Settings > Experimental), with the same oracles.
+fn oop_muxer() -> bool {
+    let on = env_flag("CAP_VERIFY_OOP_MUXER");
+    if on {
+        cap_recording::oop_muxer::resolve_muxer_binary()
+            .expect("CAP_VERIFY_OOP_MUXER needs the cap-muxer binary (CAP_MUXER_BIN)");
+    }
+    on
 }
 
 fn stimulus_binary() -> PathBuf {

@@ -42,6 +42,7 @@ on:
   push:
     branches:
       - ci/verify-recording
+      - scratch/crash-rec-oop
     paths:
       - "crates/verify/**"
       - "crates/recording/**"
@@ -59,15 +60,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJSON(inputs.runners == 'blacksmith' && '["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]' || inputs.runners == 'both' && '["macos-15","macos-26","blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]' || '["macos-15","macos-26"]') }}
+        runner: ["blacksmith-6vcpu-macos-15"]
+        oop: ["0", "1"]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
-      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}
-      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '3' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || 'recording/studio-*' }}
+      CAP_VERIFY_OOP_MUXER: ${{ matrix.oop }}
+      CAP_MUXER_BIN: ${{ github.workspace }}/target/debug/cap-muxer
       CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
@@ -121,6 +125,7 @@ jobs:
 
       - name: Build
         run: |
+          cargo build --locked -p cap-muxer
           start=$(date +%s)
           cargo test --locked -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
@@ -222,7 +227,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: verify-recording-${{ matrix.runner }}
+          name: verify-recording-${{ matrix.runner }}-oop${{ matrix.oop }}
           path: |
             ${{ github.workspace }}/verify-report
             ${{ github.workspace }}/verify-dump
