@@ -1,0 +1,321 @@
+import argparse
+import fnmatch
+import json
+import os
+import re
+import sys
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+
+
+def load_na(path):
+
+    out = []
+    if path:
+        for line in open(path, encoding="utf-8"):
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            glob, _, reason = line.partition("\t")
+            out.append((glob.strip(), reason.strip()))
+    return out
+
+
+def na_reason(na, key):
+    case = key.split("::", 1)[-1]
+    for glob, reason in na:
+        if fnmatch.fnmatchcase(case, glob) or fnmatch.fnmatchcase(key, glob):
+            return reason
+    return None
+
+
+def lane_of(artifact):
+    m = re.match(r"verify-report-(.+?)-(fast|full)(-\d+)?$", artifact)
+    if m:
+        return m.group(1)
+    m = re.match(r"verify-recording-(.+)$", artifact)
+    if m:
+        return "recording-" + m.group(1)
+    return artifact
+
+
+def load(roots):
+
+
+
+    records = defaultdict(lambda: defaultdict(list))
+    junit = defaultdict(dict)
+    for root in roots.split(","):
+        if not os.path.isdir(root):
+            sys.exit(f"no such directory: {root}")
+        load_one(root, records, junit)
+    return records, junit
+
+
+def load_one(root, records, junit):
+    for artifact in sorted(os.listdir(root)):
+        base = os.path.join(root, artifact)
+        if not os.path.isdir(base):
+            continue
+        lane = lane_of(artifact)
+        for dirpath, _, files in os.walk(base):
+            for name in sorted(files):
+                path = os.path.join(dirpath, name)
+                if name.endswith(".jsonl"):
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                r = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if "case" not in r:
+                                continue
+                            key = f"{r.get('suite', '?')}::{r['case']}"
+                            repeat = next((n for n in r.get("notes", []) if n.startswith("repeat ")), "single")
+                            r["_sample"] = f"{os.path.realpath(root)}:{repeat}"
+                            records[lane][key].append(r)
+                elif name.startswith("junit") and name.endswith(".xml"):
+                    try:
+                        tree = ET.parse(path)
+                    except ET.ParseError:
+                        continue
+                    for case in tree.getroot().iter("testcase"):
+                        test = f"{case.get('classname', '')} {case.get('name', '')}".strip()
+                        status = "pass"
+                        if case.find("failure") is not None:
+                            status = "fail"
+                        elif case.find("error") is not None:
+                            status = "error"
+                        elif case.find("skipped") is not None:
+                            status = "skipped"
+                        elif case.find("flakyFailure") is not None or case.find("rerunFailure") is not None:
+                            status = "flaky-pass"
+                        prev = junit[lane].get(test)
+                        rank = {"pass": 0, "skipped": 0, "flaky-pass": 1, "fail": 2, "error": 3}
+                        if prev is None or rank[status] > rank[prev]:
+                            junit[lane][test] = status
+
+
+def magnitude(rng):
+    try:
+        lo, hi = rng
+        return max(abs(float(lo)), abs(float(hi)))
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize(recs):
+    ran = [r for r in recs if str(r.get("outcome", "")).lower() != "unsupported"]
+    decisive = [r for r in ran if str(r.get("outcome", "")).lower() != "inconclusive"] or ran
+    outcomes = sorted({str(r.get("outcome", "?")).lower() for r in recs})
+    grouped = defaultdict(list)
+    for index, r in enumerate(decisive):
+        grouped[r.get("_sample", index)].append(r)
+    class_runs = defaultdict(int)
+    measures = defaultdict(dict)
+    samples = []
+    for group in grouped.values():
+        classes = set().union(*(set(r.get("failures") or {}) for r in group))
+        unobserved = set.intersection(*(set(r.get("unobserved") or {}) for r in group)) - classes
+        sample = {"classes": classes, "measures": defaultdict(dict), "unobserved": unobserved}
+        for cls in classes:
+            class_runs[cls] += 1
+        for r in group:
+            for cls, metrics in (r.get("measures") or {}).items():
+                for metric, rng in (metrics or {}).items():
+                    value = magnitude(rng)
+                    if value is None:
+                        continue
+                    sample["measures"][cls][metric] = max(value, sample["measures"][cls].get(metric, 0))
+                    measures[cls][metric] = max(value, measures[cls].get(metric, 0))
+        samples.append(sample)
+    unobserved = set.intersection(*(s["unobserved"] for s in samples)) if samples else set()
+    why = sorted({(r.get("problems") or {}).get("unsupported", "") or r.get("summary", "") for r in recs if str(r.get("outcome", "")).lower() == "unsupported"})
+    return {
+        "why": why,
+        "case": next((r.get("case", "") for r in recs), ""),
+        "ran": bool(ran),
+        "runs": len(samples),
+        "outcomes": outcomes,
+        "classes": dict(class_runs),
+        "measures": {k: dict(v) for k, v in measures.items()},
+        "unobserved": unobserved,
+        "samples": samples,
+    }
+
+
+def coverage_gained(b, m):
+    return sorted(b["unobserved"] - m["unobserved"]) if m["ran"] else []
+
+
+def distribution(summary, cls, metric):
+    values = []
+    for sample in summary["samples"]:
+        if cls in sample["unobserved"]:
+            continue
+        if cls not in sample["classes"]:
+            values.append(0)
+        elif metric in sample["measures"].get(cls, {}):
+            values.append(sample["measures"][cls][metric])
+    return values
+
+
+def larger(a, b, rel, abs_):
+    return a > b + max(abs_, rel * abs(b))
+
+
+def compare_case(b, m, rel, abs_):
+
+    worse, better, pending, overlap = [], [], [], []
+    gained = coverage_gained(b, m)
+    if b["ran"] and not m["ran"]:
+        return "WORSE", [f"unsupported on main (baseline {'/'.join(b['outcomes'])})"]
+    if not b["ran"] and m["ran"]:
+        return "N/A", ["unsupported on baseline: " + "; ".join(b.get("why", [])[:1])]
+    if not b["ran"] and not m["ran"]:
+        return "EQUAL", []
+    bc, mc = b["classes"], m["classes"]
+    stochastic = "missing-after-hold"
+    distribution_classes = (set(bc) | set(mc)) & {stochastic}
+    if b["case"].startswith("recording/") or m["case"].startswith("recording/"):
+        distribution_classes.add(stochastic)
+    for cls in sorted(distribution_classes):
+        metrics = {"count"} | set(b["measures"].get(cls, {})) | set(m["measures"].get(cls, {}))
+        for metric in sorted(metrics):
+            bv, mv = distribution(b, cls, metric), distribution(m, cls, metric)
+            description = f"{cls}.{metric} baseline={bv}, main={mv}"
+            if len(bv) < 3 or len(mv) < 3:
+                pending.append(description + " (requires at least 3 independent runs per side on this OS image)")
+            elif min(mv) > max(bv):
+                worse.append(description + " (every main count above baseline range)")
+            elif max(mv) < min(bv):
+                better.append(description + " (every main count below baseline range)")
+            elif bv != mv:
+                overlap.append(description + " (ranges overlap)")
+    for cls in sorted(set(mc) - set(bc) - set(gained) - {stochastic}):
+        worse.append(f"+{cls}")
+    for cls in sorted(set(bc) - set(mc) - {stochastic}):
+        if cls in m["unobserved"]:
+            continue
+        better.append(f"-{cls}")
+    for cls in sorted((set(bc) & set(mc)) - {stochastic}):
+        # Repeated runs: share of runs failing this class.
+        if b["runs"] and m["runs"] and (b["runs"] > 1 or m["runs"] > 1):
+            bf, mf = bc[cls] / b["runs"], mc[cls] / m["runs"]
+            if mf > bf:
+                worse.append(f"{cls} fails {mc[cls]}/{m['runs']} vs {bc[cls]}/{b['runs']}")
+            elif mf < bf:
+                better.append(f"{cls} fails {mc[cls]}/{m['runs']} vs {bc[cls]}/{b['runs']}")
+        bm, mm = b["measures"].get(cls, {}), m["measures"].get(cls, {})
+        for metric in sorted(set(bm) | set(mm)):
+            if metric in bm and metric in mm:
+                if larger(mm[metric], bm[metric], rel, abs_):
+                    worse.append(f"{cls}.{metric} {fmt(bm[metric])} -> {fmt(mm[metric])}")
+                elif larger(bm[metric], mm[metric], rel, abs_):
+                    better.append(f"{cls}.{metric} {fmt(bm[metric])} -> {fmt(mm[metric])}")
+            elif metric in mm:
+                worse.append(f"{cls}.{metric} new on main ({fmt(mm[metric])})")
+    if worse:
+        return "WORSE", worse + ([f"(also better: {', '.join(better)})"] if better else [])
+    if pending:
+        return "INSUFFICIENT", pending + better + overlap
+    if better:
+        return "BETTER", better + overlap
+    if overlap:
+        return "OVERLAP", overlap
+    if gained:
+        return "COVERAGE-GAINED", [f"{cls}: baseline unobserved -> main observed" for cls in gained]
+    return "EQUAL", []
+
+
+def fmt(x):
+    return f"{x:.4g}"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("base")
+    ap.add_argument("main")
+    ap.add_argument("--rel-tol", type=float, default=0.0)
+    ap.add_argument("--abs-tol", type=float, default=0.0)
+    ap.add_argument("--json")
+    ap.add_argument("--title", default="baseline vs main")
+    ap.add_argument("--na", help="file of 'case-glob<TAB>reason' lines: cases n/a on the baseline")
+    args = ap.parse_args()
+
+    na = load_na(args.na)
+    brec, bjunit = load(args.base)
+    mrec, mjunit = load(args.main)
+    lanes = sorted(set(brec) | set(mrec) | set(bjunit) | set(mjunit))
+    out = {}
+    print(f"# {args.title}\n")
+    print(f"tolerance: rel {args.rel_tol}, abs {args.abs_tol}\n")
+    print("| lane | cases base/main | WORSE | BETTER | EQUAL | coverage gained | insufficient | overlapping distributions | n/a on base | only base | only main | junit WORSE | junit BETTER |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    detail = []
+    for lane in lanes:
+        b, m = brec.get(lane, {}), mrec.get(lane, {})
+        res = defaultdict(list)
+        for key in sorted(set(b) | set(m)):
+            if key in b and key not in m:
+                bs = summarize(b[key])
+                if bs["ran"]:
+                    res["WORSE"].append((key, ["missing on main"]))
+                res["ONLY-BASE"].append((key, []))
+                continue
+            if key in m and key not in b:
+                reason = na_reason(na, key)
+                if reason:
+                    res["N/A"].append((key, [reason]))
+                else:
+                    res["ONLY-MAIN"].append((key, []))
+                continue
+            bs, ms = summarize(b[key]), summarize(m[key])
+            verdict, reasons = compare_case(bs, ms, args.rel_tol, args.abs_tol)
+            res[verdict].append((key, reasons))
+            gained = coverage_gained(bs, ms)
+            if gained and verdict != "COVERAGE-GAINED":
+                res["COVERAGE-GAINED"].append((key, [f"{cls}: baseline unobserved -> main observed" for cls in gained]))
+        bj, mj = bjunit.get(lane, {}), mjunit.get(lane, {})
+        jworse, jbetter = [], []
+        bad = {"fail", "error"}
+        for test in sorted(set(bj) | set(mj)):
+            bs, ms = bj.get(test), mj.get(test)
+            if bs is not None and ms is None:
+                if bs != "skipped":
+                    jworse.append((test, [f"missing on main (baseline {bs})"]))
+            elif bs is None:
+                continue
+            elif ms in bad and bs not in bad:
+                jworse.append((test, [f"{bs} -> {ms}"]))
+            elif bs in bad and ms not in bad:
+                jbetter.append((test, [f"{bs} -> {ms}"]))
+            elif bs == "error" and ms == "fail":
+                jbetter.append((test, ["error -> fail"]))
+            elif bs == "fail" and ms == "error":
+                jworse.append((test, ["fail -> error (crash/timeout)"]))
+        print(
+            f"| {lane} | {len(b)}/{len(m)} | {len(res['WORSE'])} | {len(res['BETTER'])} | {len(res['EQUAL'])}"
+            f" | {len(res['COVERAGE-GAINED'])} | {len(res['INSUFFICIENT'])} | {len(res['OVERLAP'])} | {len(res['N/A'])} | {len(res['ONLY-BASE'])} | {len(res['ONLY-MAIN'])} | {len(jworse)} | {len(jbetter)} |"
+        )
+        out[lane] = {k: v for k, v in res.items()}
+        out[lane]["JUNIT-WORSE"] = jworse
+        out[lane]["JUNIT-BETTER"] = jbetter
+        for label in ("WORSE", "BETTER", "COVERAGE-GAINED", "INSUFFICIENT", "OVERLAP", "JUNIT-WORSE", "JUNIT-BETTER", "N/A", "ONLY-BASE", "ONLY-MAIN"):
+            items = out[lane].get(label) or []
+            if not items:
+                continue
+            detail.append(f"\n## {lane}: {label} ({len(items)})\n")
+            for key, reasons in items:
+                detail.append(f"- `{key}`" + (f": {'; '.join(reasons)}" if reasons else ""))
+    print("\n".join(detail))
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump(out, fh, indent=1, default=list)
+
+
+if __name__ == "__main__":
+    main()

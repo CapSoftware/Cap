@@ -185,12 +185,14 @@ mod source {
         match arm {
             Arm::InProcess => {
                 builder
-                    .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig::default())
+                    .build::<ObservedMuxer<MacOSFragmentedM4SMuxer>>(
+                        MacOSFragmentedM4SMuxerConfig::default(),
+                    )
                     .await
             }
             Arm::OutOfProcess => {
                 builder
-                    .build::<OutOfProcessFragmentedM4SMuxer>(
+                    .build::<ObservedMuxer<OutOfProcessFragmentedM4SMuxer>>(
                         OutOfProcessFragmentedM4SMuxerConfig::default(),
                     )
                     .await
@@ -246,12 +248,102 @@ mod source {
             .with_timestamps(timestamps)
             // The Studio display config (capture_pipeline.rs, X11Capture):
             // 2 s segments.
-            .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+            .build::<ObservedMuxer<SegmentedVideoMuxer>>(SegmentedVideoMuxerConfig {
                 segment_duration: Duration::from_secs(2),
                 ..Default::default()
             })
             .await
     }
+}
+
+struct ObservedMuxer<M> {
+    inner: M,
+    output_path: PathBuf,
+}
+
+impl<M: cap_recording::Muxer> cap_recording::Muxer for ObservedMuxer<M>
+where
+    M::Config: Send,
+{
+    type Config = M::Config;
+
+    async fn setup(
+        config: Self::Config,
+        output_path: PathBuf,
+        video_config: Option<VideoInfo>,
+        audio_config: Option<cap_media_info::AudioInfo>,
+        pause_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        tasks: &mut cap_recording::TaskPool,
+    ) -> anyhow::Result<Self> {
+        let inner = M::setup(
+            config,
+            output_path.clone(),
+            video_config,
+            audio_config,
+            pause_flag,
+            tasks,
+        )
+        .await?;
+        Ok(Self { inner, output_path })
+    }
+
+    fn stop(&mut self) {
+        self.inner.stop();
+        std::fs::write(self.output_path.join("mux-video-stopped"), b"stopped")
+            .expect("write EOF acknowledgement");
+    }
+
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        finalization_barrier(&self.output_path)?;
+        self.inner.finish(timestamp)
+    }
+
+    fn set_health_sender(&mut self, tx: cap_recording::HealthSender) {
+        self.inner.set_health_sender(tx);
+    }
+}
+
+impl<M: cap_recording::VideoMuxer<VideoFrame = source::Frame>> cap_recording::VideoMuxer
+    for ObservedMuxer<M>
+where
+    M::Config: Send,
+{
+    type VideoFrame = source::Frame;
+
+    fn send_video_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.inner.send_video_frame(frame, timestamp)
+    }
+}
+
+impl<M: cap_recording::AudioMuxer> cap_recording::AudioMuxer for ObservedMuxer<M>
+where
+    M::Config: Send,
+{
+    fn send_audio_frame(
+        &mut self,
+        frame: cap_recording::AudioFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.inner.send_audio_frame(frame, timestamp)
+    }
+}
+
+fn finalization_barrier(display: &Path) -> anyhow::Result<()> {
+    let hold = display.join("hold-finalization");
+    if !hold.exists() {
+        return Ok(());
+    }
+    std::fs::write(display.join("finalization-entered"), b"entered")?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    while hold.exists() {
+        anyhow::ensure!(Instant::now() < deadline, "finalization barrier timed out");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
 }
 
 /// Line-per-event truth log that a SIGKILL cannot lose (no buffering).
@@ -319,8 +411,15 @@ async fn record(
         }
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
-    log.line("stop");
     drop(tx);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !display.join("mux-video-stopped").exists() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .context("waiting for mux-video EOF")?;
+    log.line("stop");
     let finished = pipeline.stop().await;
     if let Some(health) = health.as_mut() {
         while let Ok(event) = health.try_recv() {
@@ -480,6 +579,15 @@ impl ChildRecorder {
         self.child.kill()?;
         self.child.wait()?;
         Ok(orphans)
+    }
+}
+
+impl Drop for ChildRecorder {
+    fn drop(&mut self) {
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
@@ -686,6 +794,55 @@ fn fragments_on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<Vec<(
     Ok(out)
 }
 
+fn pending_fragment_frames(
+    display: &Path,
+    scratch: &Path,
+) -> anyhow::Result<std::collections::BTreeSet<u32>> {
+    let mut frames = std::collections::BTreeSet::new();
+    for dir in writer_dirs(display) {
+        let Ok(bytes) = std::fs::read(dir.join("manifest.json")) else {
+            continue;
+        };
+        let manifest: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let entries = manifest
+            .get("segments")
+            .or_else(|| manifest.get("fragments"));
+        let Some(entries) = entries.and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for fragment in complete_fragments(&dir) {
+            let Some(index) = fragment
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(segment_index)
+            else {
+                continue;
+            };
+            let pending = entries.iter().any(|entry| {
+                entry
+                    .get("is_complete")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+                    && entry
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|path| Path::new(path).file_name())
+                        .and_then(|name| name.to_str())
+                        .and_then(segment_index)
+                        == Some(index)
+            });
+            if pending {
+                frames.extend(
+                    decode_fragments(&dir, &[fragment], scratch)?
+                        .into_iter()
+                        .map(|frame| frame.0),
+                );
+            }
+        }
+    }
+    Ok(frames)
+}
+
 /// Every frame inside the physically complete fragments, in order.
 fn on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
     Ok(fragments_on_disk(display, scratch)?.concat())
@@ -838,6 +995,7 @@ fn check_recovery(
     recovered: &[(u32, f64)],
     physical: &[(u32, f64)],
     handed: &[Handed],
+    pending: &std::collections::BTreeSet<u32>,
 ) {
     check_timeline(case, "recovered", recovered, handed);
     let recovered_set: std::collections::BTreeSet<u32> = recovered.iter().map(|f| f.0).collect();
@@ -845,6 +1003,14 @@ fn check_recovery(
     let dropped: Vec<u32> = physical_set.difference(&recovered_set).copied().collect();
     if !dropped.is_empty() {
         case.count("dropped-complete", "frames", dropped.len() as f64);
+        case.count(
+            "dropped-complete",
+            "outside-pending",
+            dropped
+                .iter()
+                .filter(|index| !pending.contains(index))
+                .count() as f64,
+        );
         case.problem(
             "dropped-complete",
             format!(
@@ -1085,6 +1251,10 @@ fn recorder_kill(
     fresh(&scratch)?;
     let display = scratch.join("display");
     let truth = scratch.join("truth.txt");
+    if matches!(point, KillPoint::Finalize(_)) {
+        std::fs::create_dir_all(&display)?;
+        std::fs::write(display.join("hold-finalization"), b"hold")?;
+    }
     let mut child = ChildRecorder::spawn(&display, &truth, arm, seconds, step)?;
     let timeout = Duration::from_secs_f64(seconds + 30.0);
     match point {
@@ -1092,13 +1262,18 @@ fn recorder_kill(
             handed.last().is_some_and(|h| h.index >= n)
         })?,
         KillPoint::Finalize(ms) => {
-            child.wait_until(timeout, |_, stopped| stopped)?;
+            child.wait_until(timeout, |_, stopped| {
+                stopped && display.join("finalization-entered").exists()
+            })?;
             std::thread::sleep(Duration::from_millis(ms));
         }
     }
     let orphans = child.kill()?;
     wait_for_exit(&orphans, case);
     let (handed, stopped, _) = read_truth(&truth)?;
+    if matches!(point, KillPoint::Finalize(_)) {
+        check_finalize_coverage(case, &display, &truth)?;
+    }
     case.note(format!(
         "killed after frame {:?}{}",
         handed.last().map(|h| h.index),
@@ -1110,6 +1285,7 @@ fn recorder_kill(
     let fragments = fragments_on_disk(&display, &scratch)?;
     check_fragment_spans(case, &fragments, &handed);
     let physical = fragments.concat();
+    let pending = pending_fragment_frames(&display, &scratch)?;
     let recovered = match finalize(&display, &scratch.join("recovered.mp4")) {
         Ok(frames) => frames,
         Err(e) if physical.is_empty() => {
@@ -1118,7 +1294,7 @@ fn recorder_kill(
         }
         Err(e) => return Err(e),
     };
-    check_recovery(case, &recovered, &physical, &handed);
+    check_recovery(case, &recovered, &physical, &handed, &pending);
     if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -1168,6 +1344,7 @@ fn muxer_kill(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<(
         .collect();
     if !dropped.is_empty() {
         case.count("dropped-complete", "frames", dropped.len() as f64);
+
         case.problem(
             "dropped-complete",
             format!(
@@ -1448,4 +1625,120 @@ fn crash_safety() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn check_finalize_coverage(case: &mut Case, display: &Path, truth: &Path) -> anyhow::Result<()> {
+    let done = std::fs::read_to_string(truth)?
+        .lines()
+        .any(|line| line == "done");
+    let entered = display.join("finalization-entered").is_file();
+    let held = display.join("hold-finalization").is_file();
+    case.note(format!(
+        "finalization coverage: entered={entered}, held={held}, done={done}"
+    ));
+    if done || !entered || !held {
+        case.problem("harness", "kill missed the held finalization window");
+    }
+    Ok(())
+}
+
+#[test]
+fn finalize_barrier_is_default_off_and_blocks_until_released() {
+    let dir = tempfile::tempdir().unwrap();
+    finalization_barrier(dir.path()).unwrap();
+    assert!(!dir.path().join("finalization-entered").exists());
+    std::fs::write(dir.path().join("hold-finalization"), b"hold").unwrap();
+    let display = dir.path().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        finalization_barrier(&display).unwrap();
+        tx.send(()).unwrap();
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !dir.path().join("finalization-entered").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(rx.try_recv().is_err());
+    std::fs::remove_file(dir.path().join("hold-finalization")).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle.join().unwrap();
+}
+
+#[test]
+fn finalize_done_is_a_coverage_miss() {
+    let dir = tempfile::tempdir().unwrap();
+    let truth = dir.path().join("truth.txt");
+    std::fs::write(&truth, b"stop\ndone\n").unwrap();
+    std::fs::write(dir.path().join("finalization-entered"), b"entered").unwrap();
+    std::fs::write(dir.path().join("hold-finalization"), b"hold").unwrap();
+    let mut case = Case::new("finalize-coverage-test");
+    check_finalize_coverage(&mut case, dir.path(), &truth).unwrap();
+    assert!(case.classes.contains("harness"));
+}
+
+#[test]
+fn duplicate_and_extra_frames_still_fail_after_eof() {
+    let handed = vec![
+        Handed {
+            index: 0,
+            secs: 0.0,
+        },
+        Handed {
+            index: 1,
+            secs: 1.0 / f64::from(FPS),
+        },
+    ];
+    for frames in [
+        vec![(0, 0.0), (1, 1.0 / 30.0), (1, 2.0 / 30.0)],
+        vec![(0, 0.0), (1, 1.0 / 30.0), (2, 2.0 / 30.0)],
+    ] {
+        let mut case = Case::new("eof-mutation-test");
+        check_timeline(&mut case, "mutated", &frames, &handed);
+        assert!(case.classes.contains("order") || case.classes.contains("unexpected"));
+    }
+}
+
+#[test]
+fn pending_fragment_bound_rejects_other_complete_frame_loss() {
+    let handed = vec![
+        Handed {
+            index: 0,
+            secs: 0.0,
+        },
+        Handed {
+            index: 1,
+            secs: 1.0 / f64::from(FPS),
+        },
+    ];
+    let physical = vec![(0, 0.0), (1, 1.0 / f64::from(FPS))];
+    let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.case == "crash/recorder-kill/inproc/*")
+        .unwrap();
+    for (outside, accepted) in [(0.0, true), (1.0, false)] {
+        let metrics = BTreeMap::from([
+            ("count".into(), cap_verify_expect::Range::at(1.0)),
+            ("frames".into(), cap_verify_expect::Range::at(1.0)),
+            (
+                "outside-pending".into(),
+                cap_verify_expect::Range::at(outside),
+            ),
+        ]);
+        assert_eq!(
+            cap_verify_expect::within(&entry.bound, Some(&metrics)).is_ok(),
+            accepted
+        );
+    }
+    let mut case = Case::new("pending-fragment-test");
+    check_recovery(
+        &mut case,
+        &physical[..1],
+        &physical,
+        &handed,
+        &std::collections::BTreeSet::from([1]),
+    );
+    assert!(case.classes.contains("dropped-complete"));
+    assert!(!case.classes.contains("loss"));
 }

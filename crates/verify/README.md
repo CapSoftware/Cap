@@ -143,3 +143,13 @@ blessed failure is a bug that the suite keeps checking.
   or samples, and a repro command. The report records are uploaded as the
   `verify-report-*` artifacts, which `bless.sh --run` reads.
 - **Gate.** Make the `Engine verify` job a required check.
+
+## Baseline comparison
+
+Run `python3 scripts/verify/diff.py BASE_DIR MAIN_DIR --json comparison.json` with downloaded report artifacts. Comma-separated run directories combine independent runs on each side. Keep both sides on the same OS image.
+
+A required track absent from a recording leaves its dependent classes unobserved with reason `track absent`. A newly observed class appears in the coverage-gained column and is still judged by main's own expectations. Coverage gain alone is not an equal or worse result.
+
+The `missing-after-hold` class measures an environment-sensitive ScreenCaptureKit idle-resume event. Compare at least three independent real-capture runs per side per OS image. A distribution is worse only when every main per-run count is above the baseline range. Insufficient repetitions and overlapping ranges are reported explicitly. Retries of one capture do not add independent samples. Other classes retain the strict zero-tolerance comparison.
+
+Finalize crash cases hold the test muxer at entry to finalization after source EOF. The parent kills it while the barrier is held and checks that the recorder never wrote `done`. Missing the barrier or finding `done` is a harness failure. The barrier exists only in the integration-test wrapper and is disabled for all ordinary cases.

@@ -86,6 +86,7 @@ jobs:
           RUSTUP_TOOLCHAIN: stable
         run: |
           python3 scripts/verify/plan.py test > /dev/null
+          python3 scripts/verify/test_diff.py
           if grep -rn --include='expectations*.toml' '^reason = "TODO' crates; then
             echo "::error::blessed expectations still have TODO reasons: describe each failure (and link its fix) before merging"
             exit 1
