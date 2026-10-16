@@ -836,11 +836,17 @@ impl AudioMixer {
 
 fn mixer_now() -> Timestamp {
     #[cfg(target_os = "macos")]
-    return Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now());
+    {
+        Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now())
+    }
     #[cfg(windows)]
-    return Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now());
+    {
+        Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now())
+    }
     #[cfg(not(any(target_os = "macos", windows)))]
-    Timestamp::Instant(Instant::now())
+    {
+        Timestamp::Instant(Instant::now())
+    }
 }
 
 fn samples_duration(samples: usize, rate: u32) -> Duration {
