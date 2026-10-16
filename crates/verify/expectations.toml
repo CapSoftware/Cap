@@ -389,7 +389,7 @@ link = ""
 [[xfail]]
 case = "editing/export/multi-segment/seed-7"
 class = "stale"
-bound = { screen-frames = 26, camera-frames = 14, delta = 29, frame = [135, 157] }
+bound = { screen-frames = 27, camera-frames = 14, delta = 29, frame = [129, 157] }
 reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the frames after the transition show source frame 0 instead of 20-29 (deterministic: 22 screen and 10 camera frames, output frames 135 to 157, with the dominant side of each blend checked). Same mechanism as the seek/*/storm*/ffmpeg entries: backward seeks near the start answer frame 0"
 link = ""
 
@@ -403,8 +403,15 @@ link = ""
 [[xfail]]
 case = "editing/export/basic/seed-10"
 class = "stale"
-bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [107, 109] }
+bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [106, 109] }
 reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-37"
+class = "stale"
+bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [12, 12] }
+reason = "NEW: FFmpeg decoder (full tier, Linux), the first-frame shortcut of editing/export/basic/seed-10: in a cross-fade back into the clip start the weaker side's request for source frame 1 is answered with frame 0 (output frame 12; found by the two-sided blend check, run 38851482675)"
 link = ""
 
 [[xfail]]
