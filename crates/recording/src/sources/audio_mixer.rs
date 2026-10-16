@@ -1310,6 +1310,25 @@ mod test {
     }
 
     #[test]
+    fn pcm_stop_before_startup_grace_preserves_captured_audio() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, Some(960));
+        probe.tick(100);
+        let PcmProbe { mixer, pcm, .. } = probe;
+        drop(mixer);
+        let peaks: Vec<_> = pcm
+            .iter()
+            .enumerate()
+            .filter_map(|(index, sample)| (sample[1].abs() > 0.01).then_some(index))
+            .collect();
+        eprintln!(
+            "STOP_DURING_GRACE output_samples={} peaks={peaks:?}",
+            pcm.len()
+        );
+        assert_eq!(peaks, [960]);
+    }
+
+    #[test]
     fn pcm_sub_timeout_gap_is_not_smoothed_away() {
         let mut probe = PcmProbe::new(2);
         probe.send(1, 0, 4_800, None);

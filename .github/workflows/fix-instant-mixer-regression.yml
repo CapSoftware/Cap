@@ -79,6 +79,10 @@ jobs:
             echo "DELAYED_ARM=$arm EXIT=$status"
             if [[ "$arm" == main ]]; then test "$status" = 101; else test "$status" = 0; fi
             cargo run -p cap-verify --example mixer-pcm-identity --profile ci-verify --locked -- "$root/$arm-recordings" > "$root/$arm-recordings.log" 2>&1
+            status=0
+            cargo test -p cap-recording --lib --profile ci-verify --locked pcm_stop_before_startup_grace_preserves_captured_audio -- --nocapture 2>&1 | tee "$root/$arm-stop.log" || status=$?
+            echo "STOP_ARM=$arm EXIT=$status"
+            test "$status" = 0
           done
           python3 - <<'PYCODE'
           import hashlib
