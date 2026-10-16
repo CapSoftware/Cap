@@ -22,6 +22,10 @@ path = "examples/editor-playback-benchmark.rs"
 name = "editor-startup-benchmark"
 path = "examples/editor-startup-benchmark.rs"
 
+[features]
+# Offline audio output for the cap-verify suite. Never enabled by the app.
+test-hooks = []
+
 [dependencies]
 cap-utils = { path = "../utils" }
 cap-media = { path = "../media" }
