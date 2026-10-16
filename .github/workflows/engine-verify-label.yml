@@ -1,0 +1,20 @@
+name: Engine verify (full)
+
+# Adding the `verify-full` label to a PR runs the FULL tier once. A separate
+# workflow so that adding any other label never produces a skipped (and
+# therefore passing) "Engine verify" check that would hide a failed FAST run.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  full:
+    if: github.event.label.name == 'verify-full'
+    uses: ./.github/workflows/engine-verify.yml
+    with:
+      tier: full

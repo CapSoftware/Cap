@@ -35,7 +35,7 @@ platforms = [
 # unified tree into every `cargo build -p cap-muxer`. Any drift it causes is
 # bounded by its own tiny graph.
 [traversal-excludes]
-workspace-members = ["cap-muxer", "cap-muxer-protocol"]
+workspace-members = ["cap-muxer", "cap-muxer-protocol", "cap-verify-expect"]
 
 # hakari unifies dev-dependencies as well, so left alone it pins tauri with its
 # `test` feature and tokio `test-util` into every release binary and pulls the
