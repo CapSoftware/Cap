@@ -48,9 +48,9 @@ jobs:
       fail-fast: false
       matrix:
         runner:
-          - macos-latest
-          - windows-2022
-          - ubuntu-24.04
+          - blacksmith-6vcpu-macos-15
+          - blacksmith-8vcpu-windows-2025
+          - blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
