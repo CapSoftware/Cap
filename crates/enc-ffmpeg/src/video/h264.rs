@@ -618,42 +618,14 @@ pub(crate) fn open_video_encoder_with_flags(
     )
 }
 
-fn is_rgb(format: format::Pixel) -> bool {
-    format.descriptor().is_some_and(|descriptor| unsafe {
-        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
-    })
-}
-
 fn configure_rgb_converter(
     converter: &mut ffmpeg::software::scaling::Context,
     input: format::Pixel,
     output: format::Pixel,
 ) -> Result<(), H264EncoderError> {
-    if !is_rgb(input) || is_rgb(output) {
-        return Ok(());
-    }
-
-    // swscale defaults to BT.601 even though the encoder declares BT.709.
-    // RGB input is full range; the encoded YUV contract below is limited range.
-    let result = unsafe {
-        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
-        ffmpeg::ffi::sws_setColorspaceDetails(
-            converter.as_mut_ptr(),
-            coefficients,
-            1,
-            coefficients,
-            0,
-            0,
-            1 << 16,
-            1 << 16,
-        )
-    };
-    if result < 0 {
-        return Err(H264EncoderError::ColorConversion(ffmpeg::Error::from(
-            result,
-        )));
-    }
-    Ok(())
+    // The encoded YUV contract below is limited range.
+    super::colour::use_bt709_for_rgb_input(converter, input, output)
+        .map_err(H264EncoderError::ColorConversion)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1798,6 +1770,7 @@ mod self_test_tests {
 
 #[cfg(test)]
 mod rgb_color_tests {
+    use super::super::colour::is_rgb;
     use super::*;
 
     const COLORS: [[u8; 3]; 6] = [
