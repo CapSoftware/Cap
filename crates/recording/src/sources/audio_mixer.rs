@@ -972,14 +972,6 @@ fn samples_for_timeout(rate: i32, timeout: Duration) -> usize {
     samples.max(1.0) as usize
 }
 
-fn duration_from_samples(samples: usize, rate: i32) -> Duration {
-    if rate <= 0 {
-        return Duration::ZERO;
-    }
-
-    Duration::from_secs_f64(samples as f64 / rate as f64)
-}
-
 #[cfg(test)]
 mod test {
     use futures::{SinkExt, StreamExt};
