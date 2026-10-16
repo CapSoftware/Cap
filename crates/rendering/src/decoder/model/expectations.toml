@@ -1,0 +1,1730 @@
+# Strict expected failures for the decoder model tests
+# (cap-rendering decoder::model: `cargo test -p cap-rendering --lib decoder::model`).
+#
+# Format: the shared engine verification format (crates/verify-expect):
+#   [[xfail]]
+#   case = "<case id as printed by the suite, * globs allowed>"
+#   class = "<future | stale | grid-rounding | overread | resets | dropped | fallback | unidentified>"
+#   platforms = ["macos"]  (optional; absent = every platform)
+#   seeds = "<seed indices that fail, ranges allowed: 0 3 5-9>"  (optional; absent = any seed)
+#   reason = "<what is wrong>"
+#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
+#
+# Every listed seed must still fail with that class: a seed that passes fails
+# the run with "remove this xfail", so fixes stay locked in. Any failure not
+# listed here fails the run. After a deliberate change, rewrite this file from
+# a run with `scripts/verify/bless.sh` (locally, or from a CI run's report
+# artifacts with `--run <id>`). Reasons and links of existing entries are
+# kept; review the difference.
+#
+# Entries below were recorded on origin/main 5705ee851. "NEW:" marks bugs the
+# model found that no open PR fixes.
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "future"
+seeds = "0 7 16 49"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "15 19"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "grid-rounding"
+seeds = "8 50"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "overread"
+seeds = "1 2 4 5 7-17 19-25 27-29 31-40 42-44 46-52 54 56 58 59"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "0 3 30 57"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "stale"
+seeds = "1 3 6 8 10 15 18-20 24 26 28-30 47 50 52-54 57-59"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/random-seeks/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "7 49"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future; aVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "future"
+seeds = "0 1 4 6 8 9 11-13 15-18 20 22 23 25-28"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "grid-rounding"
+seeds = "0"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "23"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "overread"
+seeds = "0-29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "resets"
+platforms = ["macos"]
+seeds = "0 1 4 6 8 11-13 15-18 20 22 23 25-27"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 0 request 1815). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/export"
+class = "stale"
+platforms = ["macos"]
+seeds = "15"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with an older sample than the right one (seed index 15 request 3029). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/playback"
+class = "future"
+seeds = "1 4 10 11 14 17 19 24 25 27"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "19"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): an answer is the sample on screen at the exact request time instead of the grid frame (seed index 19 request 3265). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/playback"
+class = "overread"
+seeds = "0-4 6-29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/playback"
+class = "resets"
+seeds = "8 28"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera-fast/sequential/playback"
+class = "resets"
+platforms = ["macos"]
+seeds = "1 4 10 11 14 17 19 24 25 27"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/export"
+class = "future"
+seeds = "0-2"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/export"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "0"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): an answer is the sample on screen at the exact request time instead of the grid frame (seed index 0 request 8094). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/export"
+class = "overread"
+seeds = "0-3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/export"
+class = "resets"
+platforms = ["macos"]
+seeds = "0-2"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 0 request 4610). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/playback"
+class = "future"
+seeds = "2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/playback"
+class = "overread"
+seeds = "0 2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/camera/sequential/playback"
+class = "resets"
+platforms = ["macos"]
+seeds = "2 3"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 2 request 7107). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "future"
+seeds = "10 42 59 85 87 205 214 219 232 234 240 250 258 260"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "3 13 16 34 37 65 71 72 75 81 83 92 94 100-102 109 110 119 139 146 162 171 179 197 210 212 218 221 225 228 230 239 246 274 282 283 293 297"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "25 32 42 55 73 76 81 88 94 113 122 124 132 152 160 185 228 229 243 280 290"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "1-3 16 20 37 38 43 46 48 71 87 90 100 101 107 110 116 119 125 133 137 139 142 154 169 178 181 196 206 209 210 212 214 218 225 231-234 240 246 249 251 256 262 267 271 274 282 284 293 296 297"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "3 6 9-11 16 18 20-22 25 32 33 37 40 42 43 46 48 55 58 65 71 75 83 87-90 94 95 100 101 106-108 110-114 116 119 120 122 125 127 132 138-140 142 146 150 160 170 178 180 181 185 188 197 201 205 207-210 214 218 219 221 226 228-231 234 236 238 241 243 246 253 256 260 262 267 270 271 274 280 282 287 290 293 296 297"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 3 request 8). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "1-3 6-9 11 13 15-22 25 27 28 32-35 37 38 40 41 43-51 53-55 58 65 66 68-73 75 76 79 81 83 84 86 88-92 94-96 100-103 106-114 116-122 124-129 131-133 136-140 142 145-147 149 150 153 154 156 157 160 162 164 169-173 175 176 178-181 185-188 191 196 197 201 204 206-210 212 218 221-231 233 235-239 241-244 246-249 251-257 262 264 265 267 268 270-275 277 278 280-284 287 289-291 293 295-299"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/keyframe-seeks/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "42 87 214 232 234 240 258"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "future"
+seeds = "52 221"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "0 33 224 238"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "10 26 190 208 212 218 238 271 274"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "6 11 19 29 33 46 50 86 111 112 124 131 132 150 161 169 188 191 203 241 261 299"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "overread"
+seeds = "54 79 146 184 190 197"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "6 8 10 11 15 19 20 26 29 33 35 36 38 41 42 46-48 55 58 62 64 70 71 75 76 83-86 92 93 96 97 102 110-112 118-120 122 124 126 131 132 138 143-145 150 151 154 155 160 161 167 169 170 174 181 188 189 191 193 196 202 203 216 218 226 230 232 238 241 261 262 271 272 274 275 281 283 299"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/random-seeks/playback"
+class = "stale"
+seeds = "0 2 6 8 10 11 14 15 19-27 29-36 38 41-43 45-48 50 55 57 58 62 64 67 69-71 74-77 80 82-87 91-93 95-97 99 100 102 107 110-112 114 115 118-124 126 127 129 131-133 136 138 140 141 143-148 150 151 154 155 157-161 163 165-167 169 170 172 174-176 179-181 183 185 188-193 196 201-203 205 207 212 214-216 218 220 224-226 229-236 238 240-243 245 248-251 254-259 261 262 264 269 271 272 274 275 277 281-283 286 291 296 299"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/scrub/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "83 177"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): an answer is the sample on screen at the exact request time instead of the grid frame (seed index 83 request 167). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/scrub/playback"
+class = "overread"
+seeds = "41 89 96"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/scrub/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "15 17 65 70 71 76 83 154 168 169 181"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/scrub/playback"
+class = "stale"
+seeds = "1 2 5 7-9 13-15 17 19 22-24 27-29 34 36 37 40 43 48 53 55 56 58 59 61 62 65 66 70-73 76 78-81 83 84 86-88 91 93 99-101 105-107 109 110 113 115 120 123 128 129 131-137 142-144 148 149 151 152 154 155 157-160 162 166-169 171 173-175 177 180-182 184 185 189 190 196-199"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/sequential/playback"
+class = "stale"
+seeds = "23 115"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/tail/export"
+class = "stale"
+seeds = "1 7 54 60 69"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/tail/playback"
+class = "stale"
+seeds = "12 34 40 73 93"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/timeline/export"
+class = "grid-rounding"
+seeds = "16 28 45 57 93 128 137"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/timeline/export"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "36 40 52 54 58 60 70 75 117 142 148"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/timeline/export"
+class = "overread"
+seeds = "56 131"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/timeline/export"
+class = "overread"
+platforms = ["macos"]
+seeds = "2 7-9 11 19 24 31 35-37 40 45 52-54 57 60 63 66 70 71 75 76 81 86 93 95 101 102 106 112 119 121 128-130 132-134 137 142 143 147 148"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/timeline/export"
+class = "stale"
+seeds = "2 7-12 14-17 19 23 24 26 28 30-33 35-40 42 44 45 47 49 52-55 57 58 60-63 66 69-71 75 76 81-83 86 88 90 93-95 97 98 101-103 106 108 112 113 117-119 121 122 125 126 128-130 132-134 137 142 143 147 148"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "future"
+seeds = "17 51 64"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "future"
+platforms = ["macos"]
+seeds = "19"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "grid-rounding"
+seeds = "16 32"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "overread"
+platforms = ["macos"]
+seeds = "6 12 16 28 38 42 48 65 75 78 79"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 6 request 225). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "stale"
+seeds = "0 5 6 8 10 12 16 19 22-25 28 33 38 40 42 48 50 56 59 61 65 66 68 73 75 78 79"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/export"
+class = "stale"
+platforms = ["macos"]
+seeds = "17"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/playback"
+class = "future"
+seeds = "45"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/playback"
+class = "grid-rounding"
+seeds = "40"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "4 8 11 42 66 73 76"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 4 request 189). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/cfr/transition/playback"
+class = "stale"
+seeds = "4 6 8 11 14-16 20 21 23 25 29 35 36 41 42 58 60 64 66 68-70 73 74 76"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/dense/random-seeks/playback"
+class = "future"
+seeds = "132"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/dense/random-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "1 46 53 56 58 65 73 81 96 110 118 126 134 137 138 149"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 1 request 323). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/dense/random-seeks/playback"
+class = "stale"
+seeds = "0 1 3 5 9 13 15 18 25 28 30 32 34 36 37 39 43-47 49 51 53 56-59 61 62 64-66 69 73 74 76 79-82 87 89 91 96 97 100-102 105 107 109 110 114 115 117-119 122 126 127 131 134-140 143 149"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/export"
+class = "future"
+platforms = ["macos"]
+seeds = "3 15 50"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with a sample ahead of the right one (seed index 3 request 1622). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/export"
+class = "overread"
+seeds = "18 30 54 55"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/export"
+class = "overread"
+platforms = ["macos"]
+seeds = "2 3 8 15 17 20 22 45 50 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/export"
+class = "stale"
+seeds = "2 3 8 15 17 19 20 22 30 37 39 42-45 50 54 55 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "future"
+seeds = "30 33 38"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "34 58 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "grid-rounding"
+seeds = "7"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "25"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "overread"
+seeds = "7 37 55"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "2 18 22-27 30 33 34 38 41 42 58 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/halfgrid/back-into-old-gap/playback"
+class = "stale"
+seeds = "2 4 7 18 20 22-27 29 34 36 37 39 41 42 45 47 55 58 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "future"
+seeds = "36 40 61 67 79"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "28 39 74"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "grid-rounding"
+seeds = "12 31 37 43"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "11 14 38 47 50 74"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "overread"
+seeds = "0-7 10 13 16-21 23-29 32-37 39 40 42 44-49 51-60 64-75 77-79"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "11 12 14 15 22 38 41 43 50 61-63"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "stale"
+seeds = "4 8 11-16 18 22 24 26-28 31 32 37-39 41-44 47 50 57 62-64 74"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/random-seeks/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "61 67 79"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "future"
+seeds = "2 5 20 21 23 24 28 38 41-43 45 52 55 57 63 72 77 78"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "overread"
+seeds = "0-2 5-10 14 15 19-29 31 32 34 37 38 40-47 49 51-59 66 70-78"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "63"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "resets"
+seeds = "29 75"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "resets"
+platforms = ["macos"]
+seeds = "42"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "stale"
+seeds = "50 60 64 79"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/late-start/sequential/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "24"
+reason = "AVAssetReader requests before a late-starting stream's first frame read the reader one frame further ahead per request, and seeks into the stream start show the wrong frame"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/syn/edlist/export"
+class = "future"
+seeds = "0-7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/syn/edlist/export"
+class = "overread"
+seeds = "0-7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/syn/edlist/playback"
+class = "future"
+seeds = "2"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/syn/edlist/playback"
+class = "overread"
+seeds = "0-7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "future"
+seeds = "51 56 60 61 63 86"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "future"
+seeds = "28 53 59"
+flaky = true
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "0 3 6 7 9 14 19 24 26 29 34 36 41 45 47 49 55 62 65 70 76 83 85 88 95 97"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "5 25 27 32 48 52 56 65 76 86 90 98"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "0 3 7 14 17 21 24 26 34 35 37 40 41 49 51 59 61 68 69 75 83 88 97 99"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "overread"
+seeds = "65 76 86 98"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "0 6 7 14 17 19 21 25 28 29 32 34 37 39-41 47 48 51-53 56 60 61 63 64 68-71 75 78 83-85 87-89 94 95 97"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "28 53 59"
+flaky = true
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "0-3 6 7 9 10 12-22 24-26 29-37 39-42 44-50 52 54 55 57 58 62 64-76 78-85 87-91 93-97 99"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/keyframe-seeks/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "51 56 60 61 63"
+reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first depends on the wall clock. Without a stall the first wrong answer is a future one at a seek (seed 28 request 61, seed 53 request 8, seed 59 request 9: the next sample, e.g. sample 68 for 67): pool position capping, the reader's pool position is capped to the newest request (avassetreader.rs update_decoder_position(decoder_idx, capped)) so a reader that already decoded past the sample is reused without a reset. When the test thread stalls for 250 ms or more, the decoder's idle timeout (IDLE_READER_TIMEOUT, avassetreader.rs) clears the cache and reader state, the later requests take another path and the first wrong answer is a stale one from the wrong-GOP seek (reader started on the keyframe time rounded to 10 ms). Measured on Apple silicon: future 3 of 3 per seed without a stall, stale for all three seeds with a 300 ms stall before every request, and for seed 53 with a single 300 ms stall before request 6 (a 240 ms stall keeps future). macos-15: future in 6 of 7 runs, stale in 1 (38743345280). With #2595's decoder changes seed 28 passes and seeds 53 and 59 keep only the stale (wrong-GOP) answer"
+link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "future"
+seeds = "7 17 23 76 84 97 100 105 109 114 115 119 135 136 148 174"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "5 18 24 41 44 83 103 110 126 142 153"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "77 87 114 133 156"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "97"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "overread"
+seeds = "58 171 180 192"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "5 7 11 12 17 18 23 24 31 41 43 44 63 66 73 75-77 79 83 84 86 87 90 96 97 100 102-105 107 109 110 112 114-116 120 135-137 142 146 148 153 156 162 163 165 172 174 176 181 189 191 193"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "stale"
+seeds = "5 6 10-12 18 20-22 24 25 31 35 36 41-44 48-50 58 61 63 66 69 72-75 77 79 81-83 86 87 89 90 96 99 101-104 107 110 112 116 120 122 123 125-127 131 132 137 142 143 146 151 153 156 157 159 162 163 165 171 172 176 179-181 189 191-194"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/random-seeks/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "17 97 109 119"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "future"
+seeds = "6 47 68 94"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "16 22 24 26 34 45 57 97 101 110"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "68 70"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): an answer is the sample on screen at the exact request time instead of the grid frame (seed index 68 request 147). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "overread"
+seeds = "28 36 48 66 77 114"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "7 9 16 22 24-26 34 37 40 45 50 62 68 69 72 74 84 87 89 90 101 110 118"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "stale"
+seeds = "1 2 7 9 10 12 14 16 17 21-26 29 30 34 37 40 41 43-45 49 50 53 54 56-58 61 62 65 66 69 70 72-74 77-92 97 100-104 108-110 113 114 116 118 119"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/scrub/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "94"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/sequential/export"
+class = "stale"
+seeds = "34 40 73 99"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/sequential/playback"
+class = "stale"
+seeds = "6 15 22 29 49 69 85"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/timeline/export"
+class = "future"
+seeds = "13 44 59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/timeline/export"
+class = "grid-rounding"
+seeds = "43 77 91 93 96"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/timeline/export"
+class = "overread"
+seeds = "59"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/timeline/export"
+class = "overread"
+platforms = ["macos"]
+seeds = "12 13 15 18 27 37 43 44 51 72 82 91 96 102"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/timeline/export"
+class = "stale"
+seeds = "12 15 17 18 20 23 27 31 34 37 43 50 51 54 61 72 73 76 77 82 85 86 90 91 93 96 102 103 108 112 115"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "future"
+seeds = "5 14 15 17 20 22 23 27 28 30 31 33 36 40 43 48 51 54 63-65 76-78"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "future"
+platforms = ["macos"]
+seeds = "18 35 41 42 44 50 56 58 62 68-70 74"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "grid-rounding"
+seeds = "8"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "grid-rounding"
+platforms = ["macos"]
+seeds = "43 44"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "overread"
+platforms = ["macos"]
+seeds = "5 10 13 14 17 18 20 22 23 27 28 30 31 33 35-37 40-44 48 50 51 54 56 58 62 63 65 67-70 74 76-79"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 5 request 157). AVAssetReader decoder request handling, the mechanisms of this decoder's other entries (pool position capping, reader reuse after a reset, pts holes), which #2638 targets"
+link = "https://github.com/CapSoftware/Cap/pull/2638"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "stale"
+seeds = "0 4 10 11 13 16 18 29 35 37 39 41 42 44 47 50 56-60 62 67-70 74 79"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/avf/vfr/transition/playback"
+class = "stale"
+platforms = ["macos"]
+seeds = "17 28 31 51 63 65"
+reason = "AVAssetReader seeks: the reader starts on the keyframe time rounded to 10 ms, so it can return the previous GOP's last frame under the keyframe's number, and a reused pooled reader answers from frames cached by an earlier, unrelated seek"
+link = "https://github.com/CapSoftware/Cap/pull/2603"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "future"
+seeds = "7"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "grid-rounding"
+seeds = "2 11-13 20 23 26 33 47"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "overread"
+seeds = "0-4 6 8-12 14-16 18 19 22-32 34-51 54-59"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
+class = "stale"
+seeds = "47"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/export"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "4 11 22 27 29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/export"
+class = "grid-rounding"
+seeds = "3 6 28"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/export"
+class = "overread"
+seeds = "0-29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/export"
+class = "stale"
+seeds = "0 3-6 11 15 22 27-29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
+class = "grid-rounding"
+seeds = "2 6 24"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
+class = "overread"
+seeds = "0-8 10-14 16 17 19-21 23-29"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
+class = "stale"
+seeds = "0 2 6 11 24"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/export"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "0 2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/export"
+class = "grid-rounding"
+seeds = "1"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/export"
+class = "overread"
+seeds = "0-3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/export"
+class = "resets"
+platforms = ["linux"]
+seeds = "0-3"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 0 request 6042). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/export"
+class = "stale"
+seeds = "0-3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/playback"
+class = "grid-rounding"
+seeds = "2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/playback"
+class = "overread"
+seeds = "2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/playback"
+class = "resets"
+platforms = ["linux"]
+seeds = "2 3"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 2 request 6210). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/camera/sequential/playback"
+class = "stale"
+seeds = "2 3"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "future"
+platforms = ["linux"]
+seeds = "0 38 46 56 62 69 83 90 93 104 110 133 145 169 181 183 186 205 207 239 253 256 260 299"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "future"
+seeds = "1 4 6 17 18 20 23 41 42 48 50 53 63 65 101 108 115 118 119 122 124 130 136 140 142 147 149-151 154 161 167 188 192 199-201 203 209 212 216 219 223 235 237 245 248 250 261 263 268 270 271 275 285 288 290 291"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "0 4 5 8 20 29 48 53 62 63 69 115 121 130 136 142 147 151 154 161 167 173 188 200 201 207 212 216 219 223 225 226 234 235 237-239 245 248 254 255 263 268 270 275 278 285 291 299"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "2 6 9 12 17 19 23 27 28 30 31 33 38 39 41 42 46 50 52 54 56 60 61 65 68 71 72 74 75 79 82-84 86 90 92 93 96 98 99 101-104 106-108 110 111 119 122 124 125 129 131 133 135 137 138 140 141 143 145 148-150 152 156 164 165 168-172 177-179 181-183 186 189-192 194 195 197-199 203 205 206 209-211 222 227 236 241 243 250 253 256 258 265 266 273 274 283 284 287 290 294 295 297"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "0 4-8 12 15 16 19 20 26 31 37 46 47 51 53 62 63 69 70 72 80 88 91 95 100 101 111 112 115 117 121 125 127 130 136 138 142 147 153 155 161 167 170 172 173 175 183 196 200 202-204 207-212 216 219 225-227 230 234 235 237-241 244 245 253-256 263 265 275 278 285 286 291 292 294 297 299"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "overread"
+seeds = "2 11 14 27 29 30 33 38 39 50 52 54 56 59-61 67 68 71 74 82 83 86 90 92 93 96 98 99 102-104 106 108 110 113 119 126 129 131 133 135 137 139 144 145 148 152 156 162 164 165 168 169 171 177-179 181 182 185 186 189 190 197 198 205 222 229 236 243 247 258 260 266 274 287 295"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "stale"
+platforms = ["linux"]
+seeds = "4 6 20 53 63 101 108 115 119 130 136 147 154 161 200 203 209 212 216 219 235 237 245 275 291"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "0 2 5 7 8 12 14-16 19 26 27 29-31 33 37-39 46 47 51 52 54 56 59-62 67-72 74 80 82 83 86 88 90-93 95 96 98-100 102-104 106 110-113 117 121 125-127 129 131 133 135 137-139 144 145 148 152 153 155 156 162 164 165 168-173 175 177-179 181-183 186 189 190 196-198 202 204 205 207 208 210 211 215 222 225-227 229 230 234 236 238-241 243 244 247 253-256 258-260 265 269 274 278 286 287 292 294 295 297 299"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "future"
+seeds = "60"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "67 100 254 279"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "13 31 40 52 57 61 63 69 74 80 93 117 120 126 140 153 166 180 182 188 196 251 258 276 299"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "0 4 10-12 16 18 25 27 30 32 42 50 55 67 73 82 89 100 108 126 128 129 134 137-139 146 147 151 164 166 171 174 178-181 207 217 220 228 232 246 247 250 254 262 273 279 281 289 290 297"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "overread"
+seeds = "3 9 13 64 95 101 106 140 148 163 187 204 227 287 299"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
+class = "stale"
+seeds = "0 4 10-13 16 18 20 25 27 30 32 42 43 50 55 61 62 67 73 82 89 100 108 126 128 129 134 137-140 146-148 151 164 166 171 173 174 178-181 184 198 207 217 220 228 232 233 243 246 247 250 254 258 262 267 273 279 281 285 289 290 297"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "future"
+platforms = ["linux"]
+seeds = "88"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with a sample ahead of the right one (seed index 88 request 220). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "27 33 39 41 50 68 86 90 93 101 104 109 121 123 124 133 144 149 155 160 165 170 173 179 180 183 186 192 199"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "grid-rounding"
+seeds = "30 62 63 84 106 122 126 143 176 187"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "1 4 7 8 11 14 16-20 26 27 36-38 40-43 46 52 53 55 56 58 64 68 70 71 73 74 77 78 80 82 83 85 88 90-94 98-101 105 107 110 113 114 117 121 124 127 128 131-133 135 137 141 142 145 148 149 151 152 154 155 157 162 163 167 173-175 177 179 181 183 187 189 192 193 198"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "overread"
+seeds = "0 3 13 21 31 33-35 39 44 50 51 54 67 75 84 86 97 103 104 106 108 109 111 115 118 119 122 123 134 138-140 144 147 158-161 165 168 170 176 180 185 186 197"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/scrub/playback"
+class = "stale"
+seeds = "0 1 3 4 7 8 11 13-22 26 27 33 35-43 46 49-56 58 60 63 64 66-68 70-75 77 78 80-86 88 90-95 97-101 104-110 113-115 117-119 121-125 127 128 131-135 137 139 141 142 144 145 147-152 154 155 157 160-165 167 168 170 173-177 179-181 183 185-189 191-194 197-199"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/tail/export"
+class = "grid-rounding"
+seeds = "26"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "future"
+seeds = "29 50"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "grid-rounding"
+seeds = "16 26 32 50 65 75 95 102 133 145"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "overread"
+platforms = ["linux"]
+seeds = "12 42 43 64 133"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "overread"
+seeds = "53 66 103 107 132"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/timeline/export"
+class = "stale"
+seeds = "12 35 42 43 64 133 135"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "future"
+platforms = ["linux"]
+seeds = "73"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "future"
+seeds = "6 66"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "0 15 22 23 25 29 66 73"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "grid-rounding"
+seeds = "5-7 38 41 45 53 56 61 62 72"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "overread"
+platforms = ["linux"]
+seeds = "4 5 19 22 23 26 29 52 60 73"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 4 request 108). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/export"
+class = "stale"
+seeds = "0-2 4 5 7 15 19 22-26 29 33-36 38 40 41 52 55 60 62 67 73-75 79"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "future"
+seeds = "69"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "14 20 21 25 31 53 54 57 61 66"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "grid-rounding"
+seeds = "9 19 29 42 51 58 64 65"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "6 25 27 39 50 57 70"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): the reader decodes past the sample after the answer, running ahead of the requests (seed index 6 request 48). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/cfr/transition/playback"
+class = "stale"
+seeds = "3 6 7 9 14 20 21 25 27 31 36 37 39 43-45 50 53 54 57 59 61 64-66 70 77"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "future"
+seeds = "90 121"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "17 22 33"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "grid-rounding"
+seeds = "1 7 15 21 25 32 35 36 45 47 48 55 64 70 82 86 90 91 100 103 114 115 121 126 147"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "0 4 14 15 17 20 22 25 27 29 31 32 38 43 50 54 56 57 61 65 67 71 84 91 92 97 99 102 114 116 123 126 128 130 135 137 140 144"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "overread"
+seeds = "33 86"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/dense/random-seeks/playback"
+class = "stale"
+seeds = "0 4 14 15 17 20 22 25 27 29 31-33 38 39 43 50 54 56 57 61 63 65 67 71 84 86 91-93 97 99 102 114 116 123 126 128 130 135 137 140 144"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/halfgrid/back-into-old-gap/export"
+class = "overread"
+seeds = "23 41"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/halfgrid/back-into-old-gap/playback"
+class = "overread"
+seeds = "20"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/syn/edlist/export"
+class = "overread"
+seeds = "0-7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/syn/edlist/playback"
+class = "overread"
+seeds = "0-7"
+reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "future"
+platforms = ["linux"]
+seeds = "3 8 10 46 61 68 69 86 89 99"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "future"
+seeds = "2 4 5 9 11 14 20-22 24-27 29 31 32 34 36 37 39-41 48 50 53-56 58 59 62-65 67 70 71 73 76 79 82 84 88 90 91 93-98"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "2 10 13 21 22 24 28 32 34 36 37 40 42 46 48 53-55 63-65 68 69 73 76 88 90 91 93-95"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "grid-rounding"
+seeds = "1 3-5 8 9 11 15 16 18 23 25 27 29-31 41 43 44 47 50 51 56-62 66 70-72 74 75 79-87 89 92 96 97 99"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "1-5 7 8 10-14 19-21 24 25 29 34 36 40-43 48 51 53 55 59 62 64 68 73 79 81 86 91 94 96"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "overread"
+seeds = "6 9 15 17 18 23 28 30 31 44 46 47 50 52 57 58 60 61 66 69 72 75 76 78 83 84 87 89 97 99"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "stale"
+platforms = ["linux"]
+seeds = "2 4 9 11 14 20 21 24 25 29 31 34 40 41 48 55 59 62 64 73 76 79 84 91 93 94 96"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
+class = "stale"
+seeds = "1 3 7 8 10 12 13 15 17-19 23 28 30 42-44 46 47 51 52 57 60 61 66 68 69 72 75 78 81 83 86 87 89 99"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "future"
+seeds = "62"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "grid-rounding"
+seeds = "3 8 10 12 16 20 34 46 52 58 59 64 77 78 86 95 117 137 144 160 168 185 196"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "3 12 18 20 29 53 55 67 79 84 93 120 148 167 177"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "overread"
+seeds = "11 80 101 102 104 110 130 157 171 180"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
+class = "stale"
+seeds = "3 12 18 20 29 53 55 67 79 80 84 93 120 148 167 177"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "future"
+seeds = "114"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "2 37 59 67 81 111"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "grid-rounding"
+seeds = "23 30 46 48 78 87 114"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "overread"
+platforms = ["linux"]
+seeds = "1 7 12 18 33 34 36 37 43 45 46 49 56 67 70-72 81 101 103 105 111 112"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "overread"
+seeds = "2 4 10 15 19 23 25 28 38 53 54 59 69 75 80 88 91 95 98 107 110 114 119"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/scrub/playback"
+class = "stale"
+seeds = "0-2 7 8 12 15 17-19 21 23 33 34 36 37 43 45 46 49 53 54 56 59 66 67 69-72 75 80 81 86 88 91 95 101-103 105 107 108 110-112 119"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/sequential/playback"
+class = "grid-rounding"
+seeds = "25"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "future"
+seeds = "25"
+reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "20"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "grid-rounding"
+seeds = "77 110"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "overread"
+seeds = "0 20 47 56 62 88 107 110 119"
+reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/timeline/export"
+class = "stale"
+seeds = "20 56 119"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/transition/playback"
+class = "future"
+platforms = ["linux"]
+seeds = "66 75 77"
+reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with a sample ahead of the right one (seed index 66 request 206). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/transition/playback"
+class = "grid-rounding"
+platforms = ["linux"]
+seeds = "10 12 13 66 71 75"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/transition/playback"
+class = "grid-rounding"
+seeds = "15 16 19 20 28 33 34 43 47 48 56 59 62 68 70 77"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
+link = ""
+
+[[xfail]]
+case = "decoder-model/ffmpeg/vfr/transition/playback"
+class = "stale"
+seeds = "4-6 8 10 12 13 18 19 21 28 31 33 38 39 41 45-47 49 50 52 55 56 58 59 61 66 68 71 75-77 79"
+reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
+link = ""
+
