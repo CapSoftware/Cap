@@ -1,0 +1,63 @@
+name: Instant mixer current-main integration
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer-current-main]
+    paths: [.github/workflows/fix-instant-mixer-current-main.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+jobs:
+  recording:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Format and crate checks
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --all --check
+          cargo check -p cap-recording --tests --profile ci-verify --locked
+          cargo clippy -p cap-recording --lib --profile ci-verify --locked -- -D warnings
+      - name: Recording library and recovery integration
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixer-current-main"
+          set -o pipefail
+          cargo test -p cap-recording --lib --profile ci-verify --locked -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-current-main/library.log"
+          cargo test -p cap-recording --test recovery --profile ci-verify --locked -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-current-main/recovery.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-current-main-${{ matrix.os }}
+          path: ${{ runner.temp }}/mixer-current-main
+          retention-days: 7
