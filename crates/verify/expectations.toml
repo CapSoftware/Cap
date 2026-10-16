@@ -53,12 +53,6 @@ reason = "AVAssetReader serves one camera frame 1 source frame stale after the t
 link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
-case = "export/early-camera/full/*"
-class = "future"
-reason = "NEW: the auto-calculated clip camera offset repeats the decoder's start-time alignment, so a camera that started before the latest track plays (latest - camera.start) ahead (1.0 s here). Real when the mic is slow to start"
-link = ""
-
-[[xfail]]
 case = "export/camera-pts-late/full/mp430/avf"
 class = "future"
 platforms = ["macos"]
