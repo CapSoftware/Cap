@@ -25,6 +25,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           tier: fast
+      - run: rustup component add rustfmt
       - run: cargo fmt --all --check
       - run: cargo check --profile ci-verify -p cap-verify --test ssmusic
       - env:
