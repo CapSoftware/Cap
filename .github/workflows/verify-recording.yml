@@ -138,6 +138,7 @@ jobs:
     if: needs.scope.outputs.run == 'true'
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         runner: ${{ fromJSON(needs.scope.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
