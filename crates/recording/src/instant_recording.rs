@@ -789,11 +789,17 @@ async fn create_pipeline(
         let audio_dir = content_dir.join("audio");
         let mut builder = output_pipeline::OutputPipeline::builder(audio_dir.clone())
             .with_timestamps(start_time)
-            .with_start_gate(start_gate.clone())
-            // Zero is the recording start, not the first audio sample: a mic
-            // that becomes ready late, or loopback system audio that delivers
-            // only while sound plays, would otherwise move all audio early.
-            .with_audio_anchor(output_pipeline::AudioAnchor::PipelineEpoch);
+            .with_start_gate(start_gate.clone());
+        // Behind a start gate, zero is the gate's arm time, which the screen
+        // track also starts at (within a frame), not the first audio sample:
+        // a mic that becomes ready late, or loopback system audio that
+        // delivers only while sound plays, would otherwise move all audio
+        // early. Without a gate the screen starts at its first encoded frame,
+        // after capture setup, so the epoch would put audio late instead;
+        // only Linux, whose video also starts at the epoch, anchors there.
+        if start_gate.is_some() || cfg!(target_os = "linux") {
+            builder = builder.with_audio_anchor(output_pipeline::AudioAnchor::PipelineEpoch);
+        }
 
         if let Some(sys_audio) = system_audio_source {
             builder = builder
