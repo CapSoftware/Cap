@@ -52,7 +52,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CAP_VERIFY_CASE: "editing/export/multi-segment/seed-7,editing/export/same-clip-transition/forward/ffmpeg,export/camera-pts-late/full/mp430/avf,export/jitter-camera-120s/full/mp460/avf,playback/basic/transition/seq60-from0/avf,decoder-model/avf/camera-fast/sequential/export,decoder-model/avf/syn/edlist/export"
-  CAP_VERIFY_TRACE_BLEND: "2"
+  CAP_VERIFY_TRACE_BLEND: "1"
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
   CAP_VERIFY_CARGO_PROFILE: ci-verify
