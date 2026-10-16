@@ -1,0 +1,17 @@
+name: VT encoder probe (scratch, not for merge)
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: blacksmith-6vcpu-macos-15
+    steps:
+      - name: Export encoder options on this runner
+        run: |
+          brew install ffmpeg >/dev/null 2>&1 || true
+          ffmpeg -hide_banner -version | head -1
+          for sw in 0 1; do
+            echo "== h264_videotoolbox allow_sw=$sw (Cap export uses allow_sw=0, realtime=0, profile main)"
+            ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=1920x1080:rate=30 -t 2 \
+              -c:v h264_videotoolbox -allow_sw $sw -realtime 0 -profile:v main -y /tmp/vt-$sw.mp4 \
+              && echo "allow_sw=$sw: encoded" || echo "allow_sw=$sw: FAILED to open the encoder"
+          done
