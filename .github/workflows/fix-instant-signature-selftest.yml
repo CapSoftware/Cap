@@ -1,0 +1,26 @@
+name: Instant proof signature self-test
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-signature-selftest.yml, crates/verify/src/report.rs]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+jobs:
+  signature:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: fast
+      - name: Check and test the self-contained signature fixture
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all --check
+          cargo check -p cap-verify --profile ci-verify --locked
+          cargo test -p cap-verify --lib --profile ci-verify --locked report::tests::instant_system_offset_expectation_requires_its_exact_signature -- --nocapture

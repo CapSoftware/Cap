@@ -599,7 +599,19 @@ mod tests {
     }
     #[test]
     fn instant_system_offset_expectation_requires_its_exact_signature() {
-        let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
+        let entries = cap_verify_expect::parse(
+            r#"
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync-system"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-70, -30], mic-offset-ms = [5, 34] }
+reason = "Per-input startup alignment signature"
+link = ""
+"#,
+        )
+        .unwrap();
         let entry = entries
             .iter()
             .find(|entry| entry.class == "sync-system" && entry.flaky)
