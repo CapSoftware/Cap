@@ -1,0 +1,75 @@
+name: Instant mixer pause-retention probe
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-pause-proof.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - os: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: fast
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Prepare matched pause probe
+        run: |
+          root="$RUNNER_TEMP/mixer-pause"
+          mkdir -p "$root"
+          cp crates/recording/src/sources/audio_mixer.rs "$root/candidate-mixer.rs"
+          cp crates/recording/src/output_pipeline/core.rs "$root/candidate-core.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > "$root/main-mixer.rs"
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/output_pipeline/core.rs > "$root/main-core.rs"
+          python3 scripts/verify/prepare-mixer-pause-probe.py
+      - name: Run the same pause-retention assertion on both versions
+        run: |
+          root="$RUNNER_TEMP/mixer-pause"
+          set -o pipefail
+          for arm in main candidate; do
+            cp "$root/$arm-mixer.rs" crates/recording/src/sources/audio_mixer.rs
+            cp "$root/$arm-core.rs" crates/recording/src/output_pipeline/core.rs
+            code=0
+            cargo test -p cap-recording --lib --profile ci-verify --locked mixer_pause_keeps_pre_pause_capture -- --nocapture > "$root/$arm.log" 2>&1 || code=$?
+            echo "PAUSE_ARM=$arm EXIT=$code"
+            grep -E 'PAUSE retained|test result:|error\[' "$root/$arm.log" || true
+          done
+          python3 - <<'PYCODE'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "mixer-pause"
+          for arm in ["main", "candidate"]:
+              text = (root / f"{arm}.log").read_text()
+              assert "PAUSE retained_impulses=1" in text, (arm, text[-4000:])
+              assert "test result: ok." in text, arm
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-pause-${{ matrix.os }}
+          path: ${{ runner.temp }}/mixer-pause
+          retention-days: 7
