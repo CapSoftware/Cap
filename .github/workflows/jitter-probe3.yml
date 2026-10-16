@@ -23,21 +23,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { config: base, copy: a, forced: "" }
-          - { config: base, copy: b, forced: "" }
-          - { config: noidle, copy: a, forced: "" }
           - { config: pr2638, copy: a, forced: "" }
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 4
       - name: Use the PR 2638 decoder (probe only)
         if: matrix.config == 'pr2638'
         run: |
-          git show HEAD~1:crates/rendering/src/decoder/avassetreader.rs > crates/rendering/src/decoder/avassetreader.rs
+          git show 4a209fcff:crates/rendering/src/decoder/avassetreader.rs > crates/rendering/src/decoder/avassetreader.rs
           git apply probe-patches/pr2638-hooks.patch
-          git diff --stat HEAD~1 -- crates
+          git diff --stat 4a209fcff -- crates
       - name: Setup
         uses: ./.github/actions/engine-verify-setup
         with:
