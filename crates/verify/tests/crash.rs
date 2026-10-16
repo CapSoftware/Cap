@@ -1442,6 +1442,5 @@ fn crash_safety() {
             settle(case);
         }
     }
-    drop(settle);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
