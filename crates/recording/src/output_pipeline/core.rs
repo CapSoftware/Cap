@@ -2103,6 +2103,10 @@ impl SharedWallClockPause {
             .sum()
     }
 
+    fn unpaused_offset(&self, timestamps: Timestamps, offset: Duration) -> Duration {
+        offset.saturating_sub(self.captured_pause_duration(timestamps.instant() + offset))
+    }
+
     fn captured_audio_ranges(
         &self,
         frame: &AudioFrame,
@@ -4145,7 +4149,14 @@ impl PreparedAudioSources {
                     // before comparing.
                     let track_target = gap_tracker
                         .track_start_offset()
-                        .map(|offset| target_elapsed.saturating_sub(offset))
+                        .map(|offset| {
+                            let offset = if mixed_audio {
+                                shared_pause.unpaused_offset(timestamps, offset)
+                            } else {
+                                offset
+                            };
+                            target_elapsed.saturating_sub(offset)
+                        })
                         .unwrap_or(target_elapsed);
                     let tail_padding = audio_tail_padding_duration(audio_elapsed, track_target);
                     let start_samples = timestamp_generator.total_samples;
@@ -9866,6 +9877,14 @@ mod tests {
                     harness.timestamps.instant() + Duration::from_millis(800),
                 )
                 .await;
+            let first = harness
+                .shared_pause
+                .unpaused_offset(harness.timestamps, Duration::from_millis(100));
+            let stopped = harness
+                .shared_pause
+                .unpaused_offset(harness.timestamps, Duration::from_millis(500));
+            assert_eq!(first, Duration::from_millis(20));
+            assert_eq!(stopped.saturating_sub(first), Duration::from_millis(250));
             assert_eq!(harness.peaks(0), [0, 4_800, 7_200]);
             assert_eq!(harness.timestamp_generator.total_samples, 12_000);
             assert_eq!(harness.total_silence(), Duration::ZERO);

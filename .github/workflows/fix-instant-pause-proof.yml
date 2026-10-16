@@ -2,7 +2,7 @@ name: Instant mixer pause-retention probe
 on:
   push:
     branches: [ci/fixproof-instant-mixer]
-    paths: [.github/workflows/fix-instant-pause-proof.yml]
+    paths: [.github/workflows/fix-instant-pause-proof.yml, scripts/verify/prepare-mixer-pause-probe.py]
   workflow_dispatch:
 permissions:
   contents: read

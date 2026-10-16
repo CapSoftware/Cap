@@ -8,10 +8,22 @@ for arm in ["main", "candidate"]:
     core = (root / f"{arm}-core.rs").read_text()
     needle = "            fn committed_audio(&mut self) -> Duration {"
     assert core.count(needle) == 1
-    core = core.replace(needle, method + needle)
+    capture_timed = "    capture_time_pause: bool," in core
+    arm_method = method
+    arm_test = test
+    if capture_timed:
+        arm_method = method.replace(
+            "                        shared_pause: &self.shared_pause,",
+            "                        shared_pause: &self.shared_pause,\n                        capture_time_pause: true,",
+        )
+        arm_test = test.replace(
+            "                harness.shared_pause.flag.store(paused, Ordering::Release);",
+            "                harness.shared_pause.set_paused_at(paused, harness.timestamps.instant() + Duration::from_millis(100));",
+        )
+    core = core.replace(needle, arm_method + needle)
     needle = '        #[tokio::test(flavor = "current_thread")]\n        async fn primed_track_holds_audio_until_the_start_gate_arms()'
     assert core.count(needle) == 1
-    core = core.replace(needle, test + needle)
+    core = core.replace(needle, arm_test + needle)
     (root / f"{arm}-core.rs").write_text(core)
     mixer = root / f"{arm}-mixer.rs"
     mixer.write_text(mixer.read_text() + "\n" + wrapper)

@@ -63,10 +63,10 @@ jobs:
       - name: Stop while paused
         run: cargo test -p cap-recording --lib --profile ci-verify --locked mixed_pipeline_stop_ -- --nocapture
       - name: Build fixture probe
-        if: github.event_name == 'workflow_dispatch' && inputs.fixtures != false
+        if: inputs.fixtures != false
         run: scripts/verify/run.sh fast --suites export --no-run
       - name: Twenty fresh generations
-        if: github.event_name == 'workflow_dispatch' && inputs.fixtures != false
+        if: inputs.fixtures != false
         env:
           CAP_VERIFY_TIER: fast
           CAP_VERIFY_LOG: cap_recording::output_pipeline=debug
