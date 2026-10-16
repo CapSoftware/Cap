@@ -255,30 +255,6 @@ link = "https://github.com/CapSoftware/Cap/pull/2636"
 # loss or offset of one source cannot hide the other's.
 
 [[xfail]]
-case = "export/instant-ungated-mic-late/output/mp4/native"
-class = "sync-mic"
-platforms = ["macos", "windows"]
-bound = { count = 1, offset-ms = [-210, -190] }
-reason = "NEW: the Instant audio track is anchored at its first sample (AudioAnchor::FirstFrame) and nothing aligns it to the screen afterwards: a mic that becomes ready 0.2 s after the screen plays 200 ms early in output.mp4 (-198.7 to -201.1 ms measured). Bound: early by the mic's start delay"
-link = ""
-
-[[xfail]]
-case = "export/instant-ungated-system-loopback/output/mp4/native"
-class = "sync-system"
-platforms = ["macos", "windows"]
-bound = { count = 1, offset-ms = [-270, -250] }
-reason = "NEW: same anchor, loopback-style system audio (WASAPI delivers packets only while sound plays): the first sound becomes audio zero, so all audio is early by the time to first sound (260 ms here; -253.7 to -260.2 ms measured)"
-link = ""
-
-[[xfail]]
-case = "export/instant-gated-system-only/output/mp4/native"
-class = "sync-system"
-platforms = ["macos", "windows"]
-bound = { count = 1, offset-ms = [-240, -215] }
-reason = "NEW: same first-sample anchor behind the start gate, loopback-only system audio: the first sound after the gate becomes audio zero, so the system audio is early by the time from the gate to the first sound (-226.7 ms in every run on macOS and Windows; Linux, which anchors Instant audio at the recording epoch, is only up to one frame late, see the gated sync-system entry)"
-link = ""
-
-[[xfail]]
 case = "export/instant-gated-*mic*/output/mp4/native"
 class = "sync-mic"
 bound = { count = 1, offset-ms = [5, 34] }
@@ -289,7 +265,7 @@ link = ""
 case = "export/instant-gated-system-*/output/mp4/native"
 class = "sync-system"
 bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (13.3 to 15.1 ms measured; on macOS and Windows the loopback-only variant is the first-sample anchor entry instead)"
+reason = "NEW: the gate's per-pipeline zero, as the gated sync-mic entry: system audio late by up to one video frame (12.2 to 15.1 ms measured)"
 link = ""
 
 [[xfail]]
