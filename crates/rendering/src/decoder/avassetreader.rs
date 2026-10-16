@@ -23,6 +23,51 @@ use tokio::{
 
 use crate::{DecodedFrame, PixelFormat};
 
+// Probe-only diagnostics (scratch branch, not for merge). AVFDBG_DIR enables a
+// per-process trace file; AVFDBG_NO_IDLE disables the idle reader teardown;
+// AVFDBG_FORCE_IDLE=<camera frame> forces one idle teardown per process when
+// the camera decoder receives that request.
+mod avfdbg {
+    use std::io::Write;
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32},
+    };
+    static FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+    pub static INSTANCE: AtomicU32 = AtomicU32::new(0);
+    pub static FORCED: AtomicBool = AtomicBool::new(false);
+    fn file() -> Option<&'static Mutex<std::fs::File>> {
+        FILE.get_or_init(|| {
+            let dir = std::env::var_os("AVFDBG_DIR")?;
+            let _ = std::fs::create_dir_all(&dir);
+            let path = std::path::Path::new(&dir).join(format!("avfdbg-{}.log", std::process::id()));
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+                .map(Mutex::new)
+        })
+        .as_ref()
+    }
+    pub fn enabled() -> bool {
+        file().is_some()
+    }
+    pub fn log(args: std::fmt::Arguments) {
+        if let Some(f) = file()
+            && let Ok(mut f) = f.lock()
+        {
+            let _ = writeln!(f, "{args}");
+        }
+    }
+    pub fn no_idle() -> bool {
+        std::env::var_os("AVFDBG_NO_IDLE").is_some()
+    }
+    pub fn force_idle_frame() -> Option<u32> {
+        std::env::var("AVFDBG_FORCE_IDLE").ok()?.parse().ok()
+    }
+}
+
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::multi_position::{DecoderPoolManager, MultiPositionDecoderConfig, ScrubDetector};
 use super::{
@@ -702,6 +747,30 @@ impl AVAssetReaderDecoder {
 
         let mut deferred_requests = VecDeque::<PendingRequest>::new();
 
+        let dbg_inst = avfdbg::INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let dbg_t0 = std::time::Instant::now();
+        let dbg_no_idle = avfdbg::no_idle();
+        let dbg_force = if _name == "camera" {
+            avfdbg::force_idle_frame()
+        } else {
+            None
+        };
+        macro_rules! d {
+            ($($t:tt)*) => {
+                if avfdbg::enabled() {
+                    avfdbg::log(format_args!(
+                        "{} {} {:.1} {}",
+                        dbg_inst,
+                        _name,
+                        dbg_t0.elapsed().as_secs_f64() * 1e3,
+                        format_args!($($t)*)
+                    ));
+                }
+            };
+        }
+        d!("N path={} fps={fps} no_idle={dbg_no_idle} force={dbg_force:?}", path.display());
+        let mut dbg_wait_ms = 0.0f64;
+
         loop {
             let _autorelease_pool = cidre::objc::AutoreleasePoolPage::push();
             let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
@@ -725,15 +794,21 @@ impl AVAssetReaderDecoder {
                     }
                 }
             } else {
-                let received = if this.is_some() {
+                let dbg_wait_start = std::time::Instant::now();
+                let received = if this.is_some() && !dbg_no_idle {
                     rx.recv_timeout(IDLE_READER_TIMEOUT)
                 } else {
                     rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected)
                 };
+                dbg_wait_ms = dbg_wait_start.elapsed().as_secs_f64() * 1e3;
                 let message = match received {
                     Ok(message) => message,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        d!("X disconnected holes={}", pts_holes.len());
+                        break;
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        d!("T idle teardown waited={dbg_wait_ms:.1} cache={} holes={}", cache.len(), pts_holes.len());
                         cache.clear();
                         cache_bytes = 0;
                         *last_sent_frame.borrow_mut() = None;
@@ -750,6 +825,18 @@ impl AVAssetReaderDecoder {
                         sender,
                     ) => {
                         let frame = (requested_time * fps as f32).floor() as u32;
+                        if dbg_force == Some(frame)
+                            && this.is_some()
+                            && !avfdbg::FORCED.swap(true, Ordering::Relaxed)
+                        {
+                            d!("F forced teardown at req={frame} cache={} holes={}", cache.len(), pts_holes.len());
+                            cache.clear();
+                            cache_bytes = 0;
+                            *last_sent_frame.borrow_mut() = None;
+                            *first_ever_frame.borrow_mut() = None;
+                            gap_hold = None;
+                            this = None;
+                        }
                         if !sender.is_closed() {
                             pending_requests.push(PendingRequest {
                                 frame,
@@ -804,12 +891,24 @@ impl AVAssetReaderDecoder {
                     .is_some_and(|(decoder, request)| {
                         decoder.scrub_detector.record_request(request.frame)
                     });
+            d!(
+                "B n={} f={:?} deferred={} dq={} wait={dbg_wait_ms:.1} scrub={is_scrubbing} live={} cache={:?} holes={} hold={:?}",
+                pending_requests.len(),
+                pending_requests.iter().map(|r| r.frame).collect::<Vec<_>>(),
+                processing_deferred,
+                deferred_requests.len(),
+                this.is_some(),
+                cache.keys().next().zip(cache.keys().next_back()),
+                pts_holes.len(),
+                gap_hold.as_ref().map(|h| h.number)
+            );
 
             let mut unfulfilled = Vec::with_capacity(pending_requests.len());
             let mut last_sent_data = None;
             for request in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&request.frame) {
                     let data = cached.data().clone();
+                    d!("A s1 req={} ans={}", request.frame, data.number);
                     let _ = request.sender.send(data.to_decoded_frame());
                     last_sent_data = Some(data);
                 } else {
@@ -848,6 +947,7 @@ impl AVAssetReaderDecoder {
                 if let Some(data) = data {
                     gap_hold = Some(data.clone());
                     *last_sent_frame.borrow_mut() = Some(data.clone());
+                    d!("A s2 req={} ans={}", req.frame, data.number);
                     let _ = req.sender.send(data.to_decoded_frame());
                 } else {
                     still_unfulfilled.push(req);
@@ -894,7 +994,17 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
+            let dbg_ndec = this.decoders.len();
             let (decoder_idx, was_reset) = this.select_best_decoder(requested_time, is_scrubbing);
+            d!(
+                "S t={requested_time:.4} idx={decoder_idx} reset={was_reset} ndec={dbg_ndec}->{} pos={:?}",
+                this.decoders.len(),
+                this.pool_manager
+                    .positions()
+                    .iter()
+                    .map(|p| (p.id, p.position_secs))
+                    .collect::<Vec<_>>()
+            );
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
@@ -1032,11 +1142,13 @@ impl AVAssetReaderDecoder {
                             if req.frame == current_frame {
                                 let data = cache_frame.data().clone();
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
+                                d!("A s3 req={} ans={}", req.frame, data.number);
                                 let _ = req.sender.send(data.to_decoded_frame());
                             } else if req.frame < current_frame {
                                 if let Some(cached) = cache.get(&req.frame) {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
+                                    d!("A s4 req={} ans={} cur={current_frame}", req.frame, data.number);
                                     let _ = req.sender.send(data.to_decoded_frame());
                                 } else {
                                     // Always answer. Prefer the newest frame at-or-before
@@ -1072,6 +1184,7 @@ impl AVAssetReaderDecoder {
                                     if let Some(data) = best_before {
                                         gap_hold = Some(data.clone());
                                         *last_sent_frame.borrow_mut() = Some(data.clone());
+                                        d!("A s5 req={} ans={} cur={current_frame}", req.frame, data.number);
                                         let _ = req.sender.send(data.to_decoded_frame());
                                     } else if let Some((&frame_num, cached)) =
                                         cache.range(req.frame..).next()
@@ -1081,6 +1194,7 @@ impl AVAssetReaderDecoder {
                                             nearest_frame = frame_num,
                                             "serving forward frame across pts gap"
                                         );
+                                        d!("A s6 req={} ans={} cur={current_frame}", req.frame, cached.data().number);
                                         let _ = req.sender.send(cached.data().to_decoded_frame());
                                     } else {
                                         tracing::warn!(
@@ -1187,6 +1301,11 @@ impl AVAssetReaderDecoder {
                 }
             }
 
+            d!(
+                "I idx={decoder_idx} iter={frames_iterated} last={:?} left={}",
+                last_decoded_position.map(|p| (p * fps as f32).round() as u32),
+                pending_requests.len()
+            );
             if let Some(last_pos) = last_decoded_position {
                 let max_req_time = max_requested_frame as f32 / fps as f32;
                 let capped = last_pos.min(max_req_time);
@@ -1203,6 +1322,7 @@ impl AVAssetReaderDecoder {
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
+                    d!("A s7 req={} ans={}", req.frame, data.number);
                     let _ = req.sender.send(data.to_decoded_frame());
                 } else {
                     let allow_relaxed_fallback = is_scrubbing
@@ -1246,6 +1366,7 @@ impl AVAssetReaderDecoder {
                     if let Some(data) = best_before {
                         gap_hold = Some(data.clone());
                         *last_sent_frame.borrow_mut() = Some(data.clone());
+                        d!("A s8 req={} ans={}", req.frame, data.number);
                         let _ = req.sender.send(data.to_decoded_frame());
                     } else if let Some((&frame_num, cached)) = cache.range(req.frame..).next() {
                         if req.frame.abs_diff(frame_num) > fallback_distance {
@@ -1255,16 +1376,20 @@ impl AVAssetReaderDecoder {
                                 "serving forward frame across pts gap"
                             );
                         }
+                        d!("A s9 req={} ans={}", req.frame, cached.data().number);
                         let _ = req.sender.send(cached.data().to_decoded_frame());
                     } else if allow_relaxed_fallback
                         && let Some(ref last) = *last_sent_frame.borrow()
                     {
+                        d!("A s10 req={} ans={}", req.frame, last.number);
                         let _ = req.sender.send(last.to_decoded_frame());
                     } else if allow_relaxed_fallback
                         && let Some(ref first) = *first_ever_frame.borrow()
                     {
+                        d!("A s11 req={} ans={}", req.frame, first.number);
                         let _ = req.sender.send(first.to_decoded_frame());
                     } else {
+                        d!("A s12 req={} unfulfilled", req.frame);
                         unfulfilled_count += 1;
                     }
                 }

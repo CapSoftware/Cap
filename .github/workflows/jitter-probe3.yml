@@ -1,0 +1,90 @@
+name: Jitter export determinism probe 3 (scratch)
+
+on:
+  push:
+    branches: [scratch/jitter-probe3]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_TIER: full
+
+jobs:
+  probe:
+    name: probe ${{ matrix.config }} ${{ matrix.copy }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { config: base, copy: a, forced: "none 2000 2000 1200" }
+          - { config: base, copy: b, forced: "none 3000 600" }
+          - { config: noidle, copy: a, forced: "" }
+          - { config: pr2638, copy: a, forced: "none 2000 1200" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Use the PR 2638 decoder (probe only)
+        if: matrix.config == 'pr2638'
+        run: |
+          git show HEAD~1:crates/rendering/src/decoder/avassetreader.rs > crates/rendering/src/decoder/avassetreader.rs
+          git apply probe-patches/pr2638-hooks.patch
+          git diff --stat HEAD~1 -- crates
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build
+        run: scripts/verify/run.sh full --suites export --no-run
+      - name: Repeat the 120 s jitter export alongside the whole export suite
+        env:
+          NO_IDLE: ${{ matrix.config == 'noidle' && '1' || '' }}
+        run: |
+          set +e
+          if [ -n "$NO_IDLE" ]; then export AVFDBG_NO_IDLE=1; fi
+          P="$RUNNER_TEMP/probe"
+          for i in $(seq 1 5); do
+            mkdir -p "$P/suite-$i"
+            export CAP_VERIFY_REPORT_DIR="$P/suite-$i/report"
+            export AVFDBG_DIR="$RUNNER_TEMP/trace/suite-$i"
+            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast \
+              > "$P/suite-$i/log.txt" 2>&1
+            python3 -I probe-patches/summarize.py "suite rep $i" "$CAP_VERIFY_REPORT_DIR" "$AVFDBG_DIR" "$P/suite-$i/trace"
+            rm -r "$AVFDBG_DIR"
+          done
+          true
+      - name: Jitter export alone, forced idle teardown at a camera request
+        if: matrix.forced != ''
+        run: |
+          set +e
+          P="$RUNNER_TEMP/probe"
+          i=0
+          for f in ${{ matrix.forced }}; do
+            i=$((i + 1))
+            mkdir -p "$P/alone-$i-$f"
+            export CAP_VERIFY_REPORT_DIR="$P/alone-$i-$f/report"
+            export AVFDBG_DIR="$RUNNER_TEMP/trace/alone-$i"
+            if [ "$f" = none ]; then unset AVFDBG_FORCE_IDLE; else export AVFDBG_FORCE_IDLE="$f"; fi
+            CAP_VERIFY_CASE='export/jitter-camera-120s/full/mp460/avf' cargo nextest run --cargo-profile ci-verify --locked \
+              -p cap-verify --test export --no-fail-fast -E 'test(=jitter_camera)' > "$P/alone-$i-$f/log.txt" 2>&1
+            python3 -I probe-patches/summarize.py "alone $i force=$f" "$CAP_VERIFY_REPORT_DIR" "$AVFDBG_DIR" "$P/alone-$i-$f/trace"
+            rm -r "$AVFDBG_DIR"
+          done
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: jitter-probe3-${{ matrix.config }}-${{ matrix.copy }}
+          path: |
+            ${{ runner.temp }}/probe/**/*.jsonl
+            ${{ runner.temp }}/probe/**/trace/*.log
+          retention-days: 7
