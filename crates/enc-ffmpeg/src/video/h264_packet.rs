@@ -8,6 +8,7 @@ use ffmpeg::{
 };
 
 use crate::video::h264::OpenedVideoEncoder;
+use crate::video::keyframe_cadence::KeyframeCadence;
 
 pub struct H264PacketEncoder {
     encoder: encoder::Video,
@@ -26,6 +27,7 @@ pub struct H264PacketEncoder {
     encoder_time_base: Rational,
     frame_rate: Rational,
     codec_name: String,
+    keyframes: Option<KeyframeCadence>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +71,23 @@ impl H264PacketEncoder {
             encoder_time_base,
             frame_rate,
             codec_name,
+            keyframes: None,
         }
+    }
+
+    /// See `H264Encoder::with_recording_keyframes`.
+    pub(crate) fn with_recording_keyframes(mut self, is_export: bool) -> Self {
+        if !is_export {
+            let gop_size = unsafe { (*self.encoder.as_ptr()).gop_size };
+            self.keyframes = Some(KeyframeCadence::new(
+                Duration::from_secs(u64::from(
+                    crate::video::h264::DEFAULT_KEYFRAME_INTERVAL_SECS,
+                )),
+                self.encoder_time_base,
+                gop_size,
+            ));
+        }
+        self
     }
 
     pub fn codec_name(&self) -> &str {
@@ -144,10 +162,13 @@ impl H264PacketEncoder {
                 .run(&frame, converted)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            converted
         } else {
-            &frame
+            &mut frame
         };
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send);
+        }
 
         self.encoder
             .send_frame(frame_to_send)
@@ -177,10 +198,13 @@ impl H264PacketEncoder {
                 .run(frame, converted)
                 .map_err(EncodePacketError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            converted
         } else {
-            frame as &frame::Video
+            frame
         };
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send);
+        }
 
         self.encoder
             .send_frame(frame_to_send)
@@ -328,6 +352,84 @@ mod tests {
             }
         }
         frame
+    }
+
+    /// Keyframe times (seconds) of a recording-encoder run fed one frame
+    /// every `step` slots of the nominal 30 fps for `seconds`.
+    fn keyframe_times(codec: &'static [&'static str], step: u64, seconds: u64) -> Option<Vec<f64>> {
+        ffmpeg::init().ok();
+        let mut encoder = H264EncoderBuilder::new(test_video_info())
+            .with_preset(H264Preset::Ultrafast)
+            .with_encoder_priority_override(codec)
+            .build_standalone()
+            .ok()?;
+        if encoder.codec_name() != codec[0] {
+            return None;
+        }
+        let tb = encoder.time_base();
+        let secs = |pts: i64| pts as f64 * f64::from(tb.numerator()) / f64::from(tb.denominator());
+        let mut keys = Vec::new();
+        for slot in (0..seconds * 30).step_by(step as usize) {
+            let frame = create_test_frame(320, 240);
+            encoder
+                .encode_frame(
+                    frame,
+                    Duration::from_nanos(slot * 1_000_000_000 / 30),
+                    |pkt| {
+                        if pkt.is_keyframe {
+                            keys.push(secs(pkt.pts));
+                        }
+                        Ok(())
+                    },
+                )
+                .expect("encode succeeds");
+        }
+        encoder
+            .flush(|pkt| {
+                if pkt.is_keyframe {
+                    keys.push(secs(pkt.pts));
+                }
+                Ok(())
+            })
+            .expect("flush succeeds");
+        Some(keys)
+    }
+
+    #[test]
+    fn libx264_keyframes_follow_capture_time_when_frames_arrive_slowly() {
+        let keys = keyframe_times(&["libx264"], 6, 13).expect("libx264");
+        let gaps: Vec<f64> = keys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(keys.len() >= 6, "keyframes at {keys:?}");
+        assert!(
+            gaps.iter().all(|gap| *gap <= 2.0 + 0.2 + 1e-6),
+            "a 5 fps capture must still get a keyframe every 2 s plus one frame: {keys:?}"
+        );
+    }
+
+    #[test]
+    fn libx264_keyframes_at_the_nominal_rate_are_unchanged() {
+        let keys = keyframe_times(&["libx264"], 1, 9).expect("libx264");
+        let expected: Vec<f64> = (0..5).map(|k| f64::from(k) * 2.0).collect();
+        assert_eq!(keys.len(), expected.len(), "keyframes at {keys:?}");
+        assert!(
+            keys.iter()
+                .zip(&expected)
+                .all(|(a, b)| (a - b).abs() < 1e-3),
+            "keyframes at {keys:?}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn videotoolbox_keyframes_follow_capture_time_when_frames_arrive_slowly() {
+        let Some(keys) = keyframe_times(&["h264_videotoolbox"], 30, 13) else {
+            return;
+        };
+        let gaps: Vec<f64> = keys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            gaps.iter().all(|gap| *gap <= 2.0 + 1.0 + 1e-6),
+            "a 1 fps capture must still get a keyframe every 2 s plus one frame: {keys:?}"
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 pub mod h264;
 pub mod h264_packet;
 pub mod hevc;
+pub(crate) mod keyframe_cadence;
 pub mod prores;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox_hw;
