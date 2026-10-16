@@ -135,17 +135,21 @@ mod source {
 
     /// Renders ahead of time so emission keeps the nominal rate.
     pub fn picture(index: u32) -> anyhow::Result<Picture> {
+        picture_sized(index, WIDTH, HEIGHT, FPS)
+    }
+
+    pub fn picture_sized(index: u32, width: u32, height: u32, fps: u32) -> anyhow::Result<Picture> {
         let rgba = video_code::marker_rgba(
             FrameMarker::new(StreamKind::Screen, 0, index),
-            WIDTH as usize,
-            HEIGHT as usize,
+            width as usize,
+            height as usize,
         );
-        let buf = cap_verify::fixture_avf::pixel_buffer(WIDTH as usize, HEIGHT as usize, &rgba)?;
+        let buf = cap_verify::fixture_avf::pixel_buffer(width as usize, height as usize, &rgba)?;
         let format_desc = cm::VideoFormatDesc::with_image_buf(&buf)
             .map_err(|e| anyhow!("format description: {e:?}"))?;
         let timing = cm::SampleTimingInfo {
-            duration: cm::Time::new(1, FPS as i32),
-            pts: cm::Time::new(i64::from(index), FPS as i32),
+            duration: cm::Time::new(1, fps as i32),
+            pts: cm::Time::new(i64::from(index), fps as i32),
             dts: cm::Time::invalid(),
         };
         cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &format_desc, &timing)
@@ -165,8 +169,18 @@ mod source {
         rx: flume::Receiver<Frame>,
         timestamps: Timestamps,
     ) -> anyhow::Result<OutputPipeline> {
+        pipeline_with(display, arm, rx, timestamps, info()).await
+    }
+
+    pub async fn pipeline_with(
+        display: &Path,
+        arm: Arm,
+        rx: flume::Receiver<Frame>,
+        timestamps: Timestamps,
+        info: VideoInfo,
+    ) -> anyhow::Result<OutputPipeline> {
         let builder = OutputPipeline::builder(display.to_path_buf())
-            .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(info(), rx))
+            .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(info, rx))
             .with_timestamps(timestamps);
         match arm {
             Arm::InProcess => {
@@ -1180,6 +1194,118 @@ fn muxer_kill(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<(
     Ok(())
 }
 
+/// CPU seconds and resident memory of a process (`ps`).
+#[cfg(target_os = "macos")]
+fn process_usage(pid: u32) -> Option<(f64, u64)> {
+    let out = Command::new("ps")
+        .args(["-o", "time=,rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.split_whitespace();
+    let time = fields.next()?;
+    let rss: u64 = fields.next()?.parse().ok()?;
+    let mut secs = 0.0;
+    for part in time.split(':') {
+        secs = secs * 60.0 + part.parse::<f64>().ok()?;
+    }
+    Some((secs, rss * 1024))
+}
+
+/// Overhead of the out-of-process muxer at a real Studio size: 1920x1080
+/// NV12 at 60 fps for `PERF_SECONDS`, interleaved A/B rounds. Reports CPU
+/// seconds of the recorder and of cap-muxer per recorded second and their
+/// peak resident memory (measurement only; the default decision reads it).
+#[cfg(target_os = "macos")]
+const PERF_SECONDS: f64 = 10.0;
+
+#[cfg(target_os = "macos")]
+fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()> {
+    let (width, height, fps) = (1920u32, 1080u32, 60u32);
+    let ring: Vec<source::Picture> = (0..fps)
+        .map(|i| source::picture_sized(i, width, height, fps))
+        .collect::<anyhow::Result<_>>()?;
+    let me = std::process::id();
+    let mut results: BTreeMap<&str, Vec<(f64, f64, u64, u64)>> = BTreeMap::new();
+    for round in 0..3 {
+        let order = if round % 2 == 0 {
+            [Arm::InProcess, Arm::OutOfProcess]
+        } else {
+            [Arm::OutOfProcess, Arm::InProcess]
+        };
+        for arm in order {
+            let scratch = scratch_root().join(format!("perf-{}-{round}", arm.label()));
+            fresh(&scratch)?;
+            let display = scratch.join("display");
+            let ring = ring.clone();
+            let sample = rt.block_on(async {
+                let info = VideoInfo::from_raw(RawVideoFormat::Nv12, width, height, fps);
+                let (tx, rx) = flume::bounded::<source::Frame>(8);
+                let pipeline =
+                    source::pipeline_with(&display, arm, rx, Timestamps::now(), info).await?;
+                let before = process_usage(me).map(|u| u.0).unwrap_or(0.0);
+                let base = Instant::now() + Duration::from_millis(50);
+                let count = (PERF_SECONDS * f64::from(fps)) as u32;
+                let (mut peak_self, mut peak_muxer, mut muxer_cpu) = (0u64, 0u64, 0.0f64);
+                for index in 0..count {
+                    let at = base + Duration::from_secs_f64(f64::from(index) / f64::from(fps));
+                    tokio::time::sleep_until(at.into()).await;
+                    let picture = ring[(index % fps) as usize].clone();
+                    tx.send_async(source::frame(picture, at))
+                        .await
+                        .map_err(|_| anyhow!("pipeline stopped"))?;
+                    if index % (fps / 2) == 0 {
+                        if let Some((_, rss)) = process_usage(me) {
+                            peak_self = peak_self.max(rss);
+                        }
+                        for pid in muxer_children(me) {
+                            if let Some((cpu, rss)) = process_usage(pid) {
+                                peak_muxer = peak_muxer.max(rss);
+                                muxer_cpu = muxer_cpu.max(cpu);
+                            }
+                        }
+                    }
+                }
+                for pid in muxer_children(me) {
+                    if let Some((cpu, _)) = process_usage(pid) {
+                        muxer_cpu = muxer_cpu.max(cpu);
+                    }
+                }
+                drop(tx);
+                pipeline.stop().await.map_err(|e| anyhow!("stop: {e:#}"))?;
+                let after = process_usage(me).map(|u| u.0).unwrap_or(0.0);
+                anyhow::Ok((
+                    (after - before) / PERF_SECONDS,
+                    muxer_cpu / PERF_SECONDS,
+                    peak_self,
+                    peak_muxer,
+                ))
+            })?;
+            case.note(format!(
+                "round {round} {}: recorder {:.3} CPU s/s, cap-muxer {:.3} CPU s/s, recorder peak {} MB, cap-muxer peak {} MB",
+                arm.label(),
+                sample.0,
+                sample.1,
+                sample.2 / 1_000_000,
+                sample.3 / 1_000_000
+            ));
+            results.entry(arm.label()).or_default().push(sample);
+            let _ = std::fs::remove_dir_all(&scratch);
+        }
+    }
+    for (arm, samples) in &results {
+        let mut total: Vec<f64> = samples.iter().map(|s| s.0 + s.1).collect();
+        total.sort_by(f64::total_cmp);
+        case.note(format!(
+            "{arm}: median total CPU {:.3} s per recorded second (min {:.3}, max {:.3})",
+            total[total.len() / 2],
+            total[0],
+            total[total.len() - 1]
+        ));
+    }
+    Ok(())
+}
+
 #[test]
 fn crash_safety() {
     if std::env::var(CHILD_ENV).is_ok() {
@@ -1215,6 +1341,15 @@ fn crash_safety() {
         if let Err(e) = &oop_ready {
             case.problem("harness", format!("cap-muxer not found: {e:#}"));
         } else if let Err(e) = equality(&rt, &mut case) {
+            case.problem("error", format!("{e:#}"));
+        }
+        settle(case);
+    }
+
+    #[cfg(target_os = "macos")]
+    if tier == Tier::Full && report::selected("crash/oop-overhead") {
+        let mut case = Case::new("crash/oop-overhead");
+        if let Err(e) = overhead(&rt, &mut case) {
             case.problem("error", format!("{e:#}"));
         }
         settle(case);
