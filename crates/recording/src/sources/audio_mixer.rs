@@ -1116,12 +1116,21 @@ mod test {
         probe.send(0, 300, 960, Some(0));
         probe.send(0, 600, 960, Some(0));
         probe.send(0, 900, 4_800, Some(0));
-        probe.tick(1_000);
-        assert_eq!(probe.peaks(0), [14_400, 28_800, 43_200]);
+        probe.send(0, 1_000, 4_800, None);
+        probe.send(1, 1_000, 4_800, None);
+        probe.tick(1_100);
+        assert_eq!(
+            probe.peaks(0),
+            [14_400, 28_800, 43_200],
+            "{} output samples",
+            probe.pcm.len()
+        );
         assert_eq!(probe.peaks(1), [14_400]);
         probe.send(0, 1_500, 4_800, Some(0));
         probe.send(1, 1_500, 4_800, Some(0));
-        probe.tick(1_600);
+        probe.send(0, 1_600, 4_800, None);
+        probe.send(1, 1_600, 4_800, None);
+        probe.tick(1_700);
         assert_eq!(probe.peaks(0), [14_400, 28_800, 43_200, 72_000]);
         assert_eq!(probe.peaks(1), [14_400, 72_000]);
     }
