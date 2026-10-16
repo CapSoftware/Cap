@@ -7,6 +7,9 @@
 #                          default: every suite of the tier on this platform
 #   --case GLOB            only cases matching GLOB (CAP_VERIFY_CASE)
 #   --list                 print the plan and exit
+#   --check-rerun-selection  check that a test name read back from Python
+#                          (as the retry and flaky reruns do) selects exactly
+#                          that test (CRLF on Windows)
 #   --no-run               build only
 #   --archive FILE         build a nextest archive (CI build job)
 #   --from-archive FILE    run from a nextest archive (CI shard job)
@@ -38,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --suites) suites="$2"; shift ;;
     --case) export CAP_VERIFY_CASE="$2"; shift ;;
     --list) mode=list ;;
+    --check-rerun-selection) mode=check-selection ;;
     --no-run) mode=build ;;
     --prepare-fixtures) prepare_fixtures=1 ;;
     --archive) mode=archive; archive="$2"; shift ;;
@@ -110,6 +114,24 @@ if [[ "$mode" == archive || "$mode" == from-archive ]] && [[ $have_nextest == 0 
   exit 2
 fi
 
+if [[ "$mode" == check-selection ]]; then
+  list=(cargo nextest list --cargo-profile "$profile" "${cargo_args[@]}" --message-format oneline)
+  line="$("${list[@]}" -E "$filter" 2>/dev/null | head -n 1)"
+  [[ -n "$line" ]] || { echo "::error::no test listed for $filter"; exit 1; }
+  selected() { "${list[@]}" -E "binary_id($1) and test(=$2)" 2>/dev/null | grep -c . || true; }
+  raw="$("$py" -c 'import sys; print(sys.argv[1], sys.argv[2], sep="\t")' "${line%% *}" "${line#* }")"
+  IFS=$'\t' read -r b n <<<"$raw"
+  echo "without CR stripping: $(selected "$b" "$n") test(s) selected"
+  IFS=$'\t' read -r b n <<<"$(tr -d '\r' <<<"$raw")"
+  count="$(selected "$b" "$n")"
+  if [[ "$count" != 1 ]]; then
+    echo "::error::the rerun filter for '$b' '$n' selects $count tests"
+    exit 1
+  fi
+  echo "rerun selection round trip ok: $b $n"
+  exit 0
+fi
+
 case "$mode" in
   build)
     if [[ $have_nextest == 1 ]]; then
@@ -130,11 +152,13 @@ mkdir -p "$CAP_VERIFY_REPORT_DIR"
 status=0
 started=$SECONDS
 if [[ $have_nextest == 1 ]]; then
-  run=(cargo nextest run --profile "$nextest_profile" --no-fail-fast)
+  # --no-tests=fail: a filter that selects nothing (a renamed test, a typo)
+  # fails instead of passing.
+  run=(cargo nextest run --profile "$nextest_profile" --no-fail-fast --no-tests=fail)
   if [[ "$mode" == from-archive ]]; then
     # Running from an archive needs no cargo (or toolchain install).
     if command -v cargo-nextest >/dev/null; then
-      run=(cargo-nextest nextest run --profile "$nextest_profile" --no-fail-fast)
+      run=(cargo-nextest nextest run --profile "$nextest_profile" --no-fail-fast --no-tests=fail)
     fi
     run+=(--archive-file "$archive" --workspace-remap "$root")
   else
@@ -148,14 +172,17 @@ if [[ $have_nextest == 1 ]]; then
   [[ -n "$partition" ]] && shard=(--partition "$partition")
   "${run[@]}" ${shard[@]+"${shard[@]}"} -E "$filter" ${extra[@]+"${extra[@]}"} || status=$?
   junit="${CARGO_TARGET_DIR:-$root/target}/nextest/$nextest_profile/junit.xml"
-  [[ $status != 0 && -f "$junit" ]] && cp "$junit" "$CAP_VERIFY_REPORT_DIR/junit.xml"
+  # Always kept: the gate checks that every planned test ran (floor.py).
+  if [[ -f "$junit" ]]; then cp "$junit" "$CAP_VERIFY_REPORT_DIR/junit.xml"; fi
   # Starvation retry: a test whose only failures are wall-clock classes
   # under a proven machine stall (inconclusive cases, or a timeout with the
   # sentinel's evidence) runs once more with CAP_VERIFY_RETRY=1. The run
   # passes only if every failed test was retryable and every retry passed;
   # a case inconclusive again fails as `environment`. See retry.py.
   if [[ $status != 0 && -f "$CAP_VERIFY_REPORT_DIR/junit.xml" ]]; then
-    retry_plan="$("$py" scripts/verify/retry.py "$CAP_VERIFY_REPORT_DIR/junit.xml" "$CAP_VERIFY_REPORT_DIR")"
+    # Python on Windows ends lines with CRLF: strip the CR, or the last
+    # field (and the test name in a filter) carries it.
+    retry_plan="$("$py" scripts/verify/retry.py "$CAP_VERIFY_REPORT_DIR/junit.xml" "$CAP_VERIFY_REPORT_DIR" | tr -d '\r')"
     blocking="$(sed -n 's/^blocking\t//p' <<<"$retry_plan")"
     retried=0
     retry_failed=0
@@ -163,6 +190,7 @@ if [[ $have_nextest == 1 ]]; then
       [[ -z "$binary" || "$binary" == blocking ]] && continue
       retried=$((retried + 1))
       echo "retrying $binary $name once: $evidence"
+      echo "::warning title=Retried after a machine stall::$binary $name: $evidence"
       echo "$binary $name: $evidence" >>"$CAP_VERIFY_REPORT_DIR/retried.txt"
       if ! CAP_VERIFY_RETRY=1 CAP_VERIFY_REPORT_DIR="$CAP_VERIFY_REPORT_DIR/retry" \
         "${run[@]}" -E "binary_id($binary) and test(=$name)"; then
@@ -182,13 +210,19 @@ if [[ $have_nextest == 1 ]]; then
     while IFS=$'\t' read -r binary name; do
       [[ -z "$binary" ]] && continue
       echo "rerunning $binary $name once to check for flakiness"
-      if CAP_VERIFY_REPORT_DIR="$CAP_VERIFY_REPORT_DIR.rerun" "${run[@]}" -E "binary_id($binary) and test(=$name)"; then
+      rerun=0
+      CAP_VERIFY_REPORT_DIR="$CAP_VERIFY_REPORT_DIR.rerun" "${run[@]}" -E "binary_id($binary) and test(=$name)" || rerun=$?
+      if [[ $rerun == 0 ]]; then
         echo "$binary $name" >>"$CAP_VERIFY_FLAKY_FILE"
+      elif [[ $rerun == 4 ]]; then
+        # nextest's NO_TESTS_RUN: the filter is wrong, not the test.
+        echo "::error title=Flaky rerun selected no test::$binary $name"
+        status=1
       fi
     done < <("$py" -c 'import sys, xml.etree.ElementTree as ET
 for c in ET.parse(sys.argv[1]).getroot().iter("testcase"):
     if c.find("failure") is not None or c.find("error") is not None:
-        print(c.get("classname"), c.get("name"), sep="\t")' "$CAP_VERIFY_REPORT_DIR/junit.xml" | head -n 5)
+        print(c.get("classname"), c.get("name"), sep="\t")' "$CAP_VERIFY_REPORT_DIR/junit.xml" | tr -d '\r' | head -n 5)
   fi
 else
   if [[ $prepare_fixtures == 1 ]]; then

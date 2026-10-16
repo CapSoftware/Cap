@@ -68,15 +68,31 @@ fn state() -> &'static State {
     })
 }
 
+/// How often the log records that the process is still alive, so a test
+/// killed by its timeout leaves the time of its end (scripts/verify/retry.py
+/// only excuses a failure whose stall overlaps the time before it).
+const HEARTBEAT: Duration = Duration::from_secs(2);
+
 fn run(mut log: Option<std::fs::File>) {
     raise_priority();
     let state = state();
     let mut last = Instant::now();
+    let mut beat = Instant::now();
     loop {
         std::thread::sleep(PERIOD);
         let now = Instant::now();
         let gap_ms = now.duration_since(last).as_secs_f64() * 1000.0;
         last = now;
+        if now.duration_since(beat) >= HEARTBEAT {
+            beat = now;
+            if let Some(file) = log.as_mut() {
+                let _ = writeln!(
+                    file,
+                    "{}",
+                    serde_json::json!({ "alive": now.duration_since(state.started).as_secs_f64() })
+                );
+            }
+        }
         if gap_ms >= RECORD_GAP_MS {
             let at = now.duration_since(state.started).as_secs_f64() - gap_ms / 1000.0;
             if let Ok(mut gaps) = state.gaps.lock() {
