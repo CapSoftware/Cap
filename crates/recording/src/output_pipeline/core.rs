@@ -896,6 +896,10 @@ pub struct AudioGapSummary {
 struct AudioGapTracker {
     first_frame_ts: Option<Timestamp>,
     first_frame_wall_clock: Option<Instant>,
+    /// How long after its capture time the first frame reached the mux task.
+    /// Overlap detection adds it back to the wall-clock bound so the bound is
+    /// measured from the first frame's capture, not from its delivery.
+    first_frame_delivery_lag: Duration,
     reference: Timestamps,
     gap_threshold: Duration,
     total_silence_inserted: Duration,
@@ -913,6 +917,7 @@ impl AudioGapTracker {
         Self {
             first_frame_ts: None,
             first_frame_wall_clock: None,
+            first_frame_delivery_lag: Duration::ZERO,
             reference,
             gap_threshold: if has_wireless_source {
                 WIRELESS_GAP_THRESHOLD
@@ -960,6 +965,14 @@ impl AudioGapTracker {
         if self.first_frame_ts.is_none() {
             self.first_frame_ts = Some(frame_ts);
             self.first_frame_wall_clock = Some(wall_clock);
+            let lag_secs = Timestamp::Instant(wall_clock)
+                .signed_duration_since_secs(self.reference)
+                - frame_ts.signed_duration_since_secs(self.reference);
+            self.first_frame_delivery_lag = if lag_secs.is_finite() && lag_secs > 0.0 {
+                Duration::from_secs_f64(lag_secs)
+            } else {
+                Duration::ZERO
+            };
         }
     }
 
@@ -977,11 +990,30 @@ impl AudioGapTracker {
         Some(Duration::from_secs_f64(secs.max(0.0)))
     }
 
+    /// Capture time elapsed since the first frame, pause excised, bounded by
+    /// the wall clock elapsed since the first frame was delivered (plus
+    /// `AUDIO_WALL_CLOCK_TOLERANCE`) so a spurious forward timestamp jump can't
+    /// request more silence than real time has passed.
     fn capture_elapsed(
         &self,
         current_frame_ts: Timestamp,
         total_pause_duration: Duration,
         wall_clock: Instant,
+    ) -> Option<Duration> {
+        self.bounded_capture_elapsed(
+            current_frame_ts,
+            total_pause_duration,
+            wall_clock,
+            Duration::ZERO,
+        )
+    }
+
+    fn bounded_capture_elapsed(
+        &self,
+        current_frame_ts: Timestamp,
+        total_pause_duration: Duration,
+        wall_clock: Instant,
+        wall_clock_allowance: Duration,
     ) -> Option<Duration> {
         let first_ts = self.first_frame_ts?;
         let first_wall_clock = self.first_frame_wall_clock?;
@@ -995,7 +1027,8 @@ impl AudioGapTracker {
         let wall_clock_elapsed = wall_clock
             .saturating_duration_since(first_wall_clock)
             .saturating_sub(total_pause_duration)
-            .saturating_add(AUDIO_WALL_CLOCK_TOLERANCE);
+            .saturating_add(AUDIO_WALL_CLOCK_TOLERANCE)
+            .saturating_add(wall_clock_allowance);
 
         Some(capture_elapsed.min(wall_clock_elapsed))
     }
@@ -1029,6 +1062,14 @@ impl AudioGapTracker {
         }
     }
 
+    /// Samples committed past the frame's capture time. The capture time is
+    /// bounded by the wall clock measured from the first frame's CAPTURE
+    /// (delivery instant minus its delivery lag), i.e. a frame may be stamped
+    /// at most `AUDIO_WALL_CLOCK_TOLERANCE` after the instant it is observed.
+    /// Measuring from the first frame's delivery instead would read any later
+    /// drop in delivery latency (a slow first receive, a startup backlog that
+    /// drains) as overlap and delete real samples. The bound still trims
+    /// sample-stamped mixer output whose device clock runs fast.
     fn detect_overlap(
         &self,
         current_frame_ts: Timestamp,
@@ -1036,8 +1077,12 @@ impl AudioGapTracker {
         total_pause_duration: Duration,
         wall_clock: Instant,
     ) -> Option<Duration> {
-        let capture_elapsed =
-            self.capture_elapsed(current_frame_ts, total_pause_duration, wall_clock)?;
+        let capture_elapsed = self.bounded_capture_elapsed(
+            current_frame_ts,
+            total_pause_duration,
+            wall_clock,
+            self.first_frame_delivery_lag,
+        )?;
 
         if sample_based_elapsed <= capture_elapsed.saturating_add(AUDIO_OVERLAP_TOLERANCE) {
             return None;
@@ -6260,6 +6305,105 @@ mod tests {
             assert_eq!(gap, Duration::from_secs(28));
         }
 
+        /// Overlap as measured before the bound moved to the first frame's
+        /// capture: the same bounded capture time the gap path still uses.
+        fn overlap_bounded_from_first_delivery(
+            tracker: &AudioGapTracker,
+            frame_ts: Timestamp,
+            sample_based_elapsed: Duration,
+            total_pause_duration: Duration,
+            wall_clock: Instant,
+        ) -> Duration {
+            let capture = tracker
+                .capture_elapsed(frame_ts, total_pause_duration, wall_clock)
+                .unwrap();
+            if sample_based_elapsed <= capture.saturating_add(AUDIO_OVERLAP_TOLERANCE) {
+                Duration::ZERO
+            } else {
+                sample_based_elapsed.saturating_sub(capture)
+            }
+        }
+
+        // Against the previous bound: overlap never grows, it is identical to
+        // the nanosecond whenever the previous bound did not bind (so any
+        // recording that kept every sample is unchanged), and for stamps that
+        // are not in the future of their delivery it is pure capture overlap.
+        #[test]
+        fn overlap_never_exceeds_the_first_delivery_bound() {
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            let mut next = move |range_ms: u64| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                Duration::from_micros(state % (range_ms * 1_000 + 1))
+            };
+
+            let base = Duration::from_secs(5);
+            let mut differed = 0;
+            for _ in 0..200_000 {
+                let timestamps = Timestamps::now();
+                let at = |offset: Duration| Timestamp::Instant(timestamps.instant() + offset);
+                let first_capture = base + next(2_000);
+                let first_wall = (first_capture + next(1_500)).saturating_sub(next(50));
+                let capture = (first_capture + next(10_000)).saturating_sub(next(500));
+                let wall = first_wall + next(10_000);
+                let pause = if next(1) < Duration::from_micros(500) {
+                    Duration::ZERO
+                } else {
+                    next(1_000)
+                };
+                let sample_based = next(12_000);
+
+                let mut tracker = AudioGapTracker::new(false, timestamps);
+                tracker.mark_started(at(first_capture), timestamps.instant() + first_wall);
+
+                let new = tracker
+                    .detect_overlap(
+                        at(capture),
+                        sample_based,
+                        pause,
+                        timestamps.instant() + wall,
+                    )
+                    .unwrap_or_default();
+                let old = overlap_bounded_from_first_delivery(
+                    &tracker,
+                    at(capture),
+                    sample_based,
+                    pause,
+                    timestamps.instant() + wall,
+                );
+                assert!(new <= old, "overlap grew: {new:?} > {old:?}");
+
+                let raw_capture = tracker
+                    .bounded_capture_elapsed(
+                        at(capture),
+                        pause,
+                        timestamps.instant() + wall,
+                        Duration::MAX,
+                    )
+                    .unwrap();
+                let old_capture = tracker
+                    .capture_elapsed(at(capture), pause, timestamps.instant() + wall)
+                    .unwrap();
+                if old_capture == raw_capture {
+                    assert_eq!(new, old, "unbound case changed");
+                } else if new != old {
+                    differed += 1;
+                }
+
+                if capture <= wall {
+                    let raw_overlap = sample_based.saturating_sub(raw_capture);
+                    let expected = if raw_overlap > AUDIO_OVERLAP_TOLERANCE {
+                        raw_overlap
+                    } else {
+                        Duration::ZERO
+                    };
+                    assert_eq!(new, expected, "a truthful stamp was bounded");
+                }
+            }
+            assert!(differed > 0, "the generator must reach the changed cases");
+        }
+
         #[test]
         fn gap_summary_counts_only_early_whole_frame_drops_as_startup() {
             let mut tracker = AudioGapTracker::new(false, Timestamps::now());
@@ -9333,6 +9477,253 @@ mod tests {
             assert_eq!(harness.sent().len(), 3);
         }
 
+        const CHUNK: Duration = Duration::from_millis(20);
+        const CHUNK_SAMPLES: usize = 960;
+
+        fn assert_contiguous(harness: &AudioTimelineHarness, chunks: usize) {
+            let sent = harness.sent();
+            assert_eq!(sent.len(), chunks, "every chunk must be muxed whole");
+            for (index, frame) in sent.iter().enumerate() {
+                assert_eq!(
+                    *frame,
+                    SentAudioFrame {
+                        samples: CHUNK_SAMPLES,
+                        timestamp: CHUNK * index as u32,
+                    },
+                    "chunk {index} must keep its samples and its place"
+                );
+            }
+            assert_eq!(harness.gap_tracker.overlap_event_count, 0);
+            assert_eq!(harness.total_silence(), Duration::ZERO);
+        }
+
+        // Contiguous, truthful 20 ms chunks: the first reaches the mux task
+        // late and later chunks promptly (a slow first receive, or a mixer
+        // waiting out its buffer timeout for a late source). Falling delivery
+        // latency is not overlap. The schedules are the ones that delete
+        // exactly 279 and 842 samples before the first marker and 250 samples
+        // at 1.10 s when the bound is measured from the first delivery, the
+        // losses measured in saved Windows Instant recordings.
+        #[tokio::test(flavor = "current_thread")]
+        async fn delivery_catch_up_keeps_every_sample() {
+            for (lost_before_fix, step_at) in [(279_u64, None), (842, None), (250, Some(55_u64))] {
+                let mut harness = AudioTimelineHarness::new();
+                let first_lag = AUDIO_WALL_CLOCK_TOLERANCE
+                    + Duration::from_nanos(lost_before_fix * 1_000_000_000 / 48_000 + 1);
+                for chunk in 0_u64..300 {
+                    let capture = CHUNK * chunk as u32;
+                    let later_lag = if step_at.is_some_and(|step| chunk < step) {
+                        Duration::from_micros(500)
+                    } else {
+                        Duration::ZERO
+                    };
+                    let observed = first_lag.max(capture + later_lag);
+                    assert!(matches!(
+                        harness.process_at(capture, observed, CHUNK_SAMPLES).await,
+                        AudioFrameOutcome::Sent
+                    ));
+                }
+                assert_contiguous(&harness, 300);
+            }
+        }
+
+        // A 1.5 s startup backlog: the first chunk is delivered 1.5 s after
+        // its capture, the queue drains in a burst, then delivery is live.
+        #[tokio::test(flavor = "current_thread")]
+        async fn startup_backlog_drain_keeps_every_sample() {
+            let mut harness = AudioTimelineHarness::new();
+            let backlog = Duration::from_millis(1_500);
+            for chunk in 0_u32..200 {
+                let capture = CHUNK * chunk;
+                let observed = (backlog + Duration::from_micros(100) * chunk)
+                    .max(capture + Duration::from_millis(2));
+                assert!(matches!(
+                    harness.process_at(capture, observed, CHUNK_SAMPLES).await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+            assert_contiguous(&harness, 200);
+        }
+
+        // A frame captured before the samples already committed is still
+        // trimmed or dropped after a slow first receive.
+        #[tokio::test(flavor = "current_thread")]
+        async fn genuine_overlap_is_trimmed_and_dropped_after_slow_first_receive() {
+            let mut harness = AudioTimelineHarness::new();
+            let first_lag = Duration::from_millis(300);
+            for chunk in 0_u32..20 {
+                let capture = CHUNK * chunk;
+                assert!(matches!(
+                    harness
+                        .process_at(capture, first_lag.max(capture), CHUNK_SAMPLES)
+                        .await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+            let now = CHUNK * 20;
+
+            // A duplicated buffer (chunk 19 delivered again) is dropped whole.
+            assert!(matches!(
+                harness.process_at(CHUNK * 19, now, CHUNK_SAMPLES).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            // A chunk starting 10 ms before the committed end loses exactly
+            // those 10 ms.
+            assert!(matches!(
+                harness
+                    .process_at(
+                        now.saturating_sub(Duration::from_millis(10)),
+                        now,
+                        CHUNK_SAMPLES,
+                    )
+                    .await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let sent = harness.sent();
+            assert_eq!(sent.len(), 21);
+            assert_eq!(
+                sent[20],
+                SentAudioFrame {
+                    samples: 480,
+                    timestamp: now,
+                }
+            );
+            assert_eq!(harness.overlap_dropped_frames(), 1);
+            assert_eq!(harness.gap_tracker.overlap_event_count, 2);
+        }
+
+        // A source clock that jumps 100 ms backwards (a device restart
+        // re-stamping the past) has its repeated stretch dropped until its
+        // capture time catches up with the committed samples.
+        #[tokio::test(flavor = "current_thread")]
+        async fn backwards_source_clock_is_dropped_after_slow_first_receive() {
+            let mut harness = AudioTimelineHarness::new();
+            let first_lag = Duration::from_millis(300);
+            let jump_back = Duration::from_millis(100);
+            for chunk in 0_u32..40 {
+                let live = CHUNK * chunk;
+                let capture = if chunk < 20 {
+                    live
+                } else {
+                    live.saturating_sub(jump_back)
+                };
+                let outcome = harness
+                    .process_at(capture, first_lag.max(live), CHUNK_SAMPLES)
+                    .await;
+                if (20..25).contains(&chunk) {
+                    assert!(
+                        matches!(outcome, AudioFrameOutcome::DropFrame),
+                        "re-stamped chunk {chunk} overlaps committed audio"
+                    );
+                } else {
+                    assert!(matches!(outcome, AudioFrameOutcome::Sent));
+                }
+            }
+            assert_eq!(harness.overlap_dropped_frames(), 5);
+            assert_eq!(harness.sent().len(), 35);
+            assert_eq!(harness.committed_audio(), CHUNK * 35);
+            assert_eq!(harness.total_silence(), Duration::ZERO);
+        }
+
+        // The mixer stamps its output by sample count, so a fast device clock
+        // shows up only as stamps running ahead of the delivery instant. The
+        // wall-clock bound still trims that audio back: committed audio never
+        // leads the delivery instant by more than the tolerance plus one
+        // overlap step.
+        #[tokio::test(flavor = "current_thread")]
+        async fn fast_sample_stamped_clock_is_still_bounded() {
+            for first_lag in [Duration::ZERO, Duration::from_millis(50)] {
+                let mut harness = AudioTimelineHarness::new();
+                // 20 ms of samples every 19.8 ms of real time (1% fast).
+                let wall_per_chunk = Duration::from_micros(19_800);
+                let chunks = 3_000_u32;
+                let mut max_lead = Duration::ZERO;
+                for chunk in 0..chunks {
+                    let stamped = CHUNK * chunk;
+                    let observed = first_lag + wall_per_chunk * chunk;
+                    let committed = harness.committed_audio();
+                    max_lead = max_lead.max(committed.saturating_sub(observed));
+                    harness.process_at(stamped, observed, CHUNK_SAMPLES).await;
+                }
+                let real_time = first_lag + wall_per_chunk * chunks;
+                assert!(
+                    harness.gap_tracker.overlap_event_count > 0,
+                    "a fast sample-stamped clock must be trimmed"
+                );
+                assert!(
+                    max_lead <= AUDIO_WALL_CLOCK_TOLERANCE + AUDIO_OVERLAP_TOLERANCE * 2,
+                    "committed audio led the delivery instant by {max_lead:?}"
+                );
+                assert!(
+                    harness.committed_audio() <= real_time + AUDIO_WALL_CLOCK_TOLERANCE + CHUNK,
+                    "fast clock must not grow without bound"
+                );
+            }
+        }
+
+        // A real capture gap after a slow first receive still gets silence,
+        // never more than the real gap, and no captured sample is dropped.
+        // The gap bound is deliberately unchanged: it is still measured from
+        // the first delivery.
+        #[tokio::test(flavor = "current_thread")]
+        async fn real_gap_is_filled_after_slow_first_receive() {
+            let mut harness = AudioTimelineHarness::new();
+            let first_lag = Duration::from_millis(150);
+            let gap = Duration::from_millis(300);
+            for chunk in 0_u32..100 {
+                let live = CHUNK * chunk;
+                let capture = if chunk < 50 { live } else { live + gap };
+                assert!(matches!(
+                    harness
+                        .process_at(capture, first_lag.max(capture), CHUNK_SAMPLES)
+                        .await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+            let silence = harness.total_silence();
+            assert!(
+                silence >= gap.saturating_sub(first_lag.saturating_sub(AUDIO_WALL_CLOCK_TOLERANCE))
+                    && silence <= gap,
+                "inserted {silence:?} for a {gap:?} gap"
+            );
+            assert_eq!(harness.gap_tracker.overlap_event_count, 0);
+            let real: usize = harness
+                .sent()
+                .iter()
+                .filter(|frame| frame.samples == CHUNK_SAMPLES)
+                .count();
+            assert!(real >= 100, "every captured chunk must be muxed");
+        }
+
+        // Pause and resume after a slow first receive: the pause is excised
+        // from both clocks and every captured sample is kept.
+        #[tokio::test(flavor = "current_thread")]
+        async fn pause_resume_after_slow_first_receive_keeps_every_sample() {
+            let mut harness = AudioTimelineHarness::new();
+            let first_lag = Duration::from_millis(200);
+            let pause = Duration::from_secs(1);
+            for chunk in 0_u32..100 {
+                if chunk == 50 {
+                    harness
+                        .shared_pause
+                        .inner
+                        .lock()
+                        .unwrap()
+                        .total_pause_duration = pause;
+                }
+                let live = CHUNK * chunk;
+                let capture = if chunk < 50 { live } else { live + pause };
+                assert!(matches!(
+                    harness
+                        .process_at(capture, first_lag.max(capture), CHUNK_SAMPLES)
+                        .await,
+                    AudioFrameOutcome::Sent
+                ));
+            }
+            assert_contiguous(&harness, 100);
+        }
+
         #[test]
         fn real_capture_gap_still_requests_silence() {
             let timestamps = Timestamps::now();
@@ -9355,6 +9746,59 @@ mod tests {
 
         fn abs_skew(a: Duration, b: Duration) -> Duration {
             a.saturating_sub(b).max(b.saturating_sub(a))
+        }
+
+        // The 5m30s drift and stall run below, with a first chunk delivered
+        // 250 ms late. The slow start costs no captured audio, and the slow
+        // mic clock is still absorbed by bounded silence. The gap path keeps
+        // measuring from the first delivery, so its correction band widens by
+        // the part of the first delivery lag beyond the tolerance.
+        #[tokio::test(flavor = "current_thread")]
+        async fn long_drift_and_stalls_after_slow_first_receive_keep_every_sample() {
+            let mut harness = AudioTimelineHarness::new();
+            let audio_content = CHUNK_SAMPLES as f64 / TEST_SAMPLE_RATE as f64;
+            let mic_drift = 1.001;
+            let first_lag = Duration::from_millis(250);
+            let stalls: [(u64, u64); 8] = [
+                (1_000, 120),
+                (3_000, 40),
+                (5_000, 80),
+                (7_000, 293),
+                (9_000, 114),
+                (11_000, 43),
+                (13_000, 160),
+                (15_000, 200),
+            ];
+
+            let mut backlog_lag = Duration::ZERO;
+            let mut max_skew = Duration::ZERO;
+            for k in 0..16_500u64 {
+                if let Some((_, stall_ms)) = stalls.iter().find(|(idx, _)| *idx == k) {
+                    backlog_lag = Duration::from_millis(*stall_ms);
+                }
+                let capture = Duration::from_secs_f64(k as f64 * audio_content * mic_drift);
+                let wall = first_lag.max(capture + backlog_lag);
+                backlog_lag = backlog_lag.saturating_sub(Duration::from_secs_f64(audio_content));
+
+                assert!(matches!(
+                    harness.process_at(capture, wall, CHUNK_SAMPLES).await,
+                    AudioFrameOutcome::Sent
+                ));
+                let committed = harness.committed_audio();
+                max_skew = max_skew.max(abs_skew(committed, capture));
+            }
+
+            let band =
+                Duration::from_millis(100) + first_lag.saturating_sub(AUDIO_WALL_CLOCK_TOLERANCE);
+            assert!(
+                max_skew < band,
+                "audio drifted from the capture clock by {max_skew:?}"
+            );
+            assert_eq!(harness.gap_tracker.overlap_event_count, 0);
+            assert!(harness.total_silence() < Duration::from_secs(1));
+            for pair in harness.sent().windows(2) {
+                assert!(pair[1].timestamp >= pair[0].timestamp);
+            }
         }
 
         // With the mic source no longer fabricating silence for transient stalls, a stall
