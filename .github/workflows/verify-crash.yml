@@ -1,16 +1,6 @@
 name: Verify crash safety
 
-# The `crash` engine-verify suite (crates/verify/tests/crash.rs) on all three
-# platforms: in-process vs out-of-process muxer equality and recorder, muxer
-# and finalize kills against what is physically on disk. engine-verify.yml
-# runs it like every other suite; this workflow runs it alone on Blacksmith
-# runners for crash-safety proof branches.
-
 on:
-  push:
-    branches:
-      - ci/fixproof-crash*
-      - scratch/crash-*
   workflow_dispatch:
     inputs:
       tier:
@@ -23,25 +13,40 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: ${{ matrix.platform }}
+  retention:
+    name: Retention ${{ matrix.provider }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos
+          - provider: blacksmith
             runner: blacksmith-6vcpu-macos-15
-            target: aarch64-apple-darwin
-          - platform: linux
-            runner: blacksmith-8vcpu-ubuntu-2404
-            target: x86_64-unknown-linux-gnu
-          - platform: windows
-            runner: blacksmith-8vcpu-windows-2025
-            target: x86_64-pc-windows-msvc
-    uses: ./.github/workflows/engine-verify-os.yml
-    with:
-      platform: ${{ matrix.platform }}
-      runner: ${{ matrix.runner }}
-      target: ${{ matrix.target }}
-      tier: ${{ inputs.tier || 'full' }}
-      suites: crash
+            hosted: "0"
+          - provider: videotoolbox
+            runner: macos-15
+            hosted: "1"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      RETENTION_HOSTED: ${{ matrix.hosted }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build and run retained interleaved probes
+        run: python3 scripts/verify/crash-retention.py
+      - name: Upload retention evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crash-retention-${{ matrix.provider }}
+          path: ${{ runner.temp }}/crash-retention
+          if-no-files-found: error
+          retention-days: 14

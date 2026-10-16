@@ -185,17 +185,110 @@ mod source {
         match arm {
             Arm::InProcess => {
                 builder
-                    .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig::default())
+                    .build::<TracedMuxer<MacOSFragmentedM4SMuxer>>(
+                        MacOSFragmentedM4SMuxerConfig::default(),
+                    )
                     .await
             }
             Arm::OutOfProcess => {
                 builder
-                    .build::<OutOfProcessFragmentedM4SMuxer>(
+                    .build::<TracedMuxer<OutOfProcessFragmentedM4SMuxer>>(
                         OutOfProcessFragmentedM4SMuxerConfig::default(),
                     )
                     .await
             }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct TracedMuxer<M> {
+    inner: M,
+    trace: Option<std::fs::File>,
+}
+
+#[cfg(target_os = "macos")]
+impl<M: cap_recording::Muxer> cap_recording::Muxer for TracedMuxer<M>
+where
+    M::Config: Send,
+{
+    type Config = M::Config;
+
+    async fn setup(
+        config: Self::Config,
+        output_path: PathBuf,
+        video_config: Option<VideoInfo>,
+        audio_config: Option<cap_media_info::AudioInfo>,
+        pause_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        tasks: &mut cap_recording::TaskPool,
+    ) -> anyhow::Result<Self> {
+        let trace = if std::env::var_os("CAP_VERIFY_KEEP").is_some() {
+            std::fs::create_dir_all(&output_path)?;
+            Some(std::fs::File::create(output_path.join("muxer-input.tsv"))?)
+        } else {
+            None
+        };
+        let inner = M::setup(
+            config,
+            output_path,
+            video_config,
+            audio_config,
+            pause_flag,
+            tasks,
+        )
+        .await?;
+        Ok(Self { inner, trace })
+    }
+
+    fn stop(&mut self) {
+        self.inner.stop();
+    }
+
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.inner.finish(timestamp)
+    }
+
+    fn set_health_sender(&mut self, tx: cap_recording::HealthSender) {
+        self.inner.set_health_sender(tx);
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl<M: cap_recording::VideoMuxer<VideoFrame = source::Frame>> cap_recording::VideoMuxer
+    for TracedMuxer<M>
+where
+    M::Config: Send,
+{
+    type VideoFrame = source::Frame;
+
+    fn send_video_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        if let Some(trace) = &mut self.trace {
+            writeln!(
+                trace,
+                "{}\t{}",
+                frame.sample_buf.pts().value,
+                timestamp.as_nanos()
+            )?;
+        }
+        self.inner.send_video_frame(frame, timestamp)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl<M: cap_recording::AudioMuxer> cap_recording::AudioMuxer for TracedMuxer<M>
+where
+    M::Config: Send,
+{
+    fn send_audio_frame(
+        &mut self,
+        frame: cap_recording::AudioFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.inner.send_audio_frame(frame, timestamp)
     }
 }
 
@@ -284,6 +377,11 @@ async fn record(
     truth: Option<&Path>,
     mut live: Live,
 ) -> anyhow::Result<Run> {
+    eprintln!(
+        "retention: begin arm={} display={}",
+        arm.label(),
+        display.display()
+    );
     std::fs::create_dir_all(display)?;
     let mut log = TruthLog(match truth {
         Some(path) => Some(std::fs::File::create(path)?),
@@ -329,6 +427,11 @@ async fn record(
     }
     finished.map_err(|e| anyhow!("stop: {e:#}"))?;
     log.line("done");
+    eprintln!(
+        "retention: end arm={} display={}",
+        arm.label(),
+        display.display()
+    );
     Ok(Run {
         handed,
         display: display.to_path_buf(),
@@ -945,6 +1048,66 @@ fn fresh(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn copy_tree(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+fn dump_media(path: &Path) -> anyhow::Result<()> {
+    let mut input = ffmpeg::format::input(path)?;
+    let packets: Vec<_> = input
+        .packets()
+        .map(|(stream, packet)| {
+            serde_json::json!({
+                "stream": stream.index(),
+                "time_base": [stream.time_base().numerator(), stream.time_base().denominator()],
+                "pts": packet.pts(),
+                "dts": packet.dts(),
+                "duration": packet.duration(),
+                "size": packet.size(),
+                "key": packet.is_key()
+            })
+        })
+        .collect();
+    std::fs::write(
+        path.with_extension("packets.json"),
+        serde_json::to_vec_pretty(&packets)?,
+    )?;
+    let frames = decode_markers(path)?;
+    std::fs::write(
+        path.with_extension("frames.json"),
+        serde_json::to_vec_pretty(&frames)?,
+    )?;
+    Ok(())
+}
+
+fn retain_snapshot(display: &Path, scratch: &Path, phase: &str) -> anyhow::Result<()> {
+    if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
+        return Ok(());
+    }
+    let snapshot = scratch.join(phase);
+    copy_tree(display, &snapshot)?;
+    for dir in writer_dirs(&snapshot) {
+        for fragment in complete_fragments(&dir) {
+            let mut bytes = std::fs::read(dir.join("init.mp4"))?;
+            bytes.extend(std::fs::read(&fragment)?);
+            let probe = fragment.with_extension("probe.mp4");
+            std::fs::write(&probe, bytes)?;
+            dump_media(&probe)?;
+        }
+    }
+    Ok(())
+}
+
 /// Clean recordings through both writers must give the same frames at the
 /// same times, all of them, at their capture times.
 fn equality(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()> {
@@ -953,9 +1116,25 @@ fn equality(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
     let mut results = Vec::new();
     for arm in arms() {
         let display = scratch.join(arm.label()).join("display");
-        let run = rt.block_on(record(&display, arm, SECONDS, 1, None, Live::default()))?;
+        let arm_scratch = scratch.join(arm.label());
+        let truth = arm_scratch.join("truth.txt");
+        std::fs::create_dir_all(&arm_scratch)?;
+        let run = rt.block_on(record(
+            &display,
+            arm,
+            SECONDS,
+            1,
+            Some(&truth),
+            Live::default(),
+        ))?;
+        retain_snapshot(&display, &arm_scratch, "before-recovery")?;
         let out = scratch.join(format!("{}.mp4", arm.label()));
-        let frames = finalize(&run.display, &out)?;
+        let result = finalize(&run.display, &out);
+        retain_snapshot(&display, &arm_scratch, "after-recovery")?;
+        if std::env::var_os("CAP_VERIFY_KEEP").is_some() && out.exists() {
+            dump_media(&out)?;
+        }
+        let frames = result?;
         check_timeline(case, arm.label(), &frames, &run.handed);
         let handed: std::collections::BTreeSet<u32> = run.handed.iter().map(|h| h.index).collect();
         let got: std::collections::BTreeSet<u32> = frames.iter().map(|f| f.0).collect();
@@ -992,7 +1171,9 @@ fn equality(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
             case.note(format!("in-process == out-of-process: {} frames", a.len()));
         }
     }
-    let _ = std::fs::remove_dir_all(&scratch);
+    if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
     Ok(())
 }
 
@@ -1107,6 +1288,7 @@ fn recorder_kill(
     if arm == Arm::OutOfProcess {
         check_open_fragment(case, &display);
     }
+    retain_snapshot(&display, &scratch, "before-recovery")?;
     let fragments = fragments_on_disk(&display, &scratch)?;
     check_fragment_spans(case, &fragments, &handed);
     let physical = fragments.concat();
@@ -1118,6 +1300,10 @@ fn recorder_kill(
         }
         Err(e) => return Err(e),
     };
+    retain_snapshot(&display, &scratch, "after-recovery")?;
+    if std::env::var_os("CAP_VERIFY_KEEP").is_some() && scratch.join("recovered.mp4").exists() {
+        dump_media(&scratch.join("recovered.mp4"))?;
+    }
     check_recovery(case, &recovered, &physical, &handed);
     if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&scratch);
