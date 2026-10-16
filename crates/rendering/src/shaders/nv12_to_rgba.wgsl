@@ -1,3 +1,11 @@
+// Limited-range Y'CbCr to RGB. The chroma coefficients are pipeline
+// overrides (YuvMatrix::shader_constants): BT.601 by default, BT.709 for
+// sources tagged BT.709.
+override RV: f32 = 1.596;
+override GU: f32 = 0.391;
+override GV: f32 = 0.813;
+override BU: f32 = 2.018;
+
 @group(0) @binding(0) var y_plane: texture_2d<f32>;
 @group(0) @binding(1) var uv_plane: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
@@ -22,9 +30,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let u = uv_raw.r - 0.5;
     let v = uv_raw.g - 0.5;
 
-    let r = y + 1.596 * v;
-    let g = y - 0.391 * u - 0.813 * v;
-    let b = y + 2.018 * u;
+    let r = y + RV * v;
+    let g = y - GU * u - GV * v;
+    let b = y + BU * u;
 
     let color = vec4<f32>(
         clamp(r, 0.0, 1.0),

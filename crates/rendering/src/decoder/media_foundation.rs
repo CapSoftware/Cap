@@ -229,6 +229,7 @@ impl MFDecoder {
 
             let video_width = decoder.width();
             let video_height = decoder.height();
+            let matrix = super::probe_yuv_matrix(&path);
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             let mut cache_bytes = 0usize;
@@ -281,7 +282,9 @@ impl MFDecoder {
                 let mut unfulfilled = Vec::with_capacity(pending_requests.len());
                 for req in pending_requests.drain(..) {
                     if let Some(frame) = cached_frame_for(&cache, last_decoded_frame, req.frame) {
-                        let _ = req.sender.send(frame.to_decoded_frame());
+                        let _ = req
+                            .sender
+                            .send(frame.to_decoded_frame().with_matrix(matrix));
                     } else if !req.sender.is_closed() {
                         unfulfilled.push(req);
                     }
@@ -464,7 +467,7 @@ impl MFDecoder {
                                 if let Some(frame) = frame_to_send
                                     && let Some(s) = sender.take()
                                 {
-                                    let _ = s.send(frame.to_decoded_frame());
+                                    let _ = s.send(frame.to_decoded_frame().with_matrix(matrix));
                                 }
                             }
 
@@ -496,7 +499,7 @@ impl MFDecoder {
                             .map(|(_, f)| f.clone())
                     });
                     if let Some(frame) = fallback {
-                        let _ = s.send(frame.to_decoded_frame());
+                        let _ = s.send(frame.to_decoded_frame().with_matrix(matrix));
                     } else {
                         let black_frame = DecodedFrame::new(
                             vec![0u8; (video_width * video_height * 4) as usize],
@@ -516,7 +519,9 @@ impl MFDecoder {
                         .or_else(|| cache.range(..=req.frame).next_back().map(|(_, f)| f))
                         .or(last_valid_frame.as_ref());
                     if let Some(frame) = frame_to_send {
-                        let _ = req.sender.send(frame.to_decoded_frame());
+                        let _ = req
+                            .sender
+                            .send(frame.to_decoded_frame().with_matrix(matrix));
                     } else {
                         let black_frame = DecodedFrame::new(
                             vec![0u8; (video_width * video_height * 4) as usize],
