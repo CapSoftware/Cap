@@ -202,7 +202,6 @@ def compare_case(b, m, rel, abs_):
             continue
         better.append(f"-{cls}")
     for cls in sorted((set(bc) & set(mc)) - {stochastic}):
-        # Repeated runs: share of runs failing this class.
         if b["runs"] and m["runs"] and (b["runs"] > 1 or m["runs"] > 1):
             bf, mf = bc[cls] / b["runs"], mc[cls] / m["runs"]
             if mf > bf:
