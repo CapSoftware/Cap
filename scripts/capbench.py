@@ -368,6 +368,14 @@ def record_bench(mode, fps, seconds):
             "--fps", str(fps), "--duration", str(seconds), "--path", str(out_dir / "rec.cap"),
         ]
 
+    better = {
+        "cpu_per_rec_s": "lower", "peak_commit_mb": "lower", "delivered_fps": "higher",
+        "captured_ratio": "higher", "overhead_s": "lower",
+    }
+    if mode == "instant":
+        # cap-test validate reports no frame count or duration for instant recordings.
+        del better["delivered_fps"], better["captured_ratio"]
+
     def post(ctx, out_dir, metrics):
         project = out_dir / "rec.cap"
         validation = subprocess.run(
@@ -394,10 +402,7 @@ def record_bench(mode, fps, seconds):
         "timeout": seconds + 120,
         "env": {},
         "needs_screen": True,
-        "better": {
-            "cpu_per_rec_s": "lower", "peak_commit_mb": "lower", "delivered_fps": "higher",
-            "captured_ratio": "higher", "overhead_s": "lower",
-        },
+        "better": better,
     }
 
 
@@ -495,6 +500,15 @@ def start_animation(bounds):
     return process
 
 
+# Job accounting, and the metrics derived from it, exist only where the job object does (Windows).
+JOB_METRICS = {"cpu_s", "peak_commit_mb", "cpu_per_rec_s"}
+
+
+def missing_metrics(better, metrics):
+    optional = set() if "cpu_s" in metrics else JOB_METRICS
+    return sorted(key for key in better if key not in metrics and key not in optional)
+
+
 def run_once(name, spec, ctx, out_dir, keep_log):
     out_dir.mkdir(parents=True, exist_ok=True)
     argv = spec["argv"](ctx, out_dir)
@@ -515,6 +529,10 @@ def run_once(name, spec, ctx, out_dir, keep_log):
         except InvalidRun as error:
             code = "invalid"
             lines.append((measured["wall_s"], f"capbench: {error}"))
+    missing = missing_metrics(spec["better"], metrics)
+    if code == 0 and missing:
+        code = "invalid"
+        lines.append((measured["wall_s"], f"capbench: no {', '.join(missing)} in this run's output"))
     if keep_log or code != 0:
         (out_dir / "output.log").write_text("\n".join(line for _, line in lines), encoding="utf-8")
     return code, metrics, artifact
@@ -610,9 +628,6 @@ def cmd_run(args):
                 status = "ok" if code == 0 else f"exit={code}"
                 summary = ", ".join(f"{key}={value:.3f}" for key, value in sorted(metrics.items()) if key in spec["better"])
                 print(f"[{phase} {rep}] {label} {name}: {status} {summary}", flush=True)
-                missing = sorted(key for key in spec["better"] if key not in metrics)
-                if code == 0 and missing:
-                    print(f"  warning: no {', '.join(missing)} in this run's output", flush=True)
                 if phase == "warmup":
                     continue
                 if code != 0:
