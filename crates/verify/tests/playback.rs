@@ -239,6 +239,10 @@ fn edits_sequential() {
     common::assert_passed(failures);
 }
 
+/// Longest acceptable real-time playback warm-up (measured at most 0.53 s,
+/// WARP-rendered Windows included).
+const REALTIME_WARMUP_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The real-time playback loop (`cap_editor::Playback`), not just the decode
 /// and render path: every frame it delivers must show what the model puts at
 /// that frame number. Frames may be dropped under load (macOS CI presents at
@@ -291,6 +295,40 @@ fn realtime_loop() {
                     case.note(telemetry.describe());
                     let delivered: Vec<_> =
                         delivered.into_iter().filter(|(f, _)| *f < total).collect();
+                    // Performance floor, relative to what the runner class
+                    // delivers (measured on runs 38841247123, 38844291490 and
+                    // 38846099909): macOS and Linux present 0.88 to 0.99 of
+                    // the frames, WARP-rendered Windows 0.28 to 0.30; warm-up
+                    // took at most 0.53 s. A wall-clock class: a proven
+                    // machine stall makes it inconclusive, never excused.
+                    let floor = if cfg!(windows) { 0.15 } else { 0.75 };
+                    let due = (total - first) as usize;
+                    let share = delivered.len() as f64 / due.max(1) as f64;
+                    if let Some(ready) = telemetry.ready_after
+                        && ready > REALTIME_WARMUP_LIMIT
+                    {
+                        case.measure("dropped", "warm-up-s", ready.as_secs_f64());
+                        case.problem(
+                            "dropped",
+                            format!(
+                                "playback took {:.2} s to start (limit {:.1} s)",
+                                ready.as_secs_f64(),
+                                REALTIME_WARMUP_LIMIT.as_secs_f64()
+                            ),
+                        );
+                    }
+                    if telemetry.ready_after.is_some() && share < floor {
+                        case.measure("dropped", "delivered-share", share);
+                        case.problem(
+                            "dropped",
+                            format!(
+                                "real-time playback presented {} of {due} frames ({:.0}%, floor {:.0}% on this runner class)",
+                                delivered.len(),
+                                share * 100.0,
+                                floor * 100.0
+                            ),
+                        );
+                    }
                     if telemetry.ready_after.is_none() {
                         case.problem(
                             "dropped",
