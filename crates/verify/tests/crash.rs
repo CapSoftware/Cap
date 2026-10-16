@@ -844,6 +844,7 @@ fn check_recovery(
     let physical_set: std::collections::BTreeSet<u32> = physical.iter().map(|f| f.0).collect();
     let dropped: Vec<u32> = physical_set.difference(&recovered_set).copied().collect();
     if !dropped.is_empty() {
+        case.count("dropped-complete", "frames", dropped.len() as f64);
         case.problem(
             "dropped-complete",
             format!(
@@ -883,6 +884,7 @@ fn check_recovery(
         .filter(|i| last_physical.is_some_and(|p| *i < p) && !physical_set.contains(i))
         .collect();
     if !interior.is_empty() {
+        case.count("missing", "frames", interior.len() as f64);
         case.problem(
             "missing",
             format!(
@@ -907,6 +909,7 @@ fn check_recovery(
         last_physical
     ));
     if lost_tail > bound {
+        case.measure("loss", "frames", f64::from(lost_tail));
         case.problem(
             "loss",
             format!(
@@ -915,6 +918,7 @@ fn check_recovery(
         );
     }
     if lost_secs > bound_secs + 1e-6 {
+        case.measure("loss-time", "secs", (lost_secs * 100.0).round() / 100.0);
         case.problem(
             "loss-time",
             format!(
@@ -1163,6 +1167,7 @@ fn muxer_kill(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<(
         .filter(|i| !recovered_set.contains(i))
         .collect();
     if !dropped.is_empty() {
+        case.count("dropped-complete", "frames", dropped.len() as f64);
         case.problem(
             "dropped-complete",
             format!(
