@@ -115,15 +115,25 @@ jobs:
           cargo test --locked -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
 
-      # Blacksmith runs a logged-in GUI session with SIP disabled, but
-      # ScreenCaptureKit is denied until TCC grants the responsible process
-      # (Runner.Worker), so grant Screen Recording (and Microphone) to every
-      # binary that captures plus the whole runner ancestry, then restart
-      # tccd. It has no audio device: BlackHole provides input and output.
+      # Blacksmith runs a logged-in GUI session with SIP disabled, but:
+      # - ScreenCaptureKit is denied until TCC grants the responsible process
+      #   (Runner.Worker), so Screen Recording and Microphone are granted to
+      #   every binary that captures plus the whole runner ancestry, in the
+      #   system and the user TCC database (Microphone is a per-user
+      #   service: without it CoreAudio blocks the stimulus forever in
+      #   AudioDeviceCreateIOProcID waiting for coreaudiod), then tccd
+      #   restarts;
+      # - the display starts asleep (CGDisplayIsAsleep, no active display),
+      #   so ScreenCaptureKit lists windows but no display: wake it and keep
+      #   it awake for the job;
+      # - there is no audio device: BlackHole provides input and output.
       - name: Blacksmith capture permissions and audio device
         if: startsWith(matrix.runner, 'blacksmith-')
         run: |
           set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
           brew install --cask blackhole-2ch
           brew install switchaudio-osx
           sudo killall coreaudiod || true
@@ -151,19 +161,30 @@ jobs:
           for c in "$(rustup which cargo)" "$HOME/.cargo/bin/cargo"; do echo "$c"; done >> "$RUNNER_TEMP/capture-binaries"
 
           db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
           approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
           mkdir -p "$(dirname "$approvals")"
           now=$(date +%s)
           until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
           sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
             for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
-              sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
             done
             /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
             echo "granted $client"
           done
+          killall tccd || true
           sudo killall tccd || true
           sleep 2
+          cat > "$RUNNER_TEMP/display.swift" <<'SWIFT'
+          import CoreGraphics
+          let main = CGMainDisplayID()
+          print("display \(main): asleep \(CGDisplayIsAsleep(main)), active \(CGDisplayIsActive(main)), \(CGDisplayBounds(main)), screen capture \(CGPreflightScreenCaptureAccess())")
+          SWIFT
+          swiftc "$RUNNER_TEMP/display.swift" -o "$RUNNER_TEMP/display"
+          "$RUNNER_TEMP/display"
 
       - name: Real-capture recording oracle
         run: |
