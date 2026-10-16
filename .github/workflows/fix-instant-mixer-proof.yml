@@ -1,7 +1,5 @@
 name: Instant mixer alignment proof
 on:
-  push:
-    branches: [ci/fixproof-instant-mixer]
   workflow_dispatch:
 permissions:
   contents: read

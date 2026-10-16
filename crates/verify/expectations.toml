@@ -687,11 +687,3 @@ bound = { count = 1, frames = [1, 60], outside-pending = 0 }
 reason = "Bug A: kill timing can expose a physically complete fragment still listed as pending before the next manifest rescan. Only frames inside those complete pending fragments are excused; at most one 60-frame fragment. Coordinator family decision 2026-10-16. Remove when #2640 lands."
 link = "https://github.com/CapSoftware/Cap/pull/2640"
 
-[[xfail]]
-case = "export/instant/output/mp4/native"
-class = "sync-system"
-platforms = ["macos"]
-flaky = true
-bound = { count = 1, offset-ms = [-70, -30], mic-offset-ms = [5, 34] }
-reason = "Instant mixer intermittently places system audio about 60 ms before the microphone. Control 38858394655: system -46.1 ms, mic +13.9 ms; candidate 38861420654 and repeat 2: system -45.9 ms. Only this negative system offset with the microphone inside its unchanged bound is excused. Coordinator decision C, 2026-10-16."
-link = "https://github.com/CapSoftware/Cap/blob/ci/verify-ci/crates/verify/investigations/instant-system-audio.md"
