@@ -1,0 +1,78 @@
+name: Instant main tail control
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Main versus main tail control
+        run: |
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          for path in crates/recording/src/sources/audio_mixer.rs crates/recording/src/output_pipeline/core.rs; do
+            git show 94923f8918b064f8c8714d963f17833289793dc6:"$path" > "$path"
+          done
+          mkdir -p "$RUNNER_TEMP/tail-control"
+          for arm in 1 2 3 4; do
+            cargo run -p cap-verify --example mixer-pcm-identity --profile ci-verify --locked -- "$RUNNER_TEMP/tail-control/main-$arm" > "$RUNNER_TEMP/tail-control/main-$arm.log" 2>&1
+          done
+          python3 - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "tail-control"
+          report = {}
+          for source in ["mic", "system"]:
+              metadata = [json.loads((root / f"main-{arm}/{source}.json").read_text()) for arm in range(1, 5)]
+              data = [(root / f"main-{arm}/{source}.pcm").read_bytes() for arm in range(1, 5)]
+              counts = [entry["samples_per_channel"][0] for entry in metadata]
+              channels = len(metadata[0]["samples_per_channel"])
+              common = min(counts)
+              heads = [[value[channel * count * 4:(channel * count + common) * 4] for channel in range(channels)] for value, count in zip(data, counts)]
+              assert all(head == heads[0] for head in heads), source
+              for value, count in zip(data, counts):
+                  for channel in range(channels):
+                      assert not any(value[(channel * count + common) * 4:(channel + 1) * count * 4]), source
+              assert all(count >= 96000 for count in counts), (source, counts)
+              report[source] = {"samples": counts, "common_samples": common, "common_identical": True, "extra_tail_zero": True, "varies": len(set(counts)) > 1, "sha256": [hashlib.sha256(value).hexdigest() for value in data]}
+          (root / "control.json").write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-tail-control
+          path: |
+            ${{ runner.temp }}/tail-control/*.log
+            ${{ runner.temp }}/tail-control/control.json
+            ${{ runner.temp }}/tail-control/main-*/*.json
+          retention-days: 7
