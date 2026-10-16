@@ -17,6 +17,7 @@ jobs:
     name: Retention ${{ matrix.provider }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - provider: blacksmith

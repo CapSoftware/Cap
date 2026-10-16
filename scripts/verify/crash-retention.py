@@ -11,7 +11,6 @@ output.mkdir(parents=True, exist_ok=True)
 hosted = os.environ.get("RETENTION_HOSTED") == "1"
 branches = {
     "control": "scratch/sol-crash-control-20261016",
-    "2640": "ci/fixproof-2640-sol",
     "2642": "ci/fixproof-2642-sol",
 }
 if hosted:
