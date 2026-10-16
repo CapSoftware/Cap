@@ -1,0 +1,166 @@
+name: Blacksmith recording probe (scratch)
+on:
+  push:
+    branches: [scratch/verify-recording-bs-probe]
+permissions:
+  contents: read
+jobs:
+  real-capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-15, blacksmith-6vcpu-macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || '5' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      # Hosted macos-26 has a virtual output device that gives
+      # ScreenCaptureKit only silence, so system audio is not required
+      # there; Blacksmith gets BlackHole (set up below), which carries the
+      # stimulus's audio to ScreenCaptureKit, so system audio is required
+      # and the system-only case runs.
+      CAP_VERIFY_AUDIO_OUTPUT: ${{ startsWith(matrix.runner, 'blacksmith-') && 'BlackHole 2ch' || matrix.runner == 'macos-26' && 'Null Audio Device' || '' }}
+      CAP_VERIFY_REQUIRE_SYSTEM_AUDIO: ${{ startsWith(matrix.runner, 'blacksmith-') && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-verify-recording-${{ matrix.runner }}
+          save-cache: "false"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Runner devices
+        run: |
+          sw_vers
+          system_profiler SPDisplaysDataType SPAudioDataType 2>/dev/null | sed -n 1,80p
+          sysctl hw.memsize hw.ncpu
+
+      # Spotlight indexes the build and every recording the suite writes:
+      # mds (priority 50) plus a dozen mdworkers averaged 1 to 1.8 of the 3
+      # cores during the tests (ps samples, run 38736744971).
+      - name: Disable Spotlight indexing
+        run: |
+          sudo mdutil -a -i off || true
+          sudo mdutil -as || true
+
+      - name: Build
+        run: |
+          start=$(date +%s)
+          cargo test --locked -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      # Blacksmith runs a logged-in GUI session with SIP disabled, but
+      # ScreenCaptureKit is denied until TCC grants the responsible process
+      # (Runner.Worker), so grant Screen Recording (and Microphone) to every
+      # binary that captures plus the whole runner ancestry, then restart
+      # tccd. It has no audio device: BlackHole provides input and output.
+      - name: Blacksmith capture permissions and audio device
+        if: startsWith(matrix.runner, 'blacksmith-')
+        run: |
+          set -euo pipefail
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx
+          sudo killall coreaudiod || true
+          for i in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+          echo "outputs:"; SwitchAudioSource -a -t output
+          echo "default output: $(SwitchAudioSource -c -t output)"
+
+          cargo test --locked -p cap-verify --test recording --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json, sys
+          for line in sys.stdin:
+              m = json.loads(line)
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] in ("recording", "cap-verify-stimulus"):
+                  print(m["executable"])' > "$RUNNER_TEMP/capture-binaries"
+          test "$(wc -l < "$RUNNER_TEMP/capture-binaries")" -ge 2
+          p=$$
+          while [ "$p" -gt 1 ]; do
+            ps -o comm= -p "$p"
+            p=$(ps -o ppid= -p "$p" | tr -d ' ')
+          done >> "$RUNNER_TEMP/capture-binaries"
+          for c in "$(rustup which cargo)" "$HOME/.cargo/bin/cargo"; do echo "$c"; done >> "$RUNNER_TEMP/capture-binaries"
+
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          sudo killall tccd || true
+          sleep 2
+
+      - name: Probe displays and ScreenCaptureKit
+        run: |
+          cat > /tmp/disp.swift <<'SWIFT'
+          import CoreGraphics
+          import ScreenCaptureKit
+          import Foundation
+          print("CGMainDisplayID", CGMainDisplayID(), "preflight", CGPreflightScreenCaptureAccess())
+          var ids = [CGDirectDisplayID](repeating: 0, count: 8); var n: UInt32 = 0
+          CGGetActiveDisplayList(8, &ids, &n)
+          for i in 0..<Int(n) { print("active", ids[i], CGDisplayBounds(ids[i])) }
+          let sem = DispatchSemaphore(value: 0)
+          SCShareableContent.getWithCompletionHandler { c, e in
+            if let e = e { print("sck error", e) }
+            for d in c?.displays ?? [] { print("sck display", d.displayID, d.width, d.height, d.frame) }
+            print("sck windows", c?.windows.count ?? -1)
+            sem.signal()
+          }
+          sem.wait()
+          SWIFT
+          swiftc -O /tmp/disp.swift -o /tmp/disp
+          /tmp/disp
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select client from access where service='kTCCServiceScreenCapture';" | head -3
+          /tmp/disp_bin_dummy 2>/dev/null || true
+
+      - name: Probe stimulus audio start
+        run: |
+          stim=$(grep cap-verify-stimulus "$RUNNER_TEMP/capture-binaries" | head -1)
+          spec='{"fps":15.0,"seconds":4.0,"holds":[],"busy":true,"warmup":1.0,"audio":true,"audio_period":0.5,"audio_origin":0,"window":null}'
+          for variant in blackhole default; do
+            echo "=== variant $variant"
+            if [ "$variant" = default ]; then unset CAP_VERIFY_AUDIO_OUTPUT; fi
+            ( sleep 100000 | "$stim" "$spec" /tmp/stim-$variant.jsonl > /tmp/stim-$variant.out 2>&1 ) &
+            sleep 12
+            pid=$(pgrep -f "cap-verify-stimulus" | head -1)
+            echo "pid $pid"; cat /tmp/stim-$variant.out; echo "log:"; cat /tmp/stim-$variant.jsonl | head -5
+            if [ -n "$pid" ]; then sample "$pid" 2 -file /tmp/sample-$variant.txt >/dev/null 2>&1; grep -A45 "Thread_.*DispatchQueue_1: com.apple.main-thread" /tmp/sample-$variant.txt | cut -c1-160 | head -60; pkill -f cap-verify-stimulus || true; fi
+            sleep 2
+          done
+
+      - name: Probe one capture case
+        run: |
+          RUST_LOG=cap_recording=debug,scap_targets=debug CAP_VERIFY_CASE=recording/instant/late-mic CAP_VERIFY_TIER=full CAP_VERIFY_REPEAT=1 \
+            cargo test --locked -p cap-verify --test recording real_capture -- --nocapture 2>&1 | grep -iE "display|content filter|AsContentFilter|FAIL|pass|xfail|shareable" | head -40 || true
