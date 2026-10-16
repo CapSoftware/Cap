@@ -1943,8 +1943,6 @@ async fn render_nv12_export(
     Ok(())
 }
 
-/// The next frame's decode, started while the current frame renders: frame
-/// number, segment time, clip index and the decode result.
 type PrefetchedDecode = (
     u32,
     f64,
@@ -1995,13 +1993,11 @@ impl ExportFrame for Nv12RenderedFrame {
 struct InFlightFrame(Option<u32>);
 
 impl InFlightFrame {
-    /// `submitted` was rendered and the renderer returned `returned`.
     fn rendered(&mut self, submitted: u32, returned: Option<u32>) -> Result<(), RenderingError> {
         let expected = self.0.replace(submitted);
         Self::check(expected, returned)
     }
 
-    /// Takes the in-flight frame out of the renderer (`flush_pipeline*`).
     fn drain<F: ExportFrame>(
         &mut self,
         flushed: Option<Result<F, RenderingError>>,
