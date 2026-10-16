@@ -19,7 +19,6 @@ jobs:
     timeout-minutes: 60
     env:
       CAP_VERIFY_TIER: fast
-      SSMUSIC_ARTIFACTS: ${{ runner.temp }}/ssmusic
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/engine-verify-setup
@@ -28,7 +27,9 @@ jobs:
           tier: fast
       - run: cargo fmt --all --check
       - run: cargo check --profile ci-verify -p cap-verify --test ssmusic
-      - run: cargo test --profile ci-verify -p cap-verify --test ssmusic -- --nocapture > "$RUNNER_TEMP/ssmusic-test.log" 2>&1
+      - env:
+          SSMUSIC_ARTIFACTS: ${{ runner.temp }}/ssmusic
+        run: cargo test --profile ci-verify -p cap-verify --test ssmusic -- --nocapture > "$RUNNER_TEMP/ssmusic-test.log" 2>&1
       - if: always()
         uses: actions/upload-artifact@v4
         with:
