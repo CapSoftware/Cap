@@ -1,0 +1,50 @@
+name: Instant mixer controlled gate probe
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-mixer-gate.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+jobs:
+  probe:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: fast
+      - name: Prepare identical PCM and gate timestamps
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/mixer-gate"
+          mkdir -p "$root"
+          cp crates/recording/src/sources/audio_mixer.rs "$root/candidate-mixer.rs"
+          cp crates/recording/src/output_pipeline/core.rs "$root/candidate-core.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > "$root/main-mixer.rs"
+          git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/output_pipeline/core.rs > "$root/main-core.rs"
+          python3 scripts/verify/prepare-mixer-gate-probe.py
+      - name: Execute both product versions with controlled timestamps
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/mixer-gate"
+          rustup component add rustfmt
+          for arm in main candidate; do
+            cp "$root/$arm-mixer.rs" crates/recording/src/sources/audio_mixer.rs
+            cp "$root/$arm-core.rs" crates/recording/src/output_pipeline/core.rs
+            cargo fmt --all
+            cargo check -p cap-recording --profile ci-verify --locked > "$root/$arm-check.log" 2>&1
+            cargo test -p cap-recording --lib --profile ci-verify --locked identical_capture_timestamps_and_gate_probe -- --nocapture > "$root/$arm.log" 2>&1
+            grep -E 'MIXER_GATE_PROBE|test result:' "$root/$arm.log"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-gate-linux
+          path: ${{ runner.temp }}/mixer-gate
+          retention-days: 7
