@@ -48,6 +48,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/mixalign"
           set -o pipefail
           cargo test -p cap-recording --lib --profile ci-verify --locked sources::audio_mixer:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixalign/unit.log"
+      - name: Mixed pipeline stop handoff
+        run: cargo test -p cap-recording --lib --profile ci-verify --locked mixed_pipeline_stop_receives_audio_delivered_during_source_stop -- --nocapture
       - name: Build fixture probe
         run: scripts/verify/run.sh fast --suites export --no-run
       - name: Twenty fresh generations
