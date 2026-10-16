@@ -1,10 +1,10 @@
-// Limited-range Y'CbCr to RGB. The chroma coefficients are pipeline
-// overrides (YuvMatrix::shader_constants): BT.601 by default, BT.709 for
-// sources tagged BT.709.
-override RV: f32 = 1.596;
-override GU: f32 = 0.391;
-override GV: f32 = 0.813;
-override BU: f32 = 2.018;
+// Limited-range Y'CbCr to RGB: luma 16..235, chroma centred on 128. The
+// chroma coefficients are pipeline overrides (YuvMatrix::shader_constants):
+// BT.601 by default, BT.709 for sources tagged BT.709.
+override RV: f32 = 1.596027;
+override GU: f32 = 0.391762;
+override GV: f32 = 0.812968;
+override BU: f32 = 2.017232;
 
 @group(0) @binding(0) var y_plane: texture_2d<f32>;
 @group(0) @binding(1) var u_plane: texture_2d<f32>;
@@ -30,9 +30,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let u_raw = textureLoad(u_plane, u_clamped, 0).r;
     let v_raw = textureLoad(v_plane, v_clamped, 0).r;
 
-    let y = (y_raw - 0.0625) * 1.164;
-    let u = u_raw - 0.5;
-    let v = v_raw - 0.5;
+    let y = (y_raw - 16.0 / 255.0) * (255.0 / 219.0);
+    let u = u_raw - 128.0 / 255.0;
+    let v = v_raw - 128.0 / 255.0;
 
     let r = y + RV * v;
     let g = y - GU * u - GV * v;
