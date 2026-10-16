@@ -21,7 +21,7 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, oneshot},
 };
 
-use crate::{DecodedFrame, PixelFormat};
+use crate::{DecodedFrame, PixelFormat, cpu_yuv::YuvMatrix};
 
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::multi_position::{DecoderPoolManager, MultiPositionDecoderConfig, ScrubDetector};
@@ -100,11 +100,13 @@ impl ProcessedFrame {
 #[derive(Clone)]
 struct CachedFrame(ProcessedFrame);
 
-struct ImageBufProcessor;
+struct ImageBufProcessor {
+    matrix: YuvMatrix,
+}
 
 impl ImageBufProcessor {
-    fn new() -> Self {
-        Self
+    fn new(matrix: YuvMatrix) -> Self {
+        Self { matrix }
     }
 
     fn extract_raw(&self, image_buf: &mut R<cv::ImageBuf>) -> (Vec<u8>, PixelFormat, u32, u32) {
@@ -265,7 +267,10 @@ impl CachedFrame {
                         }
                     }
                 };
-                Self(ProcessedFrame { number, frame })
+                Self(ProcessedFrame {
+                    number,
+                    frame: frame.with_matrix(processor.matrix),
+                })
             }
             _ => {
                 let black_frame = vec![0u8; (width * height * 4) as usize];
@@ -650,9 +655,13 @@ impl AVAssetReaderDecoder {
             if video.width() == 0 || video.height() == 0 {
                 return Err("Invalid video dimensions".to_string());
             }
-            Ok((video.width(), video.height()))
+            Ok((
+                video.width(),
+                video.height(),
+                YuvMatrix::from_color_space(video.color_space()),
+            ))
         })();
-        let (width, height) = match dimensions {
+        let (width, height, matrix) = match dimensions {
             Ok(dimensions) => dimensions,
             Err(error) => {
                 let _ = ready_tx.send(Err(error));
@@ -688,7 +697,7 @@ impl AVAssetReaderDecoder {
         // pre-hole frame leaves the cache.
         let mut gap_hold: Option<ProcessedFrame> = None;
 
-        let processor = ImageBufProcessor::new();
+        let processor = ImageBufProcessor::new(matrix);
 
         struct PendingRequest {
             frame: u32,
