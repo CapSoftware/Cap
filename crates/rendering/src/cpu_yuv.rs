@@ -41,7 +41,7 @@ impl YuvMatrix {
     /// R = Y + rv*V, G = Y - gu*U - gv*V, B = Y + bu*U.
     pub(crate) fn shader_constants(self) -> [(&'static str, f64); 4] {
         let (rv, gu, gv, bu) = match self {
-            Self::Bt601 => (1.596, 0.391, 0.813, 2.018),
+            Self::Bt601 => (1.596027, 0.391762, 0.812968, 2.017232),
             Self::Bt709 => (1.792741, 0.213249, 0.532909, 2.112402),
         };
         [("RV", rv), ("GU", gu), ("GV", gv), ("BU", bu)]

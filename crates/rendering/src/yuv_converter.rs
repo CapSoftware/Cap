@@ -1979,10 +1979,8 @@ mod colour_matrix_tests {
                     i32::from(uv[x + 1]) - 128,
                 );
                 let actual = &rgba[x * 4..x * 4 + 3];
-                // The shaders' float constants and 16/256 luma offset differ
-                // from the 8.8 integer path by up to 2 levels (as before).
                 assert!(
-                    actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 2),
+                    actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 1),
                     "{matrix:?} {rgb:?}: GPU {actual:?}, CPU {expected:?}"
                 );
                 if matrix == YuvMatrix::Bt709 {
