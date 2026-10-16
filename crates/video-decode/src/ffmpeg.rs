@@ -192,6 +192,8 @@ pub struct FFmpegDecoder {
 enum DecoderInput {
     File(avformat::context::Input),
     Segmented(cap_enc_ffmpeg::SegmentedInput),
+    #[cfg(feature = "scripted")]
+    Scripted(crate::scripted::Demuxer),
 }
 
 impl DecoderInput {
@@ -199,6 +201,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => input,
             Self::Segmented(input) => input.input(),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => unreachable!("scripted media has no container"),
         }
     }
 
@@ -206,6 +210,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => input.seek(position, ..position),
             Self::Segmented(input) => input.seek(position),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => demuxer.seek(position),
         }
     }
 
@@ -213,6 +219,8 @@ impl DecoderInput {
         match self {
             Self::File(input) => DecoderPackets::File(input.packets()),
             Self::Segmented(input) => DecoderPackets::Segmented(input),
+            #[cfg(feature = "scripted")]
+            Self::Scripted(demuxer) => DecoderPackets::Scripted(demuxer),
         }
     }
 }
@@ -220,6 +228,8 @@ impl DecoderInput {
 enum DecoderPackets<'a> {
     File(PacketIter<'a>),
     Segmented(&'a mut cap_enc_ffmpeg::SegmentedInput),
+    #[cfg(feature = "scripted")]
+    Scripted(&'a mut crate::scripted::Demuxer),
 }
 
 impl Iterator for DecoderPackets<'_> {
@@ -238,6 +248,8 @@ impl Iterator for DecoderPackets<'_> {
                     Err(error) => Some(Err(error)),
                 }
             }
+            #[cfg(feature = "scripted")]
+            Self::Scripted(_) => None,
         }
     }
 }
@@ -277,6 +289,18 @@ impl FFmpegDecoder {
         hw_device_type: Option<AVHWDeviceType>,
     ) -> Result<Self, String> {
         let path = path.into();
+
+        #[cfg(feature = "scripted")]
+        if let Some(state) = crate::scripted::lookup(&path) {
+            let demuxer = crate::scripted::Demuxer::new(state);
+            return Ok(FFmpegDecoder {
+                decoder: demuxer.open_decoder()?,
+                start_time: demuxer.start_time(),
+                input: DecoderInput::Scripted(demuxer),
+                stream_index: 0,
+                hw_device: None,
+            });
+        }
 
         let input = if path.is_dir() {
             DecoderInput::Segmented(open_fragmented_input(&path)?)
@@ -430,6 +454,11 @@ impl<'a> Iterator for FramesIter<'a> {
     type Item = Result<avframe::Video, avutil::error::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        #[cfg(feature = "scripted")]
+        if let DecoderPackets::Scripted(demuxer) = &mut self.packets {
+            return demuxer.next_frame().map(Ok);
+        }
+
         let mut frame = avframe::Video::empty();
 
         loop {
