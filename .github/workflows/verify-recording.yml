@@ -122,6 +122,7 @@ jobs:
     timeout-minutes: 45
     env:
       CAP_VERIFY_CAPTURE: display
+      RUST_LOG: cap_recording::output_pipeline::core=debug
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
