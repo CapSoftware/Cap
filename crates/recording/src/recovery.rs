@@ -23,6 +23,7 @@ use tracing::{debug, warn};
 use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
 use crate::studio_recording::CompletedRecording;
 
+mod prefix;
 mod preparing_observer;
 mod preparing_projection;
 #[cfg(unix)]
@@ -912,7 +913,7 @@ impl RecoveryManager {
             }
             output.sync_all()?;
             drop(output);
-            std::fs::hard_link(&temporary, destination)
+            prefix::publish(&temporary, destination)
         })();
         let _ = std::fs::remove_file(&temporary);
         result
