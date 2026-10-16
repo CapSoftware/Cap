@@ -1047,7 +1047,11 @@ fn construct_filter_graph(infos: &[AudioInfo]) -> Result<FilterGraphParts, ffmpe
     let mut amix = filter_graph.add(
         &ffmpeg::filter::find("amix").expect("Failed to find amix filter"),
         "amix",
-        &format!("inputs={}:duration=longest", abuffers.len()),
+        // normalize=0: each source keeps its own level. amix's default
+        // divides every input by the number of inputs (the microphone at
+        // -6 dB beside system audio) and ramps that scale whenever an input
+        // drops out.
+        &format!("inputs={}:duration=longest:normalize=0", abuffers.len()),
     )?;
 
     let aformat_args = format!(
@@ -1545,6 +1549,25 @@ mod test {
         probe.tick(100);
         assert_eq!(probe.peaks(0), [108, 288]);
         assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+    }
+
+    #[test]
+    fn pcm_mixed_sources_keep_their_own_level() {
+        let mut probe = PcmProbe::new(2);
+        for chunk in 0..50u64 {
+            probe.send(0, chunk * 20, 960, (chunk % 10 == 0).then_some(0));
+            probe.send(1, chunk * 20, 960, (chunk % 10 == 5).then_some(0));
+            probe.tick(chunk * 20 + 20);
+        }
+        let peak = |channel: usize| {
+            probe
+                .pcm
+                .iter()
+                .map(|sample| sample[channel].abs())
+                .fold(0.0f32, f32::max)
+        };
+        assert_eq!(peak(0), 0.5);
+        assert_eq!(peak(1), 0.5);
     }
 
     #[test]
