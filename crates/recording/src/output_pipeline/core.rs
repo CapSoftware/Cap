@@ -763,6 +763,14 @@ pub(crate) struct AudioTimestampGenerator {
 const VIDEO_WALL_CLOCK_TOLERANCE_SECS: f64 = 0.1;
 #[cfg(not(target_os = "linux"))]
 const STALE_CAPTURE_SECS: f64 = 1.0;
+// A capture-time step this long since the previous frame means the source went
+// quiet (a static screen, dropped frames).
+#[cfg(not(target_os = "linux"))]
+const SOURCE_GAP: Duration = Duration::from_millis(100);
+// After such a gap, a capture time this much older than the frame's hand-off
+// is not trusted.
+#[cfg(not(target_os = "linux"))]
+const STALE_AFTER_GAP_NS: i128 = 50_000_000;
 
 impl AudioTimestampGenerator {
     #[cfg(test)]
@@ -1306,6 +1314,8 @@ struct VideoDriftTracker {
     #[cfg(not(target_os = "linux"))]
     clock_drift: CaptureClockDrift,
     #[cfg(not(target_os = "linux"))]
+    last_capture: Option<Duration>,
+    #[cfg(not(target_os = "linux"))]
     waited_for_frame: bool,
     anchor: Option<(f64, f64)>,
     anchor_deferred: bool,
@@ -1324,6 +1334,8 @@ impl VideoDriftTracker {
             min_capture_lag_secs: None,
             #[cfg(not(target_os = "linux"))]
             clock_drift: CaptureClockDrift::default(),
+            #[cfg(not(target_os = "linux"))]
+            last_capture: None,
             #[cfg(not(target_os = "linux"))]
             waited_for_frame: true,
             anchor: None,
@@ -1440,6 +1452,7 @@ impl VideoDriftTracker {
         // minimum since the last source clock discontinuity is the clocks'
         // base offset plus the quickest hand-off.
         let lag_ns = wall_clock_elapsed.as_nanos() as i128 - capture_elapsed.as_nanos() as i128;
+        let previous_capture = self.last_capture.replace(capture_elapsed);
         let lag_secs = lag_ns as f64 / 1e9;
         let min_lag_secs = match self.min_capture_lag_secs {
             Some(min) if !discontinuity => min,
@@ -1482,14 +1495,30 @@ impl VideoDriftTracker {
         //   less (scheduling or capture-service stalls, whose timestamps were
         //   exact in every measured case) and frames queued behind a mux stall
         //   keep their capture time.
-        let corrected_capture = Duration::from_nanos(
-            (capture_elapsed.as_nanos() as i128 + self.clock_drift.correction_ns(capture_elapsed))
-                .clamp(0, i128::from(u64::MAX)) as u64,
-        );
-        let expected_lag_secs = self
+        let expected_lag_ns = self
             .clock_drift
             .expected_lag_ns()
-            .map_or(min_lag_secs, |lag| lag as f64 / 1e9);
+            .unwrap_or((min_lag_secs * 1e9) as i128);
+        let expected_lag_secs = expected_lag_ns as f64 / 1e9;
+        // The first frame after the source went quiet is stamped from its
+        // hand-off when its capture time is clearly older than that:
+        // ScreenCaptureKit gave the first picture after a static screen a
+        // timestamp 229 ms (once 1.8 s) before the picture existed. Frames in a
+        // steady stream keep their capture time however late they are handed
+        // over.
+        let after_gap = previous_capture
+            .is_some_and(|previous| capture_elapsed.saturating_sub(previous) > SOURCE_GAP);
+        let handed_over_late_ns = lag_ns - expected_lag_ns;
+        let timeline_capture =
+            if self.waited_for_frame && after_gap && handed_over_late_ns > STALE_AFTER_GAP_NS {
+                capture_elapsed.saturating_add(Duration::from_nanos(handed_over_late_ns as u64))
+            } else {
+                capture_elapsed
+            };
+        let corrected_capture = Duration::from_nanos(
+            (timeline_capture.as_nanos() as i128 + self.clock_drift.correction_ns(capture_elapsed))
+                .clamp(0, i128::from(u64::MAX)) as u64,
+        );
         let bound = wall_clock_elapsed
             .saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
         // Ahead only when both the corrected and the source's own capture time
@@ -5564,23 +5593,53 @@ mod tests {
         }
 
         #[test]
-        fn late_delivery_under_the_bound_keeps_its_capture_time() {
-            // The capture service stalls: the frame after a static screen is
-            // handed over 0.9 s after its (correct) capture time.
-            let latency = Duration::from_millis(15);
+        fn late_hand_off_in_a_steady_stream_keeps_capture_times() {
+            // The source stalls for 0.9 s at frame 150 and then hands over the
+            // frames it captured meanwhile in a burst, all with correct
+            // capture times. Only the first of the burst found the loop idle.
+            let stall_end = capture(150) + Duration::from_millis(900);
             let frames: Vec<Frame> = (0..240u64)
-                .filter(|i| !(120..180).contains(i))
                 .map(|i| {
-                    let late = if i == 180 {
-                        Duration::from_millis(900)
-                    } else {
-                        latency
-                    };
-                    frame(capture(i), capture(i) + late)
+                    let handed_over =
+                        (capture(i) + Duration::from_millis(15)).max(if (150..177).contains(&i) {
+                            stall_end
+                        } else {
+                            Duration::ZERO
+                        });
+                    Frame {
+                        waited: !(151..177).contains(&i),
+                        ..frame(capture(i), handed_over)
+                    }
                 })
                 .collect();
             let (output, _) = run(&frames);
             assert_on_capture_time(&frames, &output);
+        }
+
+        #[test]
+        fn stale_capture_time_after_a_static_screen_is_stamped_from_its_hand_off() {
+            // Static screen from frame 120 to 179; the first frame after it is
+            // handed over on time but carries a capture time 229 ms too old.
+            let latency = Duration::from_millis(15);
+            let mut frames: Vec<Frame> = (0..240u64)
+                .filter(|i| !(120..180).contains(i))
+                .map(|i| frame(capture(i), capture(i) + latency))
+                .collect();
+            let first_after = frames
+                .iter()
+                .position(|f| f.capture == capture(180))
+                .unwrap();
+            frames[first_after].capture = capture(180).saturating_sub(Duration::from_millis(229));
+            let (output, _) = run(&frames);
+            assert!(
+                output[first_after].abs_diff(capture(180)) <= EXACT,
+                "stamped {:?}, captured at {:?}",
+                output[first_after],
+                capture(180)
+            );
+            for (f, out) in frames.iter().zip(&output).skip(first_after + 1) {
+                assert!(out.abs_diff(f.capture) <= EXACT);
+            }
         }
 
         #[test]
