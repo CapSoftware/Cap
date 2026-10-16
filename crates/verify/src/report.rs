@@ -94,7 +94,55 @@ pub struct Case {
     counts: BTreeMap<(String, String), f64>,
 }
 
+/// A case's analysis state, for discarding one analysis (see
+/// [`Case::rollback`]).
+pub struct CaseCheckpoint {
+    problems: usize,
+    problem_classes: usize,
+    streams: usize,
+    notes: usize,
+    classes: BTreeSet<String>,
+    class_problems: BTreeMap<String, String>,
+    unobserved: BTreeMap<String, String>,
+    measures: BTreeMap<String, cap_verify_expect::Metrics>,
+    counts: BTreeMap<(String, String), f64>,
+}
+
+impl CaseCheckpoint {
+    /// Problems recorded before the checkpoint.
+    pub fn problems(&self) -> usize {
+        self.problems
+    }
+}
+
 impl Case {
+    pub fn checkpoint(&self) -> CaseCheckpoint {
+        CaseCheckpoint {
+            problems: self.problems.len(),
+            problem_classes: self.problem_classes.len(),
+            streams: self.streams.len(),
+            notes: self.notes.len(),
+            classes: self.classes.clone(),
+            class_problems: self.class_problems.clone(),
+            unobserved: self.unobserved.clone(),
+            measures: self.measures.clone(),
+            counts: self.counts.clone(),
+        }
+    }
+
+    /// Restores everything an analysis since `checkpoint` recorded.
+    pub fn rollback(&mut self, checkpoint: CaseCheckpoint) {
+        self.problems.truncate(checkpoint.problems);
+        self.problem_classes.truncate(checkpoint.problem_classes);
+        self.streams.truncate(checkpoint.streams);
+        self.notes.truncate(checkpoint.notes);
+        self.classes = checkpoint.classes;
+        self.class_problems = checkpoint.class_problems;
+        self.unobserved = checkpoint.unobserved;
+        self.measures = checkpoint.measures;
+        self.counts = checkpoint.counts;
+    }
+
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
         eprintln!("[cap-verify] case {id} ({})", platform());

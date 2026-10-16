@@ -1228,29 +1228,19 @@ async fn run_case(
             case.note(format!("artifacts kept at {}", scratch.display()));
             return Ok(());
         }
-        let before = (
-            case.problems.len(),
-            case.problem_classes.len(),
-            case.classes.clone(),
-            case.streams.len(),
-            case.notes.len(),
-        );
+        let before = case.checkpoint();
         IMPLICATED.with(|m| m.borrow_mut().clear());
         analyze(&recorded, reference, case)?;
         let implicated = IMPLICATED.with(|m| std::mem::take(&mut *m.borrow_mut()));
         let excuse = (!product_failed)
-            .then(|| frozen_failures(case, before.0, &implicated, &freezes))
+            .then(|| frozen_failures(case, before.problems(), &implicated, &freezes))
             .flatten();
         let Some(reason) = excuse else {
             break (recorded, reference);
         };
         // Every unexpected failure lies inside a machine freeze: the
         // recording cannot tell Cap from the host. Discard the analysis.
-        case.problems.truncate(before.0);
-        case.problem_classes.truncate(before.1);
-        case.classes = before.2;
-        case.streams.truncate(before.3);
-        case.notes.truncate(before.4);
+        case.rollback(before);
         let reason = format!("{reason}; evidence {}", sentinel_evidence.display());
         keep_stimulus_log(&attempt_scratch, &stem);
         if tries < 2 {
