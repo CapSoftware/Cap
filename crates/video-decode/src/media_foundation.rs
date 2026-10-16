@@ -144,6 +144,16 @@ pub struct MFDecodedFrame {
     pub plane_time: Duration,
 }
 
+// The decoder's output surface for a sample: a texture array, the sample's slice in it, and its
+// time. Media Foundation decodes into the slice again as soon as the sample is released, so the
+// sample is held until the copy out of it is queued.
+struct DecoderSurface {
+    _sample: IMFSample,
+    texture: ID3D11Texture2D,
+    subresource: u32,
+    pts: i64,
+}
+
 pub struct NV12Sample {
     pub pts: i64,
     pub data: NV12Data,
@@ -715,7 +725,7 @@ impl MediaFoundationDecoder {
             && let Some(staging) = self.readback_free.pop()
         {
             match unsafe { self.read_decoder_surface() } {
-                Ok(Some((texture, subresource, pts))) => {
+                Ok(Some(surface)) => {
                     unsafe {
                         self.d3d11_context.CopySubresourceRegion(
                             &staging,
@@ -723,12 +733,12 @@ impl MediaFoundationDecoder {
                             0,
                             0,
                             0,
-                            &texture,
-                            subresource,
+                            &surface.texture,
+                            surface.subresource,
                             None,
                         );
                     }
-                    self.readback_queue.push_back((pts, staging));
+                    self.readback_queue.push_back((surface.pts, staging));
                 }
                 end => {
                     self.readback_free.push(staging);
@@ -790,12 +800,7 @@ impl MediaFoundationDecoder {
         }
     }
 
-    // The decoder's output surface for the next sample: a texture array, the sample's slice in
-    // it, and its time. Media Foundation decodes into the surface again once the sample is
-    // released, so copy out of it before the next read.
-    unsafe fn read_decoder_surface(
-        &mut self,
-    ) -> Result<Option<(ID3D11Texture2D, u32, i64)>, String> {
+    unsafe fn read_decoder_surface(&mut self) -> Result<Option<DecoderSurface>, String> {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
         let mut timestamp = 0i64;
@@ -857,13 +862,16 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("GetSubresourceIndex failed: {e:?}"))?
         };
 
-        Ok(Some((texture, subresource_index, timestamp)))
+        Ok(Some(DecoderSurface {
+            _sample: sample,
+            texture,
+            subresource: subresource_index,
+            pts: timestamp,
+        }))
     }
 
     unsafe fn read_sample_inner(&mut self) -> Result<Option<MFDecodedFrame>, String> {
-        let Some((texture, subresource_index, timestamp)) =
-            (unsafe { self.read_decoder_surface()? })
-        else {
+        let Some(surface) = (unsafe { self.read_decoder_surface()? }) else {
             return Ok(None);
         };
 
@@ -880,8 +888,8 @@ impl MediaFoundationDecoder {
                 0,
                 0,
                 0,
-                &texture,
-                subresource_index,
+                &surface.texture,
+                surface.subresource,
                 None,
             );
 
@@ -901,7 +909,7 @@ impl MediaFoundationDecoder {
             textures: Arc::new(frame_textures),
             width: self.width,
             height: self.height,
-            pts: timestamp,
+            pts: surface.pts,
             plane_time,
         }))
     }
@@ -1199,18 +1207,18 @@ mod tests {
         let staging = decoder.readback_free[0].clone();
         let expected_end = loop {
             match unsafe { decoder.read_decoder_surface() } {
-                Ok(Some((texture, subresource, pts))) => unsafe {
+                Ok(Some(surface)) => unsafe {
                     decoder.d3d11_context.CopySubresourceRegion(
                         &staging,
                         0,
                         0,
                         0,
                         0,
-                        &texture,
-                        subresource,
+                        &surface.texture,
+                        surface.subresource,
                         None,
                     );
-                    expected.push((pts, decoder.map_staging(&staging).unwrap().data));
+                    expected.push((surface.pts, decoder.map_staging(&staging).unwrap().data));
                 },
                 end => break end.is_err(),
             }
