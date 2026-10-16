@@ -693,6 +693,37 @@ fn fragment_complete(path: &Path) -> bool {
     at == data.len() && moof && mdat
 }
 
+fn fragment_prefix_offsets(bytes: &[u8]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut offset = 0usize;
+    let mut previous = None;
+    while offset + 8 <= bytes.len() {
+        let size = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        let kind: [u8; 4] = bytes[offset + 4..offset + 8].try_into().unwrap();
+        let (size, header) = match size {
+            0 => break,
+            1 if offset + 16 <= bytes.len() => (
+                u64::from_be_bytes(bytes[offset + 8..offset + 16].try_into().unwrap()),
+                16,
+            ),
+            1 => break,
+            value => (u64::from(value), 8),
+        };
+        let Ok(size) = usize::try_from(size) else {
+            break;
+        };
+        if size < header || size > bytes.len() - offset {
+            break;
+        }
+        offset += size;
+        if kind == *b"mdat" && previous == Some(*b"moof") {
+            ends.push(offset);
+        }
+        previous = Some(kind);
+    }
+    ends
+}
+
 fn segment_index(name: &str) -> Option<u32> {
     name.strip_prefix("segment_")?
         .trim_end_matches(".tmp")
@@ -717,7 +748,7 @@ fn complete_fragments(dir: &Path) -> Vec<PathBuf> {
         let Some(index) = segment_index(name) else {
             continue;
         };
-        if !fragment_complete(&path) {
+        if !std::fs::read(&path).is_ok_and(|bytes| !fragment_prefix_offsets(&bytes).is_empty()) {
             continue;
         }
         // Prefer the renamed file when both exist.
@@ -760,7 +791,12 @@ fn decode_fragments(
     }
     let mut joined = std::fs::read(dir.join("init.mp4")).context("init.mp4")?;
     for fragment in fragments {
-        joined.extend(std::fs::read(fragment)?);
+        let bytes = std::fs::read(fragment)?;
+        let end = fragment_prefix_offsets(&bytes)
+            .last()
+            .copied()
+            .ok_or_else(|| anyhow!("no complete fragment"))?;
+        joined.extend_from_slice(&bytes[..end]);
     }
     let path = scratch.join(format!(
         "joined-{}.mp4",
@@ -795,11 +831,20 @@ fn fragments_on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<Vec<(
     let mut out = Vec::new();
     for dir in writer_dirs(display) {
         for fragment in complete_fragments(&dir) {
-            out.push(decode_fragments(
-                &dir,
-                std::slice::from_ref(&fragment),
-                scratch,
-            )?);
+            let bytes = std::fs::read(fragment)?;
+            let init = std::fs::read(dir.join("init.mp4"))?;
+            let path = scratch.join("complete-prefix.mp4");
+            let mut previous_frames = 0;
+            for end in fragment_prefix_offsets(&bytes) {
+                let mut joined = init.clone();
+                joined.extend_from_slice(&bytes[..end]);
+                std::fs::write(&path, joined)?;
+                let frames = decode_markers(&path)?;
+                anyhow::ensure!(frames.len() >= previous_frames, "decoded prefix shrank");
+                out.push(frames[previous_frames..].to_vec());
+                previous_frames = frames.len();
+            }
+            std::fs::remove_file(path)?;
         }
     }
     Ok(out)
