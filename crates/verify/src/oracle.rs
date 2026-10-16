@@ -549,7 +549,7 @@ pub fn read_expecting(
         // both sides in the same segment.
         let swapped = |ao: FrameMarker, ai: FrameMarker| ao == i && ai == o;
         let alternative = best_of(&mut near.chain(far).filter(|(ao, ai)| {
-            !(allowed(outgoing, *ao) && allowed(incoming, *ai)) && !swapped(*ao, *ai)
+            !(swapped(*ao, *ai) || allowed(outgoing, *ao) && allowed(incoming, *ai))
         }));
         if std::env::var("CAP_VERIFY_TRACE_BLEND").as_deref() == Ok("2") {
             eprintln!(
