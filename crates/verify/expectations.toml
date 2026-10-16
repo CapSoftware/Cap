@@ -443,8 +443,9 @@ link = ""
 case = "recording/instant/late-mic"
 class = "sync-screen-mic"
 platforms = ["macos"]
-bound = { count = 1, offset-ms = [900, 1100] }
-reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
+flaky = true
+bound = { count = 1, offset-ms = [-200, -10] }
+reason = "NEW: same encoder start delay as recording/instant/screen-mic-system with a microphone that starts 1.0 s late, which the recording-start audio anchor keeps in place: -30.2 and -50.4 ms on runners; flaky for the same reason"
 link = ""
 
 [[xfail]]
