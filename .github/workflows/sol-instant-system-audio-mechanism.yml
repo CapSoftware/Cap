@@ -24,6 +24,10 @@ jobs:
         with:
           target: aarch64-apple-darwin
           tier: fast
+      - name: Link native framework for ci-verify binaries
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
       - name: Format
         run: |
           rustup component add rustfmt
