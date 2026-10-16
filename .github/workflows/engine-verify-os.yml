@@ -187,7 +187,7 @@ jobs:
           if [[ "${{ inputs.archive }}" == true ]]; then
             scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --from-archive "$RUNNER_TEMP/verify.tar.zst"
           else
-            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}"
+            scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" -- --success-output immediate
           fi
 
       - name: Summary
