@@ -1,9 +1,11 @@
 name: "fork-macos-release"
 
-# Builds Cap for Apple Silicon without any of Cap's signing secrets and
-# attaches the disk image to a GitHub release on this fork. The app keeps the
-# so.cap.desktop identity, so it installs over the official Cap and reuses its
-# recordings and settings. It is ad-hoc signed, so macOS asks once to allow it.
+# Builds Cap for Apple Silicon and attaches the disk image to a GitHub release
+# on this fork. The app keeps the so.cap.desktop identity, so it installs over
+# the official Cap and reuses its recordings and settings. It is signed with
+# the fork owner's Developer ID and notarized, so macOS keeps its privacy
+# grants across updates. Without the APPLE_* secrets it falls back to an
+# ad-hoc signature, and macOS asks for permissions again after every update.
 #
 # Every merge to main builds and publishes a release tagged
 # fw-v<version>-build.<run>. It also runs from the Actions tab, or when a tag
@@ -90,7 +92,33 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: symbols
         run: ./scripts/build-desktop-binaries.sh "$TARGET"
 
-      # No Developer ID and no updater key here: "-" signs ad hoc, and the
+      - name: Check signing secrets
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_API_KEY_FILE: ${{ secrets.APPLE_API_KEY_FILE }}
+        run: |
+          if [[ -n "$APPLE_CERTIFICATE" && -n "$APPLE_API_KEY_FILE" ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write the notarization key
+        if: ${{ steps.signing.outputs.signed == 'true' }}
+        shell: bash
+        env:
+          APPLE_API_KEY_FILE: ${{ secrets.APPLE_API_KEY_FILE }}
+        run: printf '%s\n' "$APPLE_API_KEY_FILE" > "$RUNNER_TEMP/api.p8"
+
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2
+        if: ${{ steps.signing.outputs.signed == 'true' }}
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # With the secrets, Tauri signs with the Developer ID and notarizes. The
       # updater archive is skipped because only Cap can sign one.
       - name: Build Cap
         shell: bash
@@ -98,9 +126,19 @@ jobs:
           CI: false
           CAP_BUILD_REVISION: ${{ github.sha }}
           RUST_TARGET_TRIPLE: ${{ env.TARGET }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/api.p8
         run: |
-          node scripts/bundle-gpui.mjs "$TARGET" --bundles app,dmg \
-            --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+          if [[ "$SIGNED" == "true" ]]; then
+            config='{"bundle":{"createUpdaterArtifacts":false}}'
+          else
+            unset APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_PATH
+            config='{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+          fi
+          node scripts/bundle-gpui.mjs "$TARGET" --bundles app,dmg --config "$config"
 
       - name: Verify the app
         shell: bash
@@ -138,6 +176,6 @@ jobs:
 
             **Install:** quit Cap, open the disk image and drag Cap to Applications, replacing the existing copy. Recordings and settings carry over.
 
-            **First launch:** this build is not notarized, so macOS blocks it the first time. Open System Settings → Privacy & Security and click **Open Anyway** next to Cap. macOS then asks again for Screen Recording, Camera and Microphone access.
+            **First launch:** macOS asks for Screen Recording, Camera and Microphone access once. If this release was built without the Apple signing secrets it is not notarized: open System Settings → Privacy & Security and click **Open Anyway** next to Cap.
 
             **Updates:** declining Cap's own update prompts keeps this version. Accepting one replaces it with the official Cap.
