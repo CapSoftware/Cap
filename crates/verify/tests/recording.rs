@@ -2568,6 +2568,10 @@ fn self_check(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result
             ));
             continue;
         }
+        if injection == Injection::Late && case.unobserved.contains_key(class) {
+            caught.push(format!("{}: unobserved (track absent)", injection.label()));
+            continue;
+        }
         if injection == Injection::Late
             && case.classes.iter().any(|c| c.starts_with("sync-screen-"))
         {
@@ -3289,7 +3293,7 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         },
     )?;
     let camera = match (&layout.camera, &rec.camera) {
-        (Some(track), Some((truth, dropped))) => {
+        (Some(track), Some((truth, dropped))) if track.path.is_file() => {
             case.note(format!("camera: dropped at source {dropped:?}"));
             Some(check_video(
                 case,
@@ -3307,11 +3311,12 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                 },
             )?)
         }
-        (None, Some(_)) => {
+        (_, Some(_)) => {
             case.problem(
                 "missing",
                 "camera feed attached but no camera track recorded",
             );
+            case.required_track_absent("camera");
             None
         }
         _ => None,
@@ -3364,37 +3369,54 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         }
     }
     let (mic, system) = if layout.muxed_audio {
-        let decoded = media::decode_audio(&layout.display.path, Some(48_000))?;
-        let mic = (!rec.mic_truth.is_empty()).then(|| {
-            check_audio(
-                case,
-                &decoded,
-                0.0,
-                AudioCheck {
-                    name: "mic",
-                    source: AudioSource::Mic,
-                    truth: &rec.mic_truth,
-                    window: mic_window,
-                },
-            )
-        });
-        let system = (!system_truth.is_empty()).then(|| {
-            check_audio(
-                case,
-                &decoded,
-                0.0,
-                AudioCheck {
-                    name: "system",
-                    source: AudioSource::System,
-                    truth: &system_truth,
-                    window: system_window,
-                },
-            )
-        });
-        (mic, system)
+        let has_audio = ffmpeg::format::input(&layout.display.path)?
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .is_some();
+        if has_audio {
+            let decoded = media::decode_audio(&layout.display.path, Some(48_000))?;
+            let mic = (!rec.mic_truth.is_empty()).then(|| {
+                check_audio(
+                    case,
+                    &decoded,
+                    0.0,
+                    AudioCheck {
+                        name: "mic",
+                        source: AudioSource::Mic,
+                        truth: &rec.mic_truth,
+                        window: mic_window,
+                    },
+                )
+            });
+            let system = (!system_truth.is_empty()).then(|| {
+                check_audio(
+                    case,
+                    &decoded,
+                    0.0,
+                    AudioCheck {
+                        name: "system",
+                        source: AudioSource::System,
+                        truth: &system_truth,
+                        window: system_window,
+                    },
+                )
+            });
+            (mic, system)
+        } else {
+            for (source, required) in [
+                ("mic", !rec.mic_truth.is_empty()),
+                ("system", !system_truth.is_empty()),
+            ] {
+                if required {
+                    case.problem("missing", format!("no {source} track recorded"));
+                    case.required_track_absent(source);
+                }
+            }
+            (None, None)
+        }
     } else {
         let mic = match &layout.mic {
-            Some(track) => {
+            Some(track) if track.path.is_file() => {
                 let decoded = media::decode_audio(&track.path, Some(48_000))?;
                 Some(check_audio(
                     case,
@@ -3408,14 +3430,15 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     },
                 ))
             }
-            None if rec.mic_truth.is_empty() => None,
-            None => {
+            _ if rec.mic_truth.is_empty() => None,
+            _ => {
                 case.problem("missing", "no mic track recorded");
+                case.required_track_absent("mic");
                 None
             }
         };
         let system = match (&layout.system, system_truth.is_empty()) {
-            (Some(track), false) => {
+            (Some(track), false) if track.path.is_file() => {
                 let decoded = media::decode_audio(&track.path, Some(48_000))?;
                 Some(check_audio(
                     case,
@@ -3429,11 +3452,12 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
                     },
                 ))
             }
-            (None, false) => {
+            (_, false) => {
                 case.problem(
                     "missing",
                     "system audio was playing but no system audio track was recorded",
                 );
+                case.required_track_absent("system");
                 None
             }
             _ => None,

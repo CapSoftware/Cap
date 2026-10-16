@@ -661,6 +661,7 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
     }
     let audio = media::decode_audio(&output, None).expect("decode instant audio");
     let mono = audio.mono();
+    let mut mic_offset_ms = None;
     for source in [AudioSource::Mic, AudioSource::System] {
         let expected: Vec<(u32, f64)> = emitted
             .audio
@@ -801,7 +802,16 @@ fn instant_case(spec: cap_verify::pipeline::InstantSpec) -> Option<String> {
                 ),
             );
         }
+        if source == AudioSource::Mic {
+            mic_offset_ms = Some((av * 1e4).round() / 10.0);
+        }
         if av.abs() > 0.005 {
+            if source == AudioSource::System
+                && av < 0.0
+                && let Some(mic_offset_ms) = mic_offset_ms
+            {
+                case.measure(&sync_class, "mic-offset-ms", mic_offset_ms);
+            }
             case.measure(&sync_class, "offset-ms", (av * 1e4).round() / 10.0);
             case.problem(
                 &sync_class,

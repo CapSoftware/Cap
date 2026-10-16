@@ -1132,8 +1132,7 @@ pub async fn realtime_playback(
     let segments = Arc::new(
         // Production baseline: cap-v0.6.0 has no audio-less variant; the
         // decoders are created the same way.
-        cap_editor::create_segments(&project.meta, &meta, decoder == Decoder::Ffmpeg)
-            .await?,
+        cap_editor::create_segments(&project.meta, &meta, decoder == Decoder::Ffmpeg).await?,
     );
     // The case is labelled by decoder: it must be the decoder that runs.
     check_decoders(case, decoder, &segments);

@@ -221,16 +221,6 @@ link = ""
 # of the mechanism; the same symptom on a healthy machine is a failure.
 
 [[xfail]]
-case = "export/*"
-class = "timestamps"
-platforms = ["windows"]
-flaky = true
-starved = true
-bound = { count = 1, frames = [1, 7200], off-periods = [0.95, 1.05], frame = [1, 7199] }
-reason = "NEW: under load an offline export reorders frames. A screen decode that misses its 2,000 ms deadline (crates/rendering/src/decoder/mod.rs, request_frame returns None) makes the render loop emit a fallback frame (crates/rendering/src/lib.rs, the decode-failure fallback) ahead of the frame still waiting for its GPU readback, so the output order becomes 32, 34, 33 and the encoder's monotonic pts repair (EncoderBase::update_pts via queue_frame_reusable, crates/enc-ffmpeg/src/video/h264.rs) shifts every later frame by exactly one slot: the frames after the swap sit one frame period off the grid while the count stays right. Reproduced deterministically by delaying the two screen responses at 34/60 past the deadline (sol-starved-export.md). Seen on a starved windows-2022 runner (Engine verify 38818870844, windows shard 4, export/basic/camera-hidden/mp460/ffmpeg). Bound: only under a sentinel-proven stall, and every off-grid frame exactly one period off"
-link = "https://github.com/CapSoftware/Cap/pull/2636"
-
-[[xfail]]
 case = "playback/backward-hold/backward-jumps/seq30-from0/ffmpeg"
 class = "error"
 platforms = ["windows"]
@@ -628,37 +618,6 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 # #2641 (bug B1), #2643 (bug C), #2644 (bug E).
 
 [[xfail]]
-case = "crash/recorder-kill/inproc/rollover+5"
-class = "dropped-complete"
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A): recovery drops a physically complete fragment that the manifest still lists as pending. The writer renames segment N when the packet after its closing keyframe arrives, but FragmentManifestTracker/SegmentedVideoEncoder only rescan the directory every 10 frames, and find_complete_fragments_with_init keeps manifest entries with is_complete=true plus files the manifest does not list at all, so the listed-pending segment is skipped (recovery.rs). A kill 5 frames after the keyframe lands between rename and rescan on every platform (3 of 3). Bound: one fragment (60 frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/rollover+2"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan; whether these kill points do depends on encoder latency (in 1 run: rollover+2 and random1 on 3 of 3 platforms, finalize+0ms on macOS and Windows; with local VideoToolbox rollover+2 passed). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/random1"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/finalize+0ms"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
 case = "crash/recorder-kill/inproc/static-screen"
 class = "loss-time"
 bound = { count = 1, secs = [2.5, 20.5] }
@@ -692,7 +651,7 @@ link = "https://github.com/CapSoftware/Cap/pull/2643"
 case = "crash/recorder-kill/oop/r*"
 class = "loss"
 platforms = ["macos"]
-bound = { frames = [64, 300] }
+bound = { count = 1, frames = [64, 300] }
 reason = "NEW (bug C, see loss-time): every handed frame is lost, more than one fragment plus the frames in flight (at most the 10 s handed at 30 fps)"
 link = "https://github.com/CapSoftware/Cap/pull/2643"
 
@@ -719,3 +678,20 @@ platforms = ["macos"]
 bound = { count = 1 }
 reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
 link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/*"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60], outside-pending = 0 }
+reason = "Bug A: kill timing can expose a physically complete fragment still listed as pending before the next manifest rescan. Only frames inside those complete pending fragments are excused; at most one 60-frame fragment. Coordinator family decision 2026-10-16. Remove when #2640 lands."
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "export/instant/output/mp4/native"
+class = "sync-system"
+platforms = ["macos"]
+flaky = true
+bound = { count = 1, offset-ms = [-70, -30], mic-offset-ms = [5, 34] }
+reason = "Instant mixer intermittently places system audio about 60 ms before the microphone. Control 38858394655: system -46.1 ms, mic +13.9 ms; candidate 38861420654 and repeat 2: system -45.9 ms. Only this negative system offset with the microphone inside its unchanged bound is excused. Coordinator decision C, 2026-10-16."
+link = "https://github.com/CapSoftware/Cap/blob/ci/verify-ci/crates/verify/investigations/instant-system-audio.md"

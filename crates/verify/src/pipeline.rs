@@ -769,7 +769,6 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
         None
     };
 
-
     emitted.screen_sent = video_emit.await.context("video emit")?;
     let mut held = Vec::new();
     for emit in audio_emits {

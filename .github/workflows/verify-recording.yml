@@ -66,7 +66,7 @@ permissions:
 jobs:
   scope:
     name: Scope
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       run: ${{ steps.scope.outputs.run }}
@@ -122,9 +122,11 @@ jobs:
                 runners='["macos-15"]'; tier=fast
               fi ;;
           esac
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "runners=$runners" >> "$GITHUB_OUTPUT"
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          {
+            echo "run=$run"
+            echo "runners=$runners"
+            echo "tier=$tier"
+          } >> "$GITHUB_OUTPUT"
           if [[ "$run" == true ]]; then
             echo "real capture: $tier tier on $runners" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -173,7 +175,6 @@ jobs:
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: aarch64-apple-darwin
-          prefix-key: v1-rust-verify-recording-${{ matrix.runner }}
           save-cache: "true"
 
       - uses: ./.github/actions/install-desktop-deps
@@ -230,7 +231,7 @@ jobs:
           brew install --cask blackhole-2ch
           brew install switchaudio-osx
           sudo killall coreaudiod || true
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
             sleep 1
           done
@@ -324,7 +325,7 @@ jobs:
     name: Verify recording
     needs: [scope, real-capture]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
