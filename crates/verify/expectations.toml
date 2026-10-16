@@ -620,3 +620,102 @@ hosts = ["github-hosted", "local"]
 bound = { count = 1, screen-pictures = 1 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+# Crash safety (crates/verify/tests/crash.rs). Measured on Blacksmith runners
+# (run 38850661948: macos-15 libx264, ubuntu-2404, windows-2025) with the suite
+# merged into main 3ec0c9497; each fix has its own proof branch
+# ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
+# 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
+# #2641 (bug B1), #2643 (bug C), #2644 (bug E).
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/rollover+5"
+class = "dropped-complete"
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A): recovery drops a physically complete fragment that the manifest still lists as pending. The writer renames segment N when the packet after its closing keyframe arrives, but FragmentManifestTracker/SegmentedVideoEncoder only rescan the directory every 10 frames, and find_complete_fragments_with_init keeps manifest entries with is_complete=true plus files the manifest does not list at all, so the listed-pending segment is skipped (recovery.rs). A kill 5 frames after the keyframe lands between rename and rescan on every platform (3 of 3). Bound: one fragment (60 frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/rollover+2"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan; whether these kill points do depends on encoder latency (in 1 run: rollover+2 and random1 on 3 of 3 platforms, finalize+0ms on macOS and Windows; with local VideoToolbox rollover+2 passed). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/random1"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/finalize+0ms"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/static-screen"
+class = "loss-time"
+bound = { count = 1, secs = [2.5, 20.5] }
+reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
+link = "https://github.com/CapSoftware/Cap/pull/2641"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/static-screen"
+class = "missing"
+bound = { count = 1 }
+reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2641"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "loss-time"
+platforms = ["macos"]
+bound = { count = 1, secs = [2.5, 10] }
+reason = "NEW (bug C): the out-of-process muxer writes packets into a 1 MiB BufWriter around cap-muxer's stdin and flushes only at Start and Finish (oop_muxer.rs MuxerSubprocess::write_packet), so encoded video stays in the recorder's memory: killed after 4 to 8 s, nothing reached cap-muxer (init.mp4 0 bytes, no segment). Bound: everything handed before the kill, at most 10 s"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "missing"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bug C, see loss-time): recovery finds no segment at all (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "loss"
+platforms = ["macos"]
+bound = { frames = [64, 300] }
+reason = "NEW (bug C, see loss-time): every handed frame is lost, more than one fragment plus the frames in flight (at most the 10 s handed at 30 fps)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/muxer-kill/oop"
+class = "error"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bug C): after cap-muxer is killed the recorder keeps buffering packets for the dead child (no flush, so no write error and no respawn), and stop() fails the display track: \"subprocess was reaped with unusable output\""
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/static-screen"
+class = "loss-time"
+platforms = ["macos"]
+bound = { count = 1, secs = [2.5, 20.5] }
+reason = "NEW (bugs B1 and C): the static recording's fragments span 20 s of capture (frame-count keyframe interval, see the in-process entry) and the out-of-process muxer had not received any packet (1 MiB unflushed buffer)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/static-screen"
+class = "missing"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
