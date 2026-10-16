@@ -119,12 +119,6 @@ runs:
         mkdir -p target/ci-verify
         cp target/native-deps/dxc/dxcompiler.dll target/native-deps/dxc/dxil.dll target/ci-verify/
 
-    - name: GPU diagnostics (Windows)
-      if: runner.os == 'Windows'
-      continue-on-error: true
-      shell: pwsh
-      run: scripts/verify/win-gpu-diag.ps1 -Preload "${{ github.workspace }}\target\native-deps\dxc\dxcompiler.dll"
-
     # Debug builds of wgpu (the ci-verify profile keeps debug assertions)
     # enable the D3D12 debug layer whenever d3d12SDKLayers.dll exists. When
     # that DLL comes from an unserviced Graphics Tools feature older than the
@@ -151,7 +145,6 @@ runs:
         icacls $layers /grant "*S-1-5-32-544:F" | Out-Null
         Rename-Item $layers 'd3d12SDKLayers.dll.mismatched'
         Write-Host "hid the mismatched debug layer"
-        scripts/verify/win-gpu-diag.ps1 -DebugLayer
 
     - name: FFmpeg DLLs on PATH (Windows)
       if: runner.os == 'Windows'
