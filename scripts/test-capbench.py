@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -97,6 +98,19 @@ class CapbenchTests(unittest.TestCase):
             capbench.parse_decode(timed(failed))
         clean = DECODE_OUTPUT + "\n  Frames failed: 0\n"
         self.assertIn("sequential_fps", capbench.parse_decode(timed(clean)))
+
+    def test_fixture_inside_the_work_directory_is_not_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            fixture = out / "work" / "fixture" / "run" / "reference.cap"
+            fixture.mkdir(parents=True)
+            args = SimpleNamespace(
+                bench=["decode-display"], out=str(out), label="run", fixture=str(fixture), bin_dir=tmp,
+                variant=[], env=[], screen=None, animate=False, affinity=None,
+            )
+            with self.assertRaisesRegex(SystemExit, "overlap"):
+                capbench.cmd_run(args)
+            self.assertTrue(fixture.exists())
 
     def test_startup_check_finds_missing_helpers(self):
         args = SimpleNamespace(fixture=".", bin_dir=str(Path(__file__).parent), screen=None, animate=False, affinity=None)
