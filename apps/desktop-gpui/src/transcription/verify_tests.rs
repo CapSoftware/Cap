@@ -51,10 +51,6 @@ fn finish(case: Case) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Reference segmentation
-// ---------------------------------------------------------------------------
-
 const ATTACHING: &str = ",.!?;:%)]}'’、。！？；：，";
 const WEAK: [&str; 20] = [
     "an", "as", "at", "be", "by", "do", "he", "if", "in", "is", "it", "me", "my", "of", "on", "or",
@@ -185,10 +181,6 @@ fn compare_segments(
     }
     problems
 }
-
-// ---------------------------------------------------------------------------
-// Fake transcriber over real projects
-// ---------------------------------------------------------------------------
 
 fn marker_word(source: AudioSource, index: u32) -> String {
     format!("{}{index}", source.name())
@@ -549,10 +541,6 @@ fn instant_project_is_refused() {
     }
     finish(case);
 }
-
-// ---------------------------------------------------------------------------
-// Segmentation properties
-// ---------------------------------------------------------------------------
 
 const ASCII_WORDS: [&str; 22] = [
     "hello", "world", "is", "a", "river", "cloud", "it", "to", "so", "screen", "record", "of",

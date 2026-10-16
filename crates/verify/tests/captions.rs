@@ -85,10 +85,6 @@ fn seeds(fast: u64, full: u64) -> u64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Reference model
-// ---------------------------------------------------------------------------
-
 fn attaches_to_previous(text: &str) -> bool {
     const ATTACHING: &str = ",.!?;:%)]}'’、。！？；：，";
     text.trim()
@@ -353,10 +349,6 @@ fn compare_track(product: &[CaptionTrackSegment], model: &[Piece]) -> Vec<String
     problems
 }
 
-// ---------------------------------------------------------------------------
-// Random captions
-// ---------------------------------------------------------------------------
-
 const VOCABULARY: [&str; 24] = [
     "hello", "world", "is", "a", "river", "cloud", "it", "to", "über", "café", "日本", "so",
     "screen", "record", "of", "we", "on", "capture", "edit", "timeline", "in", "up", "my", "an",
@@ -467,10 +459,6 @@ fn random_overrides(rng: &mut Rng, config: &mut ProjectConfiguration, per_source
         styled.push((source, piece.clone()));
     }
 }
-
-// ---------------------------------------------------------------------------
-// Projection and migration properties
-// ---------------------------------------------------------------------------
 
 fn projection_problems(
     base: &ProjectConfiguration,
@@ -891,10 +879,6 @@ fn legacy_migration() {
     finish(case);
 }
 
-// ---------------------------------------------------------------------------
-// On-disk round trips
-// ---------------------------------------------------------------------------
-
 fn styled_settings(rng: &mut Rng) -> CaptionSettings {
     CaptionSettings {
         enabled: true,
@@ -1043,10 +1027,6 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Transcription input + fake transcriber
-// ---------------------------------------------------------------------------
 
 /// Two takes; every track starts at a different time, so the clip offsets
 /// matter (mic 0.25 s late, system audio 0.1 s early, display 0.05 s late).
@@ -1339,10 +1319,6 @@ fn transcription_audio_words() {
     }
     finish(case);
 }
-
-// ---------------------------------------------------------------------------
-// Rendered captions
-// ---------------------------------------------------------------------------
 
 /// Caption style that is easy to find: an opaque green box with white text,
 /// no fades, animation or word highlight.
@@ -1788,10 +1764,6 @@ fn render_multi_clip() {
         .collect();
     common::assert_passed(failures);
 }
-
-// ---------------------------------------------------------------------------
-// Opening a project in the editor
-// ---------------------------------------------------------------------------
 
 /// Opens a copy of `project` whose stored config is `config` in the editor
 /// engine and returns the config it settles on.

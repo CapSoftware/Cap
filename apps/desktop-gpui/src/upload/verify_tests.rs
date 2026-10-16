@@ -36,10 +36,6 @@ const INSTANT_PAIRS: u32 = 8;
 const INSTANT_VIDEO_ID: &str = "instantverify01";
 const RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 
-// ---------------------------------------------------------------------------
-// Virtual clock
-// ---------------------------------------------------------------------------
-
 const SETTLE: Duration = Duration::from_millis(50);
 const WORKED: Duration = Duration::from_micros(200);
 
@@ -119,10 +115,6 @@ pub(super) fn virtual_time<F: Future>(future: F) -> F::Output {
     output
 }
 
-// ---------------------------------------------------------------------------
-// Fault plan
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Route {
     Part(u32),
@@ -190,10 +182,6 @@ impl Rule {
         self
     }
 }
-
-// ---------------------------------------------------------------------------
-// Mock Cap API + object store
-// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct Multipart {
@@ -1058,10 +1046,6 @@ async fn respond(
     stream.write_all(&bytes).await
 }
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
 fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -1274,10 +1258,6 @@ pub(super) fn assert_segments_stored(
     .unwrap();
     assert_eq!(manifest, expected_manifest(video, audio));
 }
-
-// ---------------------------------------------------------------------------
-// Studio share: multipart upload of the exported MP4
-// ---------------------------------------------------------------------------
 
 struct StudioRun {
     result: Result<UploadResult, String>,
@@ -1524,10 +1504,6 @@ fn studio_share_cancel_then_resume_reuses_the_persisted_video() {
         check_budget(case, &mock, budget::STUDIO_SHARE_CANCEL_THEN_RESUME);
     });
 }
-
-// ---------------------------------------------------------------------------
-// Instant: live segment upload while recording
-// ---------------------------------------------------------------------------
 
 /// Feeds the recorder's segment events on a fixed virtual schedule: both init
 /// segments at 0 s, then audio segment k at 2k s and video segment k at

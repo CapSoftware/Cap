@@ -112,10 +112,6 @@ struct Run {
     display: PathBuf,
 }
 
-// ---------------------------------------------------------------------------
-// Recording (shared by the in-test runs and the child recorder)
-// ---------------------------------------------------------------------------
-
 #[cfg(target_os = "macos")]
 mod source {
     use super::*;
@@ -469,10 +465,6 @@ fn secs_complete(line: &str) -> bool {
         .is_some_and(|d| d.len() == 6)
 }
 
-// ---------------------------------------------------------------------------
-// The child recorder (a SIGKILL target)
-// ---------------------------------------------------------------------------
-
 /// Runs only as a child of `crash_safety` (`CAP_VERIFY_CRASH_CHILD` set):
 /// records into the given directory until it is killed or finishes.
 #[test]
@@ -646,10 +638,6 @@ fn wait_for_exit(pids: &[u32], case: &mut Case) {
         ));
     }
 }
-
-// ---------------------------------------------------------------------------
-// What is physically on disk
-// ---------------------------------------------------------------------------
 
 /// Top-level ISO BMFF boxes span the file exactly and include moof + mdat:
 /// the writer finished this fragment (independent of recovery.rs).
@@ -909,10 +897,6 @@ fn check_open_fragment(case: &mut Case, display: &Path) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Oracles
-// ---------------------------------------------------------------------------
-
 /// The recovered display: the app's display finalization
 /// (`RecoveryManager::finalize_to_progressive_mp4`, the same call for a clean
 /// stop and for crash recovery).
@@ -1093,10 +1077,6 @@ fn check_recovery(
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// Cases
-// ---------------------------------------------------------------------------
 
 fn scratch_root() -> PathBuf {
     std::env::var_os("CAP_VERIFY_SCRATCH")
@@ -1712,11 +1692,19 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
         },
     ];
     let physical = vec![(0, 0.0), (1, 1.0 / f64::from(FPS))];
-    let entries = cap_verify_expect::parse(include_str!("../expectations.toml")).unwrap();
-    let entry = entries
-        .iter()
-        .find(|entry| entry.case == "crash/recorder-kill/inproc/*")
-        .unwrap();
+    // The bound the pending-fragment (#2640) entry used: frames inside
+    // complete pending fragments only.
+    let bound = cap_verify_expect::Bound::from([
+        ("count".into(), cap_verify_expect::Range::at(1.0)),
+        (
+            "frames".into(),
+            cap_verify_expect::Range {
+                min: 1.0,
+                max: 60.0,
+            },
+        ),
+        ("outside-pending".into(), cap_verify_expect::Range::at(0.0)),
+    ]);
     for (outside, accepted) in [(0.0, true), (1.0, false)] {
         let metrics = BTreeMap::from([
             ("count".into(), cap_verify_expect::Range::at(1.0)),
@@ -1727,7 +1715,7 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
             ),
         ]);
         assert_eq!(
-            cap_verify_expect::within(&entry.bound, Some(&metrics)).is_ok(),
+            cap_verify_expect::within(&bound, Some(&metrics)).is_ok(),
             accepted
         );
     }
