@@ -21,9 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-15, copy: a, target: aarch64-apple-darwin }
-          - { runner: macos-15, copy: b, target: aarch64-apple-darwin }
-          - { runner: macos-26, copy: a, target: aarch64-apple-darwin }
+          - { runner: blacksmith-6vcpu-macos-15, copy: a, target: aarch64-apple-darwin }
+          - { runner: blacksmith-6vcpu-macos-15, copy: b, target: aarch64-apple-darwin }
+          - { runner: blacksmith-6vcpu-macos-26, copy: a, target: aarch64-apple-darwin }
           - { runner: windows-2022, copy: a, target: x86_64-pc-windows-msvc }
     steps:
       - uses: actions/checkout@v4
