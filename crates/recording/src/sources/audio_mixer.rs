@@ -732,7 +732,12 @@ impl AudioMixer {
                 while let Some(mut buffer) = source.buffer.pop_front() {
                     let position =
                         sample_position(buffer.timestamp, start_timestamp, self.timestamps, rate);
-                    let overlap = (source.samples_supplied as i128 - position).max(0) as usize;
+                    let correction = placement_correction(
+                        position - source.samples_supplied as i128,
+                        source.info.sample_rate,
+                        buffer.inner.samples(),
+                    );
+                    let overlap = (-correction).max(0) as usize;
                     if overlap > 0 {
                         let dropped = overlap.min(buffer.inner.samples());
                         if source.late_samples_dropped == 0 {
@@ -752,7 +757,7 @@ impl AudioMixer {
                         buffer.timestamp = start_timestamp
                             + samples_duration(source.samples_supplied, source.info.sample_rate);
                     }
-                    let gap_end = (position.max(0) as usize).min(limit);
+                    let gap_end = (source.samples_supplied + correction.max(0) as usize).min(limit);
                     supply_silence(source, &mut self.abuffers[i], i, gap_end)?;
                     if source.samples_supplied >= limit {
                         source.buffer.push_front(buffer);
@@ -856,6 +861,35 @@ fn mixer_now() -> Timestamp {
     #[cfg(not(any(target_os = "macos", windows)))]
     {
         Timestamp::Instant(Instant::now())
+    }
+}
+
+/// Input timestamps jitter around their sample clock (Linux stamps samples
+/// with their receipt time) and drift from the host clock by a few parts per
+/// million. Within this tolerance a packet continues the source's samples
+/// untouched.
+const PLACEMENT_JITTER_TOLERANCE: Duration = Duration::from_millis(2);
+/// A packet this far from where the source's samples have reached starts at
+/// its capture time: a real gap is filled with silence, input that arrived
+/// after its time was committed is dropped.
+const PLACEMENT_REALIGN_THRESHOLD: Duration = Duration::from_millis(10);
+
+/// Samples to add (silence, positive) or drop (negative) before a packet
+/// of `packet` samples whose capture time lies `drift` samples after the
+/// source's supplied samples. Between the tolerance and the realign
+/// threshold the source moves by at most one sample per 256 (a 0.4% rate
+/// change), so clock drift never causes an audible jump.
+fn placement_correction(drift: i128, rate: u32, packet: usize) -> i128 {
+    let samples =
+        |duration: Duration| duration.as_nanos() as i128 * i128::from(rate) / 1_000_000_000;
+    let tolerance = samples(PLACEMENT_JITTER_TOLERANCE);
+    if drift.abs() >= samples(PLACEMENT_REALIGN_THRESHOLD) {
+        drift
+    } else if drift.abs() > tolerance {
+        let step = (packet as i128 / 256).max(1);
+        drift.signum() * (drift.abs() - tolerance).min(step)
+    } else {
+        0
     }
 }
 
@@ -1461,6 +1495,62 @@ mod test {
         assert_eq!(probe.peaks(1), [960]);
         assert_eq!(probe.pcm.len(), 4_800);
         assert!(probe.inputs.iter_mut().all(|input| input.is_closed()));
+    }
+
+    #[test]
+    fn pcm_timestamp_jitter_within_tolerance_keeps_samples_contiguous() {
+        let mut probe = PcmProbe::new(1);
+        let base = probe.mixer.timestamps.instant() + Duration::from_millis(100);
+        let jitter_us = [
+            0_i64, 1_500, -800, 1_900, 300, -1_900, 1_200, 0, 700, -1_500,
+        ];
+        for (packet, jitter) in jitter_us.into_iter().enumerate() {
+            let micros = 20_000 * packet as i64 + jitter;
+            let timestamp = base + Duration::from_micros(micros.max(0) as u64);
+            probe.send_at(0, Timestamp::Instant(timestamp), 960, Some(0));
+            probe.tick(20 * packet as u64 + 125);
+        }
+        assert_eq!(
+            probe.peaks(0),
+            (0..jitter_us.len())
+                .map(|packet| packet * 960)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(probe.mixer.sources[0].late_samples_dropped, 0);
+    }
+
+    #[test]
+    fn pcm_clock_drift_is_corrected_one_sample_at_a_time() {
+        let mut probe = PcmProbe::new(1);
+        let base = probe.mixer.timestamps.instant() + Duration::from_millis(100);
+        // 2,000 ppm: each 960-sample packet's capture time runs 1.92
+        // samples ahead of its sample count.
+        let spacing = Duration::from_nanos(20_040_000);
+        let packets = 200;
+        for packet in 0..packets {
+            probe.send_at(
+                0,
+                Timestamp::Instant(base + spacing * packet as u32),
+                960,
+                Some(0),
+            );
+            probe.tick(20 * packet as u64 + 125);
+        }
+        let peaks = probe.peaks(0);
+        assert_eq!(peaks.len(), packets);
+        for pair in peaks.windows(2) {
+            assert!(
+                (960..=963).contains(&(pair[1] - pair[0])),
+                "a drift correction jumped: {pair:?}"
+            );
+        }
+        let last_position =
+            (spacing.as_nanos() * (packets as u128 - 1) * 48_000 / 1_000_000_000) as usize;
+        assert!(
+            last_position.abs_diff(*peaks.last().unwrap()) <= 96 + 2,
+            "drift not followed: {} vs {last_position}",
+            peaks.last().unwrap()
+        );
     }
 
     #[test]
