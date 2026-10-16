@@ -318,6 +318,19 @@ fn require_system_audio() -> bool {
     }
 }
 
+/// `CAP_VERIFY_STIMULUS_AUDIO=0` keeps the stimulus silent, so the system
+/// audio track carries no markers and is not checked (unless system audio
+/// is required). On a host whose output device does reach
+/// ScreenCaptureKit but whose system-audio timing is not yet characterised
+/// (Blacksmith with BlackHole), this keeps the run equivalent to hosted
+/// runners, where the output devices give ScreenCaptureKit only silence.
+fn stimulus_plays_system_audio() -> bool {
+    !matches!(
+        std::env::var("CAP_VERIFY_STIMULUS_AUDIO").as_deref(),
+        Ok("0") | Ok("false")
+    )
+}
+
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
 }
@@ -1877,7 +1890,7 @@ async fn record(
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
-        audio: spec.system_audio,
+        audio: spec.system_audio && stimulus_plays_system_audio(),
         warmup: match capture {
             CaptureMode::Display => 2.0,
             CaptureMode::Window => 2.0,
