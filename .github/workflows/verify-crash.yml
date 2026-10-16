@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   verify:
-    if: inputs.suites != 'payload' && inputs.suites != 'perf-build' && inputs.suites != 'vt-crash' && inputs.suites != 'instant-repeat'
+    if: inputs.suites != 'payload' && inputs.suites != 'payload-vt' && inputs.suites != 'perf-build' && inputs.suites != 'vt-crash' && inputs.suites != 'instant-repeat'
     name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -42,8 +42,8 @@ jobs:
       suites: ${{ inputs.suites }}
 
   payload:
-    if: inputs.suites == 'payload'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: inputs.suites == 'payload' || inputs.suites == 'payload-vt'
+    runs-on: ${{ inputs.suites == 'payload-vt' && 'macos-15' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 40
     env:
       CARGO_INCREMENTAL: "0"
@@ -53,10 +53,16 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/engine-verify-setup
         with:
-          target: x86_64-unknown-linux-gnu
+          target: ${{ inputs.suites == 'payload-vt' && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
           tier: full
       - name: Prepare decoder
-        run: sudo apt-get install -y -qq ffmpeg exfatprogs
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get install -y -qq ffmpeg exfatprogs
+          elif ! command -v ffmpeg >/dev/null; then
+            brew install ffmpeg
+          fi
       - name: Validate and build
         run: |
           rustup component add rustfmt clippy
@@ -67,6 +73,7 @@ jobs:
           cargo test --locked --profile ci-verify -p cap-recording --lib timed_fragment_tests
           cargo build --locked --profile ci-verify -p cap-recording --example timed-fragment-proof
       - name: Verify prefix publication on exFAT
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           volume="$RUNNER_TEMP/timed-fragment-exfat"
@@ -86,6 +93,10 @@ jobs:
       - name: Run production writer and recovery
         run: |
           mkdir -p "$RUNNER_TEMP/timed-fragments"
+          if [ "$RUNNER_OS" = macOS ]; then
+            mkdir -p target/ci-verify/Frameworks
+            cp -R target/Frameworks/Spacedrive.framework target/ci-verify/Frameworks/
+          fi
           target/ci-verify/examples/timed-fragment-proof "$RUNNER_TEMP/timed-fragments" > "$RUNNER_TEMP/timed-fragments/run.log" 2>&1
           python3 scripts/verify/timed-fragment-proof.py "$RUNNER_TEMP/timed-fragments" > "$RUNNER_TEMP/timed-fragments/summary.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
