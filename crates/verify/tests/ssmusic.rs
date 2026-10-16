@@ -172,7 +172,7 @@ fn investigate_studio_sound_music() {
     missing[start..start + 5760].fill(0.0);
     let mut shifted = stem.clone();
     shifted.rotate_right(384);
-    let source = cap_audio::AudioData::from_raw_f32(stem.clone(), 1);
+    let source = cap_audio::AudioData::from_samples(stem.clone(), 1);
     let enhanced = cap_audio::VoiceEnhancer::new(1)
         .render(&source, 0, stem.len())
         .samples()
