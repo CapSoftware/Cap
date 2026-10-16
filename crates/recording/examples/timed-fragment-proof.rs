@@ -90,8 +90,42 @@ fn main() -> Result<()> {
             encoder.finish_with_timestamp(Duration::from_secs(60))?;
             let segments = encoder.completed_segments().len();
             drop(encoder);
+            let mut container_bytes = 0u64;
+            let mut files = Vec::new();
+            for entry in fs::read_dir(&media)? {
+                let path = entry?.path();
+                if path.file_name().is_some_and(|name| name == "init.mp4")
+                    || path.extension().is_some_and(|extension| extension == "m4s")
+                {
+                    container_bytes += path.metadata()?.len();
+                }
+                if path.extension().is_some_and(|extension| extension == "m4s") {
+                    files.push(path);
+                }
+            }
+            files.sort();
+            let tail_directory = directory.join("partial-tail");
+            copy_directory(&media, &tail_directory)?;
+            let tail_name = files
+                .last()
+                .ok_or("no segments")?
+                .file_name()
+                .ok_or("missing filename")?;
+            let tail_path = tail_directory.join(tail_name);
+            let mut damaged = fs::read(&tail_path)?;
+            damaged.truncate(damaged.len().checked_sub(12).ok_or("segment too small")?);
+            let damaged_path = tail_path.with_extension("m4s.tmp");
+            fs::rename(&tail_path, &damaged_path)?;
+            fs::write(&damaged_path, &damaged)?;
+            let tail_recovery = RecoveryManager::finalize_to_progressive_mp4(
+                &tail_directory,
+                &directory.join("partial-tail.mp4"),
+            );
+            if fs::read(&damaged_path)? != damaged {
+                return Err("recovery modified original truncated media".into());
+            }
             RecoveryManager::finalize_to_progressive_mp4(&media, &directory.join("final.mp4"))?;
-            records.push(json!({"step":step,"mode":mode,"frames":1800/step,"segments":segments,"queue_nanos":queue_times,"snapshots":snapshots}));
+            records.push(json!({"step":step,"mode":mode,"frames":1800/step,"segments":segments,"container_bytes":container_bytes,"partial_tail_error":tail_recovery.err().map(|error|error.to_string()),"queue_nanos":queue_times,"snapshots":snapshots}));
             fs::write(
                 root.join("records.json"),
                 serde_json::to_vec_pretty(&records)?,

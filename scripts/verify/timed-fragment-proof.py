@@ -27,14 +27,18 @@ for step in [1, 2, 10, 30]:
             path = directory / f"{snapshot['directory']}.mp4"
             data = inspect(path) if path.is_file() else None
             snapshots.append({**snapshot, "result": data})
-        outputs[mode] = {"full": full, "snapshots": snapshots, "segments": record["segments"]}
+        tail_path = directory / "partial-tail.mp4"
+        tail = inspect(tail_path) if tail_path.is_file() else None
+        outputs[mode] = {"full": full, "snapshots": snapshots, "segments": record["segments"], "container_bytes": record["container_bytes"], "partial_tail": tail, "partial_tail_error": record["partial_tail_error"]}
     reference = outputs["control"]["full"]
     for mode, output in outputs.items():
         actual = output["full"]
         output["same_payload"] = [packet["data_hash"] for packet in actual["packets"]] == [packet["data_hash"] for packet in reference["packets"]]
         output["same_frames"] = actual["frames"] == reference["frames"]
         output["same_timestamps"] = [(packet["pts_time"], packet["dts_time"], packet.get("duration_time")) for packet in actual["packets"]] == [(packet["pts_time"], packet["dts_time"], packet.get("duration_time")) for packet in reference["packets"]]
-        output["container_delta_percent"] = 100 * (actual["size"] / reference["size"] - 1)
+        output["container_delta_percent"] = 100 * (output["container_bytes"] / outputs["control"]["container_bytes"] - 1)
+        if output["partial_tail"]:
+            output["partial_tail"]["exact_prefix"] = output["partial_tail"]["frames"] == reference["frames"][:len(output["partial_tail"]["frames"])]
         for snapshot in output["snapshots"]:
             data = snapshot["result"]
             if data:
@@ -45,6 +49,7 @@ for step in [1, 2, 10, 30]:
 for result in results:
     for output in result["outputs"].values():
         assert output["same_payload"] and output["same_frames"] and output["same_timestamps"]
+        assert output["partial_tail"] is None or output["partial_tail"]["exact_prefix"]
         for snapshot in output["snapshots"]:
             assert snapshot["result"] is None or snapshot["exact_prefix"]
 print(json.dumps([{ "step": result["step"], "timed": {key: value for key, value in result["outputs"]["timed"].items() if key != "full"} } for result in results], default=str))
