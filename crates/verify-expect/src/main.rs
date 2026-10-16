@@ -192,3 +192,64 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_verify_expect::{Metrics, Range};
+
+    #[test]
+    fn expanded_signature_requires_a_new_explanation() {
+        let entries = parse(
+            "[[xfail]]\ncase = \"a\"\nclass = \"sync\"\nbound = { ms = [-5, 5] }\nreason = \"known offset\"\n",
+        )
+        .unwrap();
+        let ran = Ran::from([("a".into(), None)]);
+        let observed = Observed::from([(("a".into(), "sync".into()), BTreeSet::new())]);
+        let evidence = Evidence {
+            measures: BTreeMap::from([(
+                ("a".into(), "sync".into()),
+                Metrics::from([("ms".into(), Range::at(10.0))]),
+            )]),
+            ..Default::default()
+        };
+        let proposals = bless_with(
+            &entries,
+            "macos",
+            &ran,
+            &observed,
+            &evidence,
+            &BTreeMap::new(),
+        );
+        assert_eq!(proposals.len(), 2);
+        assert!(proposals.contains(&entries[0]));
+        let path = std::env::temp_dir().join(format!(
+            "cap-verify-explanation-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, render(&proposals)).unwrap();
+        let status = check_command(&[path.to_string_lossy().into_owned()]);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(status, ExitCode::FAILURE);
+
+        let retained = bless_with(
+            &entries,
+            "macos",
+            &ran,
+            &observed,
+            &Evidence {
+                measures: BTreeMap::from([(
+                    ("a".into(), "sync".into()),
+                    Metrics::from([("ms".into(), Range::at(3.0))]),
+                )]),
+                ..Default::default()
+            },
+            &BTreeMap::new(),
+        );
+        assert_eq!(retained, entries);
+    }
+}
