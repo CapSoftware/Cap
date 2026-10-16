@@ -27,7 +27,12 @@
 			"skip": {
 				"fast": {
 					"macos": ["export/*/ffmpeg", "export/backward-hold/*/mp430/*"],
-					"windows": ["export/*/mp460/*", "export/backward-hold/*", "export/jitter-camera-*", "export/*/uhd-*"]
+					"windows": [
+						"export/*/mp460/*",
+						"export/backward-hold/*",
+						"export/jitter-camera-*",
+						"export/*/uhd-*"
+					]
 				},
 				"full": {
 					"windows": ["export/jitter-camera-120s/*"]
@@ -269,7 +274,10 @@
 				"full": ["macos"]
 			},
 			"roots": ["cap-rendering"],
-			"own": ["crates/rendering/tests/iosurface-source-lifetime.rs", "crates/rendering/tests/expectations.toml"],
+			"own": [
+				"crates/rendering/tests/iosurface-source-lifetime.rs",
+				"crates/rendering/tests/expectations.toml"
+			],
 			"cases": {
 				"prefix": "native/",
 				"fast": {
