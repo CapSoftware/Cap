@@ -27,20 +27,8 @@ pub(crate) fn note_software_adapter_in_use() {
     SOFTWARE_ADAPTER_IN_USE.store(true, Ordering::Release);
 }
 
-tokio::task_local! {
-    static OFFLINE_EXPORT: ();
-}
-
-/// Runs an offline export render loop. Inside it a slow GPU readback is waited
-/// for up to the export stall limit instead of failing at the playback
-/// deadline: a failed readback costs the export a frame, and export output
-/// must not depend on how loaded the machine is.
-pub(crate) async fn offline_export<F: std::future::Future>(future: F) -> F::Output {
-    OFFLINE_EXPORT.scope((), future).await
-}
-
-fn gpu_buffer_wait_timeout() -> std::time::Duration {
-    if OFFLINE_EXPORT.try_with(|_| ()).is_ok() {
+fn gpu_buffer_wait_timeout(export_deadlines: bool) -> std::time::Duration {
+    if export_deadlines {
         return crate::decoder::EXPORT_STALL_LIMIT;
     }
     let secs = if SOFTWARE_ADAPTER_IN_USE.load(Ordering::Acquire) {
@@ -212,6 +200,7 @@ pub struct RgbaToNv12Converter {
     external_ring: Option<crate::linux_gpu::SharedRing>,
     #[cfg(target_os = "linux")]
     external_output: bool,
+    export_deadlines: bool,
 }
 
 /// An NV12 CVPixelBuffer produced by the GPU converter, ready for zero-copy
@@ -562,7 +551,13 @@ impl RgbaToNv12Converter {
             external_ring: None,
             #[cfg(target_os = "linux")]
             external_output: false,
+            export_deadlines: false,
         }
+    }
+
+    /// See `FrameRenderer::use_export_deadlines`.
+    pub fn use_export_deadlines(&mut self) {
+        self.export_deadlines = true;
     }
 
     /// Keep NV12 output on the GPU: the compute result is copied into a ring
@@ -815,6 +810,7 @@ impl RgbaToNv12Converter {
                 y_stride,
                 frame_number,
                 frame_rate,
+                export_deadlines: self.export_deadlines,
             }));
             return Ok(true);
         }
@@ -850,6 +846,7 @@ impl RgbaToNv12Converter {
                     y_stride,
                     frame_number,
                     frame_rate,
+                    export_deadlines: self.export_deadlines,
                 }));
                 return Ok(true);
             }
@@ -871,6 +868,7 @@ impl RgbaToNv12Converter {
             y_stride,
             frame_number,
             frame_rate,
+            export_deadlines: self.export_deadlines,
         }));
 
         Ok(true)
@@ -937,6 +935,7 @@ pub struct PendingNv12External {
     y_stride: u32,
     frame_number: u32,
     frame_rate: u32,
+    export_deadlines: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -956,7 +955,7 @@ impl PendingNv12External {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
         let mut poll_count = 0u32;
         loop {
             if readback_waited(started, self.frame_number) > timeout_duration {
@@ -1024,6 +1023,7 @@ pub struct PendingNv12Surface {
     y_stride: u32,
     frame_number: u32,
     frame_rate: u32,
+    export_deadlines: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -1036,7 +1036,7 @@ impl PendingNv12Surface {
             return Err(RenderingError::BufferMapWaitingFailed);
         };
         let started = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
         let mut poll_count = 0u32;
         loop {
             if readback_waited(started, self.frame_number) > timeout_duration {
@@ -1083,6 +1083,7 @@ pub struct PendingNv12Readback {
     pub y_stride: u32,
     pub frame_number: u32,
     pub frame_rate: u32,
+    export_deadlines: bool,
 }
 
 impl PendingNv12Readback {
@@ -1108,7 +1109,7 @@ impl PendingNv12Readback {
         };
 
         let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
 
         loop {
             if readback_waited(start_time, self.frame_number) > timeout_duration {
@@ -1592,7 +1593,7 @@ impl PendingSurface {
         let started = Instant::now();
         let mut poll_count = 0u32;
         while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout() {
+            if started.elapsed() > gpu_buffer_wait_timeout(false) {
                 return Err(RenderingError::BufferMapWaitingFailed);
             }
             device.poll(wgpu::PollType::Poll)?;
@@ -1627,6 +1628,7 @@ pub struct PendingReadback {
     height: u32,
     frame_number: u32,
     frame_rate: u32,
+    export_deadlines: bool,
 }
 
 fn active_readback_byte_len(
@@ -1655,7 +1657,7 @@ impl PendingReadback {
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
         let mut poll_count = 0u32;
         let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout();
+        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
 
         loop {
             if readback_waited(start_time, self.frame_number) > timeout_duration {
@@ -1758,6 +1760,7 @@ pub struct PipelinedGpuReadback {
     needs_resize: bool,
     pending_resize_size: u64,
     readiness_first_output: bool,
+    export_deadlines: bool,
 }
 
 impl PipelinedGpuReadback {
@@ -1779,6 +1782,7 @@ impl PipelinedGpuReadback {
             needs_resize: false,
             pending_resize_size: 0,
             readiness_first_output: true,
+            export_deadlines: false,
         }
     }
 
@@ -1909,6 +1913,7 @@ impl PipelinedGpuReadback {
             height: uniforms.output_size.1,
             frame_number: uniforms.frame_number,
             frame_rate: uniforms.frame_rate,
+            export_deadlines: self.export_deadlines,
         });
 
         Ok(())
@@ -1926,6 +1931,7 @@ pub struct RenderSession {
     pipelined_readback: Option<PipelinedGpuReadback>,
     texture_width: u32,
     texture_height: u32,
+    export_deadlines: bool,
 }
 
 /// The blur result cache copies into session textures, so only render hosts
@@ -1973,9 +1979,16 @@ impl RenderSession {
             pipelined_readback: None,
             texture_width: width,
             texture_height: height,
+            export_deadlines: false,
         };
         phase.finish("returned");
         session
+    }
+
+    /// See `FrameRenderer::use_export_deadlines`.
+    pub fn with_export_deadlines(mut self, export_deadlines: bool) -> Self {
+        self.export_deadlines = export_deadlines;
+        self
     }
 
     pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -2114,7 +2127,7 @@ async fn drain_submitted_work(device: &wgpu::Device, queue: &wgpu::Queue) {
         flag.store(true, Ordering::Release);
     });
     let start = Instant::now();
-    let timeout = gpu_buffer_wait_timeout();
+    let timeout = gpu_buffer_wait_timeout(false);
     while !finished.load(Ordering::Acquire) && start.elapsed() <= timeout {
         if device.poll(wgpu::PollType::Poll).is_err() {
             return;
@@ -2145,9 +2158,11 @@ pub async fn finish_encoder_timed(
     let mut timings = FinishEncoderTimings::default();
     let initial_buffer_size =
         (padded_bytes_per_row(uniforms.output_size) * uniforms.output_size.1) as u64;
+    let export_deadlines = session.export_deadlines;
     let readback = session
         .pipelined_readback
         .get_or_insert_with(|| PipelinedGpuReadback::new(device, initial_buffer_size));
+    readback.export_deadlines = export_deadlines;
 
     let previous = readback.take_pending();
 
