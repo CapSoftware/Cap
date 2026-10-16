@@ -231,6 +231,13 @@ def section_floats(lines, start_pattern, pattern, group=1):
     return None
 
 
+def on_path(name):
+    path = shutil.which(name)
+    if path is None:
+        raise FileNotFoundError(f"missing {name}; put it on PATH")
+    return path
+
+
 def ffprobe_video(path):
     result = subprocess.run(
         [
@@ -310,6 +317,7 @@ def export_bench(fps, resolution, quality, extra=()):
         "argv": argv,
         "parse": parse_export,
         "post": post,
+        "requires": lambda ctx: on_path("ffprobe"),
         "timeout": 900,
         "env": {"CAP_DISABLE_ENCODER_SELF_TEST": None},
         "better": {
@@ -366,6 +374,14 @@ def parse_decode(lines):
         "random_avg_ms": float_after(lines, r"Avg access time:\s*([\d.]+)ms"),
         "random_p95_ms": section_floats(lines, r"RANDOM ACCESS PERFORMANCE", r"P95:\s*([\d.]+)ms"),
     }
+    # Timings cover only the reads that succeeded, so a run with failed reads looks faster.
+    failed = sum(
+        int(match.group(2))
+        for _, line in lines
+        if (match := re.match(r"(Frames failed|Seek failures|Failures):\s*(\d+)", line.strip()))
+    )
+    if failed:
+        raise InvalidRun(f"decode-benchmark reported {failed} failed reads")
     return {key: value for key, value in metrics.items() if value is not None}
 
 
@@ -436,6 +452,7 @@ def record_bench(mode, fps, seconds):
         "argv": argv,
         "parse": lambda lines: {},
         "post": post,
+        "requires": lambda ctx: ctx.bin("cap-test"),
         "timeout": seconds + 120,
         "env": {},
         "needs_screen": True,
@@ -559,15 +576,15 @@ def run_once(name, spec, ctx, out_dir, keep_log):
             animation.kill()
             animation.wait()
     metrics = {key: value for key, value in measured.items() if key != "exit"}
-    metrics.update(spec["parse"](lines))
     artifact = None
     code = measured["exit"]
-    if code == 0 and spec.get("post"):
-        try:
+    try:
+        metrics.update(spec["parse"](lines))
+        if code == 0 and spec.get("post"):
             artifact = spec["post"](ctx, out_dir, metrics)
-        except InvalidRun as error:
-            code = "invalid"
-            lines.append((measured["wall_s"], f"capbench: {error}"))
+    except InvalidRun as error:
+        code = "invalid" if code == 0 else code
+        lines.append((measured["wall_s"], f"capbench: {error}"))
     missing = missing_metrics(spec["better"], metrics)
     if code == 0 and missing:
         code = "invalid"
@@ -629,6 +646,7 @@ def cmd_run(args):
         try:
             for name in names:
                 BENCHES[name]["argv"](ctx, work)
+                BENCHES[name].get("requires", lambda ctx: None)(ctx)
         except FileNotFoundError as error:
             sys.exit(str(error))
     if work.exists():

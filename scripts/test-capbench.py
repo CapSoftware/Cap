@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 
 
@@ -89,6 +90,18 @@ class CapbenchTests(unittest.TestCase):
             "decoder_create_ms": 97.0, "sequential_fps": 189.0,
             "random_avg_ms": 107.38, "random_p95_ms": 150.12,
         })
+
+    def test_decode_runs_with_failed_reads_are_invalid(self):
+        failed = DECODE_OUTPUT + "\nRANDOM ACCESS PERFORMANCE\n  Failures: 50\n"
+        with self.assertRaisesRegex(capbench.InvalidRun, "50 failed reads"):
+            capbench.parse_decode(timed(failed))
+        clean = DECODE_OUTPUT + "\n  Frames failed: 0\n"
+        self.assertIn("sequential_fps", capbench.parse_decode(timed(clean)))
+
+    def test_startup_check_finds_missing_helpers(self):
+        args = SimpleNamespace(fixture=".", bin_dir=str(Path(__file__).parent), screen=None, animate=False, affinity=None)
+        with self.assertRaisesRegex(FileNotFoundError, "cap-test"):
+            capbench.BENCHES["record-studio-60"]["requires"](capbench.Context(args))
 
     def test_startup_metrics(self):
         lines = timed("Startup: avg=1159.3ms p50=671.2ms p95=2229.8ms\nFirst preview: avg=37.0ms p50=44.4ms p95=45.9ms")
