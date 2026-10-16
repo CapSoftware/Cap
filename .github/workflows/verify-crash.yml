@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   verify:
+    if: inputs.suites != 'payload'
     name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -39,3 +40,39 @@ jobs:
       target: ${{ matrix.target }}
       tier: ${{ inputs.tier || 'full' }}
       suites: ${{ inputs.suites }}
+
+  payload:
+    if: inputs.suites == 'payload'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 40
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: full
+      - name: Prepare decoder
+        run: sudo apt-get install -y -qq ffmpeg
+      - name: Validate and build
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --all --check
+          cargo clippy --locked -p cap-enc-ffmpeg -p cap-recording --all-targets -- -D warnings
+          cargo test --locked --profile ci-verify -p cap-enc-ffmpeg --lib
+          cargo test --locked --profile ci-verify -p cap-recording --lib timed_fragment_tests
+          cargo build --locked --profile ci-verify -p cap-recording --example timed-fragment-proof
+      - name: Run production writer and recovery
+        run: |
+          mkdir -p "$RUNNER_TEMP/timed-fragments"
+          target/ci-verify/examples/timed-fragment-proof "$RUNNER_TEMP/timed-fragments" > "$RUNNER_TEMP/timed-fragments/run.log" 2>&1
+          python3 scripts/verify/timed-fragment-proof.py "$RUNNER_TEMP/timed-fragments" > "$RUNNER_TEMP/timed-fragments/summary.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: production-timed-fragments
+          path: ${{ runner.temp }}/timed-fragments
+          retention-days: 7
