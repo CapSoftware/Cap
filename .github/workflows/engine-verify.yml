@@ -9,9 +9,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux
-            runner: blacksmith-4vcpu-ubuntu-2404
-            target: x86_64-unknown-linux-gnu
           - platform: macos
             runner: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
@@ -25,6 +22,10 @@ jobs:
         with:
           target: ${{ matrix.target }}
           tier: fast
+      - name: Link macOS runtime libraries
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
       - run: rustup component add rustfmt
       - run: cargo fmt --all --check
       - run: cargo check --profile ci-verify -p cap-verify --test ssmusic --test audio
