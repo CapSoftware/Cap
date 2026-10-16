@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   verify:
-    if: inputs.suites != 'payload'
+    if: inputs.suites != 'payload' && inputs.suites != 'perf-build'
     name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -75,4 +75,48 @@ jobs:
         with:
           name: production-timed-fragments
           path: ${{ runner.temp }}/timed-fragments
+          retention-days: 7
+
+  perf-build:
+    if: inputs.suites == 'perf-build'
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: control
+            ref: ci/proof-timedfrag-base
+          - arm: candidate
+            ref: ci/proof-timedfrag
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build optimized recording benchmark
+        shell: bash
+        run: |
+          cargo test --locked -p cap-verify --test crash --no-run --profile perf --config 'profile.perf.inherits="release"' --config 'profile.perf.lto=false' --config 'profile.perf.debug=0' --config 'profile.perf.codegen-units=16' --message-format=json > "$RUNNER_TEMP/build.jsonl"
+          mkdir -p "$RUNNER_TEMP/perf-package/${{ matrix.arm }}" "$RUNNER_TEMP/perf-package/Frameworks"
+          python3 - "$RUNNER_TEMP/build.jsonl" "$RUNNER_TEMP/perf-package/${{ matrix.arm }}/crash" <<'PYTHON'
+          import json, shutil, sys
+          for line in open(sys.argv[1]):
+              row = json.loads(line)
+              if row.get("reason") == "compiler-artifact" and row.get("executable") and row["target"]["name"] == "crash":
+                  shutil.copy2(row["executable"], sys.argv[2])
+          PYTHON
+          cp -R target/Frameworks/Spacedrive.framework "$RUNNER_TEMP/perf-package/Frameworks/"
+          git rev-parse HEAD > "$RUNNER_TEMP/perf-package/${{ matrix.arm }}/head.txt"
+          tar -czf "$RUNNER_TEMP/perf-${{ matrix.arm }}.tgz" -C "$RUNNER_TEMP/perf-package" .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: timed-fragment-perf-${{ matrix.arm }}
+          path: ${{ runner.temp }}/perf-${{ matrix.arm }}.tgz
           retention-days: 7

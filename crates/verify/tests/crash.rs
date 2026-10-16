@@ -1482,19 +1482,43 @@ const PERF_SECONDS: f64 = 10.0;
 
 #[cfg(target_os = "macos")]
 fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()> {
-    let (width, height, fps) = (1920u32, 1080u32, 60u32);
+    let delivered_fps = std::env::var("CAP_VERIFY_STUDIO_PERF_FPS")
+        .ok()
+        .map(|value| value.parse::<u32>())
+        .transpose()?;
+    anyhow::ensure!(
+        delivered_fps.is_none_or(|fps| matches!(fps, 1 | 30)),
+        "performance fps must be 1 or 30"
+    );
+    let seconds = if delivered_fps.is_some() {
+        60.0
+    } else {
+        PERF_SECONDS
+    };
+    let (width, height, fps) = (
+        1920u32,
+        1080u32,
+        if delivered_fps.is_some() {
+            30u32
+        } else {
+            60u32
+        },
+    );
     let ring: Vec<source::Picture> = (0..fps)
         .map(|i| source::picture_sized(i, width, height, fps))
         .collect::<anyhow::Result<_>>()?;
     let me = std::process::id();
     let mut results: BTreeMap<&str, Vec<(f64, f64, u64, u64)>> = BTreeMap::new();
-    for round in 0..3 {
+    for round in 0..if delivered_fps.is_some() { 1 } else { 3 } {
         let order = if round % 2 == 0 {
             [Arm::InProcess, Arm::OutOfProcess]
         } else {
             [Arm::OutOfProcess, Arm::InProcess]
         };
         for arm in order {
+            if delivered_fps.is_some() && arm == Arm::OutOfProcess {
+                continue;
+            }
             let scratch = scratch_root().join(format!("perf-{}-{round}", arm.label()));
             fresh(&scratch)?;
             let display = scratch.join("display");
@@ -1507,16 +1531,19 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
                 let before = process_usage(me).map(|u| u.0).unwrap_or(0.0);
                 let service_before = encoder_service_cpu();
                 let base = Instant::now() + Duration::from_millis(50);
-                let count = (PERF_SECONDS * f64::from(fps)) as u32;
+                let count = (seconds * f64::from(fps)) as u32;
                 let (mut peak_self, mut peak_muxer, mut muxer_cpu) = (0u64, 0u64, 0.0f64);
-                for index in 0..count {
+                let mut send_nanos = Vec::new();
+                for index in (0..count).step_by((fps / delivered_fps.unwrap_or(fps)) as usize) {
                     let at = base + Duration::from_secs_f64(f64::from(index) / f64::from(fps));
                     tokio::time::sleep_until(at.into()).await;
                     let picture = ring[(index % fps) as usize].clone();
+                    let sent = Instant::now();
                     tx.send_async(source::frame(picture, at))
                         .await
                         .map_err(|_| anyhow!("pipeline stopped"))?;
-                    if index % (fps / 2) == 0 {
+                    send_nanos.push(sent.elapsed().as_nanos());
+                    if delivered_fps.is_none() && index % (fps / 2) == 0 {
                         if let Some((_, rss)) = process_usage(me) {
                             peak_self = peak_self.max(rss);
                         }
@@ -1533,13 +1560,20 @@ fn overhead(rt: &tokio::runtime::Runtime, case: &mut Case) -> anyhow::Result<()>
                         muxer_cpu = muxer_cpu.max(cpu);
                     }
                 }
+                if delivered_fps.is_some() {
+                    tokio::time::sleep_until((base + Duration::from_secs_f64(seconds)).into()).await;
+                }
                 drop(tx);
+                let stopped = Instant::now();
                 pipeline.stop().await.map_err(|e| anyhow!("stop: {e:#}"))?;
+                if let Some(path) = std::env::var_os("CAP_VERIFY_STUDIO_PERF_OUTPUT") {
+                    std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"delivered_fps": delivered_fps,"capture_seconds":seconds,"frames":send_nanos.len(),"enqueue_nanos":send_nanos,"stop_nanos":stopped.elapsed().as_nanos()}))?)?;
+                }
                 let after = process_usage(me).map(|u| u.0).unwrap_or(0.0);
                 let service = (encoder_service_cpu() - service_before).max(0.0);
                 anyhow::Ok((
-                    (after - before) / PERF_SECONDS,
-                    muxer_cpu / PERF_SECONDS + service / PERF_SECONDS,
+                    (after - before) / seconds,
+                    muxer_cpu / seconds + service / seconds,
                     peak_self,
                     peak_muxer,
                 ))
