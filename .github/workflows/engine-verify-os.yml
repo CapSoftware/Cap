@@ -178,6 +178,10 @@ jobs:
           name: verify-archive-${{ inputs.platform }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}
 
+      - name: Use fresh recorded fixtures for this proof
+        shell: bash
+        run: echo "CAP_VERIFY_FIXTURE_DIR=$RUNNER_TEMP/verify-fixtures-$GITHUB_RUN_ID-${{ matrix.shard }}" >> "$GITHUB_ENV"
+
       - name: Prepare recorded fixtures without concurrent rendering
         if: contains(format(',{0},', inputs.suites), ',export,')
         shell: bash
