@@ -107,7 +107,7 @@ const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
 
-// The 2x2 block kernel only pays off on Linux; on Apple GPUs it measured slower than one invocation per pixel.
+// The 2x2 block kernel was only measured as a win on Linux; Apple GPUs were slower and Windows is untested.
 #[cfg(target_os = "linux")]
 const YUV420P_ENTRY_POINT: &str = "main_block";
 #[cfg(target_os = "linux")]
