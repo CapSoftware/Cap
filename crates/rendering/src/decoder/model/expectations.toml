@@ -3,6 +3,24 @@
 #
 # Format: the shared engine verification format (crates/verify-expect):
 #   [[xfail]]
+#   case = "<case id as printed by the suite, * globs allowed>"
+#   class = "<future | stale | grid-rounding | overread | resets | dropped | fallback | unidentified>"
+#   platforms = ["macos"]  (optional; absent = every platform)
+#   seeds = "<seed indices that fail, ranges allowed: 0 3 5-9>"  (optional; absent = any seed)
+#   reason = "<what is wrong>"
+#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
+#
+# Every listed seed must still fail with that class: a seed that passes fails
+# the run with "remove this xfail", so fixes stay locked in. Any failure not
+# listed here fails the run. After a deliberate change, rewrite this file from
+# a run with `scripts/verify/bless.sh` (locally, or from a CI run's report
+# artifacts with `--run <id>`). Reasons and links of existing entries are
+# kept; review the difference.
+#
+# Entries below were recorded on origin/main 5705ee851. "NEW:" marks bugs the
+# model found that no open PR fixes.
+
+[[xfail]]
 case = "decoder-model/avf/camera-fast/random-seeks/playback"
 class = "future"
 platforms = ["macos"]
