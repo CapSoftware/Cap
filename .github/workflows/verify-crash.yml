@@ -56,7 +56,7 @@ jobs:
           target: x86_64-unknown-linux-gnu
           tier: full
       - name: Prepare decoder
-        run: sudo apt-get install -y -qq ffmpeg
+        run: sudo apt-get install -y -qq ffmpeg exfatprogs
       - name: Validate and build
         run: |
           rustup component add rustfmt clippy
@@ -66,6 +66,23 @@ jobs:
           cargo test --locked --profile ci-verify -p cap-enc-ffmpeg --lib
           cargo test --locked --profile ci-verify -p cap-recording --lib timed_fragment_tests
           cargo build --locked --profile ci-verify -p cap-recording --example timed-fragment-proof
+      - name: Verify prefix publication on exFAT
+        shell: bash
+        run: |
+          volume="$RUNNER_TEMP/timed-fragment-exfat"
+          image="$RUNNER_TEMP/timed-fragment-exfat.img"
+          mkdir -p "$volume"
+          truncate -s 64M "$image"
+          mkfs.exfat "$image"
+          sudo mount -o "loop,uid=$(id -u),gid=$(id -g)" "$image" "$volume"
+          trap 'sudo umount "$volume"' EXIT
+          printf source > "$volume/link-source"
+          if ln "$volume/link-source" "$volume/link-destination"; then
+            echo "::error::exFAT unexpectedly allowed hard links"
+            exit 1
+          fi
+          TMPDIR="$volume" cargo test --locked --profile ci-verify -p cap-recording --lib recovery::prefix
+          TMPDIR="$volume" cargo test --locked --profile ci-verify -p cap-recording --lib timed_fragment_tests
       - name: Run production writer and recovery
         run: |
           mkdir -p "$RUNNER_TEMP/timed-fragments"
