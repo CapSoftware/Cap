@@ -151,6 +151,10 @@ def coverage_gained(b, m):
     return sorted(b["unobserved"] - m["unobserved"]) if m["ran"] else []
 
 
+def coverage_lost(b, m):
+    return sorted(m["unobserved"] - b["unobserved"]) if b["ran"] and m["ran"] else []
+
+
 def distribution(summary, cls, metric):
     values = []
     for sample in summary["samples"]:
@@ -177,12 +181,14 @@ def compare_case(b, m, rel, abs_):
         return "N/A", ["unsupported on baseline: " + "; ".join(b.get("why", [])[:1])]
     if not b["ran"] and not m["ran"]:
         return "EQUAL", []
+    lost = coverage_lost(b, m)
+    worse.extend(f"{cls}: baseline observed -> main unobserved (lost coverage)" for cls in lost)
     bc, mc = b["classes"], m["classes"]
     stochastic = "missing-after-hold"
     distribution_classes = (set(bc) | set(mc)) & {stochastic}
     if b["case"].startswith("recording/") or m["case"].startswith("recording/"):
         distribution_classes.add(stochastic)
-    for cls in sorted(distribution_classes):
+    for cls in sorted(distribution_classes - set(lost)):
         metrics = {"count"} | set(b["measures"].get(cls, {})) | set(m["measures"].get(cls, {}))
         for metric in sorted(metrics):
             bv, mv = distribution(b, cls, metric), distribution(m, cls, metric)
@@ -252,8 +258,8 @@ def main():
     out = {}
     print(f"# {args.title}\n")
     print(f"tolerance: rel {args.rel_tol}, abs {args.abs_tol}\n")
-    print("| lane | cases base/main | WORSE | BETTER | EQUAL | coverage gained | insufficient | overlapping distributions | n/a on base | only base | only main | junit WORSE | junit BETTER |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| lane | cases base/main | WORSE | BETTER | EQUAL | coverage gained | coverage lost | insufficient | overlapping distributions | n/a on base | only base | only main | junit WORSE | junit BETTER |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     detail = []
     for lane in lanes:
         b, m = brec.get(lane, {}), mrec.get(lane, {})
@@ -278,6 +284,9 @@ def main():
             gained = coverage_gained(bs, ms)
             if gained and verdict != "COVERAGE-GAINED":
                 res["COVERAGE-GAINED"].append((key, [f"{cls}: baseline unobserved -> main observed" for cls in gained]))
+            lost = coverage_lost(bs, ms)
+            if lost:
+                res["COVERAGE-LOST"].append((key, [f"{cls}: baseline observed -> main unobserved (lost coverage)" for cls in lost]))
         bj, mj = bjunit.get(lane, {}), mjunit.get(lane, {})
         jworse, jbetter = [], []
         bad = {"fail", "error"}
@@ -298,12 +307,12 @@ def main():
                 jworse.append((test, ["fail -> error (crash/timeout)"]))
         print(
             f"| {lane} | {len(b)}/{len(m)} | {len(res['WORSE'])} | {len(res['BETTER'])} | {len(res['EQUAL'])}"
-            f" | {len(res['COVERAGE-GAINED'])} | {len(res['INSUFFICIENT'])} | {len(res['OVERLAP'])} | {len(res['N/A'])} | {len(res['ONLY-BASE'])} | {len(res['ONLY-MAIN'])} | {len(jworse)} | {len(jbetter)} |"
+            f" | {len(res['COVERAGE-GAINED'])} | {len(res['COVERAGE-LOST'])} | {len(res['INSUFFICIENT'])} | {len(res['OVERLAP'])} | {len(res['N/A'])} | {len(res['ONLY-BASE'])} | {len(res['ONLY-MAIN'])} | {len(jworse)} | {len(jbetter)} |"
         )
         out[lane] = {k: v for k, v in res.items()}
         out[lane]["JUNIT-WORSE"] = jworse
         out[lane]["JUNIT-BETTER"] = jbetter
-        for label in ("WORSE", "BETTER", "COVERAGE-GAINED", "INSUFFICIENT", "OVERLAP", "JUNIT-WORSE", "JUNIT-BETTER", "N/A", "ONLY-BASE", "ONLY-MAIN"):
+        for label in ("WORSE", "BETTER", "COVERAGE-GAINED", "COVERAGE-LOST", "INSUFFICIENT", "OVERLAP", "JUNIT-WORSE", "JUNIT-BETTER", "N/A", "ONLY-BASE", "ONLY-MAIN"):
             items = out[lane].get(label) or []
             if not items:
                 continue

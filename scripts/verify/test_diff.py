@@ -1,4 +1,8 @@
 import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +28,60 @@ def compare(base, main):
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_lost_coverage_is_worse_for_passing_and_failing_baselines(self):
+        main = record(unobserved={"sync-screen-mic": "track absent"})
+        for failed in [False, True]:
+            with self.subTest(failed=failed):
+                base = record()
+                if failed:
+                    base["failures"] = {"sync-screen-mic": []}
+                verdict, reasons = compare([base], [main])
+                self.assertEqual(verdict, "WORSE")
+                self.assertEqual(reasons, ["sync-screen-mic: baseline observed -> main unobserved (lost coverage)"])
+
+    def test_coverage_gain_does_not_hide_simultaneous_loss(self):
+        base = record(unobserved={"sync-screen-mic": "track absent"})
+        main = record(unobserved={"sync-screen-system": "track absent"})
+        bs, ms = diff.summarize([base]), diff.summarize([main])
+        self.assertEqual(diff.compare_case(bs, ms, 0, 0)[0], "WORSE")
+        self.assertEqual(diff.coverage_gained(bs, ms), ["sync-screen-mic"])
+        self.assertEqual(diff.coverage_lost(bs, ms), ["sync-screen-system"])
+
+    def test_partial_baseline_observation_still_detects_total_loss(self):
+        unseen = record(unobserved={"sync-screen-mic": "track absent"})
+        self.assertEqual(compare([unseen, record()], [unseen, unseen])[0], "WORSE")
+
+    def test_partial_main_observation_is_not_total_loss(self):
+        unseen = record(unobserved={"sync-screen-mic": "track absent"})
+        self.assertEqual(diff.coverage_lost(diff.summarize([record()]), diff.summarize([unseen, record()])), [])
+
+    def test_unobserved_on_both_sides_is_not_lost_coverage(self):
+        unseen = record(unobserved={"sync-screen-mic": "track absent"})
+        self.assertEqual(compare([unseen], [unseen]), ("EQUAL", []))
+
+    def test_lost_distribution_coverage_is_worse_instead_of_insufficient(self):
+        unseen = record(unobserved={"missing-after-hold": "track absent"})
+        self.assertEqual(compare([record(1)], [unseen])[0], "WORSE")
+
+    def test_cli_reports_coverage_lost_and_gained_separately(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            base = record(unobserved={"sync-screen-mic": "track absent"})
+            main = record(unobserved={"sync-screen-system": "track absent"})
+            for side, rec in [("base", base), ("main", main)]:
+                path = root / side / "verify-report-macos-fast"
+                path.mkdir(parents=True)
+                rec.update({"suite": "export", "case": "a"})
+                (path / "records.jsonl").write_text(json.dumps(rec) + "\n")
+            result = subprocess.run(
+                [sys.executable, "-B", str(Path(__file__).with_name("diff.py")), str(root / "base"), str(root / "main"), "--json", str(root / "diff.json")],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertIn("| coverage gained | coverage lost |", result.stdout)
+            output = json.loads((root / "diff.json").read_text())["macos"]
+            for category in ["WORSE", "COVERAGE-LOST", "COVERAGE-GAINED"]:
+                self.assertEqual(output[category][0][0], "export::a")
+
     def test_absent_track_is_coverage_gained_even_when_main_fails(self):
         base = record(unobserved={"sync-screen-mic": "track absent"})
         main = record()
