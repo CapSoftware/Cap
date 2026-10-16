@@ -287,6 +287,38 @@ mod tests {
         }
     }
 
+    /// Guard sentinel A09 (scripts/verify/guards.toml): a render that does
+    /// not continue the previous one must sound exactly like a render by a
+    /// new enhancer (the reset in `render`, and the editor cache that never
+    /// reuses an enhancer across a seek).
+    #[test]
+    fn guard_a09_render_after_a_seek_equals_a_fresh_enhancer() {
+        ffmpeg::init().unwrap();
+        // Voiced, syllable-modulated harmonics plus noise, so the render
+        // is not silence.
+        let mut source = signal(96_000 * 2, 2);
+        for (index, sample) in source.data.iter_mut().enumerate() {
+            let t = (index / 2) as f32 / 48_000.0;
+            let pitch = 140.0 + 30.0 * (t * 1.3).sin();
+            let voice: f32 = (1..6)
+                .map(|h| (std::f32::consts::TAU * pitch * h as f32 * t).sin() / h as f32)
+                .sum();
+            let syllables = (std::f32::consts::TAU * 4.0 * t).sin().max(0.0);
+            *sample += 0.25 * voice * syllables;
+        }
+        let mut reused = VoiceEnhancer::with_settings(2, 1.0, VoiceProfile::default());
+        let _ = reused.render(&source, 0, 9_600);
+        let _ = reused.render(&source, 9_600, 9_600);
+        let after_seek = reused.render(&source, 120_000, 9_600);
+        let fresh = VoiceEnhancer::with_settings(2, 1.0, VoiceProfile::default())
+            .render(&source, 120_000, 9_600);
+        assert!(
+            fresh.samples().iter().any(|v| v.abs() > 0.01),
+            "silent render"
+        );
+        assert_eq!(after_seek.samples(), fresh.samples());
+    }
+
     #[test]
     fn leveling_preserves_chunk_boundaries_timing_and_peak_headroom() {
         ffmpeg::init().unwrap();
