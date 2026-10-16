@@ -1,0 +1,99 @@
+name: Verify crash safety
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Tier
+        type: choice
+        options: [fast, full]
+        default: full
+      windows-only:
+        description: Run the retained Windows finalization comparison only
+        type: boolean
+        default: false
+      control-head:
+        description: Exact control proof commit for Windows
+        type: string
+        default: ""
+      candidate-head:
+        description: Exact 2642 proof commit for Windows
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  retention:
+    if: ${{ !inputs.windows-only }}
+    name: Retention ${{ matrix.provider }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - provider: blacksmith
+            runner: blacksmith-6vcpu-macos-15
+            hosted: "0"
+          - provider: videotoolbox
+            runner: macos-15
+            hosted: "1"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      RETENTION_HOSTED: ${{ matrix.hosted }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build and run retained interleaved probes
+        run: python3 scripts/verify/crash-retention.py
+      - name: Upload retention evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crash-retention-${{ matrix.provider }}
+          path: ${{ runner.temp }}/crash-retention
+          if-no-files-found: error
+          retention-days: 14
+  windows-retention:
+    if: ${{ inputs.windows-only }}
+    name: Windows retained finalization 5x
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CRASH_CONTROL_HEAD: ${{ inputs.control-head }}
+      CRASH_CANDIDATE_HEAD: ${{ inputs.candidate-head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: full
+      - name: Install scoped Rust validation tools
+        shell: pwsh
+        run: rustup component add rustfmt clippy
+      - name: Build and run retained interleaved probes
+        shell: pwsh
+        run: python scripts/verify/crash-windows-retention.py
+      - name: Upload retention evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crash-windows-retention
+          path: ${{ runner.temp }}/crash-windows-retention
+          if-no-files-found: error
+          retention-days: 14
