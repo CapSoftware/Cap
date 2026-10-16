@@ -1,0 +1,67 @@
+name: Instant mixer CPU benchmark binaries
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-mixer-cpu.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+jobs:
+  build:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Link native framework
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Build matched CPU probes without running them
+        run: |
+          root="$RUNNER_TEMP/mixer-cpu"
+          mkdir -p "$root"
+          cp crates/recording/src/sources/audio_mixer.rs "$root/candidate-mixer.rs"
+          cp crates/recording/src/output_pipeline/core.rs "$root/candidate-core.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          for arm in main candidate; do
+            if [[ "$arm" == main ]]; then
+              git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > crates/recording/src/sources/audio_mixer.rs
+              git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/output_pipeline/core.rs > crates/recording/src/output_pipeline/core.rs
+            else
+              cp "$root/candidate-mixer.rs" crates/recording/src/sources/audio_mixer.rs
+              cp "$root/candidate-core.rs" crates/recording/src/output_pipeline/core.rs
+            fi
+            python3 scripts/verify/prepare-mixer-cpu-probe.py
+            cargo test -p cap-recording --lib --profile ci-verify --locked --no-run --message-format=json > "$root/$arm-build.jsonl"
+            ARM="$arm" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          root = Path(os.environ["RUNNER_TEMP"]) / "mixer-cpu"
+          arm = os.environ["ARM"]
+          executables = [row["executable"] for line in (root / f"{arm}-build.jsonl").read_text().splitlines() if (row := json.loads(line)).get("executable") and row["target"]["name"] == "cap_recording"]
+          assert len(executables) == 1, executables
+          shutil.copy2(executables[0], root / arm)
+          PY
+            strip -S "$root/$arm"
+            otool -L "$root/$arm" > "$root/$arm-libraries.txt"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mixer-cpu-binaries
+          path: |
+            ${{ runner.temp }}/mixer-cpu/main
+            ${{ runner.temp }}/mixer-cpu/candidate
+            ${{ runner.temp }}/mixer-cpu/*-libraries.txt
+            ${{ runner.temp }}/mixer-cpu/*-build.jsonl
+          retention-days: 7

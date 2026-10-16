@@ -3983,13 +3983,14 @@ impl PreparedAudioSources {
                 {
                     scope.fail_required(format!("Required audio processing failed: {error:#}"));
                 }
+                let cancelled_at = Instant::now();
+                let pause_at_stop = if mixed_audio {
+                    shared_pause.captured_pause_duration(cancelled_at)
+                } else {
+                    shared_pause.total_pause_duration()
+                };
                 let cancellation_target_elapsed = if was_cancelled && !audio_degraded {
-                    Some(
-                        timestamps
-                            .instant()
-                            .elapsed()
-                            .saturating_sub(shared_pause.total_pause_duration()),
-                    )
+                    Some(cancelled_at.saturating_duration_since(timestamps.instant()).saturating_sub(pause_at_stop))
                 } else {
                     None
                 };
@@ -4107,7 +4108,7 @@ impl PreparedAudioSources {
                     }
                 }
 
-                let final_pause_duration = shared_pause.total_pause_duration();
+                let final_pause_duration = if mixed_audio { pause_at_stop } else { shared_pause.total_pause_duration() };
 
                 if let Some(scope) = &required_scope
                     && !mixed_sources_stopped
@@ -9696,6 +9697,74 @@ mod tests {
                         harness.timestamps.instant() + Duration::from_millis(600),
                     )
                     .await;
+                assert_eq!(harness.peaks(0), [960, 5_760]);
+                assert_eq!(harness.peaks(1), [960, 5_760]);
+                assert_eq!(harness.timestamp_generator.total_samples, 14_400);
+                assert_eq!(harness.overlap_dropped_frames(), 0);
+                assert_eq!(harness.total_silence(), Duration::ZERO);
+            }
+        }
+
+        #[tokio::test]
+        async fn mixed_pause_live_inputs_match_backlogged_delivery() {
+            for late_delivery in [false, true] {
+                let mut harness = AudioTimelineHarness::mixed();
+                let mut builder = AudioMixer::builder()
+                    .with_timestamps(harness.timestamps)
+                    .with_master_clock(harness.master_clock.clone());
+                let (output, mut received) = mpsc::channel(64);
+                let mut inputs = Vec::new();
+                for _ in 0..2 {
+                    let (input, receiver) = mpsc::channel(32);
+                    builder.add_source(AudioMixer::INFO, receiver);
+                    inputs.push(input);
+                }
+                let mut mixer = builder.build(output).unwrap();
+                for chunk in 0..25 {
+                    let millis = chunk * 20;
+                    if millis == 100 {
+                        harness.pause_at(100, true);
+                    }
+                    if millis == 300 {
+                        harness.pause_at(300, false);
+                    }
+                    for (channel, input) in inputs.iter_mut().enumerate() {
+                        let peaks = if [20, 200, 320].contains(&millis) {
+                            vec![(0, channel)]
+                        } else {
+                            Vec::new()
+                        };
+                        input
+                            .try_send(mixed_pause_frame(harness.timestamps, millis, 960, &peaks))
+                            .unwrap();
+                    }
+                    if !late_delivery {
+                        mixer
+                            .tick_for_capture_pause(
+                                harness.timestamps.instant() + Duration::from_millis(millis + 20),
+                            )
+                            .unwrap();
+                        while let Ok(Some(frame)) = received.try_next() {
+                            harness
+                                .process_frame_at(
+                                    frame,
+                                    harness.timestamps.instant()
+                                        + Duration::from_millis(millis + 20),
+                                )
+                                .await;
+                        }
+                    }
+                }
+                drop(inputs);
+                mixer.finish_for_capture_pause().unwrap();
+                while let Ok(Some(frame)) = received.try_next() {
+                    harness
+                        .process_frame_at(
+                            frame,
+                            harness.timestamps.instant() + Duration::from_millis(800),
+                        )
+                        .await;
+                }
                 assert_eq!(harness.peaks(0), [960, 5_760]);
                 assert_eq!(harness.peaks(1), [960, 5_760]);
                 assert_eq!(harness.timestamp_generator.total_samples, 14_400);
