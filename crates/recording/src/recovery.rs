@@ -480,8 +480,22 @@ impl RecoveryManager {
                 {
                     continue;
                 }
-                if read_fragment_prefix(&init, &path).is_ok() {
-                    info.fragments.push(path);
+                // A malformed or empty tail has nothing to recover. Any other
+                // read error keeps the fragment listed: staged finalization
+                // refuses to publish a recording with a pending `.tmp`, so
+                // the recording stays retryable instead of losing it.
+                match read_fragment_prefix(&init, &path) {
+                    Ok(_) => info.fragments.push(path),
+                    Err(error)
+                        if !matches!(
+                            error.kind(),
+                            std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof
+                        ) =>
+                    {
+                        warn!(path = %path.display(), %error, "Fragment prefix unreadable; keeping it for a retry");
+                        info.fragments.push(path);
+                    }
+                    Err(_) => {}
                 }
             }
         }
@@ -7170,6 +7184,23 @@ mod timed_fragment_tests {
         let info = RecoveryManager::find_studio_fragments_with_init(directory.path());
         assert_eq!(info.fragments, [source]);
         assert_eq!(recovery_snapshot(directory.path()).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_pending_fragment_stays_listed_for_a_retry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let (source, _) = fixture(directory.path());
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&source).is_ok() {
+            // Permissions do not apply (running as root).
+            return;
+        }
+        let info = RecoveryManager::find_studio_fragments_with_init(directory.path());
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(info.fragments, [source]);
     }
 
     #[test]
