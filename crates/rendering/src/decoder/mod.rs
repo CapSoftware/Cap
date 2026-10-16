@@ -712,24 +712,30 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
+/// Bounds the pts-hole map. Holes are facts about the file, and a pooled
+/// reader parked past a hole never re-vends it, so the map keeps every hole a
+/// realistic recording has and only evicts on pathological inputs.
+const MAX_TRACKED_HOLES: usize = 1 << 14;
+
 /// Records a pts hole discovered from a decode-order vend jump (frames vend
-/// in pts order, so a jump means no samples exist in between). The map stays
-/// bounded by dropping the narrowest hole — wide static-screen holds matter
-/// most.
+/// in pts order, so a jump means no samples exist in between). When the map
+/// is full it drops the hole farthest from the one just recorded: requests
+/// trail the reader, so the newest holes are the ones about to be asked for.
 pub(super) fn record_pts_hole(
     holes: &mut std::collections::BTreeMap<u32, u32>,
     start: u32,
     end: u32,
 ) {
-    const MAX_TRACKED_HOLES: usize = 64;
     holes.insert(start, end);
     if holes.len() > MAX_TRACKED_HOLES
-        && let Some(narrowest) = holes
-            .iter()
-            .min_by_key(|&(&s, &e)| e.saturating_sub(s))
-            .map(|(&s, _)| s)
+        && let (Some(&first), Some(&last)) = (holes.keys().next(), holes.keys().next_back())
     {
-        holes.remove(&narrowest);
+        let farthest = if start.abs_diff(first) >= start.abs_diff(last) {
+            first
+        } else {
+            last
+        };
+        holes.remove(&farthest);
     }
 }
 
@@ -1789,6 +1795,51 @@ pub async fn spawn_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pts_hole_tracking_keeps_the_newest_holes_when_full() {
+        let mut holes = std::collections::BTreeMap::new();
+        let mut frame = 0u32;
+        for i in 0..(MAX_TRACKED_HOLES as u32 + 1000) {
+            let width = if i % 4 == 0 { 3 } else { 2 };
+            record_pts_hole(&mut holes, frame, frame + width);
+            assert_eq!(holes.get(&frame), Some(&(frame + width)));
+            frame += width;
+        }
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert!(
+            holes
+                .keys()
+                .all(|&start| start as usize + 3 * MAX_TRACKED_HOLES >= frame as usize)
+        );
+    }
+
+    #[test]
+    fn pts_hole_tracking_drops_the_farthest_hole_after_a_backward_seek() {
+        let mut holes = std::collections::BTreeMap::new();
+        let last = MAX_TRACKED_HOLES as u32 - 1;
+        for i in 0..=last {
+            record_pts_hole(&mut holes, 1000 + i * 2, 1000 + i * 2 + 2);
+        }
+        record_pts_hole(&mut holes, 10, 40);
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert_eq!(holes.get(&10), Some(&40));
+        assert!(holes.contains_key(&1000));
+        assert!(!holes.contains_key(&(1000 + last * 2)));
+    }
+
+    #[test]
+    fn pts_hole_tracking_keeps_an_old_static_hold_while_later_holes_arrive() {
+        let mut holes = std::collections::BTreeMap::new();
+        record_pts_hole(&mut holes, 1797, 2402);
+        let mut frame = 2402u32;
+        for i in 0..2000u32 {
+            let width = 2 + i % 7;
+            record_pts_hole(&mut holes, frame, frame + width);
+            frame += width;
+        }
+        assert_eq!(holes.get(&1797), Some(&2402));
+    }
 
     #[test]
     fn decoded_frame_storage_identity_matches_clones() {
