@@ -1,0 +1,14 @@
+name: Surface wait native proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    uses: ./.github/workflows/engine-verify-os.yml
+    with:
+      platform: macos
+      runner: macos-15
+      target: aarch64-apple-darwin
+      tier: full
+      suites: export,audio
