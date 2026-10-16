@@ -563,6 +563,7 @@ impl AudioMixer {
                 }
 
                 let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
+                tracing::trace!(target: "winaudio", source = index, raw_ns = raw_timestamp.signed_duration_since_secs(self.timestamps) * 1e9, mapped_ns = remap.master_ns, samples = frame.samples(), now_ns = now.signed_duration_since_secs(self.timestamps) * 1e9, outcome = ?remap.outcome, "mixer_receive");
 
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
@@ -628,6 +629,7 @@ impl AudioMixer {
 
             if self.start_timestamp.is_some() {
                 self.wall_clock_start = Some(now);
+                tracing::trace!(target: "winaudio", start_ns = self.start_timestamp.unwrap().signed_duration_since_secs(self.timestamps) * 1e9, now_ns = now.signed_duration_since_secs(self.timestamps) * 1e9, "mixer_anchor");
             }
         }
 
@@ -637,7 +639,7 @@ impl AudioMixer {
                 .checked_sub(start_timestamp.duration_since(self.timestamps))
             && elapsed_since_start > self.max_buffer_timeout
         {
-            for source in &mut self.sources {
+            for (index, source) in self.sources.iter_mut().enumerate() {
                 if source.buffer_last.is_none() {
                     let rate = source.info.rate();
                     let buffer_timeout = source.buffer_timeout;
@@ -661,6 +663,7 @@ impl AudioMixer {
 
                         let timestamp =
                             start_timestamp + elapsed_since_start.saturating_sub(remaining);
+                        tracing::trace!(target: "winaudio", source = index, timestamp_ns = timestamp.signed_duration_since_secs(self.timestamps) * 1e9, samples = chunk_samples, now_ns = now.signed_duration_since_secs(self.timestamps) * 1e9, "mixer_head_silence");
                         source.buffer_last = Some((timestamp, frame_duration));
                         source.buffer.push_front(AudioFrame::new(frame, timestamp));
 
@@ -710,6 +713,7 @@ impl AudioMixer {
 
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
+                tracing::trace!(target: "winaudio", source = i, timestamp_ns = buffer.timestamp.signed_duration_since_secs(self.timestamps) * 1e9, samples = buffer.inner.samples(), pts = ?buffer.inner.pts(), "mixer_filter_input");
                 let result = self.abuffers[i].source().add(&buffer.inner);
                 if self.required_stop.is_some() {
                     result
@@ -744,6 +748,7 @@ impl AudioMixer {
             let output_timestamp = self.sample_based_output_timestamp(start_timestamp);
 
             let frame_samples = filtered.samples();
+            tracing::trace!(target: "winaudio", timestamp_ns = output_timestamp.signed_duration_since_secs(self.timestamps) * 1e9, samples = frame_samples, samples_out = self.samples_out, now_ns = now.signed_duration_since_secs(self.timestamps) * 1e9, "mixer_output");
             let mut frame = AudioFrame::new(filtered, output_timestamp);
 
             loop {

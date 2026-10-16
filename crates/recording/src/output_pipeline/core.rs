@@ -3912,12 +3912,14 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
             } else {
                 frame.timestamp
             };
+        tracing::trace!(target: "winaudio", anchor = ?ctx.anchor, timestamp_ns = anchor_ts.signed_duration_since_secs(ctx.timestamps) * 1e9, observed_ns = observed_at.saturating_duration_since(ctx.timestamps.instant()).as_nanos() as u64, "audio_anchor");
         let _ = first_tx.send(anchor_ts);
     }
 
     state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
+    tracing::trace!(target: "winaudio", frame = *state.frame_count, timestamp_ns = frame.timestamp.signed_duration_since_secs(ctx.timestamps) * 1e9, samples = frame.inner.samples(), sample_before_ns = sample_based_before.as_nanos() as u64, capture_elapsed_ns = state.gap_tracker.capture_elapsed(frame.timestamp, total_pause_duration, observed_at).map(|v| v.as_nanos() as u64), first_wall_ns = state.gap_tracker.first_frame_wall_clock.map(|v| v.saturating_duration_since(ctx.timestamps.instant()).as_nanos() as u64), observed_ns = observed_at.saturating_duration_since(ctx.timestamps.instant()).as_nanos() as u64, "audio_process");
 
     if let Some(overlap_duration) = state.gap_tracker.detect_overlap(
         frame.timestamp,
@@ -3927,6 +3929,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     ) {
         let trim_samples = duration_to_sample_count(overlap_duration, ctx.sample_rate) as usize;
         let frame_samples = frame.inner.samples();
+        tracing::trace!(target: "winaudio", frame = *state.frame_count, overlap_ns = overlap_duration.as_nanos() as u64, trim_samples, frame_samples, "audio_overlap");
 
         if trim_samples >= frame_samples {
             state
@@ -3970,6 +3973,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         let silence_samples = state.timestamp_generator.advance_by_duration(gap_duration);
 
         if silence_samples > 0 {
+            tracing::trace!(target: "winaudio", frame = *state.frame_count, silence_samples, gap_ns = gap_duration.as_nanos() as u64, "audio_gap");
             if gap_duration >= LONG_SILENCE_LOG_THRESHOLD {
                 // Long gaps are expected for intermittent sources (loopback
                 // system audio while nothing plays); the wall-clock clamp in
@@ -4988,6 +4992,44 @@ mod tests {
                 next,
                 Some(Duration::from_secs(4)),
                 "the timeline keeps flowing after the anomaly"
+            );
+        }
+    }
+
+    #[test]
+    fn winaudio_probe_delayed_first_receive_trims_contiguous_source() {
+        for lost_samples in [251_u64, 279, 855] {
+            let reference = Timestamps::now();
+            let delay = Duration::from_nanos(lost_samples * 1_000_000_000 / 48_000 + 1);
+            let first_wall = reference.instant() + AUDIO_WALL_CLOCK_TOLERANCE + delay;
+            let mut tracker = AudioGapTracker::new(false, reference);
+            tracker.mark_started(Timestamp::Instant(reference.instant()), first_wall);
+            let capture = Duration::from_millis(120);
+            let overlap = tracker
+                .detect_overlap(
+                    Timestamp::Instant(reference.instant() + capture),
+                    capture,
+                    Duration::ZERO,
+                    reference.instant() + capture,
+                )
+                .unwrap();
+            assert_eq!(duration_to_sample_count(overlap, 48_000), lost_samples);
+            let mut capture_anchored = AudioGapTracker::new(false, reference);
+            capture_anchored
+                .mark_started(Timestamp::Instant(reference.instant()), reference.instant());
+            assert!(
+                capture_anchored
+                    .detect_overlap(
+                        Timestamp::Instant(reference.instant() + capture),
+                        capture,
+                        Duration::ZERO,
+                        reference.instant() + capture,
+                    )
+                    .is_none()
+            );
+            eprintln!(
+                "WINAUDIO_PROBE delay_ns={} lost_samples={lost_samples}",
+                delay.as_nanos()
             );
         }
     }

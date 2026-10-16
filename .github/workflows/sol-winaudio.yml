@@ -1,0 +1,79 @@
+name: Windows Instant audio mechanism probe
+
+on:
+  push:
+    branches: [scratch/sol-winaudio]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+
+jobs:
+  probe:
+    name: probe windows-2022 ${{ matrix.copy }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [wa, wb, wc, wd, we, wf]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+      - name: Build
+        shell: bash
+        run: scripts/verify/run.sh fast --suites export --no-run
+      - name: Fresh instrumented Instant fixtures
+        shell: bash
+        env:
+          CAP_VERIFY_TIER: fast
+          CAP_VERIFY_CASE: export/instant*
+          CAP_VERIFY_LOG: winaudio=trace,cap_recording::output_pipeline=debug,cap_recording::sources::audio_mixer=debug
+          CAP_VERIFY_DUMP_AUDIO: "1"
+        run: |
+          set +e
+          PY=$(command -v python3 || command -v python)
+          mkdir -p "$RUNNER_TEMP/winaudio/reports" "$RUNNER_TEMP/winaudio/fixtures"
+          for i in 1 2 3 4 5; do
+            export CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/winaudio/fixtures/fx-$i"
+            export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/winaudio/reports/report-$i"
+            cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-capture \
+              -E 'binary_id(cap-verify::export) and test(=instant_output)' > "$RUNNER_TEMP/winaudio/reports/log-$i.txt" 2>&1
+            echo "iteration $i exit $?"
+            cat "$CAP_VERIFY_REPORT_DIR"/*.jsonl | "$PY" -c '
+          import sys, json
+          for line in sys.stdin:
+              record = json.loads(line)
+              if "case" in record:
+                  print("PROBE", record["outcome"], record["case"], record.get("notes", []))'
+          done
+          true
+      - name: Focused model and scoped compile checks
+        if: matrix.copy == 'wa'
+        shell: bash
+        run: |
+          cargo test --profile ci-verify --locked -p cap-recording --lib winaudio_probe -- --nocapture
+          cargo check --profile ci-verify --locked -p cap-recording -p cap-verify
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: sol-winaudio-reports-${{ matrix.copy }}
+          path: ${{ runner.temp }}/winaudio/reports
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: sol-winaudio-fixtures-${{ matrix.copy }}
+          path: ${{ runner.temp }}/winaudio/fixtures
+          retention-days: 7

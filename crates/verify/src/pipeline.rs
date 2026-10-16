@@ -595,6 +595,7 @@ pub struct Emitted {
 
 pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()> {
     high_resolution_timer();
+    tracing::trace!(target: "winaudio", name = %spec.name, "fixture_begin");
     use cap_recording::{DashSegmentedAudioMuxer, DashSegmentedAudioMuxerConfig};
     crate::media::init();
     if dir.exists() {
@@ -696,6 +697,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                         audio_chunk(&track, t, &stereo_info),
                         Timestamp::Instant(at),
                     );
+                    tracing::trace!(target: "winaudio", source = "system", chunk = k, capture_ns = at.duration_since(base).as_nanos() as u64, sent_ns = base.elapsed().as_nanos() as u64, samples = frame.inner.samples(), "source_chunk");
                     if tx.send(frame).await.is_err() {
                         break;
                     }
@@ -714,6 +716,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                         audio_chunk(&track, t, &stereo_info),
                         Timestamp::Instant(at),
                     );
+                    tracing::trace!(target: "winaudio", source = "system", chunk = k, capture_ns = at.duration_since(base).as_nanos() as u64, sent_ns = base.elapsed().as_nanos() as u64, samples = frame.inner.samples(), "source_chunk");
                     if tx.send(frame).await.is_err() {
                         return tx;
                     }
@@ -748,6 +751,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                 tokio::time::sleep_until(at.into()).await;
                 let frame =
                     AudioFrame::new(audio_chunk(&track, t, &mono_info), Timestamp::Instant(at));
+                tracing::trace!(target: "winaudio", source = "mic", chunk = k, capture_ns = at.duration_since(base).as_nanos() as u64, sent_ns = base.elapsed().as_nanos() as u64, samples = frame.inner.samples(), "source_chunk");
                 if tx.send(frame).await.is_err() {
                     break;
                 }
