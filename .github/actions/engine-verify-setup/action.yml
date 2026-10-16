@@ -125,22 +125,32 @@ runs:
       shell: pwsh
       run: scripts/verify/win-gpu-diag.ps1 -Preload "${{ github.workspace }}\target\native-deps\dxc\dxcompiler.dll"
 
-    - name: WARP from NuGet (Windows)
+    # Debug builds of wgpu (the ci-verify profile keeps debug assertions)
+    # enable the D3D12 debug layer whenever d3d12SDKLayers.dll exists. When
+    # that DLL comes from an unserviced Graphics Tools feature older than the
+    # D3D12 runtime (blacksmith-8vcpu-windows-2025: layers 10.0.26100.1591,
+    # runtime 10.0.26100.33296), D3D12CreateDevice fails with E_INVALIDARG on
+    # every adapter, WARP included, and every case fails "No GPU adapter
+    # found". Hiding the mismatched layer makes D3D12GetDebugInterface report
+    # DXGI_ERROR_SDK_COMPONENT_MISSING, which wgpu treats as "no debug layer".
+    - name: Hide a D3D12 debug layer that does not match the runtime (Windows)
       if: runner.os == 'Windows'
-      continue-on-error: true
       shell: pwsh
       run: |
-        $dir = Join-Path $env:RUNNER_TEMP 'warp-nuget'
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        $zip = Join-Path $dir 'warp.zip'
-        Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP' -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath (Join-Path $dir 'pkg') -Force
-        Get-ChildItem -Recurse -Path (Join-Path $dir 'pkg') -Filter '*.dll' | ForEach-Object { Write-Host "nuget: $($_.FullName.Substring($dir.Length)) $($_.VersionInfo.FileVersion)" }
-        $warp = Get-ChildItem -Recurse -Path (Join-Path $dir 'pkg') -Filter 'd3d10warp.dll' |
-          Where-Object { $_.FullName -match '\\(x64|amd64)\\' } | Select-Object -First 1
-        if (-not $warp) { throw 'no x64 d3d10warp.dll in the package' }
-        scripts/verify/win-gpu-diag.ps1 -Preload $warp.FullName
-        scripts/verify/win-gpu-diag.ps1 -Preload $warp.FullName -DebugLayer
+        $sys = Join-Path $env:WINDIR 'System32'
+        $layers = Join-Path $sys 'd3d12SDKLayers.dll'
+        $core = Join-Path $sys 'D3D12Core.dll'
+        if (-not (Test-Path $layers)) { Write-Host 'no D3D12 debug layer installed'; exit 0 }
+        $lv = (Get-Item $layers).VersionInfo
+        $cv = (Get-Item $core).VersionInfo
+        $lver = "$($lv.FileMajorPart).$($lv.FileMinorPart).$($lv.FileBuildPart).$($lv.FilePrivatePart)"
+        $cver = "$($cv.FileMajorPart).$($cv.FileMinorPart).$($cv.FileBuildPart).$($cv.FilePrivatePart)"
+        Write-Host "D3D12 debug layer $lver, runtime $cver"
+        if ($lver -eq $cver) { exit 0 }
+        takeown /f $layers | Out-Null
+        icacls $layers /grant "*S-1-5-32-544:F" | Out-Null
+        Rename-Item $layers 'd3d12SDKLayers.dll.mismatched'
+        Write-Host "hid the mismatched debug layer"
         scripts/verify/win-gpu-diag.ps1 -DebugLayer
 
     - name: FFmpeg DLLs on PATH (Windows)
