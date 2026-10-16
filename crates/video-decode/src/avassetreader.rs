@@ -300,6 +300,7 @@ impl KeyframeIndex {
             .collect();
         Self {
             keyframes,
+            time_base: ffmpeg::Rational::new(script.time_base.0, script.time_base.1),
             fps,
             duration_secs: script.duration_secs(),
             pixel_format: Some(cv::PixelFormat::_420V),
