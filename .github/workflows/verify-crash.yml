@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   verify:
-    if: inputs.suites != 'payload' && inputs.suites != 'perf-build' && inputs.suites != 'vt-crash'
+    if: inputs.suites != 'payload' && inputs.suites != 'perf-build' && inputs.suites != 'vt-crash' && inputs.suites != 'instant-repeat'
     name: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -148,3 +148,49 @@ jobs:
       target: aarch64-apple-darwin
       tier: full
       suites: crash
+
+  instant-repeat:
+    if: inputs.suites == 'instant-repeat'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: control
+            ref: ci/proof-timedfrag-base
+          - arm: candidate
+            ref: ci/proof-timedfrag
+    env:
+      CARGO_INCREMENTAL: "0"
+      CAP_VERIFY_HOST: blacksmith
+      CAP_VERIFY_TIER: full
+      CAP_VERIFY_CASE: export/instant-gated-mic-only/output/mp4/native
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: full
+      - name: Build focused fixture probe
+        run: cargo test --locked --profile ci-verify -p cap-verify --test export --no-run
+      - name: Three fresh gate phase samples
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/instant-repeat"
+          git rev-parse HEAD > "$RUNNER_TEMP/instant-repeat/head.txt"
+          result=0
+          for repeat in 1 2 3; do
+            mkdir -p "$RUNNER_TEMP/instant-repeat/$repeat"
+            CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/instant-fixtures-$repeat" CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/instant-repeat/$repeat" cargo test --locked --profile ci-verify -p cap-verify --test export instant_output -- --nocapture --test-threads=1 > "$RUNNER_TEMP/instant-repeat/$repeat/run.log" 2>&1 || result=1
+          done
+          exit "$result"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: instant-phase-${{ matrix.arm }}
+          path: ${{ runner.temp }}/instant-repeat
+          retention-days: 7

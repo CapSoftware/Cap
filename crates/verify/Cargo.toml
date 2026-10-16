@@ -39,4 +39,5 @@ tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "0.2"
 scap-targets = { path = "../scap-targets" }
