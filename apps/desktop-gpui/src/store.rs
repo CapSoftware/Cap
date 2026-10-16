@@ -98,6 +98,28 @@ pub struct PersistedState {
     /// also `localStorage` over there.
     #[serde(default)]
     pub screenshot_crop_snap_to_ratio: Option<bool>,
+    #[serde(default)]
+    pub editor_window: Option<EditorWindowMemory>,
+}
+
+/// Where the editor window last sat on each display, keyed by display UUID.
+/// Offsets are measured from the display's top-left corner, so they survive
+/// the display being moved around in the arrangement.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditorWindowMemory {
+    #[serde(default)]
+    pub last_display: Option<String>,
+    #[serde(default)]
+    pub displays: Vec<RememberedEditorFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RememberedEditorFrame {
+    pub display: String,
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// `export_settings` in the Tauri editor (`ExportPage.tsx` localStorage).
@@ -276,9 +298,16 @@ pub fn load() -> PersistedState {
         .unwrap_or_default()
 }
 
+static UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read-modify-write on the caller's thread; callers hand this to the
-/// background executor.
+/// background executor. Writers are serialized and the file is replaced by
+/// rename, because [`load`] treats a half-written file as empty and the next
+/// update would then persist defaults over every other preference.
 pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
+    let _guard = UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = state_path();
     let mut state = load();
     mutate(&mut state);
@@ -287,7 +316,10 @@ pub fn update(mutate: impl FnOnce(&mut PersistedState)) {
     }
     match serde_json::to_vec_pretty(&state) {
         Ok(bytes) => {
-            if let Err(error) = std::fs::write(&path, bytes) {
+            let temp = path.with_extension("json.tmp");
+            if let Err(error) =
+                std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, &path))
+            {
                 tracing::warn!("persisting gpui state: {error}");
             }
         }
@@ -626,9 +658,32 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show in overlay";
+        ShowOverlay = "showOverlay", "Show Cap";
+        DoNothing = "doNothing", "Do nothing";
     }
     default = OpenEditor
+}
+
+settings_enum! {
+    /// What a finished screenshot does next. GPUI-only: the Tauri app always
+    /// opened the editor and never reads this key.
+    PostScreenshotBehaviour {
+        OpenEditor = "openEditor", "Open editor";
+        Copy = "copy", "Copy to clipboard";
+        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
+        Save = "save", "Do nothing";
+    }
+    default = OpenEditor
+}
+
+impl PostScreenshotBehaviour {
+    pub fn copies(self) -> bool {
+        matches!(self, Self::Copy | Self::CopyAndOpenEditor)
+    }
+
+    pub fn opens_editor(self) -> bool {
+        matches!(self, Self::OpenEditor | Self::CopyAndOpenEditor)
+    }
 }
 
 settings_enum! {
@@ -813,6 +868,7 @@ pub struct GeneralSettings {
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
+    pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -1034,6 +1090,19 @@ pub fn set_recording_camera_id(id: Option<&cap_recording::feeds::camera::DeviceO
     set_store_setting(RECORDING_SETTINGS, "cameraId", value)
 }
 
+/// `RecordingSettingsStore.systemAudio`, which the Tauri app restored on
+/// launch. Anything but a boolean reads as off.
+pub fn recording_system_audio() -> bool {
+    store_section(RECORDING_SETTINGS)
+        .get("systemAudio")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+pub fn set_recording_system_audio(enabled: bool) -> bool {
+    set_store_setting(RECORDING_SETTINGS, "systemAudio", Value::Bool(enabled))
+}
+
 pub fn set_recording_microphone_name(name: Option<&str>) -> bool {
     set_store_setting(
         RECORDING_SETTINGS,
@@ -1131,6 +1200,7 @@ impl GeneralSettings {
                 "mainWindowRecordingStartBehaviour",
             ),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
+            post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
@@ -2002,6 +2072,27 @@ mod tests {
         expected[RECORDING_SETTINGS]["cameraId"] = Value::Null;
         expected[RECORDING_SETTINGS]["micName"] = Value::Null;
         assert_eq!(store.read(), expected);
+    }
+
+    #[test]
+    fn system_audio_restores_and_saves_without_touching_devices() {
+        let store = TempStore::new(
+            "recording-inputs-system-audio",
+            Some(r#"{"recording_settings":{"systemAudio":true,"micName":"Desk"}}"#),
+        );
+        assert!(recording_system_audio());
+
+        assert!(set_recording_system_audio(false));
+        assert!(!recording_system_audio());
+        assert_eq!(store.read()[RECORDING_SETTINGS]["systemAudio"], false);
+        assert_eq!(store.read()[RECORDING_SETTINGS]["micName"], "Desk");
+        drop(store);
+
+        let _store = TempStore::new(
+            "recording-inputs-system-audio-malformed",
+            Some(r#"{"recording_settings":{"systemAudio":"yes"}}"#),
+        );
+        assert!(!recording_system_audio());
     }
 
     #[test]
