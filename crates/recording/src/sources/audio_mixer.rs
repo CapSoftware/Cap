@@ -1132,6 +1132,20 @@ mod test {
     }
 
     #[test]
+    fn pcm_delayed_first_delivery_retains_captured_samples() {
+        let mut probe = PcmProbe::new(2);
+        for chunk in 0..50 {
+            probe.send(0, chunk * 20, 960, None);
+            probe.tick(chunk * 20 + 20);
+        }
+        probe.send(1, 200, 48_000, Some(2_400));
+        probe.send(0, 1_000, 9_600, None);
+        probe.tick(1_200);
+        eprintln!("DELAYED peaks={:?}", probe.peaks(1));
+        assert_eq!(probe.peaks(1).len(), 1);
+    }
+
+    #[test]
     fn pcm_sub_timeout_gap_is_not_smoothed_away() {
         let mut probe = PcmProbe::new(2);
         probe.send(1, 0, 4_800, None);

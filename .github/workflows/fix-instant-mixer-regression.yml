@@ -70,6 +70,10 @@ jobs:
             status=0
             cargo test -p cap-recording --lib --profile ci-verify --locked pcm_sparse_system_and_pause_resume_preserve_later_gaps -- --nocapture 2>&1 | tee "$root/$arm.log" || status=$?
             if [[ "$arm" == main ]]; then test "$status" = 101; else test "$status" = 0; fi
+            status=0
+            cargo test -p cap-recording --lib --profile ci-verify --locked pcm_delayed_first_delivery_retains_captured_samples -- --nocapture 2>&1 | tee "$root/$arm-delayed.log" || status=$?
+            echo "DELAYED_ARM=$arm EXIT=$status"
+            test "$status" = 0
             cargo run -p cap-verify --example mixer-pcm-identity --profile ci-verify --locked -- "$root/$arm-recordings" > "$root/$arm-recordings.log" 2>&1
           done
           python3 - <<'PYCODE'
