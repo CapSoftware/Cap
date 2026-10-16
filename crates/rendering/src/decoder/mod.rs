@@ -849,10 +849,10 @@ impl AsyncVideoDecoderHandle {
                     Err(_) => Ok(None),
                 };
             }
-            if let Ok(Some(frame)) = self
+            let primary = self
                 .request_frame(time, timeout_ms, max_fallback_distance, deadline)
-                .await
-            {
+                .await;
+            if let Ok(Some(frame)) = primary {
                 return Ok(Some(frame));
             }
             let result = fallback
@@ -884,7 +884,7 @@ impl AsyncVideoDecoderHandle {
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Software video decoder fallback failed");
-                    Ok(None)
+                    primary
                 }
             };
         }
