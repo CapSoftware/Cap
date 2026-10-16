@@ -1196,6 +1196,8 @@ struct CaptureClockDrift {
     window_start: Option<Duration>,
     window_min_lag: Option<(i128, Duration)>,
     previous_window: Option<(i128, Duration)>,
+    measured_change_ns: i128,
+    measured_elapsed_ns: i128,
     pending_ns: Option<i128>,
     engaged: bool,
     target_ns: i128,
@@ -1242,11 +1244,22 @@ impl CaptureClockDrift {
         if let Some((previous_min, previous_sampled_at)) = previous {
             let step = window_min - previous_min;
             let elapsed_ns = sampled_at.abs_diff(previous_sampled_at).as_nanos() as i128;
-            if step.abs() > elapsed_ns / CLOCK_DRIFT_MAX_RATE_DIVISOR + CLOCK_DRIFT_JITTER_NS {
-                self.reference_lag_ns = Some(reference + step);
+            let max_drift_ns = elapsed_ns / CLOCK_DRIFT_MAX_RATE_DIVISOR;
+            if step.abs() > max_drift_ns + CLOCK_DRIFT_JITTER_NS {
+                // The step also holds the clock's drift since the previous
+                // sample; keep that part, at the rate measured so far.
+                let drift_ns = if self.measured_elapsed_ns > 0 {
+                    (self.measured_change_ns * elapsed_ns / self.measured_elapsed_ns)
+                        .clamp(-max_drift_ns, max_drift_ns)
+                } else {
+                    0
+                };
+                self.reference_lag_ns = Some(reference + step - drift_ns);
                 self.pending_ns = None;
                 return;
             }
+            self.measured_change_ns += step;
+            self.measured_elapsed_ns += elapsed_ns;
         }
         let residual = window_min - reference - self.target_ns;
         if self.engaged {
@@ -5360,15 +5373,14 @@ mod tests {
         // over 300 ms late every 97 s. Returns the frames and the host time
         // each was captured at.
         fn hour_of_frames(rate: f64) -> (Vec<Frame>, Vec<Duration>) {
-            hour_of_frames_with_delivery_step(rate, 0..0, Duration::ZERO)
+            hour_of_frames_with_delivery(rate, |_| Duration::ZERO)
         }
 
-        // As `hour_of_frames`, with every frame in `stepped` handed over
-        // `extra` later (the source's delivery delay changing, not its clock).
-        fn hour_of_frames_with_delivery_step(
+        // As `hour_of_frames`, with frame `i` handed over `extra(i)` later
+        // (the source's delivery delay changing, not its clock).
+        fn hour_of_frames_with_delivery(
             rate: f64,
-            stepped: std::ops::Range<u64>,
-            extra: Duration,
+            extra: impl Fn(u64) -> Duration,
         ) -> (Vec<Frame>, Vec<Duration>) {
             let mut rng = 0x0d71_f700_u64;
             let mut free_at = Duration::ZERO;
@@ -5384,11 +5396,7 @@ mod tests {
                     } else {
                         Duration::from_micros(10_000 + (rng >> 33) % 5_000)
                     };
-                    let delivery = if stepped.contains(&i) {
-                        extra
-                    } else {
-                        Duration::ZERO
-                    };
+                    let delivery = extra(i);
                     let handed_over = t + late + delivery;
                     let waited = handed_over >= free_at;
                     let wall = handed_over.max(free_at);
@@ -5445,8 +5453,13 @@ mod tests {
         fn delivery_delay_step_on_the_host_clock_is_not_drift() {
             // From minute 10 to minute 12 every frame is handed over 200 ms
             // later, then delivery recovers.
-            let (frames, _) =
-                hour_of_frames_with_delivery_step(0.0, 18_000..21_600, Duration::from_millis(200));
+            let (frames, _) = hour_of_frames_with_delivery(0.0, |i| {
+                if (18_000..21_600).contains(&i) {
+                    Duration::from_millis(200)
+                } else {
+                    Duration::ZERO
+                }
+            });
             let (output, tracker) = run(&frames);
             assert_on_capture_time(&frames, &output);
             assert!(!tracker.clock_drift.engaged);
@@ -5456,19 +5469,49 @@ mod tests {
         #[test]
         fn drift_with_a_delivery_delay_step_stays_on_the_host_timeline() {
             for rate in [-0.01, 0.01] {
-                let (frames, host) = hour_of_frames_with_delivery_step(
-                    rate,
-                    36_000..54_000,
-                    Duration::from_millis(200),
-                );
+                let (frames, host) = hour_of_frames_with_delivery(rate, |i| {
+                    if (36_000..54_000).contains(&i) {
+                        Duration::from_millis(200)
+                    } else {
+                        Duration::ZERO
+                    }
+                });
                 let (output, _) = run(&frames);
                 let worst = worst_error_ms(&output, &host);
                 println!("clock rate {rate:+} with a delivery step: worst error {worst:.1} ms");
                 assert!(
-                    worst <= 60.0,
+                    worst <= 50.0,
                     "rate {rate}: {worst:.1} ms off the host timeline"
                 );
             }
+        }
+
+        #[test]
+        fn repeated_delivery_changes_keep_the_clock_drift() {
+            // Delivery is 200 ms slower for 2 minutes out of every 4, all hour.
+            let toggling = |i: u64| {
+                if (i / 3600) % 2 == 1 {
+                    Duration::from_millis(200)
+                } else {
+                    Duration::ZERO
+                }
+            };
+            for (rate, limit_ms) in [(-0.01, 50.0), (-0.001, 30.0), (0.001, 30.0), (0.01, 50.0)] {
+                let (frames, host) = hour_of_frames_with_delivery(rate, toggling);
+                let (output, _) = run(&frames);
+                let worst = worst_error_ms(&output, &host);
+                println!(
+                    "clock rate {rate:+} with repeated delivery changes: worst error {worst:.1} ms"
+                );
+                assert!(
+                    worst <= limit_ms,
+                    "rate {rate}: {worst:.1} ms off the host timeline"
+                );
+            }
+            let (frames, _) = hour_of_frames_with_delivery(0.0, toggling);
+            let (output, tracker) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+            assert!(!tracker.clock_drift.engaged);
         }
 
         #[test]
