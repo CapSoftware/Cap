@@ -1,0 +1,77 @@
+name: Sol Instant queued-start investigation
+
+on:
+  push:
+    branches: [scratch/sol-instant-system-audio-startup]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+
+jobs:
+  probe:
+    name: synthetic macOS ${{ matrix.copy }}
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [queued]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Link native framework for ci-verify binaries
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Format
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all --check
+      - name: Check touched crates
+        run: cargo check -p cap-recording -p cap-verify --profile ci-verify --locked
+      - name: Build
+        run: scripts/verify/run.sh fast --suites export --no-run
+      - name: Two controlled queued-start generations
+        shell: bash
+        env:
+          CAP_VERIFY_TIER: fast
+          CAP_VERIFY_LOG: cap_instant_probe=debug,cap_recording::output_pipeline=debug
+          CAP_VERIFY_HOST: blacksmith
+          CAP_VERIFY_INSTANT_DELAY_MIXER: "1"
+        run: |
+          set -u
+          set +e
+          mkdir -p "$RUNNER_TEMP/probe/reports"
+          for i in $(seq 1 2); do
+            variants="instant"
+            for v in $variants; do
+              export CAP_VERIFY_CASE="export/$v/output/mp4/native"
+              export CAP_VERIFY_FIXTURE_DIR="$RUNNER_TEMP/probe/fixtures/fx-$i-$v"
+              export CAP_VERIFY_REPORT_DIR="$RUNNER_TEMP/probe/reports/report-$i-$v"
+              log="$RUNNER_TEMP/probe/reports/log-$i-$v.txt"
+              cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test export --no-fail-fast --no-capture \
+                -E 'binary_id(cap-verify::export) and test(=instant_output)' > "$log" 2>&1
+              code=$?
+              echo "PROBE generation=$i variant=$v exit=$code"
+              grep -E 'A/V offset|overlapping audio frame|stage=startup_silence|stage=start ' "$log" || true
+            done
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: sol-instant-system-audio-${{ matrix.copy }}
+          path: ${{ runner.temp }}/probe/reports
+          retention-days: 7

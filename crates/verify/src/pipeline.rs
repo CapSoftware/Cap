@@ -774,6 +774,9 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
         builder = builder
             .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(mono_info, rx));
     }
+    if std::env::var_os("CAP_VERIFY_INSTANT_DELAY_MIXER").is_some() {
+        tokio::time::sleep_until((base + Duration::from_millis(300)).into()).await;
+    }
     let audio_pipeline = if has_audio {
         Some(
             builder
