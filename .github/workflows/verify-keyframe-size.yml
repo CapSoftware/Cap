@@ -1,0 +1,30 @@
+name: Verify keyframe file sizes
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  size:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: full
+      - name: Compare identical encoder inputs
+        run: python3 scripts/verify/keyframe-size.py
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: keyframe-size
+          path: ${{ runner.temp }}/keyframe-size
+          if-no-files-found: error
+          retention-days: 14
