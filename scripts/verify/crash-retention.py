@@ -16,6 +16,9 @@ branches = {
 }
 if hosted:
     branches = {"control": branches["control"]}
+runtime_frameworks = Path(os.environ["RUNNER_TEMP"]) / "crash-retention-bin/Frameworks"
+runtime_frameworks.parent.mkdir(parents=True, exist_ok=True)
+runtime_frameworks.symlink_to(root / "target/Frameworks", target_is_directory=True)
 binaries = {}
 heads = {}
 for arm, branch in branches.items():
