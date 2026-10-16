@@ -3,6 +3,8 @@ pub mod avassetreader;
 pub mod ffmpeg;
 #[cfg(target_os = "windows")]
 pub mod media_foundation;
+#[cfg(feature = "scripted")]
+pub mod scripted;
 
 #[cfg(target_os = "macos")]
 pub use avassetreader::{AVAssetReaderDecoder, KeyframeIndex};
