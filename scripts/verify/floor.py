@@ -75,7 +75,8 @@ def check(config, matrix, tier, reports):
         tests = junit_tests(dirs)
         for name in [n for n in entry["suites"].split(",") if n]:
             suite = suites[name]
-            floor = suite.get("cases", {}).get(tier, {}).get(platform)
+            floors = suite.get("cases", {}).get(tier, {})
+            floor = floors.get(platform, floors.get(entry.get("os", platform)))
             if floor is not None:
                 prefix = suite["cases"]["prefix"]
                 ran = sum(1 for i in ids if i.startswith(prefix))

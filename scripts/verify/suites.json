@@ -307,5 +307,34 @@
 			"fast": 8,
 			"full": 12
 		}
+	},
+	"extra_runners": {
+		"macos-vt": {
+			"_doc": "macOS MP4 exports on the VideoToolbox hardware H.264 encoder. Blacksmith macOS VMs have none: Cap opens h264_videotoolbox with allow_sw=0 for exports, which fails there (\"Try -allow_sw 1\", probe run 38853844860), so Cap falls back to libx264, a path real Macs only take when the hardware encoder is busy or over capacity. The suites that encode (export, audio) run again on hosted macOS when a change reaches encoding (encoders, export, the renderer's output and RGBA to NV12 conversion, media and frame conversion) or the suite itself, and in every full run (nightly, dispatch).",
+			"os": "macos",
+			"runner": "macos-15",
+			"target": "aarch64-apple-darwin",
+			"shards": {
+				"fast": 1,
+				"full": 1
+			},
+			"suites": ["export", "audio"],
+			"paths": [
+				"crates/enc-ffmpeg/**",
+				"crates/enc-avfoundation/**",
+				"crates/export/**",
+				"crates/rendering/src/lib.rs",
+				"crates/rendering/src/frame_pipeline.rs",
+				"crates/rendering/src/shaders/**",
+				"crates/media/**",
+				"crates/frame-converter/**",
+				"crates/gpu-converters/**",
+				"crates/verify/**",
+				"scripts/verify/**",
+				".github/workflows/engine-verify*.yml",
+				".github/actions/engine-verify-setup/**",
+				"Cargo.lock"
+			]
+		}
 	}
 }
