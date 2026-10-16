@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get install -y -qq ffmpeg exfatprogs
+            sudo apt-get install -y -qq ffmpeg exfatprogs exfat-fuse
           elif ! command -v ffmpeg >/dev/null; then
             brew install ffmpeg
           fi
@@ -82,7 +82,9 @@ jobs:
           mkdir -p "$volume"
           truncate -s 64M "$image"
           mkfs.exfat "$image"
-          sudo mount -o "loop,uid=$(id -u),gid=$(id -g)" "$image" "$volume"
+          if ! sudo mount -t exfat -o "loop,uid=$(id -u),gid=$(id -g)" "$image" "$volume"; then
+            sudo mount.exfat-fuse -o "uid=$(id -u),gid=$(id -g)" "$image" "$volume"
+          fi
           trap 'sudo umount "$volume"' EXIT
           printf source > "$volume/link-source"
           if ln "$volume/link-source" "$volume/link-destination"; then
