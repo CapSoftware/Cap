@@ -1,5 +1,8 @@
 name: Instant main tail control
 on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-tail-control.yml]
   workflow_dispatch:
 permissions:
   contents: read
