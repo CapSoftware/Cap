@@ -50,7 +50,7 @@ jobs:
           start = candidate.index("    struct PcmProbe {")
           end = candidate.index("    #[tokio::test]\n    async fn mix_sources()", start)
           tests = candidate[start:end]
-          for name in ["pcm_first_input_after_grace_drops_and_counts_only_committed_samples", "pcm_watermark_limits_commitment_to_the_shortest_input"]:
+          for name in ["pcm_first_input_after_grace_drops_and_counts_only_committed_samples", "pcm_watermark_limits_commitment_to_the_shortest_input", "pcm_watermark_splits_do_not_accumulate_timestamp_rounding"]:
               begin = tests.index("    #[test]\n    fn " + name)
               finish = tests.index("    #[test]", begin + 1)
               tests = tests[:begin] + tests[finish:]
