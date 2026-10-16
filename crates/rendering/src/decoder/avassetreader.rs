@@ -600,6 +600,10 @@ impl AVAssetReaderDecoder {
         tokio_handle: tokio::runtime::Handle,
     ) {
         let dimensions = (|| {
+            #[cfg(test)]
+            if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
+                return Ok((width, height));
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
