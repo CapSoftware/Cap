@@ -13,6 +13,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
+use crate::video::keyframe_cadence::KeyframeCadence;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
 use std::sync::Arc;
@@ -236,7 +237,7 @@ impl H264EncoderBuilder {
                             );
                         }
                     }
-                    return Ok(encoder);
+                    return Ok(encoder.with_recording_keyframes(self.is_export));
                 }
                 Err(err) => {
                     debug!("Encoder {} init failed: {:?}", codec_name, err);
@@ -298,6 +299,7 @@ impl H264EncoderBuilder {
             input_width,
             input_height,
             converted_frame_pool,
+            keyframes: None,
             #[cfg(target_os = "macos")]
             videotoolbox_hw: None,
         })
@@ -421,6 +423,7 @@ impl H264EncoderBuilder {
             "Selected hardware H264 encoder with zero-copy VideoToolbox input"
         );
 
+        let is_export = self.is_export;
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
             encoder,
@@ -432,8 +435,10 @@ impl H264EncoderBuilder {
             input_width: input_config.width,
             input_height: input_config.height,
             converted_frame_pool: None,
+            keyframes: None,
             videotoolbox_hw: Some(Arc::new(hw_frames)),
-        })
+        }
+        .with_recording_keyframes(is_export))
     }
 
     pub fn build_standalone(self) -> Result<H264PacketEncoder, H264EncoderError> {
@@ -513,7 +518,7 @@ impl H264EncoderBuilder {
                         fps = fps,
                         "Selected standalone H264 encoder"
                     );
-                    return Ok(encoder);
+                    return Ok(encoder.with_recording_keyframes(self.is_export));
                 }
                 Err(err) => {
                     debug!("Standalone encoder {} init failed: {:?}", codec_name, err);
@@ -849,6 +854,7 @@ pub struct H264Encoder {
     input_width: u32,
     input_height: u32,
     converted_frame_pool: Option<frame::Video>,
+    keyframes: Option<KeyframeCadence>,
     #[cfg(target_os = "macos")]
     videotoolbox_hw: Option<Arc<VideoToolboxHwFrames>>,
 }
@@ -873,6 +879,21 @@ pub enum QueueFrameError {
 
 impl H264Encoder {
     const TIME_BASE: i32 = 90000;
+
+    /// Recording encoders force a keyframe every
+    /// [`DEFAULT_KEYFRAME_INTERVAL_SECS`] of capture time (see
+    /// [`KeyframeCadence`]); exports keep the encoder's own cadence.
+    fn with_recording_keyframes(mut self, is_export: bool) -> Self {
+        if !is_export {
+            let gop_size = unsafe { (*self.encoder.as_ptr()).gop_size };
+            self.keyframes = Some(KeyframeCadence::new(
+                Duration::from_secs(u64::from(DEFAULT_KEYFRAME_INTERVAL_SECS)),
+                self.encoder.time_base(),
+                gop_size,
+            ));
+        }
+        self
+    }
 
     pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
         H264EncoderBuilder::new(input_config)
@@ -938,10 +959,13 @@ impl H264Encoder {
                 .run(&frame, converted)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            converted
         } else {
-            &frame
+            &mut frame
         };
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send);
+        }
 
         self.base
             .send_frame(frame_to_send, output, &mut self.encoder)
@@ -968,10 +992,13 @@ impl H264Encoder {
                 .run(frame, converted)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
-            converted as &frame::Video
+            converted
         } else {
-            frame as &frame::Video
+            frame
         };
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(frame_to_send);
+        }
 
         self.base
             .send_frame(frame_to_send, output, &mut self.encoder)
@@ -998,6 +1025,9 @@ impl H264Encoder {
 
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
+        if let Some(keyframes) = &mut self.keyframes {
+            keyframes.apply(&mut frame);
+        }
 
         self.base
             .send_frame(&frame, output, &mut self.encoder)
@@ -1282,6 +1312,7 @@ fn get_codec_and_options(
                     options.set("rc", "vbr");
                     options.set("spatial-aq", "1");
                     options.set("temporal-aq", "1");
+                    options.set("forced-idr", "1");
                 }
                 options.set("g", &keyframe_interval_str);
             }
@@ -1293,6 +1324,7 @@ fn get_codec_and_options(
                 } else {
                     options.set("preset", "faster");
                     options.set("look_ahead", "1");
+                    options.set("forced_idr", "1");
                 }
                 options.set("g", &keyframe_interval_str);
             }
