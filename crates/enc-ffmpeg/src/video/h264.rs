@@ -863,8 +863,17 @@ impl H264Encoder {
                 self.encoder.time_base(),
                 gop_size,
             ));
+            self.base.record_packet_keys();
         }
         self
+    }
+
+    fn observe_packets(&mut self) {
+        if let Some(keyframes) = &mut self.keyframes {
+            for (pts, is_key) in self.base.take_packet_keys() {
+                keyframes.observe(pts, is_key);
+            }
+        }
     }
 
     pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
@@ -923,6 +932,7 @@ impl H264Encoder {
     ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
+        let requested = frame.kind() == ffmpeg::picture::Type::I;
 
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
@@ -935,13 +945,16 @@ impl H264Encoder {
         } else {
             &mut frame
         };
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send);
+        match &mut self.keyframes {
+            Some(keyframes) => keyframes.send(frame_to_send, requested, |frame| {
+                self.base.send_frame(frame, output, &mut self.encoder)
+            }),
+            None => self
+                .base
+                .send_frame(frame_to_send, output, &mut self.encoder),
         }
-
-        self.base
-            .send_frame(frame_to_send, output, &mut self.encoder)
-            .map_err(QueueFrameError::Encode)?;
+        .map_err(QueueFrameError::Encode)?;
+        self.observe_packets();
 
         Ok(())
     }
@@ -954,6 +967,7 @@ impl H264Encoder {
         output: &mut format::context::Output,
     ) -> Result<(), QueueFrameError> {
         self.base.update_pts(frame, timestamp, &mut self.encoder);
+        let requested = frame.kind() == ffmpeg::picture::Type::I;
 
         let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
@@ -968,13 +982,16 @@ impl H264Encoder {
         } else {
             frame
         };
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(frame_to_send);
+        match &mut self.keyframes {
+            Some(keyframes) => keyframes.send(frame_to_send, requested, |frame| {
+                self.base.send_frame(frame, output, &mut self.encoder)
+            }),
+            None => self
+                .base
+                .send_frame(frame_to_send, output, &mut self.encoder),
         }
-
-        self.base
-            .send_frame(frame_to_send, output, &mut self.encoder)
-            .map_err(QueueFrameError::Encode)?;
+        .map_err(QueueFrameError::Encode)?;
+        self.observe_packets();
 
         Ok(())
     }
@@ -997,13 +1014,16 @@ impl H264Encoder {
 
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
-        if let Some(keyframes) = &mut self.keyframes {
-            keyframes.apply(&mut frame);
-        }
+        let requested = frame.kind() == ffmpeg::picture::Type::I;
 
-        self.base
-            .send_frame(&frame, output, &mut self.encoder)
-            .map_err(QueueFrameError::Encode)?;
+        match &mut self.keyframes {
+            Some(keyframes) => keyframes.send(&mut frame, requested, |frame| {
+                self.base.send_frame(frame, output, &mut self.encoder)
+            }),
+            None => self.base.send_frame(&frame, output, &mut self.encoder),
+        }
+        .map_err(QueueFrameError::Encode)?;
+        self.observe_packets();
 
         Ok(())
     }
