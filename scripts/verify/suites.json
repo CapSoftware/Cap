@@ -131,9 +131,9 @@
 			"cases": {
 				"prefix": "crash/",
 				"fast": {
-					"linux": 8,
-					"macos": 18,
-					"windows": 8
+					"linux": 7,
+					"macos": 16,
+					"windows": 7
 				},
 				"full": {
 					"linux": 9,

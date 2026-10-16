@@ -34,11 +34,9 @@ def platform_reports(reports, platform, tier):
 def case_ids(dirs):
     ids = set()
     for d in dirs:
+        # Retry and flaky-rerun records count too: a timeout can stop a test
+        # before its later cases write, and its retry then runs them.
         for path in glob.glob(os.path.join(d, "**", "*.jsonl"), recursive=True):
-            rel = os.path.relpath(path, d).replace(os.sep, "/")
-            # Retry and flaky-rerun records repeat cases of the main pass.
-            if rel.startswith("retry/") or ".rerun" in rel:
-                continue
             with open(path, encoding="utf-8") as f:
                 for line in f:
                     try:
