@@ -1,0 +1,92 @@
+name: Instant mixer interleaved performance proof
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer]
+    paths: [.github/workflows/fix-instant-mixer-perf.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Link native framework
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+      - name: Build both product versions
+        run: |
+          root="$RUNNER_TEMP/mixer-perf"
+          mkdir -p "$root"
+          cp crates/recording/src/sources/audio_mixer.rs "$root/candidate-mixer.rs"
+          cp crates/recording/src/output_pipeline/core.rs "$root/candidate-core.rs"
+          git fetch origin 94923f8918b064f8c8714d963f17833289793dc6 --depth=1
+          for arm in main candidate; do
+            if [[ "$arm" == main ]]; then
+              git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/sources/audio_mixer.rs > crates/recording/src/sources/audio_mixer.rs
+              git show 94923f8918b064f8c8714d963f17833289793dc6:crates/recording/src/output_pipeline/core.rs > crates/recording/src/output_pipeline/core.rs
+            else
+              cp "$root/candidate-mixer.rs" crates/recording/src/sources/audio_mixer.rs
+              cp "$root/candidate-core.rs" crates/recording/src/output_pipeline/core.rs
+            fi
+            cargo test --locked -p cap-verify --test export --test seek --profile ci-verify --no-run --message-format=json > "$root/$arm-build.jsonl"
+            PERF_ARM="$arm" python3 - <<'PYCODE'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          root = Path(os.environ["RUNNER_TEMP"]) / "mixer-perf"
+          arm = os.environ["PERF_ARM"]
+          binaries = {}
+          for line in (root / f"{arm}-build.jsonl").read_text().splitlines():
+              row = json.loads(line)
+              if row.get("executable") and row["target"]["name"] in ["export", "seek"]:
+                  source = Path(row["executable"])
+                  destination = source.with_name(f"perf-{arm}-{row['target']['name']}")
+                  shutil.copy2(source, destination)
+                  binaries[row["target"]["name"]] = str(destination)
+          assert binaries.keys() == {"export", "seek"}, binaries
+          (root / f"{arm}-binaries.json").write_text(json.dumps(binaries))
+          PYCODE
+          done
+      - name: Generate common fresh input fixtures
+        env:
+          CAP_VERIFY_FIXTURE_DIR: ${{ runner.temp }}/mixer-perf-fixtures
+        run: scripts/verify/run.sh full --suites export,seek --prepare-fixtures
+      - name: Eight interleaved pairs
+        env:
+          CAP_VERIFY_FIXTURE_DIR: ${{ runner.temp }}/mixer-perf-fixtures
+        run: python3 scripts/verify/compare-mixer-perf.py "$RUNNER_TEMP/mixer-perf"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-perf
+          path: |
+            ${{ runner.temp }}/mixer-perf/*summary.json
+            ${{ runner.temp }}/mixer-perf/results.jsonl
+            ${{ runner.temp }}/mixer-perf/*/test.log
+            ${{ runner.temp }}/mixer-perf/*/*.jsonl
+          retention-days: 7
