@@ -1,0 +1,42 @@
+name: Sol Instant mixer mechanism
+
+on:
+  push:
+    branches: [scratch/sol-instant-system-audio-mechanism]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  mechanism:
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Check touched crates
+        run: cargo check -p cap-recording -p cap-verify --profile ci-verify --locked
+      - name: Controlled arrival order with identical capture timestamps
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/mechanism"
+          set -o pipefail
+          cargo test -p cap-recording --lib --profile ci-verify --locked diagnostic_instant_source_alignment -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mechanism/test.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: sol-instant-system-audio-mechanism
+          path: ${{ runner.temp }}/mechanism
+          retention-days: 7

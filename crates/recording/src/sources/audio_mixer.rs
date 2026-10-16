@@ -976,6 +976,66 @@ mod test {
     const SAMPLES_SECOND: usize = SOURCE_INFO.rate() as usize;
 
     #[tokio::test]
+    async fn diagnostic_instant_source_alignment() {
+        fn impulse(samples: usize, at: usize, channel: usize) -> ffmpeg::frame::Audio {
+            let mut bytes = vec![0u8; samples * 8];
+            let offset = at * 8 + channel * 4;
+            bytes[offset..offset + 4].copy_from_slice(&0.5f32.to_le_bytes());
+            AudioMixer::INFO.wrap_frame(&bytes)
+        }
+
+        for early_poll in [false, true] {
+            let timestamps = Timestamps::now();
+            let (output, mut receiver) = mpsc::channel(128);
+            let mut builder = AudioMixerBuilder::new().with_timestamps(timestamps);
+            let (mut system, system_rx) = mpsc::channel(4);
+            let (mut mic, mic_rx) = mpsc::channel(4);
+            builder.add_source(AudioMixer::INFO, system_rx);
+            builder.add_source(AudioMixer::INFO, mic_rx);
+            let mut mixer = builder.build(output).unwrap();
+            let at =
+                |millis| Timestamp::Instant(timestamps.instant() + Duration::from_millis(millis));
+            mic.send(AudioFrame::new(impulse(24_000, 9_600, 0), at(200)))
+                .await
+                .unwrap();
+            if early_poll {
+                assert!(mixer.tick(timestamps, at(200)).unwrap());
+                assert!(mixer.tick(timestamps, at(254)).unwrap());
+            }
+            system
+                .send(AudioFrame::new(impulse(24_000, 6_720, 1), at(260)))
+                .await
+                .unwrap();
+            assert!(mixer.tick(timestamps, at(300)).unwrap());
+            let mut samples = Vec::new();
+            while let Ok(Some(frame)) = receiver.try_next() {
+                for pair in frame.inner.data(0)[..frame.inner.samples() * 8].chunks_exact(8) {
+                    samples.push([
+                        f32::from_le_bytes(pair[..4].try_into().unwrap()),
+                        f32::from_le_bytes(pair[4..].try_into().unwrap()),
+                    ]);
+                }
+            }
+            let peaks: Vec<usize> = (0..2)
+                .map(|channel| {
+                    samples
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| a[channel].abs().total_cmp(&b[channel].abs()))
+                        .unwrap()
+                        .0
+                })
+                .collect();
+            let delta = peaks[1] as i64 - peaks[0] as i64;
+            eprintln!(
+                "MECHANISM early_poll={early_poll} mic_peak={} system_peak={} delta_samples={delta}",
+                peaks[0], peaks[1]
+            );
+            assert_eq!(delta, if early_poll { -320 } else { -2_880 });
+        }
+    }
+
+    #[tokio::test]
     async fn mix_sources() {
         let (tx, mut output_rx) = mpsc::channel(4);
         let mut mixer = AudioMixerBuilder::new();
