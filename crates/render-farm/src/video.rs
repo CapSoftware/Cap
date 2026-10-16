@@ -592,15 +592,19 @@ fn encode(
             }
             let converter = match &mut rgba_converter {
                 Some(converter) => converter,
-                None => rgba_converter.insert(ffmpeg::software::scaling::Context::get(
-                    Pixel::RGBA,
-                    width,
-                    height,
-                    Pixel::NV12,
-                    width,
-                    height,
-                    ffmpeg::software::scaling::flag::Flags::BILINEAR,
-                )?),
+                None => {
+                    let mut converter = ffmpeg::software::scaling::Context::get(
+                        Pixel::RGBA,
+                        width,
+                        height,
+                        Pixel::NV12,
+                        width,
+                        height,
+                        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+                    )?;
+                    use_bt709(&mut converter)?;
+                    rgba_converter.insert(converter)
+                }
             };
             converter.run(&rgba, &mut nv12)?;
         } else {
@@ -626,6 +630,27 @@ fn encode(
     })
 }
 
+/// swscale converts RGB with BT.601 unless told otherwise; the stream is
+/// tagged BT.709 limited range (see the encoder setup above).
+fn use_bt709(converter: &mut ffmpeg::software::scaling::Context) -> Result<(), ffmpeg::Error> {
+    let result = unsafe {
+        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            converter.as_mut_ptr(),
+            coefficients,
+            1,
+            coefficients,
+            0,
+            0,
+            1 << 16,
+            1 << 16,
+        )
+    };
+    if result < 0 {
+        return Err(ffmpeg::Error::from(result));
+    }
+    Ok(())
+}
 fn cap_enc_ffmpeg_keyframe_secs() -> u32 {
     2
 }
