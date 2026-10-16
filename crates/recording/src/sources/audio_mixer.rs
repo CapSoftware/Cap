@@ -115,6 +115,10 @@ impl AudioMixerBuilder {
             .max()
             .unwrap_or(DEFAULT_BUFFER_TIMEOUT);
 
+        for (source, input) in self.sources.iter().enumerate() {
+            debug!(target: "cap_instant_probe", stage = "setup", source, rate = input.info.rate(), buffer_size = input.info.buffer_size, timeout_ns = input.buffer_timeout.as_nanos() as u64);
+        }
+
         let timestamps = self.timestamps.unwrap_or_else(Timestamps::now);
         let master_clock = self
             .master_clock
@@ -563,6 +567,7 @@ impl AudioMixer {
                 }
 
                 let timestamp = Timestamp::Instant(clock_anchor + remap.duration());
+                debug!(target: "cap_instant_probe", stage = "receive", source = index, raw_ns = remap.raw_ns, mapped_ns = remap.master_ns, outcome = ?remap.outcome, now_ns = self.master_clock.elapsed_ns(), samples = frame_samples);
 
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
@@ -596,6 +601,7 @@ impl AudioMixer {
                             let silence_duration =
                                 Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
                             let timestamp = buffer_last_timestamp + buffer_last_duration;
+                            debug!(target: "cap_instant_probe", stage = "gap_silence", source = index, timestamp_ns = self.master_clock.remap_raw_ns(timestamp), samples = silence_samples_count);
                             source.buffer_last = Some((timestamp, silence_duration));
                             source.buffer.push_back(AudioFrame::new(frame, timestamp));
                         }
@@ -628,6 +634,7 @@ impl AudioMixer {
 
             if self.start_timestamp.is_some() {
                 self.wall_clock_start = Some(now);
+                debug!(target: "cap_instant_probe", stage = "start", start_ns = self.master_clock.remap_raw_ns(self.start_timestamp.unwrap()), now_ns = self.master_clock.remap_raw_ns(now));
             }
         }
 
@@ -637,7 +644,7 @@ impl AudioMixer {
                 .checked_sub(start_timestamp.duration_since(self.timestamps))
             && elapsed_since_start > self.max_buffer_timeout
         {
-            for source in &mut self.sources {
+            for (index, source) in self.sources.iter_mut().enumerate() {
                 if source.buffer_last.is_none() {
                     let rate = source.info.rate();
                     let buffer_timeout = source.buffer_timeout;
@@ -661,6 +668,7 @@ impl AudioMixer {
 
                         let timestamp =
                             start_timestamp + elapsed_since_start.saturating_sub(remaining);
+                        debug!(target: "cap_instant_probe", stage = "startup_silence", source = index, timestamp_ns = self.master_clock.remap_raw_ns(timestamp), now_ns = self.master_clock.remap_raw_ns(now), samples = chunk_samples, timeout_ns = buffer_timeout.as_nanos() as u64);
                         source.buffer_last = Some((timestamp, frame_duration));
                         source.buffer.push_front(AudioFrame::new(frame, timestamp));
 
@@ -710,6 +718,7 @@ impl AudioMixer {
 
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
+                debug!(target: "cap_instant_probe", stage = "filter_input", source = i, timestamp_ns = self.master_clock.remap_raw_ns(buffer.timestamp), samples = buffer.inner.samples(), pts = ?buffer.inner.pts());
                 let result = self.abuffers[i].source().add(&buffer.inner);
                 if self.required_stop.is_some() {
                     result
@@ -744,6 +753,7 @@ impl AudioMixer {
             let output_timestamp = self.sample_based_output_timestamp(start_timestamp);
 
             let frame_samples = filtered.samples();
+            debug!(target: "cap_instant_probe", stage = "mix_output", sample_start = self.samples_out, timestamp_ns = self.master_clock.remap_raw_ns(output_timestamp), samples = frame_samples, pts = ?filtered.pts());
             let mut frame = AudioFrame::new(filtered, output_timestamp);
 
             loop {

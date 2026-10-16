@@ -694,6 +694,11 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                     let t = k as f64 * AUDIO_CHUNK_SECS;
                     let at = base + Duration::from_secs_f64(t);
                     tokio::time::sleep_until(at.into()).await;
+                    eprintln!(
+                        "INSTANT_SOURCE source=system slot={k} raw_ns={} sent_ns={}",
+                        at.saturating_duration_since(base).as_nanos(),
+                        base.elapsed().as_nanos()
+                    );
                     let frame = AudioFrame::new(
                         audio_chunk(&track, t, &stereo_info),
                         Timestamp::Instant(at),
@@ -712,6 +717,11 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                     let t = k as f64 * AUDIO_CHUNK_SECS;
                     let at = base + Duration::from_secs_f64(t);
                     tokio::time::sleep_until(at.into()).await;
+                    eprintln!(
+                        "INSTANT_SOURCE source=system slot={k} raw_ns={} sent_ns={}",
+                        at.saturating_duration_since(base).as_nanos(),
+                        base.elapsed().as_nanos()
+                    );
                     let frame = AudioFrame::new(
                         audio_chunk(&track, t, &stereo_info),
                         Timestamp::Instant(at),
@@ -748,6 +758,11 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
                 let t = k as f64 * AUDIO_CHUNK_SECS;
                 let at = base + Duration::from_secs_f64(t);
                 tokio::time::sleep_until(at.into()).await;
+                eprintln!(
+                    "INSTANT_SOURCE source=mic slot={k} raw_ns={} sent_ns={}",
+                    at.saturating_duration_since(base).as_nanos(),
+                    base.elapsed().as_nanos()
+                );
                 let frame =
                     AudioFrame::new(audio_chunk(&track, t, &mono_info), Timestamp::Instant(at));
                 if tx.send(frame).await.is_err() {
@@ -772,6 +787,7 @@ pub async fn record_instant(spec: &InstantSpec, dir: &Path) -> anyhow::Result<()
 
     if let (Some(gate), Some(arm_at)) = (&gate, spec.arm_at) {
         tokio::time::sleep_until((base + Duration::from_secs_f64(arm_at)).into()).await;
+        eprintln!("INSTANT_GATE arm_ns={}", base.elapsed().as_nanos());
         gate.arm();
     }
     emitted.screen_sent = video_emit.await.context("video emit")?;

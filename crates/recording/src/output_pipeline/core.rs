@@ -4193,6 +4193,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     state: AudioFrameProcessState<'_>,
     mut frame: AudioFrame,
 ) -> anyhow::Result<AudioFrameOutcome> {
+    debug!(target: "cap_instant_probe", stage = "mux_receive", timestamp_ns = ctx.master_clock.remap_raw_ns(frame.timestamp), now_ns = ctx.observed_at.saturating_duration_since(ctx.timestamps.instant()).as_nanos() as u64, samples = frame.inner.samples(), total_samples = state.timestamp_generator.total_samples, gate_applied = *state.gate_applied, anchor = ?ctx.anchor);
     let (is_paused, total_pause_duration) = ctx.shared_pause.check();
 
     if is_paused {
@@ -4340,6 +4341,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
+    debug!(target: "cap_instant_probe", stage = "mux_aligned", timestamp_ns = ctx.master_clock.remap_raw_ns(frame.timestamp), samples = frame.inner.samples(), total_samples = state.timestamp_generator.total_samples, sample_based_ns = sample_based_before.as_nanos() as u64);
 
     if let Some(overlap_duration) = state.gap_tracker.detect_overlap(
         frame.timestamp,
