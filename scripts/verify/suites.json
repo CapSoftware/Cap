@@ -153,6 +153,45 @@
 			"own": []
 		},
 		{
+			"name": "export-order-decode",
+			"about": "scratch proof: offline export frame order under injected decode/readback delays",
+			"cargo": ["-p", "cap-rendering", "--lib"],
+			"binaries": ["cap-rendering"],
+			"test": "export_order_tests::slow_decode_keeps_every_frame_in_order",
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-rendering"],
+			"own": []
+		},
+		{
+			"name": "export-order-readback",
+			"about": "scratch proof: offline export frame order under injected decode/readback delays",
+			"cargo": ["-p", "cap-rendering", "--lib"],
+			"binaries": ["cap-rendering"],
+			"test": "export_order_tests::slow_readback_keeps_every_frame_in_order",
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-rendering"],
+			"own": []
+		},
+		{
+			"name": "export-order-stall",
+			"about": "scratch proof: offline export frame order under injected decode/readback delays",
+			"cargo": ["-p", "cap-rendering", "--lib"],
+			"binaries": ["cap-rendering"],
+			"test": "export_order_tests::stalled_readback_stops_the_export_instead_of_dropping_the_frame",
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-rendering"],
+			"own": []
+		},
+		{
 			"name": "native-rendering",
 			"about": "native macOS rendering regressions (IOSurface source lifetime in the YUV converter)",
 			"cargo": ["-p", "cap-rendering", "--test", "iosurface-source-lifetime"],

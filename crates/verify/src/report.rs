@@ -89,9 +89,16 @@ pub struct Case {
     pub unsupported: Option<String>,
 }
 
+/// Scratch (export-order proof): the case running in this process, for the
+/// output hash log.
+pub static CURRENT_CASE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 impl Case {
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
+        if let Ok(mut current) = CURRENT_CASE.lock() {
+            current.clone_from(&id);
+        }
         eprintln!("[cap-verify] case {id} ({})", platform());
         Self {
             id,
