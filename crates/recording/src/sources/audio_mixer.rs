@@ -24,6 +24,7 @@ const MIN_BUFFER_TIMEOUT_WIRELESS: Duration = Duration::from_millis(90);
 const MAX_BUFFER_TIMEOUT: Duration = Duration::from_millis(250);
 const BUFFER_TIMEOUT_HEADROOM: f64 = 2.5;
 const STARTUP_GRACE: Duration = Duration::from_secs(1);
+pub(crate) const MIXER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub const MAX_BUFFERING_TICKS: u32 = 45;
 pub const AUDIO_OUTPUT_FRAMES: u32 = cap_timestamp::AUDIO_OUTPUT_FRAMES as u32;
@@ -43,6 +44,7 @@ struct MixerSource {
     clock_state: SourceClockState,
     samples_supplied: usize,
     late_samples_dropped: u64,
+    ended: bool,
 }
 
 pub struct AudioMixerBuilder {
@@ -108,6 +110,7 @@ impl AudioMixerBuilder {
             clock_state: SourceClockState::new(clock_label),
             samples_supplied: 0,
             late_samples_dropped: 0,
+            ended: false,
         });
     }
 
@@ -146,6 +149,8 @@ impl AudioMixerBuilder {
             buffering: MixerBufferingTracker::new(),
             health_tx: self.health_tx,
             required_stop: self.required_stop,
+            drain_deadline: None,
+            finishing: false,
         })
     }
 
@@ -177,16 +182,11 @@ impl AudioMixerBuilder {
                     .is_some_and(CancellationToken::is_cancelled)
             {
                 info!("Mixer stop flag triggered");
+                mixer.finish()?;
                 break;
             }
 
-            #[cfg(target_os = "macos")]
-            let now = Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now());
-            #[cfg(windows)]
-            let now =
-                Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now());
-            #[cfg(not(any(target_os = "macos", windows)))]
-            let now = Timestamp::Instant(Instant::now());
+            let now = mixer_now();
 
             if !mixer.tick(start, now)? {
                 info!("Mixer output closed");
@@ -227,6 +227,8 @@ pub struct AudioMixer {
     buffering: MixerBufferingTracker,
     health_tx: Option<HealthSender>,
     required_stop: Option<CancellationToken>,
+    drain_deadline: Option<Instant>,
+    finishing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -522,12 +524,19 @@ impl AudioMixer {
             let rate = source.info.rate();
 
             loop {
+                if self
+                    .drain_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    source.rx.close();
+                }
                 let AudioFrame {
                     inner: frame,
                     timestamp: raw_timestamp,
                 } = match source.rx.try_next() {
                     Ok(Some(frame)) => frame,
                     Ok(None) => {
+                        source.ended = true;
                         anyhow::ensure!(
                             self.required_stop
                                 .as_ref()
@@ -624,6 +633,30 @@ impl AudioMixer {
         self.tick_with_output(now, |sink, frame| sink.sink().frame(frame))
     }
 
+    fn finish(&mut self) -> anyhow::Result<()> {
+        if let Some(stop) = &self.required_stop {
+            stop.cancel();
+        }
+        self.drain_deadline = Some(Instant::now() + STARTUP_GRACE);
+        loop {
+            self.buffer_sources(mixer_now())?;
+            if self.sources.iter().all(|source| source.ended) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.finishing = true;
+        self.drain_deadline = Some(Instant::now() + STARTUP_GRACE);
+        if !self.tick(self.timestamps, mixer_now())? {
+            return Ok(());
+        }
+        for input in &mut self.abuffers {
+            input.source().flush().context("Audio mixer flush failed")?;
+        }
+        self.tick(self.timestamps, mixer_now())?;
+        Ok(())
+    }
+
     fn tick_with_output(
         &mut self,
         now: Timestamp,
@@ -639,7 +672,11 @@ impl AudioMixer {
         };
 
         let wall_now = Instant::now();
-        let laggard = self.detect_laggard_source(now);
+        let laggard = if self.finishing {
+            None
+        } else {
+            self.detect_laggard_source(now)
+        };
         let action = self
             .buffering
             .observe(wall_now, laggard, self.health_tx.as_ref());
@@ -662,11 +699,17 @@ impl AudioMixer {
             if let Some((timestamp, duration)) = source.buffer_last {
                 let end = timestamp + duration;
                 if watermark.is_none_or(|previous: Timestamp| {
-                    end.duration_since(self.timestamps) < previous.duration_since(self.timestamps)
+                    let end = end.duration_since(self.timestamps);
+                    let previous = previous.duration_since(self.timestamps);
+                    if self.finishing {
+                        end > previous
+                    } else {
+                        end < previous
+                    }
                 }) {
                     watermark = Some(end);
                 }
-            } else if !grace_elapsed {
+            } else if !grace_elapsed && !self.finishing {
                 waiting_for_input = true;
             }
         }
@@ -727,7 +770,7 @@ impl AudioMixer {
                     }
                     source.samples_supplied += samples;
                 }
-                if source.buffer_last.is_none() {
+                if source.buffer_last.is_none() || self.finishing {
                     supply_silence(source, &mut self.abuffers[i], i, limit)?;
                 }
             }
@@ -765,6 +808,11 @@ impl AudioMixer {
                 match self.output.try_send(frame) {
                     Ok(()) => break,
                     Err(err) if err.is_full() => {
+                        anyhow::ensure!(
+                            self.drain_deadline
+                                .is_none_or(|deadline| Instant::now() < deadline),
+                            "Audio mixer output did not drain before the stop deadline"
+                        );
                         frame = err.into_inner();
                         std::thread::sleep(Duration::from_millis(1));
                     }
@@ -783,6 +831,21 @@ impl AudioMixer {
 
     pub fn builder() -> AudioMixerBuilder {
         AudioMixerBuilder::new()
+    }
+}
+
+fn mixer_now() -> Timestamp {
+    #[cfg(target_os = "macos")]
+    {
+        Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now())
+    }
+    #[cfg(windows)]
+    {
+        Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now())
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Timestamp::Instant(Instant::now())
     }
 }
 
@@ -1083,6 +1146,10 @@ mod test {
                     .tick(self.mixer.timestamps, self.at(millis))
                     .unwrap()
             );
+            self.collect(millis);
+        }
+
+        fn collect(&mut self, millis: u64) {
             while let Ok(Some(frame)) = self.output.try_next() {
                 self.deliveries.push((self.pcm.len(), millis));
                 for pair in frame.inner.data(0)[..frame.inner.samples() * 8].chunks_exact(8) {
@@ -1318,6 +1385,72 @@ mod test {
         probe.send(0, 50, 2_400, Some(0));
         probe.tick(100);
         assert_eq!(probe.peaks(0), [0, 1_440, 2_400]);
+    }
+
+    #[test]
+    fn pcm_stop_before_startup_grace_preserves_captured_audio() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, Some(960));
+        probe.tick(100);
+        assert!(probe.pcm.is_empty());
+        probe.inputs.clear();
+        probe.mixer.finish().unwrap();
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+    }
+
+    #[test]
+    fn pcm_stop_drains_the_longest_input_and_pads_closed_sources() {
+        for millis in [100, 1_500] {
+            let mut probe = PcmProbe::new(2);
+            probe.send(0, 0, 960, None);
+            probe.send(1, 0, 4_800, Some(4_799));
+            probe.tick(millis);
+            probe.inputs.clear();
+            probe.mixer.finish().unwrap();
+            probe.collect(millis);
+            assert_eq!(probe.peaks(1), [4_799]);
+            assert_eq!(probe.pcm.len(), 4_800);
+        }
+    }
+
+    #[test]
+    fn pcm_stop_waits_for_queued_capture_before_closing_inputs() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 960, None);
+        let mut input = probe.inputs.pop().unwrap();
+        probe.inputs.clear();
+        let timestamp = probe.at(20);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            let mut bytes = vec![0; 3_840 * 8];
+            bytes[3_000 * 8 + 4..3_000 * 8 + 8].copy_from_slice(&0.5_f32.to_le_bytes());
+            input
+                .try_send(AudioFrame::new(
+                    AudioMixer::INFO.wrap_frame(&bytes),
+                    timestamp,
+                ))
+                .unwrap();
+        });
+        probe.mixer.finish().unwrap();
+        worker.join().unwrap();
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [3_960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+    }
+
+    #[test]
+    fn pcm_stop_bounds_a_producer_that_never_closes() {
+        let mut probe = PcmProbe::new(2);
+        probe.send(1, 0, 4_800, Some(960));
+        let start = Instant::now();
+        probe.mixer.finish().unwrap();
+        assert!(start.elapsed() < MIXER_STOP_TIMEOUT);
+        probe.collect(100);
+        assert_eq!(probe.peaks(1), [960]);
+        assert_eq!(probe.pcm.len(), 4_800);
+        assert!(probe.inputs.iter_mut().all(|input| input.is_closed()));
     }
 
     #[test]

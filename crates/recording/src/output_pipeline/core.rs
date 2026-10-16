@@ -1,5 +1,5 @@
 use super::start_gate::{AudioAdmission, RecordingStartGate};
-use crate::sources::audio_mixer::AudioMixer;
+use crate::sources::audio_mixer::{AudioMixer, MIXER_STOP_TIMEOUT};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{MasterClock, SourceClockOutcome, SourceClockState, Timestamp, Timestamps};
@@ -3805,6 +3805,7 @@ impl PreparedAudioSources {
         audio_anchor: AudioAnchor,
     ) {
         let audio_info = self.audio_info;
+        let mixed_audio = self.erased_audio_sources.len() > 1;
         let has_wireless_source = self.has_wireless_source;
         let health_tx = setup_ctx.health_tx().clone();
         let master_clock = setup_ctx.master_clock().clone();
@@ -3905,16 +3906,49 @@ impl PreparedAudioSources {
                     None
                 };
 
+                let mixed_sources_stopped = was_cancelled && mixed_audio;
+                if mixed_sources_stopped {
+                    let stopped = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        stop_audio_sources(&mut self.erased_audio_sources, required_scope.as_ref()),
+                    )
+                    .await;
+                    if stopped.is_err() {
+                        let error = anyhow!("Mixed audio sources did not stop before the deadline");
+                        if let Some(scope) = &required_scope {
+                            scope.fail_required(error.to_string());
+                        }
+                        let _ = audio_error.get_or_insert(error);
+                    }
+                    self.erased_audio_sources.clear();
+                }
+
                 if was_cancelled && !audio_degraded {
                     let drain_start = std::time::Instant::now();
+                    let drain_deadline = tokio::time::Instant::now() + MIXER_STOP_TIMEOUT;
                     let max_drain_frames = 500u64;
                     let mut drained = 0u64;
                     let mut skipped = 0u64;
                     let mut degraded_during_drain = false;
 
                     while drained < max_drain_frames {
-                        match self.audio_rx.try_next() {
-                            Ok(Some(frame)) => match process_audio_frame(
+                        let next = if mixed_audio {
+                            match tokio::time::timeout_at(drain_deadline, self.audio_rx.next()).await {
+                                Ok(frame) => frame,
+                                Err(_) => {
+                                    let error = anyhow!("Mixed audio output did not close before the drain deadline");
+                                    if let Some(scope) = &required_scope {
+                                        scope.fail_required(error.to_string());
+                                    }
+                                    let _ = audio_error.get_or_insert(error);
+                                    break;
+                                }
+                            }
+                        } else {
+                            self.audio_rx.try_next().ok().flatten()
+                        };
+                        match next {
+                            Some(frame) => match process_audio_frame(
                                 AudioFrameProcessContext {
                                     audio_info: &audio_info,
                                     sample_rate,
@@ -3965,7 +3999,7 @@ impl PreparedAudioSources {
                                     skipped += 1;
                                 }
                             },
-                            Ok(None) | Err(_) => break,
+                            None => break,
                         }
                     }
 
@@ -3986,7 +4020,9 @@ impl PreparedAudioSources {
 
                 let final_pause_duration = shared_pause.total_pause_duration();
 
-                if let Some(scope) = &required_scope {
+                if let Some(scope) = &required_scope
+                    && !mixed_sources_stopped
+                {
                     stop_audio_sources(&mut self.erased_audio_sources, Some(scope)).await;
                 }
 
@@ -4104,7 +4140,7 @@ impl PreparedAudioSources {
                     let _ = gap_summary_slot.set(gap_tracker.gap_summary());
                 }
 
-                if required_scope.is_none() {
+                if required_scope.is_none() && !mixed_sources_stopped {
                     stop_audio_sources(&mut self.erased_audio_sources, None).await;
                 }
 
@@ -9233,6 +9269,64 @@ mod tests {
                 });
                 Ok(())
             }
+        }
+
+        struct StopFrameSource {
+            output: mpsc::Sender<AudioFrame>,
+            final_frame: Option<AudioFrame>,
+        }
+
+        impl AudioSource for StopFrameSource {
+            type Config = Option<AudioFrame>;
+
+            fn setup(
+                final_frame: Self::Config,
+                output: mpsc::Sender<AudioFrame>,
+                _: &mut SetupCtx,
+            ) -> impl Future<Output = anyhow::Result<Self>> + Send + 'static {
+                std::future::ready(Ok(Self {
+                    output,
+                    final_frame,
+                }))
+            }
+
+            fn audio_info(&self) -> AudioInfo {
+                AudioMixer::INFO
+            }
+
+            async fn stop(&mut self) -> anyhow::Result<()> {
+                if let Some(frame) = self.final_frame.take() {
+                    self.output.send(frame).await?;
+                }
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn mixed_pipeline_stop_receives_audio_delivered_during_source_stop() {
+            let temp = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp.path().join("mixed-stop.ogg"))
+                .with_timestamps(timestamps)
+                .with_audio_source::<StopFrameSource>(None)
+                .with_audio_source::<StopFrameSource>(Some(AudioFrame::new(
+                    AudioMixer::INFO.empty_frame(4_800),
+                    Timestamp::Instant(timestamps.instant()),
+                )))
+                .build::<RecordingAudioMuxer>(sent.clone())
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
+                .await
+                .unwrap()
+                .unwrap();
+            let frames = sent.lock().unwrap();
+            assert_eq!(
+                frames.iter().map(|frame| frame.samples).sum::<usize>(),
+                4_800
+            );
+            assert_eq!(frames[0].timestamp, Duration::ZERO);
         }
 
         struct AudioTimelineHarness {
