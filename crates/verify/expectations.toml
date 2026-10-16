@@ -40,6 +40,14 @@ reason = "The last screen frame of the 120 s offline playback (output 7199, 119.
 link = ""
 
 [[xfail]]
+case = "export/jitter-camera-120s/full/mp460/avf"
+class = "nondeterministic"
+platforms = ["macos"]
+flaky = true
+reason = "Two exports of the 120 s jitter-camera project can differ (4001 of 7200 frames, first at frame 3163, in 1 of 3 runs on blacksmith-6vcpu-macos-15, 38838622145) inside the camera runaway of the future entry above: once the pts-hole map has lost the hold, which frame a request gets depends on how far the AVAssetReader has decoded when the request arrives, so the wrong answers themselves vary (5081 wrong frames in that run, 5146 in the others). The IOSurface part of this nondeterminism is gone with #2625 (0 of 3 sol-avf proof runs, 0 of 5 in probe 38784185050); #2595's decoder changes remove the runaway and with it this class (5 of 5 identical exports in that probe's decoder configuration, 2 of 2 on Apple silicon)"
+link = "https://github.com/CapSoftware/Cap/pull/2595"
+
+[[xfail]]
 case = "*/jitter-camera-120s/full/*/ffmpeg"
 class = "stale"
 reason = "Same pts-hole eviction on the FFmpeg decoder (full tier, 120 s): 1551 of 7199 camera frames stale, up to 90 source frames, identical in the MP4 export and in offline playback on every platform"
