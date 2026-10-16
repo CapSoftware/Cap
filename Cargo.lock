@@ -2019,6 +2019,7 @@ dependencies = [
  "cap-flags",
  "cap-media-info",
  "cap-project",
+ "cap-verify-expect",
  "cap-video-decode",
  "cidre",
  "clap",
@@ -2148,6 +2149,62 @@ dependencies = [
  "windows-sys 0.52.0",
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "cap-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-audio",
+ "cap-editor",
+ "cap-enc-avfoundation",
+ "cap-export",
+ "cap-media-info",
+ "cap-project",
+ "cap-recording",
+ "cap-rendering",
+ "cap-timestamp",
+ "cap-verify-expect",
+ "cidre",
+ "ffmpeg-next",
+ "flume",
+ "futures",
+ "relative-path",
+ "rustfft",
+ "scap-targets",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-verify-expect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
+name = "cap-verify-stimulus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-verify",
+ "cidre",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
+ "futures",
+ "objc2-foundation 0.3.1",
+ "scap-screencapturekit",
+ "serde_json",
+ "softbuffer",
+ "winit",
+ "workspace-hack",
 ]
 
 [[package]]
