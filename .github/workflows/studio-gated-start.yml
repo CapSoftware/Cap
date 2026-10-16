@@ -1,0 +1,23 @@
+name: Studio gated start investigation
+on:
+  push:
+    branches: [scratch/studio-gated-start]
+    paths: [.github/workflows/studio-gated-start.yml]
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Runs of the gated Studio case on each macOS 15 host
+        default: "10"
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  capture:
+    uses: ./.github/workflows/verify-recording.yml
+    with:
+      proof-run: true
+      tier: fast
+      repeat: ${{ inputs.repeat || '10' }}
+      case_filter: recording/studio-screen/gated
+      keep_artifacts: true
+      runners: both

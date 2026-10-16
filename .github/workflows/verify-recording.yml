@@ -57,6 +57,12 @@ on:
       tier:
         type: string
         default: full
+      case_filter:
+        type: string
+        default: ""
+      keep_artifacts:
+        type: boolean
+        default: false
       runners:
         type: string
         default: hosted
@@ -104,7 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           files="$RUNNER_TEMP/changed.txt"
-          hosted='["macos-15","macos-26"]'
+          hosted='["macos-15"]'
           if [[ "${{ inputs.proof-run }}" == true ]]; then
             EVENT=workflow_dispatch
           fi
@@ -114,8 +120,8 @@ jobs:
               run=true
               tier="${INPUT_TIER:-full}"
               case "${INPUT_RUNNERS:-hosted}" in
-                blacksmith) runners='["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26"]' ;;
-                both) runners='["blacksmith-6vcpu-macos-15","blacksmith-6vcpu-macos-26","macos-15","macos-26"]' ;;
+                blacksmith) runners='["blacksmith-6vcpu-macos-15"]' ;;
+                both) runners='["blacksmith-6vcpu-macos-15","macos-15"]' ;;
                 *) runners="$hosted" ;;
               esac ;;
             *)
