@@ -1503,9 +1503,12 @@ impl VideoDriftTracker {
         // The first frame after the source went quiet is stamped from its
         // hand-off when its capture time is clearly older than that:
         // ScreenCaptureKit gave the first picture after a static screen a
-        // timestamp 229 ms (once 1.8 s) before the picture existed. Frames in a
-        // steady stream keep their capture time however late they are handed
-        // over.
+        // timestamp 229 ms (once 1.8 s) before the picture existed. At this
+        // point a stale timestamp and a correct one delivered late look the
+        // same; the hand-off is what this tracker always used, so a genuinely
+        // late frame after a gap is stamped as before rather than a stale one
+        // showing its picture early. Frames in a steady stream keep their
+        // capture time however late they are handed over.
         let after_gap = previous_capture
             .is_some_and(|previous| capture_elapsed.saturating_sub(previous) > SOURCE_GAP);
         let handed_over_late_ns = lag_ns - expected_lag_ns;
@@ -5614,6 +5617,51 @@ mod tests {
                 .collect();
             let (output, _) = run(&frames);
             assert_on_capture_time(&frames, &output);
+        }
+
+        #[test]
+        fn late_delivery_after_a_static_screen_is_stamped_no_later_than_before() {
+            // The capture service stalls: the first frame after a static screen
+            // is handed over 0.9 s after its correct capture time, followed by
+            // a burst of frames queued behind it. Indistinguishable from a stale
+            // timestamp, so it gets its hand-off as the old stamping did, never
+            // later than that, and the burst stays monotonic.
+            let latency = Duration::from_millis(15);
+            let stall_end = capture(180) + Duration::from_millis(900);
+            let frames: Vec<Frame> = (0..260u64)
+                .filter(|i| !(120..180).contains(i))
+                .map(|i| {
+                    let handed_over = (capture(i) + latency).max(if (180..207).contains(&i) {
+                        stall_end
+                    } else {
+                        Duration::ZERO
+                    });
+                    Frame {
+                        waited: !(181..207).contains(&i),
+                        ..frame(capture(i), handed_over)
+                    }
+                })
+                .collect();
+            let (output, _) = run(&frames);
+            let old = legacy(&frames);
+            let first_after = frames
+                .iter()
+                .position(|f| f.capture == capture(180))
+                .unwrap();
+            assert!(output[first_after].abs_diff(stall_end.saturating_sub(latency)) <= EXACT);
+            for (i, out) in output.iter().enumerate() {
+                assert!(*out <= old[i] + EXACT, "frame {i} later than the old stamp");
+                if i > 0 {
+                    assert!(*out >= output[i - 1]);
+                }
+            }
+            let resumed = frames
+                .iter()
+                .position(|f| f.capture == capture(220))
+                .unwrap();
+            for (f, out) in frames.iter().zip(&output).skip(resumed) {
+                assert!(out.abs_diff(f.capture) <= EXACT);
+            }
         }
 
         #[test]
