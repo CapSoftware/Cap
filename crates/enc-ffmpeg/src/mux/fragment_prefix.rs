@@ -391,6 +391,13 @@ fn read_fragment(
     Ok(fragment)
 }
 
+fn is_incomplete_tail(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+    )
+}
+
 pub fn read_fragment_prefix(init: &Path, media: &Path) -> io::Result<FragmentPrefix> {
     let track = read_track(init)?;
     let mut reader = Reader::open(media)?;
@@ -451,8 +458,14 @@ pub fn read_fragment_prefix(init: &Path, media: &Path) -> io::Result<FragmentPre
         }
         Ok(())
     })();
+    // Only a malformed or truncated tail ends the prefix; any other read
+    // error leaves the recording retryable instead of shortening it.
+    if let Err(error) = result
+        && !is_incomplete_tail(&error)
+    {
+        return Err(error);
+    }
     if prefix == 0 {
-        result?;
         return Err(invalid());
     }
     let ticks = end_time
@@ -471,6 +484,21 @@ pub fn read_fragment_prefix(init: &Path, media: &Path) -> io::Result<FragmentPre
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_malformed_or_truncated_tails_end_a_prefix() {
+        assert!(is_incomplete_tail(&invalid()));
+        assert!(is_incomplete_tail(&io::Error::from(
+            io::ErrorKind::UnexpectedEof
+        )));
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::Other,
+        ] {
+            assert!(!is_incomplete_tail(&io::Error::from(kind)));
+        }
+    }
 
     fn boxed(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let mut bytes = ((data.len() + 8) as u32).to_be_bytes().to_vec();
