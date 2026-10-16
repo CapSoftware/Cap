@@ -296,18 +296,6 @@ reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the sta
 link = ""
 
 [[xfail]]
-case = "export/basic/colour-red/mp430/*"
-class = "colour-level"
-reason = "NEW: export converts rendered RGBA to NV12 with BT.601 coefficients (GPU: crates/rendering/src/shaders/rgba_to_nv12.wgsl; software adapters: convert_rgba_to_nv12 in crates/rendering/src/lib.rs) but the encoder tags the stream BT.709 (crates/enc-ffmpeg/src/video/h264.rs), so players decode renderer-generated colour (backgrounds, captions, cursor, text) shifted: background (220,40,40) decodes about 13 luma code values too bright. Screen video whose decode matrix matches passes through unchanged"
-link = ""
-
-[[xfail]]
-case = "export/basic/colour-red/mp430/*"
-class = "colour-matrix"
-reason = "NEW: same root cause as colour-level (BT.601 coefficients in an export tagged BT.709): background (220,40,40) decodes Cb about 9 code values low"
-link = ""
-
-[[xfail]]
 case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
 class = "stale"
 platforms = ["macos"]
