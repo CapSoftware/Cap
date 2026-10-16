@@ -1,0 +1,51 @@
+name: Instant mixer Linux integration continuation
+on:
+  push:
+    branches: [ci/fixproof-instant-mixer-current-main]
+    paths: [.github/workflows/fix-instant-mixer-linux-integration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+jobs:
+  recording:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-unknown-linux-gnu
+          tier: full
+      - name: Recording library and recovery integration
+        run: |
+          mkdir -p "$RUNNER_TEMP/mixer-linux-integration"
+          set -o pipefail
+          cargo test -p cap-recording --lib --profile ci-verify --locked -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-linux-integration/library.log"
+          cargo test -p cap-recording --test recovery --profile ci-verify --locked -- --test-threads=1 --nocapture 2>&1 | tee "$RUNNER_TEMP/mixer-linux-integration/recovery.log"
+      - name: Preserve recording library Clippy result
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          cargo clippy -p cap-recording --lib --profile ci-verify --locked -- -D warnings 2>&1 | tee "$RUNNER_TEMP/mixer-linux-integration/clippy.log"
+      - name: Check source-identical main utility crate
+        if: ${{ !cancelled() }}
+        run: |
+          git diff --exit-code 1fbc86b90664dec8633b23cecd982936fc5abc85 HEAD -- crates/utils
+          set -o pipefail
+          cargo clippy -p cap-utils --lib --profile ci-verify --locked -- -D warnings 2>&1 | tee "$RUNNER_TEMP/mixer-linux-integration/main-utility-clippy.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mixer-linux-integration
+          path: ${{ runner.temp }}/mixer-linux-integration
+          retention-days: 7
