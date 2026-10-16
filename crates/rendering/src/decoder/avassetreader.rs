@@ -542,7 +542,12 @@ impl AVAssetReaderDecoder {
         })
     }
 
-    fn select_best_decoder(&mut self, requested_time: f32, is_scrubbing: bool) -> (usize, bool) {
+    fn select_best_decoder(
+        &mut self,
+        requested_frame: u32,
+        requested_time: f32,
+        is_scrubbing: bool,
+    ) -> (usize, bool) {
         let decoder_count = self.decoders.len();
         let (best_id, _distance, needs_reset) = if is_scrubbing {
             self.pool_manager
@@ -557,6 +562,16 @@ impl AVAssetReaderDecoder {
         };
 
         let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
+        // Pool positions are capped to the newest request, so a reader that
+        // decoded ahead can look usable for a request it has already passed.
+        // It can never vend that frame again, and reading on would answer
+        // with a stale or later frame, so it has to seek back first.
+        let needs_reset = needs_reset
+            || self
+                .decoders
+                .get(decoder_idx)
+                .and_then(|decoder| decoder.prev_vended)
+                .is_some_and(|prev| prev >= requested_frame);
 
         let max_decoder_count = self
             .pool_manager
@@ -899,7 +914,7 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
-            let (decoder_idx, was_reset) = this.select_best_decoder(requested_time, is_scrubbing);
+            let (decoder_idx, was_reset) = this.select_best_decoder(requested_frame, requested_time, is_scrubbing);
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
