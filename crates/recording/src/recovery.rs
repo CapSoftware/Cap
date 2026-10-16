@@ -812,6 +812,12 @@ impl RecoveryManager {
                         );
                     }
                     Err(error) => {
+                        let reason = if error.kind() == std::io::ErrorKind::InvalidData {
+                            "truncated_fragment".to_string()
+                        } else {
+                            error.to_string()
+                        };
+                        let _ = std::fs::write(&corrupt_marker, &reason);
                         warn!(path = %path.display(), %error, "Cannot recover fragment prefix");
                         if let Some(health_tx) = health_tx {
                             emit_health(
