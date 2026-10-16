@@ -76,6 +76,51 @@ pub fn check_pcm(case: &mut Case, label: &str, model: &AudioModel, mono: &[f32])
     report
 }
 
+pub fn check_music_contribution(
+    case: &mut Case,
+    project: &Project,
+    config: &ProjectConfiguration,
+    recording: &[f32],
+    combined: &[f32],
+) {
+    let mut recording_config = config.clone();
+    recording_config
+        .timeline
+        .as_mut()
+        .expect("timeline")
+        .audio_segments
+        .clear();
+    check_pcm(
+        case,
+        "recording",
+        &audio_model(project, &recording_config),
+        recording,
+    );
+    if recording.len() != combined.len() {
+        case.problem(
+            "audio-duration",
+            format!(
+                "adding music changed the sample count: {} to {}",
+                recording.len(),
+                combined.len()
+            ),
+        );
+        return;
+    }
+    // Enhanced mic markers overlap the music's chirp band. Subtraction removes
+    // their unknown waveform while retaining music timing, payload and gain checks.
+    let music: Vec<f32> = combined
+        .iter()
+        .zip(recording)
+        .map(|(combined, recording)| combined - recording)
+        .collect();
+    let mut model = audio_model(project, config);
+    model
+        .expected
+        .retain(|marker| marker.source == cap_verify::audio_code::AudioSource::Media);
+    check_pcm(case, "music contribution", &model, &music);
+}
+
 /// Plays a project's audio through the editor's real output source
 /// pipeline (`AudioOutput::play` -> `install_source` -> pre-render buffer
 /// -> playhead sync -> fill), pulled offline block by block.

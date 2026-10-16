@@ -272,6 +272,159 @@ fn export_studio_sound_low_fps() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+#[test]
+fn studio_sound_music() {
+    let spec = audio_fixture::mix(report::tier());
+    let project = audio_support::project(&spec);
+    let rt = common::runtime();
+    let mut config = project.config();
+    studio_sound(&mut config);
+    audio_fixture::add_music(&mut config, 1.0, 7.0, 0.5, -6.0);
+    let mut recording_config = config.clone();
+    recording_config
+        .timeline
+        .as_mut()
+        .expect("timeline")
+        .audio_segments
+        .clear();
+    let mut failures = Vec::new();
+    for fps in [30, 10] {
+        for path in [ExportPath::App, ExportPath::Plain] {
+            let id = format!(
+                "audio/{}/studio-sound-music/{}{fps}",
+                spec.name,
+                path.label()
+            );
+            if !report::selected(&id) {
+                continue;
+            }
+            let mut case = Case::new(&id);
+            let combined_dir = common::scratch_dir(&id);
+            let recording_dir = common::scratch_dir(&format!("{id}-recording"));
+            let outputs: Result<Vec<Vec<f32>>, String> = [
+                (config.clone(), combined_dir.path()),
+                (recording_config.clone(), recording_dir.path()),
+            ]
+            .into_iter()
+            .map(|(config, dir)| {
+                rt.block_on(audio_support::export(&project, config, path, fps, RES, dir))
+                    .and_then(|out| audio_support::exported_mono(&out))
+            })
+            .collect();
+            match outputs {
+                Ok(outputs) => audio_support::check_music_contribution(
+                    &mut case,
+                    &project,
+                    &config,
+                    &outputs[1],
+                    &outputs[0],
+                ),
+                Err(error) => case.problem("error", error),
+            }
+            failures.extend(report::settle(case).err());
+        }
+    }
+    let id = format!("audio/{}/studio-sound-music/playback", spec.name);
+    if report::selected(&id) {
+        let mut case = Case::new(&id);
+        let duration = audio_support::audio_model(&project, &config).duration;
+        let mut outputs = Vec::new();
+        for config in [config.clone(), recording_config] {
+            let mut player = OfflinePlayer::open(&rt, &project, config);
+            player.play(0.0);
+            outputs.push(audio_support::mono(&player.pull(duration + 0.3)));
+            if player.starved > 0 {
+                case.problem("audio-starved", format!("{} pulls starved", player.starved));
+            }
+        }
+        audio_support::check_music_contribution(
+            &mut case,
+            &project,
+            &config,
+            &outputs[1],
+            &outputs[0],
+        );
+        failures.extend(report::settle(case).err());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn studio_sound_music_is_additive() {
+    let spec = audio_fixture::mix(report::tier());
+    let id = format!("audio/{}/studio-sound-music/additive", spec.name);
+    if !report::selected(&id) {
+        return;
+    }
+    let project = audio_support::project(&spec);
+    let rt = common::runtime();
+    let mut config = project.config();
+    cuts(&mut config);
+    audio_fixture::add_music(&mut config, 1.0, 7.0, 0.5, -6.0);
+    let media = rt
+        .block_on(cap_editor::create_segments(
+            &project.meta,
+            project.meta.studio_meta().expect("studio"),
+            false,
+        ))
+        .expect("segments");
+    let segments = rt.block_on(cap_editor::get_audio_segments(&media));
+    let music = cap_editor::load_music_tracks_uncached(&config, &project.path);
+    let source = cap_audio::AudioData::from_file(&project.path.join(audio_fixture::MUSIC_FILE))
+        .expect("music source");
+    assert_eq!(source.channels(), 2);
+    let frames =
+        (config.timeline.as_ref().expect("timeline").duration() * 48_000.0).round() as usize;
+    let render = |config: &ProjectConfiguration, block: usize| {
+        let mut renderer =
+            cap_editor::AudioRenderer::new(segments.clone()).with_music(music.clone());
+        let mut pcm = Vec::new();
+        while pcm.len() / 2 < frames {
+            let count = block.min(frames - pcm.len() / 2);
+            let (_, chunk) = renderer.render_frame_raw(count, config).expect("audio");
+            assert!(!chunk.is_empty());
+            pcm.extend(chunk);
+        }
+        pcm
+    };
+    let mut case = Case::new(&id);
+    for improve in [false, true] {
+        config.audio.improve = improve;
+        let mut recording_config = config.clone();
+        recording_config
+            .timeline
+            .as_mut()
+            .expect("timeline")
+            .audio_segments
+            .clear();
+        for block in [1024, 1600, 4800] {
+            let combined = render(&config, block);
+            let recording = render(&recording_config, block);
+            assert_eq!(combined.len(), recording.len());
+            let mut worst = 0.0f32;
+            for (sample, (combined, recording)) in combined.iter().zip(&recording).enumerate() {
+                assert!(combined.is_finite() && combined.abs() < 0.99);
+                let frame = sample / 2;
+                let expected = if (48_000..336_000).contains(&frame) {
+                    source.samples()[(frame - 24_000) * 2 + sample % 2] * 10.0_f32.powf(-6.0 / 20.0)
+                } else {
+                    0.0
+                };
+                let difference = (combined - recording - expected).abs();
+                worst = worst.max(difference);
+                assert!(
+                    difference <= 1e-6,
+                    "Studio Sound {improve}, block {block}, sample {sample}: music differs by {difference}"
+                );
+            }
+            case.note(format!(
+                "Studio Sound {improve}, block {block}: music max sample error {worst:.9}"
+            ));
+        }
+    }
+    common::finish(case);
+}
+
 /// Full decode of audio recorded at another rate than 48 kHz (44.1 kHz USB
 /// microphones are common): the resampler's buffered tail must be flushed,
 /// so the decoded track lasts exactly as long as the source, its last
