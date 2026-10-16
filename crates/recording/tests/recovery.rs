@@ -2292,3 +2292,50 @@ fn instant_recovery_rebuilds_corrupt_prior_output_only_from_valid_required_raw()
         }
     }
 }
+
+#[test]
+fn recovery_aligns_tracks_with_the_start_times_persisted_while_recording() {
+    test_utils::init_tracing();
+
+    let recording = TestRecording::new().unwrap();
+    let display_dir = recording.create_display_dir(0).unwrap();
+    write_synthetic_fragments(&display_dir, 180, Duration::from_secs(2));
+
+    // What the recorder leaves: an in-progress meta without segments, plus
+    // the start times it persisted beside the segment.
+    let meta = RecordingMeta {
+        platform: None,
+        project_path: recording.path().to_path_buf(),
+        pretty_name: "Test Recording".to_string(),
+        sharing: None,
+        upload: None,
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: Vec::new(),
+                cursors: Cursors::default(),
+                status: Some(StudioRecordingStatus::InProgress),
+            },
+        })),
+    };
+    std::fs::write(
+        recording.path().join("recording-meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        display_dir
+            .parent()
+            .unwrap()
+            .join(cap_recording::recovery::SEGMENT_START_TIMES_FILE),
+        br#"{"display":0.412,"camera":null,"mic":0.25,"system_audio":null}"#,
+    )
+    .unwrap();
+
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let recovered = RecoveryManager::recover(&incomplete).expect("recovery should succeed");
+
+    let StudioRecordingMeta::MultipleSegments { inner } = recovered.meta else {
+        panic!("segmented meta expected");
+    };
+    assert_eq!(inner.segments[0].display.start_time, Some(0.412));
+}

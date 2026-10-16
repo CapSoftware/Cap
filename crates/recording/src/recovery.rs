@@ -147,6 +147,18 @@ pub enum RecoveryError {
 
 pub struct RecoveryManager;
 
+/// Track start times the recorder writes beside an in-progress segment
+/// (`crate::studio_recording::SegmentStartTimes`); the in-progress meta has
+/// no segments, so this is what recovery aligns the tracks with.
+pub const SEGMENT_START_TIMES_FILE: &str = "start-times.json";
+
+fn persisted_start_times(segment_dir: &Path) -> Option<crate::studio_recording::SegmentStartTimes> {
+    let raw = std::fs::read(segment_dir.join(SEGMENT_START_TIMES_FILE)).ok()?;
+    serde_json::from_slice(&raw)
+        .inspect_err(|error| warn!(%error, "Ignoring unreadable segment start times"))
+        .ok()
+}
+
 const EXPORT_SEEK_PROBE_SAMPLE_COUNT: usize = 8;
 
 impl RecoveryManager {
@@ -2345,7 +2357,10 @@ impl RecoveryManager {
                     }
                 };
 
-                let display_start_time = original_segment.and_then(|s| s.display.start_time);
+                let persisted = persisted_start_times(&segment_dir);
+                let display_start_time = original_segment
+                    .and_then(|s| s.display.start_time)
+                    .or(persisted.map(|times| times.display));
 
                 let get_start_time_or_fallback = |original_time: Option<f64>| -> Option<f64> {
                     start_time_or_display_fallback(original_time, display_start_time)
@@ -2368,7 +2383,8 @@ impl RecoveryManager {
                             start_time: get_start_time_or_fallback(
                                 original_segment
                                     .and_then(|s| s.camera.as_ref())
-                                    .and_then(|c| c.start_time),
+                                    .and_then(|c| c.start_time)
+                                    .or(persisted.and_then(|times| times.camera)),
                             ),
                             device_id: original_segment
                                 .and_then(|s| s.camera.as_ref())
@@ -2391,7 +2407,8 @@ impl RecoveryManager {
                                 start_time: get_start_time_or_fallback(
                                     original_segment
                                         .and_then(|s| s.mic.as_ref())
-                                        .and_then(|m| m.start_time),
+                                        .and_then(|m| m.start_time)
+                                        .or(persisted.and_then(|times| times.mic)),
                                 ),
                                 device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
@@ -2416,7 +2433,8 @@ impl RecoveryManager {
                                 start_time: get_start_time_or_fallback(
                                     original_segment
                                         .and_then(|s| s.system_audio.as_ref())
-                                        .and_then(|a| a.start_time),
+                                        .and_then(|a| a.start_time)
+                                        .or(persisted.and_then(|times| times.system_audio)),
                                 ),
                                 device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
