@@ -127,6 +127,10 @@ mod source {
 
     pub type Frame = screen_capture::VideoFrame;
 
+    pub fn frame_index(frame: &Frame) -> i64 {
+        frame.sample_buf.pts().value
+    }
+
     pub fn info() -> VideoInfo {
         VideoInfo::from_raw(RawVideoFormat::Nv12, WIDTH, HEIGHT, FPS)
     }
@@ -201,14 +205,14 @@ mod source {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct TracedMuxer<M> {
     inner: M,
     trace: Option<std::fs::File>,
     output_path: PathBuf,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl<M: cap_recording::Muxer> cap_recording::Muxer for TracedMuxer<M>
 where
     M::Config: Send,
@@ -260,7 +264,7 @@ where
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl<M: cap_recording::VideoMuxer<VideoFrame = source::Frame>> cap_recording::VideoMuxer
     for TracedMuxer<M>
 where
@@ -277,7 +281,7 @@ where
             writeln!(
                 trace,
                 "{}\t{}",
-                frame.sample_buf.pts().value,
+                source::frame_index(&frame),
                 timestamp.as_nanos()
             )?;
         }
@@ -285,7 +289,7 @@ where
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl<M: cap_recording::AudioMuxer> cap_recording::AudioMuxer for TracedMuxer<M>
 where
     M::Config: Send,
@@ -306,6 +310,16 @@ mod source {
 
     pub type Frame = FFmpegVideoFrame;
 
+    #[cfg(target_os = "windows")]
+    type TestMuxer = TracedMuxer<SegmentedVideoMuxer>;
+    #[cfg(not(target_os = "windows"))]
+    type TestMuxer = SegmentedVideoMuxer;
+
+    #[cfg(target_os = "windows")]
+    pub fn frame_index(frame: &Frame) -> i64 {
+        frame.inner.pts().expect("synthetic source frame index")
+    }
+
     pub fn info() -> VideoInfo {
         VideoInfo::from_raw(RawVideoFormat::Bgra, WIDTH, HEIGHT, FPS)
     }
@@ -315,6 +329,8 @@ mod source {
     /// Renders ahead of time so emission keeps the nominal rate.
     pub fn picture(index: u32) -> anyhow::Result<Picture> {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, WIDTH, HEIGHT);
+        #[cfg(target_os = "windows")]
+        frame.set_pts(Some(i64::from(index)));
         let stride = frame.stride(0);
         video_code::draw_marker(
             FrameMarker::new(StreamKind::Screen, 0, index),
@@ -346,7 +362,7 @@ mod source {
             .with_timestamps(timestamps)
             // The Studio display config (capture_pipeline.rs, X11Capture):
             // 2 s segments.
-            .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+            .build::<TestMuxer>(SegmentedVideoMuxerConfig {
                 segment_duration: Duration::from_secs(2),
                 ..Default::default()
             })
@@ -424,10 +440,10 @@ async fn record(
         }
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     log.line("stop");
     drop(tx);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     tokio::time::timeout(Duration::from_secs(5), async {
         while !display.join("mux-video-stopped").exists() {
             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -435,7 +451,7 @@ async fn record(
     })
     .await
     .context("waiting for mux-video EOF")?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     log.line("stop");
     let finished = pipeline.stop().await;
     if let Some(health) = health.as_mut() {
