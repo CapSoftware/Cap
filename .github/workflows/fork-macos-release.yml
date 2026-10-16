@@ -1,0 +1,143 @@
+name: "fork-macos-release"
+
+# Builds Cap for Apple Silicon without any of Cap's signing secrets and
+# attaches the disk image to a GitHub release on this fork. The app keeps the
+# so.cap.desktop identity, so it installs over the official Cap and reuses its
+# recordings and settings. It is ad-hoc signed, so macOS asks once to allow it.
+#
+# Every merge to main builds and publishes a release tagged
+# fw-v<version>-build.<run>. It also runs from the Actions tab, or when a tag
+# named fw-v<anything> is pushed. The tag the release step creates is pushed
+# with GITHUB_TOKEN, which does not start another run.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "fw-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.repository != 'CapSoftware/Cap' }}
+    runs-on: macos-15
+    timeout-minutes: 360
+    env:
+      TARGET: aarch64-apple-darwin
+      CAP_BUNDLE: apps/desktop-gpui/target/aarch64-apple-darwin/release/bundle
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-fork-release
+          save-cache: true
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            apps/desktop-gpui -> target
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Name the release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' apps/desktop/src-tauri/Cargo.toml | head -n 1)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="fw-v$version-build.$GITHUB_RUN_NUMBER"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create .env file in root
+        shell: bash
+        run: |
+          {
+            echo "appVersion=${{ steps.release.outputs.version }}"
+            echo "VITE_ENVIRONMENT=production"
+            echo "RUST_TARGET_TRIPLE=$TARGET"
+          } >> .env
+
+      - name: Run cap-setup
+        shell: bash
+        run: bun run cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ env.TARGET }}
+
+      - name: Build desktop binaries
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: ./scripts/build-desktop-binaries.sh "$TARGET"
+
+      # No Developer ID and no updater key here: "-" signs ad hoc, and the
+      # updater archive is skipped because only Cap can sign one.
+      - name: Build Cap
+        shell: bash
+        env:
+          CI: false
+          CAP_BUILD_REVISION: ${{ github.sha }}
+          RUST_TARGET_TRIPLE: ${{ env.TARGET }}
+        run: |
+          node scripts/bundle-gpui.mjs "$TARGET" --bundles app,dmg \
+            --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
+
+      - name: Verify the app
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$CAP_BUNDLE/macos/Cap.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "so.cap.desktop"
+          codesign --verify --deep --strict "$app"
+          for binary in Cap cap-cli cap-muxer; do
+            test -x "$app/Contents/MacOS/$binary"
+          done
+
+      - name: Stage the disk image
+        id: dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$(find "$CAP_BUNDLE/dmg" -maxdepth 1 -name '*.dmg' | head -n 1)"
+          test -n "$source"
+          dmg="$RUNNER_TEMP/Cap_${{ steps.release.outputs.tag }}_aarch64.dmg"
+          hdiutil convert "$source" -format ULMO -o "$dmg"
+          hdiutil verify "$dmg"
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Cap ${{ steps.release.outputs.version }} (${{ steps.release.outputs.tag }})
+          files: ${{ steps.dmg.outputs.path }}
+          make_latest: true
+          body: |
+            Cap ${{ steps.release.outputs.version }} built from ${{ github.sha }} for Apple Silicon Macs.
+
+            **Install:** quit Cap, open the disk image and drag Cap to Applications, replacing the existing copy. Recordings and settings carry over.
+
+            **First launch:** this build is not notarized, so macOS blocks it the first time. Open System Settings → Privacy & Security and click **Open Anyway** next to Cap. macOS then asks again for Screen Recording, Camera and Microphone access.
+
+            **Updates:** declining Cap's own update prompts keeps this version. Accepting one replaces it with the official Cap.

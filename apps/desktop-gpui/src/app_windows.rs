@@ -69,8 +69,7 @@ pub(crate) fn display_work_area(
         let bounds = scap_targets::Display::from_id(&id)
             .as_ref()
             .and_then(capture_display_bounds)?;
-        let primary_height = cx.primary_display()?.bounds().size.height;
-        Some(global_macos_work_area(available, bounds, primary_height))
+        Some(global_macos_work_area(available, bounds))
     }
     #[cfg(not(target_os = "macos"))]
     Some(available)
@@ -144,16 +143,12 @@ fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixe
 }
 
 #[cfg(target_os = "macos")]
-fn global_macos_work_area(
-    mut available: Bounds<Pixels>,
-    display: Bounds<Pixels>,
-    primary_height: Pixels,
-) -> Bounds<Pixels> {
-    // GPUI's macOS work area uses local x but includes the AppKit screen y.
-    // Windows opened without a display ID need primary-display coordinates.
-    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
-    available.origin.x += display.origin.x;
-    available.origin.y += display.origin.y - appkit_origin_y;
+fn global_macos_work_area(mut available: Bounds<Pixels>, display: Bounds<Pixels>) -> Bounds<Pixels> {
+    // GPUI's macOS work area is relative to its own display's top-left corner
+    // (`visible_bounds` in gpui_macos). Windows opened without a display ID need
+    // primary-display coordinates, so a display above or below the primary one
+    // has to carry its global origin across.
+    available.origin += display.origin;
     available
 }
 
@@ -5468,6 +5463,7 @@ fn load_editor_waveforms(
             gpui_tokio::Tokio::spawn(cx, async move {
                 let mut mic = Vec::with_capacity(instance.segment_medias.len());
                 let mut system = Vec::with_capacity(instance.segment_medias.len());
+                let mut repairs = Vec::with_capacity(instance.segment_medias.len());
                 for segment in instance.segment_medias.iter() {
                     for (loader, out) in [
                         (&segment.audio, &mut mic),
@@ -5475,31 +5471,51 @@ fn load_editor_waveforms(
                     ] {
                         out.push(loader.get().await.ok().flatten());
                     }
+                    repairs.push(segment.audio_timing_repair);
                 }
-                (mic, system)
+                (mic, system, repairs)
             })
         });
-        let Ok((mic, system)) = task.await else {
+        let Ok((mic, system, repairs)) = task.await else {
             return;
         };
-        let peaks = cx
+        let (peaks, envelopes) = cx
             .background_executor()
             .spawn(async move {
-                let [mic, system] = [mic, system].map(|tracks| {
-                    tracks
-                        .into_iter()
-                        .map(|audio| {
-                            Arc::new(match audio {
-                                Some(audio) => editor_timeline::waveform_peaks(
-                                    &audio.sample_slices().collect::<Vec<_>>(),
-                                    audio.channels(),
-                                ),
-                                None => Vec::new(),
+                let measure =
+                    |tracks: &[Option<Arc<cap_audio::DecodedAudio>>],
+                     kernel: fn(&[&[f32]], u16) -> Vec<f32>| {
+                        tracks
+                            .iter()
+                            .map(|audio| {
+                                Arc::new(match audio {
+                                    Some(audio) => kernel(
+                                        &audio.sample_slices().collect::<Vec<_>>(),
+                                        audio.channels(),
+                                    ),
+                                    None => Vec::new(),
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>()
-                });
-                (mic, system)
+                            .collect::<Vec<_>>()
+                    };
+                let peaks = (
+                    measure(&mic, editor_timeline::waveform_peaks),
+                    measure(&system, editor_timeline::waveform_peaks),
+                );
+                let mic_levels = measure(&mic, crate::clean_up::loudness_db);
+                let system_levels = measure(&system, crate::clean_up::loudness_db);
+                let envelopes = mic_levels
+                    .into_iter()
+                    .zip(system_levels)
+                    .zip(repairs)
+                    .map(|((mic, system), repair)| crate::clean_up::ClipEnvelope {
+                        mic: (!mic.is_empty()).then_some(mic),
+                        system: (!system.is_empty()).then_some(system),
+                        mic_repair_secs: f64::from(repair.mic_offset_secs),
+                        system_repair_secs: f64::from(repair.system_audio_offset_secs),
+                    })
+                    .collect::<Vec<_>>();
+                (peaks, envelopes)
             })
             .await;
         let _ = handle.update(cx, |view, window, cx| {
@@ -5508,7 +5524,8 @@ fn load_editor_waveforms(
                 system = peaks.1.iter().filter(|peaks| !peaks.is_empty()).count(),
                 "editor waveforms ready"
             );
-            view.set_waveforms(peaks.0, peaks.1, window, cx)
+            view.set_waveforms(peaks.0, peaks.1, window, cx);
+            view.set_clean_up_envelopes(envelopes, window, cx);
         });
     })
     .detach();
@@ -6844,11 +6861,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
-        for (display_origin, appkit_y) in [
-            (point(px(-1440.), px(0.)), 180.),
-            (point(px(1920.), px(0.)), 180.),
-            (point(px(0.), px(-900.)), 1080.),
-            (point(px(0.), px(1080.)), -900.),
+        for display_origin in [
+            point(px(-1440.), px(0.)),
+            point(px(1920.), px(0.)),
+            point(px(0.), px(-900.)),
+            point(px(0.), px(1080.)),
+            point(px(1691.), px(-1080.)),
         ] {
             let display = Bounds {
                 origin: display_origin,
@@ -6856,11 +6874,10 @@ mod tests {
             };
             let available = global_macos_work_area(
                 Bounds {
-                    origin: point(px(0.), px(appkit_y + 25.)),
+                    origin: point(px(0.), px(25.)),
                     size: size(px(1440.), px(825.)),
                 },
                 display,
-                px(1080.),
             );
             assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
             assert_eq!(available.size, size(px(1440.), px(825.)));

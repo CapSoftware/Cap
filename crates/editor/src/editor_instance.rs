@@ -27,6 +27,12 @@ pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 
+/// Lower bound for [`EditorInstance::set_playback_rate`]. Preview-only, like a
+/// video player's speed control -- never affects project config or exports.
+pub const MIN_PLAYBACK_RATE: f64 = 0.25;
+/// Upper bound for [`EditorInstance::set_playback_rate`].
+pub const MAX_PLAYBACK_RATE: f64 = 4.0;
+
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
     entries: Vec<PreviewCursorCacheEntry>,
@@ -185,6 +191,11 @@ pub struct EditorInstance {
     pub render_constants: Arc<RenderVideoConstants>,
     playback_active: watch::Sender<bool>,
     playback_active_rx: watch::Receiver<bool>,
+    // Shared across every clone of this editor (including the one
+    // `recreate_preparing_candidate` builds) so a live rate change is visible
+    // regardless of which instance the caller currently holds.
+    playback_rate: watch::Sender<f64>,
+    playback_rate_rx: watch::Receiver<f64>,
     // Guards playback_active against a restart race: the event pump of a
     // replaced playback receives its Stop after the successor already sent
     // true, and without the epoch check that late Stop would flip the watch
@@ -578,6 +589,7 @@ impl EditorInstance {
 
         let (preview_tx, preview_rx) = watch::channel(None);
         let (playback_active_tx, playback_active_rx) = watch::channel(false);
+        let (playback_rate_tx, playback_rate_rx) = watch::channel(1.0);
 
         let this = Arc::new(Self {
             preparing_adoption: std::sync::Mutex::new(None),
@@ -599,6 +611,8 @@ impl EditorInstance {
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
+            playback_rate: playback_rate_tx,
+            playback_rate_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
             playback_epoch: AtomicU64::new(0),
@@ -713,6 +727,8 @@ impl EditorInstance {
             render_constants: self.render_constants.clone(),
             playback_active,
             playback_active_rx,
+            playback_rate: self.playback_rate.clone(),
+            playback_rate_rx: self.playback_rate_rx.clone(),
             playback_epoch: AtomicU64::new(0),
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
@@ -737,6 +753,26 @@ impl EditorInstance {
 
     pub fn meta(&self) -> &RecordingMeta {
         &self.meta
+    }
+
+    /// Sets the preview-only playback speed (1.0 = normal). Non-finite values
+    /// are ignored; finite values are clamped to
+    /// [`MIN_PLAYBACK_RATE`]..=[`MAX_PLAYBACK_RATE`]. Applies live to a
+    /// running playback without a stop/restart, and persists across
+    /// play/stop. Never touches project config, exports, or the timeline
+    /// coordinate system.
+    pub fn set_playback_rate(&self, rate: f64) {
+        if !rate.is_finite() {
+            warn!(rate, "Ignoring non-finite playback rate");
+            return;
+        }
+        let clamped = rate.clamp(MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);
+        let _ = self.playback_rate.send(clamped);
+    }
+
+    /// Current preview playback speed (1.0 = normal).
+    pub fn playback_rate(&self) -> f64 {
+        *self.playback_rate_rx.borrow()
     }
 
     pub async fn dispose(&self) {
@@ -886,6 +922,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
+                playback_rate: self.playback_rate_rx.clone(),
                 telemetry: None,
             };
             let playback_handle = if let Some(adoption) = adoption {

@@ -1852,11 +1852,63 @@ its baseline values, every drag and delete having been undone.
 | **Escape clears only the selection** | The source also clears `audioPicker` and `camera3dSetup`, neither of which exists yet. |
 | **No `hidden_text_segments` bookkeeping** | `#[serde(skip_serializing)]` on the field means it never round-trips through a write in either app; nothing here maintains it. |
 
+### Clean Up
+
+The sidebar's **Clean Up** tab (scissors) cuts silences out of the timeline
+before captions or export. It has no Tauri counterpart.
+
+- **Detection** runs on audio the editor has already decoded.
+  `load_editor_waveforms` measures each recording clip's mic and system audio
+  once, as a 10ms RMS loudness envelope (`kernels/src/silence.rs`), on the
+  background executor next to the waveform peaks.
+  - `clean_up::detect_silences` turns the two envelopes into silence ranges in
+    **source time**. It combines them per window by the louder track, after
+    each track's clip offset, timing repair and project gain; a track at
+    -30 dB or below is ignored.
+  - The ranges are recomputed only when the settings, the track gains or the
+    clip offsets change. Timeline edits only re-map them.
+- **The settings**, in order of application:
+  1. **Silence Threshold:** the loudness below which a window counts as silent.
+  2. Blips of 20ms or less inside a pause are bridged.
+  3. **Min Duration:** the shortest silence that gets cut.
+  4. **Min Keep:** a sound shorter than this between two cut silences is cut
+     with them.
+  5. **Pad start / Pad end:** silence left in after speech stops and before it
+     resumes. Neither pad applies at a recording's own edges.
+
+  Presets are fixed settings; any other combination shows no preset
+  selected. The settings live on the window, not in the project.
+- **Mapping:** `timeline_silences` intersects each clip segment with its
+  recording clip's ranges and places them in output time through
+  `clip_timeline_offsets` and the hold windows.
+  - It stays out of a transition's overlap.
+  - It snaps to a clip edge rather than leaving a sliver of under 30ms.
+  - One detected range can appear in several segments once a clip has been
+    split, and keeping or cutting it acts on every part.
+- **Cutting** is one `edit`, so one undo entry.
+  - `editor_edits::cut_clip_source_range` removes a source range from a
+    segment by trimming its head or tail or splitting it.
+  - It ripples every other track exactly as `delete_clip_segments` does,
+    through `ripple_delete_output_tracks`.
+  - The cuts apply from the last segment and latest range backwards, so
+    earlier indices never move. A segment the cut covers entirely is
+    deleted, unless it is the last one.
+- **Review:** "Review silences" draws the ranges on the clip track and floats
+  a pill over the timeline. Its controls are previous/next, keep (toggle),
+  cut this one, and `Esc`.
+  - The overlays show whenever the Clean Up tab is open.
+  - Kept ranges draw grey and are left out of "Cut N silences".
+  - Each cut logs `clean up cut silences` plus the usual `timeline edit` line.
+- **Captions** need nothing special. They are source-timed, so
+  `synchronize_captions` re-projects them onto the edited timeline on the
+  next `project_changed`.
+
 
 ## The config sidebar
 
 The panel on the right, **complete**: six tabs, the colour-grade section they
-share, and the eight per-segment panels the timeline selection routes to.
+share, and the eight per-segment panels the timeline selection routes to. A
+seventh tab, Clean Up, is this app's own (see [Clean Up](#clean-up)).
 `ConfigSidebar.tsx` is 6500 lines and really twenty small panels in a
 trenchcoat, so it lands in four modules:
 

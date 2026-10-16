@@ -2437,6 +2437,399 @@ fn spawn_progressive_render(
     }
 }
 
+/// Analysis frame length for [`TimeStretcher`]'s WSOLA. ~20-30ms is the usual
+/// sweet spot for speech.
+const STRETCH_FRAME_MS: f64 = 25.0;
+/// How far from the nominal analysis position WSOLA searches for the
+/// best-correlated overlap, each direction.
+const STRETCH_TOLERANCE_MS: f64 = 6.0;
+
+fn hann_periodic_window(len: usize) -> Vec<f32> {
+    let len_f = len as f64;
+    (0..len)
+        .map(|i| {
+            let phase = std::f64::consts::TAU * i as f64 / len_f;
+            (0.5 - 0.5 * phase.cos()) as f32
+        })
+        .collect()
+}
+
+/// Realtime-safe, pitch-preserving time stretcher for the preview playback
+/// rate (see [`crate::EditorInstance::set_playback_rate`]).
+///
+/// Implements WSOLA (Waveform Similarity Overlap-Add): consecutive
+/// `frame_len`-sample analysis frames are windowed (periodic Hann, 50%
+/// overlap) and overlap-added into `synthesis_hop`-sample output chunks,
+/// advancing the nominal input position by `synthesis_hop * rate` each hop.
+/// Before extracting a frame, a small search (`+/- tolerance`, scored by
+/// unnormalized cross-correlation against the previous frame's tail) picks
+/// the best-aligned offset, avoiding the phase cancellation a naive
+/// fixed-offset overlap-add would produce. Pitch is unaffected because every
+/// frame is played back at the source's native sample rate; only how often
+/// frames overlap changes.
+///
+/// At `rate == 1.0`, as long as the stretcher has never been engaged, `fill`
+/// is a direct passthrough to the caller's `pull` closure -- bit-identical to
+/// unstretched playback, with none of the buffering below allocated into the
+/// hot path. Once engaged by a non-1.0 rate, the WSOLA path keeps running
+/// (COLA-correct, so audio stays continuous) even if the rate later returns
+/// to exactly 1.0, trading a few hundred microseconds of CPU for avoiding a
+/// resync glitch; this is a deliberate simplification and a known deviation
+/// from "always bit-identical at 1.0" once the rate has ever been touched.
+///
+/// All buffers are preallocated in [`TimeStretcher::new`] for the worst case
+/// (max rate, max search tolerance); `fill` never allocates.
+pub(crate) struct TimeStretcher<T: FromSampleBytes> {
+    channels: usize,
+    sample_rate: u32,
+    frame_len: usize,
+    synthesis_hop: usize,
+    tolerance: usize,
+    window: Vec<f32>,
+    ring: VecDeque<f32>,
+    ring_base_frame: u64,
+    analysis_pos: f64,
+    overlap_tail: Vec<f32>,
+    corr_ref: Vec<f32>,
+    has_overlap: bool,
+    active: bool,
+    pending_output: Vec<f32>,
+    pending_start: usize,
+    pending_end: usize,
+    pull_scratch: Vec<T>,
+    pull_scratch_f32: Vec<f32>,
+    candidate_scratch: Vec<f32>,
+}
+
+impl<T: FromSampleBytes + cpal::FromSample<f32>> TimeStretcher<T>
+where
+    f32: cpal::FromSample<T>,
+{
+    pub(crate) fn new(sample_rate: u32, channels: usize) -> Self {
+        let channels = channels.max(1);
+        let frame_len = {
+            let raw = (f64::from(sample_rate) * STRETCH_FRAME_MS / 1_000.0)
+                .round()
+                .max(4.0) as usize;
+            raw + (raw % 2)
+        };
+        let synthesis_hop = frame_len / 2;
+        let tolerance = (f64::from(sample_rate) * STRETCH_TOLERANCE_MS / 1_000.0)
+            .round()
+            .max(1.0) as usize;
+        let window = hann_periodic_window(frame_len);
+
+        let max_hop_advance =
+            (synthesis_hop as f64 * crate::editor_instance::MAX_PLAYBACK_RATE).ceil() as usize;
+        let window_span = frame_len + 2 * tolerance;
+        let ring_capacity_frames = max_hop_advance + window_span + synthesis_hop + 4;
+        let ring_capacity = ring_capacity_frames * channels;
+
+        Self {
+            channels,
+            sample_rate,
+            frame_len,
+            synthesis_hop,
+            tolerance,
+            window,
+            ring: VecDeque::with_capacity(ring_capacity),
+            ring_base_frame: 0,
+            analysis_pos: 0.0,
+            overlap_tail: vec![0.0; synthesis_hop * channels],
+            corr_ref: vec![0.0; synthesis_hop],
+            has_overlap: false,
+            active: false,
+            pending_output: vec![0.0; synthesis_hop * channels],
+            pending_start: 0,
+            pending_end: 0,
+            pull_scratch: vec![T::EQUILIBRIUM; ring_capacity],
+            pull_scratch_f32: vec![0.0; ring_capacity],
+            candidate_scratch: vec![0.0; frame_len * channels],
+        }
+    }
+
+    /// Discards buffered lookahead and overlap-add state. Call on seek /
+    /// reseat so the next `fill` starts clean from wherever the source's
+    /// playhead was just moved to.
+    pub(crate) fn flush(&mut self) {
+        self.ring.clear();
+        self.ring_base_frame = 0;
+        self.analysis_pos = 0.0;
+        self.overlap_tail.fill(0.0);
+        self.corr_ref.fill(0.0);
+        self.has_overlap = false;
+        self.pending_start = 0;
+        self.pending_end = 0;
+    }
+
+    /// Source-timeline seconds of audio this stretcher has already pulled
+    /// from the source but not yet handed to the output -- lookahead the
+    /// search needs plus one hop of already-produced-but-undelivered output.
+    fn internal_delay_secs(&self) -> f64 {
+        if !self.active {
+            return 0.0;
+        }
+        let buffered_frames = self.ring.len() / self.channels
+            + (self.pending_end - self.pending_start) / self.channels;
+        buffered_frames as f64 / f64::from(self.sample_rate)
+    }
+
+    /// Maps the underlying buffer's raw (pulled-sample) position to what is
+    /// actually audible right now, correcting for this stretcher's own
+    /// internal lookahead delay.
+    pub(crate) fn current_audible_playhead(&self, raw_playhead_secs: f64) -> f64 {
+        (raw_playhead_secs - self.internal_delay_secs()).max(0.0)
+    }
+
+    /// Fills `output` at `rate`x the source's pace, preserving pitch. `pull`
+    /// must behave like [`PrerenderedAudioBuffer::fill`]: always fill the
+    /// whole slice requested, padding with silence past the end of the
+    /// source.
+    pub(crate) fn fill(&mut self, output: &mut [T], rate: f64, mut pull: impl FnMut(&mut [T])) {
+        if rate == 1.0 && !self.active {
+            pull(output);
+            return;
+        }
+        self.active = true;
+
+        let mut written = 0;
+        while written < output.len() {
+            if self.pending_start >= self.pending_end {
+                self.produce_hop(rate, &mut pull);
+            }
+            let available = self.pending_end - self.pending_start;
+            let take = (output.len() - written).min(available);
+            for i in 0..take {
+                output[written + i] =
+                    <T as cpal::Sample>::from_sample(self.pending_output[self.pending_start + i]);
+            }
+            self.pending_start += take;
+            written += take;
+        }
+    }
+
+    fn produce_hop(&mut self, rate: f64, pull: &mut impl FnMut(&mut [T])) {
+        let channels = self.channels;
+        let frame_len = self.frame_len as i64;
+        let synthesis_hop = self.synthesis_hop;
+        let tolerance = self.tolerance as i64;
+
+        let nominal = self.analysis_pos.round() as i64;
+        let window_start = (nominal - tolerance).max(0);
+        let window_end = nominal + tolerance + frame_len;
+
+        self.ensure_ring_covers(window_end, pull);
+        self.trim_ring_before(window_start);
+
+        let ring_base_frame = self.ring_base_frame as i64;
+        let ring_slice = self.ring.make_contiguous();
+        let ring_len_frames = (ring_slice.len() / channels) as i64;
+
+        let best_offset = if self.has_overlap {
+            let mut best_offset = 0i64;
+            let mut best_score = f32::NEG_INFINITY;
+            let mut found = false;
+            let mut k = -tolerance;
+            while k <= tolerance {
+                let candidate_start = nominal + k - ring_base_frame;
+                if candidate_start >= 0 && candidate_start + frame_len <= ring_len_frames {
+                    let start = candidate_start as usize;
+                    let mut score = 0.0f32;
+                    for i in 0..synthesis_hop {
+                        score += self.corr_ref[i] * ring_slice[(start + i) * channels];
+                    }
+                    if !found || score > best_score {
+                        best_score = score;
+                        best_offset = k;
+                        found = true;
+                    }
+                }
+                k += 1;
+            }
+            best_offset
+        } else {
+            0
+        };
+
+        let max_start = (ring_len_frames - frame_len).max(0);
+        let candidate_start =
+            (nominal + best_offset - ring_base_frame).clamp(0, max_start) as usize;
+        let frame_len = frame_len as usize;
+
+        for i in 0..frame_len {
+            let w = self.window[i];
+            let base = (candidate_start + i) * channels;
+            for ch in 0..channels {
+                self.candidate_scratch[i * channels + ch] =
+                    ring_slice.get(base + ch).copied().unwrap_or(0.0) * w;
+            }
+        }
+
+        let hop_samples = synthesis_hop * channels;
+        for j in 0..hop_samples {
+            self.pending_output[j] = self.overlap_tail[j] + self.candidate_scratch[j];
+        }
+        self.pending_start = 0;
+        self.pending_end = hop_samples;
+
+        self.overlap_tail
+            .copy_from_slice(&self.candidate_scratch[hop_samples..frame_len * channels]);
+
+        for i in 0..synthesis_hop {
+            let src = (candidate_start + synthesis_hop + i) * channels;
+            self.corr_ref[i] = ring_slice.get(src).copied().unwrap_or(0.0);
+        }
+        self.has_overlap = true;
+
+        self.analysis_pos += synthesis_hop as f64 * rate;
+    }
+
+    fn ensure_ring_covers(&mut self, end_frame: i64, pull: &mut impl FnMut(&mut [T])) {
+        let channels = self.channels;
+        let have_end = self.ring_base_frame as i64 + (self.ring.len() / channels) as i64;
+        if end_frame <= have_end {
+            return;
+        }
+        let deficit_frames =
+            ((end_frame - have_end) as usize).min(self.pull_scratch.len() / channels);
+        if deficit_frames == 0 {
+            return;
+        }
+        let deficit_samples = deficit_frames * channels;
+        let scratch = &mut self.pull_scratch[..deficit_samples];
+        pull(scratch);
+        for (dst, src) in self.pull_scratch_f32[..deficit_samples]
+            .iter_mut()
+            .zip(scratch.iter())
+        {
+            *dst = <f32 as cpal::Sample>::from_sample(*src);
+        }
+        self.ring
+            .extend(self.pull_scratch_f32[..deficit_samples].iter().copied());
+    }
+
+    fn trim_ring_before(&mut self, frame: i64) {
+        let channels = self.channels;
+        let drop_frames =
+            ((frame - self.ring_base_frame as i64).max(0) as usize).min(self.ring.len() / channels);
+        for _ in 0..drop_frames * channels {
+            self.ring.pop_front();
+        }
+        self.ring_base_frame += drop_frames as u64;
+    }
+}
+
+#[cfg(test)]
+mod time_stretch_tests {
+    use super::*;
+
+    fn sine_source(sample_rate: u32, freq: f64, total_frames: usize) -> Vec<f32> {
+        (0..total_frames)
+            .map(|i| {
+                (std::f64::consts::TAU * freq * i as f64 / f64::from(sample_rate)).sin() as f32
+            })
+            .collect()
+    }
+
+    struct VecPuller<'a> {
+        data: &'a [f32],
+        pos: usize,
+        total_pulled: usize,
+    }
+
+    impl VecPuller<'_> {
+        fn pull_into(&mut self, out: &mut [f32]) {
+            for slot in out.iter_mut() {
+                *slot = self.data.get(self.pos).copied().unwrap_or(0.0);
+                self.pos += 1;
+            }
+            self.total_pulled += out.len();
+        }
+    }
+
+    #[test]
+    fn bypass_at_unit_rate_is_bit_identical() {
+        let mut stretcher = TimeStretcher::<f32>::new(48_000, 1);
+        let source = sine_source(48_000, 440.0, 4_096);
+        let mut puller = VecPuller {
+            data: &source,
+            pos: 0,
+            total_pulled: 0,
+        };
+
+        let mut output = vec![0.0f32; 2_048];
+        stretcher.fill(&mut output, 1.0, |buf| puller.pull_into(buf));
+
+        assert_eq!(output, source[..2_048]);
+        assert_eq!(puller.total_pulled, 2_048);
+    }
+
+    #[test]
+    fn stretch_consumes_approximately_rate_times_the_output_length() {
+        for rate in [0.5, 1.25, 1.5, 2.0] {
+            let sample_rate = 48_000u32;
+            let mut stretcher = TimeStretcher::<f32>::new(sample_rate, 1);
+            let source = sine_source(sample_rate, 220.0, sample_rate as usize * 3);
+            let mut puller = VecPuller {
+                data: &source,
+                pos: 0,
+                total_pulled: 0,
+            };
+
+            let output_len = sample_rate as usize;
+            let mut output = vec![0.0f32; output_len];
+            stretcher.fill(&mut output, rate, |buf| puller.pull_into(buf));
+
+            assert_eq!(output.len(), output_len);
+
+            let expected_pulled = (output_len as f64 * rate) as usize;
+            // One-off lookahead (lost search tolerance + half analysis frame)
+            // pulled ahead of what's actually been output -- bounded, not
+            // proportional to the run length.
+            let tolerance = sample_rate as usize / 5;
+            let diff = puller.total_pulled.abs_diff(expected_pulled);
+            assert!(
+                diff <= tolerance,
+                "rate={rate}, pulled={}, expected={expected_pulled}, diff={diff}",
+                puller.total_pulled
+            );
+        }
+    }
+
+    #[test]
+    fn stretching_preserves_pitch_measured_by_zero_crossing_rate() {
+        let sample_rate = 48_000u32;
+        let freq = 440.0;
+        let mut stretcher = TimeStretcher::<f32>::new(sample_rate, 1);
+        let source = sine_source(sample_rate, freq, sample_rate as usize * 4);
+        let mut puller = VecPuller {
+            data: &source,
+            pos: 0,
+            total_pulled: 0,
+        };
+
+        let output_len = sample_rate as usize * 2;
+        let mut output = vec![0.0f32; output_len];
+        stretcher.fill(&mut output, 1.5, |buf| puller.pull_into(buf));
+
+        // Skip the WSOLA fade-in (zero overlap tail on the very first hop),
+        // which biases the earliest crossings.
+        let skip = sample_rate as usize / 10;
+        let measured = &output[skip..];
+        let crossings = measured
+            .windows(2)
+            .filter(|pair| (pair[0] >= 0.0) != (pair[1] >= 0.0))
+            .count();
+        let measured_seconds = measured.len() as f64 / f64::from(sample_rate);
+        let measured_freq = crossings as f64 / 2.0 / measured_seconds;
+
+        assert!(
+            (measured_freq - freq).abs() < freq * 0.1,
+            "expected ~{freq} Hz, measured {measured_freq} Hz"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
