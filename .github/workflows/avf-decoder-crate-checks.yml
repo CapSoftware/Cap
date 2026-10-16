@@ -37,6 +37,9 @@ jobs:
         with:
           target: ${{ matrix.target }}
           tier: full
+      - name: Rust check components
+        shell: bash
+        run: rustup component add rustfmt clippy
       - name: Provenance
         shell: bash
         run: |
