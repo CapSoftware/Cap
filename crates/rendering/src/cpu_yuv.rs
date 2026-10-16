@@ -288,6 +288,7 @@ const PARALLEL_THRESHOLD_PIXELS: usize = 1920 * 1080;
 const MIN_ROWS_PER_THREAD: usize = 16;
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 pub fn nv12_to_rgba_simd(
     y_data: &[u8],
     uv_data: &[u8],
@@ -551,6 +552,7 @@ fn nv12_convert_row_into(
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
 unsafe fn nv12_convert_row_avx2(
     y_data: &[u8],
     uv_data: &[u8],
@@ -577,6 +579,7 @@ unsafe fn nv12_convert_row_avx2(
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[target_feature(enable = "sse2")]
+#[allow(clippy::too_many_arguments)]
 unsafe fn nv12_convert_row_sse2(
     y_data: &[u8],
     uv_data: &[u8],
@@ -600,6 +603,7 @@ unsafe fn nv12_convert_row_sse2(
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 fn nv12_convert_row_scalar(
     y_data: &[u8],
     uv_data: &[u8],
