@@ -1,0 +1,47 @@
+name: Verify Windows crash finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      control-head:
+        description: Exact control proof commit
+        type: string
+        required: true
+      candidate-head:
+        description: Exact 2642 proof commit
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  retention:
+    name: Windows retained finalization 5x
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      CRASH_CONTROL_HEAD: ${{ inputs.control-head }}
+      CRASH_CANDIDATE_HEAD: ${{ inputs.candidate-head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: full
+      - name: Build and run retained interleaved probes
+        shell: pwsh
+        run: python scripts/verify/crash-windows-retention.py
+      - name: Upload retention evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crash-windows-retention
+          path: ${{ runner.temp }}/crash-windows-retention
+          if-no-files-found: error
+          retention-days: 14
