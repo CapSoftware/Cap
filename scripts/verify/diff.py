@@ -279,6 +279,8 @@ def compare_case(b, m, rel, abs_):
                 better.append(f"{cls} fails {mc[cls]}/{m['runs']} vs {bc[cls]}/{b['runs']}")
         bm, mm = b["measures"].get(cls, {}), m["measures"].get(cls, {})
         for metric in sorted(set(bm) | set(mm)):
+            if metric == "frame":
+                continue
             if fresh or timing_resolution(metric) is not None:
                 bv, mv = distribution(b, cls, metric), distribution(m, cls, metric)
                 resolution = metric_resolution(metric)

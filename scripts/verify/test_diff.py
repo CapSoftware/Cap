@@ -34,6 +34,29 @@ def measured(value, case="export/instant-gated-mic-only/output/mp4/native", cls=
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_witness_frame_movement_does_not_change_severity(self):
+        for cls in ["stale", "future", "unreadable", "timestamps", "nondeterministic"]:
+            with self.subTest(cls=cls):
+                base = measured(4, case="editing/export/basic/seed-10", cls=cls, metric="screen-frames")
+                base["measures"][cls]["frame"] = [63, 63]
+                main = json.loads(json.dumps(base))
+                main["measures"][cls]["frame"] = [109, 109]
+                self.assertEqual(compare([base], [main]), ("EQUAL", []))
+                main["measures"][cls]["screen-frames"] = [3, 3]
+                self.assertEqual(compare([base], [main])[0], "BETTER")
+                main["measures"][cls]["screen-frames"] = [5, 5]
+                self.assertEqual(compare([base], [main])[0], "WORSE")
+
+    def test_witness_frame_does_not_hide_new_classes_or_larger_deltas(self):
+        for cls in ["stale", "future", "unreadable", "grid-rounding"]:
+            with self.subTest(cls=cls):
+                main = measured(109, case="export/basic", cls=cls, metric="frame")
+                self.assertEqual(compare([dict(record(), case="export/basic")], [main])[0], "WORSE")
+                base = json.loads(json.dumps(main))
+                base["measures"][cls]["delta"] = [1, 1]
+                main["measures"][cls]["delta"] = [2, 2]
+                self.assertEqual(compare([base], [main])[0], "WORSE")
+
     def test_continuous_metrics_require_three_independent_runs(self):
         self.assertEqual(compare([measured(15.2)], [measured(15.3)])[0], "INSUFFICIENT")
         self.assertEqual(compare([measured(15.2, sample="same") for _ in range(3)], [measured(16) for _ in range(3)])[0], "INSUFFICIENT")
