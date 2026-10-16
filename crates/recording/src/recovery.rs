@@ -767,6 +767,20 @@ impl RecoveryManager {
         health_tx: Option<&HealthSender>,
         recover_complete_prefixes: bool,
     ) {
+        Self::rescue_pending_tmp_fragments_with_copy(
+            dir,
+            health_tx,
+            recover_complete_prefixes,
+            Self::copy_recovered_prefix,
+        );
+    }
+
+    fn rescue_pending_tmp_fragments_with_copy(
+        dir: &Path,
+        health_tx: Option<&HealthSender>,
+        recover_complete_prefixes: bool,
+        copy: impl Fn(&Path, &Path, u64) -> std::io::Result<()>,
+    ) {
         const MIN_VALID_TMP_SIZE: u64 = 100;
 
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -801,24 +815,22 @@ impl RecoveryManager {
                 continue;
             }
             if recover_complete_prefixes && dir.join("init.mp4").is_file() {
-                let result =
-                    read_fragment_prefix(&dir.join("init.mp4"), &path).and_then(|prefix| {
-                        Self::copy_recovered_prefix(&path, &final_path, prefix.length)
-                    });
-                match result {
-                    Ok(()) => {
-                        finalization_info!(
-                            "Recovered complete fragment prefix from {}",
-                            path.display()
-                        );
-                    }
+                match read_fragment_prefix(&dir.join("init.mp4"), &path) {
+                    Ok(prefix) => match copy(&path, &final_path, prefix.length) {
+                        Ok(()) => {
+                            finalization_info!(
+                                "Recovered complete fragment prefix from {}",
+                                path.display()
+                            );
+                        }
+                        Err(error) => {
+                            warn!(path = %path.display(), %error, "Could not copy recoverable fragment prefix");
+                        }
+                    },
                     Err(error) => {
-                        let reason = if error.kind() == std::io::ErrorKind::InvalidData {
-                            "truncated_fragment".to_string()
-                        } else {
-                            error.to_string()
-                        };
-                        let _ = std::fs::write(&corrupt_marker, &reason);
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            let _ = std::fs::write(&corrupt_marker, "truncated_fragment");
+                        }
                         warn!(path = %path.display(), %error, "Cannot recover fragment prefix");
                         if let Some(health_tx) = health_tx {
                             emit_health(
@@ -7187,6 +7199,32 @@ mod timed_fragment_tests {
         RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, false);
         assert!(!directory.path().join("segment_001.m4s").exists());
         assert_eq!(std::fs::read(source).unwrap(), original);
+    }
+
+    #[test]
+    fn failed_prefix_copy_does_not_quarantine_valid_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, complete) = fixture(directory.path());
+        let original = std::fs::read(&source).unwrap();
+        RecoveryManager::rescue_pending_tmp_fragments_with_copy(
+            directory.path(),
+            None,
+            true,
+            |_, _, _| Err(std::io::Error::other("injected storage failure")),
+        );
+        assert!(
+            !directory
+                .path()
+                .join("segment_001.m4s.tmp.corrupt")
+                .exists()
+        );
+        assert!(!directory.path().join("segment_001.m4s").exists());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        RecoveryManager::rescue_pending_tmp_fragments(directory.path(), None, true);
+        assert_eq!(
+            std::fs::read(directory.path().join("segment_001.m4s")).unwrap(),
+            complete
+        );
     }
 
     #[test]
