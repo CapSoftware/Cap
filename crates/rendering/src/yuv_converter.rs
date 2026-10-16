@@ -1964,30 +1964,51 @@ mod colour_matrix_tests {
             return;
         };
         let (y, uv) = chart_nv12();
+        // The same chroma as separate U and V planes for the planar shader.
+        let u: Vec<u8> = uv.iter().step_by(2).copied().collect();
+        let v: Vec<u8> = uv.iter().skip(1).step_by(2).copied().collect();
         let mut converter = YuvToRgbaConverter::new(&device);
         for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
             converter.set_matrix(matrix);
-            converter
-                .convert_nv12(&device, &queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
-                .expect("convert");
-            let rgba = read_rgba(&device, &queue, converter.output_texture().unwrap());
-            for (i, rgb) in CHART.iter().enumerate() {
-                let x = i * 4;
-                let expected = matrix.ycbcr_to_rgb(
-                    i32::from(y[x]) - 16,
-                    i32::from(uv[x]) - 128,
-                    i32::from(uv[x + 1]) - 128,
-                );
-                let actual = &rgba[x * 4..x * 4 + 3];
-                assert!(
-                    actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 1),
-                    "{matrix:?} {rgb:?}: GPU {actual:?}, CPU {expected:?}"
-                );
-                if matrix == YuvMatrix::Bt709 {
-                    assert!(
-                        actual.iter().zip(rgb).all(|(a, e)| a.abs_diff(*e) <= 2),
-                        "BT.709 round trip of {rgb:?} gave {actual:?}"
+            for planar in [false, true] {
+                if planar {
+                    converter
+                        .convert_yuv420p(
+                            &device,
+                            &queue,
+                            &y,
+                            &u,
+                            &v,
+                            WIDTH,
+                            HEIGHT,
+                            WIDTH,
+                            WIDTH / 2,
+                        )
+                        .expect("convert YUV420P");
+                } else {
+                    converter
+                        .convert_nv12(&device, &queue, &y, &uv, WIDTH, HEIGHT, WIDTH, WIDTH)
+                        .expect("convert NV12");
+                }
+                let rgba = read_rgba(&device, &queue, converter.output_texture().unwrap());
+                for (i, rgb) in CHART.iter().enumerate() {
+                    let x = i * 4;
+                    let expected = matrix.ycbcr_to_rgb(
+                        i32::from(y[x]) - 16,
+                        i32::from(uv[x]) - 128,
+                        i32::from(uv[x + 1]) - 128,
                     );
+                    let actual = &rgba[x * 4..x * 4 + 3];
+                    assert!(
+                        actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 1),
+                        "{matrix:?} planar={planar} {rgb:?}: GPU {actual:?}, CPU {expected:?}"
+                    );
+                    if matrix == YuvMatrix::Bt709 {
+                        assert!(
+                            actual.iter().zip(rgb).all(|(a, e)| a.abs_diff(*e) <= 2),
+                            "planar={planar}: BT.709 round trip of {rgb:?} gave {actual:?}"
+                        );
+                    }
                 }
             }
         }
