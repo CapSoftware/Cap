@@ -80,6 +80,19 @@
 			}
 		},
 		{
+			"name": "crash",
+			"about": "crash safety of fragmented Studio recording: in-process vs out-of-process muxer equality, recorder and muxer kills, recovery against what is physically on disk (needs the cap-muxer binary, built by run.sh)",
+			"cargo": ["-p", "cap-verify", "--test", "crash"],
+			"binaries": ["cap-verify::crash"],
+			"test": "crash_safety",
+			"platforms": {
+				"fast": ["linux", "macos", "windows"],
+				"full": ["linux", "macos", "windows"]
+			},
+			"roots": ["cap-verify", "cap-muxer"],
+			"own": ["crates/verify/tests/crash.rs"]
+		},
+		{
 			"name": "audio",
 			"about": "export and offline playback audio against sample-accurate markers (mic, system audio, cuts, speeds, mute, volume, A/V offset)",
 			"cargo": ["-p", "cap-verify", "--test", "audio"],
