@@ -628,37 +628,6 @@ link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
 # #2641 (bug B1), #2643 (bug C), #2644 (bug E).
 
 [[xfail]]
-case = "crash/recorder-kill/inproc/rollover+5"
-class = "dropped-complete"
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A): recovery drops a physically complete fragment that the manifest still lists as pending. The writer renames segment N when the packet after its closing keyframe arrives, but FragmentManifestTracker/SegmentedVideoEncoder only rescan the directory every 10 frames, and find_complete_fragments_with_init keeps manifest entries with is_complete=true plus files the manifest does not list at all, so the listed-pending segment is skipped (recovery.rs). A kill 5 frames after the keyframe lands between rename and rescan on every platform (3 of 3). Bound: one fragment (60 frames)"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/rollover+2"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan; whether these kill points do depends on encoder latency (in 1 run: rollover+2 and random1 on 3 of 3 platforms, finalize+0ms on macOS and Windows; with local VideoToolbox rollover+2 passed). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/random1"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
-case = "crash/recorder-kill/inproc/finalize+0ms"
-class = "dropped-complete"
-flaky = true
-bound = { count = 1, frames = [1, 60] }
-reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
-link = "https://github.com/CapSoftware/Cap/pull/2640"
-
-[[xfail]]
 case = "crash/recorder-kill/inproc/static-screen"
 class = "loss-time"
 bound = { count = 1, secs = [2.5, 20.5] }
