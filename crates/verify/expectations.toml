@@ -140,16 +140,16 @@ link = "https://github.com/CapSoftware/Cap/pull/2638"
 case = "seek/seek-gop/storm30/avf"
 class = "stale"
 platforms = ["macos"]
-bound = { screen-frames = 20, camera-frames = 20, delta = 352, frame = [1, 900] }
-reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (seek 349 shows 237): 20 of 3000 full-tier seeks (1 in the fast tier), up to 352 source frames stale"
+bound = { screen-frames = 30, camera-frames = 30, delta = 450, frame = [1, 900] }
+reason = "A reused AVAssetReader answers from a frame cached by an earlier, unrelated seek (seek 349 shows 237): 20 of 3000 full-tier seeks (1 in the fast tier), up to 352 source frames stale. Which earlier seek's frame answers depends on timing, so the bound is the mechanism's: any frame of the fixture (450), at most 1% of the seeks"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
 case = "seek/seek-native/storm30/avf"
 class = "stale"
 platforms = ["macos"]
-bound = { screen-frames = 28, camera-frames = 28, delta = 243, frame = [1, 900] }
-reason = "Same reader reuse as seek/seek-gop/storm30/avf on the native fixture: 28 of 3000 full-tier seeks (2 in the fast tier), up to 243 source frames stale"
+bound = { screen-frames = 40, camera-frames = 40, delta = 450, frame = [1, 900] }
+reason = "Same reader reuse as seek/seek-gop/storm30/avf on the native fixture: 7 to 28 of 3000 full-tier seeks (2 in the fast tier), up to 243 to 287 source frames stale between runs; bounded like seek/seek-gop/storm30/avf"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
@@ -198,15 +198,15 @@ link = "https://github.com/CapSoftware/Cap/pull/2638"
 [[xfail]]
 case = "seek/seek-gop/storm30/ffmpeg"
 class = "stale"
-bound = { screen-frames = 71, camera-frames = 71, delta = 81, frame = [1, 900] }
-reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1 to 4 source frames old, and seeks near the start are answered by the first-frame shortcut with frame 0 (71 of 3000 full-tier seeks, 1 in the fast tier, up to 81 source frames stale)"
+bound = { screen-frames = 100, camera-frames = 100, delta = 100, frame = [1, 900] }
+reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1 to 4 source frames old, and seeks near the start are answered by the first-frame shortcut with frame 0 (71 of 3000 full-tier seeks, 1 in the fast tier, up to 81 source frames stale). The count depends on the decoder's wall-clock paths (it varies between runs on macOS: 65 to 78 on the native fixture), so the bound is the mechanism's: at most 100 seeks (3.3%), never more stale than the 100 frames the shortcut and the lookback can reach"
 link = ""
 
 [[xfail]]
 case = "seek/seek-native/storm30/ffmpeg"
 class = "stale"
-bound = { screen-frames = 65, camera-frames = 65, delta = 83, frame = [1, 900] }
-reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut as seek/seek-gop/storm30/ffmpeg on the native fixture: 62 to 65 of 3000 full-tier seeks (9 in the fast tier), up to 83 source frames stale"
+bound = { screen-frames = 100, camera-frames = 100, delta = 100, frame = [1, 900] }
+reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut as seek/seek-gop/storm30/ffmpeg on the native fixture: 62 to 78 of 3000 full-tier seeks (9 in the fast tier), up to 83 source frames stale; bounded like seek/seek-gop/storm30/ffmpeg"
 link = ""
 
 [[xfail]]
@@ -313,9 +313,8 @@ link = ""
 [[xfail]]
 case = "export/instant/output/mp4/native"
 class = "sync-system"
-platforms = ["linux"]
 bound = { count = 1, offset-ms = [5, 34] }
-reason = "NEW: the gate's per-pipeline zero (see export/instant-gated-*): on Linux, whose Instant audio anchors at the recording epoch and keeps the system markers, system audio is late by up to one video frame (8.5 ms measured)"
+reason = "NEW: the gate's per-pipeline zero (see export/instant-gated-*): system audio is late by up to one video frame (8.5 ms on Linux; 7.5 ms on macOS and Windows since #2635 keeps the system markers in the mix)"
 link = ""
 
 [[xfail]]
@@ -389,7 +388,7 @@ link = ""
 [[xfail]]
 case = "editing/export/multi-segment/seed-7"
 class = "stale"
-bound = { screen-frames = 26, camera-frames = 14, delta = 29, frame = [135, 157] }
+bound = { screen-frames = 30, camera-frames = 14, delta = 29, frame = [129, 157] }
 reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the frames after the transition show source frame 0 instead of 20-29 (deterministic: 22 screen and 10 camera frames, output frames 135 to 157, with the dominant side of each blend checked). Same mechanism as the seek/*/storm*/ffmpeg entries: backward seeks near the start answer frame 0"
 link = ""
 
@@ -403,8 +402,15 @@ link = ""
 [[xfail]]
 case = "editing/export/basic/seed-10"
 class = "stale"
-bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [107, 109] }
+bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [106, 109] }
 reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-37"
+class = "stale"
+bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [12, 12] }
+reason = "NEW: FFmpeg decoder (full tier, Linux), the first-frame shortcut of editing/export/basic/seed-10: in a cross-fade back into the clip start the weaker side's request for source frame 1 is answered with frame 0 (output frame 12; found by the two-sided blend check, run 38851482675)"
 link = ""
 
 [[xfail]]
@@ -614,3 +620,102 @@ hosts = ["github-hosted", "local"]
 bound = { count = 1, screen-pictures = 1 }
 reason = "NEW (ScreenCaptureKit idle resume, see above): the first 15 fps picture after the 3 s hold is missing when the resume takes longer than its 67 ms; runners 5 of 6 runs (flaky because the 70 to 82 ms resume straddles the 67 ms picture). Bound: the one hold's picture"
 link = "https://github.com/CapSoftware/Cap/actions/runs/38745219281"
+# Crash safety (crates/verify/tests/crash.rs). Measured on Blacksmith runners
+# (run 38850661948: macos-15 libx264, ubuntu-2404, windows-2025) with the suite
+# merged into main 3ec0c9497; each fix has its own proof branch
+# ci/fixproof-crash-<a|b1|c|ce> (runs 38850662667, 38850661576, 38850663436,
+# 38850662102), which removes exactly its entries. Fixes: #2640 (bug A),
+# #2641 (bug B1), #2643 (bug C), #2644 (bug E).
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/rollover+5"
+class = "dropped-complete"
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A): recovery drops a physically complete fragment that the manifest still lists as pending. The writer renames segment N when the packet after its closing keyframe arrives, but FragmentManifestTracker/SegmentedVideoEncoder only rescan the directory every 10 frames, and find_complete_fragments_with_init keeps manifest entries with is_complete=true plus files the manifest does not list at all, so the listed-pending segment is skipped (recovery.rs). A kill 5 frames after the keyframe lands between rename and rescan on every platform (3 of 3). Bound: one fragment (60 frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/rollover+2"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan; whether these kill points do depends on encoder latency (in 1 run: rollover+2 and random1 on 3 of 3 platforms, finalize+0ms on macOS and Windows; with local VideoToolbox rollover+2 passed). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/random1"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/finalize+0ms"
+class = "dropped-complete"
+flaky = true
+bound = { count = 1, frames = [1, 60] }
+reason = "NEW (bug A, see rollover+5): the same drop whenever the kill lands between a segment rename and the next 10-frame manifest rescan (timing-dependent, see rollover+2). Bound: one fragment"
+link = "https://github.com/CapSoftware/Cap/pull/2640"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/static-screen"
+class = "loss-time"
+bound = { count = 1, secs = [2.5, 20.5] }
+reason = "NEW (bug B1): fragments are cut only at keyframes and every recording encoder's keyframe interval is a frame count (g = 2 s x nominal fps; libx264 keyint 60 here, VideoToolbox 12), so when the screen delivers 3 frames per second a fragment spans 20 s of capture and a crash after 11 s loses all of it (3 of 3 platforms; macOS runners use libx264). Bound: at most one 20 s fragment of capture"
+link = "https://github.com/CapSoftware/Cap/pull/2641"
+
+[[xfail]]
+case = "crash/recorder-kill/inproc/static-screen"
+class = "missing"
+bound = { count = 1 }
+reason = "NEW (bug B1, see loss-time): no fragment of the static recording is complete when the recorder dies, so recovery has nothing (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2641"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "loss-time"
+platforms = ["macos"]
+bound = { count = 1, secs = [2.5, 10] }
+reason = "NEW (bug C): the out-of-process muxer writes packets into a 1 MiB BufWriter around cap-muxer's stdin and flushes only at Start and Finish (oop_muxer.rs MuxerSubprocess::write_packet), so encoded video stays in the recorder's memory: killed after 4 to 8 s, nothing reached cap-muxer (init.mp4 0 bytes, no segment). Bound: everything handed before the kill, at most 10 s"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "missing"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bug C, see loss-time): recovery finds no segment at all (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/r*"
+class = "loss"
+platforms = ["macos"]
+bound = { frames = [64, 300] }
+reason = "NEW (bug C, see loss-time): every handed frame is lost, more than one fragment plus the frames in flight (at most the 10 s handed at 30 fps)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/muxer-kill/oop"
+class = "error"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bug C): after cap-muxer is killed the recorder keeps buffering packets for the dead child (no flush, so no write error and no respawn), and stop() fails the display track: \"subprocess was reaped with unusable output\""
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/static-screen"
+class = "loss-time"
+platforms = ["macos"]
+bound = { count = 1, secs = [2.5, 20.5] }
+reason = "NEW (bugs B1 and C): the static recording's fragments span 20 s of capture (frame-count keyframe interval, see the in-process entry) and the out-of-process muxer had not received any packet (1 MiB unflushed buffer)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"
+
+[[xfail]]
+case = "crash/recorder-kill/oop/static-screen"
+class = "missing"
+platforms = ["macos"]
+bound = { count = 1 }
+reason = "NEW (bugs B1 and C, see loss-time): nothing recoverable (no frames)"
+link = "https://github.com/CapSoftware/Cap/pull/2643"

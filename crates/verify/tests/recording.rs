@@ -1811,7 +1811,7 @@ fn sentinel_freezes_excuse_only_failures_localized_inside_them() {
     assert!(machine_freezes(&log, reference, (2.0, 9.0)).is_empty());
 
     let excuse = |problems: &[(&str, Option<Vec<f64>>)], freezes: &[(f64, f64)]| {
-        let mut case = Case::new("recording/studio-camera/startup-drops");
+        let mut case = Case::new("recording/instant/screen-mic-system");
         IMPLICATED.with(|m| m.borrow_mut().clear());
         for (class, times) in problems {
             case.problem(class, format!("{class} problem"));
@@ -1823,15 +1823,15 @@ fn sentinel_freezes_excuse_only_failures_localized_inside_them() {
         frozen_failures(&case, 0, &implicated, freezes)
     };
     let lost = ("missing", Some(vec![9.8, 10.0, 10.4]));
-    // Expected classes (camera-clock here) never need an excuse.
-    let clock = ("camera-clock", None);
+    // Expected classes (sync-screen-mic here) never need an excuse.
+    let clock = ("sync-screen-mic", None);
     assert!(excuse(&[lost.clone(), clock.clone()], &freezes).is_some());
     // Without a freeze, or outside it, a loss stays a Cap failure.
     assert!(excuse(&[lost.clone()], &[]).is_none());
     assert!(excuse(&[("missing", Some(vec![10.0, 10.6]))], &freezes).is_none());
     assert!(excuse(&[("missing", Some(vec![9.7]))], &freezes).is_none());
     // A failure that is not localized (a sync median) is never excused.
-    assert!(excuse(&[lost, ("sync", None)], &freezes).is_none());
+    assert!(excuse(&[lost, ("sync-screen-system", None)], &freezes).is_none());
     // Only expected failures: nothing to excuse.
     assert!(excuse(&[clock], &freezes).is_none());
 }
