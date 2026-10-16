@@ -675,7 +675,7 @@ link = "https://github.com/CapSoftware/Cap/pull/2643"
 case = "crash/recorder-kill/oop/r*"
 class = "loss"
 platforms = ["macos"]
-bound = { frames = [64, 300] }
+bound = { count = 1, frames = [64, 300] }
 reason = "NEW (bug C, see loss-time): every handed frame is lost, more than one fragment plus the frames in flight (at most the 10 s handed at 30 fps)"
 link = "https://github.com/CapSoftware/Cap/pull/2643"
 
