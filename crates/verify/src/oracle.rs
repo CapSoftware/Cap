@@ -87,6 +87,9 @@ pub const BLEND_SEARCH_ONE_SIDE: i64 = 240;
 /// the expected pair before the blend is read as that pair.
 pub const BLEND_SIDE_MARGIN: f64 = 0.05;
 
+/// How many times smaller the other pair's residual must be.
+pub const BLEND_SIDE_RATIO: f64 = 3.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mismatch {
     /// Position in the checked sequence (request number for seek runs).
@@ -541,11 +544,13 @@ pub fn read_expecting(
             .into_iter()
             .flatten()
         });
-        let alternative = best_of(
-            &mut near
-                .chain(far)
-                .filter(|(ao, ai)| !(allowed(outgoing, *ao) && allowed(incoming, *ai))),
-        );
+        // The same two frames with the sides swapped (weight 1 - p) are the
+        // same picture, not an alternative: a cross-fade inside one clip has
+        // both sides in the same segment.
+        let swapped = |ao: FrameMarker, ai: FrameMarker| ao == i && ai == o;
+        let alternative = best_of(&mut near.chain(far).filter(|(ao, ai)| {
+            !(swapped(*ao, *ai) || allowed(outgoing, *ao) && allowed(incoming, *ai))
+        }));
         if std::env::var("CAP_VERIFY_TRACE_BLEND").as_deref() == Ok("2") {
             eprintln!(
                 "[cap-verify-blend-sides] {}",
@@ -559,8 +564,14 @@ pub fn read_expecting(
                 })
             );
         }
+        // Clearly better, absolutely and relative to the expected pair's
+        // residual: on a noisy stream (the Linux camera code, residuals 0.13
+        // to 0.17 on correct blends) a neighbouring pair can fit a little
+        // better by chance; a wrong side leaves the expected pair with a
+        // residual several times the alternative's.
         if let Some((ao, ai, ap, ares)) = alternative
             && ares + BLEND_SIDE_MARGIN < residual
+            && ares * BLEND_SIDE_RATIO < residual
         {
             return Readout::Blend {
                 outgoing: ao,

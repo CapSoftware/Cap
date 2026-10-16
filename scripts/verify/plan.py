@@ -278,7 +278,37 @@ def affected(config, files, metadata, tier):
     return names, "; ".join(reasons[:8]) + (" ..." if len(reasons) > 8 else "")
 
 
-def matrix(config, names, tier):
+def extra_runners(config, names, tier, files):
+    """Additional platform entries (suites.json `extra_runners`): the same
+    platform's suites on another machine class, for a path the main runner
+    cannot cover (macOS export on the VideoToolbox hardware encoder, which
+    Blacksmith VMs lack). Included for every changed path that matches the
+    entry's `paths`, and always when `files` is None (a full run)."""
+    out = []
+    for name, entry in config.get("extra_runners", {}).items():
+        suites = [
+            s["name"] for s in config["suites"]
+            if s["name"] in names and s["name"] in entry["suites"] and entry["os"] in s["platforms"][tier]
+        ]
+        if not suites:
+            continue
+        if files is not None and not any(match(f, p) for f in files for p in entry["paths"]):
+            continue
+        shards = entry["shards"][tier] if isinstance(entry["shards"], dict) else entry["shards"]
+        out.append({
+            "platform": name,
+            "os": entry["os"],
+            "runner": os.environ.get(f"ENGINE_VERIFY_{name.upper().replace('-', '_')}_RUNNER", "").strip() or entry["runner"],
+            "target": entry["target"],
+            "shards": shards,
+            "shard_list": json.dumps(list(range(1, shards + 1))),
+            "archive": entry.get("archive", False),
+            "suites": ",".join(suites),
+        })
+    return out
+
+
+def matrix(config, names, tier, files=None):
     include = []
     for platform in PLATFORMS:
         suites = [s["name"] for s in config["suites"] if s["name"] in names and platform in s["platforms"][tier]]
@@ -296,6 +326,7 @@ def matrix(config, names, tier):
             runner["shards"] = runner["shards"][tier]
         include.append({
             "platform": platform,
+            "os": platform,
             "runner": runner["runner"],
             "target": runner["target"],
             "shards": runner["shards"],
@@ -303,6 +334,7 @@ def matrix(config, names, tier):
             "archive": runner.get("archive", False),
             "suites": ",".join(suites),
         })
+    include += extra_runners(config, names, tier, files)
     return {"include": include}
 
 
@@ -321,6 +353,7 @@ def load_metadata(path):
 
 def cmd_changes(args):
     config = load_config()
+    files = None
     if args.all:
         names, reason = [s["name"] for s in config["suites"]], "full run"
     else:
@@ -328,6 +361,7 @@ def cmd_changes(args):
             files = [line.strip() for line in f if line.strip()]
         if len(files) >= args.max_files:
             names, reason = [s["name"] for s in config["suites"]], f"{len(files)} changed files (list may be truncated)"
+            files = None
         else:
             names, reason = affected(config, files, load_metadata(args.metadata), args.tier)
     if args.suites:
@@ -337,7 +371,7 @@ def cmd_changes(args):
             sys.exit(f"unknown suites: {', '.join(sorted(unknown))}")
         names = [n for n in names if n in wanted]
         reason += f" (limited to {args.suites})"
-    m = matrix(config, names, args.tier)
+    m = matrix(config, names, args.tier, files)
     lines = {
         "run": "true" if m["include"] else "false",
         "reason": reason.replace("\n", " "),
@@ -486,6 +520,18 @@ def cmd_test(_args):
         ok = got == expected
         failed += not ok
         print(f"{'ok ' if ok else 'BAD'} recording {files} -> {got}")
+    names = [s["name"] for s in config["suites"]]
+    for files, expected in [
+        (["crates/enc-ffmpeg/src/video/h264.rs"], True),
+        (["crates/export/src/mp4.rs"], True),
+        (["crates/rendering/src/decoder/ffmpeg.rs"], False),
+        (["crates/editor/src/playback.rs"], False),
+        (None, True),
+    ]:
+        got = any(e["platform"] == "macos-vt" for e in matrix(config, names, "fast", files)["include"])
+        ok = got == expected
+        failed += not ok
+        print(f"{'ok ' if ok else 'BAD'} macos-vt {files} -> {got}")
     rendering_only = affected(config, ["crates/rendering/src/decoder/model/mod.rs"], metadata, "fast")[0]
     if "decoder-model-ffmpeg" not in rendering_only:
         failed += 1
