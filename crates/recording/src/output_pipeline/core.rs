@@ -2829,6 +2829,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let video_info = video_source.video_info();
         let mut video_source = PreparedVideoSource::new(video_source);
         let (first_tx, first_rx) = oneshot::channel();
+        let (first_rx, first_seen) = observe_first_timestamp(first_rx);
 
         let audio = setup_audio_sources(
             &mut setup_ctx,
@@ -2905,6 +2906,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
                 .is_some_and(|scope| scope.requires_joined_stop()),
             path,
             first_timestamp_rx: first_rx,
+            first_timestamp: first_seen,
             video_info: Some(video_info),
             stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             done_fut: build_ctx.done_rx,
@@ -2948,6 +2950,7 @@ impl OutputPipelineBuilder<NoVideo> {
         );
 
         let (first_tx, first_rx) = oneshot::channel();
+        let (first_rx, first_seen) = observe_first_timestamp(first_rx);
 
         let audio = setup_audio_sources(
             &mut setup_ctx,
@@ -2995,6 +2998,7 @@ impl OutputPipelineBuilder<NoVideo> {
                 .is_some_and(|scope| scope.requires_joined_stop()),
             path,
             first_timestamp_rx: first_rx,
+            first_timestamp: first_seen,
             stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             video_info: None,
             done_fut: build_ctx.done_rx,
@@ -4586,10 +4590,30 @@ async fn setup_audio_sources(
 
 pub type DoneFut = Shared<BoxFuture<'static, Result<(), PipelineDoneError>>>;
 
+/// Forwards the first timestamp to the receiver `stop` consumes and to a
+/// watch observers can read while the pipeline records.
+fn observe_first_timestamp(
+    first_rx: oneshot::Receiver<Timestamp>,
+) -> (
+    oneshot::Receiver<Timestamp>,
+    tokio::sync::watch::Receiver<Option<Timestamp>>,
+) {
+    let (forward_tx, forward_rx) = oneshot::channel();
+    let (seen_tx, seen_rx) = tokio::sync::watch::channel(None);
+    tokio::spawn(async move {
+        if let Ok(timestamp) = first_rx.await {
+            seen_tx.send_replace(Some(timestamp));
+            let _ = forward_tx.send(timestamp);
+        }
+    });
+    (forward_rx, seen_rx)
+}
+
 pub struct OutputPipeline {
     joined_stop: bool,
     path: PathBuf,
     pub first_timestamp_rx: oneshot::Receiver<Timestamp>,
+    first_timestamp: tokio::sync::watch::Receiver<Option<Timestamp>>,
     video_info: Option<VideoInfo>,
     stop_token: Option<DropGuard>,
     done_fut: DoneFut,
@@ -4670,6 +4694,12 @@ impl PipelineDoneError {
 impl OutputPipeline {
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    /// The first frame's capture timestamp once the pipeline has one, while
+    /// it records (`first_timestamp_rx` is consumed by `stop`).
+    pub fn first_timestamp_watch(&self) -> tokio::sync::watch::Receiver<Option<Timestamp>> {
+        self.first_timestamp.clone()
     }
 
     pub async fn stop(self) -> anyhow::Result<FinishedOutputPipeline> {
