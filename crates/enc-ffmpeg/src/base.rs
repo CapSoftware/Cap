@@ -328,6 +328,40 @@ fn normalize_input_pts(pts: i64, last_pts: Option<i64>) -> i64 {
 mod tests {
     use super::*;
 
+    /// Guard sentinel E02 (scripts/verify/guards.toml): a stream whose first
+    /// frame carries a non-zero pts is rebased to start at 0 and keeps its
+    /// frame spacing. Exports start at 0 anyway, so removing the rebase
+    /// changes no export output today; this checks the rebase itself.
+    #[test]
+    fn guard_e02_rebases_a_stream_whose_first_pts_is_not_zero() {
+        ffmpeg::init().unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new().encoder();
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for pts in [3_000_i64, 3_512, 4_024, 4_536] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            frame.set_pts(Some(pts));
+            base.update_pts(&mut frame, Duration::MAX, &mut encoder);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(512), Some(1_024), Some(1_536)]);
+
+        // Capture timestamps (time base 1/90000) starting 2.5 s in.
+        let mut video = ffmpeg::codec::context::Context::new()
+            .encoder()
+            .video()
+            .unwrap();
+        video.set_time_base((1, 90_000));
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for ms in [2_500_u64, 2_533, 2_567, 2_600] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            base.update_pts(&mut frame, Duration::from_millis(ms), &mut video);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(2_970), Some(6_030), Some(9_000)]);
+    }
+
     #[test]
     fn normalize_input_pts_passes_monotonic_input_through() {
         // Any strictly-forward delta passes untouched, even sub-frame ones
