@@ -1,0 +1,98 @@
+name: AVF decoder fix probe (scratch)
+
+# Scratch proof for fix/avf-decoder-requests, not for merge. Repeats the AVF
+# cases the decoder fix targets, plus the rec-studio across-segments case,
+# on base (product diff reverted) and fix, with no flaky reruns.
+
+on:
+  push:
+    branches: [ci/fixproof-avf-decoder]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CAP_VERIFY_CARGO_PROFILE: ci-verify
+  CAP_VERIFY_LOCKED: "1"
+
+jobs:
+  probe:
+    if: contains(github.event.head_commit.message, '[probe]')
+    name: probe ${{ matrix.config }} ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [base, fix]
+        runner: [blacksmith-6vcpu-macos-15, blacksmith-6vcpu-macos-26]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Revert the product diff (base)
+        if: matrix.config == 'base'
+        run: |
+          git apply -R probe/product.patch
+          git diff --stat
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: full
+      - name: Build
+        run: |
+          scripts/verify/run.sh full --suites export,playback,seek --no-run
+          cargo test --profile ci-verify --locked -p cap-rendering --lib --no-run
+      - name: Repeat cases
+        run: |
+          set +e
+          out="$RUNNER_TEMP/probe"
+          mkdir -p "$out"
+          summary() {
+            cat "$1"/*.jsonl 2>/dev/null | python3 -c '
+          import sys, json
+          for l in sys.stdin:
+              r = json.loads(l)
+              print("   ", r["outcome"], r["case"], sorted(r["failures"]), "|", r["summary"][:200].replace("\n", " "))'
+          }
+          run() {
+            local name="$1" test="$2" case="$3" reps="$4" tier="$5"
+            for i in $(seq 1 "$reps"); do
+              export CAP_VERIFY_REPORT_DIR="$out/$name-$i"
+              local t0=$(date +%s)
+              CAP_VERIFY_TIER="$tier" CAP_VERIFY_CASE="$case" /usr/bin/time -l cargo nextest run --cargo-profile ci-verify --locked -p cap-verify --test "$test" --no-fail-fast \
+                > "$out/$name-$i.log" 2>&1
+              echo "$name rep $i: $(( $(date +%s) - t0 )) s, $(grep -E 'instructions retired' "$out/$name-$i.log" | awk '{print $1}') instructions"
+              summary "$CAP_VERIFY_REPORT_DIR"
+            done
+          }
+          model() {
+            for i in $(seq 1 "$1"); do
+              cargo test --profile ci-verify --locked -p cap-rendering --lib decoder::model::avassetreader -- --nocapture > "$out/model-$i.log" 2>&1
+              echo "model rep $i: exit $?"
+              grep -E 'UNEXPECTED|^FAIL|decoder model' "$out/model-$i.log" | cut -c1-220
+            done
+          }
+          run recstudio export 'export/rec-studio/across-segments/*/avf' 8 fast
+          run transition-export export 'export/basic/transition/*/avf' 5 fast
+          run transition-playback playback 'playback/basic/transition/seq*/avf' 5 fast
+          run vfr-holds seek 'seek/vfr-holds/*/avf' 5 fast
+          run keyframes seek 'seek/seek-*/keyframes60/avf' 5 fast
+          run storm30 seek 'seek/seek-*/storm30/avf' 3 full
+          run backward-hold export 'export/backward-hold/backward-jumps/*/avf' 3 fast
+          run campts export 'export/camera-pts-late/full/mp430/avf' 5 full
+          run jitter40 export 'export/jitter-camera-40s/full/mp460/avf' 3 fast
+          run cuts-realtime playback 'playback/basic/cuts-speeds-reorder/realtime30-from25/avf' 5 fast
+          model 5
+          true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: avf-decoder-probe-${{ matrix.config }}-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/probe/**/*.jsonl
+            ${{ runner.temp }}/probe/*.log
+          retention-days: 7
