@@ -524,23 +524,6 @@ bound = { count = 1, mic-spread-ms = [4, 130] }
 reason = "NEW: gated Instant microphone timeline not continuous after the gate opens: marker offsets vary by 5 to 124 ms within one recording on runners (overlap trims after admission; 852 ms once on a developer Mac). Bound: the trim size"
 link = ""
 
-[[xfail]]
-case = "recording/studio-recovery/*"
-class = "start-time"
-platforms = ["macos"]
-bound = { count = 1 }
-reason = "NEW: crash recovery rebuilds recording-meta.json without any track start_time (the in-progress meta has no segments), so the editor aligns screen, mic and system audio at 0"
-link = ""
-
-[[xfail]]
-case = "recording/studio-recovery/*"
-class = "sync-screen-mic"
-platforms = ["macos"]
-flaky = true
-bound = { count = 1, offset-ms = [-150, -10] }
-reason = "NEW: consequence of the start-time entry: aligned at 0, the screen plays early by its start-up delay: runners -55 to -104 ms; -33.4 ms once (inside the window, so the check passed). Bound: screen early by at most 150 ms"
-link = ""
-
 # Crash recovery on the software (libx264) encoder path. Blacksmith macOS VMs
 # have no VideoToolbox hardware H.264 encoder (VTCompressionSessionCreate with
 # RequireHardwareAcceleratedVideoEncoder returns -12903, probe run
