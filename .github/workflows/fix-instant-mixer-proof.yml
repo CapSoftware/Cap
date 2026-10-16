@@ -55,6 +55,10 @@ jobs:
           cargo test -p cap-recording --lib --profile ci-verify --locked sources::audio_mixer:: -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixalign/unit.log"
       - name: Mixed pipeline stop handoff
         run: cargo test -p cap-recording --lib --profile ci-verify --locked mixed_pipeline_stop_receives_audio_delivered_during_source_stop -- --nocapture
+      - name: Capture-time pause tests
+        run: cargo test -p cap-recording --lib --profile ci-verify --locked mixed_pause -- --nocapture
+      - name: Stop while paused
+        run: cargo test -p cap-recording --lib --profile ci-verify --locked mixed_pipeline_stop_ -- --nocapture
       - name: Build fixture probe
         if: inputs.fixtures != false
         run: scripts/verify/run.sh fast --suites export --no-run

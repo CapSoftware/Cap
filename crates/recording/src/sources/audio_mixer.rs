@@ -633,6 +633,16 @@ impl AudioMixer {
         self.tick_with_output(now, |sink, frame| sink.sink().frame(frame))
     }
 
+    #[cfg(test)]
+    pub(crate) fn tick_for_capture_pause(&mut self, now: Instant) -> anyhow::Result<bool> {
+        self.tick(self.timestamps, Timestamp::Instant(now))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_for_capture_pause(&mut self) -> anyhow::Result<()> {
+        self.finish()
+    }
+
     fn finish(&mut self) -> anyhow::Result<()> {
         if let Some(stop) = &self.required_stop {
             stop.cancel();

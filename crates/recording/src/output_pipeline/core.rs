@@ -2038,7 +2038,23 @@ impl SharedPauseState {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CapturePause {
+    start: Instant,
+    end: Option<Instant>,
+}
+
+impl CapturePause {
+    fn duration_before(self, instant: Instant) -> Duration {
+        self.end
+            .unwrap_or(instant)
+            .min(instant)
+            .saturating_duration_since(self.start)
+    }
+}
+
 struct SharedWallClockPauseInner {
+    capture_pauses: Vec<CapturePause>,
     pause_started_at: Option<std::time::Instant>,
     total_pause_duration: Duration,
 }
@@ -2054,10 +2070,85 @@ impl SharedWallClockPause {
         Self {
             flag,
             inner: Arc::new(std::sync::Mutex::new(SharedWallClockPauseInner {
+                capture_pauses: Vec::new(),
                 pause_started_at: None,
                 total_pause_duration: Duration::ZERO,
             })),
         }
+    }
+
+    fn set_paused_at(&self, paused: bool, instant: Instant) {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let active = inner
+            .capture_pauses
+            .last_mut()
+            .filter(|pause| pause.end.is_none());
+        match (paused, active) {
+            (true, None) => inner.capture_pauses.push(CapturePause {
+                start: instant,
+                end: None,
+            }),
+            (false, Some(pause)) => pause.end = Some(instant.max(pause.start)),
+            _ => {}
+        }
+        self.flag.store(paused, Ordering::Release);
+    }
+
+    fn captured_pause_duration(&self, instant: Instant) -> Duration {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner
+            .capture_pauses
+            .iter()
+            .map(|pause| pause.duration_before(instant))
+            .sum()
+    }
+
+    fn captured_audio_ranges(
+        &self,
+        frame: &AudioFrame,
+        timestamps: Timestamps,
+        rate: u32,
+    ) -> Option<Vec<(usize, usize, Duration)>> {
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if inner.capture_pauses.is_empty() {
+            return None;
+        }
+        let start = timestamps.instant() + frame.timestamp.duration_since(timestamps);
+        let samples = frame.inner.samples();
+        let index = |instant: Instant| {
+            (instant.saturating_duration_since(start).as_nanos() * u128::from(rate))
+                .div_ceil(1_000_000_000)
+                .min(samples as u128) as usize
+        };
+        let mut ranges = Vec::new();
+        let mut cursor = 0;
+        for pause in &inner.capture_pauses {
+            let begin = index(pause.start);
+            if cursor < begin {
+                ranges.push((cursor, begin));
+            }
+            cursor = cursor.max(pause.end.map(index).unwrap_or(samples));
+        }
+        if cursor < samples {
+            ranges.push((cursor, samples));
+        }
+        Some(
+            ranges
+                .into_iter()
+                .map(|(begin, end)| {
+                    let instant = start
+                        + Duration::from_nanos(
+                            (begin as u128 * 1_000_000_000 / u128::from(rate)) as u64,
+                        );
+                    let paused = inner
+                        .capture_pauses
+                        .iter()
+                        .map(|pause| pause.duration_before(instant))
+                        .sum();
+                    (begin, end, paused)
+                })
+                .collect(),
+        )
     }
 
     pub fn check(&self) -> (bool, Duration) {
@@ -2883,7 +2974,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.done_tx,
             None,
             &path,
-            shared_pause,
+            shared_pause.clone(),
             true,
             video_start_gate,
             start_gate,
@@ -2908,7 +2999,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             video_info: Some(video_info),
             stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             done_fut: build_ctx.done_rx,
-            pause_flag: build_ctx.pause_flag,
+            shared_pause,
             cancel_token: build_ctx.stop_token,
             video_frame_count,
             video_timestamp_span,
@@ -2980,7 +3071,7 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.done_tx,
             Some(first_tx),
             &path,
-            shared_pause,
+            shared_pause.clone(),
             false,
             None,
             start_gate,
@@ -2998,7 +3089,7 @@ impl OutputPipelineBuilder<NoVideo> {
             stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             video_info: None,
             done_fut: build_ctx.done_rx,
-            pause_flag: build_ctx.pause_flag,
+            shared_pause,
             cancel_token: build_ctx.stop_token,
             video_frame_count: Arc::new(AtomicU64::new(0)),
             video_timestamp_span: Arc::new(VideoTimestampSpan::default()),
@@ -3844,6 +3935,7 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
+                                    capture_time_pause: mixed_audio,
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -3952,6 +4044,7 @@ impl PreparedAudioSources {
                                     muxer: &muxer,
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
+                                    capture_time_pause: mixed_audio,
                                     video_start_gate: video_start_gate.as_ref(),
                                     start_gate: &start_gate.gate,
                                     allow_audio_degradation,
@@ -4178,6 +4271,7 @@ struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
     muxer: &'a Arc<Mutex<TMutex>>,
     health_tx: &'a HealthSender,
     shared_pause: &'a SharedWallClockPause,
+    capture_time_pause: bool,
     video_start_gate: Option<&'a VideoStartGate>,
     start_gate: &'a Option<RecordingStartGate>,
     allow_audio_degradation: bool,
@@ -4226,10 +4320,53 @@ fn audio_epoch(timestamps: Timestamps, start_gate: Option<&RecordingStartGate>) 
 
 async fn process_audio_frame<TMutex: AudioMuxer>(
     ctx: AudioFrameProcessContext<'_, TMutex>,
-    state: AudioFrameProcessState<'_>,
-    mut frame: AudioFrame,
+    mut state: AudioFrameProcessState<'_>,
+    frame: AudioFrame,
 ) -> anyhow::Result<AudioFrameOutcome> {
-    let (is_paused, total_pause_duration) = ctx.shared_pause.check();
+    if !ctx.capture_time_pause {
+        return process_audio_frame_part(&ctx, &mut state, frame, None).await;
+    }
+    let Some(mut ranges) =
+        ctx.shared_pause
+            .captured_audio_ranges(&frame, ctx.timestamps, ctx.sample_rate)
+    else {
+        return process_audio_frame_part(&ctx, &mut state, frame, Some(Duration::ZERO)).await;
+    };
+    if ranges.len() == 1 && ranges[0].0 == 0 && ranges[0].1 == frame.inner.samples() {
+        let (_, _, paused) = ranges.pop().unwrap();
+        return process_audio_frame_part(&ctx, &mut state, frame, Some(paused)).await;
+    }
+    if ranges.is_empty() {
+        *state.dropped_during_pause += 1;
+        return Ok(AudioFrameOutcome::DroppedPaused);
+    }
+    let mut outcome = AudioFrameOutcome::DropFrame;
+    for (begin, end, paused) in ranges {
+        let mut inner = trim_audio_frame_front(&frame.inner, begin)
+            .context("Could not split mixed audio at a capture-time pause boundary")?;
+        inner.set_samples(end - begin);
+        let offset = Duration::from_nanos(
+            (begin as u128 * 1_000_000_000 / u128::from(ctx.sample_rate)) as u64,
+        );
+        let part = AudioFrame::new(inner, frame.timestamp + offset);
+        match process_audio_frame_part(&ctx, &mut state, part, Some(paused)).await? {
+            AudioFrameOutcome::AudioDegraded => return Ok(AudioFrameOutcome::AudioDegraded),
+            AudioFrameOutcome::Sent => outcome = AudioFrameOutcome::Sent,
+            _ => {}
+        }
+    }
+    Ok(outcome)
+}
+
+async fn process_audio_frame_part<TMutex: AudioMuxer>(
+    ctx: &AudioFrameProcessContext<'_, TMutex>,
+    state: &mut AudioFrameProcessState<'_>,
+    mut frame: AudioFrame,
+    captured_pause_duration: Option<Duration>,
+) -> anyhow::Result<AudioFrameOutcome> {
+    let (is_paused, total_pause_duration) = captured_pause_duration
+        .map(|duration| (false, duration))
+        .unwrap_or_else(|| ctx.shared_pause.check());
 
     if is_paused {
         *state.dropped_during_pause += 1;
@@ -4376,11 +4513,19 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     state.gap_tracker.mark_started(frame.timestamp, observed_at);
 
     let sample_based_before = state.timestamp_generator.next_timestamp(0);
+    let timeline_pause_duration = if ctx.capture_time_pause && !total_pause_duration.is_zero() {
+        let first = state.gap_tracker.first_frame_ts.unwrap();
+        total_pause_duration.saturating_sub(ctx.shared_pause.captured_pause_duration(
+            ctx.timestamps.instant() + first.duration_since(ctx.timestamps),
+        ))
+    } else {
+        total_pause_duration
+    };
 
     if let Some(overlap_duration) = state.gap_tracker.detect_overlap(
         frame.timestamp,
         sample_based_before,
-        total_pause_duration,
+        timeline_pause_duration,
         observed_at,
     ) {
         let trim_samples = duration_to_sample_count(overlap_duration, ctx.sample_rate) as usize;
@@ -4421,7 +4566,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     if let Some(gap_duration) = state.gap_tracker.detect_gap(
         frame.timestamp,
         sample_based_before,
-        total_pause_duration,
+        timeline_pause_duration,
         observed_at,
     ) {
         let start_samples = state.timestamp_generator.total_samples;
@@ -4629,7 +4774,7 @@ pub struct OutputPipeline {
     video_info: Option<VideoInfo>,
     stop_token: Option<DropGuard>,
     done_fut: DoneFut,
-    pause_flag: Arc<AtomicBool>,
+    shared_pause: SharedWallClockPause,
     cancel_token: CancellationToken,
     video_frame_count: Arc<AtomicU64>,
     video_timestamp_span: Arc<VideoTimestampSpan>,
@@ -4779,11 +4924,11 @@ impl OutputPipeline {
     }
 
     pub fn pause(&self) {
-        self.pause_flag.store(true, atomic::Ordering::Release);
+        self.shared_pause.set_paused_at(true, Instant::now());
     }
 
     pub fn resume(&self) {
-        self.pause_flag.store(false, atomic::Ordering::Release);
+        self.shared_pause.set_paused_at(false, Instant::now());
     }
 
     pub fn video_info(&self) -> Option<VideoInfo> {
@@ -9203,6 +9348,7 @@ mod tests {
 
         struct RecordingAudioMuxer {
             sent: Arc<std::sync::Mutex<Vec<SentAudioFrame>>>,
+            pcm: Option<Arc<std::sync::Mutex<Vec<[f32; 2]>>>>,
         }
 
         impl Muxer for RecordingAudioMuxer {
@@ -9219,7 +9365,10 @@ mod tests {
             where
                 Self: Sized,
             {
-                Ok(Self { sent: config })
+                Ok(Self {
+                    sent: config,
+                    pcm: None,
+                })
             }
 
             fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
@@ -9233,6 +9382,19 @@ mod tests {
                 frame: AudioFrame,
                 timestamp: Duration,
             ) -> anyhow::Result<()> {
+                if let Some(pcm) = &self.pcm {
+                    let mut pcm = pcm.lock().unwrap();
+                    pcm.extend(
+                        frame.inner.data(0)[..frame.inner.samples() * 8]
+                            .chunks_exact(8)
+                            .map(|pair| {
+                                [
+                                    f32::from_le_bytes(pair[..4].try_into().unwrap()),
+                                    f32::from_le_bytes(pair[4..].try_into().unwrap()),
+                                ]
+                            }),
+                    );
+                }
                 self.sent.lock().unwrap().push(SentAudioFrame {
                     samples: frame.inner.samples(),
                     timestamp,
@@ -9305,6 +9467,8 @@ mod tests {
             master_clock: Arc<MasterClock>,
             muxer: Arc<Mutex<RecordingAudioMuxer>>,
             sent: Arc<std::sync::Mutex<Vec<SentAudioFrame>>>,
+            pcm: Arc<std::sync::Mutex<Vec<[f32; 2]>>>,
+            capture_time_pause: bool,
             health_tx: HealthSender,
             shared_pause: SharedWallClockPause,
             timestamp_generator: AudioTimestampGenerator,
@@ -9325,7 +9489,11 @@ mod tests {
                 let timestamps = Timestamps::now();
                 let master_clock = MasterClock::new(timestamps, TEST_SAMPLE_RATE);
                 let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
-                let muxer = Arc::new(Mutex::new(RecordingAudioMuxer { sent: sent.clone() }));
+                let pcm = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let muxer = Arc::new(Mutex::new(RecordingAudioMuxer {
+                    sent: sent.clone(),
+                    pcm: None,
+                }));
                 let (health_tx, _) = new_health_channel();
                 let shared_pause = SharedWallClockPause::new(Arc::new(AtomicBool::new(false)));
 
@@ -9335,6 +9503,8 @@ mod tests {
                     master_clock: master_clock.clone(),
                     muxer,
                     sent,
+                    pcm,
+                    capture_time_pause: false,
                     health_tx,
                     shared_pause,
                     timestamp_generator: AudioTimestampGenerator::from_master_clock(master_clock),
@@ -9386,7 +9556,14 @@ mod tests {
                 let timestamp = Timestamp::Instant(self.timestamps.instant() + capture_offset);
                 let observed_at = self.timestamps.instant() + wall_offset;
                 let frame = AudioFrame::new(make_test_frame(&self.info, samples, 0.0), timestamp);
+                self.process_frame_at(frame, observed_at).await
+            }
 
+            async fn process_frame_at(
+                &mut self,
+                frame: AudioFrame,
+                observed_at: Instant,
+            ) -> AudioFrameOutcome {
                 process_audio_frame(
                     AudioFrameProcessContext {
                         audio_info: &self.info,
@@ -9395,6 +9572,7 @@ mod tests {
                         muxer: &self.muxer,
                         health_tx: &self.health_tx,
                         shared_pause: &self.shared_pause,
+                        capture_time_pause: self.capture_time_pause,
                         video_start_gate: None,
                         start_gate: &self.start_gate,
                         allow_audio_degradation: true,
@@ -9419,6 +9597,34 @@ mod tests {
                 .unwrap()
             }
 
+            fn mixed() -> Self {
+                let mut harness = Self::new();
+                harness.info = AudioMixer::INFO;
+                harness.capture_time_pause = true;
+                harness.muxer = Arc::new(Mutex::new(RecordingAudioMuxer {
+                    sent: harness.sent.clone(),
+                    pcm: Some(harness.pcm.clone()),
+                }));
+                harness
+            }
+
+            fn pause_at(&self, millis: u64, paused: bool) {
+                self.shared_pause.set_paused_at(
+                    paused,
+                    self.timestamps.instant() + Duration::from_millis(millis),
+                );
+            }
+
+            fn peaks(&self, channel: usize) -> Vec<usize> {
+                self.pcm
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, sample)| (sample[channel].abs() > 0.01).then_some(index))
+                    .collect()
+            }
+
             fn committed_audio(&mut self) -> Duration {
                 self.timestamp_generator.next_timestamp(0)
             }
@@ -9434,6 +9640,199 @@ mod tests {
             fn sent(&self) -> Vec<SentAudioFrame> {
                 self.sent.lock().unwrap().clone()
             }
+        }
+
+        fn mixed_pause_frame(
+            timestamps: Timestamps,
+            start_ms: u64,
+            samples: usize,
+            peaks: &[(usize, usize)],
+        ) -> AudioFrame {
+            let mut bytes = vec![0; samples * 8];
+            for &(sample, channel) in peaks {
+                let offset = sample * 8 + channel * 4;
+                bytes[offset..offset + 4].copy_from_slice(&0.5_f32.to_le_bytes());
+            }
+            AudioFrame::new(
+                AudioMixer::INFO.wrap_frame(&bytes),
+                Timestamp::Instant(timestamps.instant() + Duration::from_millis(start_ms)),
+            )
+        }
+
+        #[tokio::test]
+        async fn mixed_pause_splits_capture_boundaries_independent_of_delivery() {
+            for late_delivery in [false, true] {
+                let mut harness = AudioTimelineHarness::mixed();
+                let first = mixed_pause_frame(harness.timestamps, 0, 4_800, &[(960, 0), (960, 1)]);
+                if !late_delivery {
+                    harness
+                        .process_frame_at(
+                            first,
+                            harness.timestamps.instant() + Duration::from_millis(100),
+                        )
+                        .await;
+                }
+                harness.pause_at(100, true);
+                harness.pause_at(300, false);
+                if late_delivery {
+                    let first =
+                        mixed_pause_frame(harness.timestamps, 0, 4_800, &[(960, 0), (960, 1)]);
+                    harness
+                        .process_frame_at(
+                            first,
+                            harness.timestamps.instant() + Duration::from_millis(600),
+                        )
+                        .await;
+                }
+                let crossing = mixed_pause_frame(
+                    harness.timestamps,
+                    100,
+                    19_200,
+                    &[(4_800, 0), (4_800, 1), (10_560, 0), (10_560, 1)],
+                );
+                harness
+                    .process_frame_at(
+                        crossing,
+                        harness.timestamps.instant() + Duration::from_millis(600),
+                    )
+                    .await;
+                assert_eq!(harness.peaks(0), [960, 5_760]);
+                assert_eq!(harness.peaks(1), [960, 5_760]);
+                assert_eq!(harness.timestamp_generator.total_samples, 14_400);
+                assert_eq!(harness.overlap_dropped_frames(), 0);
+                assert_eq!(harness.total_silence(), Duration::ZERO);
+            }
+        }
+
+        #[tokio::test]
+        async fn mixed_pause_keeps_watermark_held_capture_with_absent_input() {
+            for stop_while_paused in [false, true] {
+                let mut harness = AudioTimelineHarness::mixed();
+                let mut builder = AudioMixer::builder()
+                    .with_timestamps(harness.timestamps)
+                    .with_master_clock(harness.master_clock.clone());
+                let (system, system_rx) = mpsc::channel(8);
+                let (mut mic, mic_rx) = mpsc::channel(8);
+                builder.add_source(AudioMixer::INFO, system_rx);
+                builder.add_source(AudioMixer::INFO, mic_rx);
+                let (output, mut received) = mpsc::channel(32);
+                let mut mixer = builder.build(output).unwrap();
+                mic.try_send(mixed_pause_frame(harness.timestamps, 0, 4_800, &[(960, 1)]))
+                    .unwrap();
+                mixer
+                    .tick_for_capture_pause(
+                        harness.timestamps.instant() + Duration::from_millis(100),
+                    )
+                    .unwrap();
+                assert!(received.try_next().is_err());
+                harness.pause_at(100, true);
+                if stop_while_paused {
+                    drop(system);
+                    drop(mic);
+                    mixer.finish_for_capture_pause().unwrap();
+                } else {
+                    mixer
+                        .tick_for_capture_pause(
+                            harness.timestamps.instant() + Duration::from_millis(1_000),
+                        )
+                        .unwrap();
+                }
+                while let Ok(Some(frame)) = received.try_next() {
+                    harness
+                        .process_frame_at(
+                            frame,
+                            harness.timestamps.instant() + Duration::from_millis(1_000),
+                        )
+                        .await;
+                }
+                assert_eq!(harness.peaks(1), [960]);
+                if stop_while_paused {
+                    assert_eq!(harness.timestamp_generator.total_samples, 4_800);
+                }
+                assert_eq!(harness.dropped_during_pause, 0);
+            }
+        }
+
+        #[tokio::test]
+        async fn mixed_pause_drops_held_paused_capture_and_keeps_resumed_samples() {
+            let mut harness = AudioTimelineHarness::mixed();
+            harness.pause_at(100, true);
+            harness.pause_at(300, false);
+            let frame = mixed_pause_frame(
+                harness.timestamps,
+                0,
+                24_000,
+                &[(960, 0), (9_600, 0), (19_200, 0)],
+            );
+            harness
+                .process_frame_at(
+                    frame,
+                    harness.timestamps.instant() + Duration::from_millis(800),
+                )
+                .await;
+            assert_eq!(harness.peaks(0), [960, 9_600]);
+            assert_eq!(harness.timestamp_generator.total_samples, 14_400);
+            assert_eq!(harness.total_silence(), Duration::ZERO);
+            assert_eq!(harness.overlap_dropped_frames(), 0);
+        }
+
+        #[tokio::test]
+        async fn mixed_pause_before_first_sample_and_repeated_cycles_keep_the_timeline() {
+            let mut harness = AudioTimelineHarness::mixed();
+            harness.pause_at(20, true);
+            harness.pause_at(100, false);
+            harness.pause_at(200, true);
+            harness.pause_at(300, false);
+            harness.pause_at(350, true);
+            harness.pause_at(400, false);
+            let frame = mixed_pause_frame(
+                harness.timestamps,
+                100,
+                19_200,
+                &[(0, 0), (4_800, 0), (9_600, 0), (12_000, 0), (14_400, 0)],
+            );
+            harness
+                .process_frame_at(
+                    frame,
+                    harness.timestamps.instant() + Duration::from_millis(800),
+                )
+                .await;
+            assert_eq!(harness.peaks(0), [0, 4_800, 7_200]);
+            assert_eq!(harness.timestamp_generator.total_samples, 12_000);
+            assert_eq!(harness.total_silence(), Duration::ZERO);
+            assert_eq!(harness.overlap_dropped_frames(), 0);
+        }
+
+        #[tokio::test]
+        async fn mixed_pipeline_stop_while_paused_drains_pre_pause_capture() {
+            let temp = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp.path().join("mixed-paused-stop.ogg"))
+                .with_timestamps(timestamps)
+                .with_audio_source::<StopFrameSource>(None)
+                .with_audio_source::<StopFrameSource>(Some(mixed_pause_frame(
+                    timestamps,
+                    0,
+                    4_800,
+                    &[(960, 1)],
+                )))
+                .build::<RecordingAudioMuxer>(sent.clone())
+                .await
+                .unwrap();
+            pipeline
+                .shared_pause
+                .set_paused_at(true, timestamps.instant() + Duration::from_millis(100));
+            tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
+                .await
+                .unwrap()
+                .unwrap();
+            let frames = sent.lock().unwrap();
+            assert_eq!(
+                frames.iter().map(|frame| frame.samples).sum::<usize>(),
+                4_800
+            );
+            assert_eq!(frames[0].timestamp, Duration::ZERO);
         }
 
         #[tokio::test(flavor = "current_thread")]
