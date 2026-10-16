@@ -199,6 +199,7 @@ struct EncoderState {
 }
 
 pub struct WindowsFragmentedM4SMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -216,6 +217,7 @@ pub struct WindowsFragmentedM4SMuxer {
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub bpp: f32,
@@ -229,6 +231,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
 impl Default for WindowsFragmentedM4SMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(2),
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
@@ -265,6 +268,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         let mut muxer = Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -337,8 +341,12 @@ impl WindowsFragmentedM4SMuxer {
             prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
@@ -805,8 +813,12 @@ impl WindowsFragmentedM4SCameraMuxer {
             prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            true,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }

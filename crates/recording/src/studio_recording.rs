@@ -3327,6 +3327,7 @@ async fn create_segment_pipeline(
                 builder
                     .build::<crate::ffmpeg::SegmentedVideoMuxer>(
                         crate::ffmpeg::SegmentedVideoMuxerConfig {
+                            timed_fragments: true,
                             segment_duration: Duration::from_secs(2),
                             shared_pause_state: shared_pause_state.clone(),
                             ..Default::default()
@@ -3530,6 +3531,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::SegmentedVideoMuxer>(
                     crate::ffmpeg::SegmentedVideoMuxerConfig {
+                        timed_fragments: true,
                         segment_duration: Duration::from_secs(2),
                         shared_pause_state: shared_pause_state.clone(),
                         ..Default::default()
