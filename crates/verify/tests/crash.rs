@@ -1814,20 +1814,25 @@ fn crash_safety() {
             }
             settle(case);
         }
-        let id = format!("crash/sparse-idle-kill/{fps}fps");
-        if report::selected(&id) {
-            let mut case = Case::new(&id);
-            if let Err(error) = recorder_kill(
-                Arm::InProcess,
-                &format!("idle-{fps}"),
-                KillPoint::Idle(330),
-                14.0,
-                step,
-                &mut case,
-            ) {
-                case.problem("error", format!("{error:#}"));
+        for (label, index) in [
+            (format!("{fps}fps"), 330),
+            (format!("{fps}fps-boundary"), 300),
+        ] {
+            let id = format!("crash/sparse-idle-kill/{label}");
+            if report::selected(&id) {
+                let mut case = Case::new(&id);
+                if let Err(error) = recorder_kill(
+                    Arm::InProcess,
+                    &format!("idle-{label}"),
+                    KillPoint::Idle(index),
+                    14.0,
+                    step,
+                    &mut case,
+                ) {
+                    case.problem("error", format!("{error:#}"));
+                }
+                settle(case);
             }
-            settle(case);
         }
     }
 

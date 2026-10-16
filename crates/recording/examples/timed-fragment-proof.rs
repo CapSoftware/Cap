@@ -68,7 +68,9 @@ fn main() -> Result<()> {
             )?;
             let mut queue_times = Vec::new();
             let mut snapshots = Vec::new();
-            let mut thresholds = [7.0_f64, 17.0, 59.0].into_iter().peekable();
+            let mut thresholds = [6.0_f64, 7.0, 16.0, 17.0, 58.0, 59.0]
+                .into_iter()
+                .peekable();
             for slot in (0..1800_u64).step_by(step as usize) {
                 let timestamp = Duration::from_nanos(slot * 1_000_000_000 / 30);
                 let start = Instant::now();
