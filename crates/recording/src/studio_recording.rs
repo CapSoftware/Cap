@@ -16,7 +16,7 @@ use crate::{
         CursorActor, CursorActorResponse, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder,
     },
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
+    ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig},
     output_pipeline::{
         AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline,
         PipelineDoneError,
@@ -3552,6 +3552,7 @@ async fn create_segment_pipeline(
                 .with_start_gate(start_gate.clone())
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("mic-out"))
                 .await
@@ -3560,7 +3561,9 @@ async fn create_segment_pipeline(
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("mic-out"))
                 .await
         };
@@ -3584,6 +3587,7 @@ async fn create_segment_pipeline(
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
+                    write_behind: cfg!(target_os = "macos"),
                 })
                 .instrument(error_span!("system-audio-out"))
                 .await
@@ -3593,7 +3597,9 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
-                .build::<OggMuxer>(())
+                .build::<OggMuxer>(OggMuxerConfig {
+                    write_behind: cfg!(target_os = "macos"),
+                })
                 .instrument(error_span!("system-audio-out"))
                 .await
         };

@@ -123,6 +123,10 @@ impl AACEncoder {
     ) -> Result<(), ffmpeg::Error> {
         self.base.send_frame(frame, timestamp, sink)
     }
+
+    pub fn flush_to(&mut self, sink: &mut impl PacketSink) -> Result<(), ffmpeg::Error> {
+        self.base.flush(sink)
+    }
 }
 
 impl AudioEncoder for AACEncoder {
