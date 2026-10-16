@@ -413,6 +413,13 @@ async fn record(
         if let Some(hook) = live.on_frame.as_mut() {
             hook(index);
         }
+        if std::env::var("CAP_VERIFY_CRASH_IDLE_AFTER")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|last| index >= last)
+        {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(tx);
@@ -521,11 +528,15 @@ impl ChildRecorder {
         arm: Arm,
         seconds: f64,
         step: u32,
+        idle_after: Option<u32>,
     ) -> anyhow::Result<Self> {
         let exe = std::env::current_exe()?;
         let mut command = Command::new(exe);
         if let Ok(muxer) = cap_recording::oop_muxer::resolve_muxer_binary() {
             command.env(cap_recording::oop_muxer::ENV_BIN_PATH, muxer);
+        }
+        if let Some(index) = idle_after {
+            command.env("CAP_VERIFY_CRASH_IDLE_AFTER", index.to_string());
         }
         let child = command
             .args([
@@ -1227,7 +1238,7 @@ fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
         fresh(&scratch)?;
         let display = scratch.join("display");
         let truth = scratch.join("truth.txt");
-        let mut child = ChildRecorder::spawn(&display, &truth, arm, 5.0, 1)?;
+        let mut child = ChildRecorder::spawn(&display, &truth, arm, 5.0, 1, None)?;
         let n = 2 * GOP + k;
         child.wait_until(Duration::from_secs(40), |handed, _| {
             handed.last().is_some_and(|h| h.index >= n)
@@ -1256,6 +1267,7 @@ fn writer_latency(arm: Arm, case: &mut Case) -> anyhow::Result<()> {
 enum KillPoint {
     /// After frame N was handed.
     Frame(u32),
+    Idle(u32),
     /// Some milliseconds after the recorder started stopping.
     Finalize(u64),
 }
@@ -1304,12 +1316,28 @@ fn recorder_kill(
         std::fs::create_dir_all(&display)?;
         std::fs::write(display.join("hold-finalization"), b"hold")?;
     }
-    let mut child = ChildRecorder::spawn(&display, &truth, arm, seconds, step)?;
+    let idle_after = if let KillPoint::Idle(index) = point {
+        Some(index)
+    } else {
+        None
+    };
+    let mut child = ChildRecorder::spawn(&display, &truth, arm, seconds, step, idle_after)?;
     let timeout = Duration::from_secs_f64(seconds + 30.0);
     match point {
         KillPoint::Frame(n) => child.wait_until(timeout, |handed, _| {
             handed.last().is_some_and(|h| h.index >= n)
         })?,
+        KillPoint::Idle(index) => {
+            child.wait_until(timeout, |handed, _| {
+                handed.last().is_some_and(|frame| frame.index >= index)
+            })?;
+            std::thread::sleep(Duration::from_millis(500));
+            let (handed, stopped, _) = read_truth(&truth)?;
+            anyhow::ensure!(
+                !stopped && handed.last().is_some_and(|frame| frame.index == index),
+                "idle kill missed its source pause"
+            );
+        }
         KillPoint::Finalize(ms) => {
             child.wait_until(timeout, |_, stopped| {
                 stopped && display.join("finalization-entered").exists()
@@ -1659,6 +1687,52 @@ fn crash_safety() {
             case.problem("error", format!("{e:#}"));
         }
         settle(case);
+    }
+
+    for fps in [30_u32, 15, 3, 1] {
+        let step = FPS / fps;
+        let id = format!("crash/sparse-stop/{fps}fps");
+        if report::selected(&id) {
+            let mut case = Case::new(&id);
+            let result = (|| -> anyhow::Result<()> {
+                let scratch = scratch_root().join(format!("sparse-stop-{fps}"));
+                fresh(&scratch)?;
+                let run = rt.block_on(record(
+                    &scratch.join("display"),
+                    Arm::InProcess,
+                    14.0,
+                    step,
+                    None,
+                    Live::default(),
+                ))?;
+                let frames = finalize(&run.display, &scratch.join("final.mp4"))?;
+                check_timeline(&mut case, "inproc", &frames, &run.handed);
+                anyhow::ensure!(frames.len() == run.handed.len(), "sparse stop lost frames");
+                if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
+                    std::fs::remove_dir_all(scratch)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                case.problem("error", format!("{error:#}"));
+            }
+            settle(case);
+        }
+        let id = format!("crash/sparse-idle-kill/{fps}fps");
+        if report::selected(&id) {
+            let mut case = Case::new(&id);
+            if let Err(error) = recorder_kill(
+                Arm::InProcess,
+                &format!("idle-{fps}"),
+                KillPoint::Idle(330),
+                14.0,
+                step,
+                &mut case,
+            ) {
+                case.problem("error", format!("{error:#}"));
+            }
+            settle(case);
+        }
     }
 
     let seed: u64 = std::env::var("CAP_VERIFY_CRASH_SEED")
