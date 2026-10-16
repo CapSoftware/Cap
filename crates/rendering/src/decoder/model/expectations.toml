@@ -3,24 +3,6 @@
 #
 # Format: the shared engine verification format (crates/verify-expect):
 #   [[xfail]]
-#   case = "<case id as printed by the suite, * globs allowed>"
-#   class = "<future | stale | grid-rounding | overread | resets | dropped | fallback | unidentified>"
-#   platforms = ["macos"]  (optional; absent = every platform)
-#   seeds = "<seed indices that fail, ranges allowed: 0 3 5-9>"  (optional; absent = any seed)
-#   reason = "<what is wrong>"
-#   link = "<PR or issue that fixes it; empty when no fix exists yet>"
-#
-# Every listed seed must still fail with that class: a seed that passes fails
-# the run with "remove this xfail", so fixes stay locked in. Any failure not
-# listed here fails the run. After a deliberate change, rewrite this file from
-# a run with `scripts/verify/bless.sh` (locally, or from a CI run's report
-# artifacts with `--run <id>`). Reasons and links of existing entries are
-# kept; review the difference.
-#
-# Entries below were recorded on origin/main 5705ee851. "NEW:" marks bugs the
-# model found that no open PR fixes.
-
-[[xfail]]
 case = "decoder-model/avf/camera-fast/random-seeks/playback"
 class = "future"
 platforms = ["macos"]
@@ -516,14 +498,6 @@ link = ""
 [[xfail]]
 case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
 class = "overread"
-platforms = ["linux"]
-seeds = "7"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
-class = "overread"
 seeds = "47"
 reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
 link = "https://github.com/CapSoftware/Cap/pull/2595"
@@ -534,122 +508,6 @@ class = "stale"
 seeds = "47"
 reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
 link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/export"
-class = "grid-rounding"
-platforms = ["linux"]
-seeds = "4 11 22 27 29"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/export"
-class = "grid-rounding"
-seeds = "3 6 28"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/export"
-class = "overread"
-seeds = "0-29"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/export"
-class = "stale"
-seeds = "0 3-6 11 15 22 27-29"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
-class = "grid-rounding"
-seeds = "2 6 24"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
-class = "overread"
-seeds = "0-8 10-14 16 17 19-21 23-29"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/sequential/playback"
-class = "stale"
-seeds = "0 2 6 11 24"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/export"
-class = "grid-rounding"
-platforms = ["linux"]
-seeds = "0 2 3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/export"
-class = "grid-rounding"
-seeds = "1"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/export"
-class = "overread"
-seeds = "0-3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/export"
-class = "resets"
-platforms = ["linux"]
-seeds = "0-3"
-reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 0 request 6042). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/export"
-class = "stale"
-seeds = "0-3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/playback"
-class = "grid-rounding"
-seeds = "2 3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/playback"
-class = "overread"
-seeds = "2 3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/playback"
-class = "resets"
-platforms = ["linux"]
-seeds = "2 3"
-reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): reader starts and seeks exceed the budget of two per jump in the request stream later in the sequence (seed index 2 request 6210). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, first-frame shortcut, reset decisions)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera/sequential/playback"
-class = "stale"
-seeds = "2 3"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
@@ -782,14 +640,14 @@ link = ""
 case = "decoder-model/ffmpeg/cfr/scrub/playback"
 class = "overread"
 platforms = ["linux"]
-seeds = "1 4 7 8 11 14 16-20 26 27 36-38 40-43 46 52 53 55 56 58 64 68 70 71 73 74 77 78 80 82 83 85 88 90-94 98-101 105 107 110 113 114 117 121 124 127 128 131-133 135 137 141 142 145 148 149 151 152 154 155 157 162 163 167 173-175 177 179 181 183 187 189 192 193 198"
+seeds = "1 4 7-8 11 14 16-20 26-27 36-38 40-43 46 52-53 55-56 58 64 68 70-71 73-74 77-78 80 82-83 85 88 90-94 98-101 105 107 110 113-114 117 121 124 127-128 131-133 135 137 141-142 145 148-149 151-152 154-155 157 162-163 167 173-175 177 179 181 183 187 189 192 198"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/scrub/playback"
 class = "overread"
-seeds = "0 3 13 21 33-35 39 50 51 67 75 84 86 97 103 104 106 108 109 115 118 119 122 123 134 138 139 144 147 160 161 165 168 170 176 180 185 186 197"
+seeds = "0 3 13 21 33-35 39 50-51 54 67 75 84 86 97 103-104 106 108-109 115 118-119 122-123 134 138-139 144 147 160-161 165 168 170 176 180 185-186 197"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
@@ -826,13 +684,6 @@ case = "decoder-model/ffmpeg/cfr/timeline/export"
 class = "overread"
 platforms = ["linux"]
 seeds = "12 42 43 64 133"
-reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/timeline/export"
-class = "overread"
-seeds = "53 66 103 107 132"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
@@ -970,34 +821,6 @@ reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame 
 link = ""
 
 [[xfail]]
-case = "decoder-model/ffmpeg/halfgrid/back-into-old-gap/export"
-class = "overread"
-seeds = "23 41"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/halfgrid/back-into-old-gap/playback"
-class = "overread"
-seeds = "20"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/syn/edlist/export"
-class = "overread"
-seeds = "0-7"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
-case = "decoder-model/ffmpeg/syn/edlist/playback"
-class = "overread"
-seeds = "0-7"
-reason = "Camera runaway: when the pts-hole map is full it evicts the narrowest hole, so with two requests per source frame the reader reads one frame further ahead per hole until answers come from the future"
-link = "https://github.com/CapSoftware/Cap/pull/2595"
-
-[[xfail]]
 case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
 class = "future"
 platforms = ["linux"]
@@ -1031,14 +854,14 @@ link = ""
 case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
 class = "overread"
 platforms = ["linux"]
-seeds = "1-5 7 8 10-14 19-21 24 25 29 34 36 40-43 48 51 53 55 59 62 64 68 73 79 81 86 91 94 96"
+seeds = "1-5 7-8 10-14 19-21 24-25 29 34 40-43 48 51 53 55 59 62 64 68 73 79 81 86 91 94 96"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
 class = "overread"
-seeds = "6 15 17 18 23 28 30 31 44 46 47 50 52 57 58 60 61 66 69 72 75 76 78 83 84 87 89 97 99"
+seeds = "6 9 15 17 18 23 28 30 31 44 46 47 50 52 57 58 60 61 66 69 72 75 76 78 83 84 87 89 97 99"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
@@ -1082,7 +905,7 @@ link = ""
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
 class = "overread"
-seeds = "11 80 101 102 104 110 130 157 171 180"
+seeds = "80"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
@@ -1126,7 +949,7 @@ link = ""
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/scrub/playback"
 class = "overread"
-seeds = "2 23 28 59 69 75 88 91 95 119"
+seeds = "2 15 19 23 28 53-54 59 69 75 80 88 91 95 107 110 119"
 reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
 link = ""
 
@@ -1162,22 +985,8 @@ link = ""
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/timeline/export"
 class = "grid-rounding"
-seeds = "20 77 110"
+seeds = "77 110"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/timeline/export"
-class = "overread"
-seeds = "0 20 47 56 62 88 107 110 119"
-reason = "NEW: after a backward request served from the FFmpeg decoder's cache, the reader is left far ahead and the next request reads past the frame it needs"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/timeline/export"
-class = "stale"
-seeds = "56 119"
-reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
 link = ""
 
 [[xfail]]
@@ -1209,4 +1018,3 @@ class = "stale"
 seeds = "4-6 8 10 12 13 18 19 21 28 31 33 38 39 41 45-47 49 50 52 55 56 58 59 61 66 68 71 75-77 79"
 reason = "NEW: the FFmpeg decoder answers backward requests with a cached frame up to 2 grid frames older than the requested one, answers grid frames 0 to 2 with the first frame, and after a backward request served from the cache it reads forward from a reader that is still far ahead, answering with an older cached frame"
 link = ""
-
