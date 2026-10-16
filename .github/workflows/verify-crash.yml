@@ -1,18 +1,12 @@
-name: Verify crash safety
-
-# The `crash` engine-verify suite (crates/verify/tests/crash.rs) on all three
-# platforms: in-process vs out-of-process muxer equality and recorder, muxer
-# and finalize kills against what is physically on disk. engine-verify.yml
-# runs it like every other suite; this workflow runs it alone on Blacksmith
-# runners for crash-safety proof branches.
+name: Verify timed Studio fragments
 
 on:
-  push:
-    branches:
-      - ci/fixproof-crash*
-      - scratch/crash-*
   workflow_dispatch:
     inputs:
+      suites:
+        description: "Empty runs the full engine matrix"
+        type: string
+        default: ""
       tier:
         description: Tier
         type: choice
@@ -44,4 +38,4 @@ jobs:
       runner: ${{ matrix.runner }}
       target: ${{ matrix.target }}
       tier: ${{ inputs.tier || 'full' }}
-      suites: crash
+      suites: ${{ inputs.suites }}
