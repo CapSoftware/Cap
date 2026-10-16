@@ -202,6 +202,15 @@ impl FrameDropTracker {
                 total_frames = self.total_frames,
                 "MP4 muxer encoder queue full, first frame dropped"
             );
+            if let Some(tx) = &self.health_tx {
+                emit_health(
+                    tx,
+                    PipelineHealthEvent::FrameDropRateHigh {
+                        source: self.source.to_string(),
+                        rate_pct: 100.0 / (self.total_frames + 1) as f64,
+                    },
+                );
+            }
         }
         self.check_drop_rate();
     }
