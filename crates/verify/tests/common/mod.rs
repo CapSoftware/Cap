@@ -277,6 +277,56 @@ pub async fn export(
     run: &ExportRun,
     out: &Path,
 ) -> Result<PathBuf, String> {
+    let path = export_inner(project, config, run, out).await?;
+    log_output_hash(run, &path);
+    Ok(path)
+}
+
+/// Scratch (export-order proof): appends `case, format, fps, size, fnv64` of
+/// every exported file to `$CAP_VERIFY_REPORT_DIR/output-hashes.tsv`, so base
+/// and fix runs can be compared byte for byte.
+fn log_output_hash(run: &ExportRun, path: &Path) {
+    use std::io::Write;
+    let Ok(dir) = std::env::var("CAP_VERIFY_REPORT_DIR") else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in &bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let case = cap_verify::report::CURRENT_CASE
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::path::Path::new(&dir).join("output-hashes.tsv"))
+    {
+        let _ = writeln!(
+            file,
+            "{}\t{}\t{:?}\t{}\t{}\t{:016x}",
+            cap_verify::report::platform(),
+            case,
+            run.format,
+            run.fps,
+            bytes.len(),
+            hash
+        );
+    }
+}
+
+async fn export_inner(
+    project: &Project,
+    config: ProjectConfiguration,
+    run: &ExportRun,
+    out: &Path,
+) -> Result<PathBuf, String> {
     let force = run.decoder == Decoder::Ffmpeg;
     let base = cap_export::ExporterBase::builder(project.path.clone())
         .with_config(config)
