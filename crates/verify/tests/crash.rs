@@ -244,7 +244,12 @@ mod source {
         OutputPipeline::builder(display.to_path_buf())
             .with_video::<ChannelVideoSource<Frame>>(ChannelVideoSourceConfig::new(info(), rx))
             .with_timestamps(timestamps)
-            .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig::default())
+            // The Studio display config (capture_pipeline.rs, X11Capture):
+            // 2 s segments.
+            .build::<SegmentedVideoMuxer>(SegmentedVideoMuxerConfig {
+                segment_duration: Duration::from_secs(2),
+                ..Default::default()
+            })
             .await
     }
 }
@@ -386,6 +391,9 @@ fn crash_child_recorder() {
     let truth = PathBuf::from(fields["truth"]);
     let seconds: f64 = fields["seconds"].parse().expect("seconds");
     let step: u32 = fields["step"].parse().expect("step");
+    if arm == Arm::OutOfProcess {
+        cap_recording::oop_muxer::resolve_muxer_binary().expect("child recorder: cap-muxer binary");
+    }
     let rt = common::runtime();
     rt.block_on(record(
         &display,
@@ -412,7 +420,11 @@ impl ChildRecorder {
         step: u32,
     ) -> anyhow::Result<Self> {
         let exe = std::env::current_exe()?;
-        let child = Command::new(exe)
+        let mut command = Command::new(exe);
+        if let Ok(muxer) = cap_recording::oop_muxer::resolve_muxer_binary() {
+            command.env(cap_recording::oop_muxer::ENV_BIN_PATH, muxer);
+        }
+        let child = command
             .args([
                 "crash_child_recorder",
                 "--exact",
