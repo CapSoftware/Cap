@@ -1,6 +1,9 @@
 name: Surface wait native proof
 on:
   workflow_dispatch:
+  push:
+    branches: [ci/fixproof-surfacewait-control, ci/fixproof-surfacewait]
+    paths: [.github/workflows/surfacewait-native.yml]
 permissions:
   contents: read
 jobs:
