@@ -72,6 +72,18 @@ pub struct CursorEvents {
 }
 
 impl CursorEvents {
+    pub fn load_clicks_from_file(path: &Path) -> Result<Vec<CursorClickEvent>, String> {
+        #[derive(Deserialize)]
+        struct Clicks {
+            clicks: Vec<CursorClickEvent>,
+        }
+
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
+        serde_json::from_reader::<_, Clicks>(BufReader::new(file))
+            .map(|events| events.clicks)
+            .map_err(|e| format!("Failed to parse cursor clicks: {e}"))
+    }
+
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
         Self::load_from_reader(BufReader::new(file))
@@ -309,6 +321,10 @@ mod tests {
         let events = CursorEvents::load_from_file(&path).unwrap();
         assert_eq!(events.moves, expected.moves);
         assert_eq!(events.clicks, expected.clicks);
+        assert_eq!(
+            CursorEvents::load_clicks_from_file(&path).unwrap(),
+            expected.clicks
+        );
         let legacy = CursorData::load_from_file(&path).unwrap();
         assert_eq!(
             serde_json::to_value(legacy).unwrap(),
@@ -321,6 +337,29 @@ mod tests {
         let loaded_events = CursorEvents::load_from_file(&path).unwrap();
         assert_eq!(loaded_events.moves, expected.moves);
         assert_eq!(loaded_events.clicks, expected.clicks);
+        assert_eq!(
+            CursorEvents::load_clicks_from_file(&path).unwrap(),
+            expected.clicks
+        );
+    }
+
+    #[test]
+    fn click_only_load_rejects_incomplete_files_and_invalid_clicks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.json");
+        assert!(CursorEvents::load_clicks_from_file(&path).is_err());
+        for json in [
+            r#"{"clicks":[],"moves":["#,
+            r#"{"clicks":[{}],"moves":[]}"#,
+            r#"{"clicks":[],"moves":[]} trailing"#,
+            r#"{"moves":[]}"#,
+        ] {
+            std::fs::write(&path, json).unwrap();
+            assert!(
+                CursorEvents::load_clicks_from_file(&path).is_err(),
+                "{json}"
+            );
+        }
     }
 
     #[test]

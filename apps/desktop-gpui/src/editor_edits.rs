@@ -1971,6 +1971,50 @@ pub fn clip_trim_end(
 /// `DEFAULT_AUTO_ZOOM_AMOUNT` (`src-tauri/src/recording.rs:3704`).
 pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
 
+pub fn generate_zoom_segments_for_timeline(
+    clicks_by_clip: &[Vec<CursorClickEvent>],
+    timeline: &TimelineConfiguration,
+    zoom_amount: f64,
+) -> Vec<ZoomSegment> {
+    let ordered_clicks: Vec<_> = clicks_by_clip
+        .iter()
+        .map(|clicks| {
+            let mut ordered: Vec<_> = clicks
+                .iter()
+                .filter(|click| click.time_ms.is_finite())
+                .collect();
+            ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+            ordered
+        })
+        .collect();
+    let holds = timeline.hold_windows();
+    let offsets = crate::editor_timeline::clip_timeline_offsets(timeline);
+    let mut mapped = Vec::new();
+    for (segment, offset) in timeline.segments.iter().zip(offsets) {
+        if !segment.start.is_finite()
+            || !segment.end.is_finite()
+            || !segment.timescale.is_finite()
+            || segment.timescale <= 0.0
+            || segment.end <= segment.start
+        {
+            continue;
+        }
+        let Some(clicks) = ordered_clicks.get(segment.recording_clip as usize) else {
+            continue;
+        };
+        let start = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.start);
+        let end = clicks.partition_point(|click| click.time_ms / 1000.0 < segment.end);
+        for click in &clicks[start..end] {
+            let source_time = click.time_ms / 1000.0;
+            let effective = offset + (source_time - segment.start) / segment.timescale;
+            let mut click = (**click).clone();
+            click.time_ms = effective_to_output(&holds, effective) * 1000.0;
+            mapped.push(click);
+        }
+    }
+    generate_zoom_segments_from_clicks(mapped, timeline.duration(), zoom_amount)
+}
+
 /// `generate_zoom_segments_from_clicks_impl`
 /// (`src-tauri/src/recording.rs:3706-3782`), the algorithm behind the Tauri
 /// command the empty zoom track's generate button invokes: every click grows
@@ -3189,6 +3233,125 @@ mod tests {
     fn no_clicks_or_no_duration_generate_no_zoom_segments() {
         assert!(generate_zoom_segments_from_clicks(Vec::new(), 20.0, 2.0).is_empty());
         assert!(generate_zoom_segments_from_clicks(vec![click(1_000.)], 0.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn auto_zoom_tracks_trimmed_retimed_repeated_and_reordered_takes() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 1, "timescale": 2.0, "start": 10.0, "end": 30.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let zooms = generate_zoom_segments_for_timeline(
+            &[
+                vec![click(4000.0)],
+                vec![click(2000.0), click(14000.0), click(30000.0)],
+            ],
+            timeline,
+            2.0,
+        );
+        let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
+        assert_eq!(bounds, vec![(1.7, 4.5), (13.7, 16.5), (23.7, 26.5)]);
+    }
+
+    #[test]
+    fn auto_zoom_offsets_each_take_in_an_unedited_recording() {
+        let project = two_clip_config();
+        let zooms = generate_zoom_segments_for_timeline(
+            &[vec![click(2000.0)], vec![click(4000.0)]],
+            project.timeline.as_ref().unwrap(),
+            2.0,
+        );
+        assert_eq!(zooms.len(), 2);
+        assert_eq!((zooms[1].start, zooms[1].end), (13.7, 16.5));
+    }
+
+    #[test]
+    fn auto_zoom_accounts_for_transitions_and_fullscreen_holds() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 8.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 2.0 }],
+                "textSegments": [
+                    { "start": 3.0, "end": 6.0, "content": "first", "layout": "fullscreen" },
+                    { "start": 15.0, "end": 17.0, "content": "second", "layout": "fullscreen" }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let zooms = generate_zoom_segments_for_timeline(
+            &[vec![click(3000.0)], vec![click(4000.0)]],
+            timeline,
+            2.0,
+        );
+        let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
+        assert_eq!(bounds, vec![(5.7, 8.5), (16.7, 19.5)]);
+    }
+
+    #[test]
+    fn auto_zoom_uses_edited_duration_and_ignores_removed_clicks() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 2.0, "start": 10.0, "end": 30.0 }],
+                "zoomSegments": []
+            }
+        }));
+        let zooms = generate_zoom_segments_for_timeline(
+            &[vec![
+                click(f64::NAN),
+                click(26000.0),
+                click(2000.0),
+                click(29000.0),
+                click(f64::INFINITY),
+                click(30000.0),
+            ]],
+            project.timeline.as_ref().unwrap(),
+            2.0,
+        );
+        assert_eq!(zooms.len(), 1);
+        assert_eq!((zooms[0].start, zooms[0].end), (7.7, 9.2));
+    }
+
+    #[test]
+    fn auto_zoom_preserves_single_take_behavior_across_a_split() {
+        let mut project = two_clip_config();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments.truncate(1);
+        let clicks = vec![click(0.0), click(4000.0), click(5000.0), click(9500.0)];
+        let expected = generate_zoom_segments_from_clicks(clicks.clone(), 10.0, 2.5);
+        let bounds = |zooms: Vec<ZoomSegment>| {
+            zooms
+                .into_iter()
+                .map(|zoom| (zoom.start, zoom.end, zoom.amount))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bounds(generate_zoom_segments_for_timeline(
+                std::slice::from_ref(&clicks),
+                timeline,
+                2.5
+            )),
+            bounds(expected.clone())
+        );
+        assert!(split_clip_segment(timeline, 5.0, Some(0)));
+        assert_eq!(
+            bounds(generate_zoom_segments_for_timeline(
+                &[clicks],
+                timeline,
+                2.5
+            )),
+            bounds(expected)
+        );
     }
 
     // -- Split --------------------------------------------------------------

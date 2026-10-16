@@ -17,6 +17,7 @@ mod thumbnail;
 pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
+    PlaySpec,
 };
 pub use cap_audio::{
     TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,

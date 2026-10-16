@@ -161,6 +161,7 @@ impl MFDecoder {
 
             let video_width = decoder.width();
             let video_height = decoder.height();
+            let matrix = super::probe_yuv_matrix(&path);
 
             let mut health = DecoderHealthMonitor::new();
 
@@ -198,6 +199,7 @@ impl MFDecoder {
                             data.y_stride,
                             data.uv_stride,
                         )
+                        .with_matrix(matrix)
                     },
                 ));
             };
