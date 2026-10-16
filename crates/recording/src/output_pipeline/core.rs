@@ -6320,7 +6320,7 @@ mod tests {
             if sample_based_elapsed <= capture.saturating_add(AUDIO_OVERLAP_TOLERANCE) {
                 Duration::ZERO
             } else {
-                sample_based_elapsed - capture
+                sample_based_elapsed.saturating_sub(capture)
             }
         }
 
@@ -9571,7 +9571,11 @@ mod tests {
             // those 10 ms.
             assert!(matches!(
                 harness
-                    .process_at(now - Duration::from_millis(10), now, CHUNK_SAMPLES)
+                    .process_at(
+                        now.saturating_sub(Duration::from_millis(10)),
+                        now,
+                        CHUNK_SAMPLES,
+                    )
                     .await,
                 AudioFrameOutcome::Sent
             ));
@@ -9599,7 +9603,11 @@ mod tests {
             let jump_back = Duration::from_millis(100);
             for chunk in 0_u32..40 {
                 let live = CHUNK * chunk;
-                let capture = if chunk < 20 { live } else { live - jump_back };
+                let capture = if chunk < 20 {
+                    live
+                } else {
+                    live.saturating_sub(jump_back)
+                };
                 let outcome = harness
                     .process_at(capture, first_lag.max(live), CHUNK_SAMPLES)
                     .await;
@@ -9675,7 +9683,8 @@ mod tests {
             }
             let silence = harness.total_silence();
             assert!(
-                silence >= gap - (first_lag - AUDIO_WALL_CLOCK_TOLERANCE) && silence <= gap,
+                silence >= gap.saturating_sub(first_lag.saturating_sub(AUDIO_WALL_CLOCK_TOLERANCE))
+                    && silence <= gap,
                 "inserted {silence:?} for a {gap:?} gap"
             );
             assert_eq!(harness.gap_tracker.overlap_event_count, 0);
@@ -9779,7 +9788,8 @@ mod tests {
                 max_skew = max_skew.max(abs_skew(committed, capture));
             }
 
-            let band = Duration::from_millis(100) + (first_lag - AUDIO_WALL_CLOCK_TOLERANCE);
+            let band =
+                Duration::from_millis(100) + first_lag.saturating_sub(AUDIO_WALL_CLOCK_TOLERANCE);
             assert!(
                 max_skew < band,
                 "audio drifted from the capture clock by {max_skew:?}"
