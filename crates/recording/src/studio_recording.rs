@@ -1458,60 +1458,86 @@ impl Pipeline {
 
     /// Writes the tracks' start times beside the segment as soon as their
     /// first frames arrive and again as more tracks start, so a crash keeps
-    /// the alignment a normal stop would persist. Ends once every track has
-    /// started or the pipeline is gone.
+    /// the alignment a normal stop would persist.
     fn spawn_start_time_persister(&self) {
         let Some(segment_dir) = self.screen.path().parent().map(Path::to_path_buf) else {
             return;
         };
         let start_time = self.start_time;
         let start_gate = self.start_gate.clone();
-        let mut display = self.screen.first_timestamp_watch();
-        let mut mic = self.microphone.as_ref().map(|p| p.first_timestamp_watch());
-        let mut camera = self.camera.as_ref().map(|p| p.first_timestamp_watch());
-        let mut system_audio = self
-            .system_audio
-            .as_ref()
-            .map(|p| p.first_timestamp_watch());
+        let mut display = Some(self.screen.first_timestamp_watch());
+        let mut tracks = [
+            self.microphone.as_ref().map(|p| p.first_timestamp_watch()),
+            self.camera.as_ref().map(|p| p.first_timestamp_watch()),
+            self.system_audio
+                .as_ref()
+                .map(|p| p.first_timestamp_watch()),
+        ];
         tokio::spawn(async move {
+            const WRITE_ATTEMPTS: u32 = 5;
+            let mut firsts: [Option<Timestamp>; 4] = [None; 4];
             let mut written = None;
+            let mut failed_writes = 0;
             loop {
-                let first = |watch: &Option<tokio::sync::watch::Receiver<Option<Timestamp>>>| {
-                    watch.as_ref().and_then(|watch| *watch.borrow())
-                };
-                if let Some(display_first) = *display.borrow() {
+                if let Some(watch) = &mut display {
+                    firsts[0] = firsts[0].or(*watch.borrow_and_update());
+                }
+                for (first, watch) in firsts[1..].iter_mut().zip(tracks.iter_mut()) {
+                    if let Some(watch) = watch {
+                        *first = first.or(*watch.borrow_and_update());
+                    }
+                }
+                if let Some(display_first) = firsts[0] {
                     let times = SegmentStartTimes::compute(
                         pipeline_epoch(start_time, start_gate.as_ref()),
                         display_first,
-                        first(&mic),
-                        first(&camera),
-                        first(&system_audio),
+                        firsts[1],
+                        firsts[2],
+                        firsts[3],
                     );
                     if written != Some(times) {
-                        if let Err(error) = write_segment_start_times(&segment_dir, &times) {
-                            warn!(%error, "Failed to persist segment start times");
+                        match write_segment_start_times(&segment_dir, &times) {
+                            Ok(()) => written = Some(times),
+                            Err(error) => {
+                                failed_writes += 1;
+                                warn!(%error, failed_writes, "Failed to persist segment start times");
+                                if failed_writes >= WRITE_ATTEMPTS {
+                                    return;
+                                }
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                continue;
+                            }
                         }
-                        written = Some(times);
                     }
                 }
-                let pending = |watch: &Option<tokio::sync::watch::Receiver<Option<Timestamp>>>| {
-                    watch.as_ref().is_some_and(|watch| watch.borrow().is_none())
-                };
-                if display.borrow().is_some()
-                    && !pending(&mic)
-                    && !pending(&camera)
-                    && !pending(&system_audio)
-                {
+                let display_waiting = firsts[0].is_none() && display.is_some();
+                let tracks_waiting: [bool; 3] =
+                    std::array::from_fn(|i| firsts[i + 1].is_none() && tracks[i].is_some());
+                if !display_waiting && !tracks_waiting.contains(&true) {
                     return;
                 }
-                let alive = tokio::select! {
-                    result = display.changed(), if display.borrow().is_none() => result.is_ok(),
-                    alive = first_timestamp_change(&mut mic) => alive,
-                    alive = first_timestamp_change(&mut camera) => alive,
-                    alive = first_timestamp_change(&mut system_audio) => alive,
-                };
-                if !alive {
-                    return;
+                let [mic, camera, system_audio] = &mut tracks;
+                tokio::select! {
+                    result = changed(&mut display), if display_waiting => {
+                        if result.is_err() {
+                            return;
+                        }
+                    }
+                    result = changed(mic), if tracks_waiting[0] => {
+                        if result.is_err() {
+                            *mic = None;
+                        }
+                    }
+                    result = changed(camera), if tracks_waiting[1] => {
+                        if result.is_err() {
+                            *camera = None;
+                        }
+                    }
+                    result = changed(system_audio), if tracks_waiting[2] => {
+                        if result.is_err() {
+                            *system_audio = None;
+                        }
+                    }
                 }
             }
         });
@@ -3695,14 +3721,12 @@ fn persist_final_recording_meta(
     Ok(recording_meta)
 }
 
-/// Resolves when a track that has not started yet starts (`true`) or its
-/// pipeline is gone (`false`); never for absent or started tracks.
-async fn first_timestamp_change(
+async fn changed(
     watch: &mut Option<tokio::sync::watch::Receiver<Option<Timestamp>>>,
-) -> bool {
+) -> Result<(), tokio::sync::watch::error::RecvError> {
     match watch {
-        Some(watch) if watch.borrow().is_none() => watch.changed().await.is_ok(),
-        _ => std::future::pending().await,
+        Some(watch) => watch.changed().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -3714,13 +3738,20 @@ fn pipeline_epoch(start_time: Timestamps, start_gate: Option<&RecordingStartGate
 }
 
 fn write_segment_start_times(segment_dir: &Path, times: &SegmentStartTimes) -> std::io::Result<()> {
+    use std::io::Write;
     let path = segment_dir.join(crate::recovery::SEGMENT_START_TIMES_FILE);
     let temp = path.with_extension("json.tmp");
-    std::fs::write(
-        &temp,
-        serde_json::to_vec(times).map_err(std::io::Error::other)?,
-    )?;
-    std::fs::rename(&temp, &path)
+    let mut file = std::fs::File::create(&temp)?;
+    file.write_all(&serde_json::to_vec(times).map_err(std::io::Error::other)?)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temp, &path)?;
+    if let Ok(dir) = std::fs::File::open(segment_dir)
+        && let Err(error) = dir.sync_all()
+    {
+        warn!(%error, "Directory fsync failed after persisting segment start times");
+    }
+    Ok(())
 }
 
 fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
@@ -5554,6 +5585,77 @@ mod tests {
         );
         assert_eq!(during, at_stop);
         assert!(during.mic.unwrap() > during.display);
+    }
+
+    #[tokio::test]
+    async fn a_track_that_ends_before_starting_does_not_stop_start_time_persistence() {
+        let temp = tempfile::tempdir().unwrap();
+        let segment_dir = temp.path().join("content/segments/segment-0");
+        std::fs::create_dir_all(&segment_dir).unwrap();
+        let timestamps = Timestamps::now();
+        let (screen_tx, screen_rx) = flume::bounded(4);
+        let screen = OutputPipeline::builder(segment_dir.join("display"))
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                screen_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let (mic_tx, mic_rx) = futures::channel::mpsc::channel(16);
+        let microphone = OutputPipeline::builder(segment_dir.join("audio-input"))
+            .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                test_audio_info(),
+                mic_rx,
+            ))
+            .with_timestamps(timestamps)
+            .build::<SuccessfulVideoMuxer>(())
+            .await
+            .unwrap();
+        let microphone_watch = microphone.first_timestamp_watch();
+        let pipeline = Pipeline {
+            start_time: timestamps,
+            start_gate: None,
+            screen,
+            microphone: None,
+            camera: None,
+            system_audio: None,
+            cursor: None,
+            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            watcher_task: None,
+            #[cfg(any(target_os = "linux", windows))]
+            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let pipeline = Pipeline {
+            microphone: Some(microphone),
+            ..pipeline
+        };
+        pipeline.spawn_start_time_persister();
+
+        drop(mic_tx);
+        let Pipeline {
+            microphone, screen, ..
+        } = pipeline;
+        let _ = microphone.unwrap().stop().await;
+        assert!(microphone_watch.borrow().is_none());
+
+        screen_tx
+            .send_async(TestVideoFrame {
+                timestamp: Timestamp::Instant(timestamps.instant() + Duration::from_millis(200)),
+            })
+            .await
+            .unwrap();
+        let path = segment_dir.join(crate::recovery::SEGMENT_START_TIMES_FILE);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let times: SegmentStartTimes =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(times.mic, None);
+        drop(screen_tx);
+        let _ = screen.stop().await;
     }
 
     fn test_video_info() -> VideoInfo {
