@@ -19,7 +19,7 @@ fn config(project: &common::Project, improve: bool, music: bool) -> ProjectConfi
     );
     config.audio.improve = improve;
     if music {
-        audio_fixture::add_music(&mut config, 0.75, 6.5, 2.0, -3.0);
+        audio_fixture::add_music(&mut config, 1.0, 7.0, 0.5, -6.0);
     }
     config
 }
@@ -152,6 +152,45 @@ fn investigate_studio_sound_music() {
             save(&dir, &format!("export-{fps}-{improve}-base"), &base);
             save(&dir, &format!("export-{fps}-{improve}-stem"), &stem);
         }
+    }
+    let cfg = config(&project, true, true);
+    let mut model = audio_support::audio_model(&project, &cfg);
+    model
+        .expected
+        .retain(|marker| marker.source == AudioSource::Media);
+    let stem = subtract(
+        &raw(&rt, &project, &cfg, 1600),
+        &raw(&rt, &project, &config(&project, true, false), 1600),
+    );
+    let first = model
+        .expected
+        .iter()
+        .find(|m| m.presence == audio_model::Presence::Required)
+        .unwrap();
+    let mut missing = stem.clone();
+    let start = (first.time_secs * 48000.0).round() as usize;
+    missing[start..start + 5760].fill(0.0);
+    let mut shifted = stem.clone();
+    shifted.rotate_right(384);
+    let source = cap_audio::AudioData::from_raw_f32(stem.clone(), 1);
+    let enhanced = cap_audio::VoiceEnhancer::new(1)
+        .render(&source, 0, stem.len())
+        .samples()
+        .to_vec();
+    let corruptions = [
+        ("missing", missing),
+        ("shift-8ms", shifted),
+        ("gain-plus29", stem.iter().map(|s| s * 1.29).collect()),
+        ("duck-minus29", stem.iter().map(|s| s * 0.71).collect()),
+        ("voice-enhanced-music", enhanced),
+    ];
+    for (name, corrupted) in corruptions {
+        let report = audio_model::check(&model, &audio_model::hear(&corrupted, 0.0, &[]));
+        assert!(!report.passed(), "missed {name}");
+        evidence.insert(
+            format!("corruption-{name}"),
+            serde_json::json!({"report": report}),
+        );
     }
     std::fs::write(
         dir.join("evidence.json"),

@@ -27,10 +27,14 @@ jobs:
           tier: fast
       - run: rustup component add rustfmt
       - run: cargo fmt --all --check
-      - run: cargo check --profile ci-verify -p cap-verify --test ssmusic
+      - run: cargo check --profile ci-verify -p cap-verify --test ssmusic --test audio
       - env:
           SSMUSIC_ARTIFACTS: ${{ runner.temp }}/ssmusic
         run: cargo test --profile ci-verify -p cap-verify --test ssmusic -- --nocapture > "$RUNNER_TEMP/ssmusic-test.log" 2>&1
+      - env:
+          CAP_VERIFY_REPORT_DIR: ${{ runner.temp }}/ssmusic/report
+        run: cargo test --profile ci-verify -p cap-verify --test audio studio_sound_music -- --nocapture --test-threads=1 > "$RUNNER_TEMP/ssmusic-correction.log" 2>&1
+      - run: python3 scripts/verify/ssmusic-mutant.py
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -38,3 +42,5 @@ jobs:
           path: |
             ${{ runner.temp }}/ssmusic
             ${{ runner.temp }}/ssmusic-test.log
+            ${{ runner.temp }}/ssmusic-correction.log
+            ${{ runner.temp }}/ssmusic-mutant.log
