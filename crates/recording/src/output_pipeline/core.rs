@@ -1183,8 +1183,9 @@ impl CaptureInstantTimeline {
 // in. The minimum hand-off lag (wall minus capture) over each window of frames
 // the mux loop waited for ignores stalls, since some frames are always handed
 // over promptly, but moves with real clock drift. The first window after the
-// anchor is the reference; once two consecutive windows sit more than
-// CLOCK_DRIFT_ENGAGE beyond it in the same direction, every window sets the
+// anchor is the reference, and a delivery delay that changes faster than a
+// clock can drift (CLOCK_DRIFT_MAX_RATE) moves the reference. Once two consecutive windows sit more
+// than CLOCK_DRIFT_ENGAGE beyond it in the same direction, every window sets the
 // target, and the applied correction slews toward it by at most
 // 1/CLOCK_DRIFT_SLEW_DIVISOR of each frame's capture interval. Host-clock
 // sources never engage, so their stamps are unchanged.
@@ -1193,7 +1194,8 @@ impl CaptureInstantTimeline {
 struct CaptureClockDrift {
     reference_lag_ns: Option<i128>,
     window_start: Option<Duration>,
-    window_min_lag_ns: Option<i128>,
+    window_min_lag: Option<(i128, Duration)>,
+    previous_window: Option<(i128, Duration)>,
     pending_ns: Option<i128>,
     engaged: bool,
     target_ns: i128,
@@ -1207,26 +1209,45 @@ const CLOCK_DRIFT_WINDOW: Duration = Duration::from_secs(1);
 const CLOCK_DRIFT_ENGAGE_NS: i128 = 25_000_000;
 #[cfg(not(target_os = "linux"))]
 const CLOCK_DRIFT_SLEW_DIVISOR: i128 = 20;
+// 2%: faster than any capture clock drifts.
+#[cfg(not(target_os = "linux"))]
+const CLOCK_DRIFT_MAX_RATE_DIVISOR: i128 = 50;
+// Slack for the minimum itself moving between windows.
+#[cfg(not(target_os = "linux"))]
+const CLOCK_DRIFT_JITTER_NS: i128 = 5_000_000;
 
 #[cfg(not(target_os = "linux"))]
 impl CaptureClockDrift {
     fn observe(&mut self, lag_ns: i128, wall: Duration, waited: bool) {
-        if waited {
-            self.window_min_lag_ns =
-                Some(self.window_min_lag_ns.map_or(lag_ns, |min| min.min(lag_ns)));
+        if waited && self.window_min_lag.is_none_or(|(min, _)| lag_ns < min) {
+            self.window_min_lag = Some((lag_ns, wall));
         }
         let start = *self.window_start.get_or_insert(wall);
         if wall.saturating_sub(start) < CLOCK_DRIFT_WINDOW {
             return;
         }
         self.window_start = Some(wall);
-        let Some(window_min) = self.window_min_lag_ns.take() else {
+        let Some((window_min, sampled_at)) = self.window_min_lag.take() else {
             return;
         };
+        let previous = self.previous_window.replace((window_min, sampled_at));
         let Some(reference) = self.reference_lag_ns else {
             self.reference_lag_ns = Some(window_min);
             return;
         };
+        // A clock drifts at a rate: a change faster than CLOCK_DRIFT_MAX_RATE
+        // since the previous measured window is the delivery delay changing (a
+        // host-clock source handed over later or sooner), which moves the
+        // reference instead.
+        if let Some((previous_min, previous_sampled_at)) = previous {
+            let step = window_min - previous_min;
+            let elapsed_ns = sampled_at.abs_diff(previous_sampled_at).as_nanos() as i128;
+            if step.abs() > elapsed_ns / CLOCK_DRIFT_MAX_RATE_DIVISOR + CLOCK_DRIFT_JITTER_NS {
+                self.reference_lag_ns = Some(reference + step);
+                self.pending_ns = None;
+                return;
+            }
+        }
         let residual = window_min - reference - self.target_ns;
         if self.engaged {
             self.target_ns += residual;
@@ -1458,7 +1479,12 @@ impl VideoDriftTracker {
             .map_or(min_lag_secs, |lag| lag as f64 / 1e9);
         let bound = wall_clock_elapsed
             .saturating_add(Duration::from_secs_f64(VIDEO_WALL_CLOCK_TOLERANCE_SECS));
-        let ahead = timeline.candidate(corrected_capture) > bound;
+        // Ahead only when both the corrected and the source's own capture time
+        // are: a drift correction that overshoots on its own is clamped by the
+        // timeline instead, so those frames still reach the estimator that
+        // takes it back.
+        let ahead = timeline.candidate(corrected_capture) > bound
+            && timeline.candidate(capture_elapsed) > bound;
         let stale = self.waited_for_frame && lag_secs - expected_lag_secs > STALE_CAPTURE_SECS;
         if ahead || stale {
             if !self.clamp_warning_logged {
@@ -5334,6 +5360,16 @@ mod tests {
         // over 300 ms late every 97 s. Returns the frames and the host time
         // each was captured at.
         fn hour_of_frames(rate: f64) -> (Vec<Frame>, Vec<Duration>) {
+            hour_of_frames_with_delivery_step(rate, 0..0, Duration::ZERO)
+        }
+
+        // As `hour_of_frames`, with every frame in `stepped` handed over
+        // `extra` later (the source's delivery delay changing, not its clock).
+        fn hour_of_frames_with_delivery_step(
+            rate: f64,
+            stepped: std::ops::Range<u64>,
+            extra: Duration,
+        ) -> (Vec<Frame>, Vec<Duration>) {
             let mut rng = 0x0d71_f700_u64;
             let mut free_at = Duration::ZERO;
             let mut host = Vec::new();
@@ -5348,7 +5384,12 @@ mod tests {
                     } else {
                         Duration::from_micros(10_000 + (rng >> 33) % 5_000)
                     };
-                    let handed_over = t + late;
+                    let delivery = if stepped.contains(&i) {
+                        extra
+                    } else {
+                        Duration::ZERO
+                    };
+                    let handed_over = t + late + delivery;
                     let waited = handed_over >= free_at;
                     let wall = handed_over.max(free_at);
                     free_at = wall
@@ -5398,6 +5439,36 @@ mod tests {
             assert_on_capture_time(&frames, &output);
             assert!(!tracker.clock_drift.engaged);
             assert_eq!(tracker.clock_drift.correction_ns, 0);
+        }
+
+        #[test]
+        fn delivery_delay_step_on_the_host_clock_is_not_drift() {
+            // From minute 10 to minute 12 every frame is handed over 200 ms
+            // later, then delivery recovers.
+            let (frames, _) =
+                hour_of_frames_with_delivery_step(0.0, 18_000..21_600, Duration::from_millis(200));
+            let (output, tracker) = run(&frames);
+            assert_on_capture_time(&frames, &output);
+            assert!(!tracker.clock_drift.engaged);
+            assert_eq!(tracker.clock_drift.correction_ns, 0);
+        }
+
+        #[test]
+        fn drift_with_a_delivery_delay_step_stays_on_the_host_timeline() {
+            for rate in [-0.01, 0.01] {
+                let (frames, host) = hour_of_frames_with_delivery_step(
+                    rate,
+                    36_000..54_000,
+                    Duration::from_millis(200),
+                );
+                let (output, _) = run(&frames);
+                let worst = worst_error_ms(&output, &host);
+                println!("clock rate {rate:+} with a delivery step: worst error {worst:.1} ms");
+                assert!(
+                    worst <= 60.0,
+                    "rate {rate}: {worst:.1} ms off the host timeline"
+                );
+            }
         }
 
         #[test]
