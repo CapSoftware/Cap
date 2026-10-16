@@ -3861,6 +3861,45 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     started
 }
 
+async fn stop_audio_sources_together(
+    sources: &mut [ErasedAudioSource],
+    required_scope: Option<&PipelineBuildScope>,
+) {
+    let results = futures::future::join_all(
+        sources
+            .iter_mut()
+            .map(|source| (source.stop_fn)(source.inner.as_mut())),
+    )
+    .await;
+    for (source, result) in sources.iter_mut().zip(results) {
+        let cleanup_scope = source.cleanup_scope.take();
+        if let Err(error) = result
+            && let Some(scope) = cleanup_scope.as_ref().or(required_scope)
+        {
+            scope.record_cleanup_error(error.to_string());
+        }
+    }
+}
+
+/// Mixed audio drained at stop: keeps what was captured before `stop`, also
+/// when it arrives late, and drops what sources captured after it.
+fn clip_to_capture_time(
+    mut frame: AudioFrame,
+    timestamps: Timestamps,
+    stop: Instant,
+) -> Option<AudioFrame> {
+    let start = timestamps.instant() + frame.timestamp.duration_since(timestamps);
+    let kept = stop.saturating_duration_since(start).as_nanos() * u128::from(frame.inner.rate())
+        / 1_000_000_000;
+    if kept == 0 {
+        return None;
+    }
+    if (kept as usize) < frame.inner.samples() {
+        frame.inner.set_samples(kept as usize);
+    }
+    Some(frame)
+}
+
 async fn stop_audio_sources(
     sources: &mut [ErasedAudioSource],
     required_scope: Option<&PipelineBuildScope>,
@@ -4005,22 +4044,15 @@ impl PreparedAudioSources {
 
                 let mixed_sources_stopped = was_cancelled && mixed_audio;
                 if mixed_sources_stopped {
-                    let stopped = tokio::time::timeout(
-                        Duration::from_secs(1),
-                        stop_audio_sources(&mut self.erased_audio_sources, required_scope.as_ref()),
+                    // The mixer finishes once every input has ended (or at its
+                    // own drain deadline), so its sources stop first, together:
+                    // a source still capturing while another tears down would
+                    // feed audio from after Stop into the drain.
+                    stop_audio_sources_together(
+                        &mut self.erased_audio_sources,
+                        required_scope.as_ref(),
                     )
                     .await;
-                    // A slow device teardown (Bluetooth inputs can take
-                    // seconds) costs at most the audio after this point:
-                    // the mixer closes its inputs at its own drain deadline.
-                    if stopped.is_err() {
-                        warn!("Mixed audio sources did not stop within 1 s; draining what the mixer has");
-                        if let Some(scope) = &required_scope {
-                            scope.record_cleanup_error(
-                                "Mixed audio sources did not stop before the deadline".to_string(),
-                            );
-                        }
-                    }
                     self.erased_audio_sources.clear();
                 }
 
@@ -4038,14 +4070,10 @@ impl PreparedAudioSources {
                                 Ok(frame) => frame,
                                 Err(_) => {
                                     warn!(drained, "Mixed audio output did not close before the drain deadline; keeping the audio drained so far");
-                                    if let Some(scope) = &required_scope {
-                                        scope.record_cleanup_error(
-                                            "Mixed audio output did not close before the drain deadline".to_string(),
-                                        );
-                                    }
                                     break;
                                 }
                             }
+                            .and_then(|frame| clip_to_capture_time(frame, timestamps, cancelled_at))
                         } else {
                             self.audio_rx.try_next().ok().flatten()
                         };
@@ -6652,6 +6680,28 @@ mod tests {
             assert_eq!(summary.startup_overlap_trimmed_ms, 35 * 3 + 10);
             assert_eq!(summary.overlap_dropped_frames, 5);
             assert_eq!(summary.total_overlap_trimmed_ms, 35 * 5 + 10);
+        }
+    }
+
+    mod clip_to_capture_time {
+        use super::super::*;
+
+        fn frame_at(timestamps: Timestamps, millis: u64) -> AudioFrame {
+            AudioFrame::new(
+                AudioMixer::INFO.wrap_frame(&vec![0; 960 * 8]),
+                Timestamp::Instant(timestamps.instant() + Duration::from_millis(millis)),
+            )
+        }
+
+        #[test]
+        fn keeps_only_samples_captured_before_stop() {
+            let timestamps = Timestamps::now();
+            let stop = timestamps.instant() + Duration::from_millis(110);
+            let clipped = clip_to_capture_time(frame_at(timestamps, 100), timestamps, stop);
+            assert_eq!(clipped.unwrap().inner.samples(), 480);
+            let whole = clip_to_capture_time(frame_at(timestamps, 50), timestamps, stop);
+            assert_eq!(whole.unwrap().inner.samples(), 960);
+            assert!(clip_to_capture_time(frame_at(timestamps, 110), timestamps, stop).is_none());
         }
     }
 
@@ -9496,16 +9546,18 @@ mod tests {
                 .build::<RecordingAudioMuxer>(sent.clone())
                 .await
                 .unwrap();
+            // The 100 ms frame was captured entirely before Stop.
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(150)).into())
+                .await;
             tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
                 .await
                 .unwrap()
                 .unwrap();
             let frames = sent.lock().unwrap();
-            assert_eq!(
-                frames.iter().map(|frame| frame.samples).sum::<usize>(),
-                4_800
-            );
+            // The delivered frame is the only audio, so the track starts with
+            // it and is then padded with silence out to Stop.
             assert_eq!(frames[0].timestamp, Duration::ZERO);
+            assert!(frames.iter().map(|frame| frame.samples).sum::<usize>() >= 4_800);
         }
 
         struct AudioTimelineHarness {
@@ -9946,6 +9998,9 @@ mod tests {
             pipeline
                 .shared_pause
                 .set_paused_at(true, timestamps.instant() + Duration::from_millis(100));
+            // The 100 ms frame was captured entirely before Stop.
+            tokio::time::sleep_until((timestamps.instant() + Duration::from_millis(150)).into())
+                .await;
             tokio::time::timeout(Duration::from_secs(3), pipeline.stop())
                 .await
                 .unwrap()
