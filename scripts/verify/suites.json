@@ -1,5 +1,5 @@
 {
-	"_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them. Exception: hosted Windows runners have no D3D11 video device, so every Windows case decodes with FFmpeg (the code Linux runs) and renders on the WARP software rasterizer; there the 120 s jitter-camera export and playback and the 3000-seek storms took 6 to more than 15 minutes each (killed at the 15 minute per-test limit in 4 of 5 full runs), so FULL leaves them to Linux and macOS.",
+	"_doc": "Engine verification suites. Read by scripts/verify/plan.py (CI planning, change detection) and scripts/verify/run.sh (local and CI runs). Fields: cargo = the cargo target selection that builds the suite; test = optional exact test name inside that binary; platforms = where each tier runs it (platform-independent logic runs on linux only); roots = workspace packages whose dependency closure decides whether a change can affect the suite; own = files that only affect this suite (a change confined to them selects just this suite). skip = case-id globs left out of a tier on a platform (CAP_VERIFY_SKIP), to keep the FAST tier within its time budget; the FULL tier runs them. Exception: hosted Windows runners have no D3D11 video device, so every Windows case decodes with FFmpeg (the code Linux runs) and renders on the WARP software rasterizer; there the 120 s jitter-camera export and playback and the 3000-seek storms took 6 to more than 15 minutes each (killed at the 15 minute per-test limit in 4 of 5 full runs), so FULL leaves them to Linux and macOS. cases = the executed-case floor per tier and platform: the gate fails when fewer distinct cases whose id starts with prefix ran across all shards (scripts/verify/floor.py). unsupported = per-platform case globs that may report unsupported (with the reason); CI sets CAP_VERIFY_REQUIRE_SUPPORTED=1, so any other unsupported case fails.",
 	"suites": [
 		{
 			"name": "verify-self",
@@ -27,15 +27,23 @@
 			"skip": {
 				"fast": {
 					"macos": ["export/*/ffmpeg", "export/backward-hold/*/mp430/*"],
-					"windows": [
-						"export/*/mp460/*",
-						"export/backward-hold/*",
-						"export/jitter-camera-*",
-						"export/*/uhd-*"
-					]
+					"windows": ["export/*/mp460/*", "export/backward-hold/*", "export/jitter-camera-*", "export/*/uhd-*"]
 				},
 				"full": {
 					"windows": ["export/jitter-camera-120s/*"]
+				}
+			},
+			"cases": {
+				"prefix": "export/",
+				"fast": {
+					"linux": 42,
+					"macos": 41,
+					"windows": 43
+				},
+				"full": {
+					"linux": 43,
+					"macos": 69,
+					"windows": 67
 				}
 			}
 		},
@@ -57,6 +65,18 @@
 				"full": {
 					"windows": ["playback/jitter-camera-120s/*"]
 				}
+			},
+			"cases": {
+				"prefix": "playback/",
+				"fast": {
+					"linux": 19,
+					"macos": 19
+				},
+				"full": {
+					"linux": 19,
+					"macos": 38,
+					"windows": 36
+				}
 			}
 		},
 		{
@@ -76,6 +96,18 @@
 				},
 				"full": {
 					"windows": ["seek/*/storm*"]
+				}
+			},
+			"cases": {
+				"prefix": "seek/",
+				"fast": {
+					"linux": 11,
+					"macos": 11
+				},
+				"full": {
+					"linux": 11,
+					"macos": 22,
+					"windows": 16
 				}
 			}
 		},
@@ -100,6 +132,19 @@
 					"windows": ["audio/*/mp4-plain30", "audio/*/gif30", "audio/*/mov30"],
 					"macos": ["audio/*/mp4-plain30", "audio/*/gif30"]
 				}
+			},
+			"cases": {
+				"prefix": "audio/",
+				"fast": {
+					"linux": 56,
+					"macos": 40,
+					"windows": 39
+				},
+				"full": {
+					"linux": 58,
+					"macos": 58,
+					"windows": 58
+				}
 			}
 		},
 		{
@@ -112,7 +157,16 @@
 				"full": ["linux"]
 			},
 			"roots": ["cap-verify"],
-			"own": ["crates/verify/tests/editing.rs", "crates/verify/tests/edits/**"]
+			"own": ["crates/verify/tests/editing.rs", "crates/verify/tests/edits/**"],
+			"cases": {
+				"prefix": "editing/",
+				"fast": {
+					"linux": 22
+				},
+				"full": {
+					"linux": 78
+				}
+			}
 		},
 		{
 			"name": "captions",
@@ -124,7 +178,16 @@
 				"full": ["linux"]
 			},
 			"roots": ["cap-verify"],
-			"own": ["crates/verify/tests/captions.rs"]
+			"own": ["crates/verify/tests/captions.rs"],
+			"cases": {
+				"prefix": "captions/",
+				"fast": {
+					"linux": 19
+				},
+				"full": {
+					"linux": 19
+				}
+			}
 		},
 		{
 			"name": "decoder-model-ffmpeg",
@@ -137,7 +200,16 @@
 				"full": ["linux"]
 			},
 			"roots": ["cap-rendering"],
-			"own": []
+			"own": [],
+			"cases": {
+				"prefix": "decoder-model/ffmpeg/",
+				"fast": {
+					"linux": 29
+				},
+				"full": {
+					"linux": 29
+				}
+			}
 		},
 		{
 			"name": "decoder-model-avf",
@@ -150,7 +222,16 @@
 				"full": ["macos"]
 			},
 			"roots": ["cap-rendering"],
-			"own": []
+			"own": [],
+			"cases": {
+				"prefix": "decoder-model/avf/",
+				"fast": {
+					"macos": 31
+				},
+				"full": {
+					"macos": 31
+				}
+			}
 		},
 		{
 			"name": "native-rendering",
@@ -162,10 +243,16 @@
 				"full": ["macos"]
 			},
 			"roots": ["cap-rendering"],
-			"own": [
-				"crates/rendering/tests/iosurface-source-lifetime.rs",
-				"crates/rendering/tests/expectations.toml"
-			]
+			"own": ["crates/rendering/tests/iosurface-source-lifetime.rs", "crates/rendering/tests/expectations.toml"],
+			"cases": {
+				"prefix": "native/",
+				"fast": {
+					"macos": 1
+				},
+				"full": {
+					"macos": 1
+				}
+			}
 		}
 	],
 	"always": [
@@ -207,6 +294,18 @@
 				"full": 4
 			},
 			"archive": false
+		}
+	},
+	"unsupported": {
+		"windows": {
+			"*/mf": "Media Foundation decoding needs a D3D11 device with video support; CI Windows VMs render on the WARP software adapter, which has none, so the product falls back to FFmpeg there. Media Foundation is not exercised by CI."
+		}
+	},
+	"recording": {
+		"_doc": "Real capture (verify-recording.yml): distinct case ids each runner must record per tier (crates/verify/tests/recording.rs specs; system-only reports unsupported when the stimulus is silent).",
+		"cases": {
+			"fast": 8,
+			"full": 12
 		}
 	}
 }

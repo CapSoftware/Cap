@@ -4,8 +4,10 @@ name: Engine verify
 # and captions engines (crates/verify, crates/verify-expect, the decoder model
 # fuzzer in cap-rendering). See crates/verify/README.md.
 #
-# Tiers: FAST on every PR push; FULL with the `verify-full` label
-# (engine-verify-label.yml), in the merge queue and nightly. Only suites whose
+# Tiers: FULL for every pull request that changes an engine crate
+# (scripts/verify/plan.py ENGINE_CRATES) or a high-risk region, with the
+# `verify-full` label (engine-verify-label.yml), in the merge queue and
+# nightly; FAST for other pull requests. Only suites whose
 # code a change can reach run (scripts/verify/plan.py maps changed paths to
 # suites through the workspace dependency graph), and only on the platforms
 # where they test platform code. The "Engine verify" job is the one to require.
@@ -71,6 +73,7 @@ jobs:
       run: ${{ steps.plan.outputs.run }}
       tier: ${{ steps.escalated.outputs.tier }}
       escalate: ${{ steps.risk.outputs.escalate }}
+      engine: ${{ steps.risk.outputs.engine }}
       matrix: ${{ steps.plan.outputs.matrix }}
       save-cache: ${{ steps.tier.outputs.save-cache }}
     steps:
@@ -162,13 +165,14 @@ jobs:
         env:
           TIER: ${{ steps.tier.outputs.tier }}
           ESCALATE: ${{ steps.risk.outputs.escalate }}
+          ENGINE: ${{ steps.risk.outputs.engine }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ inputs.base }}
         run: |
           tier="$TIER"
-          if [[ "$ESCALATE" == true && ( "$EVENT" == pull_request || -n "$BASE" ) && "$tier" == fast ]]; then
+          if [[ ( "$ESCALATE" == true || "$ENGINE" == true ) && ( "$EVENT" == pull_request || -n "$BASE" ) && "$tier" == fast ]]; then
             tier=full
-            echo "High-risk code changed: running the FULL tier." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Engine or high-risk code changed: running the FULL tier." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
 
@@ -265,6 +269,7 @@ jobs:
           RUN: ${{ needs.plan.outputs.run }}
           VERIFY: ${{ needs.verify.result }}
           TIER: ${{ needs.plan.outputs.tier }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
         run: |
           if [[ "$PLAN" != success ]]; then
             echo "planning failed" >&2
@@ -285,6 +290,16 @@ jobs:
           fi
           if [[ "$VERIFY" != success ]]; then
             echo "engine verification $VERIFY ($TIER tier): see the platform jobs" >&2
+            exit 1
+          fi
+          # Executed-case floor: every planned suite ran at least its known
+          # number of cases on every platform, and every named test ran.
+          floor=0
+          python3 scripts/verify/floor.py --matrix "$MATRIX" --tier "$TIER" "$RUNNER_TEMP/reports" > "$RUNNER_TEMP/floor.txt" || floor=$?
+          cat "$RUNNER_TEMP/floor.txt"
+          { echo "### Executed cases"; echo '```text'; cat "$RUNNER_TEMP/floor.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [[ $floor != 0 ]]; then
+            echo "::error::fewer cases or tests ran than planned (see Executed cases)"
             exit 1
           fi
           echo "engine verification passed ($TIER tier)"

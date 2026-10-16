@@ -9,6 +9,9 @@
       Maps changed paths to suites through the workspace dependency graph
       (`cargo metadata`) and prints GitHub step outputs: run, reason,
       suites, matrix.
+  plan.py recording [--files FILE | --all]
+      run=, reason= for the real-capture workflow: whether a change reaches
+      the recorder's or the stimulus's dependency closure or the harness.
   plan.py risk --files F [--summary FILE] [--output FILE]
       changed files -> high-risk regions and guards (scripts/verify/guards.toml):
       escalate=, regions=, guards= lines plus ::warning annotations.
@@ -33,6 +36,33 @@ def load_guards():
 
     with open(os.path.join(ROOT, "scripts", "verify", "guards.toml"), "rb") as f:
         return tomllib.load(f)
+
+
+# Engine crates: a pull request that changes any of them runs the FULL tier
+# (with Blacksmith runners there is no queue to save).
+ENGINE_CRATES = [
+    "crates/rendering/**",
+    "crates/editor/**",
+    "crates/export/**",
+    "crates/recording/**",
+    "crates/enc-*/**",
+    "crates/audio/**",
+    "crates/video-decode/**",
+    "crates/project/**",
+    "crates/scap-*/**",
+    "crates/camera*/**",
+    "crates/media/**",
+    "crates/media-info/**",
+    "crates/frame-converter/**",
+    "crates/gpu-converters/**",
+    "crates/cursor-capture/**",
+    "crates/timestamp/**",
+    "crates/cap-muxer/**",
+]
+
+
+def engine_files(files):
+    return sorted({p for p in files for pattern in ENGINE_CRATES if match(p, pattern)})
 
 
 def risk(files, guards=None):
@@ -81,7 +111,10 @@ def load_config():
 
 def match(path, pattern):
     if pattern.endswith("/**"):
-        return path.startswith(pattern[:-2])
+        prefix = pattern[:-2]
+        if any(c in prefix for c in "*?["):
+            return fnmatch.fnmatchcase(path, prefix + "*")
+        return path.startswith(prefix)
     return fnmatch.fnmatchcase(path, pattern)
 
 
@@ -154,11 +187,15 @@ def cmd_select(args):
 
 def cmd_env(args):
     """Shell `export` lines for the env of the selected suites (suites.json
-    `env`: {"KEY": "value"} or {"KEY": {"<platform>": "value"}}). Variables
-    already set in the environment win."""
+    `env`: {"KEY": "value"} or {"KEY": {"<platform>": "value"}}) and the
+    platform's unsupported-case allowlist. Variables already set in the
+    environment win."""
     import shlex
     config = load_config()
     names = [n for n in (args.suites or "").split(",") if n]
+    allow = ",".join(config.get("unsupported", {}).get(args.platform, {}).keys())
+    if allow and "CAP_VERIFY_UNSUPPORTED_ALLOW" not in os.environ:
+        print(f"export CAP_VERIFY_UNSUPPORTED_ALLOW={shlex.quote(allow)}")
     for suite in select(config, args.tier, args.platform, names or None, args.local):
         for key, value in suite.get("env", {}).items():
             if isinstance(value, dict):
@@ -311,6 +348,56 @@ def cmd_changes(args):
         print(f"{key}={value}")
 
 
+# Real capture (crates/verify/tests/recording.rs): the recorder and the
+# stimulus, their whole dependency closure, and the harness itself.
+RECORDING = {
+    "roots": ["cap-recording", "cap-verify-stimulus"],
+    "own": [
+        "crates/verify/tests/recording.rs",
+        "crates/verify/src/**",
+        "crates/verify/Cargo.toml",
+        "crates/verify/expectations.toml",
+        "crates/verify-expect/**",
+        "crates/verify-stimulus/**",
+        ".github/workflows/verify-recording.yml",
+    ],
+}
+
+
+def recording_affected(config, files, metadata):
+    """(run, reason) for the real-capture workflow."""
+    for path in files:
+        for pattern in config["always"] + RECORDING["own"]:
+            if match(path, pattern):
+                return True, f"{path} affects real capture"
+    dirs, deps = workspace_graph(metadata)
+    reach = set().union(*(closure(r, deps) for r in RECORDING["roots"]))
+    for path in files:
+        # Other suites' test files share the cap-verify package but not the
+        # recording test binary.
+        if path.startswith("crates/verify/tests/"):
+            continue
+        package = owning_package(path, dirs)
+        if package in reach:
+            return True, f"{path} ({package}) is in the recorder's dependency closure"
+    return False, "no recording code changed"
+
+
+def cmd_recording(args):
+    config = load_config()
+    if args.all:
+        run, reason = True, "full run"
+    else:
+        with open(args.files) as f:
+            files = [line.strip() for line in f if line.strip()]
+        if len(files) >= args.max_files:
+            run, reason = True, f"{len(files)} changed files (list may be truncated)"
+        else:
+            run, reason = recording_affected(config, files, load_metadata(args.metadata))
+    print(f"run={'true' if run else 'false'}")
+    print(f"reason={reason}")
+
+
 def cmd_risk(args):
     with open(args.files) as f:
         files = [line.strip() for line in f if line.strip()]
@@ -321,8 +408,12 @@ def cmd_risk(args):
             f.write(md + "\n")
     for note in notes:
         print(note)
+    engine = engine_files(files)
+    if engine:
+        print(f"::notice title=Engine crates changed::FULL tier for {', '.join(engine[:6])}{' ...' if len(engine) > 6 else ''}")
     outputs = [
         f"escalate={'true' if regions or touched else 'false'}",
+        f"engine={'true' if engine else 'false'}",
         f"regions={','.join(name for name, _ in regions)}",
         f"guards={','.join(g['id'] for g in touched)}",
     ]
@@ -374,6 +465,27 @@ def cmd_test(_args):
         ok = got == expected
         failed += not ok
         print(f"{'ok ' if ok else 'BAD'} risk {files} -> {got}")
+    for files, expected in [
+        (["crates/rendering/src/lib.rs"], True),
+        (["crates/enc-ffmpeg/src/lib.rs"], True),
+        (["crates/camera-ffmpeg/src/lib.rs"], True),
+        (["apps/desktop-gpui/src/main.rs", "crates/verify/src/oracle.rs"], False),
+    ]:
+        ok = bool(engine_files(files)) == expected
+        failed += not ok
+        print(f"{'ok ' if ok else 'BAD'} engine {files} -> {bool(engine_files(files))}")
+    for files, expected in [
+        (["crates/frame-converter/src/lib.rs"], True),
+        (["crates/recording/src/studio_recording.rs"], True),
+        (["crates/verify/tests/recording.rs"], True),
+        (["vendor/wgpu-hal/src/lib.rs"], True),
+        (["Cargo.toml"], True),
+        (["crates/verify/tests/export.rs", "apps/web/app/page.tsx"], False),
+    ]:
+        got = recording_affected(config, files, metadata)[0]
+        ok = got == expected
+        failed += not ok
+        print(f"{'ok ' if ok else 'BAD'} recording {files} -> {got}")
     rendering_only = affected(config, ["crates/rendering/src/decoder/model/mod.rs"], metadata, "fast")[0]
     if "decoder-model-ffmpeg" not in rendering_only:
         failed += 1
@@ -404,6 +516,12 @@ def main():
     p.add_argument("--max-files", type=int, default=3000)
     p.add_argument("--suites")
     p.set_defaults(func=cmd_changes)
+    p = sub.add_parser("recording")
+    p.add_argument("--files")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--metadata")
+    p.add_argument("--max-files", type=int, default=3000)
+    p.set_defaults(func=cmd_recording)
     p = sub.add_parser("risk")
     p.add_argument("--files", required=True)
     p.add_argument("--summary", help="append the markdown report to this file")

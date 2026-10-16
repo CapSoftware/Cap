@@ -22,6 +22,11 @@ def load_records(dirs):
     records = []
     for d in dirs:
         for path in sorted(glob.glob(os.path.join(d, "**", "*.jsonl"), recursive=True)):
+            # Retry records repeat cases of the main pass (counted with the
+            # retries below), so they are not cases of their own.
+            rel = os.path.relpath(path, d).replace(os.sep, "/")
+            if rel.startswith("retry/"):
+                continue
             with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -132,6 +137,21 @@ def render(records, title, junit, flaky, text, retries=None):
         f"{counts.get('fail', 0)} FAILED, {counts.get('xpass', 0)} unexpectedly passing, "
         f"{counts.get('unsupported', 0)} unsupported ({seconds:.0f} s of case time)"
     )
+    excused = {}
+    for r in records:
+        for kind in (r.get("excused") or {}).values():
+            excused[kind] = excused.get(kind, 0) + 1
+    if excused.get("flaky") or excused.get("flaky, starved"):
+        head += (
+            f"; expected failures excused by flaky entries: {excused.get('flaky', 0)}, "
+            f"only under a proven machine stall: {excused.get('flaky, starved', 0)}"
+        )
+    second = [
+        r for r in records
+        if any(str(n).startswith("inconclusive, retrying") for n in r.get("notes") or [])
+    ]
+    if second:
+        head += f"; {len(second)} real-capture case(s) settled on a second attempt after a proven input fault"
     unmeasured = [r for r in records if r.get("unobserved")]
     if unmeasured:
         head += f"; {len(unmeasured)} with classes not measured because an earlier check failed"

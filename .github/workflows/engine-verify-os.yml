@@ -57,6 +57,11 @@ env:
   CAP_VERIFY_NEXTEST_PROFILE: ci
   CAP_VERIFY_LOCKED: "1"
   CAP_VERIFY_CARGO_CONFIG: ${{ inputs.cargo-config }}
+  # A case this runner cannot run fails unless scripts/verify/suites.json
+  # allows it as unsupported on this platform (with the reason).
+  CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+  # Machine class for host-scoped expectations (crates/verify-expect hosts).
+  CAP_VERIFY_HOST: ${{ startsWith(inputs.runner, 'blacksmith-') && 'blacksmith' || 'github-hosted' }}
 
 jobs:
   build:
@@ -158,6 +163,13 @@ jobs:
             ~/.cargo/git/db/
             target/ci-verify/
           key: ${{ steps.setup.outputs.build-cache-key }}
+
+      # The retry and flaky reruns read test names back from Python (CRLF on
+      # Windows): check that such a name selects exactly its test.
+      - name: Rerun selection self-check
+        if: ${{ !inputs.archive }}
+        shell: bash
+        run: scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --check-rerun-selection
 
       - name: Download archive
         if: inputs.archive
