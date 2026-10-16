@@ -122,7 +122,20 @@
 				"full": ["linux", "macos", "windows"]
 			},
 			"roots": ["cap-verify", "cap-muxer"],
-			"own": ["crates/verify/tests/crash.rs"]
+			"own": ["crates/verify/tests/crash.rs"],
+			"cases": {
+				"prefix": "crash/",
+				"fast": {
+					"linux": 8,
+					"macos": 18,
+					"windows": 8
+				},
+				"full": {
+					"linux": 9,
+					"macos": 21,
+					"windows": 9
+				}
+			}
 		},
 		{
 			"name": "audio",
