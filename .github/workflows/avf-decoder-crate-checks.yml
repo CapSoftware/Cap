@@ -1,0 +1,70 @@
+name: AVF decoder matched crate checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/fixproof-avf-decoder-r3]
+    paths: [.github/workflows/avf-decoder-crate-checks.yml]
+permissions:
+  contents: read
+jobs:
+  crates:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [control, candidate]
+        platform: [linux, macos, windows]
+        include:
+          - platform: linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+          - platform: macos
+            runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - platform: windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CAP_VERIFY_HOST: blacksmith
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.variant == 'control' && '4b2e72bbf86226d406ae4d1b9c46c2b988729cf2' || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.target }}
+          tier: full
+      - name: Provenance
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/avf-crates"
+          git rev-parse HEAD > "$RUNNER_TEMP/avf-crates/head.txt"
+      - name: Format
+        shell: bash
+        run: |
+          cargo fmt --all -- --check > "$RUNNER_TEMP/avf-crates/fmt.log" 2>&1
+      - name: Check
+        shell: bash
+        run: |
+          cargo check --locked -p cap-rendering -p cap-video-decode > "$RUNNER_TEMP/avf-crates/check.log" 2>&1
+      - name: Rendering crate tests
+        shell: bash
+        run: |
+          cargo test --locked --profile ci-verify -p cap-rendering --lib -- --test-threads=1 --skip decoder::model:: > "$RUNNER_TEMP/avf-crates/rendering-tests.log" 2>&1
+      - name: Video decode crate tests
+        shell: bash
+        run: |
+          cargo test --locked --profile ci-verify -p cap-video-decode -- --test-threads=1 > "$RUNNER_TEMP/avf-crates/video-decode-tests.log" 2>&1
+      - name: Clippy
+        shell: bash
+        run: |
+          cargo clippy --locked --profile ci-verify -p cap-rendering -p cap-video-decode --all-targets -- -D warnings > "$RUNNER_TEMP/avf-crates/clippy.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: avf-crates-${{ matrix.platform }}-${{ matrix.variant }}
+          path: ${{ runner.temp }}/avf-crates
+          retention-days: 14
