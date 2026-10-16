@@ -23,8 +23,8 @@ jobs:
           tier: fast
       - name: Link native framework
         run: |
-          mkdir -p target/ci-verify/Frameworks
-          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+          mkdir -p target/release/Frameworks
+          ln -s "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/release/Frameworks/Spacedrive.framework
       - name: Build matched CPU probes without running them
         run: |
           root="$RUNNER_TEMP/mixer-cpu"
@@ -41,7 +41,7 @@ jobs:
               cp "$root/candidate-core.rs" crates/recording/src/output_pipeline/core.rs
             fi
             python3 scripts/verify/prepare-mixer-cpu-probe.py
-            cargo test -p cap-recording --lib --profile ci-verify --locked --no-run --message-format=json > "$root/$arm-build.jsonl"
+            cargo test -p cap-recording --lib --release --locked --no-run --message-format=json > "$root/$arm-build.jsonl"
             ARM="$arm" python3 - <<'PY'
           import json
           import os
