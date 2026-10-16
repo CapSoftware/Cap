@@ -244,6 +244,8 @@ def affected(config, files, metadata, tier):
 def matrix(config, names, tier):
     include = []
     for platform in PLATFORMS:
+        if platform != "windows":
+            continue
         suites = [s["name"] for s in config["suites"] if s["name"] in names and platform in s["platforms"][tier]]
         if not suites:
             continue

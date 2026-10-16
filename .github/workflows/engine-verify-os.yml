@@ -181,6 +181,8 @@ jobs:
       - name: Test
         id: test
         shell: bash
+        env:
+          CAP_VERIFY_LOG: ${{ inputs.platform == 'windows' && 'wgpu_hal=warn,wgpu_core=warn,cap_rendering=info' || '' }}
         run: |
           if [[ "${{ inputs.archive }}" == true ]]; then
             scripts/verify/run.sh "${{ inputs.tier }}" --suites "${{ inputs.suites }}" --from-archive "$RUNNER_TEMP/verify.tar.zst"

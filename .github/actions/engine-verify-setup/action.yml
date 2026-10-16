@@ -119,6 +119,33 @@ runs:
         mkdir -p target/ci-verify
         cp target/native-deps/dxc/dxcompiler.dll target/native-deps/dxc/dxil.dll target/ci-verify/
 
+    - name: GPU diagnostics (Windows)
+      if: runner.os == 'Windows'
+      continue-on-error: true
+      shell: pwsh
+      run: scripts/verify/win-gpu-diag.ps1 -Preload "${{ github.workspace }}\target\native-deps\dxc\dxcompiler.dll"
+
+    - name: WARP from NuGet (Windows)
+      if: runner.os == 'Windows'
+      continue-on-error: true
+      shell: pwsh
+      run: |
+        $dir = Join-Path $env:RUNNER_TEMP 'warp-nuget'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $zip = Join-Path $dir 'warp.zip'
+        Invoke-WebRequest -Uri 'https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP' -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $dir 'pkg') -Force
+        Get-ChildItem -Recurse -Path (Join-Path $dir 'pkg') -Filter '*.dll' | ForEach-Object { Write-Host "nuget: $($_.FullName.Substring($dir.Length)) $($_.VersionInfo.FileVersion)" }
+        $warp = Get-ChildItem -Recurse -Path (Join-Path $dir 'pkg') -Filter 'd3d10warp.dll' |
+          Where-Object { $_.FullName -match '\\(x64|amd64)\\' } | Select-Object -First 1
+        if (-not $warp) { throw 'no x64 d3d10warp.dll in the package' }
+        foreach ($t in 'target\ci-verify', 'target\ci-verify\deps') {
+          New-Item -ItemType Directory -Force -Path $t | Out-Null
+          Copy-Item $warp.FullName $t
+        }
+        Add-Content -Path $env:GITHUB_PATH -Value $warp.DirectoryName
+        scripts/verify/win-gpu-diag.ps1 -Preload $warp.FullName
+
     - name: FFmpeg DLLs on PATH (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
