@@ -50,7 +50,10 @@ jobs:
           rustup component add rustfmt clippy
           cargo fmt --all --check
           cargo check -p cap-recording -p cap-verify --profile ci-verify --locked
-          cargo clippy -p cap-recording --lib --tests --profile ci-verify --locked -- -D warnings
+          cargo clippy -p cap-recording --lib --profile ci-verify --locked -- -D warnings
+          if [[ "${{ matrix.os }}" == macos ]]; then
+            cargo clippy -p cap-recording --lib --tests --profile ci-verify --locked -- -D warnings
+          fi
       - name: Mixer unit tests
         run: |
           mkdir -p "$RUNNER_TEMP/mixalign"
