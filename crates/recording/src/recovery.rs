@@ -582,6 +582,12 @@ impl RecoveryManager {
                 if manifest_type == "m4s_segments" && init_segment.is_some() {
                     let listed: std::collections::HashSet<_> = entries
                         .iter()
+                        .filter(|entry| {
+                            entry
+                                .get("is_complete")
+                                .and_then(|complete| complete.as_bool())
+                                .unwrap_or(false)
+                        })
                         .filter_map(|entry| entry.get("path").and_then(|path| path.as_str()))
                         .filter_map(|path| recovery_child_path(dir, path))
                         .collect();
@@ -5292,6 +5298,60 @@ mod tests {
             fragment.extend_from_slice(&[0; 64]);
         }
         fragment
+    }
+
+    #[test]
+    fn recovery_keeps_a_completed_fragment_listed_pending_after_an_earlier_valid_fragment() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        for name in ["segment_001.m4s", "segment_002.m4s"] {
+            fs::write(dir.path().join(name), &fragment).unwrap();
+        }
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": true, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": false, "file_size": null}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+        assert_eq!(
+            recovered.fragments,
+            ["segment_001.m4s", "segment_002.m4s"].map(|name| dir.path().join(name))
+        );
+    }
+
+    #[test]
+    fn recovery_still_rejects_pending_and_mismatched_fragments_that_are_not_complete() {
+        let dir = tempdir().unwrap();
+        let fragment = complete_m4s_fragment();
+        fs::write(dir.path().join("init.mp4"), [0; 128]).unwrap();
+        fs::write(dir.path().join("segment_001.m4s"), &fragment).unwrap();
+        fs::write(dir.path().join("segment_002.m4s"), &fragment).unwrap();
+        fs::write(
+            dir.path().join("segment_003.m4s"),
+            &fragment[..fragment.len() - 1],
+        )
+        .unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "version": 5,
+            "type": "m4s_segments",
+            "init_segment": "init.mp4",
+            "segments": [
+                {"path": "segment_001.m4s", "is_complete": true, "file_size": fragment.len()},
+                {"path": "segment_002.m4s", "is_complete": true, "file_size": fragment.len() + 1},
+                {"path": "segment_003.m4s", "is_complete": false, "file_size": null}
+            ]
+        }))
+        .unwrap();
+        fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+        let recovered = RecoveryManager::find_complete_fragments_with_init(dir.path());
+        assert_eq!(recovered.fragments, [dir.path().join("segment_001.m4s")]);
     }
 
     #[test]
