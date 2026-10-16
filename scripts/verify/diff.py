@@ -1,6 +1,7 @@
 import argparse
 import fnmatch
 import json
+import math
 import os
 import re
 import sys
@@ -107,6 +108,43 @@ def magnitude(rng):
         return None
 
 
+def normalized_measures(record):
+    measures = {cls: dict(metrics or {}) for cls, metrics in (record.get("measures") or {}).items()}
+    if record.get("case") != "export/instant/output/mp4/native":
+        return measures
+    unobserved = record.get("unobserved") or {}
+    if "sync-mic" in unobserved or "sync-system" in unobserved:
+        return measures
+    mic = measures.get("sync-mic", {}).get("offset-ms")
+    system = measures.get("sync-system", {}).get("offset-ms")
+    if mic is not None and system is not None:
+        # Historical source offsets are already rounded to 0.1 ms. Subtract their
+        # signed intervals without inventing precision or replacing newer telemetry.
+        metrics = measures["sync-system"]
+        metrics.setdefault("mic-offset-ms", mic)
+        metrics.setdefault("system-minus-mic-ms", [round(system[0] - mic[1], 1), round(system[1] - mic[0], 1)])
+    return measures
+
+
+def fresh_fixture(case):
+    return case.startswith(("recording/", "crash/", "export/instant", "export/rec-"))
+
+
+def timing_resolution(metric):
+    if metric.endswith("-ms"):
+        return 0.1
+    if metric == "secs":
+        return 0.01
+    if metric.endswith("-s"):
+        return 1e-9
+    return None
+
+
+def metric_resolution(metric):
+    resolution = timing_resolution(metric)
+    return resolution if resolution is not None else 1.0
+
+
 def summarize(recs):
     ran = [r for r in recs if str(r.get("outcome", "")).lower() != "unsupported"]
     decisive = [r for r in ran if str(r.get("outcome", "")).lower() != "inconclusive"] or ran
@@ -124,7 +162,7 @@ def summarize(recs):
         for cls in classes:
             class_runs[cls] += 1
         for r in group:
-            for cls, metrics in (r.get("measures") or {}).items():
+            for cls, metrics in normalized_measures(r).items():
                 for metric, rng in (metrics or {}).items():
                     value = magnitude(rng)
                     if value is None:
@@ -171,6 +209,11 @@ def larger(a, b, rel, abs_):
     return a > b + max(abs_, rel * abs(b))
 
 
+def beyond_resolution(a, b, rel, abs_):
+    limit = b + max(abs_, rel * abs(b))
+    return a > limit and not math.isclose(a, limit, rel_tol=1e-12, abs_tol=1e-12)
+
+
 def compare_case(b, m, rel, abs_):
 
     worse, better, pending, overlap = [], [], [], []
@@ -184,6 +227,14 @@ def compare_case(b, m, rel, abs_):
     lost = coverage_lost(b, m)
     worse.extend(f"{cls}: baseline observed -> main unobserved (lost coverage)" for cls in lost)
     bc, mc = b["classes"], m["classes"]
+    fresh = fresh_fixture(b["case"]) or fresh_fixture(m["case"])
+    if fresh and (b["runs"] < 3 or m["runs"] < 3):
+        pending.append("fresh fixture comparison requires at least 3 independent runs per side on this OS image")
+    sampled_classes = {
+        cls for cls in set(bc) | set(mc)
+        if fresh or any(timing_resolution(metric) is not None for metric in
+                        set(b["measures"].get(cls, {})) | set(m["measures"].get(cls, {})))
+    }
     stochastic = "missing-after-hold"
     distribution_classes = (set(bc) | set(mc)) & {stochastic}
     if b["case"].startswith("recording/") or m["case"].startswith("recording/"):
@@ -202,13 +253,23 @@ def compare_case(b, m, rel, abs_):
             elif bv != mv:
                 overlap.append(description + " (ranges overlap)")
     for cls in sorted(set(mc) - set(bc) - set(gained) - {stochastic}):
-        worse.append(f"+{cls}")
+        if cls in sampled_classes and (b["runs"] < 3 or m["runs"] < 3):
+            pending.append(f"+{cls} (requires at least 3 independent runs per side on this OS image)")
+        elif cls in sampled_classes and mc[cls] != m["runs"]:
+            overlap.append(f"+{cls} in {mc[cls]}/{m['runs']} main runs (ranges overlap)")
+        else:
+            worse.append(f"+{cls}")
     for cls in sorted(set(bc) - set(mc) - {stochastic}):
         if cls in m["unobserved"]:
             continue
-        better.append(f"-{cls}")
+        if cls in sampled_classes and (b["runs"] < 3 or m["runs"] < 3):
+            pending.append(f"-{cls} (requires at least 3 independent runs per side on this OS image)")
+        elif cls in sampled_classes and bc[cls] != b["runs"]:
+            overlap.append(f"-{cls} in {bc[cls]}/{b['runs']} baseline runs (ranges overlap)")
+        else:
+            better.append(f"-{cls}")
     for cls in sorted((set(bc) & set(mc)) - {stochastic}):
-        if b["runs"] and m["runs"] and (b["runs"] > 1 or m["runs"] > 1):
+        if cls not in sampled_classes and b["runs"] and m["runs"] and (b["runs"] > 1 or m["runs"] > 1):
             bf, mf = bc[cls] / b["runs"], mc[cls] / m["runs"]
             if mf > bf:
                 worse.append(f"{cls} fails {mc[cls]}/{m['runs']} vs {bc[cls]}/{b['runs']}")
@@ -216,7 +277,19 @@ def compare_case(b, m, rel, abs_):
                 better.append(f"{cls} fails {mc[cls]}/{m['runs']} vs {bc[cls]}/{b['runs']}")
         bm, mm = b["measures"].get(cls, {}), m["measures"].get(cls, {})
         for metric in sorted(set(bm) | set(mm)):
-            if metric in bm and metric in mm:
+            if fresh or timing_resolution(metric) is not None:
+                bv, mv = distribution(b, cls, metric), distribution(m, cls, metric)
+                resolution = metric_resolution(metric)
+                description = f"{cls}.{metric} baseline={bv}, main={mv}, resolution={resolution:g}"
+                if len(bv) < 3 or len(mv) < 3:
+                    pending.append(description + " (requires at least 3 independent runs per side on this OS image)")
+                elif beyond_resolution(min(mv), max(bv), rel, max(abs_, resolution)):
+                    worse.append(description + " (every main value above baseline range by more than resolution)")
+                elif beyond_resolution(min(bv), max(mv), rel, max(abs_, resolution)):
+                    better.append(description + " (every main value below baseline range by more than resolution)")
+                elif bv != mv:
+                    overlap.append(description + " (ranges overlap within resolution)")
+            elif metric in bm and metric in mm:
                 if larger(mm[metric], bm[metric], rel, abs_):
                     worse.append(f"{cls}.{metric} {fmt(bm[metric])} -> {fmt(mm[metric])}")
                 elif larger(bm[metric], mm[metric], rel, abs_):

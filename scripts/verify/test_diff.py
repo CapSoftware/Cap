@@ -27,7 +27,75 @@ def compare(base, main):
     return diff.compare_case(diff.summarize(base), diff.summarize(main), 0, 0)
 
 
+def measured(value, case="export/instant-gated-mic-only/output/mp4/native", cls="sync-mic", metric="offset-ms", sample=None):
+    result = record(sample=sample)
+    result.update(case=case, failures={cls: []}, measures={cls: {metric: [value, value]}})
+    return result
+
+
 class ComparisonTests(unittest.TestCase):
+    def test_continuous_metrics_require_three_independent_runs(self):
+        self.assertEqual(compare([measured(15.2)], [measured(15.3)])[0], "INSUFFICIENT")
+        self.assertEqual(compare([measured(15.2, sample="same") for _ in range(3)], [measured(16) for _ in range(3)])[0], "INSUFFICIENT")
+
+    def test_continuous_overlap_and_one_resolution_step_are_not_worse(self):
+        base = [measured(v) for v in [15.1, 15.2, 15.3]]
+        for values in [[15.2, 15.3, 15.4], [15.4, 15.4, 15.4]]:
+            with self.subTest(values=values):
+                self.assertEqual(compare(base, [measured(v) for v in values])[0], "OVERLAP")
+
+    def test_continuous_separated_ranges_are_worse(self):
+        self.assertEqual(compare([measured(v) for v in [15.1, 15.2, 15.3]], [measured(v) for v in [15.5, 15.6, 15.5]])[0], "WORSE")
+
+    def test_signed_offsets_compare_magnitude(self):
+        self.assertEqual(compare([measured(-15) for _ in range(3)], [measured(-17) for _ in range(3)])[0], "WORSE")
+
+    def test_timing_metric_outside_recording_cases_uses_distribution(self):
+        self.assertEqual(compare([measured(1, case="playback/basic", metric="warm-up-s")], [measured(2, case="playback/basic", metric="warm-up-s")])[0], "INSUFFICIENT")
+
+    def test_fresh_crash_counts_use_frame_resolution(self):
+        base = [measured(176, case="crash/recorder-kill/oop/random0", cls="loss", metric="frames") for _ in range(3)]
+        for value, expected in [(177, "OVERLAP"), (178, "WORSE")]:
+            main = [measured(value, case="crash/recorder-kill/oop/random0", cls="loss", metric="frames") for _ in range(3)]
+            self.assertEqual(compare(base, main)[0], expected)
+
+    def test_missing_metric_is_insufficient_not_zero(self):
+        base = [measured(15) for _ in range(3)]
+        base[0]["measures"] = {}
+        self.assertEqual(compare(base, [measured(17) for _ in range(3)])[0], "INSUFFICIENT")
+
+    def test_new_fresh_class_needs_consistent_occurrence(self):
+        base = [dict(record(), case="crash/example") for _ in range(3)]
+        main = [measured(1, case="crash/example", cls="unexpected", metric="count") for _ in range(3)]
+        self.assertEqual(compare(base[:1], main[:1])[0], "INSUFFICIENT")
+        self.assertEqual(compare(base, main)[0], "WORSE")
+        self.assertEqual(compare(base, main[:2] + base[:1])[0], "OVERLAP")
+
+    def test_legacy_instant_telemetry_preserves_signed_interval(self):
+        rec = measured(-45.9, case="export/instant/output/mp4/native", cls="sync-system")
+        rec["measures"]["sync-mic"] = {"offset-ms": [14.0, 14.2]}
+        rec["measures"]["sync-system"]["offset-ms"] = [-46.0, -45.8]
+        actual = diff.normalized_measures(rec)["sync-system"]
+        self.assertEqual(actual["mic-offset-ms"], [14.0, 14.2])
+        self.assertEqual(actual["system-minus-mic-ms"], [-60.2, -59.8])
+        self.assertNotIn("mic-offset-ms", rec["measures"]["sync-system"])
+
+    def test_legacy_normalization_does_not_override_measurements_or_invent_sources(self):
+        rec = measured(8.5, case="export/instant/output/mp4/native", cls="sync-system")
+        self.assertNotIn("mic-offset-ms", diff.normalized_measures(rec)["sync-system"])
+        rec["measures"]["sync-mic"] = {"offset-ms": [15.1, 15.1]}
+        rec["measures"]["sync-system"]["system-minus-mic-ms"] = [-6.7, -6.7]
+        self.assertEqual(diff.normalized_measures(rec)["sync-system"]["system-minus-mic-ms"], [-6.7, -6.7])
+        rec["unobserved"] = {"sync-mic": "track absent"}
+        self.assertNotIn("mic-offset-ms", diff.normalized_measures(rec)["sync-system"])
+
+    def test_legacy_and_current_instant_records_compare_equally(self):
+        legacy = measured(8.5, case="export/instant/output/mp4/native", cls="sync-system")
+        legacy["measures"]["sync-mic"] = {"offset-ms": [15.1, 15.1]}
+        current = json.loads(json.dumps(legacy))
+        current["measures"]["sync-system"].update({"mic-offset-ms": [15.1, 15.1], "system-minus-mic-ms": [-6.6, -6.6]})
+        self.assertEqual(compare([legacy] * 3, [current] * 3), ("EQUAL", []))
+
     def test_lost_coverage_is_worse_for_passing_and_failing_baselines(self):
         main = record(unobserved={"sync-screen-mic": "track absent"})
         for failed in [False, True]:
