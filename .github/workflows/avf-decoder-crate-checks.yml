@@ -40,6 +40,13 @@ jobs:
       - name: Rust check components
         shell: bash
         run: rustup component add rustfmt clippy
+      - name: Native framework for macOS test binaries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p target/ci-verify/Frameworks
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" target/ci-verify/Frameworks/Spacedrive.framework
+          test -f target/ci-verify/Frameworks/Spacedrive.framework/Libraries/libavcodec.61.19.100.dylib
       - name: Provenance
         shell: bash
         run: |
