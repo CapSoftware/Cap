@@ -73,7 +73,19 @@ pub enum MismatchKind {
 
 /// Largest allowed difference between a transition frame's measured blend
 /// weight and the transition progress.
-pub const BLEND_PROGRESS_TOLERANCE: f64 = 0.35;
+pub const BLEND_PROGRESS_TOLERANCE: f64 = 0.1;
+
+/// Source frames searched on each side of a cross-fade for a pair that
+/// explains the picture better than the expected one.
+pub const BLEND_SEARCH: i64 = 12;
+
+/// Source frames searched on one side of a cross-fade with the other side
+/// held at its expected frame (a reader left far behind or ahead).
+pub const BLEND_SEARCH_ONE_SIDE: i64 = 240;
+
+/// How much better (in worst per-cell residual) another pair must fit than
+/// the expected pair before the blend is read as that pair.
+pub const BLEND_SIDE_MARGIN: f64 = 0.05;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mismatch {
@@ -471,7 +483,9 @@ pub fn read_expecting(
 ) -> Readout {
     use crate::video_code::{self, BLEND_TOLERANCE, FrameMarker};
     let StreamExpectation::Blend {
-        outgoing, incoming, ..
+        outgoing,
+        incoming,
+        progress: expected_progress,
     } = expectation
     else {
         return video_code::read_stream(img, kind);
@@ -504,6 +518,57 @@ pub fn read_expecting(
     if let Some((o, i, p, residual)) = expected
         && residual <= BLEND_TOLERANCE
     {
+        // Both sides are verified: a wrong frame on the weaker side leaves
+        // residuals of only about its weight, which the tolerance alone would
+        // accept. Any other pair of nearby frames that explains the picture
+        // clearly better than the expected pair is what the stream shows.
+        let allowed = |side: &(u8, Vec<u32>), m: FrameMarker| {
+            m.segment == side.0 && side.1.contains(&m.index)
+        };
+        let (o0, i0) = (i64::from(o.index), i64::from(i.index));
+        let near = (-BLEND_SEARCH..=BLEND_SEARCH).flat_map(|d_o| {
+            (-BLEND_SEARCH..=BLEND_SEARCH).filter_map(move |d_i| {
+                Some((marker(o.segment, o0 + d_o)?, marker(i.segment, i0 + d_i)?))
+            })
+        });
+        // One side wrong by far (a stale reader position) with the other
+        // side right.
+        let far = (-BLEND_SEARCH_ONE_SIDE..=BLEND_SEARCH_ONE_SIDE).flat_map(|d| {
+            [
+                marker(o.segment, o0 + d).map(|ao| (ao, i)),
+                marker(i.segment, i0 + d).map(|ai| (o, ai)),
+            ]
+            .into_iter()
+            .flatten()
+        });
+        let alternative = best_of(
+            &mut near
+                .chain(far)
+                .filter(|(ao, ai)| !(allowed(outgoing, *ao) && allowed(incoming, *ai))),
+        );
+        if std::env::var("CAP_VERIFY_TRACE_BLEND").as_deref() == Ok("2") {
+            eprintln!(
+                "[cap-verify-blend-sides] {}",
+                serde_json::json!({
+                    "stream": kind,
+                    "expected": [o.index, i.index],
+                    "p": p,
+                    "progress": expected_progress,
+                    "residual": residual,
+                    "alternative": alternative.map(|(ao, ai, ap, ares)| (ao.index, ai.index, ap, ares)),
+                })
+            );
+        }
+        if let Some((ao, ai, ap, ares)) = alternative
+            && ares + BLEND_SIDE_MARGIN < residual
+        {
+            return Readout::Blend {
+                outgoing: ao,
+                incoming: ai,
+                progress: ap,
+                residual: ares,
+            };
+        }
         return Readout::Blend {
             outgoing: o,
             incoming: i,
