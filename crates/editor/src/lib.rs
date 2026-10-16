@@ -17,6 +17,8 @@ mod thumbnail;
 pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
 #[cfg(feature = "test-hooks")]
 pub use audio_output::OfflineAudioSink;
+#[cfg(feature = "test-hooks")]
+pub use audio_output::PlaySpec;
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
 };

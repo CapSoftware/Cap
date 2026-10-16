@@ -868,11 +868,10 @@ impl Player {
         ));
     }
 
-    pub fn prefer_sequential(&self) {
-        for segment in &self.segments {
-            segment.decoders.prefer_sequential_access();
-        }
-    }
+    /// Nightly baseline: 2c51caae0's decoders have no sequential-access
+    /// hint (`prefer_sequential_access`) and its exporter never asked for
+    /// one, so this is a no-op here.
+    pub fn prefer_sequential(&self) {}
 
     /// Renders output frame `frame` and reads its markers. `None` when the
     /// timeline has no segment there or the decoders returned nothing.

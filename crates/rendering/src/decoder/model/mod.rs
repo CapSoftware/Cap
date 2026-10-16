@@ -300,9 +300,9 @@ fn run_case(case: &Case, runtime: &tokio::runtime::Runtime, trace: bool) -> Outc
                 );
             }
         };
-        if case.mode == Mode::Export {
-            handle.prefer_sequential_access();
-        }
+        // Nightly baseline: 2c51caae0 has no sequential-access hint
+        // (`prefer_sequential_access`), so export-mode requests run against
+        // the default decoder cache, as the nightly exporter did.
         let decoder_type = handle.decoder_type();
         #[cfg(target_os = "macos")]
         if case.decoder == Decoder::Avf {

@@ -1286,7 +1286,7 @@ fn control_thread_offline(
                     generation: Some(generation),
                 });
             }
-            ControlMsg::EnsureStream | ControlMsg::HoldAwake | ControlMsg::ReleaseAwake => {}
+            ControlMsg::EnsureStream => {}
             ControlMsg::Retire(source) => drop(source),
             ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
