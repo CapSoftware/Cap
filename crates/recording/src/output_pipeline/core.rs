@@ -4048,11 +4048,21 @@ impl PreparedAudioSources {
                     // own drain deadline), so its sources stop first, together:
                     // a source still capturing while another tears down would
                     // feed audio from after Stop into the drain.
-                    stop_audio_sources_together(
-                        &mut self.erased_audio_sources,
-                        required_scope.as_ref(),
+                    // A device whose teardown hangs must not hang the
+                    // recording: past the deadline the drain keeps what the
+                    // mixer has, and dropping the sources ends their capture.
+                    if tokio::time::timeout(
+                        MIXER_STOP_TIMEOUT,
+                        stop_audio_sources_together(
+                            &mut self.erased_audio_sources,
+                            required_scope.as_ref(),
+                        ),
                     )
-                    .await;
+                    .await
+                    .is_err()
+                    {
+                        warn!("Mixed audio sources did not stop within the stop deadline");
+                    }
                     self.erased_audio_sources.clear();
                 }
 
