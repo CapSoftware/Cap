@@ -248,6 +248,13 @@ def matrix(config, names, tier):
         if not suites:
             continue
         runner = dict(config["runners"][platform])
+        # One switch per platform without a code change: the repository
+        # variable ENGINE_VERIFY_<PLATFORM>_RUNNER (passed in by
+        # engine-verify.yml) overrides suites.json, e.g. macos-15 to go back
+        # to GitHub-hosted runners.
+        override = os.environ.get(f"ENGINE_VERIFY_{platform.upper()}_RUNNER", "").strip()
+        if override:
+            runner["runner"] = override
         if isinstance(runner["shards"], dict):
             runner["shards"] = runner["shards"][tier]
         include.append({

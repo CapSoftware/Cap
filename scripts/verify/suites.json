@@ -191,7 +191,7 @@
 			"archive": false
 		},
 		"macos": {
-			"runner": "macos-15",
+			"runner": "blacksmith-6vcpu-macos-15",
 			"target": "aarch64-apple-darwin",
 			"shards": {
 				"fast": 1,

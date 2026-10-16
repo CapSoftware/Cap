@@ -60,7 +60,10 @@ runs:
       if: inputs.rust-cache == 'true'
       shell: bash
       run: |
-        base="verify-build-v3-${{ inputs.target }}-$(date -u +%G-W%V)"
+        # runner.environment separates GitHub-hosted from self-hosted
+        # (Blacksmith) builds: their paths and toolchains differ, so one's
+        # target directory would only force a rebuild on the other.
+        base="verify-build-v3-${{ inputs.target }}-${{ runner.environment }}-$(date -u +%G-W%V)"
         echo "base=$base" >> "$GITHUB_OUTPUT"
         echo "key=$base-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
@@ -126,4 +129,4 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/verify-fixtures
-        key: verify-fixtures-v1-${{ runner.os }}-${{ inputs.tier }}-${{ hashFiles('crates/**/src/**', 'crates/**/Cargo.toml', 'Cargo.lock', 'scripts/setup.js') }}
+        key: verify-fixtures-v1-${{ runner.os }}-${{ runner.environment }}-${{ inputs.tier }}-${{ hashFiles('crates/**/src/**', 'crates/**/Cargo.toml', 'Cargo.lock', 'scripts/setup.js') }}

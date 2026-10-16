@@ -178,6 +178,12 @@ jobs:
           MAX: ${{ steps.files.outputs.max }}
           SUITES: ${{ inputs.suites }}
           RUSTUP_TOOLCHAIN: stable
+          # Runner labels live in scripts/verify/suites.json (macOS:
+          # Blacksmith). A repository variable overrides one without a code
+          # change, e.g. ENGINE_VERIFY_MACOS_RUNNER=macos-15 for GitHub-hosted.
+          ENGINE_VERIFY_MACOS_RUNNER: ${{ vars.ENGINE_VERIFY_MACOS_RUNNER }}
+          ENGINE_VERIFY_LINUX_RUNNER: ${{ vars.ENGINE_VERIFY_LINUX_RUNNER }}
+          ENGINE_VERIFY_WINDOWS_RUNNER: ${{ vars.ENGINE_VERIFY_WINDOWS_RUNNER }}
         run: |
           set -euo pipefail
           if [[ "$SCOPE" == all ]]; then
