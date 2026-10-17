@@ -54,8 +54,17 @@ impl RecordingStartGate {
         self.0.video_origin_at_arm.store(true, Ordering::Release);
     }
 
-    pub(crate) fn video_origin_at_arm(&self) -> bool {
-        self.0.video_origin_at_arm.load(Ordering::Acquire)
+    /// How far the first admitted video frame was captured after the arm
+    /// point, when [`Self::set_video_origin_at_arm`] is on. The video track
+    /// then starts at the arm point: the first frame is shown from there and
+    /// every later frame is muxed this much later than its offset from the
+    /// first, so each keeps its capture time relative to the arm point.
+    pub(crate) fn video_origin_lead(&self, admitted: Timestamp) -> Option<Duration> {
+        if !self.0.video_origin_at_arm.load(Ordering::Acquire) {
+            return None;
+        }
+        let offset = self.offset_secs(admitted)?;
+        Some(Duration::from_secs_f64(offset.max(0.0)))
     }
 
     pub fn arm(&self) -> bool {
@@ -164,6 +173,24 @@ mod tests {
                     .unwrap(),
             )
         }
+    }
+
+    #[test]
+    fn video_origin_lead_only_when_asked() {
+        let armed = Timestamps::now();
+        let admitted = at(armed, 21);
+
+        let gate = RecordingStartGate::new();
+        assert!(gate.arm_at(armed));
+        assert_eq!(gate.video_origin_lead(admitted), None);
+
+        let gate = RecordingStartGate::new();
+        gate.set_video_origin_at_arm();
+        assert_eq!(gate.video_origin_lead(admitted), None, "closed gate");
+        assert!(gate.arm_at(armed));
+        let lead = gate.video_origin_lead(admitted).unwrap();
+        assert!(lead.abs_diff(Duration::from_millis(21)) < Duration::from_micros(1));
+        assert_eq!(gate.video_origin_lead(at(armed, 0)), Some(Duration::ZERO));
     }
 
     #[test]
