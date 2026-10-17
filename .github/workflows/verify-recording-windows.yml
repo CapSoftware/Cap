@@ -1,0 +1,80 @@
+name: Verify recording (Windows, bring-up)
+
+# Bring-up of the real-capture oracle (crates/verify/tests/recording.rs) on
+# GitHub-hosted Windows: its jobs run in the runner's interactive console
+# session, where Windows Graphics Capture records the desktop. Blacksmith
+# Windows VMs run jobs in session 0, which has no desktop to capture
+# (probe runs 38997642473, 38997747111).
+
+on:
+  push:
+    branches: [ci/windows-real-capture]
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "fast or full"
+        default: "fast"
+      case_filter:
+        description: "Case globs, comma-separated (empty runs all)"
+        default: ""
+
+concurrency:
+  group: verify-recording-windows-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  real-capture:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ inputs.tier || 'fast' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_HOST: github-hosted
+      # No audio endpoints on hosted Windows: nothing plays or loops back
+      # system audio.
+      CAP_VERIFY_STIMULUS_AUDIO: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+
+      - name: Build
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo build --locked --profile ci-verify -p cap-verify-stimulus
+          cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      - name: Real-capture recording oracle
+        shell: bash
+        run: cargo test --locked --profile ci-verify -p cap-verify --test recording -- --nocapture
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python scripts/verify/summary.py --title "real capture windows-2022" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: verify-recording-windows-2022
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore

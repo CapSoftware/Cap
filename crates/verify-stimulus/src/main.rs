@@ -1,12 +1,12 @@
 //! `cap-verify-stimulus <spec json> <log path>`: see `cap_verify::stimulus`.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
-    eprintln!("cap-verify-stimulus only runs on macOS");
+    eprintln!("cap-verify-stimulus only runs on macOS and Windows");
     std::process::exit(2);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn main() {
     if let Err(e) = app::run() {
         println!("error {e}");
@@ -14,7 +14,7 @@ fn main() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod app {
     use std::{
         fs::File,
@@ -36,6 +36,7 @@ mod app {
         video_code::{self, FrameMarker, PixelOrder, StreamKind},
     };
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    #[cfg(target_os = "macos")]
     use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
     use winit::{
         application::ApplicationHandler,
@@ -81,11 +82,16 @@ mod app {
         });
         let sentinel = Sentinel::start(log_path.with_file_name(SENTINEL_FILE));
 
-        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        let event_loop = EventLoop::<Command>::with_user_event()
-            .with_activation_policy(ActivationPolicy::Regular)
-            .with_activate_ignoring_other_apps(true)
-            .build()?;
+        #[cfg(target_os = "macos")]
+        let event_loop = {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            EventLoop::<Command>::with_user_event()
+                .with_activation_policy(ActivationPolicy::Regular)
+                .with_activate_ignoring_other_apps(true)
+                .build()?
+        };
+        #[cfg(windows)]
+        let event_loop = EventLoop::<Command>::with_user_event().build()?;
         let proxy = event_loop.create_proxy();
         spawn_stdin_reader(proxy);
 
@@ -124,15 +130,21 @@ mod app {
         let observer = start_observer(app.log.clone());
         let (qos, realtime) = raise_priority(app.spec.fps);
         app.log.write(&StimulusEvent::Priority { qos, realtime });
-        let process_info = NSProcessInfo::processInfo();
-        let activity = unsafe {
-            process_info.beginActivityWithOptions_reason(
-                NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
-                &NSString::from_str("Present recording verification markers on schedule"),
-            )
+        #[cfg(target_os = "macos")]
+        let result = {
+            let process_info = NSProcessInfo::processInfo();
+            let activity = unsafe {
+                process_info.beginActivityWithOptions_reason(
+                    NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                    &NSString::from_str("Present recording verification markers on schedule"),
+                )
+            };
+            let result = event_loop.run_app(&mut app);
+            unsafe { process_info.endActivity(&activity) };
+            result
         };
+        #[cfg(windows)]
         let result = event_loop.run_app(&mut app);
-        unsafe { process_info.endActivity(&activity) };
         result?;
         drop(observer);
         drop(audio);
@@ -190,10 +202,17 @@ mod app {
                 .thread
                 .join()
                 .map_err(|_| anyhow::anyhow!("sentinel panicked"))?;
-            let info = cidre::mach::TimeBaseInfo::new();
+            // Host ticks to nanoseconds: ticks * numer / denom.
+            #[cfg(target_os = "macos")]
+            let timebase = {
+                let info = cidre::mach::TimeBaseInfo::new();
+                [u64::from(info.numer), u64::from(info.denom)]
+            };
+            #[cfg(windows)]
+            let timebase = [1_000_000_000, sched::qpc_frequency()];
             let mut out = serde_json::json!({
                 "period_secs": SENTINEL_PERIOD_SECS,
-                "timebase": [info.numer, info.denom],
+                "timebase": timebase,
                 "first": wakes.first(),
                 "realtime": realtime,
                 "end": end,
@@ -230,6 +249,18 @@ mod app {
     /// while pictures are being presented is the window server or capture
     /// service stalling (the input never reached the screen or the capture
     /// service), not the recorder.
+    #[cfg(windows)]
+    fn start_observer(log: Arc<Log>) -> Observer {
+        log.write(&StimulusEvent::ObserverUnavailable {
+            reason: "no independent capture observer on Windows".into(),
+        });
+        Observer {
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            thread: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn start_observer(log: Arc<Log>) -> Observer {
         use cidre::{ns, sc};
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -694,6 +725,7 @@ mod app {
         epoch: Arc<AtomicU64>,
         log: Arc<Log>,
     ) -> Result<cpal::Stream, String> {
+        #[cfg(target_os = "macos")]
         use cpal::host::coreaudio::StreamInstantExt;
 
         let host = cpal::default_host();
@@ -760,7 +792,16 @@ mod app {
             .build_output_stream(
                 &config.config(),
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    state.fill(data, info.timestamp().callback.as_host_time());
+                    #[cfg(target_os = "macos")]
+                    let callback_host = info.timestamp().callback.as_host_time();
+                    // cpal's WASAPI instants have no host-clock accessor; the
+                    // callback runs at the start of the buffer it fills.
+                    #[cfg(windows)]
+                    let callback_host = {
+                        let _ = info;
+                        host_now()
+                    };
+                    state.fill(data, callback_host);
                 },
                 |e| eprintln!("stimulus audio error: {e}"),
                 None,
