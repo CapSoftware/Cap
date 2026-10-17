@@ -221,8 +221,301 @@ fn filter_rows(data: &[u8], stride: usize, bpp: usize, first_row: usize, out: &m
     }
 }
 
-// The png crate's `Filter::Adaptive`: try Up, Sub, Avg, Paeth and keep the one
-// with the smallest sum of absolute signed bytes, later filters winning ties.
+#[cfg(target_arch = "aarch64")]
+unsafe fn apply_up_neon(previous: &[u8], current: &[u8], out: &mut [u8]) -> u64 {
+    use core::arch::aarch64::*;
+    let mut len = current.len();
+    let mut p_ptr = previous.as_ptr();
+    let mut c_ptr = current.as_ptr();
+    let mut o_ptr = out.as_mut_ptr();
+    let mut sum = 0u64;
+    while len >= 64 {
+        unsafe {
+            let c0 = vld1q_u8(c_ptr);
+            let c1 = vld1q_u8(c_ptr.add(16));
+            let c2 = vld1q_u8(c_ptr.add(32));
+            let c3 = vld1q_u8(c_ptr.add(48));
+            let p0 = vld1q_u8(p_ptr);
+            let p1 = vld1q_u8(p_ptr.add(16));
+            let p2 = vld1q_u8(p_ptr.add(32));
+            let p3 = vld1q_u8(p_ptr.add(48));
+            let d0 = vsubq_u8(c0, p0);
+            let d1 = vsubq_u8(c1, p1);
+            let d2 = vsubq_u8(c2, p2);
+            let d3 = vsubq_u8(c3, p3);
+            vst1q_u8(o_ptr, d0);
+            vst1q_u8(o_ptr.add(16), d1);
+            vst1q_u8(o_ptr.add(32), d2);
+            vst1q_u8(o_ptr.add(48), d3);
+            let a0 = vabsq_s8(vreinterpretq_s8_u8(d0));
+            let a1 = vabsq_s8(vreinterpretq_s8_u8(d1));
+            let a2 = vabsq_s8(vreinterpretq_s8_u8(d2));
+            let a3 = vabsq_s8(vreinterpretq_s8_u8(d3));
+            let s0 = vaddlvq_u8(vreinterpretq_u8_s8(a0));
+            let s1 = vaddlvq_u8(vreinterpretq_u8_s8(a1));
+            let s2 = vaddlvq_u8(vreinterpretq_u8_s8(a2));
+            let s3 = vaddlvq_u8(vreinterpretq_u8_s8(a3));
+            sum += u64::from(s0) + u64::from(s1) + u64::from(s2) + u64::from(s3);
+            c_ptr = c_ptr.add(64);
+            p_ptr = p_ptr.add(64);
+            o_ptr = o_ptr.add(64);
+        }
+        len -= 64;
+    }
+    while len >= 16 {
+        unsafe {
+            let c = vld1q_u8(c_ptr);
+            let p = vld1q_u8(p_ptr);
+            let d = vsubq_u8(c, p);
+            vst1q_u8(o_ptr, d);
+            let a = vabsq_s8(vreinterpretq_s8_u8(d));
+            sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(a)));
+            c_ptr = c_ptr.add(16);
+            p_ptr = p_ptr.add(16);
+            o_ptr = o_ptr.add(16);
+        }
+        len -= 16;
+    }
+    let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, len) };
+    let tail_p = unsafe { core::slice::from_raw_parts(p_ptr, len) };
+    let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, len) };
+    for i in 0..len {
+        let diff = tail_c[i].wrapping_sub(tail_p[i]);
+        tail_o[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    sum
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn apply_sub_neon(current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
+    use core::arch::aarch64::*;
+    out[..bpp].copy_from_slice(&current[..bpp]);
+    let mut sum = 0u64;
+    for &b in &out[..bpp] {
+        sum += u64::from((b as i8).unsigned_abs());
+    }
+    let len = current.len() - bpp;
+    let mut c_ptr = unsafe { current.as_ptr().add(bpp) };
+    let mut p_ptr = current.as_ptr();
+    let mut o_ptr = unsafe { out.as_mut_ptr().add(bpp) };
+    let mut rem = len;
+    while rem >= 64 {
+        unsafe {
+            let c0 = vld1q_u8(c_ptr);
+            let c1 = vld1q_u8(c_ptr.add(16));
+            let c2 = vld1q_u8(c_ptr.add(32));
+            let c3 = vld1q_u8(c_ptr.add(48));
+            let p0 = vld1q_u8(p_ptr);
+            let p1 = vld1q_u8(p_ptr.add(16));
+            let p2 = vld1q_u8(p_ptr.add(32));
+            let p3 = vld1q_u8(p_ptr.add(48));
+            let d0 = vsubq_u8(c0, p0);
+            let d1 = vsubq_u8(c1, p1);
+            let d2 = vsubq_u8(c2, p2);
+            let d3 = vsubq_u8(c3, p3);
+            vst1q_u8(o_ptr, d0);
+            vst1q_u8(o_ptr.add(16), d1);
+            vst1q_u8(o_ptr.add(32), d2);
+            vst1q_u8(o_ptr.add(48), d3);
+            let a0 = vabsq_s8(vreinterpretq_s8_u8(d0));
+            let a1 = vabsq_s8(vreinterpretq_s8_u8(d1));
+            let a2 = vabsq_s8(vreinterpretq_s8_u8(d2));
+            let a3 = vabsq_s8(vreinterpretq_s8_u8(d3));
+            let s0 = vaddlvq_u8(vreinterpretq_u8_s8(a0));
+            let s1 = vaddlvq_u8(vreinterpretq_u8_s8(a1));
+            let s2 = vaddlvq_u8(vreinterpretq_u8_s8(a2));
+            let s3 = vaddlvq_u8(vreinterpretq_u8_s8(a3));
+            sum += u64::from(s0) + u64::from(s1) + u64::from(s2) + u64::from(s3);
+            c_ptr = c_ptr.add(64);
+            p_ptr = p_ptr.add(64);
+            o_ptr = o_ptr.add(64);
+        }
+        rem -= 64;
+    }
+    while rem >= 16 {
+        unsafe {
+            let c = vld1q_u8(c_ptr);
+            let p = vld1q_u8(p_ptr);
+            let d = vsubq_u8(c, p);
+            vst1q_u8(o_ptr, d);
+            let a = vabsq_s8(vreinterpretq_s8_u8(d));
+            sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(a)));
+            c_ptr = c_ptr.add(16);
+            p_ptr = p_ptr.add(16);
+            o_ptr = o_ptr.add(16);
+        }
+        rem -= 16;
+    }
+    let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
+    let tail_p = unsafe { core::slice::from_raw_parts(p_ptr, rem) };
+    let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
+    for i in 0..rem {
+        let diff = tail_c[i].wrapping_sub(tail_p[i]);
+        tail_o[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    sum
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
+    use core::arch::aarch64::*;
+    let mut sum = 0u64;
+    for i in 0..bpp {
+        let diff = current[i].wrapping_sub(previous[i] / 2);
+        out[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    let len = current.len() - bpp;
+    let mut a_ptr = current.as_ptr();
+    let mut b_ptr = unsafe { previous.as_ptr().add(bpp) };
+    let mut c_ptr = unsafe { current.as_ptr().add(bpp) };
+    let mut o_ptr = unsafe { out.as_mut_ptr().add(bpp) };
+    let mut rem = len;
+    while rem >= 64 {
+        unsafe {
+            let a0 = vld1q_u8(a_ptr);
+            let a1 = vld1q_u8(a_ptr.add(16));
+            let a2 = vld1q_u8(a_ptr.add(32));
+            let a3 = vld1q_u8(a_ptr.add(48));
+            let b0 = vld1q_u8(b_ptr);
+            let b1 = vld1q_u8(b_ptr.add(16));
+            let b2 = vld1q_u8(b_ptr.add(32));
+            let b3 = vld1q_u8(b_ptr.add(48));
+            let c0 = vld1q_u8(c_ptr);
+            let c1 = vld1q_u8(c_ptr.add(16));
+            let c2 = vld1q_u8(c_ptr.add(32));
+            let c3 = vld1q_u8(c_ptr.add(48));
+            let avg0 = vhaddq_u8(a0, b0);
+            let avg1 = vhaddq_u8(a1, b1);
+            let avg2 = vhaddq_u8(a2, b2);
+            let avg3 = vhaddq_u8(a3, b3);
+            let d0 = vsubq_u8(c0, avg0);
+            let d1 = vsubq_u8(c1, avg1);
+            let d2 = vsubq_u8(c2, avg2);
+            let d3 = vsubq_u8(c3, avg3);
+            vst1q_u8(o_ptr, d0);
+            vst1q_u8(o_ptr.add(16), d1);
+            vst1q_u8(o_ptr.add(32), d2);
+            vst1q_u8(o_ptr.add(48), d3);
+            let s0 = vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d0))));
+            let s1 = vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d1))));
+            let s2 = vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d2))));
+            let s3 = vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d3))));
+            sum += u64::from(s0) + u64::from(s1) + u64::from(s2) + u64::from(s3);
+            a_ptr = a_ptr.add(64);
+            b_ptr = b_ptr.add(64);
+            c_ptr = c_ptr.add(64);
+            o_ptr = o_ptr.add(64);
+        }
+        rem -= 64;
+    }
+    while rem >= 16 {
+        unsafe {
+            let a = vld1q_u8(a_ptr);
+            let b = vld1q_u8(b_ptr);
+            let c = vld1q_u8(c_ptr);
+            let avg = vhaddq_u8(a, b);
+            let d = vsubq_u8(c, avg);
+            vst1q_u8(o_ptr, d);
+            sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d)))));
+            a_ptr = a_ptr.add(16);
+            b_ptr = b_ptr.add(16);
+            c_ptr = c_ptr.add(16);
+            o_ptr = o_ptr.add(16);
+        }
+        rem -= 16;
+    }
+    let tail_a = unsafe { core::slice::from_raw_parts(a_ptr, rem) };
+    let tail_b = unsafe { core::slice::from_raw_parts(b_ptr, rem) };
+    let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
+    let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
+    for i in 0..rem {
+        let (a, b) = (tail_a[i], tail_b[i]);
+        let diff = tail_c[i].wrapping_sub((a & b) + ((a ^ b) >> 1));
+        tail_o[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    sum
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn apply_paeth_neon(
+    previous: &[u8],
+    current: &[u8],
+    bpp: usize,
+    out: &mut [u8],
+) -> u64 {
+    use core::arch::aarch64::*;
+    let mut sum = 0u64;
+    for i in 0..bpp {
+        let diff = current[i].wrapping_sub(previous[i]);
+        out[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    let len = current.len() - bpp;
+    let mut a_ptr = current.as_ptr();
+    let mut b_ptr = unsafe { previous.as_ptr().add(bpp) };
+    let mut c_ptr = previous.as_ptr();
+    let mut curr_ptr = unsafe { current.as_ptr().add(bpp) };
+    let mut o_ptr = unsafe { out.as_mut_ptr().add(bpp) };
+    let mut rem = len;
+    while rem >= 8 {
+        unsafe {
+            let a_raw = vld1_u8(a_ptr);
+            let b_raw = vld1_u8(b_ptr);
+            let c_raw = vld1_u8(c_ptr);
+            let curr_raw = vld1_u8(curr_ptr);
+
+            let a16 = vreinterpretq_s16_u16(vmovl_u8(a_raw));
+            let b16 = vreinterpretq_s16_u16(vmovl_u8(b_raw));
+            let c16 = vreinterpretq_s16_u16(vmovl_u8(c_raw));
+
+            let pa = vabsq_s16(vsubq_s16(b16, c16));
+            let pb = vabsq_s16(vsubq_s16(a16, c16));
+            let pc = vabsq_s16(vsubq_s16(vaddq_s16(a16, b16), vaddq_s16(c16, c16)));
+
+            let mask_a = vandq_u16(vcleq_s16(pa, pb), vcleq_s16(pa, pc));
+            let mask_b = vcleq_s16(pb, pc);
+
+            let p16 = vbslq_u16(
+                mask_a,
+                vreinterpretq_u16_s16(a16),
+                vbslq_u16(
+                    mask_b,
+                    vreinterpretq_u16_s16(b16),
+                    vreinterpretq_u16_s16(c16),
+                ),
+            );
+            let p8 = vmovn_u16(p16);
+            let diff = vsub_u8(curr_raw, p8);
+            vst1_u8(o_ptr, diff);
+
+            let abs_diff = vabs_s8(vreinterpret_s8_u8(diff));
+            sum += u64::from(vaddlv_u8(vreinterpret_u8_s8(abs_diff)));
+
+            a_ptr = a_ptr.add(8);
+            b_ptr = b_ptr.add(8);
+            c_ptr = c_ptr.add(8);
+            curr_ptr = curr_ptr.add(8);
+            o_ptr = o_ptr.add(8);
+        }
+        rem -= 8;
+    }
+    let tail_a = unsafe { core::slice::from_raw_parts(a_ptr, rem) };
+    let tail_b = unsafe { core::slice::from_raw_parts(b_ptr, rem) };
+    let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
+    let tail_curr = unsafe { core::slice::from_raw_parts(curr_ptr, rem) };
+    let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
+    for i in 0..rem {
+        let diff = tail_curr[i].wrapping_sub(paeth(tail_a[i], tail_b[i], tail_c[i]));
+        tail_o[i] = diff;
+        sum += u64::from((diff as i8).unsigned_abs());
+    }
+    sum
+}
+
 fn adaptive_filter(
     bpp: usize,
     previous: &[u8],
@@ -230,34 +523,120 @@ fn adaptive_filter(
     output: &mut [u8],
     candidate: &mut [u8],
 ) -> u8 {
-    let mut best_cost = u64::MAX;
-    let mut best = 0;
-    for kind in [2, 1, 3, 4] {
-        apply_filter(kind, bpp, previous, current, candidate);
-        let cost = sum_abs(candidate);
-        if cost <= best_cost {
-            best_cost = cost;
-            best = kind;
-            output.copy_from_slice(candidate);
-            if cost == 0 {
-                break;
-            }
+    #[cfg(target_arch = "aarch64")]
+    let cost2 = unsafe { apply_up_neon(previous, current, output) };
+    #[cfg(not(target_arch = "aarch64"))]
+    let cost2 = {
+        apply_filter(2, bpp, previous, current, output);
+        sum_abs(output)
+    };
+
+    let mut best_cost = cost2;
+    let mut best = 2;
+    if cost2 == 0 {
+        return best;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    let cost1 = unsafe { apply_sub_neon(current, bpp, candidate) };
+    #[cfg(not(target_arch = "aarch64"))]
+    let cost1 = {
+        apply_filter(1, bpp, previous, current, candidate);
+        sum_abs(candidate)
+    };
+    if cost1 <= best_cost {
+        best_cost = cost1;
+        best = 1;
+        output.copy_from_slice(candidate);
+        if cost1 == 0 {
+            return best;
         }
     }
+
+    #[cfg(target_arch = "aarch64")]
+    let cost3 = unsafe { apply_avg_neon(previous, current, bpp, candidate) };
+    #[cfg(not(target_arch = "aarch64"))]
+    let cost3 = {
+        apply_filter(3, bpp, previous, current, candidate);
+        sum_abs(candidate)
+    };
+    if cost3 <= best_cost {
+        best_cost = cost3;
+        best = 3;
+        output.copy_from_slice(candidate);
+        if cost3 == 0 {
+            return best;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    let cost4 = unsafe { apply_paeth_neon(previous, current, bpp, candidate) };
+    #[cfg(not(target_arch = "aarch64"))]
+    let cost4 = {
+        apply_filter(4, bpp, previous, current, candidate);
+        sum_abs(candidate)
+    };
+    if cost4 <= best_cost {
+        best = 4;
+        output.copy_from_slice(candidate);
+    }
+
     best
 }
 
+#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 fn sum_abs(buf: &[u8]) -> u64 {
-    buf.chunks(32)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|&b| u64::from((b as i8).unsigned_abs()))
-                .sum::<u64>()
-        })
-        .sum()
+    #[cfg(target_arch = "aarch64")]
+    {
+        use core::arch::aarch64::*;
+        let mut sum = 0u64;
+        let mut ptr = buf.as_ptr();
+        let mut len = buf.len();
+        while len >= 64 {
+            unsafe {
+                let v0 = vld1q_s8(ptr as *const i8);
+                let v1 = vld1q_s8(ptr.add(16) as *const i8);
+                let v2 = vld1q_s8(ptr.add(32) as *const i8);
+                let v3 = vld1q_s8(ptr.add(48) as *const i8);
+                let a0 = vabsq_s8(v0);
+                let a1 = vabsq_s8(v1);
+                let a2 = vabsq_s8(v2);
+                let a3 = vabsq_s8(v3);
+                let s0 = vaddlvq_u8(vreinterpretq_u8_s8(a0));
+                let s1 = vaddlvq_u8(vreinterpretq_u8_s8(a1));
+                let s2 = vaddlvq_u8(vreinterpretq_u8_s8(a2));
+                let s3 = vaddlvq_u8(vreinterpretq_u8_s8(a3));
+                sum += u64::from(s0) + u64::from(s1) + u64::from(s2) + u64::from(s3);
+                ptr = ptr.add(64);
+                len -= 64;
+            }
+        }
+        while len >= 16 {
+            unsafe {
+                let v0 = vld1q_s8(ptr as *const i8);
+                let a0 = vabsq_s8(v0);
+                sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(a0)));
+                ptr = ptr.add(16);
+                len -= 16;
+            }
+        }
+        let rem = unsafe { core::slice::from_raw_parts(ptr, len) };
+        for &b in rem {
+            sum += u64::from((b as i8).unsigned_abs());
+        }
+        sum
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut sum = 0u64;
+        for &b in buf {
+            sum += u64::from((b as i8).unsigned_abs());
+        }
+        sum
+    }
 }
 
+#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 fn apply_filter(kind: u8, bpp: usize, previous: &[u8], current: &[u8], out: &mut [u8]) {
     let len = current.len();
     match kind {
@@ -434,5 +813,62 @@ mod tests {
         let png = encode(&gray, 64, 32, image::ExtendedColorType::L8).unwrap();
         assert_eq!(decode(&png).to_luma8().into_raw(), gray);
         assert!(encode(&gray, 64, 32, image::ExtendedColorType::Rgb8).is_err());
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn neon_filters_match_scalar_reference() {
+        for bpp in [3, 4] {
+            for len in [
+                bpp,
+                bpp + 1,
+                bpp + 7,
+                bpp + 8,
+                bpp + 15,
+                bpp + 16,
+                bpp + 63,
+                bpp + 64,
+                bpp + 100,
+            ] {
+                let mut prev = vec![0u8; len];
+                let mut curr = vec![0u8; len];
+                for i in 0..len {
+                    prev[i] = ((i * 17 + 3) % 256) as u8;
+                    curr[i] = ((i * 31 + 7) % 256) as u8;
+                }
+
+                let mut ref_out = vec![0u8; len];
+                apply_filter(2, bpp, &prev, &curr, &mut ref_out);
+                let ref_cost = sum_abs(&ref_out);
+                let mut neon_out = vec![0u8; len];
+                let neon_cost = unsafe { apply_up_neon(&prev, &curr, &mut neon_out) };
+                assert_eq!(neon_out, ref_out);
+                assert_eq!(neon_cost, ref_cost);
+
+                let mut ref_out = vec![0u8; len];
+                apply_filter(1, bpp, &prev, &curr, &mut ref_out);
+                let ref_cost = sum_abs(&ref_out);
+                let mut neon_out = vec![0u8; len];
+                let neon_cost = unsafe { apply_sub_neon(&curr, bpp, &mut neon_out) };
+                assert_eq!(neon_out, ref_out);
+                assert_eq!(neon_cost, ref_cost);
+
+                let mut ref_out = vec![0u8; len];
+                apply_filter(3, bpp, &prev, &curr, &mut ref_out);
+                let ref_cost = sum_abs(&ref_out);
+                let mut neon_out = vec![0u8; len];
+                let neon_cost = unsafe { apply_avg_neon(&prev, &curr, bpp, &mut neon_out) };
+                assert_eq!(neon_out, ref_out);
+                assert_eq!(neon_cost, ref_cost);
+
+                let mut ref_out = vec![0u8; len];
+                apply_filter(4, bpp, &prev, &curr, &mut ref_out);
+                let ref_cost = sum_abs(&ref_out);
+                let mut neon_out = vec![0u8; len];
+                let neon_cost = unsafe { apply_paeth_neon(&prev, &curr, bpp, &mut neon_out) };
+                assert_eq!(neon_out, ref_out);
+                assert_eq!(neon_cost, ref_cost);
+            }
+        }
     }
 }
