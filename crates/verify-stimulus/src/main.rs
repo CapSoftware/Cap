@@ -512,12 +512,13 @@ mod app {
                         DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
                         DXGI_SAMPLE_DESC,
                     },
-                    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_NONE,
-                    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain1,
+                    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+                    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
+                    IDXGIFactory2, IDXGISwapChain1,
                 },
             },
         };
+        use windows::core::Interface;
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
         pub struct Canvas {
@@ -552,9 +553,14 @@ mod app {
             .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
             let device = device.ok_or("no D3D11 device")?;
             let context = context.ok_or("no D3D11 context")?;
-            let factory: IDXGIFactory2 =
-                unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
-                    .map_err(|e| format!("CreateDXGIFactory2: {e}"))?;
+            // The swap chain must come from the factory that made the device.
+            let factory: IDXGIFactory2 = unsafe {
+                device
+                    .cast::<IDXGIDevice>()
+                    .and_then(|dxgi| dxgi.GetAdapter())
+                    .and_then(|adapter| adapter.GetParent())
+            }
+            .map_err(|e| format!("device factory: {e}"))?;
             let desc = DXGI_SWAP_CHAIN_DESC1 {
                 Width: size.0,
                 Height: size.1,
