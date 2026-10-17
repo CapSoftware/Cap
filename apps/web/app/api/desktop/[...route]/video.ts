@@ -13,7 +13,12 @@ import type { VideoMetadata } from "@cap/database/types";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
+import {
+	makeCurrentUserLayer,
+	S3Buckets,
+	Storage,
+	Videos,
+} from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, lte } from "drizzle-orm";
@@ -299,10 +304,29 @@ app.get(
 				);
 			}
 
-			const writable = await (clientSupportsGoogleDriveUpload
-				? Storage.getWritableAccessForUser(user.id, videoOrgId)
-				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
-			).pipe(runPromise);
+			const writable = await Effect.gen(function* () {
+				const writable = yield* clientSupportsGoogleDriveUpload
+					? Storage.getWritableAccessForUser(user.id, videoOrgId)
+					: Storage.getS3WritableAccessForUser(user.id, videoOrgId);
+				if (
+					Option.isNone(writable.bucketId) &&
+					Option.isNone(writable.storageIntegrationId) &&
+					!isScreenshot &&
+					(recordingMode === "desktopSegments" ||
+						recordingMode === "desktopMP4") &&
+					process.env.VERCEL === "1"
+				) {
+					const buckets = yield* S3Buckets;
+					return {
+						...writable,
+						bucketId: buckets.getRegionalUploadBucketId(
+							c.req.header("x-vercel-ip-latitude"),
+							c.req.header("x-vercel-ip-longitude"),
+						),
+					};
+				}
+				return writable;
+			}).pipe(runPromise);
 
 			await db()
 				.insert(videos)

@@ -5,8 +5,10 @@ import {
 	Storage as StorageDomain,
 	Video,
 } from "@cap/web-domain";
-import { Effect, Option } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Effect, Layer, Option } from "effect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const regionalStorage = vi.hoisted(() => ({ select: vi.fn(), s3: vi.fn() }));
 
 const deletion = vi.hoisted(() => ({
 	deleteVideo: vi.fn(),
@@ -86,19 +88,23 @@ vi.mock("@cap/web-backend", async () => {
 	class Videos extends Effect.Service<Videos>()("Videos", {
 		sync: () => ({ delete: deletion.deleteVideo }),
 	}) {}
+	class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
+		sync: () => ({ getRegionalUploadBucketId: regionalStorage.select }),
+	}) {}
 	return {
 		makeCurrentUserLayer,
 		Videos,
+		S3Buckets,
 		Storage: {
 			getOrganizationWritableAccess: vi.fn(),
-			getS3WritableAccessForUser: vi.fn(),
+			getS3WritableAccessForUser: regionalStorage.s3,
 		},
 	};
 });
 
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
-	const { Videos } = await import("@cap/web-backend");
+	const { Videos, S3Buckets } = await import("@cap/web-backend");
 	return {
 		runPromise: vi.fn(async (value: unknown) =>
 			Effect.isEffect(value)
@@ -107,9 +113,11 @@ vi.mock("@/lib/server", async () => {
 							value as Effect.Effect<
 								unknown,
 								unknown,
-								InstanceType<typeof Videos>
+								InstanceType<typeof Videos> | InstanceType<typeof S3Buckets>
 							>
-						).pipe(Effect.provide(Videos.Default)),
+						).pipe(
+							Effect.provide(Layer.mergeAll(Videos.Default, S3Buckets.Default)),
+						),
 					)
 				: value,
 		),
@@ -126,6 +134,8 @@ vi.mock("@/lib/google-drive-storage-quota", () => ({
 
 // The live-transcription stack drags in the whole workflow graph
 // (server-only modules included); these tests only care that create works.
+vi.mock("next/server", () => ({ after: vi.fn() }));
+
 vi.mock("@/lib/live-transcribe", () => ({
 	maybeStartLiveTranscription: vi.fn(async () => "skipped"),
 }));
@@ -666,4 +676,157 @@ describe("GET /create", () => {
 		expect(await response.json()).toEqual({ error: "invalid_video_id" });
 		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
+});
+
+describe("new Instant recording regions", () => {
+	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		vi.stubEnv("VERCEL", "1");
+		resetMockDb();
+		stubStorage();
+		regionalStorage.s3.mockReturnValue(
+			Effect.succeed({
+				bucketId: Option.none(),
+				storageIntegrationId: Option.none(),
+			}),
+		);
+		regionalStorage.select.mockImplementation(
+			(latitude: string | undefined, longitude: string | undefined) =>
+				latitude === "35.68" && longitude === "139.69"
+					? Option.some("cap-tokyo")
+					: Option.none(),
+		);
+		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Org", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+		app = (await import("@/app/api/desktop/[...route]/video")).app;
+	});
+	afterEach(() => vi.unstubAllEnvs());
+
+	it.each(["desktopMP4", "desktopSegments"])(
+		"persists the selected bucket for %s",
+		async (mode) => {
+			const response = await app.request(
+				`https://cap.test/create?recordingMode=${mode}`,
+				{
+					headers: {
+						"x-vercel-ip-latitude": "35.68",
+						"x-vercel-ip-longitude": "139.69",
+					},
+				},
+			);
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)?.bucket).toBe("cap-tokyo");
+			expect(regionalStorage.select).toHaveBeenCalledWith("35.68", "139.69");
+		},
+	);
+
+	it.each<Record<string, string>>([
+		{ "x-vercel-ip-latitude": "40.71", "x-vercel-ip-longitude": "-74.01" },
+		{},
+		{ "x-vercel-ip-latitude": "bad", "x-vercel-ip-longitude": "139.69" },
+	])(
+		"keeps Virginia when no regional bucket is selected (%#)",
+		async (headers) => {
+			const response = await app.request(
+				"https://cap.test/create?recordingMode=desktopMP4",
+				{ headers },
+			);
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)?.bucket).toBeNull();
+		},
+	);
+
+	it.each([
+		{
+			bucket: "custom-bucket",
+			integration: null,
+			vercel: "1",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: "drive-id",
+			vercel: "1",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "",
+			query: "recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "1",
+			query: "isScreenshot=true&recordingMode=desktopMP4",
+		},
+		{
+			bucket: null,
+			integration: null,
+			vercel: "1",
+			query: "recordingMode=hls",
+		},
+	])(
+		"preserves storage outside eligible new Instant recordings (%#)",
+		async ({ bucket, integration, vercel, query }) => {
+			vi.stubEnv("VERCEL", vercel);
+			regionalStorage.s3.mockReturnValue(
+				Effect.succeed({
+					bucketId: Option.fromNullable(bucket),
+					storageIntegrationId: Option.fromNullable(integration),
+				}),
+			);
+			const response = await app.request(`https://cap.test/create?${query}`, {
+				headers: {
+					"x-vercel-ip-latitude": "35.68",
+					"x-vercel-ip-longitude": "139.69",
+				},
+			});
+			expect(response.status).toBe(200);
+			expect(insertedValues(schema.videos)).toMatchObject({
+				bucket,
+				storageIntegrationId: integration,
+			});
+			expect(regionalStorage.select).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([null, "cap-tokyo", "custom-bucket"])(
+		"does not reroute an existing recording after travel: %s",
+		async (bucket) => {
+			mockDb.where.mockReset().mockResolvedValue([
+				{
+					id: "existing",
+					ownerId: "user-1",
+					bucket,
+					source: { type: "desktopMP4" },
+				},
+			]);
+			const response = await app.request(
+				"https://cap.test/create?videoId=existing&recordingMode=desktopMP4",
+				{
+					headers: {
+						"x-vercel-ip-latitude": "35.68",
+						"x-vercel-ip-longitude": "139.69",
+					},
+				},
+			);
+			expect(response.status).toBe(200);
+			expect(mockDb.insert).not.toHaveBeenCalled();
+			expect(mockDb.update).not.toHaveBeenCalled();
+			expect(regionalStorage.select).not.toHaveBeenCalled();
+		},
+	);
 });

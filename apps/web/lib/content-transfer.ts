@@ -1,3 +1,5 @@
+import { S3Bucket } from "@cap/web-domain";
+
 export const CONTENT_TRANSFER_KIND = "transfer_org_content" as const;
 export const MAX_CONTENT_TRANSFER_VIDEOS = 10_000;
 export const MAX_CONTENT_TRANSFER_FOLDERS = 2_000;
@@ -290,7 +292,7 @@ export function getContentTransferStorageBlockReason({
 		}
 		return "The Cap uses a personal storage integration owned by another user";
 	}
-	if (bucketId) {
+	if (!S3Bucket.isCapManagedBucket(bucketId)) {
 		if (!bucketOwnerId) return "The storage bucket is missing";
 		if (
 			bucketOrganizationId === organizationId ||
