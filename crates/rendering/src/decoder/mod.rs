@@ -591,7 +591,7 @@ impl DecodedFrame {
         }
 
         let y_bytes = (self.y_stride as usize).saturating_mul(self.height as usize);
-        let uv_bytes = (self.uv_stride as usize).saturating_mul((self.height / 2) as usize);
+        let uv_bytes = (self.uv_stride as usize).saturating_mul(self.height.div_ceil(2) as usize);
 
         match self.format {
             PixelFormat::Rgba => (self.width as usize)
@@ -648,7 +648,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_end = y_size.checked_add(u_size)?;
                 self.data().get(y_size..u_end)
@@ -666,7 +666,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let v_start = y_size.checked_add(u_size)?;
                 self.data().get(v_start..)
