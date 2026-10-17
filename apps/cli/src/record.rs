@@ -759,12 +759,8 @@ async fn start_recording(
         .with_system_audio(params.system_audio);
     let mut instant_builder =
         instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
-    let mut camera_active = false;
     let camera_recorded =
         !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
-
-    // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
-    // recording, so the feed actor handle itself does not need to be retained.
     // macOS Instant recordings capture only the screen (the desktop app's camera bubble is part of
     // the screen), so a camera opened here would run for the whole recording without being recorded.
     if params.camera.is_some() && !camera_recorded {
@@ -773,64 +769,46 @@ async fn start_recording(
         );
     }
 
-    if let Some(device_id) = params.camera.as_deref().filter(|_| camera_recorded) {
-        let info = cap_camera::list_cameras()
-            .find(|c| c.device_id() == device_id)
-            .ok_or_else(|| {
-                let available: Vec<String> = cap_camera::list_cameras()
-                    .map(|c| c.device_id().to_string())
-                    .collect();
-                format!(
-                    "Camera with id '{device_id}' not found. Available device ids: {available:?} \
-                     (see `cap targets cameras`)"
-                )
-            })?;
-        let id = camera::DeviceOrModelID::from_info(&info);
+    // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
+    // recording, so the feed actor handle itself does not need to be retained. The ScreenCaptureKit
+    // content, the microphone and the camera are independent, so they are prepared together. The
+    // camera goes last because its device discovery blocks while the other two finish on their own
+    // threads.
+    let (shareable_content, mic_lock, camera_lock) = tokio::try_join!(
+        async {
+            #[cfg(target_os = "macos")]
+            {
+                acquire_shareable_content_for_target(&target_for_shareable_content)
+                    .await
+                    .map(Some)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Ok::<_, String>(None::<()>)
+            }
+        },
+        async {
+            match params.mic.as_deref() {
+                Some(mic_name) => open_mic_feed(mic_name).await.map(Some),
+                None => Ok(None),
+            }
+        },
+        async {
+            match params.camera.as_deref().filter(|_| camera_recorded) {
+                Some(device_id) => open_camera_feed(device_id).await.map(Some),
+                None => Ok(None),
+            }
+        },
+    )?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = shareable_content;
 
-        let camera_feed = CameraFeed::spawn(CameraFeed::default());
-        camera_feed
-            .ask(camera::SetInput { id, settings: None })
-            .await
-            .map_err(|e| format!("Failed to set camera input: {e}"))?
-            .await
-            .map_err(|e| format!("Camera failed to connect: {e}"))?;
-        let lock = camera_feed
-            .ask(camera::Lock)
-            .await
-            .map_err(|e| format!("Failed to lock camera feed: {e}"))?;
-        let lock = Arc::new(lock);
+    let camera_active = camera_lock.is_some();
+    if let Some(lock) = camera_lock {
         studio_builder = studio_builder.with_camera_feed(lock.clone());
         instant_builder = instant_builder.with_camera_feed(lock);
-        camera_active = true;
     }
-
-    if let Some(mic_name) = params.mic.as_deref() {
-        let available = MicrophoneFeed::list();
-        if !available.contains_key(mic_name) {
-            let names: Vec<&str> = available.keys().map(String::as_str).collect();
-            return Err(format!(
-                "Microphone '{mic_name}' not found. Available: {names:?} (see `cap targets mics`)"
-            ));
-        }
-
-        let (error_tx, _error_rx) = flume::bounded(16);
-        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
-        mic_feed
-            .ask(microphone::SetInput {
-                label: mic_name.to_string(),
-                settings: None,
-            })
-            .await
-            .map_err(|e| format!("Failed to set mic input: {e}"))?
-            .await
-            .map_err(|e| format!("Mic failed to connect: {e}"))?;
-        // The stream needs a moment to warm up before locking on slower devices.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let lock = mic_feed
-            .ask(microphone::Lock)
-            .await
-            .map_err(|e| format!("Failed to lock mic feed: {e}"))?;
-        let lock = Arc::new(lock);
+    if let Some(lock) = mic_lock {
         studio_builder = studio_builder.with_mic_feed(lock.clone());
         instant_builder = instant_builder.with_mic_feed(lock);
     }
@@ -846,9 +824,7 @@ async fn start_recording(
             builder
                 .build(
                     #[cfg(target_os = "macos")]
-                    Some(
-                        acquire_shareable_content_for_target(&target_for_shareable_content).await?,
-                    ),
+                    shareable_content,
                 )
                 .await
                 .map(ActorHandle::Studio)
@@ -877,9 +853,7 @@ async fn start_recording(
             let actor = builder
                 .build(
                     #[cfg(target_os = "macos")]
-                    Some(
-                        acquire_shareable_content_for_target(&target_for_shareable_content).await?,
-                    ),
+                    shareable_content,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -890,6 +864,66 @@ async fn start_recording(
             })
         }
     }
+}
+
+async fn open_camera_feed(
+    device_id: &str,
+) -> Result<Arc<cap_recording::feeds::camera::CameraFeedLock>, String> {
+    let info = cap_camera::list_cameras()
+        .find(|c| c.device_id() == device_id)
+        .ok_or_else(|| {
+            let available: Vec<String> = cap_camera::list_cameras()
+                .map(|c| c.device_id().to_string())
+                .collect();
+            format!(
+                "Camera with id '{device_id}' not found. Available device ids: {available:?} \
+                 (see `cap targets cameras`)"
+            )
+        })?;
+    let id = camera::DeviceOrModelID::from_info(&info);
+
+    let camera_feed = CameraFeed::spawn(CameraFeed::default());
+    camera_feed
+        .ask(camera::SetInput { id, settings: None })
+        .await
+        .map_err(|e| format!("Failed to set camera input: {e}"))?
+        .await
+        .map_err(|e| format!("Camera failed to connect: {e}"))?;
+    let lock = camera_feed
+        .ask(camera::Lock)
+        .await
+        .map_err(|e| format!("Failed to lock camera feed: {e}"))?;
+    Ok(Arc::new(lock))
+}
+
+async fn open_mic_feed(
+    mic_name: &str,
+) -> Result<Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>, String> {
+    let available = MicrophoneFeed::list_names();
+    if !available.iter().any(|name| name == mic_name) {
+        return Err(format!(
+            "Microphone '{mic_name}' not found. Available: {available:?} (see `cap targets mics`)"
+        ));
+    }
+
+    let (error_tx, _error_rx) = flume::bounded(16);
+    let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    mic_feed
+        .ask(microphone::SetInput {
+            label: mic_name.to_string(),
+            settings: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to set mic input: {e}"))?
+        .await
+        .map_err(|e| format!("Mic failed to connect: {e}"))?;
+    // The stream needs a moment to warm up before locking on slower devices.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let lock = mic_feed
+        .ask(microphone::Lock)
+        .await
+        .map_err(|e| format!("Failed to lock mic feed: {e}"))?;
+    Ok(Arc::new(lock))
 }
 
 #[cfg(target_os = "macos")]
