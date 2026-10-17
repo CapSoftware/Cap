@@ -44,6 +44,13 @@ reason = "Seeds 28, 53 and 59 fail in every run; which wrong answer comes first 
 link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftware/Cap/pull/2603"
 
 [[xfail]]
+case = "decoder-model/ffmpeg/late-start/random-seeks/playback"
+class = "grid-rounding"
+seeds = "0 6 9 11 16"
+reason = "Same seek-to-request grid rounding as the zero-start FFmpeg cases below: a seek can land on the frame on screen at the exact request time even though its rounded grid label is after the request. Newly covered by enabling late-start streams for FFmpeg; no future or stale answers remain"
+link = ""
+
+[[xfail]]
 case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
 class = "grid-rounding"
 seeds = "2 11-13 20 26"
