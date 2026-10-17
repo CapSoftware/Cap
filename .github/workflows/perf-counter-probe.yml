@@ -1,0 +1,19 @@
+name: Perf counter probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    steps:
+      - run: |
+          cat /proc/sys/kernel/perf_event_paranoid || true
+          sudo apt-get install -y linux-tools-common linux-tools-generic linux-tools-$(uname -r) >/dev/null 2>&1 || true
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          for i in 1 2 3; do perf stat -x, -e instructions:u,task-clock python3 -c "sum(range(3_000_000))" 2>&1 | tail -2; done
+  macos:
+    runs-on: blacksmith-6vcpu-macos-26
+    steps:
+      - run: |
+          for i in 1 2 3; do /usr/bin/time -l python3 -c "sum(range(3_000_000))" 2>&1 | grep -E "instructions retired|cycles elapsed|user|real"; done
