@@ -452,7 +452,13 @@ fn open_path_or_url(target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut cmd = std::process::Command::new("open");
     #[cfg(target_os = "windows")]
-    let mut cmd = std::process::Command::new("explorer");
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut c = std::process::Command::new("explorer");
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
     #[cfg(target_os = "linux")]
     let mut cmd = std::process::Command::new("xdg-open");
 
