@@ -72,6 +72,15 @@ jobs:
             target/ci-verify/
           key: ${{ steps.setup.outputs.build-cache-key }}
 
+      - name: Stimulus smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          spec='{"fps":15.0,"seconds":2.0,"holds":[],"busy":true,"audio":false,"warmup":1.0,"audio_period":0.5,"audio_origin":0,"window":null}'
+          (sleep 5; echo go; sleep 4; echo quit) | target/ci-verify/cap-verify-stimulus.exe "$spec" "$RUNNER_TEMP/stimulus.jsonl"
+          echo "exit status $?"
+          head -c 3000 "$RUNNER_TEMP/stimulus.jsonl" || true
+
       - name: Real-capture recording oracle
         shell: bash
         run: cargo test --locked --profile ci-verify -p cap-verify --test recording -- --nocapture
