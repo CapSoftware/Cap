@@ -408,6 +408,11 @@ def main():
             return [item for item in items or [] if not any(r.startswith("missing on main (baseline") for r in item[1])]
 
         worse = sum(len(counted(lane.get("WORSE"))) + len(counted(lane.get("JUNIT-WORSE"))) for lane in out.values())
+        # A baseline run that stopped early leaves main's cases unmatched.
+        unmatched = [lane for lane in lanes if mrec.get(lane) and not brec.get(lane)]
+        for lane in unmatched:
+            print(f"lane {lane}: no baseline records", file=sys.stderr)
+        worse += len(unmatched)
         if worse:
             print(f"\n{worse} row(s) worse than the baseline", file=sys.stderr)
             return 1

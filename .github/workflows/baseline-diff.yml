@@ -1,10 +1,8 @@
 name: Baseline diff
 
-# Compares main's nightly Engine verify and real-capture runs with the latest
-# run of the same workflow on the production baseline branch
-# (scratch/prod-baseline: cap-v0.6.0 plus the suite), case by case
-# (scripts/verify/diff.py). Fails when main is worse than 0.6.0 anywhere. The
-# baseline is re-run weekly so its report artifacts never expire.
+# Report artifacts expire after 90 days and the baseline branch never
+# changes, so a weekly cron re-runs the baseline in the same shape as main's
+# nightly runs (FULL, three repeats of real capture on both runner pools).
 
 on:
   workflow_run:
@@ -43,7 +41,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run engine-verify.yml --repo "$GITHUB_REPOSITORY" --ref "$BASELINE_BRANCH" --raw-field tier=full
-          gh workflow run verify-recording.yml --repo "$GITHUB_REPOSITORY" --ref "$BASELINE_BRANCH"
+          gh workflow run verify-recording.yml --repo "$GITHUB_REPOSITORY" --ref "$BASELINE_BRANCH" \
+            --raw-field tier=full --raw-field repeat=3 --raw-field runners=both
 
   diff:
     if: >-
@@ -66,8 +65,10 @@ jobs:
           workflow=$(gh run view "$MAIN_RUN" --repo "$GITHUB_REPOSITORY" --json workflowDatabaseId --jq .workflowDatabaseId)
           baseline="$BASELINE_INPUT"
           if [[ -z "$baseline" ]]; then
+            # Baseline runs fail (0.6.0 has known bugs) but must not be cancelled.
             baseline=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASELINE_BRANCH" \
-              --status completed --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+              --status completed --limit 20 --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion != "cancelled")][0].databaseId // empty')
           fi
           if [[ -z "$baseline" ]]; then
             echo "::error::no completed baseline run of workflow $workflow on $BASELINE_BRANCH"
