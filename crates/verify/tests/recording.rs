@@ -114,7 +114,7 @@ struct Spec {
 }
 
 fn specs() -> Vec<Spec> {
-    vec![
+    let mut specs = vec![
         Spec {
             id: "recording/studio-screen/fragmented",
             tier: Tier::Fast,
@@ -285,6 +285,55 @@ fn specs() -> Vec<Spec> {
             holds: vec![(6.0, 2.0), (18.0, 5.0)],
             camera_drops_at: vec![],
             gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+    ];
+    specs.extend(soak_specs());
+    specs
+}
+
+/// `CAP_VERIFY_SOAK_SECS=<seconds>` adds a long Studio recording with a
+/// camera and a long Instant recording, for drift, frame loss and memory over
+/// a real session length (up to 30 minutes: past that the microphone's
+/// marker indices run out). Run them with `CAP_VERIFY_TIER=full` and
+/// `CAP_VERIFY_CASE='recording/soak/*'`.
+fn soak_specs() -> Vec<Spec> {
+    let Some(seconds) = std::env::var("CAP_VERIFY_SOAK_SECS")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|&s| s > 0.0)
+    else {
+        return vec![];
+    };
+    let seconds = seconds.min(1800.0);
+    vec![
+        Spec {
+            id: "recording/soak/studio-camera",
+            tier: Tier::Full,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: true,
+            },
+            seconds,
+            stimulus_fps: STIMULUS_FPS_30,
+            holds: vec![(seconds / 3.0, 3.0), (2.0 * seconds / 3.0, 10.0)],
+            camera_drops_at: vec![],
+            gated: true,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/soak/instant",
+            tier: Tier::Full,
+            mode: Mode::Instant,
+            seconds,
+            stimulus_fps: STIMULUS_FPS_30,
+            holds: vec![(seconds / 2.0, 5.0)],
+            camera_drops_at: vec![],
+            gated: true,
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
