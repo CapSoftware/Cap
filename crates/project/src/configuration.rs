@@ -1949,7 +1949,11 @@ impl TimelineConfiguration {
 
         if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
             let effective = hold_start - held_time_before(&holds, hold_start);
-            let source = match self.get_frame_mapping_unheld(effective)? {
+            let mapping = self.get_frame_mapping_unheld(effective).or_else(|| {
+                // A closing title holds the last source instant before the exclusive endpoint.
+                self.get_frame_mapping_unheld(effective.next_down().max(0.0))
+            })?;
+            let source = match mapping {
                 TimelineFrameMapping::Single { source, .. }
                 | TimelineFrameMapping::Hold { source, .. } => source,
                 TimelineFrameMapping::Transition { incoming, .. } => incoming,
@@ -3697,6 +3701,58 @@ mod tests {
         let (later, segment) = timeline.get_segment_time(7.5).unwrap();
         assert_eq!(later, 10.5);
         assert_eq!(segment.recording_clip, 1);
+    }
+
+    #[test]
+    fn fullscreen_outro_maps_every_frame_to_the_last_clip() {
+        for transitions in [
+            Vec::new(),
+            vec![ClipTransition {
+                segment_index: 1,
+                kind: ClipTransitionType::CrossFade,
+                duration: 1.0,
+            }],
+        ] {
+            let mut timeline = timeline_with_transitions(transitions);
+            timeline.segments[1].timescale = 2.0;
+            timeline.text_segments = vec![fullscreen_text(1.0, 3.0)];
+            let outro_start = timeline.duration();
+            let outro_end = outro_start + 3.0;
+            timeline
+                .text_segments
+                .push(fullscreen_text(outro_start, outro_end));
+            let timeline: TimelineConfiguration =
+                serde_json::from_value(serde_json::to_value(&timeline).unwrap()).unwrap();
+
+            assert_eq!(timeline.duration(), outro_end);
+            for frame in 0..(outro_end * 30.0) as u32 {
+                let time = f64::from(frame) / 30.0;
+                let mapping = timeline.get_frame_mapping(time);
+                assert!(mapping.is_some(), "no source at output time {time}");
+                if time >= outro_start {
+                    assert!(matches!(
+                        mapping,
+                        Some(TimelineFrameMapping::Hold { source, output_end })
+                            if source.segment.recording_clip == 1
+                                && source.source_time > 16.0 - 1e-12
+                                && source.source_time < 16.0
+                                && output_end == outro_end
+                    ));
+                }
+            }
+            assert!(timeline.get_frame_mapping(outro_end).is_none());
+        }
+    }
+
+    #[test]
+    fn fullscreen_title_does_not_create_a_source_for_an_empty_timeline() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0)];
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 0.0;
+        assert!(timeline.get_frame_mapping(1.0).is_none());
+        timeline.segments.clear();
+        assert!(timeline.get_frame_mapping(1.0).is_none());
     }
 
     #[test]
