@@ -77,7 +77,9 @@ import {
 	type XY,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideClipboardPaste from "~icons/lucide/clipboard-paste";
 import IconLucideColumns2 from "~icons/lucide/columns-2";
+import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
@@ -130,6 +132,7 @@ import {
 	DEFAULT_SPLIT_LAYOUT,
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
+import { copiedSceneSettings, copySceneSettings } from "./scene-clipboard";
 import { StyleGroupToggle, StyleSegmentConfig } from "./style-segment-config";
 import type { TextSegment } from "./text";
 import { TextSegmentConfig } from "./text-segment-config";
@@ -5014,6 +5017,25 @@ function SceneSegmentConfig(props: {
 						leftIcon={<IconLucideCheck />}
 					>
 						Done
+					</EditorButton>
+					<EditorButton
+						tooltipText="Copy this scene's layout, positions and transitions"
+						kbd={["meta", "shift", "C"]}
+						onClick={() => copySceneSettings(props.segment)}
+						leftIcon={<IconLucideCopy />}
+					>
+						Copy
+					</EditorButton>
+					<EditorButton
+						tooltipText="Paste copied scene settings into the selected scenes"
+						kbd={["meta", "shift", "V"]}
+						disabled={!copiedSceneSettings()}
+						onClick={() =>
+							projectActions.pasteSceneSettings([props.segmentIndex])
+						}
+						leftIcon={<IconLucideClipboardPaste />}
+					>
+						Paste
 					</EditorButton>
 				</div>
 				<EditorButton
