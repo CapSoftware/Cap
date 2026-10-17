@@ -34,7 +34,8 @@ export async function maybeStartLiveTranscription({
 	orgId: Organisation.OrganisationId;
 }): Promise<LiveTranscriptionStart> {
 	try {
-		if (!serverEnv().ASSEMBLY_API_KEY) {
+		const env = serverEnv();
+		if (!env.CAP_LIVE_TRANSCRIPTION || !env.ASSEMBLY_API_KEY) {
 			return "skipped";
 		}
 
