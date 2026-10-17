@@ -92,8 +92,16 @@ pub fn blit_over_offset(
         if is_opaque(source) {
             target.copy_from_slice(source);
         } else {
-            for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
-                blend_pixel_over(target, source.try_into().unwrap());
+            for (target_px, source_px) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                let alpha = source_px[3];
+                if alpha == 0 {
+                    continue;
+                }
+                if alpha == 255 {
+                    target_px.copy_from_slice(source_px);
+                    continue;
+                }
+                blend_pixel_over(target_px, [source_px[0], source_px[1], source_px[2], alpha]);
             }
         }
     }
