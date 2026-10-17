@@ -21,22 +21,24 @@ import sys
 import time
 from pathlib import Path
 
-# A head build is slower when the median of its per-pair CPU ratios to the
-# base exceeds the workload's limit and it is slower in most pairs. Adjacent
-# runs of a pair share the machine's state; across a job a Blacksmith VM's
-# speed drifts (one seek-storm job ran 10.1 to 13.2 s per run for the same
-# code). Limits sit above the median-ratio noise of identical code on
-# blacksmith-6vcpu-macos-26 (runs 38995088761, 38998485953): export-basic
-# 1.1%, export-jitter-camera-40s 4.4%, seek-storm 5.0%. Real-time playback's
-# CPU varied by 15%, so it is reported without a limit.
+# A head build fails the budget when the median of its per-pair CPU ratios to
+# the base is more than FAIL_LIMIT above 1 and it is slower in most pairs;
+# above WARN_LIMIT it is reported as a warning. Adjacent runs of a pair share
+# the machine's state, but a Blacksmith VM's speed drifts within a job and
+# between builds: identical code measured up to +10.8% (export-jitter-camera-
+# 40s, run 39000364369, pairs +13%, +11%, +0.3%) and seek-storm runs ranged
+# 10.1 to 13.2 s (run 38998485953). The fail limit sits well above that, so
+# the check stops large slowdowns without failing on the machine. Real-time
+# playback's CPU varied by 15% and is only reported.
 WORKLOADS = [
-    ("export-basic", "export", "export/basic/*", "fast", 0.05),
-    ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast", 0.10),
-    ("seek-storm", "seek", "seek/*/storm30/*", "fast", 0.10),
-    ("playback-basic", "playback", "playback/basic/*", "fast", None),
+    ("export-basic", "export", "export/basic/*", "fast", True),
+    ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast", True),
+    ("seek-storm", "seek", "seek/*/storm30/*", "fast", True),
+    ("playback-basic", "playback", "playback/basic/*", "fast", False),
 ]
 
-WALL_WARN = 0.08
+FAIL_LIMIT = 0.25
+WARN_LIMIT = 0.08
 
 
 def run_once(side, target, case, tier, fixtures, report):
@@ -109,7 +111,7 @@ def main():
         print(f"::error::{name} {label}: exit {result['exit']}, {len(result['outcomes'])} cases reported")
         print("\n".join(tail))
         return False
-    for name, target, case, tier, cpu_limit in WORKLOADS:
+    for name, target, case, tier, gated in WORKLOADS:
         # The first run of a side generates fixtures and fills caches.
         usable = True
         for label, side in sides.items():
@@ -150,11 +152,14 @@ def main():
         slower_pairs = sum(
             h["cpu"] > b["cpu"] for b, h in zip(samples["base"], samples["head"])
         )
-        verdict = "ok" if cpu_limit is not None else "reported only"
-        if cpu_limit is not None and cpu_delta > cpu_limit and slower_pairs * 4 >= args.pairs * 3:
+        mostly_slower = slower_pairs * 4 >= args.pairs * 3
+        verdict = "ok" if gated else "reported only"
+        if gated and cpu_delta > FAIL_LIMIT and mostly_slower:
             verdict = f"SLOWER: CPU +{cpu_delta:.1%}, slower in {slower_pairs} of {args.pairs} pairs"
             failed.append(name)
-        elif wall_delta > WALL_WARN:
+        elif cpu_delta > WARN_LIMIT and mostly_slower:
+            verdict = f"CPU +{cpu_delta:.1%} (warning; fails past +{FAIL_LIMIT:.0%})"
+        elif wall_delta > WARN_LIMIT:
             verdict = f"wall +{wall_delta:.1%} (warning only)"
         rows.append((name, cpu["base"], cpu["head"], wall["base"], wall["head"], verdict, cpu_delta))
 
