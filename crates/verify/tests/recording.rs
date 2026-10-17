@@ -2054,14 +2054,19 @@ async fn record(
     reference: u64,
     case: &mut Case,
 ) -> anyhow::Result<Recorded> {
+    let system_output = platform::system_audio_output();
+    if spec.system_audio && require_system_audio() && !system_output {
+        case.problem(
+            "missing",
+            "system audio required but this host has no audio output device",
+        );
+    }
     let stimulus_spec = StimulusSpec {
         fps: spec.stimulus_fps,
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
-        audio: spec.system_audio
-            && stimulus_plays_system_audio()
-            && platform::system_audio_output(),
+        audio: spec.system_audio && stimulus_plays_system_audio() && system_output,
         warmup: match capture {
             CaptureMode::Display => 2.0,
             CaptureMode::Window => 2.0,
@@ -2309,16 +2314,40 @@ fn copy_project(from: &Path, to: &Path) -> anyhow::Result<()> {
     {
         fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
             std::fs::create_dir_all(to)?;
-            for entry in std::fs::read_dir(from)? {
-                let entry = entry?;
-                let target = to.join(entry.file_name());
-                if entry.file_type()?.is_dir() {
-                    copy_dir(&entry.path(), &target)?;
-                } else {
-                    std::fs::copy(entry.path(), &target)?;
+            let mut copied = std::collections::HashSet::new();
+            // The recorder renames `.tmp` fragments as it finishes them: a
+            // file listed can be gone by the time it is opened, under a name
+            // the next listing has.
+            for _ in 0..5 {
+                let mut vanished = false;
+                for entry in std::fs::read_dir(from)? {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    if copied.contains(&name) {
+                        continue;
+                    }
+                    let target = to.join(&name);
+                    let result = if entry.file_type()?.is_dir() {
+                        copy_dir(&entry.path(), &target)
+                    } else {
+                        std::fs::copy(entry.path(), &target).map(|_| ())
+                    };
+                    match result {
+                        Ok(()) => {
+                            copied.insert(name);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vanished = true,
+                        Err(e) => return Err(e),
+                    }
+                }
+                if !vanished {
+                    return Ok(());
                 }
             }
-            Ok(())
+            Err(std::io::Error::other(format!(
+                "files in {} kept disappearing while it was copied",
+                from.display()
+            )))
         }
         copy_dir(from, to).map_err(Into::into)
     }

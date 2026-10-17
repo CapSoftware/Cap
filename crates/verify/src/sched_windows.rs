@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The requested wake period and work budget, in milliseconds.
+/// Milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Constraint {
     pub period_ms: f64,
@@ -32,7 +32,6 @@ pub struct ThreadState {
 /// `THREAD_PRIORITY_TIME_CRITICAL`.
 pub const REALTIME_PRIORITY: i32 = 15;
 
-/// The outcome of [`request_realtime`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Realtime {
     pub requested: Constraint,
@@ -47,7 +46,6 @@ pub struct Realtime {
 }
 
 impl Realtime {
-    /// `Ok` when the thread runs at the time-critical priority.
     pub fn obtained(&self) -> Result<(), String> {
         if self.policy_status != 0 {
             return Err(format!(
@@ -59,7 +57,6 @@ impl Realtime {
     }
 }
 
-/// `Ok` when the thread state is at the time-critical priority.
 pub fn state_is_realtime(state: Option<ThreadState>) -> Result<(), String> {
     match state {
         Some(state) if state.base_pri >= REALTIME_PRIORITY => Ok(()),
@@ -117,19 +114,16 @@ unsafe extern "system" {
     fn timeBeginPeriod(period: u32) -> u32;
 }
 
-/// The calling thread's id.
 pub fn current_thread() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
-/// QueryPerformanceCounter ticks.
 pub fn qpc_now() -> u64 {
     let mut count = 0i64;
     unsafe { QueryPerformanceCounter(&mut count) };
     count as u64
 }
 
-/// QueryPerformanceCounter ticks per second.
 pub fn qpc_frequency() -> u64 {
     static FREQUENCY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *FREQUENCY.get_or_init(|| {
@@ -170,7 +164,6 @@ pub fn request_realtime(period_secs: f64, computation_secs: f64) -> Realtime {
     }
 }
 
-/// The scheduling state of the thread with id `thread`.
 pub fn thread_state(thread: u32) -> Option<ThreadState> {
     let handle = unsafe { OpenThread(THREAD_QUERY_LIMITED_INFORMATION, 0, thread) };
     if handle == 0 {
@@ -190,15 +183,25 @@ pub fn thread_state(thread: u32) -> Option<ThreadState> {
     })
 }
 
+struct Timer(isize);
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
 thread_local! {
-    static TIMER: isize = unsafe {
+    static TIMER: Timer = Timer(unsafe {
         CreateWaitableTimerExW(
             std::ptr::null(),
             std::ptr::null(),
             CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
             TIMER_ALL_ACCESS,
         )
-    };
+    });
 }
 
 /// How long before the deadline the timer wait ends and spinning starts.
@@ -212,7 +215,7 @@ pub fn wait_until(deadline: u64) {
     let remaining = |now: u64| (deadline as f64 - now as f64) / frequency;
     let left = remaining(qpc_now());
     if left > SPIN_SECS {
-        TIMER.with(|&timer| {
+        TIMER.with(|&Timer(timer)| {
             if timer != 0 {
                 // Negative: relative, in 100 ns intervals.
                 let due = -(((left - SPIN_SECS) * 1e7) as i64).max(1);

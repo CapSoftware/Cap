@@ -929,12 +929,13 @@ mod app {
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     #[cfg(target_os = "macos")]
                     let callback_host = info.timestamp().callback.as_host_time();
-                    // cpal's WASAPI instants have no host-clock accessor; the
-                    // callback runs at the start of the buffer it fills.
+                    // WASAPI stream instants are QueryPerformanceCounter
+                    // readings in 100 ns units.
                     #[cfg(windows)]
                     let callback_host = {
-                        let _ = info;
-                        host_now()
+                        use cpal::host::wasapi::StreamInstantExt;
+                        let units = i128::from(info.timestamp().callback.as_performance_counter());
+                        (units * i128::from(cap_verify::sched::qpc_frequency()) / 10_000_000) as u64
                     };
                     state.fill(data, callback_host);
                 },
