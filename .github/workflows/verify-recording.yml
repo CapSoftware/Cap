@@ -52,6 +52,9 @@ on:
         type: choice
         options: [blacksmith, hosted, both]
         default: blacksmith
+      soak_secs:
+        description: "Adds the recording/soak/* cases at this length (seconds, at most 1800); set case_filter to recording/soak/* to run only them"
+        default: ""
   schedule:
     - cron: "41 3 * * *"
   pull_request:
@@ -150,13 +153,14 @@ jobs:
       matrix:
         runner: ${{ fromJSON(needs.scope.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.soak_secs != '' && 180 || 45 }}
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
       CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_SOAK_SECS: ${{ inputs.soak_secs || '' }}
       CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report

@@ -710,6 +710,11 @@ async fn create_pipeline(
     start_time: Timestamps,
     start_gate: Option<RecordingStartGate>,
 ) -> anyhow::Result<Pipeline> {
+    // Instant merges its screen and audio tracks by timestamp, and gated
+    // audio starts at the arm point, so the screen must start there too.
+    if let Some(gate) = &start_gate {
+        gate.set_video_origin_at_arm();
+    }
     let ScreenPipelineInput {
         source: screen_capture,
         info: screen_info,

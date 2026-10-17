@@ -198,7 +198,7 @@ struct Spec {
 }
 
 fn specs() -> Vec<Spec> {
-    vec![
+    let mut specs = vec![
         Spec {
             id: "recording/studio-screen/fragmented",
             tier: Tier::Fast,
@@ -369,6 +369,59 @@ fn specs() -> Vec<Spec> {
             holds: vec![(6.0, 2.0), (18.0, 5.0)],
             camera_drops_at: vec![],
             gated: false,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+    ];
+    specs.extend(soak_specs());
+    specs
+}
+
+/// `CAP_VERIFY_SOAK_SECS`: at most 1800 s, because the microphone's 12-bit
+/// marker index (one marker every 0.5 s) runs out past 34 minutes.
+fn soak_specs() -> Vec<Spec> {
+    let Some(value) = std::env::var("CAP_VERIFY_SOAK_SECS")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    else {
+        return vec![];
+    };
+    let seconds = value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or_else(|| {
+            panic!("CAP_VERIFY_SOAK_SECS={value:?} is not a positive number of seconds")
+        });
+    let seconds = seconds.min(1800.0);
+    vec![
+        Spec {
+            id: "recording/soak/studio-camera",
+            tier: Tier::Full,
+            mode: Mode::Studio {
+                fragmented: true,
+                camera: true,
+            },
+            seconds,
+            stimulus_fps: STIMULUS_FPS_30,
+            holds: vec![(seconds / 3.0, 3.0), (2.0 * seconds / 3.0, 10.0)],
+            camera_drops_at: vec![],
+            gated: true,
+            mic_delay: 0.0,
+            mic: true,
+            system_audio: true,
+        },
+        Spec {
+            id: "recording/soak/instant",
+            tier: Tier::Full,
+            mode: Mode::Instant,
+            seconds,
+            stimulus_fps: STIMULUS_FPS_30,
+            holds: vec![(seconds / 2.0, 5.0)],
+            camera_drops_at: vec![],
+            gated: true,
             mic_delay: 0.0,
             mic: true,
             system_audio: true,
