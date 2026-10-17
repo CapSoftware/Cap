@@ -12,9 +12,9 @@ import {
 	withMediaOperation,
 } from "./media-operations";
 import { materializeMedia } from "./media-transfer";
+import { fetchAllowed, getUrlPolicy, resolveAllowedUrl } from "./url-policy";
 
 const PROBE_TIMEOUT_MS = 30_000;
-const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
 
 export { canAcceptNewProbeOperation, getActiveProbeOperationCount };
 
@@ -46,11 +46,15 @@ function isHttpUrl(path: string): boolean {
 	}
 }
 
-async function hasHttpNetworkFailure(path: string): Promise<boolean> {
+async function hasHttpNetworkFailure(
+	path: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
 	try {
-		const response = await probeFetch(path, {
+		const timeout = AbortSignal.timeout(10_000);
+		const response = await fetchAllowed(path, {
 			headers: { Range: "bytes=0-0" },
-			signal: AbortSignal.timeout(10_000),
+			signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 		});
 		await response.body?.cancel();
 		return !response.ok;
@@ -59,8 +63,11 @@ async function hasHttpNetworkFailure(path: string): Promise<boolean> {
 	}
 }
 
-async function probeMedia(path: string): Promise<VideoMetadata> {
-	if (isHttpUrl(path) && (await hasHttpNetworkFailure(path))) {
+async function probeMedia(
+	path: string,
+	signal?: AbortSignal,
+): Promise<VideoMetadata> {
+	if (isHttpUrl(path) && (await hasHttpNetworkFailure(path, signal))) {
 		throw new Error("Media input is not accessible");
 	}
 
@@ -126,9 +133,25 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 		throw new Error("Server is busy, please try again later");
 	}
 
-	return await withMediaOperation("probe", () =>
-		withTimeout(probeMedia(videoUrl), PROBE_TIMEOUT_MS),
-	);
+	return await withMediaOperation("probe", () => {
+		const controller = new AbortController();
+		return withTimeout(
+			(async () => {
+				const allowedUrl = /^https?:/i.test(videoUrl)
+					? await resolveAllowedUrl(
+							videoUrl,
+							getUrlPolicy(),
+							undefined,
+							undefined,
+							controller.signal,
+						)
+					: videoUrl;
+				return probeMedia(allowedUrl, controller.signal);
+			})(),
+			PROBE_TIMEOUT_MS,
+			() => controller.abort(),
+		);
+	});
 }
 
 export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
@@ -143,7 +166,7 @@ export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
 
 export async function checkVideoAccessible(videoUrl: string): Promise<boolean> {
 	try {
-		const response = await probeFetch(videoUrl, {
+		const response = await fetchAllowed(videoUrl, {
 			method: "HEAD",
 			signal: AbortSignal.timeout(10_000),
 		});

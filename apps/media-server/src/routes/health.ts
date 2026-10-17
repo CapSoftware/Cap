@@ -1,6 +1,6 @@
 import os from "node:os";
 import { Hono } from "hono";
-import { getSystemResources } from "../lib/job-manager";
+import { getSystemResources, isDraining } from "../lib/job-manager";
 import { getMediaEngineStatus } from "../lib/media-engine";
 
 const health = new Hono();
@@ -17,25 +17,33 @@ health.get("/", (c) => {
 	);
 	const resources = getSystemResources();
 
-	return c.json({
-		status:
-			mediaEngine.available && resources.effectiveMax > 0 ? "ok" : "degraded",
-		mediaEngine,
-		["ff" + "mpeg"]: {
-			available: mediaEngine.available,
-			version: mediaEngine.version,
+	const draining = isDraining();
+
+	return c.json(
+		{
+			status: draining
+				? "draining"
+				: mediaEngine.available && resources.effectiveMax > 0
+					? "ok"
+					: "degraded",
+			mediaEngine,
+			["ff" + "mpeg"]: {
+				available: mediaEngine.available,
+				version: mediaEngine.version,
+			},
+			system: {
+				...resources,
+				loadAvg5m,
+				loadAvg15m,
+				totalMemoryMB,
+				freeMemoryMB,
+				memoryUsagePercent,
+				uptimeSeconds: Math.round(os.uptime()),
+				processUptimeSeconds: Math.round(process.uptime()),
+			},
 		},
-		system: {
-			...resources,
-			loadAvg5m,
-			loadAvg15m,
-			totalMemoryMB,
-			freeMemoryMB,
-			memoryUsagePercent,
-			uptimeSeconds: Math.round(os.uptime()),
-			processUptimeSeconds: Math.round(process.uptime()),
-		},
-	});
+		200,
+	);
 });
 
 export default health;

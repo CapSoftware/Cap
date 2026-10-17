@@ -184,9 +184,12 @@ export async function sendOrganizationInvites(
 		}),
 	);
 
-	const failedInvites = inviteRecords.filter(
-		(_, i) => emailResults[i]?.status === "rejected",
-	);
+	const failedInvites = inviteRecords.filter((_, i) => {
+		const result = emailResults[i];
+		if (!result || result.status === "rejected") return true;
+		const error = result.value?.error;
+		return Boolean(error && error.name !== "email_not_configured");
+	});
 	const failedEmails = failedInvites.map((r) => r.email);
 
 	if (failedInvites.length > 0) {

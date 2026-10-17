@@ -4912,8 +4912,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 											}),
 											idempotencyKey: providerIdempotencyKey,
 										});
-										if (delivery?.error)
+										if (delivery?.error) {
+											if (delivery.error.name === "email_not_configured") {
+												return {
+													...invitation,
+													emailDelivery: "not_configured" as const,
+												};
+											}
 											throw new Error(delivery.error.message);
+										}
 										return {
 											...invitation,
 											emailDelivery: "accepted" as const,

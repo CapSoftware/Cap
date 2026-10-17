@@ -38,7 +38,7 @@ services:
         - '-q'
         - '-O'
         - /dev/null
-        - 'http://127.0.0.1:3000/'
+        - 'http://127.0.0.1:3000/api/status'
       interval: 30s
       timeout: 10s
       retries: 3
@@ -46,8 +46,12 @@ services:
   media-server:
     image: 'ghcr.io/capsoftware/cap-media-server:latest'
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       PORT: 3456
+      S3_INTERNAL_ENDPOINT: 'http://minio:9000'
+      S3_PUBLIC_ENDPOINT: '${SERVICE_URL_MINIO}'
+      MEDIA_SERVER_WEBHOOK_URL: 'http://cap-web:3000'
       MEDIA_SERVER_WEBHOOK_SECRET: '${SERVICE_HEX_32_MEDIASERVER}'
     healthcheck:
       test:

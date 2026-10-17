@@ -9,6 +9,7 @@ import {
 import { withMediaTransfers } from "./media-transfer";
 import { uploadFileToStorage } from "./media-video";
 import { verifyRemoteRecordingBytes } from "./recording-verification";
+import { fetchAllowed } from "./url-policy";
 import { tryAcquireDirectVideoProcessSlot } from "./video-capacity";
 
 const preparedSchema = z.object({
@@ -74,14 +75,13 @@ export async function enhanceLocalRecording(input: {
 				AbortSignal.timeout(120_000),
 			]);
 			const callback = async (body: Record<string, unknown>) => {
-				const response = await fetch(webhookUrl, {
+				const response = await fetchAllowed(webhookUrl, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json",
 						"x-media-server-secret": webhookSecret,
 					},
 					body: JSON.stringify({ kind: "audio-levels", ...body }),
-					redirect: "error",
 					signal,
 				});
 				if (!response.ok) throw new Error("Audio publication unavailable");

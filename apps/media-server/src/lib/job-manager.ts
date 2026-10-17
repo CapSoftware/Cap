@@ -6,6 +6,7 @@ import {
 import { getContainerMemoryMetrics } from "./container-memory";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
+import { fetchAllowed } from "./url-policy";
 import { getActiveDirectVideoProcessCount } from "./video-capacity";
 
 export type JobPhase =
@@ -329,9 +330,35 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
+let draining = false;
+
+export function beginDraining() {
+	draining = true;
+}
+
+export function endDraining() {
+	draining = false;
+}
+
+export function isDraining(): boolean {
+	return draining;
+}
+
+export async function waitForActiveVideoProcesses(
+	timeoutMs: number,
+	pollMs = 250,
+): Promise<number> {
+	const deadline = Date.now() + timeoutMs;
+	while (getActiveVideoProcessCount() > 0 && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, pollMs));
+	}
+	return getActiveVideoProcessCount();
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
+	if (draining) return false;
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
 	return (
@@ -727,7 +754,7 @@ async function deliverWebhook(
 		const startedAt = Date.now();
 		job.webhookLastAttemptAt = startedAt;
 		try {
-			const resp = await fetch(job.webhookUrl, {
+			const resp = await fetchAllowed(job.webhookUrl, {
 				method: "POST",
 				headers,
 				body,

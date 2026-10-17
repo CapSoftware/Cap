@@ -8,6 +8,7 @@ import {
 	extractAudioStream,
 	getActiveAudioOperationCount as getActiveProcessCount,
 } from "../lib/media-audio";
+import { blockedUrlPayload } from "../lib/url-policy";
 
 const audio = new Hono();
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
@@ -66,6 +67,9 @@ audio.post("/check", async (c) => {
 		return c.json({ hasAudio });
 	} catch (err) {
 		console.error("[audio/check] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(
@@ -156,6 +160,9 @@ audio.post("/extract", async (c) => {
 	} catch (err) {
 		console.error("[audio/extract] Error:", err);
 
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
+
 		if (isBusyError(err)) {
 			return c.json(
 				{
@@ -228,6 +235,9 @@ audio.post("/convert", async (c) => {
 		});
 	} catch (err) {
 		console.error("[audio/convert] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(

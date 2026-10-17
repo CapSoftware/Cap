@@ -14,9 +14,9 @@ services:
       DATABASE_URL: mysql://cap:${MYSQL_PASSWORD:-cap-local-pwd-123}@mysql:3306/cap
       WEB_URL: ${CAP_URL:-http://localhost:3000}
       NEXTAUTH_URL: ${CAP_URL:-http://localhost:3000}
-      DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789}
-      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
+      DATABASE_ENCRYPTION_KEY: ${DATABASE_ENCRYPTION_KEY:?Set DATABASE_ENCRYPTION_KEY in .env (run: openssl rand -hex 32)}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?Set NEXTAUTH_SECRET in .env (run: openssl rand -hex 32)}
+      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}
       CAP_AWS_ACCESS_KEY: ${MINIO_ROOT_USER:-cap-admin}
       CAP_AWS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-cap-minio-pwd-456}
       CAP_AWS_BUCKET: cap
@@ -35,7 +35,7 @@ services:
     ports:
       - "${CAP_PORT:-3000}:3000"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/status"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -49,9 +49,13 @@ services:
       context: ./apps/media-server
       dockerfile: Dockerfile.standalone
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       PORT: 3456
-      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:-fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210}
+      S3_INTERNAL_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_URL:-http://localhost:9000}
+      MEDIA_SERVER_WEBHOOK_URL: http://cap-web:3000
+      MEDIA_SERVER_WEBHOOK_SECRET: ${MEDIA_SERVER_WEBHOOK_SECRET:?Set MEDIA_SERVER_WEBHOOK_SECRET in .env (run: openssl rand -hex 32)}
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3456/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s

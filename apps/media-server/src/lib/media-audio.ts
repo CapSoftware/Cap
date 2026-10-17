@@ -13,6 +13,7 @@ import {
 import { materializeStreamingInput } from "./media-video";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import { ensureTempDir, getTempDir } from "./temp-files";
+import { fetchAllowed } from "./url-policy";
 
 export interface AudioExtractionOptions {
 	format?: "mp3";
@@ -119,6 +120,8 @@ function getAudioExtractArgs(
 ): string[] {
 	return [
 		"ffmpeg",
+		"-protocol_whitelist",
+		"file,pipe",
 		"-i",
 		videoUrl,
 		"-vn",
@@ -134,10 +137,13 @@ function getAudioExtractArgs(
 
 function getAudioProbeArgs(inputPath: string): string[] {
 	const normalizedPath = (inputPath.split("?")[0] ?? "").toLowerCase();
-	const args = ["ffprobe", "-v", "error"];
-	if (normalizedPath.endsWith(".m3u8") || normalizedPath.endsWith(".mpd")) {
-		args.push("-protocol_whitelist", "file,http,https,tcp,tls,crypto,data");
-	}
+	const args = [
+		"ffprobe",
+		"-v",
+		"error",
+		"-protocol_whitelist",
+		"file,pipe,crypto,data",
+	];
 	if (normalizedPath.endsWith(".m3u8")) {
 		args.push(
 			"-allowed_extensions",
@@ -163,30 +169,41 @@ function isRemoteStreamingUrl(value: string): boolean {
 	}
 }
 
-async function prepareAudioProbeInput(
+async function stageRemoteInput(
 	videoUrl: string,
-	abortSignal: AbortSignal,
+	abortSignal?: AbortSignal,
 ): Promise<{ inputPath: string; cleanup: () => Promise<void> }> {
-	if (!isRemoteStreamingUrl(videoUrl)) {
+	if (!/^https?:/i.test(videoUrl)) {
 		return { inputPath: videoUrl, cleanup: async () => {} };
 	}
 
 	await ensureTempDir();
-	const dirPath = await mkdtemp(join(getTempDir(), "audio-probe-"));
-	try {
-		const inputPath = await materializeStreamingInput(
-			videoUrl,
-			dirPath,
-			abortSignal,
-		);
-		return {
-			inputPath,
-			cleanup: async () => {
-				await rm(dirPath, { recursive: true, force: true });
-			},
-		};
-	} catch (error) {
+	const dirPath = await mkdtemp(join(getTempDir(), "audio-input-"));
+	const cleanup = async () => {
 		await rm(dirPath, { recursive: true, force: true }).catch(() => {});
+	};
+	try {
+		if (isRemoteStreamingUrl(videoUrl)) {
+			return {
+				inputPath: await materializeStreamingInput(
+					videoUrl,
+					dirPath,
+					abortSignal,
+				),
+				cleanup,
+			};
+		}
+		const response = await fetchAllowed(videoUrl, { signal: abortSignal });
+		if (!response.ok) {
+			throw new Error(
+				`Failed to fetch media: ${response.status} ${response.statusText}`,
+			);
+		}
+		const inputPath = join(dirPath, "input");
+		await Bun.write(inputPath, response);
+		return { inputPath, cleanup };
+	} catch (error) {
+		await cleanup();
 		throw error;
 	}
 }
@@ -270,7 +287,7 @@ export async function checkHasAudioTrack(videoUrl: string): Promise<boolean> {
 		setCancel(cancel);
 		return await withTimeout(
 			(async () => {
-				const preparedInput = await prepareAudioProbeInput(
+				const preparedInput = await stageRemoteInput(
 					videoUrl,
 					abortController.signal,
 				);
@@ -305,18 +322,31 @@ export async function extractAudio(
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 
 	return await withMediaOperation("audio", async (setCancel) => {
-		const proc = registerSubprocess(
-			spawn({
-				cmd: getAudioExtractArgs(videoUrl, opts),
-				stdout: "pipe",
-				stderr: "pipe",
-			}),
-		);
-		setCancel(() => terminateProcess(proc));
+		const abortController = new AbortController();
+		let proc: Subprocess | undefined;
+		let cleanupStaged = async () => {};
+		const cancel = async () => {
+			abortController.abort();
+			if (proc) await terminateProcess(proc);
+			await cleanupStaged();
+		};
+		setCancel(cancel);
 
 		try {
 			return await withTimeout(
 				(async () => {
+					const staged = await stageRemoteInput(
+						videoUrl,
+						abortController.signal,
+					);
+					cleanupStaged = staged.cleanup;
+					proc = registerSubprocess(
+						spawn({
+							cmd: getAudioExtractArgs(staged.inputPath, opts),
+							stdout: "pipe",
+							stderr: "pipe",
+						}),
+					);
 					const stderrPromise = readStreamWithLimit(
 						proc.stderr as ReadableStream<Uint8Array>,
 						MAX_STDERR_BYTES,
@@ -368,10 +398,11 @@ export async function extractAudio(
 					return output;
 				})(),
 				opts.timeoutMs,
-				() => terminateProcess(proc),
+				cancel,
 			);
 		} finally {
-			await terminateProcess(proc);
+			if (proc) await terminateProcess(proc);
+			await cleanupStaged();
 		}
 	});
 }
@@ -385,6 +416,16 @@ export function extractAudioStream(
 	}
 
 	const opts = { ...DEFAULT_OPTIONS, ...options };
+	if (/^https?:/i.test(videoUrl)) {
+		return openRemoteAudioExtractStream(videoUrl, opts);
+	}
+	return openAudioExtractStream(videoUrl, opts);
+}
+
+function openAudioExtractStream(
+	videoUrl: string,
+	opts: Required<AudioExtractionOptions>,
+): StreamingExtractResult {
 	const proc: Subprocess = registerSubprocess(
 		spawn({
 			cmd: getAudioExtractArgs(videoUrl, opts),
@@ -438,6 +479,97 @@ export function extractAudioStream(
 					return;
 				}
 
+				try {
+					const { done, value } = await reader.read();
+					if (done) {
+						controller.close();
+						cleanup();
+					} else {
+						controller.enqueue(value);
+					}
+				} catch (err) {
+					controller.error(err);
+					cleanup();
+				}
+			},
+			cancel() {
+				cleanup();
+			},
+		},
+		new CountQueuingStrategy({ highWaterMark: 4 }),
+	);
+
+	return { stream, cleanup };
+}
+
+function openRemoteAudioExtractStream(
+	videoUrl: string,
+	opts: Required<AudioExtractionOptions>,
+): StreamingExtractResult {
+	const abortController = new AbortController();
+	let cleaned = false;
+	let proc: Subprocess | undefined;
+	let cleanupStaged = async () => {};
+	let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let resolveReady: () => void = () => {};
+	const ready = new Promise<void>((resolve) => {
+		resolveReady = resolve;
+	});
+	let operation: ReturnType<typeof registerMediaOperation> | undefined;
+
+	const cleanup = () => {
+		if (cleaned) return;
+		cleaned = true;
+		abortController.abort();
+		if (timeoutId) clearTimeout(timeoutId);
+		if (reader) {
+			try {
+				reader.cancel().catch(() => {});
+				reader.releaseLock();
+			} catch {}
+			reader = null;
+		}
+		if (operation) unregisterMediaOperation(operation);
+		if (proc) void terminateProcess(proc);
+		void cleanupStaged();
+	};
+	operation = registerMediaOperation("audio", cleanup);
+
+	timeoutId = setTimeout(cleanup, opts.timeoutMs);
+
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			async start() {
+				try {
+					const staged = await stageRemoteInput(
+						videoUrl,
+						abortController.signal,
+					);
+					cleanupStaged = staged.cleanup;
+					if (cleaned) return;
+					proc = registerSubprocess(
+						spawn({
+							cmd: getAudioExtractArgs(staged.inputPath, opts),
+							stdout: "pipe",
+							stderr: "pipe",
+						}),
+					);
+					void drainStream(proc.stderr as ReadableStream<Uint8Array>);
+					proc.exited.then(() => {
+						cleanup();
+					});
+					reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+				} finally {
+					resolveReady();
+				}
+			},
+			async pull(controller) {
+				await ready;
+				if (!reader || cleaned) {
+					controller.close();
+					return;
+				}
 				try {
 					const { done, value } = await reader.read();
 					if (done) {
