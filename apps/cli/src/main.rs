@@ -189,7 +189,7 @@ impl CliLogLevel {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Export a '.cap' project to a video file
+    /// Export one or more '.cap' projects to video files
     Export(Export),
     /// Render an export preview frame
     ExportPreview(ExportPreview),
