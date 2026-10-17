@@ -764,7 +764,7 @@ export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
  * Normalized (0-1) center of the camera rect in output-frame space.
  * Overrides `position` when set.
  */
-manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig; crop?: CameraCrop | null }
 /**
  * Screen-space focus blur applied over the composed frame while a 3d segment
  * is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
@@ -873,6 +873,7 @@ transitionOut?: number }
  * after its last keyframe.
  */
 export type Camera3DTracks = { tiltX: Camera3DKeyframe[]; tiltY: Camera3DKeyframe[]; roll: Camera3DKeyframe[]; rotateX: Camera3DKeyframe[]; rotateY: Camera3DKeyframe[]; fov: Camera3DKeyframe[]; zoom: Camera3DKeyframe[]; panX: Camera3DKeyframe[]; panY: Camera3DKeyframe[]; blurStrength: Camera3DKeyframe[]; blurFalloff: Camera3DKeyframe[]; blurFocusSize: Camera3DKeyframe[]; blurFocusX: Camera3DKeyframe[]; blurFocusY: Camera3DKeyframe[]; blurAngle: Camera3DKeyframe[]; blurDirPosition: Camera3DKeyframe[] }
+export type CameraCrop = { left: number; top: number; right: number; bottom: number }
 export type CameraDeviceSettings = { width: number | null; height: number | null; frameRate: number | null }
 export type CameraFormatInfo = { width: number; height: number; frameRate: number }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
