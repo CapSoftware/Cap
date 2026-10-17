@@ -45,219 +45,79 @@ link = "https://github.com/CapSoftware/Cap/pull/2595 https://github.com/CapSoftw
 
 [[xfail]]
 case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
-class = "future"
-seeds = "7"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/camera-fast/random-seeks/playback"
 class = "grid-rounding"
-seeds = "2 11-13 20 23 26 33"
+seeds = "2 11-13 20 26"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
-class = "future"
-seeds = "0-1 4 6 17-18 20 23 38 41-42 46 48 50 53 56 62-63 65 69 83 90 93 101 104 108 110 115 118-119 122 124 126 130 133 136 140 142 145 147 149-151 154 161 167 169 181 183 186 188 192 199-201 203 205 207 209 212 215-216 219 223 235 237 239 245 248 250 253 256 260-261 263 268 270-271 275 285 288 290-291 299"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
 class = "grid-rounding"
-seeds = "0 4 6 8-9 12 15 17 20 23 28 30-31 39 41-42 46 48 50 52-54 56 61-63 65 75 79 83-84 86 90 93 96 102 107-108 110-111 115 117 119 121-122 124-125 129 136 138 140-143 145 147-151 154 156 161 167 169 172 177 181 183 186 188-192 194-195 197-201 203 205-207 209 211-212 216 219 222-223 226 234-235 237 239 241 245 248 250 253-256 263 265-266 268 270 273-275 283-285 290-291 294 299"
-reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/keyframe-seeks/playback"
-class = "stale"
-seeds = "5 8 96 161"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
-class = "future"
-seeds = "60"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
-class = "grid-rounding"
-seeds = "31 40 52 57 61 63 69 74 80 93 117 120 126 153 166 180 182 188 196 251 276 279 297 299"
+seeds = "8 12 23 39 46 56 62 65 79 90 107 115 117 119 122 129 140-141 147-149 154 161 169 181 183 188 192 194-195 197 199-201 203 205-207 209 216 222-223 234-235 237 239 241 245 248 250 253 256 266 268 275 283 291 294"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/random-seeks/playback"
-class = "stale"
-seeds = "12 67 129 198 233 281"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/scrub/playback"
-class = "future"
-seeds = "88"
-reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with a sample ahead of the right one (seed index 88 request 220). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, reset decisions)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/scrub/playback"
 class = "grid-rounding"
-seeds = "13 30 50 62-63 93 107 119 121-122 126 143-144 149 176 187 199"
+seeds = "31 52 57 61 63 69 74 80 93 117 120 126 153 166 180 182 196 251 279 297"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/scrub/playback"
-class = "stale"
-seeds = "7 11 15 26 37-39 46 49-50 52-53 55 63 70-72 80 83 93-95 105-107 109 113 118 124 127 132-134 141-142 150 155 173 175 188 191 193 199"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/tail/export"
 class = "grid-rounding"
-seeds = "26"
+seeds = "30 62-63 107 122 126 143 149 187 199"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/timeline/export"
-class = "future"
-seeds = "29 50"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/timeline/export"
 class = "grid-rounding"
-seeds = "16 26 32 50 65 75 95 102 133 145"
-reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/timeline/export"
-class = "stale"
-seeds = "35"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/transition/export"
-class = "future"
-seeds = "6 66 73"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/transition/export"
-class = "grid-rounding"
-seeds = "0 5-7 15 22 23 25 29 38 41 45 53 56 61 62 66 72 73"
+seeds = "16 26 32 75 95 102 133 145"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/transition/export"
-class = "stale"
-seeds = "0-2 4-5 7 15 22-26 29 33-36 38 40-41 52 60 62 67 73-75 79"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/transition/playback"
-class = "future"
-seeds = "69"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/cfr/transition/playback"
 class = "grid-rounding"
-seeds = "9 14 19-21 25 29 31 42 51 53 54 57 58 61 64-66"
+seeds = "6 41 56 61 66 72-73"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/cfr/transition/playback"
-class = "stale"
-seeds = "3 6 7 9 14 20 21 25 27 31 36 37 39 43-45 50 53 54 57 59 61 64-66 70 77"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/dense/random-seeks/playback"
-class = "future"
-seeds = "90 121"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/dense/random-seeks/playback"
 class = "grid-rounding"
-seeds = "1 7 15 17 21-22 25 32-33 35-36 45 47-48 55 64 70 82 86 90-91 100 103 114-115 121 126 144 147"
+seeds = "19 29 42 51 65-66"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/dense/random-seeks/playback"
-class = "stale"
-seeds = "39 57 61"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
-class = "future"
-seeds = "2-5 8-11 14 20-22 24-27 29 31 32 34 36 37 39-41 46 48 50 53-56 58 59 61-65 67-71 73 76 79 82 84 86 88-91 93-99"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
+class = "grid-rounding"
+seeds = "1 7 15 17 21-22 25 33 35-36 45 47-48 55 64 70 82 86 90 100 103 114-115 121 126 144"
+reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/keyframe-seeks/playback"
 class = "grid-rounding"
-seeds = "1-5 9-11 13 16-18 21-25 27-32 34 36-37 40-44 46-48 50-51 53-56 58-66 68-74 76 79-93 95-97"
+seeds = "2 4-5 9-11 13 18 22-23 27 29 31-32 36 41 48 50 59 62-63 69-73 76 81-82 84 88-91 95"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
-class = "future"
-seeds = "62"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/random-seeks/playback"
 class = "grid-rounding"
-seeds = "3 8 10 12 16 20 34 46 52 58 59 64 77 78 86 95 117 137 144 160 168 185 196"
+seeds = "3 12 16 20 34 46 58-59 64 77-78 86 117 137 144 160 168 196"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/scrub/playback"
-class = "future"
-seeds = "114"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/scrub/playback"
 class = "grid-rounding"
-seeds = "23 30 46 48 78 87 111 114 119"
+seeds = "23 30 46 114"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/scrub/playback"
-class = "stale"
-seeds = "0 7-8 12 17-18 21 23 46 59 66 75 86 103 108"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
 link = ""
 
 [[xfail]]
@@ -269,36 +129,14 @@ link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/timeline/export"
-class = "future"
-seeds = "25"
-reason = "NEW: the FFmpeg decoder seeks with the request time rounded to the stream tick, so a request a fraction of a tick before a keyframe lands on that keyframe and is answered with a later frame"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/timeline/export"
 class = "grid-rounding"
-seeds = "20 77 110"
+seeds = "77"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
 
 [[xfail]]
 case = "decoder-model/ffmpeg/vfr/transition/playback"
-class = "future"
-seeds = "66 75 77"
-reason = "Found once each sequence keeps running after its first wrong answer (full failure sets, runs 38851482697 and 38851482675): a later request is answered with a sample ahead of the right one (seed index 66 request 206). FFmpeg decoder request handling, the mechanisms of this decoder's other entries (backward lookback tolerance, reset decisions)"
-link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/transition/playback"
 class = "grid-rounding"
-seeds = "10 12 13 15 16 19 20 28 33 34 43 47 48 56 59 62 66 68 70 71 75 77"
+seeds = "13 16 20 34 48 62 70 75 77"
 reason = "NEW: the FFmpeg decoder seeks to the exact request time, so after a reset it answers with the frame on screen at that time even when its rounded grid label is after the request; sequential playback shows the previous frame for the same request"
 link = ""
-
-[[xfail]]
-case = "decoder-model/ffmpeg/vfr/transition/playback"
-class = "stale"
-seeds = "4-6 8 10 12 13 18 19 21 28 31 33 38 39 41 45-47 49 50 52 55 56 58 59 61 66 68 71 75-77 79"
-reason = "NEW: the FFmpeg decoder answers a backward request whose frame is not cached with a cached frame up to 2 grid frames older (MAX_FRAME_LOOKBACK_TOLERANCE)"
-link = ""
-
