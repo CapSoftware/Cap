@@ -1180,10 +1180,13 @@ impl Default for GeneralSettings {
 
 impl GeneralSettings {
     pub fn load() -> Self {
+        let store = read_store(&tauri_store_path()).unwrap_or_default();
+        let empty = Map::new();
+        let section = |name: &str| store.get(name).and_then(Value::as_object).unwrap_or(&empty);
         Self::from_sections(
-            &store_section(GENERAL_SETTINGS),
-            &store_section(RECORDING_START_SAFETY),
-            &store_section(AUDIO_ENHANCEMENT),
+            section(GENERAL_SETTINGS),
+            section(RECORDING_START_SAFETY),
+            section(AUDIO_ENHANCEMENT),
         )
     }
 
@@ -1913,6 +1916,80 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
+        }
+    }
+
+    fn load_general_settings_separately() -> GeneralSettings {
+        GeneralSettings::from_sections(
+            &store_section(GENERAL_SETTINGS),
+            &store_section(RECORDING_START_SAFETY),
+            &store_section(AUDIO_ENHANCEMENT),
+        )
+    }
+
+    #[test]
+    fn general_settings_load_matches_separate_section_reads() {
+        for contents in [
+            None,
+            Some("invalid json"),
+            Some("[]"),
+            Some(r#"{"general_settings":["wrong shape"],"audio_enhancement":null}"#),
+            Some(
+                r#"{"general_settings":{"theme":"dark","maxFps":24},"recording_start_safety":{"confirmBeforeRecordingWithoutMicrophone":false},"audio_enhancement":{"enabledByDefault":false}}"#,
+            ),
+        ] {
+            let _store = TempStore::new("general-settings-load", contents);
+            assert_eq!(GeneralSettings::load(), load_general_settings_separately());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_general_settings_load() {
+        use std::{hint::black_box, time::Instant};
+
+        for preset_count in [0, 10, 50] {
+            let config =
+                crate::presets::preset_config(&cap_project::ProjectConfiguration::default());
+            let presets: Vec<_> = (0..preset_count)
+                .map(|index| serde_json::json!({"name": format!("Preset {index}"), "config": config}))
+                .collect();
+            let contents = serde_json::to_string_pretty(&serde_json::json!({
+                "general_settings": {"theme": "dark", "maxFps": 60},
+                "recording_start_safety": {"confirmBeforeRecordingWithoutMicrophone": false},
+                "audio_enhancement": {"enabledByDefault": true},
+                "presets": {"presets": presets, "default": null},
+                "teleprompter": {"script": "A recording script. ".repeat(100)}
+            }))
+            .unwrap();
+            let _store = TempStore::new("general-settings-benchmark", Some(&contents));
+            assert_eq!(GeneralSettings::load(), load_general_settings_separately());
+            let measure = |load: fn() -> GeneralSettings| {
+                let start = Instant::now();
+                for _ in 0..200 {
+                    black_box(load());
+                }
+                start.elapsed().as_secs_f64() * 1_000_000.0 / 200.0
+            };
+            let mut separate = Vec::new();
+            let mut current = Vec::new();
+            for round in 0..9 {
+                if round % 2 == 0 {
+                    separate.push(measure(load_general_settings_separately));
+                    current.push(measure(GeneralSettings::load));
+                } else {
+                    current.push(measure(GeneralSettings::load));
+                    separate.push(measure(load_general_settings_separately));
+                }
+            }
+            separate.sort_by(f64::total_cmp);
+            current.sort_by(f64::total_cmp);
+            eprintln!(
+                "presets={preset_count} bytes={} separate_median_us={:.3} current_median_us={:.3} separate_runs_us={separate:?} current_runs_us={current:?}",
+                contents.len(),
+                separate[4],
+                current[4]
+            );
         }
     }
 
