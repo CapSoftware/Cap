@@ -456,8 +456,16 @@ mod app {
         }
     }
 
-    /// Where the stimulus draws BGRA pictures and presents them.
-    #[cfg(target_os = "macos")]
+    /// Where the stimulus draws BGRA pictures and presents them. softbuffer
+    /// presents on Windows with a GDI blit into the window's redirection
+    /// surface, which the compositor (and so Windows Graphics Capture) can
+    /// sample half done: recordings showed markers whose top rows were the new
+    /// picture and bottom rows the old one (run 39000141528). On Windows the
+    /// blit starts right after a composition pass (`DwmFlush`), so it is done
+    /// long before the next one. A DXGI swap chain was not an option on hosted
+    /// runners: their Hyper-V display rejected a flip-model swap chain
+    /// (DXGI_ERROR_INVALID_CALL, run 39002964457) and creating the other
+    /// swap effects crashed the stimulus.
     mod canvas {
         use super::*;
         use std::num::NonZeroU32;
@@ -468,6 +476,15 @@ mod app {
             softbuffer::Context::new(window.clone())
                 .and_then(|context| softbuffer::Surface::new(&context, window.clone()))
                 .map_err(|e| e.to_string())
+        }
+
+        #[cfg(windows)]
+        fn after_composition() {
+            #[link(name = "dwmapi")]
+            unsafe extern "system" {
+                fn DwmFlush() -> i32;
+            }
+            unsafe { DwmFlush() };
         }
 
         pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
@@ -487,158 +504,9 @@ mod app {
                 )
             };
             paint(bytes);
+            #[cfg(windows)]
+            after_composition();
             buffer.present().is_ok()
-        }
-    }
-
-    /// A flip-model DXGI swap chain. softbuffer presents on Windows with a
-    /// GDI blit that the compositor (and so Windows Graphics Capture) can
-    /// sample half done: recordings showed markers whose top rows were the
-    /// new picture and bottom rows the old one (run 39000141528). A flip
-    /// present hands the compositor whole pictures.
-    #[cfg(windows)]
-    mod canvas {
-        use super::*;
-        use windows::Win32::{
-            Foundation::{HMODULE, HWND},
-            Graphics::{
-                Direct3D::D3D_DRIVER_TYPE_HARDWARE,
-                Direct3D11::{
-                    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
-                    ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-                },
-                Dxgi::{
-                    Common::{
-                        DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
-                        DXGI_SAMPLE_DESC,
-                    },
-                    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-                    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_DISCARD, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
-                    IDXGIFactory2, IDXGISwapChain1,
-                },
-            },
-        };
-        use windows::core::Interface;
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-        pub struct Canvas {
-            context: ID3D11DeviceContext,
-            swap_chain: IDXGISwapChain1,
-            size: (u32, u32),
-            pixels: Vec<u8>,
-        }
-
-        pub fn new(window: &Arc<Window>) -> Result<Canvas, String> {
-            let hwnd = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
-                RawWindowHandle::Win32(handle) => HWND(handle.hwnd.get() as *mut core::ffi::c_void),
-                other => return Err(format!("not a Win32 window: {other:?}")),
-            };
-            let size = window.inner_size();
-            let size = (size.width.max(1), size.height.max(1));
-            let mut device: Option<ID3D11Device> = None;
-            let mut context: Option<ID3D11DeviceContext> = None;
-            unsafe {
-                D3D11CreateDevice(
-                    None,
-                    D3D_DRIVER_TYPE_HARDWARE,
-                    HMODULE::default(),
-                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                    None,
-                    D3D11_SDK_VERSION,
-                    Some(&mut device),
-                    None,
-                    Some(&mut context),
-                )
-            }
-            .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
-            let device = device.ok_or("no D3D11 device")?;
-            let context = context.ok_or("no D3D11 context")?;
-            // The swap chain must come from the factory that made the device.
-            let factory: IDXGIFactory2 = unsafe {
-                device
-                    .cast::<IDXGIDevice>()
-                    .and_then(|dxgi| dxgi.GetAdapter())
-                    .and_then(|adapter| adapter.GetParent())
-            }
-            .map_err(|e| format!("device factory: {e}"))?;
-            // Flip model first; the blit model is the fallback where the
-            // display driver has no flip support. Both present through D3D,
-            // which the compositor reads only once the copy has completed.
-            let attempts = [
-                (DXGI_SWAP_EFFECT_FLIP_DISCARD, 2, DXGI_SCALING_NONE),
-                (DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 2, DXGI_SCALING_STRETCH),
-                (DXGI_SWAP_EFFECT_DISCARD, 1, DXGI_SCALING_STRETCH),
-            ];
-            let mut errors = Vec::new();
-            let mut created = None;
-            for (effect, buffers, scaling) in attempts {
-                let desc = DXGI_SWAP_CHAIN_DESC1 {
-                    Width: size.0,
-                    Height: size.1,
-                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                    BufferCount: buffers,
-                    Scaling: scaling,
-                    SwapEffect: effect,
-                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                    ..Default::default()
-                };
-                match unsafe { factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None) } {
-                    Ok(swap_chain) => {
-                        eprintln!("stimulus swap chain: {effect:?}, {buffers} buffers");
-                        created = Some(swap_chain);
-                        break;
-                    }
-                    Err(e) => errors.push(format!("{effect:?}: {e}")),
-                }
-            }
-            let swap_chain = created
-                .ok_or_else(|| format!("CreateSwapChainForHwnd: {}", errors.join("; ")))?;
-            Ok(Canvas {
-                context,
-                swap_chain,
-                size,
-                pixels: Vec::new(),
-            })
-        }
-
-        pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
-            if canvas.size != (w, h) {
-                let resized = unsafe {
-                    canvas.swap_chain.ResizeBuffers(
-                        0,
-                        w,
-                        h,
-                        DXGI_FORMAT_UNKNOWN,
-                        DXGI_SWAP_CHAIN_FLAG(0),
-                    )
-                };
-                if resized.is_err() {
-                    return false;
-                }
-                canvas.size = (w, h);
-            }
-            canvas.pixels.resize(w as usize * h as usize * 4, 0);
-            paint(&mut canvas.pixels);
-            let Ok(back) = (unsafe { canvas.swap_chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
-                return false;
-            };
-            unsafe {
-                canvas.context.UpdateSubresource(
-                    &back,
-                    0,
-                    None,
-                    canvas.pixels.as_ptr().cast(),
-                    w * 4,
-                    0,
-                );
-            }
-            unsafe { canvas.swap_chain.Present(0, DXGI_PRESENT(0)) }.is_ok()
         }
     }
 

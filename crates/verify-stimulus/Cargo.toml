@@ -29,11 +29,5 @@ winit = "0.30"
 
 [target.'cfg(windows)'.dependencies]
 cpal = { workspace = true }
+softbuffer = "0.4"
 winit = "0.30"
-windows = { workspace = true, features = [
-	"Win32_Foundation",
-	"Win32_Graphics_Direct3D",
-	"Win32_Graphics_Direct3D11",
-	"Win32_Graphics_Dxgi",
-	"Win32_Graphics_Dxgi_Common",
-] }
