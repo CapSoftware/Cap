@@ -7,7 +7,7 @@ use cap_recording::{
     sources::screen_capture::ScreenCaptureTarget,
 };
 use std::collections::HashMap;
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
 use crate::tray;
@@ -109,6 +109,16 @@ pub fn camera_key(id: &DeviceOrModelID) -> String {
 pub fn set_recording_mode(app: AppHandle, mode: RecordingMode) -> Result<(), String> {
     RecordingSettingsStore::set_mode(&app, mode)?;
     tray::update_tray_icon_for_mode(&app, mode);
+
+    // A mode switch invalidates any pending "restore this overlay when
+    // Settings closes" instruction — otherwise a stale label can pop the
+    // target-select overlay back up as a screen-wide input-eating surface
+    // after the user has moved on to a different mode. See #1945.
+    if let Some(focus_manager) = app.try_state::<crate::target_select_overlay::WindowFocusManager>()
+    {
+        focus_manager.clear_overlay_restore_labels();
+    }
+
     Ok(())
 }
 
