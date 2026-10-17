@@ -510,9 +510,13 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
     };
     let transition = async {
         let transition = transition?;
+        let transition_decoders = if transition.segment_index == segment_index {
+            transition.decoders.transition_side().await
+        } else {
+            &transition.decoders
+        };
         let segment_frames = if is_initial {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames_initial(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -521,8 +525,7 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
                 )
                 .await
         } else {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames(
                     transition.segment_time as f32,
                     !hide_camera,

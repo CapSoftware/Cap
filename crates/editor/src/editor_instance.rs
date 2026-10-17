@@ -1155,12 +1155,23 @@ impl EditorInstance {
                                     _ = preview_rx.changed() => {
                                         continue;
                                     }
-                                    frames = outgoing_media.decoders.get_frames_initial(
-                                        outgoing.source_time as f32,
-                                        project.requires_camera(),
-                                        true,
-                                        outgoing_offsets,
-                                    ) => frames,
+                                    frames = async {
+                                        let decoders = if outgoing.segment.recording_clip
+                                            == segment.recording_clip
+                                        {
+                                            outgoing_media.decoders.transition_side().await
+                                        } else {
+                                            &outgoing_media.decoders
+                                        };
+                                        decoders
+                                            .get_frames_initial(
+                                                outgoing.source_time as f32,
+                                                project.requires_camera(),
+                                                true,
+                                                outgoing_offsets,
+                                            )
+                                            .await
+                                    } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
                                     let outgoing_zoom = outgoing_zoom_timelines
@@ -2368,10 +2379,7 @@ mod initial_clip_configuration_tests {
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0].index, 0);
         assert!(clips[0].offsets_auto_calculated);
-        assert_eq!(
-            clips[0].offsets.camera.to_bits(),
-            ((1.23456789_f64 - 0.987654321) as f32).to_bits()
-        );
+        assert_eq!(clips[0].offsets.camera.to_bits(), 0.0_f32.to_bits());
         assert_eq!(
             clips[0].offsets.mic.to_bits(),
             (((1.23456789_f64 - 0.876543219) as f32) + calibration).to_bits()

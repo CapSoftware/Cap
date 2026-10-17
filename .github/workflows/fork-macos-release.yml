@@ -70,28 +70,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Create .env file in root
-        shell: bash
-        run: |
-          {
-            echo "appVersion=${{ steps.release.outputs.version }}"
-            echo "VITE_ENVIRONMENT=production"
-            echo "RUST_TARGET_TRIPLE=$TARGET"
-          } >> .env
-
-      - name: Run cap-setup
-        shell: bash
-        run: bun run cap-setup
-        env:
-          RUST_TARGET_TRIPLE: ${{ env.TARGET }}
-
-      - name: Build desktop binaries
-        shell: bash
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: "0"
-          CARGO_PROFILE_RELEASE_STRIP: symbols
-        run: ./scripts/build-desktop-binaries.sh "$TARGET"
-
       - name: Check signing secrets
         id: signing
         shell: bash
@@ -117,6 +95,34 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Create .env file in root
+        shell: bash
+        run: |
+          {
+            echo "appVersion=${{ steps.release.outputs.version }}"
+            echo "VITE_ENVIRONMENT=production"
+            echo "RUST_TARGET_TRIPLE=$TARGET"
+          } >> .env
+
+      # cap-setup downloads the ONNX Runtime dylib that ships in the app's
+      # Resources. Tauri does not sign resources, so cap-setup signs it here.
+      # It needs the Developer ID already in the keychain, or notarization
+      # rejects the app.
+      - name: Run cap-setup
+        shell: bash
+        run: bun run cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ env.TARGET }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_KEYCHAIN: ${{ steps.signing.outputs.signed == 'true' && format('{0}/build.keychain', runner.temp) || '' }}
+
+      - name: Build desktop binaries
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: ./scripts/build-desktop-binaries.sh "$TARGET"
 
       # With the secrets, Tauri signs with the Developer ID and notarizes. The
       # updater archive is skipped because only Cap can sign one.
