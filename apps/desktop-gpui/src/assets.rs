@@ -159,6 +159,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "download.svg",
     "flip-vertical-2.svg",
     "maximize.svg",
+    "minimize.svg",
     "mouse-pointer-2.svg",
     "mouse-pointer-ban.svg",
     "move.svg",

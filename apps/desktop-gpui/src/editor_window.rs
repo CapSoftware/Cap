@@ -146,6 +146,7 @@ const MIN_PLAYER_HEIGHT: f32 = 320.;
 /// card, the transport across the bottom.
 const PLAYER_TOOLBAR_HEIGHT: f32 = 44.;
 const PLAYER_BAR_HEIGHT: f32 = 48.;
+const SEEK_BAR_HEIGHT: f32 = 20.;
 
 /// The resize grip: a hit zone straddling the 8px gap between the player row
 /// and the timeline card, with the pill drawn in the middle of the gap.
@@ -1256,6 +1257,22 @@ impl PendingProjectSave {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PreviewFullscreen {
+    Entering,
+    Shown,
+}
+
+impl PreviewFullscreen {
+    fn observe(self, window_fullscreen: bool) -> Option<Self> {
+        match (self, window_fullscreen) {
+            (_, true) => Some(Self::Shown),
+            (Self::Entering, false) => Some(Self::Entering),
+            (Self::Shown, false) => None,
+        }
+    }
+}
+
 /// Which edge -- or the whole box -- a live drag is moving.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DragKind {
@@ -1433,6 +1450,9 @@ pub struct EditorWindow {
     /// root-handler pattern -- a slider drag that leaves its 96px row keeps
     /// tracking.
     zoom_slider_drag: bool,
+    preview_fullscreen: Option<PreviewFullscreen>,
+    seek_slider_track: ui::SliderTrack,
+    seek_slider_drag: bool,
 
     // -- Editing (E4) --------------------------------------------------------
     /// The live project. Every edit mutates this, the watch channel carries it
@@ -2083,6 +2103,9 @@ impl EditorWindow {
             fitted: false,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
+            preview_fullscreen: None,
+            seek_slider_track: ui::SliderTrack::default(),
+            seek_slider_drag: false,
             project: ProjectConfiguration::default(),
             history: ProjectHistory::new(ProjectConfiguration::default()),
             selection: None,
@@ -3367,6 +3390,14 @@ impl EditorWindow {
                 window.refresh();
                 return;
             }
+        }
+
+        if self.preview_fullscreen.is_some() {
+            if event.keystroke.key == "escape" && !event.is_held {
+                self.toggle_preview_fullscreen(window, cx);
+                cx.stop_propagation();
+            }
+            return;
         }
 
         if self.lane_reorder.is_some() && event.keystroke.key == "escape" && !event.is_held {
@@ -9544,18 +9575,26 @@ impl EditorWindow {
                 .absolute()
                 .inset_0(),
             )
-            .child(
-                self.toolbar.clone().cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .h(px(PLAYER_TOOLBAR_HEIGHT)),
-                ),
-            )
+            .when(self.preview_fullscreen.is_none(), |this| {
+                this.child(
+                    self.toolbar.clone().cached(
+                        StyleRefinement::default()
+                            .w_full()
+                            .h(px(PLAYER_TOOLBAR_HEIGHT)),
+                    ),
+                )
+            })
             .child(self.render_preview_canvas(cx))
             .child(
                 self.transport_controls
                     .clone()
-                    .cached(StyleRefinement::default().w_full().h(px(PLAYER_BAR_HEIGHT))),
+                    .cached(StyleRefinement::default().w_full().h(px(
+                        if self.preview_fullscreen.is_some() {
+                            PLAYER_BAR_HEIGHT + SEEK_BAR_HEIGHT
+                        } else {
+                            PLAYER_BAR_HEIGHT
+                        },
+                    ))),
             )
             .children(self.render_notice())
     }
@@ -9816,15 +9855,20 @@ impl EditorWindow {
             .min_h_0()
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
+            .when(self.preview_fullscreen.is_some(), |this| {
+                this.rounded_t(px(11.))
+            })
             .child(body)
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() {
-                self.render_canvas_overlay(cx)
-            } else {
-                None
-            })
+            .children(
+                if self.project_ready() && self.preview_fullscreen.is_none() {
+                    self.render_canvas_overlay(cx)
+                } else {
+                    None
+                },
+            )
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -9923,6 +9967,52 @@ impl EditorWindow {
             }))
     }
 
+    fn toggle_preview_fullscreen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entering = self.preview_fullscreen.take().is_none();
+        if entering != window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        if entering {
+            self.preview_fullscreen = Some(PreviewFullscreen::Entering);
+        }
+        cx.notify();
+    }
+
+    fn fullscreen_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let (icon, label) = if self.preview_fullscreen.is_some() {
+            ("icons/minimize.svg", "Exit fullscreen (Esc)")
+        } else {
+            ("icons/maximize.svg", "Fullscreen preview")
+        };
+        div()
+            .id("transport-fullscreen")
+            .group("transport-fullscreen-group")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(28.))
+            .flex_none()
+            .rounded(px(7.))
+            .cursor_pointer()
+            .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+            .active(|this| this.bg(Hsla::from(theme.editor.ctl_active)))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+            .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).view(cx))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .group_hover("transport-fullscreen-group", move |style| {
+                        style.text_color(Hsla::from(theme.editor.text_1))
+                    }),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_preview_fullscreen(window, cx);
+            }))
+    }
+
     /// The zoom slider's pointer maths, shared by the press and the drag.
     fn apply_zoom_slider(
         &mut self,
@@ -9939,6 +10029,42 @@ impl EditorWindow {
         self.view.transform.apply_slider(fraction, origin, total);
         self.note_transform("slider", Some(origin));
         cx.notify();
+    }
+
+    fn apply_seek_slider(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(fraction) = ui::slider_value_at(&self.seek_slider_track, position, 0., 1., 0.001)
+        else {
+            return;
+        };
+        self.seek_to_time(f64::from(fraction) * self.total_duration(), cx);
+        cx.notify();
+    }
+
+    fn render_seek_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor = self.theme.editor;
+        let total = self.total_duration();
+        let fraction = if total > 0. {
+            (self.playhead / total) as f32
+        } else {
+            0.
+        };
+        div().w_full().px(px(14.)).flex().items_center().child(
+            ui::Slider::new("preview-seek", fraction, self.seek_slider_track.clone())
+                .flex()
+                .row_height(px(SEEK_BAR_HEIGHT))
+                .track(px(3.), Hsla::from(editor.ctl_active))
+                .fill(Hsla::from(editor.accent))
+                .thumb(
+                    px(12.),
+                    Hsla::from(editor.thumb),
+                    Some(gpui::hsla(0., 0., 0., 0.12)),
+                )
+                .thumb_shadow()
+                .on_drag_start(cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    this.seek_slider_drag = true;
+                    this.apply_seek_slider(event.position, cx);
+                })),
+        )
     }
 
     /// The player's transport bar: the clock on the left, the transport cluster
@@ -9983,7 +10109,7 @@ impl EditorWindow {
                 .on_click(handler)
         };
 
-        div()
+        let row = div()
             .relative()
             .w_full()
             .h_full()
@@ -10079,7 +10205,9 @@ impl EditorWindow {
                             )),
                     ),
             )
-            .child(
+            .child(if self.preview_fullscreen.is_some() {
+                self.fullscreen_button(cx).into_any_element()
+            } else {
                 div()
                     .flex()
                     .flex_row()
@@ -10155,13 +10283,22 @@ impl EditorWindow {
                             },
                         ))
                     }))
-                    .child(self.zoom_button(
-                        "transport-zoom-in",
-                        "icons/zoom-in.svg",
-                        1. / 1.1,
-                        cx,
-                    )),
-            )
+                    .child(self.zoom_button("transport-zoom-in", "icons/zoom-in.svg", 1. / 1.1, cx))
+                    .child(self.header_divider())
+                    .child(self.fullscreen_button(cx))
+                    .into_any_element()
+            });
+        if self.preview_fullscreen.is_some() {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(self.render_seek_bar(cx))
+                .child(div().flex_1().min_h_0().child(row))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     // -- Timeline ------------------------------------------------------------
@@ -11186,6 +11323,14 @@ impl Render for EditorWindow {
                 .fit_on_mount(timeline::content_width(viewport_width), total);
         }
 
+        if let Some(state) = self.preview_fullscreen {
+            self.preview_fullscreen = state.observe(window.is_fullscreen());
+            if self.preview_fullscreen.is_none() {
+                cx.notify();
+            }
+        }
+        let preview_only = self.preview_fullscreen.is_some();
+
         if self.export.is_some() {
             return div()
                 .size_full()
@@ -11354,11 +11499,13 @@ impl Render for EditorWindow {
                 .absolute()
                 .inset_0()
             })
-            .child(
-                self.header
-                    .clone()
-                    .cached(StyleRefinement::default().w_full().h(px(HEADER_HEIGHT))),
-            )
+            .when(!preview_only, |this| {
+                this.child(
+                    self.header
+                        .clone()
+                        .cached(StyleRefinement::default().w_full().h(px(HEADER_HEIGHT))),
+                )
+            })
             // `flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0
             // leading-5` (`Editor.tsx:676`).
             .child(
@@ -11369,6 +11516,7 @@ impl Render for EditorWindow {
                     .min_h_0()
                     .w_full()
                     .pb(px(8.))
+                    .when(preview_only, |this| this.pt(px(8.)))
                     .overflow_hidden()
                     // No `overflow_hidden` from here down: every card clips its
                     // own children, and an intermediate content mask would cut
@@ -11411,13 +11559,18 @@ impl Render for EditorWindow {
                                     // sidebar view's: a margin inside a cached
                                     // element is not honoured.
                                     .child(
-                                        div().flex_none().h_full().pl(px(8.)).child(
-                                            self.sidebar_view.clone().cached(
-                                                StyleRefinement::default()
-                                                    .w(px(SIDEBAR_WIDTH))
-                                                    .h_full(),
+                                        div()
+                                            .flex_none()
+                                            .h_full()
+                                            .pl(px(8.))
+                                            .when(preview_only, |this| this.hidden())
+                                            .child(
+                                                self.sidebar_view.clone().cached(
+                                                    StyleRefinement::default()
+                                                        .w(px(SIDEBAR_WIDTH))
+                                                        .h_full(),
+                                                ),
                                             ),
-                                        ),
                                     ),
                             )
                             // The timeline card: the wrapper is owned here so
@@ -11430,6 +11583,7 @@ impl Render for EditorWindow {
                                     .w_full()
                                     .px(px(8.))
                                     .h(px(layout.timeline_height))
+                                    .when(preview_only, |this| this.hidden())
                                     .child(
                                         div()
                                             .size_full()
@@ -11527,6 +11681,18 @@ impl Render for EditorWindow {
                     }),
                 )
                 .cursor(gpui::CursorStyle::ResizeRow)
+            }))
+            .children(self.seek_slider_drag.then(|| {
+                ui::Slider::drag_layer(
+                    "preview-seek-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.apply_seek_slider(event.position, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.seek_slider_drag = false;
+                        cx.notify();
+                    }),
+                )
             }))
             .children(self.zoom_slider_drag.then(|| {
                 ui::Slider::drag_layer(
@@ -11827,6 +11993,18 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_fullscreen_ends_once_the_window_leaves_fullscreen() {
+        let entering = PreviewFullscreen::Entering;
+        assert_eq!(entering.observe(false), Some(PreviewFullscreen::Entering));
+        assert_eq!(entering.observe(true), Some(PreviewFullscreen::Shown));
+        assert_eq!(
+            PreviewFullscreen::Shown.observe(true),
+            Some(PreviewFullscreen::Shown)
+        );
+        assert_eq!(PreviewFullscreen::Shown.observe(false), None);
+    }
 
     #[test]
     fn auto_zoom_loads_clicks_without_losing_take_indices() {
