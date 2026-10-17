@@ -27,6 +27,7 @@ struct Inner {
     armed_at: OnceLock<Timestamps>,
     created: Instant,
     failsafe_logged: AtomicBool,
+    video_origin_at_arm: AtomicBool,
 }
 
 impl Default for RecordingStartGate {
@@ -41,7 +42,20 @@ impl RecordingStartGate {
             armed_at: OnceLock::new(),
             created: Instant::now(),
             failsafe_logged: AtomicBool::new(false),
+            video_origin_at_arm: AtomicBool::new(false),
         }))
+    }
+
+    /// Stamps the first admitted video frame at the arm point, so the video
+    /// timeline starts where audio anchored at the recording epoch does.
+    /// Instant merges its tracks by timestamp; Studio aligns them with each
+    /// track's recorded start time instead and leaves this off.
+    pub(crate) fn set_video_origin_at_arm(&self) {
+        self.0.video_origin_at_arm.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn video_origin_at_arm(&self) -> bool {
+        self.0.video_origin_at_arm.load(Ordering::Acquire)
     }
 
     pub fn arm(&self) -> bool {

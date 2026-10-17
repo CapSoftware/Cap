@@ -3553,6 +3553,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                     gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
                                 "Start gate admitted first video frame"
                             );
+                            // The first frame is shown from the arm point;
+                            // every later frame keeps its own capture time.
+                            if gate.video_origin_at_arm()
+                                && let Some(armed) = gate.armed_instant()
+                            {
+                                timestamp = Timestamp::Instant(armed);
+                            }
                         }
                         wall_clock_origin = gate
                             .armed_instant()
@@ -3690,10 +3697,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                 match tokio::time::timeout_at(drain_deadline, video_rx.next()).await {
                     Ok(Some(frame)) => {
-                        let timestamp = frame.timestamp();
+                        let mut timestamp = frame.timestamp();
                         if let Some(gate) = &start_gate {
                             if !gate.admits_video(timestamp) {
                                 continue;
+                            }
+                            if gate.video_origin_at_arm()
+                                && let Some(armed) = gate.armed_instant()
+                            {
+                                timestamp = Timestamp::Instant(armed);
                             }
                             wall_clock_origin = gate
                                 .armed_instant()
