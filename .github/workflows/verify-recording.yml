@@ -1,8 +1,9 @@
 name: Verify recording (real capture)
 
 # Records a marker stimulus through Cap's real Studio and Instant pipelines
-# (ScreenCaptureKit + VideoToolbox) on macOS runners and checks every frame
-# and audio marker against the host-clock truth. See
+# on macOS (ScreenCaptureKit + VideoToolbox) and GitHub-hosted Windows
+# (Windows Graphics Capture + Media Foundation) and checks every frame and
+# audio marker against the host-clock truth. See
 # crates/verify/tests/recording.rs.
 #
 # Every pull request gets a "Verify recording" verdict (the job to require):
@@ -51,6 +52,9 @@ on:
         type: choice
         options: [blacksmith, hosted, both]
         default: blacksmith
+      soak_secs:
+        description: "Adds the recording/soak/* cases at this length (seconds, at most 1800); set case_filter to recording/soak/* to run only them"
+        default: ""
   schedule:
     - cron: "41 3 * * *"
   pull_request:
@@ -149,13 +153,14 @@ jobs:
       matrix:
         runner: ${{ fromJSON(needs.scope.outputs.runners) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.soak_secs != '' && 180 || 45 }}
     env:
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
       CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
       CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_SOAK_SECS: ${{ inputs.soak_secs || '' }}
       CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
       CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
       CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
@@ -328,11 +333,87 @@ jobs:
             ${{ github.workspace }}/verify-scratch
           if-no-files-found: ignore
 
+  # GitHub-hosted Windows runs jobs in the runner's interactive console
+  # session, where Windows Graphics Capture records the desktop; Blacksmith
+  # Windows VMs run jobs in session 0, which has no desktop (probe runs
+  # 38997642473, 38997747111). Hosted Windows has no audio endpoints, so the
+  # stimulus stays silent and system audio is not recorded.
+  real-capture-windows:
+    name: real-capture (windows-2022)
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CAP_VERIFY_CAPTURE: display
+      CAP_VERIFY_REQUIRE_CAPTURE: "1"
+      CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
+      CAP_VERIFY_REPEAT: ${{ inputs.repeat || (github.event_name == 'schedule' && '3') || '1' }}
+      CAP_VERIFY_CASE: ${{ inputs.case_filter || '' }}
+      CAP_VERIFY_KEEP: ${{ inputs.keep_artifacts && '1' || '' }}
+      CAP_VERIFY_SCRATCH: ${{ github.workspace }}/verify-scratch
+      CAP_VERIFY_REPORT_DIR: ${{ github.workspace }}/verify-report
+      CAP_VERIFY_DUMP: ${{ github.workspace }}/verify-dump
+      CAP_VERIFY_HOST: github-hosted
+      CAP_VERIFY_REQUIRE_SUPPORTED: "1"
+      CAP_VERIFY_UNSUPPORTED_ALLOW: recording/instant/system-only
+      CAP_VERIFY_STIMULUS_AUDIO: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        id: setup
+        uses: ./.github/actions/engine-verify-setup
+        with:
+          target: x86_64-pc-windows-msvc
+          tier: fast
+
+      - name: Build
+        shell: bash
+        run: |
+          start=$(date +%s)
+          cargo build --locked --profile ci-verify -p cap-verify-stimulus
+          cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
+          echo "build seconds: $(( $(date +%s) - start ))"
+
+      - name: Save build cache
+        if: steps.setup.outputs.build-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
+
+      - name: Real-capture recording oracle
+        shell: bash
+        run: cargo test --locked --profile ci-verify -p cap-verify --test recording -- --nocapture
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: python scripts/verify/summary.py --title "real capture windows-2022 ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-windows-2022
+          path: |
+            ${{ github.workspace }}/verify-report
+            ${{ github.workspace }}/verify-dump
+            ${{ github.workspace }}/verify-scratch
+          if-no-files-found: ignore
+
   # The check to require: green when the change is out of scope or every
   # planned runner passed with at least the tier's case count.
   gate:
     name: Verify recording
-    needs: [scope, real-capture]
+    needs: [scope, real-capture, real-capture-windows]
     if: always()
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
@@ -353,6 +434,7 @@ jobs:
           SCOPE: ${{ needs.scope.result }}
           RUN: ${{ needs.scope.outputs.run }}
           CAPTURE: ${{ needs.real-capture.result }}
+          CAPTURE_WINDOWS: ${{ needs.real-capture-windows.result }}
           TIER: ${{ needs.scope.outputs.tier }}
           RUNNERS: ${{ needs.scope.outputs.runners }}
           CASE_FILTER: ${{ inputs.case_filter }}
@@ -365,10 +447,11 @@ jobs:
             echo "No recording code changed: nothing to verify." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [[ "$CAPTURE" != success ]]; then
-            echo "real capture $CAPTURE ($TIER tier): see the runner jobs" >&2
+          if [[ "$CAPTURE" != success || "$CAPTURE_WINDOWS" != success ]]; then
+            echo "real capture: macOS $CAPTURE, Windows $CAPTURE_WINDOWS ($TIER tier): see the runner jobs" >&2
             exit 1
           fi
+          RUNNERS=$(python3 -c 'import json, sys; print(json.dumps(json.loads(sys.argv[1]) + ["windows-2022"]))' "$RUNNERS")
           if [[ -n "$CASE_FILTER" ]]; then
             echo "case filter set: executed-case floor not applied"
             exit 0
