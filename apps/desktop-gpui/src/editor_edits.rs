@@ -2430,8 +2430,21 @@ pub fn set_clip_segment_timescale(
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.mask_segments {
-        segment.start += shift(segment.start);
+        let old_start = segment.start;
+        let start_shift = shift(old_start);
+        segment.start += start_shift;
         segment.end += shift(segment.end);
+        for key in segment
+            .keyframes
+            .position
+            .iter_mut()
+            .chain(&mut segment.keyframes.size)
+        {
+            key.time += shift(old_start + key.time) - start_shift;
+        }
+        for key in &mut segment.keyframes.intensity {
+            key.time += shift(old_start + key.time) - start_shift;
+        }
     }
     for segment in &mut timeline.text_segments {
         segment.start += shift(segment.start);
@@ -4014,6 +4027,85 @@ mod tests {
         assert_eq!(keyboard.keys[0].time_offset, 500.0);
         assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    fn clip_speed_changes_remap_mask_keyframes_in_absolute_time() {
+        for (timescale, expected) in [
+            (
+                0.5,
+                [
+                    (2.0, 14.0, [2.0, 6.0, 10.0]),
+                    (16.0, 24.0, [2.0, 5.0, 7.0]),
+                    (21.0, 27.0, [1.0, 3.0, 5.0]),
+                ],
+            ),
+            (
+                2.0,
+                [
+                    (0.5, 3.5, [0.5, 1.5, 2.5]),
+                    (4.0, 9.0, [0.5, 2.0, 4.0]),
+                    (6.0, 12.0, [1.0, 3.0, 5.0]),
+                ],
+            ),
+        ] {
+            let mut project = two_clip_config();
+            let timeline = project.timeline.as_mut().unwrap();
+            for (start, end) in [(1.0, 7.0), (8.0, 14.0), (11.0, 17.0)] {
+                let mut mask = default_mask_segment(start, end, 0);
+                mask.keyframes = serde_json::from_value(serde_json::json!({
+                    "position": [
+                        { "time": 1.0, "x": 0.2, "y": 0.3 },
+                        { "time": 3.0, "x": 0.5, "y": 0.6 },
+                        { "time": 5.0, "x": 0.8, "y": 0.9 }
+                    ],
+                    "size": [{ "time": 3.0, "x": 0.3, "y": 0.4 }],
+                    "intensity": [{ "time": 5.0, "value": 0.7 }]
+                }))
+                .unwrap();
+                timeline.mask_segments.push(mask);
+            }
+            let original = project.clone();
+            let mut history = ProjectHistory::new(original.clone());
+            assert!(set_clip_segment_timescale(
+                project.timeline.as_mut().unwrap(),
+                0,
+                timescale
+            ));
+            for ((before, after), (start, end, times)) in original
+                .timeline
+                .as_ref()
+                .unwrap()
+                .mask_segments
+                .iter()
+                .zip(&project.timeline.as_ref().unwrap().mask_segments)
+                .zip(expected)
+            {
+                let mut expected = before.clone();
+                expected.start = start;
+                expected.end = end;
+                for (key, time) in expected.keyframes.position.iter_mut().zip(times) {
+                    key.time = time;
+                }
+                expected.keyframes.size[0].time = times[1];
+                expected.keyframes.intensity[0].time = times[2];
+                assert_eq!(
+                    serde_json::to_value(after).unwrap(),
+                    serde_json::to_value(&expected).unwrap(),
+                    "mask starting at {} at speed {timescale}",
+                    before.start
+                );
+            }
+            history.record(&project);
+            assert_eq!(
+                serde_json::to_value(history.undo().unwrap()).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(history.redo().unwrap()).unwrap(),
+                serde_json::to_value(&project).unwrap()
+            );
+        }
     }
 
     #[test]
