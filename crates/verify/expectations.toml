@@ -63,27 +63,6 @@ bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
 reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
 link = ""
 
-[[xfail]]
-case = "seek/seek-gop/storm30/ffmpeg"
-class = "stale"
-bound = { screen-frames = 100, camera-frames = 100, delta = 100, frame = [1, 900] }
-reason = "NEW: FFmpeg decoder seeks answer stale frames: the backward-seek lookback tolerance serves a cached frame 1 to 4 source frames old, and seeks near the start are answered by the first-frame shortcut with frame 0 (71 of 3000 full-tier seeks, 1 in the fast tier, up to 81 source frames stale). The count depends on the decoder's wall-clock paths (it varies between runs on macOS: 65 to 78 on the native fixture), so the bound is the mechanism's: at most 100 seeks (3.3%), never more stale than the 100 frames the shortcut and the lookback can reach"
-link = ""
-
-[[xfail]]
-case = "seek/seek-native/storm30/ffmpeg"
-class = "stale"
-bound = { screen-frames = 100, camera-frames = 100, delta = 100, frame = [1, 900] }
-reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut as seek/seek-gop/storm30/ffmpeg on the native fixture: 62 to 78 of 3000 full-tier seeks (9 in the fast tier), up to 83 source frames stale; bounded like seek/seek-gop/storm30/ffmpeg"
-link = ""
-
-[[xfail]]
-case = "seek/vfr-holds/storm60/ffmpeg"
-class = "stale"
-bound = { screen-frames = 38, camera-frames = 67, delta = 76, frame = [1, 1800] }
-reason = "NEW: same FFmpeg lookback tolerance and first-frame shortcut over long VFR holds: 38 screen and 67 camera seeks of the full storm (7 and 11 in the fast tier), up to 76 source frames stale"
-link = ""
-
 # Decode deadline under machine starvation. These apply only to a case the
 # starvation sentinel saw stall (starved = true) and only with the signature
 # of the mechanism; the same symptom on a healthy machine is a failure.
@@ -187,22 +166,6 @@ reason = "During a cross-fade both clips read the same AVAssetReader decoder at 
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
-case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
-class = "stale"
-platforms = ["linux", "windows"]
-bound = { screen-frames = 18, delta = 49, frame = [61, 115] }
-reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 18 frames, output frames 61 to 110, 6 of them where the stale side is the weaker one, inside the 1.8 s transition at output frames 61 to 115). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
-link = ""
-
-[[xfail]]
-case = "seek/seek-native/keyframes60/ffmpeg"
-class = "stale"
-platforms = ["linux", "windows"]
-bound = { screen-frames = 2, camera-frames = 2, delta = 61, frame = [124, 490] }
-reason = "NEW: FFmpeg decoder. Off macOS this fixture is libx264 (the AVFoundation encoder is unavailable), so its keyframe set and shuffled request order differ from macOS. Request 124 shows source frame 0 for 61, the first-frame shortcut bug of seek/seek-gop/home-then-play30/ffmpeg; request 490 shows 243 for 244: the 2-frame backward lookback tolerance. Identical on Linux and Windows"
-link = ""
-
-[[xfail]]
 case = "editing/mapping/duration-covered"
 class = "coverage"
 bound = { count = [1, 4], failed-per-mille = [95, 98] }
@@ -231,59 +194,11 @@ reason = "NEW (minor): loading a legacy (output-timed) project drops a caption t
 link = ""
 
 [[xfail]]
-case = "editing/export/multi-segment/seed-7"
-class = "stale"
-bound = { screen-frames = 30, camera-frames = 14, delta = 29, frame = [129, 157] }
-reason = "FFmpeg decoder (full tier): after the timeline played clip 0 from 1.68 s to its end and then transitions back into clip 0 at 0 s, the frames after the transition show source frame 0 instead of 20-29 (deterministic: 22 screen and 10 camera frames, output frames 135 to 157, with the dominant side of each blend checked). Same mechanism as the seek/*/storm*/ffmpeg entries: backward seeks near the start answer frame 0"
-link = ""
-
-[[xfail]]
-case = "editing/export/multi-segment/seed-7"
-class = "unreadable"
-bound = { screen-frames = 1, frame = [141, 141] }
-reason = "FFmpeg decoder (full tier): one blend frame of the transition back into clip 0 mixes two stale frames and its marker is unreadable (same bug as the stale entry above)"
-link = ""
-
-[[xfail]]
-case = "editing/export/basic/seed-10"
-class = "stale"
-bound = { screen-frames = 3, camera-frames = 3, delta = 2, frame = [106, 109] }
-reason = "NEW: FFmpeg decoder (full tier, Linux): seed 10 splits the clip at 0.34 s, plays the later part first and cross-fades back into the clip start, so the requests for source frames 1 and 2 right after the transition are answered with frame 0 (frames 108-109 on Linux, 107-109 with the macOS-encoded fixture). The first-frame shortcut in crates/rendering/src/decoder/ffmpeg.rs (requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE answered with first_ever_frame, no reset) serves frame 0 for any request up to frame 2 that is not cached; same mechanism as seek/seek-gop/home-then-play30/ffmpeg. Deterministic"
-link = ""
-
-[[xfail]]
-case = "editing/export/basic/seed-37"
-class = "stale"
-bound = { screen-frames = 1, camera-frames = 1, delta = 1, frame = [12, 12] }
-reason = "NEW: FFmpeg decoder (full tier, Linux), the first-frame shortcut of editing/export/basic/seed-10: in a cross-fade back into the clip start the weaker side's request for source frame 1 is answered with frame 0 (output frame 12; found by the two-sided blend check, run 38851482675)"
-link = ""
-
-[[xfail]]
-case = "editing/export/same-clip-transition/forward/ffmpeg"
-class = "stale"
-bound = { screen-frames = 8, camera-frames = 8, delta = 55, frame = [37, 58] }
-reason = "NEW: FFmpeg decoder, cross-fade between two parts of the same recording clip (0-2 s, then 3-5.5 s, 0.8 s transition): the export reads one decoder at two positions interleaved and every third blend frame takes the far side from the near position (frame 37: incoming should be source 90, shows 35; up to 55 source frames stale). 6 frames where the wrong side dominates; the two-sided blend check finds 2 more where it is the weaker side (weights 0.08 and 0.21, measured on Apple silicon). Deterministic; AVAssetReader passes this case (its 60 fps variant is the */basic/transition/*60*/avf xfail)"
-link = ""
-
-[[xfail]]
-case = "editing/export/basic/seed-5"
-class = "stale"
-bound = { screen-frames = 2, camera-frames = 2, delta = 2, frame = [52, 54] }
-reason = "FFmpeg decoder, same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frame 53 one source frame stale"
-link = ""
-
-[[xfail]]
 case = "editing/export/basic/seed-23"
-class = "stale"
-bound = { screen-frames = 6, camera-frames = 6, delta = 70, frame = [7, 12] }
-reason = "FFmpeg decoder (full tier), same-clip cross-fade (see editing/export/same-clip-transition/forward/ffmpeg): blend frames 7 to 11 up to 70 source frames stale"
-link = ""
-
-[[xfail]]
-case = "seek/seek-gop/home-then-play30/ffmpeg"
-class = "stale"
-bound = { screen-frames = 31, camera-frames = 31, delta = 89, frame = [60, 90] }
-reason = "NEW: FFmpeg decoder freezes on the first frame after a jump to the start. Seek 6.1 s, seek 0, seek 2.0 s and play: 31 of 122 frames show source frame 0 (up to 89 frames stale, about 1 s frozen). A request at grid 0..2 is answered by the first-frame shortcut (ffmpeg.rs, requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE) without resetting the reader, which stays near 6 s, and last_sent_frame becomes frame 0; the next request is then not 'far forward' of frame 0 (< FRAME_CACHE_SIZE), so no reset happens, the reader vends frames past the request and the answer falls back to last_sent_frame (frame 0) until playback outruns FRAME_CACHE_SIZE. Main decoder on Linux and on Windows without a D3D11 video device; macOS AVAssetReader passes. Minimal: CAP_VERIFY_SEEK_SCRIPT='seek-gop@60:6.1,0.0167,2.0667' (third request shows frame 0 for 61)"
+class = "future"
+platforms = ["linux"]
+bound = { camera-frames = 1, delta = 8, frame = [8, 8] }
+reason = "NEW: Linux only (software renderer): in seed 23's 3 s same-clip cross-fade, output frame 8 shows incoming camera source frame 84 instead of 76. The FFmpeg decoder answers every camera request with the requested frame (traced: request 76 read 76, run 38997099068, identical on macOS), so a later camera frame reaches the renderer's shared camera layer, which draws the outgoing and incoming sides in turn. Before #2661 the shared decoder made output frames 7 to 12 up to 70 frames stale and hid it. Deterministic on Linux; macOS and Windows pass"
 link = ""
 
 [[xfail]]

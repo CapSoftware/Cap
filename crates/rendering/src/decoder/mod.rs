@@ -2806,6 +2806,7 @@ mod managed_worker_tests {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
             segment_offset: 10.25,
+            transition_readers: None,
         };
         let input = ManagedSegmentVideoInput::new(
             0,
