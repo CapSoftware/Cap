@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
 use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
+use x11rb::protocol::shm::ConnectionExt as _;
 use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConnectionExt as _, EventMask, ImageFormat, ImageOrder, MapState,
 };
@@ -2044,6 +2045,59 @@ pub(crate) struct X11Grabber {
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+    shm: Option<X11ShmSegment>,
+}
+
+struct X11ShmSegment {
+    seg: u32,
+    data: *const u8,
+    len: usize,
+}
+
+impl X11ShmSegment {
+    fn new(conn: &RustConnection, len: usize) -> anyhow::Result<Self> {
+        let version = conn.shm_query_version()?.reply()?;
+        if (version.major_version, version.minor_version) < (1, 2) {
+            bail!("MIT-SHM 1.2 is required to share a segment over a file descriptor");
+        }
+        let seg = conn.generate_id()?;
+        let reply = conn
+            .shm_create_segment(seg, u32::try_from(len)?, false)?
+            .reply()?;
+        // A read-only shared mapping of the segment the server just created;
+        // it stays valid after the descriptor closes and is unmapped on drop.
+        let data = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                std::os::fd::AsRawFd::as_raw_fd(&reply.shm_fd),
+                0,
+            )
+        };
+        if data == libc::MAP_FAILED {
+            let _ = conn.shm_detach(seg);
+            bail!("map X11 shared memory: {}", std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            seg,
+            data: data.cast(),
+            len,
+        })
+    }
+
+    fn bytes(&self, len: usize) -> &[u8] {
+        // The server only writes while a ShmGetImage request is in flight,
+        // and callers read after waiting for its reply.
+        unsafe { std::slice::from_raw_parts(self.data, len.min(self.len)) }
+    }
+}
+
+impl Drop for X11ShmSegment {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.data.cast_mut().cast(), self.len) };
+    }
 }
 
 struct X11WindowCapture {
@@ -2162,6 +2216,9 @@ impl X11Grabber {
             None
         };
 
+        let shm = X11ShmSegment::new(&conn, usize::from(width) * usize::from(height) * 4)
+            .inspect_err(|error| tracing::debug!(%error, "X11 capture falls back to GetImage"))
+            .ok();
         let mut grabber = Self {
             conn,
             root,
@@ -2174,6 +2231,7 @@ impl X11Grabber {
             output,
             scaler: None,
             show_cursor,
+            shm,
         };
         grabber.refresh_window_pixmap()?;
         Ok(grabber)
@@ -2260,50 +2318,27 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
-        let reply = self
-            .conn
-            .get_image(
-                ImageFormat::Z_PIXMAP,
-                drawable,
-                x,
-                y,
-                self.width,
-                self.height,
-                u32::MAX,
-            )
-            .context("request X11 image")?
-            .reply()
-            .context("read X11 image")?;
-
-        let width = usize::from(self.width);
-        let height = usize::from(self.height);
-        let row_bytes = width * 4;
-        let source_stride = reply
-            .data
-            .len()
-            .checked_div(height)
-            .filter(|stride| *stride >= row_bytes)
-            .ok_or_else(|| {
-                anyhow!(
-                    "X11 image too small: {} bytes for {}x{}",
-                    reply.data.len(),
-                    width,
-                    height
-                )
-            })?;
-
         let mut source = ffmpeg::frame::Video::new(
             self.source_pixel,
             u32::from(self.width),
             u32::from(self.height),
         );
-        let dst_stride = source.stride(0);
-        let copy = row_bytes.min(dst_stride);
-        for row in 0..height {
-            let src_start = row * source_stride;
-            let dst_start = row * dst_stride;
-            source.data_mut(0)[dst_start..dst_start + copy]
-                .copy_from_slice(&reply.data[src_start..src_start + copy]);
+        if !self.grab_shm(drawable, x, y, &mut source) {
+            let reply = self
+                .conn
+                .get_image(
+                    ImageFormat::Z_PIXMAP,
+                    drawable,
+                    x,
+                    y,
+                    self.width,
+                    self.height,
+                    u32::MAX,
+                )
+                .context("request X11 image")?
+                .reply()
+                .context("read X11 image")?;
+            copy_x11_image(&reply.data, &mut source)?;
         }
 
         let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
@@ -2315,6 +2350,56 @@ impl X11Grabber {
         }
 
         Ok(frame)
+    }
+
+    fn grab_shm(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        source: &mut ffmpeg::frame::Video,
+    ) -> bool {
+        let Some(shm) = &mut self.shm else {
+            return false;
+        };
+        let needed = usize::from(self.width) * usize::from(self.height) * 4;
+        if shm.len < needed {
+            match X11ShmSegment::new(&self.conn, needed) {
+                Ok(resized) => {
+                    let _ = self.conn.shm_detach(shm.seg);
+                    *shm = resized;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "X11 shared memory capture disabled");
+                    let _ = self.conn.shm_detach(shm.seg);
+                    self.shm = None;
+                    return false;
+                }
+            }
+        }
+        let read = self
+            .conn
+            .shm_get_image(
+                drawable,
+                x,
+                y,
+                self.width,
+                self.height,
+                u32::MAX,
+                ImageFormat::Z_PIXMAP.into(),
+                shm.seg,
+                0,
+            )
+            .map_err(anyhow::Error::from)
+            .and_then(|cookie| Ok(cookie.reply()?))
+            .and_then(|reply| copy_x11_image(shm.bytes(reply.size as usize), source));
+        if let Err(error) = read {
+            tracing::warn!(%error, "X11 shared memory capture disabled");
+            let _ = self.conn.shm_detach(shm.seg);
+            self.shm = None;
+            return false;
+        }
+        true
     }
 
     /// Alpha-blend the X11 cursor onto a BGRZ frame (mirrors x11grab's
@@ -2385,6 +2470,33 @@ impl X11Grabber {
 
         Ok(())
     }
+}
+
+fn copy_x11_image(data: &[u8], frame: &mut ffmpeg::frame::Video) -> anyhow::Result<()> {
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    let row_bytes = width * 4;
+    let source_stride = data
+        .len()
+        .checked_div(height)
+        .filter(|stride| *stride >= row_bytes)
+        .ok_or_else(|| {
+            anyhow!(
+                "X11 image too small: {} bytes for {}x{}",
+                data.len(),
+                width,
+                height
+            )
+        })?;
+    let dst_stride = frame.stride(0);
+    let copy = row_bytes.min(dst_stride);
+    for row in 0..height {
+        let src_start = row * source_stride;
+        let dst_start = row * dst_stride;
+        frame.data_mut(0)[dst_start..dst_start + copy]
+            .copy_from_slice(&data[src_start..src_start + copy]);
+    }
+    Ok(())
 }
 
 /// Map an X11 32-bit TrueColor visual (byte order + RGB masks) to the matching
@@ -2966,5 +3078,220 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+}
+
+#[cfg(test)]
+mod x11_grabber_tests {
+    use super::{X11Grabber, X11InputConfig};
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::{
+        ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, ImageFormat,
+        WindowClass,
+    };
+    use x11rb::rust_connection::RustConnection;
+
+    struct Display {
+        conn: RustConnection,
+        name: String,
+        root: u32,
+        depth: u8,
+        width: u16,
+        height: u16,
+    }
+
+    fn display() -> Option<Display> {
+        let name = std::env::var("CAP_TEST_X11_DISPLAY").ok()?;
+        let (conn, screen) = x11rb::connect(Some(&name)).ok()?;
+        let screen = &conn.setup().roots[screen];
+        let (root, depth, width, height) = (
+            screen.root,
+            screen.root_depth,
+            screen.width_in_pixels,
+            screen.height_in_pixels,
+        );
+        Some(Display {
+            conn,
+            name,
+            root,
+            depth,
+            width,
+            height,
+        })
+    }
+
+    fn config(
+        display: &Display,
+        window_id: Option<u32>,
+        width: u16,
+        height: u16,
+    ) -> X11InputConfig {
+        X11InputConfig {
+            display_name: display.name.clone(),
+            window_id,
+            x: 0,
+            y: 0,
+            width: u32::from(width),
+            height: u32::from(height),
+            fps: 30,
+            show_cursor: false,
+        }
+    }
+
+    fn paint_gradient(display: &Display, drawable: u32, width: u16, height: u16) {
+        let gc = display.conn.generate_id().unwrap();
+        display
+            .conn
+            .create_gc(gc, drawable, &CreateGCAux::new())
+            .unwrap();
+        for top in (0..height).step_by(64) {
+            let rows = (height - top).min(64);
+            let data: Vec<u8> = (top..top + rows)
+                .flat_map(|y| (0..width).flat_map(move |x| [x as u8, y as u8, (x ^ y) as u8, 0]))
+                .collect();
+            display
+                .conn
+                .put_image(
+                    ImageFormat::Z_PIXMAP,
+                    drawable,
+                    gc,
+                    width,
+                    rows,
+                    0,
+                    top as i16,
+                    0,
+                    display.depth,
+                    &data,
+                )
+                .unwrap();
+        }
+        display.conn.free_gc(gc).unwrap();
+        display.conn.get_input_focus().unwrap().reply().unwrap();
+    }
+
+    fn grab_both_ways(grabber: &mut X11Grabber) -> (ffmpeg::frame::Video, ffmpeg::frame::Video) {
+        let shared = grabber.grab().unwrap();
+        let segment = grabber
+            .shm
+            .take()
+            .expect("the shared read fell back to GetImage");
+        let streamed = grabber.grab().unwrap();
+        grabber.shm = Some(segment);
+        (shared, streamed)
+    }
+
+    fn assert_same_pixels(shared: &ffmpeg::frame::Video, streamed: &ffmpeg::frame::Video) {
+        assert_eq!(
+            (shared.width(), shared.height()),
+            (streamed.width(), streamed.height())
+        );
+        let row_bytes = shared.width() as usize * 4;
+        for row in 0..shared.height() as usize {
+            assert_eq!(
+                &shared.data(0)[row * shared.stride(0)..][..row_bytes],
+                &streamed.data(0)[row * streamed.stride(0)..][..row_bytes],
+                "row {row}"
+            );
+        }
+    }
+
+    fn pixel(frame: &ffmpeg::frame::Video, x: usize, y: usize) -> [u8; 3] {
+        let start = y * frame.stride(0) + x * 4;
+        frame.data(0)[start..start + 3].try_into().unwrap()
+    }
+
+    #[test]
+    fn shared_memory_capture_matches_get_image() {
+        let Some(display) = display() else {
+            eprintln!(
+                "Set CAP_TEST_X11_DISPLAY to a dedicated X server such as Xvfb to run this test"
+            );
+            return;
+        };
+        paint_gradient(&display, display.root, 320, 200);
+        let mut grabber =
+            X11Grabber::new(&config(&display, None, display.width, display.height)).unwrap();
+        if grabber.shm.is_none() {
+            eprintln!("The X11 display has no MIT-SHM 1.2");
+            return;
+        }
+        let (shared, streamed) = grab_both_ways(&mut grabber);
+        assert_eq!(pixel(&shared, 5, 7), [5, 7, 2]);
+        assert_same_pixels(&shared, &streamed);
+
+        let window = display.conn.generate_id().unwrap();
+        display
+            .conn
+            .create_window(
+                display.depth,
+                window,
+                display.root,
+                40,
+                40,
+                200,
+                150,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap();
+        display.conn.map_window(window).unwrap();
+        display.conn.get_input_focus().unwrap().reply().unwrap();
+        let mut grabber = X11Grabber::new(&config(&display, Some(window), 200, 150)).unwrap();
+        paint_gradient(&display, window, 200, 150);
+        let (shared, streamed) = grab_both_ways(&mut grabber);
+        assert_eq!(pixel(&shared, 9, 4), [9, 4, 13]);
+        assert_same_pixels(&shared, &streamed);
+
+        display
+            .conn
+            .configure_window(window, &ConfigureWindowAux::new().width(480).height(320))
+            .unwrap();
+        display.conn.get_input_focus().unwrap().reply().unwrap();
+        paint_gradient(&display, window, 480, 320);
+        let (shared, streamed) = grab_both_ways(&mut grabber);
+        assert_eq!((grabber.width, grabber.height), (480, 320));
+        assert!(grabber.shm.as_ref().unwrap().len >= 480 * 320 * 4);
+        assert_same_pixels(&shared, &streamed);
+
+        display.conn.destroy_window(window).unwrap();
+        display.conn.get_input_focus().unwrap().reply().unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_x11_grab() {
+        fn cpu_ms() -> f64 {
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as f64 * 1000.0
+                + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1000.0
+        }
+
+        let Some(display) = display() else {
+            eprintln!(
+                "Set CAP_TEST_X11_DISPLAY to a dedicated X server such as Xvfb to run this benchmark"
+            );
+            return;
+        };
+        let mut grabber =
+            X11Grabber::new(&config(&display, None, display.width, display.height)).unwrap();
+        let segment = grabber.shm.take();
+        for (path, shm) in [("GetImage", None), ("ShmGetImage", segment)] {
+            grabber.shm = shm;
+            let frames = 120;
+            let (started, cpu) = (std::time::Instant::now(), cpu_ms());
+            for _ in 0..frames {
+                std::hint::black_box(grabber.grab().unwrap());
+            }
+            println!(
+                "{{\"path\":\"{path}\",\"size\":\"{}x{}\",\"wall_ms_per_frame\":{:.2},\"cpu_ms_per_frame\":{:.2}}}",
+                display.width,
+                display.height,
+                started.elapsed().as_secs_f64() * 1000.0 / f64::from(frames),
+                (cpu_ms() - cpu) / f64::from(frames)
+            );
+        }
     }
 }
