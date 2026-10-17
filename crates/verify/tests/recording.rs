@@ -294,19 +294,23 @@ fn specs() -> Vec<Spec> {
     specs
 }
 
-/// `CAP_VERIFY_SOAK_SECS=<seconds>` adds a long Studio recording with a
-/// camera and a long Instant recording, for drift, frame loss and memory over
-/// a real session length (up to 30 minutes: past that the microphone's
-/// marker indices run out). Run them with `CAP_VERIFY_TIER=full` and
-/// `CAP_VERIFY_CASE='recording/soak/*'`.
+/// `CAP_VERIFY_SOAK_SECS`: at most 1800 s, because the microphone's 12-bit
+/// marker index (one marker every 0.5 s) runs out past 34 minutes.
 fn soak_specs() -> Vec<Spec> {
-    let Some(seconds) = std::env::var("CAP_VERIFY_SOAK_SECS")
+    let Some(value) = std::env::var("CAP_VERIFY_SOAK_SECS")
         .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|&s| s > 0.0)
+        .filter(|v| !v.trim().is_empty())
     else {
         return vec![];
     };
+    let seconds = value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or_else(|| {
+            panic!("CAP_VERIFY_SOAK_SECS={value:?} is not a positive number of seconds")
+        });
     let seconds = seconds.min(1800.0);
     vec![
         Spec {
