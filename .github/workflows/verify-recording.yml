@@ -317,6 +317,14 @@ jobs:
         run: |
           python3 scripts/verify/summary.py --title "real capture ${{ matrix.runner }} ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
 
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-report-${{ matrix.runner }}
+          path: ${{ github.workspace }}/verify-report
+          if-no-files-found: ignore
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

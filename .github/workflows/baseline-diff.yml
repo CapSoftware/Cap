@@ -68,7 +68,8 @@ jobs:
             # Baseline runs fail (0.6.0 has known bugs), but a run with a
             # cancelled or timed-out job stopped before reporting every case.
             for candidate in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASELINE_BRANCH" \
-              --status completed --limit 20 --json databaseId --jq '.[].databaseId'); do
+              --limit 20 --json databaseId,conclusion \
+              --jq '.[] | select(.conclusion == "success" or .conclusion == "failure") | .databaseId'); do
               stopped=$(gh run view "$candidate" --repo "$GITHUB_REPOSITORY" --json conclusion,jobs \
                 --jq '[.conclusion, .jobs[].conclusion] | map(select(. == "cancelled" or . == "timed_out")) | length')
               if [[ "$stopped" == 0 ]]; then
@@ -96,10 +97,14 @@ jobs:
             run=$([[ $side == main ]] && echo "$MAIN_RUN" || echo "$BASELINE_RUN")
             dest="$RUNNER_TEMP/reports/$side"
             mkdir -p "$dest"
+            # Real capture also uploads its reports alone; runs from before
+            # that only have the artifact with the recordings.
             gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" \
-              --pattern 'verify-report-*' --pattern 'verify-recording-*'
-            # Recordings are large and not read by the diff.
-            find "$dest" -type d -name verify-scratch -prune -exec rm -r {} +
+              --pattern 'verify-report-*' --pattern 'verify-recording-report-*' || true
+            if [[ -z "$(find "$dest" -maxdepth 1 -name 'verify-*' -print -quit)" ]]; then
+              gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" --pattern 'verify-recording-*'
+              find "$dest" -type d -name verify-scratch -prune -exec rm -r {} +
+            fi
             echo "$side: $(find "$dest" -name '*.jsonl' | wc -l) report files"
           done
 
