@@ -19,6 +19,7 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
+import IconLucideMagnet from "~icons/lucide/magnet";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
 	CanvasElementsOverlay,
@@ -40,6 +41,7 @@ import {
 } from "./preview-bounds";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
+import { snappingEnabled, toggleSnapping } from "./Timeline/segment-snapping";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
@@ -331,6 +333,10 @@ export function PlayerContent(props: { compactness?: number }) {
 				),
 		},
 		{
+			combo: "N",
+			handler: toggleSnapping,
+		},
+		{
 			combo: "Mod+=",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
@@ -504,6 +510,14 @@ export function PlayerContent(props: { compactness?: number }) {
 						as={KToggleButton}
 						variant="danger"
 						leftIcon={<IconCapScissors />}
+					/>
+					<EditorButton<typeof KToggleButton>
+						tooltipText="Snapping"
+						kbd={["N"]}
+						pressed={snappingEnabled()}
+						onChange={() => toggleSnapping()}
+						as={KToggleButton}
+						leftIcon={<IconLucideMagnet />}
 					/>
 					<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
 					<div class="flex flex-row gap-0.5 items-center" title={zoomHint()}>

@@ -16,6 +16,12 @@ import { produce } from "solid-js/store";
 import { useEditorContext } from "../context";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
+	clearSnapGuide,
+	liveSnapTargets,
+	snapEdgeTime,
+	snapMoveDelta,
+} from "./segment-snapping";
+import {
 	SegmentContent,
 	SegmentHandle,
 	SegmentLabel,
@@ -273,6 +279,12 @@ export function SceneTrack(props: {
 						setPreviewTime(maxValue);
 					};
 
+					const sceneSnapTargets = () =>
+						liveSnapTargets(project.timeline, () => editorState.playbackTime, {
+							type: "scene",
+							index: i(),
+						});
+
 					function createMouseDownDrag<T>(
 						setup: () => T,
 						_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
@@ -295,6 +307,7 @@ export function SceneTrack(props: {
 
 							function finish(e: MouseEvent) {
 								resumeHistory();
+								clearSnapGuide();
 
 								const currentIndex = i();
 								const selection = editorState.timeline.selection;
@@ -463,12 +476,22 @@ export function SceneTrack(props: {
 											}
 										}
 
-										return { start, minValue, maxValue };
+										return {
+											start,
+											minValue,
+											maxValue,
+											targets: sceneSnapTargets(),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const newStart =
+										const newStart = snapEdgeTime(
 											value.start +
-											(e.clientX - initialMouseX) * secsPerPixel();
+												(e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											value.targets,
+											secsPerPixel(),
+											{ min: value.minValue, max: value.maxValue },
+										);
 										const nextStart = Math.min(
 											value.maxValue,
 											Math.max(value.minValue, newStart),
@@ -511,11 +534,21 @@ export function SceneTrack(props: {
 											original,
 											minStart,
 											maxEnd,
+											targets: sceneSnapTargets(),
 										};
 									},
 									(e, value, initialMouseX) => {
-										const rawDelta =
-											(e.clientX - initialMouseX) * secsPerPixel();
+										const rawDelta = snapMoveDelta(
+											value.original,
+											(e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											value.targets,
+											secsPerPixel(),
+											{
+												min: value.minStart - value.original.start,
+												max: value.maxEnd - value.original.end,
+											},
+										);
 
 										const newStart = value.original.start + rawDelta;
 										const newEnd = value.original.end + rawDelta;
@@ -584,11 +617,21 @@ export function SceneTrack(props: {
 											}
 										}
 
-										return { end, minValue, maxValue };
+										return {
+											end,
+											minValue,
+											maxValue,
+											targets: sceneSnapTargets(),
+										};
 									},
 									(e, value, initialMouseX) => {
-										const newEnd =
-											value.end + (e.clientX - initialMouseX) * secsPerPixel();
+										const newEnd = snapEdgeTime(
+											value.end + (e.clientX - initialMouseX) * secsPerPixel(),
+											e,
+											value.targets,
+											secsPerPixel(),
+											{ min: value.minValue, max: value.maxValue },
+										);
 										const nextEnd = Math.min(
 											value.maxValue,
 											Math.max(value.minValue, newEnd),
