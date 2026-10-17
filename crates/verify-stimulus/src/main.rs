@@ -456,16 +456,8 @@ mod app {
         }
     }
 
-    /// Where the stimulus draws BGRA pictures and presents them. softbuffer
-    /// presents on Windows with a GDI blit into the window's redirection
-    /// surface, which the compositor (and so Windows Graphics Capture) can
-    /// sample half done: recordings showed markers whose top rows were the new
-    /// picture and bottom rows the old one (run 39000141528). On Windows the
-    /// blit starts right after a composition pass (`DwmFlush`), so it is done
-    /// long before the next one. A DXGI swap chain was not an option on hosted
-    /// runners: their Hyper-V display rejected a flip-model swap chain
-    /// (DXGI_ERROR_INVALID_CALL, run 39002964457) and creating the other
-    /// swap effects crashed the stimulus.
+    /// Where the stimulus draws BGRA pictures and presents them.
+    #[cfg(target_os = "macos")]
     mod canvas {
         use super::*;
         use std::num::NonZeroU32;
@@ -476,15 +468,6 @@ mod app {
             softbuffer::Context::new(window.clone())
                 .and_then(|context| softbuffer::Surface::new(&context, window.clone()))
                 .map_err(|e| e.to_string())
-        }
-
-        #[cfg(windows)]
-        fn after_composition() {
-            #[link(name = "dwmapi")]
-            unsafe extern "system" {
-                fn DwmFlush() -> i32;
-            }
-            unsafe { DwmFlush() };
         }
 
         pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
@@ -504,9 +487,121 @@ mod app {
                 )
             };
             paint(bytes);
-            #[cfg(windows)]
-            after_composition();
             buffer.present().is_ok()
+        }
+    }
+
+    /// A layered window updated with `UpdateLayeredWindow`, which hands the
+    /// compositor a whole picture. A GDI blit into the window's redirection
+    /// surface (softbuffer) could be composited, and so captured by Windows
+    /// Graphics Capture, half done: recordings showed markers whose top rows
+    /// were the new picture and bottom rows the old one (run 39000141528),
+    /// also when the blit started right after a composition pass (run
+    /// 39004015045). Hosted runners' Hyper-V display rejected a flip-model
+    /// DXGI swap chain (run 39002964457).
+    #[cfg(windows)]
+    mod canvas {
+        use super::*;
+        use windows::Win32::{
+            Foundation::{COLORREF, HWND, POINT, SIZE},
+            Graphics::Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
+                DIB_RGB_COLORS, DeleteObject, GetDC, HBITMAP, HDC, SelectObject,
+            },
+            UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GetWindowLongPtrW, SetWindowLongPtrW, ULW_OPAQUE, UpdateLayeredWindow,
+                WS_EX_LAYERED,
+            },
+        };
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        pub struct Canvas {
+            hwnd: HWND,
+            screen: HDC,
+            memory: HDC,
+            bitmap: Option<HBITMAP>,
+            bits: *mut u8,
+            size: (u32, u32),
+        }
+
+        pub fn new(window: &Arc<Window>) -> Result<Canvas, String> {
+            let hwnd = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
+                RawWindowHandle::Win32(handle) => HWND(handle.hwnd.get() as *mut core::ffi::c_void),
+                other => return Err(format!("not a Win32 window: {other:?}")),
+            };
+            unsafe {
+                let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED.0 as isize);
+                let screen = GetDC(None);
+                let memory = CreateCompatibleDC(Some(screen));
+                Ok(Canvas {
+                    hwnd,
+                    screen,
+                    memory,
+                    bitmap: None,
+                    bits: std::ptr::null_mut(),
+                    size: (0, 0),
+                })
+            }
+        }
+
+        pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
+            if canvas.size != (w, h) || canvas.bitmap.is_none() {
+                let info = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                        biWidth: w as i32,
+                        biHeight: -(h as i32),
+                        biPlanes: 1,
+                        biBitCount: 32,
+                        biCompression: BI_RGB.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut bits = std::ptr::null_mut();
+                let Ok(bitmap) = (unsafe {
+                    CreateDIBSection(
+                        Some(canvas.memory),
+                        &info,
+                        DIB_RGB_COLORS,
+                        &mut bits,
+                        None,
+                        0,
+                    )
+                }) else {
+                    return false;
+                };
+                unsafe {
+                    SelectObject(canvas.memory, bitmap.into());
+                    if let Some(old) = canvas.bitmap.replace(bitmap) {
+                        let _ = DeleteObject(old.into());
+                    }
+                }
+                canvas.bits = bits.cast();
+                canvas.size = (w, h);
+            }
+            let len = w as usize * h as usize * 4;
+            paint(unsafe { std::slice::from_raw_parts_mut(canvas.bits, len) });
+            let size = SIZE {
+                cx: w as i32,
+                cy: h as i32,
+            };
+            let origin = POINT { x: 0, y: 0 };
+            unsafe {
+                UpdateLayeredWindow(
+                    canvas.hwnd,
+                    Some(canvas.screen),
+                    None,
+                    Some(&size),
+                    Some(canvas.memory),
+                    Some(&origin),
+                    COLORREF(0),
+                    None,
+                    ULW_OPAQUE,
+                )
+            }
+            .is_ok()
         }
     }
 

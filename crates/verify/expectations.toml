@@ -337,16 +337,18 @@ link = ""
 case = "recording/studio-camera/*"
 class = "sync-camera-mic"
 platforms = ["windows"]
+flaky = true
 bound = { count = 1, camera-mic-ms = [-70, 0] }
-reason = "NEW: same Windows camera frame pacing: the paced duplicates shift the camera track's frames against their capture times (camera vs mic -38.3 ms, run 39000141528). Bound: two frame periods early"
+reason = "NEW: same Windows camera frame pacing: the paced duplicates shift the camera track's frames against their capture times (camera vs mic -38.3 ms in run 39000141528, -18.4 ms, inside the limit, in run 39004015045). Bound: two frame periods early"
 link = ""
 
 [[xfail]]
 case = "recording/studio-camera/*"
 class = "camera-clock"
 platforms = ["windows"]
+flaky = true
 bound = { count = 1, camera-mic-ms = [-70, 0] }
-reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms, run 39000141528). Bound: two frame periods early"
+reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
 link = ""
 
 [[xfail]]
