@@ -2184,7 +2184,8 @@ async fn record(
     let crashed = if spec.mode == Mode::StudioCrashed {
         let snapshot = scratch.join("crash-snapshot.cap");
         let snapshot_started = host_now();
-        snapshot_live_project(&project, &snapshot)?;
+        copy_project(&project, &snapshot)
+            .map_err(|e| anyhow::anyhow!("snapshot of the live recording failed: {e:#}"))?;
         case.note(format!(
             "crash snapshot at {:.3}s, cloned in {:.3}s",
             host_secs(snapshot_started, reference),
@@ -2250,15 +2251,9 @@ async fn record(
     let (project_path, loss_budget) = match crashed {
         Some(snapshot) => {
             let recovery_copy = scratch.join("crashed.cap");
-            let status = std::process::Command::new("cp")
-                .arg("-cR")
-                .arg(&snapshot)
-                .arg(&recovery_copy)
-                .status()?;
-            anyhow::ensure!(
-                status.success(),
-                "copy of the preserved crash snapshot failed"
-            );
+            copy_project(&snapshot, &recovery_copy).map_err(|e| {
+                anyhow::anyhow!("copy of the preserved crash snapshot failed: {e:#}")
+            })?;
             let started = std::time::Instant::now();
             let recovered = tokio::task::spawn_blocking(move || {
                 let incomplete = RecoveryManager::inspect_recording(&recovery_copy)
@@ -2296,18 +2291,18 @@ async fn record(
 /// pipeline still in flight.
 const CRASH_LOSS_BUDGET: f64 = 3.0;
 
-/// Copies the live project as a crash would leave it on disk: APFS clones on
-/// macOS; a file-by-file copy on Windows, where the recorder's files are open
-/// for shared reading.
-fn snapshot_live_project(project: &Path, snapshot: &Path) -> anyhow::Result<()> {
+/// Copies a project directory: APFS clones on macOS; a file-by-file copy on
+/// Windows, where a live recorder's files are open for shared reading. Taken
+/// of a live project, the copy is what a crash leaves on disk.
+fn copy_project(from: &Path, to: &Path) -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
         let status = std::process::Command::new("cp")
             .arg("-cR")
-            .arg(project)
-            .arg(snapshot)
+            .arg(from)
+            .arg(to)
             .status()?;
-        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        anyhow::ensure!(status.success(), "cp -cR failed");
         Ok(())
     }
     #[cfg(windows)]
@@ -2325,8 +2320,7 @@ fn snapshot_live_project(project: &Path, snapshot: &Path) -> anyhow::Result<()> 
             }
             Ok(())
         }
-        copy_dir(project, snapshot)
-            .map_err(|e| anyhow::anyhow!("snapshot of the live recording failed: {e}"))
+        copy_dir(from, to).map_err(Into::into)
     }
 }
 
