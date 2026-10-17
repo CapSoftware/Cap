@@ -124,10 +124,18 @@ jobs:
           set -euo pipefail
           # Lanes as diff.py names them: shard numbers and tiers dropped.
           lanes() {
-            find "$1" -mindepth 1 -maxdepth 1 -type d -name 'verify-*' -printf '%f\n' \
-              | sed -E 's/^verify-recording-report-/verify-recording-/; s/-(fast|full)(-[0-9]+)?$//' | sort -u
+            local dir
+            for dir in "$1"/verify-*/; do
+              if [[ -d "$dir" ]]; then basename "$dir"; fi
+            done | sed -E 's/^verify-recording-report-/verify-recording-/; s/-(fast|full)(-[0-9]+)?$//' | sort -u
           }
-          missing=$(comm -23 <(lanes "$RUNNER_TEMP/reports/main") <(lanes "$RUNNER_TEMP/reports/baseline"))
+          main_lanes=$(lanes "$RUNNER_TEMP/reports/main")
+          baseline_lanes=$(lanes "$RUNNER_TEMP/reports/baseline")
+          if [[ -z "$main_lanes" ]]; then
+            echo "::error::main's run has no report directories"
+            exit 1
+          fi
+          missing=$(comm -23 <(echo "$main_lanes") <(echo "$baseline_lanes"))
           if [[ -n "$missing" ]]; then
             echo "::error::the baseline run has no reports for: $(echo $missing)"
             exit 1
