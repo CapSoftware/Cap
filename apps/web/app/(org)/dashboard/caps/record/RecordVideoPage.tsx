@@ -11,7 +11,11 @@ import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { FREE_PLAN_MAX_RECORDING_MS } from "../components/web-recorder-dialog/web-recorder-constants";
 import { WebRecorderDialog } from "../components/web-recorder-dialog/web-recorder-dialog";
 
-export const RecordVideoPage = () => {
+export const RecordVideoPage = ({
+	openBrowserRecorder = false,
+}: {
+	openBrowserRecorder?: boolean;
+}) => {
 	const checkingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const openDesktop = useCallback(() => {
@@ -62,7 +66,7 @@ export const RecordVideoPage = () => {
 								Open Cap Desktop
 							</Button>
 							<p className="text-sm text-gray-10">or</p>
-							<WebRecorderDialog />
+							<WebRecorderDialog defaultOpen={openBrowserRecorder} />
 							<ChromeRecorderButton
 								size="sm"
 								className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}

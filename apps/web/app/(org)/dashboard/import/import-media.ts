@@ -20,11 +20,13 @@ export async function importMediaFile({
 	folderId,
 	orgId,
 	setUploadStatus,
+	showSuccessToast = true,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
+	showSuccessToast?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -44,6 +46,7 @@ export async function importMediaFile({
 			folderId,
 			orgId,
 			setUploadStatus,
+			showSuccessToast,
 		);
 	}
 
@@ -116,6 +119,7 @@ async function uploadVideoForServerProcessing(
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	showSuccessToast: boolean,
 ) {
 	try {
 		setUploadStatus({ status: "parsing" });
@@ -265,9 +269,11 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		if (showSuccessToast) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return true;
 	} catch (err) {
 		console.error("Video upload failed", err);

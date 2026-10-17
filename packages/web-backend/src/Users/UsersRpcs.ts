@@ -35,6 +35,9 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						case "skipToDashboard":
 							yield* onboarding.skipToDashboard();
 							return { step: "skipToDashboard" as const, data: undefined };
+						case "getStarted":
+							yield* onboarding.getStarted(payload.data);
+							return { step: "getStarted" as const, data: undefined };
 					}
 				}).pipe(
 					Effect.catchTag("DatabaseError", () =>

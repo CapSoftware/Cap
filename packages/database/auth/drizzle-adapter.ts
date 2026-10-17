@@ -143,6 +143,7 @@ export function DrizzleAdapter(
 					activeOrganizationId: Organisation.OrganisationId.make(""),
 					marketingOrigin:
 						pendingInvite || ssoIdentity ? "teammate" : "independent",
+					onboardingSteps: ssoIdentity ? null : { getStarted: false },
 				});
 				if (ssoIdentity) {
 					await insertUser.onDuplicateKeyUpdate({
