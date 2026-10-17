@@ -192,36 +192,12 @@ pub fn convert_32bit_rows(
                 .zip(rgba_data.chunks_exact_mut(row_bytes))
                 .take(height)
             {
-                let src = &source[..row_bytes];
-                let aligned = (row_bytes / 16) * 16;
-                let (src_aligned, src_rem) = src.split_at(aligned);
-                let (dst_aligned, dst_rem) = target.split_at_mut(aligned);
-                for (src, dst) in src_aligned.chunks_exact(16).zip(dst_aligned.chunks_exact_mut(16)) {
-                    dst[0] = src[1];
-                    dst[1] = src[2];
-                    dst[2] = src[3];
-                    dst[3] = src[0];
-
-                    dst[4] = src[5];
-                    dst[5] = src[6];
-                    dst[6] = src[7];
-                    dst[7] = src[4];
-
-                    dst[8] = src[9];
-                    dst[9] = src[10];
-                    dst[10] = src[11];
-                    dst[11] = src[8];
-
-                    dst[12] = src[13];
-                    dst[13] = src[14];
-                    dst[14] = src[15];
-                    dst[15] = src[12];
-                }
-                for (src, dst) in src_rem.chunks_exact(4).zip(dst_rem.chunks_exact_mut(4)) {
-                    dst[0] = src[1];
-                    dst[1] = src[2];
-                    dst[2] = src[3];
-                    dst[3] = src[0];
+                for (src, dst) in source[..row_bytes]
+                    .chunks_exact(4)
+                    .zip(target.chunks_exact_mut(4))
+                {
+                    let pixel = u32::from_ne_bytes(src.try_into().unwrap());
+                    dst.copy_from_slice(&pixel.rotate_right(8).to_ne_bytes());
                 }
             }
         }
@@ -231,36 +207,12 @@ pub fn convert_32bit_rows(
                 .zip(rgba_data.chunks_exact_mut(row_bytes))
                 .take(height)
             {
-                let src = &source[..row_bytes];
-                let aligned = (row_bytes / 16) * 16;
-                let (src_aligned, src_rem) = src.split_at(aligned);
-                let (dst_aligned, dst_rem) = target.split_at_mut(aligned);
-                for (src, dst) in src_aligned.chunks_exact(16).zip(dst_aligned.chunks_exact_mut(16)) {
-                    dst[0] = src[3];
-                    dst[1] = src[2];
-                    dst[2] = src[1];
-                    dst[3] = src[0];
-
-                    dst[4] = src[7];
-                    dst[5] = src[6];
-                    dst[6] = src[5];
-                    dst[7] = src[4];
-
-                    dst[8] = src[11];
-                    dst[9] = src[10];
-                    dst[10] = src[9];
-                    dst[11] = src[8];
-
-                    dst[12] = src[15];
-                    dst[13] = src[14];
-                    dst[14] = src[13];
-                    dst[15] = src[12];
-                }
-                for (src, dst) in src_rem.chunks_exact(4).zip(dst_rem.chunks_exact_mut(4)) {
-                    dst[0] = src[3];
-                    dst[1] = src[2];
-                    dst[2] = src[1];
-                    dst[3] = src[0];
+                for (src, dst) in source[..row_bytes]
+                    .chunks_exact(4)
+                    .zip(target.chunks_exact_mut(4))
+                {
+                    let pixel = u32::from_ne_bytes(src.try_into().unwrap());
+                    dst.copy_from_slice(&pixel.swap_bytes().to_ne_bytes());
                 }
             }
         }
@@ -332,18 +284,19 @@ pub fn convert_nv12_planes(
             let cr_f = cr as f32 - 128.0;
 
             let r_chroma = 1.596027_f32 * cr_f;
-            let g_chroma = -0.391762_f32 * cb_f - 0.812968_f32 * cr_f;
+            let g_cb = 0.391762_f32 * cb_f;
+            let g_cr = 0.812968_f32 * cr_f;
             let b_chroma = 2.017232_f32 * cb_f;
 
             let y1 = ((f32::from(y_row[x]) - y_sub).max(0.0)) * scale;
             rgba_row[dst_idx] = clamp_channel(y1 + r_chroma);
-            rgba_row[dst_idx + 1] = clamp_channel(y1 + g_chroma);
+            rgba_row[dst_idx + 1] = clamp_channel(y1 - g_cb - g_cr);
             rgba_row[dst_idx + 2] = clamp_channel(y1 + b_chroma);
             rgba_row[dst_idx + 3] = 255;
 
             let y2 = ((f32::from(y_row[x + 1]) - y_sub).max(0.0)) * scale;
             rgba_row[dst_idx + 4] = clamp_channel(y2 + r_chroma);
-            rgba_row[dst_idx + 5] = clamp_channel(y2 + g_chroma);
+            rgba_row[dst_idx + 5] = clamp_channel(y2 - g_cb - g_cr);
             rgba_row[dst_idx + 6] = clamp_channel(y2 + b_chroma);
             rgba_row[dst_idx + 7] = 255;
 
@@ -352,6 +305,14 @@ pub fn convert_nv12_planes(
         }
 
         if x < width {
+            if x + 1 >= uv_row.len() {
+                tracing::warn!(
+                    uv_index = x,
+                    uv_row_len = uv_row.len(),
+                    "UV index out of bounds during conversion",
+                );
+                return None;
+            }
             let cb = uv_row[x];
             let cr = uv_row[x + 1];
             let (r, g, b) = ycbcr_to_rgb(y_row[x], cb, cr, range);
@@ -364,7 +325,6 @@ pub fn convert_nv12_planes(
 
     Some(rgba_data)
 }
-
 
 pub fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
     let y = y as f32;
@@ -460,5 +420,61 @@ mod tests {
         let out = convert_nv12_planes(&y_plane, 4, &uv_plane, 4, 2, 2, Nv12Range::Video).unwrap();
         assert_eq!(&out[0..8], &[0, 0, 0, 255, 254, 254, 254, 255]);
         assert!(convert_nv12_planes(&[16], 4, &uv_plane, 4, 2, 1, Nv12Range::Video).is_none());
+    }
+
+    #[test]
+    fn nv12_precision_and_odd_width_rejection() {
+        let (r, g, b) = ycbcr_to_rgb(36, 80, 58, Nv12Range::Video);
+        assert_eq!(g, 99);
+        let y_plane = vec![36, 36];
+        let uv_plane = vec![80, 58];
+        let out = convert_nv12_planes(&y_plane, 2, &uv_plane, 2, 2, 1, Nv12Range::Video).unwrap();
+        assert_eq!(out, vec![r, 99, b, 255, r, 99, b, 255]);
+
+        let y_plane_odd = vec![36, 36, 36];
+        let uv_plane_short = vec![80, 58, 80];
+        assert!(
+            convert_nv12_planes(&y_plane_odd, 3, &uv_plane_short, 3, 3, 1, Nv12Range::Video)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn convert_32bit_rows_unaligned_widths() {
+        for width in [1, 2, 3, 5, 6, 7, 9, 15, 17] {
+            let stride = width * 4 + 8;
+            let height = 3;
+            let mut raw = vec![0u8; stride * height];
+            for (i, byte) in raw.iter_mut().enumerate() {
+                *byte = (i as u8).wrapping_mul(13);
+            }
+            for order in [
+                ChannelOrder::Rgba,
+                ChannelOrder::Bgra,
+                ChannelOrder::Argb,
+                ChannelOrder::Abgr,
+            ] {
+                let converted = convert_32bit_rows(&raw, stride, width, height, order).unwrap();
+                assert_eq!(converted.len(), width * height * 4);
+                for y in 0..height {
+                    for x in 0..width {
+                        let src_idx = y * stride + x * 4;
+                        let dst_idx = (y * width + x) * 4;
+                        let px = &raw[src_idx..src_idx + 4];
+                        let expected = match order {
+                            ChannelOrder::Rgba => [px[0], px[1], px[2], px[3]],
+                            ChannelOrder::Bgra => [px[2], px[1], px[0], px[3]],
+                            ChannelOrder::Argb => [px[1], px[2], px[3], px[0]],
+                            ChannelOrder::Abgr => [px[3], px[2], px[1], px[0]],
+                        };
+                        assert_eq!(
+                            &converted[dst_idx..dst_idx + 4],
+                            &expected,
+                            "failed at width {width}, order {order:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -63,14 +63,15 @@ fn main() {
         ("1080p-argb", 1920, 1080, 1920 * 4, ChannelOrder::Argb),
         ("1080p-abgr", 1920, 1080, 1920 * 4, ChannelOrder::Abgr),
         ("1080p-bgra-padded", 1920, 1080, 7936, ChannelOrder::Bgra),
+        ("unaligned-5px-argb", 5, 1080, 32, ChannelOrder::Argb),
+        ("unaligned-6px-abgr", 6, 1080, 32, ChannelOrder::Abgr),
+        ("unaligned-7px-argb", 7, 1080, 32, ChannelOrder::Argb),
     ] {
         let input: Vec<u8> = (0..stride * height)
             .map(|i| (i as u8).wrapping_mul(31))
             .collect();
-        let expected =
-            baseline::convert_32bit_rows(&input, stride, width, height, order).unwrap();
-        let actual =
-            candidate::convert_32bit_rows(&input, stride, width, height, order).unwrap();
+        let expected = baseline::convert_32bit_rows(&input, stride, width, height, order).unwrap();
+        let actual = candidate::convert_32bit_rows(&input, stride, width, height, order).unwrap();
         assert_eq!(expected, actual, "Mismatch in {name}");
 
         let mut baseline_times = Vec::new();
@@ -123,12 +124,10 @@ fn main() {
         let input: Vec<u8> = (0..stride * height)
             .map(|i| (i as u8).wrapping_mul(13))
             .collect();
-        let expected = baseline::downsample_nearest(
-            &input, width, height, stride, target_w, target_h,
-        );
-        let actual = candidate::downsample_nearest(
-            &input, width, height, stride, target_w, target_h,
-        );
+        let expected =
+            baseline::downsample_nearest(&input, width, height, stride, target_w, target_h);
+        let actual =
+            candidate::downsample_nearest(&input, width, height, stride, target_w, target_h);
         assert_eq!(expected, actual, "Mismatch in {name}");
 
         let mut baseline_times = Vec::new();
@@ -180,14 +179,32 @@ fn main() {
         ("1080p-nv12", 1920, 1080),
         ("4k-nv12", 3840, 2160),
     ] {
-        let y_plane: Vec<u8> = (0..width * height).map(|i| (i as u8).wrapping_mul(7)).collect();
-        let uv_plane: Vec<u8> = (0..width * (height / 2)).map(|i| 128u8.wrapping_add(i as u8)).collect();
+        let y_plane: Vec<u8> = (0..width * height)
+            .map(|i| (i as u8).wrapping_mul(7))
+            .collect();
+        let uv_plane: Vec<u8> = (0..width * (height / 2))
+            .map(|i| 128u8.wrapping_add(i as u8))
+            .collect();
         let expected = baseline::convert_nv12_planes(
-            &y_plane, width, &uv_plane, width, width, height, Nv12Range::Video,
-        ).unwrap();
+            &y_plane,
+            width,
+            &uv_plane,
+            width,
+            width,
+            height,
+            Nv12Range::Video,
+        )
+        .unwrap();
         let actual = candidate::convert_nv12_planes(
-            &y_plane, width, &uv_plane, width, width, height, Nv12Range::Video,
-        ).unwrap();
+            &y_plane,
+            width,
+            &uv_plane,
+            width,
+            width,
+            height,
+            Nv12Range::Video,
+        )
+        .unwrap();
         assert_eq!(expected, actual, "Mismatch in {name}");
 
         let mut baseline_times = Vec::new();
@@ -389,6 +406,10 @@ mod baseline {
         let g = scale * y_value - 0.391762_f32 * cb - 0.812968_f32 * cr;
         let b = scale * y_value + 2.017232_f32 * cb;
 
-        (r.clamp(0.0, 255.0) as u8, g.clamp(0.0, 255.0) as u8, b.clamp(0.0, 255.0) as u8)
+        (
+            r.clamp(0.0, 255.0) as u8,
+            g.clamp(0.0, 255.0) as u8,
+            b.clamp(0.0, 255.0) as u8,
+        )
     }
 }
