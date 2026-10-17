@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockDb = vi.fn();
 const mockStart = vi.fn();
 const mockSetVideoProcessingError = vi.fn();
+const mockMarkLoomImportRetrying = vi.fn();
 
 vi.mock("@cap/database", () => ({
 	db: mockDb,
@@ -51,6 +52,10 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("@/lib/video-processing", () => ({
 	setVideoProcessingError: mockSetVideoProcessingError,
+}));
+
+vi.mock("@/lib/loom-import/retry", () => ({
+	markLoomImportRetrying: mockMarkLoomImportRetrying,
 }));
 
 vi.mock("@/workflows/process-video", () => ({
@@ -198,6 +203,7 @@ describe("recoverFailedVideoProcessing", () => {
 			}),
 		]);
 		expect(result.statuses).toEqual({ started: 1 });
+		expect(mockMarkLoomImportRetrying).toHaveBeenCalledWith("video-1");
 	});
 
 	it("keeps a failed Loom workflow start eligible for Loom-specific recovery", async () => {

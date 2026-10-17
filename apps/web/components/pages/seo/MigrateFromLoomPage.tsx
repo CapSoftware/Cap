@@ -306,11 +306,12 @@ const Teams = () => (
 				<p
 					className={`${BODY_TEXT} mt-6 max-w-[520px] text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)]`}
 				>
-					Upload a CSV of up to 500 Loom links mapped to teammate emails and
+					Upload a CSV of up to 2,000 Loom links mapped to teammate emails and
 					spaces, and Cap imports each video for the right owner. Bigger
-					libraries run in controlled batches through the Cap CLI or MCP server,
-					or we run the migration with you. We have moved organizations with
-					hundreds of users and tens of thousands of recordings.
+					libraries split across a few CSVs, run in controlled batches through
+					the Cap CLI or MCP server, or we run the migration with you. We have
+					moved organizations with hundreds of users and tens of thousands of
+					recordings.
 				</p>
 				<div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
 					<Link href="/docs/migrating-to-cap" className={BTN_PRIMARY}>
@@ -335,7 +336,7 @@ const Teams = () => (
 					<span
 						className={`${MONO} text-[11px] uppercase tracking-[0.05em] text-[#8FDCBB]`}
 					>
-						Up to 500 rows
+						Up to 2,000 rows
 					</span>
 				</div>
 				<pre

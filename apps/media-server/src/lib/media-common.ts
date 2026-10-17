@@ -61,6 +61,42 @@ export async function withTimeout<T>(
 	}
 }
 
+export async function withIdleTimeout<T>(
+	run: (touch: () => void) => Promise<T>,
+	idleMs: number,
+	cleanup?: () => void | Promise<void>,
+): Promise<T> {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let rejectIdle: ((error: Error) => void) | undefined;
+	let cleanupPromise: Promise<void> | undefined;
+	const idlePromise = new Promise<never>((_, reject) => {
+		rejectIdle = reject;
+	});
+	const touch = () => {
+		if (timeoutId) clearTimeout(timeoutId);
+		timeoutId = setTimeout(() => {
+			cleanupPromise = Promise.resolve()
+				.then(() => cleanup?.())
+				.then(() => undefined);
+			rejectIdle?.(
+				new Error(
+					`Stopped making progress for ${Math.round(idleMs / 1000)} seconds`,
+				),
+			);
+		}, idleMs);
+	};
+
+	touch();
+	try {
+		return await Promise.race([run(touch), idlePromise]);
+	} catch (err) {
+		if (cleanupPromise) await cleanupPromise;
+		throw err;
+	} finally {
+		if (timeoutId) clearTimeout(timeoutId);
+	}
+}
+
 function isHttpUrl(path: string): boolean {
 	try {
 		const url = new URL(path);

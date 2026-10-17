@@ -7,11 +7,14 @@ import {
 	createJob,
 	deleteJob,
 	getJob,
+	JOB_PROGRESS_STALL_MS,
 	type JobProgress,
+	markJobProgress,
 	type RecordingWorkerAcknowledgement,
 	sendWebhook,
 	touchJob,
 	updateJob,
+	watchJobProgress,
 } from "../../lib/job-manager";
 
 const createdJobs: string[] = [];
@@ -520,5 +523,60 @@ describe("job cleanup", () => {
 		expect(cleaned).toBe(1);
 		expect(currentJob?.phase).toBe("error");
 		expect(currentJob?.error).toContain("maximum lifetime of 60 minutes");
+	});
+
+	test("keeps a job that is still making progress running for hours", () => {
+		const job = createTrackedJob("job-long-but-moving");
+		const now = Date.now();
+		job.phase = "processing";
+		watchJobProgress(job.jobId);
+		job.createdAt = now - 3 * 60 * 60 * 1000;
+		job.updatedAt = now;
+		job.progressAt = now - 60_000;
+
+		expect(cleanupExpiredJobs()).toBe(0);
+		expect(getJob(job.jobId)?.phase).toBe("processing");
+	});
+
+	test("fails a job that stopped making progress, however short it is", () => {
+		const job = createTrackedJob("job-short-but-stuck");
+		const now = Date.now();
+		job.phase = "processing";
+		watchJobProgress(job.jobId);
+		job.createdAt = now - 20 * 60 * 1000;
+		job.updatedAt = now;
+		job.progressAt = now - JOB_PROGRESS_STALL_MS - 60_000;
+
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(getJob(job.jobId)).toMatchObject({
+			phase: "error",
+			message: "Processing failed (stalled)",
+		});
+		expect(getJob(job.jobId)?.error).toContain("stopped making progress");
+	});
+
+	test("counts rising progress and new phases as progress, not heartbeats", () => {
+		const job = createTrackedJob("job-progress-signals");
+		job.phase = "processing";
+		job.progress = 20;
+		watchJobProgress(job.jobId);
+		const old = Date.now() - 10 * 60 * 1000;
+
+		job.progressAt = old;
+		touchJob(job.jobId);
+		updateJob(job.jobId, { message: "Still here" });
+		updateJob(job.jobId, { progress: 20 });
+		expect(job.progressAt).toBe(old);
+
+		updateJob(job.jobId, { progress: 21 });
+		expect(job.progressAt).toBeGreaterThan(old);
+
+		job.progressAt = old;
+		updateJob(job.jobId, { phase: "uploading" });
+		expect(job.progressAt).toBeGreaterThan(old);
+
+		job.progressAt = old;
+		markJobProgress(job.jobId);
+		expect(job.progressAt).toBeGreaterThan(old);
 	});
 });

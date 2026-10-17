@@ -188,6 +188,18 @@ function createServerEnv() {
 				.describe(
 					"Base URL for media server webhooks (use host.docker.internal for Docker setups)",
 				),
+			LOOM_IMPORT_CONCURRENCY: z
+				.string()
+				.optional()
+				.describe(
+					"How many videos each Loom CSV import sends to the media server at once (default 4)",
+				),
+			LOOM_IMPORT_GLOBAL_CONCURRENCY: z
+				.string()
+				.optional()
+				.describe(
+					"How many Loom CSV videos all imports together send to the media server at once (default 12)",
+				),
 
 			/// Ignore
 			NODE_ENV: z.string(),

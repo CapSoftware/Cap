@@ -6,7 +6,8 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { FatalError, sleep } from "workflow";
+import { FatalError, RetryableError, sleep } from "workflow";
+import { dispatchLoomImportForVideo } from "@/lib/loom-import/dispatch";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -30,10 +31,14 @@ interface ImportLoomPayload {
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
+const LOOM_UNAVAILABLE_ERROR = "Loom is not responding right now";
+const LOOM_UNAVAILABLE_RETRY_AFTER_MS = 20_000;
+const LOOM_UNAVAILABLE_MAX_WAITS = 6;
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
-const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
-const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 24 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 24 * 60 * 60;
+const PROCESSING_POLL_MAX_MS = 2 * 60 * 1000;
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -44,11 +49,16 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
+function isLoomUnavailableError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes(LOOM_UNAVAILABLE_ERROR);
+}
+
 async function fetchLoomCdnUrl(
 	videoId: string,
 	endpoint: string,
 	includeBody: boolean,
-): Promise<string | null> {
+): Promise<{ url: string } | { unavailable: true } | null> {
 	try {
 		const options: RequestInit = {
 			method: "POST",
@@ -72,15 +82,18 @@ async function fetchLoomCdnUrl(
 			options,
 		);
 
+		if (response.status === 429 || response.status >= 500) {
+			return { unavailable: true };
+		}
 		if (!response.ok || response.status === 204) return null;
 
 		const text = await response.text();
 		if (!text.trim()) return null;
 
 		const data = JSON.parse(text) as { url?: string };
-		return data.url ?? null;
+		return data.url ? { url: data.url } : null;
 	} catch {
-		return null;
+		return { unavailable: true };
 	}
 }
 
@@ -93,17 +106,29 @@ async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
 	];
 
 	let fallbackStreamingUrl: string | null = null;
+	let unavailable = false;
 
 	for (const { endpoint, includeBody } of requestVariants) {
-		const url = await fetchLoomCdnUrl(loomVideoId, endpoint, includeBody);
-		if (!url) continue;
+		const result = await fetchLoomCdnUrl(loomVideoId, endpoint, includeBody);
+		if (!result) continue;
+		if ("unavailable" in result) {
+			unavailable = true;
+			continue;
+		}
 
-		if (!isStreamingUrl(url)) return url;
+		if (!isStreamingUrl(result.url)) return result.url;
 
-		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
+		if (!fallbackStreamingUrl) fallbackStreamingUrl = result.url;
 	}
 
 	if (fallbackStreamingUrl) return fallbackStreamingUrl;
+
+	if (unavailable) {
+		throw new RetryableError(
+			`${LOOM_UNAVAILABLE_ERROR}. We'll try this video again shortly.`,
+			{ retryAfter: LOOM_UNAVAILABLE_RETRY_AFTER_MS },
+		);
+	}
 
 	throw new FatalError(
 		"Could not retrieve a download URL from Loom. The video may be private, password-protected, or the link may have expired.",
@@ -206,13 +231,24 @@ export async function importLoomVideoWorkflow(
 			: { importFromLoom: true };
 
 		let metadata: ProcessedVideoMetadata;
+		let loomWaits = 0;
 		for (let processingAttempt = 0; ; processingAttempt++) {
 			let capacityRetryCount = 0;
+			let jobId: string;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(payload, processingInput);
+					jobId = await processVideoOnMediaServer(payload, processingInput);
 					break;
 				} catch (error) {
+					if (
+						isLoomUnavailableError(error) &&
+						loomWaits < LOOM_UNAVAILABLE_MAX_WAITS
+					) {
+						loomWaits++;
+						await markLoomImportWaitingForCapacity(payload.videoId);
+						await sleep(`${60 * loomWaits}s`);
+						continue;
+					}
 					if (!isMediaServerCapacityError(error)) throw error;
 					await markLoomImportWaitingForCapacity(payload.videoId);
 					await sleep(`${Math.min(180, 30 + capacityRetryCount * 15)}s`);
@@ -220,7 +256,10 @@ export async function importLoomVideoWorkflow(
 				}
 			}
 			try {
-				metadata = await waitForVideoProcessing(payload.videoId);
+				metadata = await waitForVideoProcessing(payload.videoId, {
+					jobId,
+					maxPollMs: PROCESSING_POLL_MAX_MS,
+				});
 				break;
 			} catch (error) {
 				if (
@@ -236,6 +275,7 @@ export async function importLoomVideoWorkflow(
 		}
 		await saveMetadataAndComplete(payload.videoId, metadata);
 		await completeAgentImport(payload.agentOperationId, payload.videoId);
+		await continueLoomImportJob(payload.videoId);
 
 		return {
 			success: true,
@@ -246,8 +286,26 @@ export async function importLoomVideoWorkflow(
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		await setProcessingError(payload.videoId, errorMessage);
 		await failAgentImport(payload.agentOperationId, errorMessage);
+		await continueLoomImportJob(payload.videoId);
 		throw new FatalError(errorMessage);
 	}
+}
+
+async function continueLoomImports(videoId: string) {
+	try {
+		await dispatchLoomImportForVideo(videoId);
+	} catch (error) {
+		console.error("[import-loom-video] Could not continue Loom import job", {
+			videoId,
+			error,
+		});
+	}
+}
+
+async function continueLoomImportJob(videoId: string): Promise<void> {
+	"use step";
+
+	await continueLoomImports(videoId);
 }
 
 function getInputExtension(url: string): string | undefined {
@@ -375,7 +433,7 @@ async function startMediaServerProcessJob(
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
 	processingInput: LoomProcessingInput,
-): Promise<void> {
+): Promise<string> {
 	"use step";
 
 	const { videoId, userId, rawFileKey, loomVideoId } = payload;
@@ -480,7 +538,7 @@ async function processVideoOnMediaServer(
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
-	await startMediaServerProcessJob(mediaServerUrl, {
+	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
 		videoUrl: rawVideoUrl,
@@ -493,6 +551,8 @@ async function processVideoOnMediaServer(
 		inputExtension: getInputExtension(rawVideoUrl),
 		priority: "bulk",
 	});
+	await continueLoomImports(videoId);
+	return jobId;
 }
 
 async function saveMetadataAndComplete(

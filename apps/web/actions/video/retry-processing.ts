@@ -6,6 +6,7 @@ import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
+import { markLoomImportRetrying } from "@/lib/loom-import/retry";
 import {
 	setVideoProcessingError,
 	startVideoProcessingWorkflow,
@@ -114,6 +115,7 @@ export async function retryVideoProcessing({
 			throw normalizedError;
 		}
 
+		await markLoomImportRetrying(videoId);
 		return { success: true, status: "started" };
 	}
 

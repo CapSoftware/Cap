@@ -2,34 +2,18 @@
 
 import {
 	Button,
-	Dialog,
-	DialogContent,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
 	Input,
-	Select,
 	SelectContent,
 	SelectItem,
 	SelectRoot,
 	SelectTrigger,
 	SelectValue,
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
 } from "@cap/ui";
 import { Folder } from "@cap/web-domain";
 import {
 	faArrowLeft,
-	faCircleCheck,
-	faDownload,
 	faFileCsv,
 	faLink,
-	faTriangleExclamation,
-	faUpload,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
@@ -37,24 +21,12 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import {
-	type ChangeEvent,
-	type DragEvent,
-	useId,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-	getLoomImportFolders,
-	importFromLoom,
-	importFromLoomCsv,
-	type LoomCsvImportResult,
-	type LoomCsvImportRowResult,
-} from "@/actions/loom";
+import { getLoomImportFolders, importFromLoom } from "@/actions/loom";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import type { LoomImportJobSummary } from "@/lib/loom-import/jobs";
 import {
 	type LoomImportDestination,
 	loomImportDestinationHref,
@@ -65,194 +37,20 @@ import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { BulkImport } from "./_components/bulk-import";
+import { LoomMark } from "./_components/doodles";
+import { RecentImports } from "./_components/recent-imports";
 
 type Mode = "single" | "csv";
 
-type CsvData = {
-	fileName: string;
-	headers: string[];
-	rows: string[][];
-};
-
-type Mapping = {
-	loomUrl?: string;
-	userEmail?: string;
-	spaceName?: string;
-};
-
-type MappedRow = {
-	rowNumber: number;
-	loomUrl: string;
-	userEmail: string;
-	spaceName: string;
-};
-
-const LOOM_CSV_TEMPLATE =
-	"loom_video_url,user_email,space_name\nhttps://www.loom.com/share/0123456789abcdef,user@example.com,Sales\n";
-
 const ROOT_FOLDER_VALUE = "__cap_root_folder__";
-
-const OPTIONAL_COLUMN_VALUE = "__cap_skip_column__";
-const MAX_SPACE_NAME_LENGTH = 255;
-const MAX_LOOM_CSV_IMPORT_ROWS = 500;
-const LOOM_CSV_BATCH_SIZE = 10;
-const LOOM_CSV_BATCH_DELAY_MS = 1500;
-const LOOM_CSV_LIMIT_MESSAGE =
-	"CSV imports are limited to 500 videos at a time. Contact support to raise this limit.";
-const LOOM_CSV_PERMISSION_MESSAGE =
-	"Only organization admins and owners can import Loom videos from a CSV.";
-
-function delay(ms: number) {
-	return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function chunkRows<T>(rows: T[], size: number) {
-	const chunks: T[][] = [];
-	for (let index = 0; index < rows.length; index += size) {
-		chunks.push(rows.slice(index, index + size));
-	}
-	return chunks;
-}
-
-function buildCsvImportResult(
-	results: LoomCsvImportRowResult[],
-	error?: string,
-): LoomCsvImportResult {
-	const importedCount = results.filter((row) => row.success).length;
-	const failedCount = results.length - importedCount;
-
-	return {
-		success: importedCount > 0,
-		importedCount,
-		failedCount,
-		results,
-		error:
-			error ??
-			(importedCount > 0 ? undefined : "No Loom videos were imported."),
-	};
-}
-
-function parseCsvRecords(text: string) {
-	const records: string[][] = [];
-	let field = "";
-	let row: string[] = [];
-	let inQuotes = false;
-	const input = text.replace(/^\uFEFF/, "");
-
-	for (let index = 0; index < input.length; index += 1) {
-		const char = input.charAt(index);
-		const next = input.charAt(index + 1);
-
-		if (char === '"') {
-			if (inQuotes && next === '"') {
-				field += '"';
-				index += 1;
-			} else {
-				inQuotes = !inQuotes;
-			}
-			continue;
-		}
-
-		if (char === "," && !inQuotes) {
-			row.push(field.trim());
-			field = "";
-			continue;
-		}
-
-		if ((char === "\n" || char === "\r") && !inQuotes) {
-			if (char === "\r" && next === "\n") index += 1;
-			row.push(field.trim());
-			if (row.some((cell) => cell.length > 0)) records.push(row);
-			row = [];
-			field = "";
-			continue;
-		}
-
-		field += char;
-	}
-
-	if (inQuotes) throw new Error("CSV has an unclosed quoted field.");
-
-	if (field.length > 0 || row.length > 0) {
-		row.push(field.trim());
-		if (row.some((cell) => cell.length > 0)) records.push(row);
-	}
-
-	return records;
-}
-
-function parseCsv(text: string, fileName: string): CsvData {
-	const records = parseCsvRecords(text);
-	const headers = records[0]?.map((header) => header.trim()) ?? [];
-	const rows = records
-		.slice(1)
-		.filter((row) => row.some((cell) => cell.trim().length > 0));
-
-	if (headers.length === 0) {
-		throw new Error("No CSV headers found.");
-	}
-
-	return { fileName, headers, rows };
-}
-
-function normalizeHeader(value: string) {
-	return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function guessColumn(headers: string[], candidates: string[]) {
-	const normalizedHeaders = headers.map(normalizeHeader);
-	const directMatch = normalizedHeaders.findIndex((header) =>
-		candidates.includes(header),
-	);
-	if (directMatch !== -1) return String(directMatch);
-
-	const partialMatch = normalizedHeaders.findIndex((header) =>
-		candidates.some((candidate) => header.includes(candidate)),
-	);
-	return partialMatch === -1 ? undefined : String(partialMatch);
-}
-
-function isLoomUrl(value: string) {
-	try {
-		return new URL(value).hostname.includes("loom.com");
-	} catch {
-		return false;
-	}
-}
-
-function isEmail(value: string) {
-	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function isValidSpaceName(value: string) {
-	return value.length <= MAX_SPACE_NAME_LENGTH;
-}
-
-function pluralize(count: number, singular: string, plural: string) {
-	return count === 1 ? singular : plural;
-}
-
-const LoomMark = ({ size = 18 }: { size?: number }) => (
-	<svg
-		xmlns="http://www.w3.org/2000/svg"
-		width={size}
-		height={size}
-		viewBox="0 0 16 16"
-		fill="none"
-		role="img"
-		aria-label="Loom"
-	>
-		<path
-			fill="#625DF5"
-			d="M15 7.222h-4.094l3.546-2.047-.779-1.35-3.545 2.048 2.046-3.546-1.349-.779L8.78 5.093V1H7.22v4.094L5.174 1.548l-1.348.779 2.046 3.545-3.545-2.046-.779 1.348 3.546 2.047H1v1.557h4.093l-3.545 2.047.779 1.35 3.545-2.047-2.047 3.545 1.35.779 2.046-3.546V15h1.557v-4.094l2.047 3.546 1.349-.779-2.047-3.546 3.545 2.047.779-1.349-3.545-2.046h4.093L15 7.222zm-7 2.896a2.126 2.126 0 110-4.252 2.126 2.126 0 010 4.252z"
-		/>
-	</svg>
-);
 
 export const ImportLoomPage = ({
 	initialDestination = {},
+	recentJobs = [],
 }: {
 	initialDestination?: LoomImportDestination;
+	recentJobs?: LoomImportJobSummary[];
 }) => {
 	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
@@ -269,11 +67,10 @@ export const ImportLoomPage = ({
 		ownerId: activeOrganization?.organization.ownerId,
 		memberRole: currentMember?.role,
 	});
-	const canUseCsvImport = canManageOrganizationSettings(currentRole);
+	const isAdmin = canManageOrganizationSettings(currentRole);
 
 	const [mode, setMode] = useState<Mode>(prefilledMode);
-	const activeMode = canUseCsvImport ? mode : "single";
-	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
+	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
 	const [selectedFolderId, setSelectedFolderId] = useState(
 		initialDestination.folderId ?? ROOT_FOLDER_VALUE,
@@ -285,7 +82,7 @@ export const ImportLoomPage = ({
 		queryKey: ["loom-import-folders", user.id, orgId, spaceId],
 		queryFn: () =>
 			orgId ? getLoomImportFolders({ orgId, spaceId }) : Promise.resolve([]),
-		enabled: Boolean(orgId) && activeMode === "single",
+		enabled: Boolean(orgId) && mode === "single",
 	});
 	const folderRows = useMemo(
 		() => buildMoveFolderDestinationRows(foldersQuery.data ?? []),
@@ -316,76 +113,6 @@ export const ImportLoomPage = ({
 
 	const [loomUrl, setLoomUrl] = useState(prefilledLoomUrl);
 	const [isImporting, setIsImporting] = useState(false);
-
-	const inputRef = useRef<HTMLInputElement>(null);
-	const [csvData, setCsvData] = useState<CsvData | null>(null);
-	const [mapping, setMapping] = useState<Mapping>({});
-	const [isDragOver, setIsDragOver] = useState(false);
-	const [confirmOpen, setConfirmOpen] = useState(false);
-	const [isCsvImporting, setIsCsvImporting] = useState(false);
-	const [csvImportProgress, setCsvImportProgress] = useState(0);
-	const [result, setResult] = useState<LoomCsvImportResult | null>(null);
-
-	const selectedColumnValues = [
-		mapping.loomUrl,
-		mapping.userEmail,
-		mapping.spaceName,
-	].filter((value) => value !== undefined);
-	const selectedColumnsConflict =
-		new Set(selectedColumnValues).size !== selectedColumnValues.length;
-
-	const mappedRows = useMemo<MappedRow[]>(() => {
-		if (
-			!csvData ||
-			mapping.loomUrl === undefined ||
-			mapping.userEmail === undefined
-		) {
-			return [];
-		}
-
-		const loomIndex = Number(mapping.loomUrl);
-		const emailIndex = Number(mapping.userEmail);
-		const spaceIndex =
-			mapping.spaceName === undefined ? undefined : Number(mapping.spaceName);
-
-		return csvData.rows
-			.map((row, index) => ({
-				rowNumber: index + 2,
-				loomUrl: (row[loomIndex] ?? "").trim(),
-				userEmail: (row[emailIndex] ?? "").trim().toLowerCase(),
-				spaceName:
-					spaceIndex === undefined ? "" : (row[spaceIndex] ?? "").trim(),
-			}))
-			.filter((row) => row.loomUrl || row.userEmail || row.spaceName);
-	}, [csvData, mapping.loomUrl, mapping.spaceName, mapping.userEmail]);
-
-	const readyRows = useMemo(
-		() =>
-			mappedRows.filter(
-				(row) =>
-					isLoomUrl(row.loomUrl) &&
-					isEmail(row.userEmail) &&
-					isValidSpaceName(row.spaceName),
-			),
-		[mappedRows],
-	);
-
-	const invalidRows = mappedRows.length - readyRows.length;
-	const previewRows = mappedRows.slice(0, 5);
-	const csvLimitExceeded = readyRows.length > MAX_LOOM_CSV_IMPORT_ROWS;
-	const canImport =
-		canUseCsvImport &&
-		!!activeOrganization &&
-		!selectedColumnsConflict &&
-		readyRows.length > 0 &&
-		!csvLimitExceeded &&
-		!isCsvImporting;
-
-	const columnOptions =
-		csvData?.headers.map((header, index) => ({
-			value: String(index),
-			label: header || `Column ${index + 1}`,
-		})) ?? [];
 
 	const isValidLoomUrl = (() => {
 		try {
@@ -431,153 +158,6 @@ export const ImportLoomPage = ({
 		}
 	};
 
-	const handleTemplateDownload = () => {
-		const blob = new Blob([LOOM_CSV_TEMPLATE], {
-			type: "text/csv;charset=utf-8",
-		});
-		const url = URL.createObjectURL(blob);
-		const link = document.createElement("a");
-		link.href = url;
-		link.download = "cap-loom-import-template.csv";
-		link.click();
-		URL.revokeObjectURL(url);
-	};
-
-	const loadCsvFile = async (file: File) => {
-		if (!user) return;
-
-		if (!canUseCsvImport) {
-			toast.error(LOOM_CSV_PERMISSION_MESSAGE);
-			return;
-		}
-
-		if (!user.isPro) {
-			setUpgradeModalOpen(true);
-			return;
-		}
-
-		if (!file.name.toLowerCase().endsWith(".csv") && file.type !== "text/csv") {
-			toast.error("Please upload a CSV file.");
-			return;
-		}
-
-		try {
-			const parsed = parseCsv(await file.text(), file.name);
-			if (parsed.rows.length > MAX_LOOM_CSV_IMPORT_ROWS) {
-				toast.error(LOOM_CSV_LIMIT_MESSAGE);
-			}
-
-			const loomUrlGuess = guessColumn(parsed.headers, [
-				"loomvideourl",
-				"loomurl",
-				"loomlink",
-				"videourl",
-				"url",
-			]);
-			const userEmailGuess = guessColumn(parsed.headers, [
-				"useremail",
-				"memberemail",
-				"owneremail",
-				"email",
-			]);
-			const spaceNameGuess = guessColumn(parsed.headers, [
-				"spacename",
-				"space",
-				"workspace",
-				"workspacename",
-			]);
-
-			setCsvData(parsed);
-			setMapping({
-				loomUrl: loomUrlGuess,
-				userEmail: userEmailGuess,
-				spaceName: spaceNameGuess,
-			});
-			setResult(null);
-			setCsvImportProgress(0);
-		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Could not parse CSV.",
-			);
-		}
-	};
-
-	const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-		const file = event.target.files?.[0];
-		if (!file) return;
-		await loadCsvFile(file);
-		if (inputRef.current) inputRef.current.value = "";
-	};
-
-	const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
-		event.preventDefault();
-		setIsDragOver(false);
-		const file = event.dataTransfer.files[0];
-		if (!file) return;
-		await loadCsvFile(file);
-	};
-
-	const handleCsvImport = async () => {
-		if (csvLimitExceeded) {
-			toast.error(LOOM_CSV_LIMIT_MESSAGE);
-			return;
-		}
-
-		if (!activeOrganization || !canImport) return;
-
-		setIsCsvImporting(true);
-		setResult(null);
-		setCsvImportProgress(0);
-
-		try {
-			const batches = chunkRows(readyRows, LOOM_CSV_BATCH_SIZE);
-			let combinedResults: LoomCsvImportRowResult[] = [];
-			let blockedError: string | undefined;
-
-			for (const [batchIndex, batch] of batches.entries()) {
-				const importResult = await importFromLoomCsv({
-					orgId: activeOrganization.organization.id,
-					rows: batch,
-				});
-
-				if (importResult.results.length === 0 && importResult.error) {
-					blockedError = importResult.error;
-					break;
-				}
-
-				combinedResults = [...combinedResults, ...importResult.results];
-				setCsvImportProgress(combinedResults.length);
-				setResult(buildCsvImportResult(combinedResults));
-
-				if (batchIndex < batches.length - 1) {
-					await delay(LOOM_CSV_BATCH_DELAY_MS);
-				}
-			}
-
-			const finalResult = buildCsvImportResult(combinedResults, blockedError);
-			setResult(finalResult);
-
-			if (finalResult.importedCount > 0) {
-				toast.success(
-					`${finalResult.importedCount} ${pluralize(
-						finalResult.importedCount,
-						"Loom import",
-						"Loom imports",
-					)} started.`,
-				);
-				router.refresh();
-			} else {
-				toast.error(finalResult.error || "No Loom videos were imported.");
-			}
-
-			setConfirmOpen(false);
-		} catch {
-			toast.error("An unexpected error occurred. Please try again.");
-		} finally {
-			setIsCsvImporting(false);
-		}
-	};
-
 	return (
 		<div className="flex flex-col w-full h-full">
 			<div className="mb-8">
@@ -597,37 +177,34 @@ export const ImportLoomPage = ({
 							Import from Loom
 						</h1>
 						<p className="mt-1 max-w-xl text-sm text-gray-10">
-							{canUseCsvImport
-								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
-								: "Paste a Loom share link to bring it into Cap."}
+							Bring one Loom over with a link, or move a whole library from a
+							CSV. Titles and original recording dates come with them.
 						</p>
 					</div>
 				</div>
 			</div>
 
 			<div className="flex flex-col gap-6 w-full max-w-4xl">
-				{canUseCsvImport && (
-					<div
-						role="tablist"
-						aria-label="Loom import mode"
-						className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
-					>
-						<ModeTab
-							active={activeMode === "single"}
-							icon={faLink}
-							label="Single Video"
-							onClick={() => setMode("single")}
-						/>
-						<ModeTab
-							active={activeMode === "csv"}
-							icon={faFileCsv}
-							label="Bulk Import"
-							onClick={() => setMode("csv")}
-						/>
-					</div>
-				)}
+				<div
+					role="tablist"
+					aria-label="Loom import mode"
+					className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
+				>
+					<ModeTab
+						active={mode === "single"}
+						icon={faLink}
+						label="Single Video"
+						onClick={() => setMode("single")}
+					/>
+					<ModeTab
+						active={mode === "csv"}
+						icon={faFileCsv}
+						label="Bulk Import"
+						onClick={() => setMode("csv")}
+					/>
+				</div>
 
-				{activeMode === "single" ? (
+				{mode === "single" ? (
 					<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
 						<div className="flex flex-col gap-1 px-6 py-5 border-b border-gray-3">
 							<p className="text-sm font-medium text-gray-12">Loom video URL</p>
@@ -753,404 +330,12 @@ export const ImportLoomPage = ({
 							</div>
 						</div>
 					</div>
-				) : (
-					<div className="flex flex-col gap-6">
-						{!csvData && (
-							<>
-								<div className="flex flex-col gap-4 justify-between p-5 rounded-xl border sm:flex-row sm:items-center bg-gray-2 border-gray-3">
-									<div className="flex gap-4 items-start sm:items-center">
-										<div className="flex flex-shrink-0 justify-center items-center rounded-lg size-10 bg-gray-3 text-gray-11">
-											<FontAwesomeIcon className="size-4" icon={faFileCsv} />
-										</div>
-										<div className="flex flex-col gap-1.5">
-											<p className="text-sm font-medium text-gray-12">
-												First time? Start with our template
-											</p>
-											<p className="text-xs text-gray-10">
-												Two columns required:{" "}
-												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-													loom_video_url
-												</code>{" "}
-												and{" "}
-												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-													user_email
-												</code>
-												. Add{" "}
-												<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-													space_name
-												</code>{" "}
-												to place videos in spaces. Emails that are not members
-												yet will be added without an email invite.
-											</p>
-										</div>
-									</div>
-									<Button
-										type="button"
-										variant="white"
-										size="sm"
-										onClick={handleTemplateDownload}
-										className="flex-shrink-0"
-									>
-										<FontAwesomeIcon className="size-3.5" icon={faDownload} />
-										Download Template
-									</Button>
-								</div>
+				) : orgId ? (
+					<BulkImport orgId={orgId} isAdmin={isAdmin} isPro={user.isPro} />
+				) : null}
 
-								<section
-									aria-label="CSV upload"
-									onDragOver={(event) => {
-										event.preventDefault();
-										setIsDragOver(true);
-									}}
-									onDragLeave={() => setIsDragOver(false)}
-									onDrop={handleDrop}
-									className={clsx(
-										"relative flex flex-col items-center justify-center w-full rounded-xl border-2 border-dashed transition-all duration-200 py-14 px-8",
-										isDragOver
-											? "border-blue-10 bg-blue-3"
-											: "border-gray-4 bg-gray-1 hover:border-gray-6 hover:bg-gray-2",
-									)}
-								>
-									<div className="flex flex-col gap-4 items-center">
-										<div className="flex justify-center items-center rounded-full size-16 bg-gray-3 text-gray-10">
-											<FontAwesomeIcon className="size-6" icon={faUpload} />
-										</div>
-										<div className="flex flex-col gap-1 items-center text-center">
-											<p className="text-sm font-medium text-gray-12">
-												Drag and drop your CSV here
-											</p>
-											<p className="text-xs text-gray-10">
-												Or browse your computer to upload a file.
-											</p>
-										</div>
-										<Button
-											type="button"
-											onClick={() => inputRef.current?.click()}
-											variant="dark"
-											size="sm"
-											className="mt-2"
-										>
-											Browse CSV
-										</Button>
-									</div>
-								</section>
-							</>
-						)}
-
-						<input
-							ref={inputRef}
-							type="file"
-							accept=".csv,text/csv"
-							onChange={handleFileChange}
-							className="hidden"
-						/>
-
-						{csvData && (
-							<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
-								<div className="flex flex-col gap-3 justify-between px-6 py-5 border-b sm:flex-row sm:items-center border-gray-3">
-									<div className="flex gap-3 items-center">
-										<div className="flex justify-center items-center rounded-lg size-10 bg-gray-3 text-gray-11">
-											<FontAwesomeIcon className="size-4" icon={faFileCsv} />
-										</div>
-										<div>
-											<p className="text-sm font-medium text-gray-12">
-												{csvData.fileName}
-											</p>
-											<p className="text-xs text-gray-10">
-												{csvData.rows.length}{" "}
-												{pluralize(csvData.rows.length, "row", "rows")} detected
-											</p>
-										</div>
-									</div>
-									<Button
-										type="button"
-										variant="gray"
-										size="sm"
-										onClick={() => {
-											setCsvData(null);
-											setMapping({});
-											setResult(null);
-											setCsvImportProgress(0);
-										}}
-									>
-										Replace CSV
-									</Button>
-								</div>
-
-								<div className="flex flex-col gap-6 p-6">
-									<div>
-										<p className="mb-3 text-xs font-medium tracking-wide uppercase text-gray-10">
-											Map columns
-										</p>
-										<div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-											<MappingField
-												label="Loom video URL"
-												value={mapping.loomUrl}
-												options={columnOptions}
-												onValueChange={(value) =>
-													setMapping((current) => ({
-														...current,
-														loomUrl: value,
-													}))
-												}
-											/>
-											<MappingField
-												label="User email"
-												value={mapping.userEmail}
-												options={columnOptions}
-												onValueChange={(value) =>
-													setMapping((current) => ({
-														...current,
-														userEmail: value,
-													}))
-												}
-											/>
-											<MappingField
-												label="Space name"
-												value={mapping.spaceName}
-												options={columnOptions}
-												optional
-												onValueChange={(value) =>
-													setMapping((current) => ({
-														...current,
-														spaceName: value,
-													}))
-												}
-											/>
-										</div>
-										{selectedColumnsConflict && (
-											<p className="mt-3 text-sm text-red-10">
-												Choose different columns for each mapped field.
-											</p>
-										)}
-									</div>
-
-									<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-										<StatBox
-											tone="positive"
-											label="Ready to import"
-											value={readyRows.length}
-										/>
-										<StatBox
-											tone="warn"
-											label="Needs fix"
-											value={invalidRows}
-										/>
-										<StatBox
-											tone="neutral"
-											label="Total mapped"
-											value={mappedRows.length}
-										/>
-									</div>
-
-									{csvLimitExceeded && (
-										<div className="flex gap-3 items-start p-4 rounded-lg border bg-red-2 border-red-4 text-red-11">
-											<FontAwesomeIcon
-												className="mt-0.5 size-4"
-												icon={faTriangleExclamation}
-											/>
-											<div className="text-sm">
-												<p className="font-medium">
-													CSV imports are limited to {MAX_LOOM_CSV_IMPORT_ROWS}{" "}
-													videos at a time.
-												</p>
-												<p className="mt-1 text-red-10">
-													Split this file into smaller batches or{" "}
-													<a className="underline" href="mailto:hello@cap.so">
-														contact support
-													</a>{" "}
-													to raise the limit.
-												</p>
-											</div>
-										</div>
-									)}
-
-									{previewRows.length > 0 && (
-										<div className="overflow-hidden rounded-lg border border-gray-3">
-											<Table>
-												<TableHeader>
-													<TableRow>
-														<TableHead className="w-16">Row</TableHead>
-														<TableHead>Loom URL</TableHead>
-														<TableHead>User email</TableHead>
-														<TableHead>Space</TableHead>
-														<TableHead className="w-32">Status</TableHead>
-													</TableRow>
-												</TableHeader>
-												<TableBody>
-													{previewRows.map((row) => {
-														const valid =
-															isLoomUrl(row.loomUrl) &&
-															isEmail(row.userEmail) &&
-															isValidSpaceName(row.spaceName);
-														return (
-															<TableRow key={row.rowNumber}>
-																<TableCell className="text-gray-10">
-																	{row.rowNumber}
-																</TableCell>
-																<TableCell className="max-w-[260px] truncate">
-																	{row.loomUrl || "—"}
-																</TableCell>
-																<TableCell>{row.userEmail || "—"}</TableCell>
-																<TableCell>{row.spaceName || "—"}</TableCell>
-																<TableCell>
-																	<StatusPill ready={valid} />
-																</TableCell>
-															</TableRow>
-														);
-													})}
-												</TableBody>
-											</Table>
-											{mappedRows.length > previewRows.length && (
-												<div className="px-4 py-2 text-xs border-t bg-gray-2 text-gray-10 border-gray-3">
-													Showing {previewRows.length} of {mappedRows.length}{" "}
-													mapped rows.
-												</div>
-											)}
-										</div>
-									)}
-
-									<div className="flex flex-col-reverse gap-3 justify-end sm:flex-row">
-										<Button
-											type="button"
-											variant="gray"
-											size="sm"
-											onClick={() => {
-												setCsvData(null);
-												setMapping({});
-												setResult(null);
-												setCsvImportProgress(0);
-											}}
-										>
-											Clear
-										</Button>
-										<Button
-											type="button"
-											variant="dark"
-											size="sm"
-											disabled={!canImport}
-											onClick={() => setConfirmOpen(true)}
-										>
-											Review Import
-										</Button>
-									</div>
-								</div>
-							</div>
-						)}
-
-						{result && (
-							<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
-								<div className="flex flex-col gap-3 justify-between px-6 py-5 border-b sm:flex-row sm:items-center border-gray-3">
-									<div>
-										<p className="text-sm font-medium text-gray-12">
-											Import results
-										</p>
-										<p className="mt-1 text-xs text-gray-10">
-											{result.importedCount}{" "}
-											{pluralize(result.importedCount, "started", "started")},{" "}
-											{result.failedCount}{" "}
-											{pluralize(result.failedCount, "failed", "failed")}
-										</p>
-									</div>
-									<div className="flex gap-2 items-center">
-										<StatusPill
-											ready
-											label={`${result.importedCount} started`}
-										/>
-										{result.failedCount > 0 && (
-											<StatusPill
-												ready={false}
-												label={`${result.failedCount} failed`}
-											/>
-										)}
-									</div>
-								</div>
-								<div className="overflow-hidden">
-									<Table>
-										<TableHeader>
-											<TableRow>
-												<TableHead className="w-16">Row</TableHead>
-												<TableHead>User email</TableHead>
-												<TableHead>Space</TableHead>
-												<TableHead>Status</TableHead>
-											</TableRow>
-										</TableHeader>
-										<TableBody>
-											{result.results.map((row) => (
-												<TableRow key={`${row.rowNumber}-${row.userEmail}`}>
-													<TableCell className="text-gray-10">
-														{row.rowNumber}
-													</TableCell>
-													<TableCell>{row.userEmail || "—"}</TableCell>
-													<TableCell>{row.spaceName || "—"}</TableCell>
-													<TableCell
-														className={
-															row.success && !row.error
-																? "text-green-10"
-																: "text-red-10"
-														}
-													>
-														{row.error || (row.success ? "Started" : "Failed")}
-													</TableCell>
-												</TableRow>
-											))}
-										</TableBody>
-									</Table>
-								</div>
-							</div>
-						)}
-					</div>
-				)}
+				{mode === "csv" && <RecentImports jobs={recentJobs} />}
 			</div>
-
-			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-				<DialogContent className="w-[calc(100%-20px)] max-w-md">
-					<DialogHeader
-						icon={<FontAwesomeIcon icon={faFileCsv} className="size-3.5" />}
-					>
-						<DialogTitle>Start CSV import</DialogTitle>
-					</DialogHeader>
-					<div className="p-5 text-sm text-gray-11">
-						{readyRows.length} {pluralize(readyRows.length, "video", "videos")}{" "}
-						will be imported for existing members or newly added users in
-						batches of {LOOM_CSV_BATCH_SIZE}.
-						{readyRows.some((row) => row.spaceName) && (
-							<span className="block mt-2">
-								Rows with a space name will be added to that space. Missing
-								spaces will be created.
-							</span>
-						)}
-						{invalidRows > 0 && (
-							<span className="block mt-2">
-								{invalidRows} {pluralize(invalidRows, "row", "rows")} will be
-								skipped because the Loom URL, email, or space name is invalid.
-							</span>
-						)}
-					</div>
-					<DialogFooter>
-						<Button
-							type="button"
-							size="sm"
-							variant="gray"
-							onClick={() => setConfirmOpen(false)}
-						>
-							Cancel
-						</Button>
-						<Button
-							type="button"
-							onClick={handleCsvImport}
-							size="sm"
-							spinner={isCsvImporting}
-							variant="dark"
-							disabled={!canImport}
-						>
-							{isCsvImporting
-								? `Importing ${csvImportProgress}/${readyRows.length}`
-								: "Start Import"}
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 
 			<UpgradeModal
 				open={upgradeModalOpen}
@@ -1194,76 +379,3 @@ const ModeTab = ({
 		<span className="relative">{label}</span>
 	</button>
 );
-
-const MappingField = ({
-	label,
-	value,
-	options,
-	optional = false,
-	onValueChange,
-}: {
-	label: string;
-	value: string | undefined;
-	options: { value: string; label: string }[];
-	optional?: boolean;
-	onValueChange: (value: string | undefined) => void;
-}) => {
-	const fieldOptions = optional
-		? [{ value: OPTIONAL_COLUMN_VALUE, label: "Do not import" }, ...options]
-		: options;
-
-	return (
-		<div className="flex flex-col gap-2">
-			<p className="text-xs font-medium text-gray-11">{label}</p>
-			<Select
-				value={value}
-				onValueChange={(nextValue) =>
-					onValueChange(
-						nextValue === OPTIONAL_COLUMN_VALUE ? undefined : nextValue,
-					)
-				}
-				options={fieldOptions}
-				placeholder="Choose column"
-			/>
-		</div>
-	);
-};
-
-const StatusPill = ({ ready, label }: { ready: boolean; label?: string }) => (
-	<span
-		className={clsx(
-			"inline-flex items-center gap-1.5 px-2 h-6 rounded-full text-xs font-medium",
-			ready ? "bg-green-3 text-green-11" : "bg-red-3 text-red-11",
-		)}
-	>
-		<FontAwesomeIcon
-			icon={ready ? faCircleCheck : faTriangleExclamation}
-			className="size-3"
-		/>
-		{label ?? (ready ? "Ready" : "Needs fix")}
-	</span>
-);
-
-const StatBox = ({
-	label,
-	value,
-	tone,
-}: {
-	label: string;
-	value: number;
-	tone: "positive" | "warn" | "neutral";
-}) => {
-	const accent =
-		tone === "positive"
-			? "text-green-11"
-			: tone === "warn" && value > 0
-				? "text-red-11"
-				: "text-gray-12";
-
-	return (
-		<div className="flex flex-col gap-1 p-4 rounded-lg border bg-gray-2 border-gray-3">
-			<p className="text-xs text-gray-10">{label}</p>
-			<p className={clsx("text-xl font-medium", accent)}>{value}</p>
-		</div>
-	);
-};
