@@ -36,7 +36,11 @@ export const SNAP_PX = 7;
 
 export function buildSnapTargets(
 	otherRects: NormRect[],
-	opts?: { margin?: { x: number; y: number } },
+	opts?: {
+		margin?: { x: number; y: number };
+		thirds?: boolean;
+		guides?: { v: number[]; h: number[] };
+	},
 ): SnapTargets {
 	const v: SnapLine[] = [
 		{ pos: 0, kind: "frame-edge" },
@@ -60,6 +64,16 @@ export function buildSnapTargets(
 			{ pos: 1 - margin.y, kind: "margin" },
 		);
 	}
+
+	if (opts?.thirds) {
+		for (const pos of [1 / 3, 2 / 3]) {
+			v.push({ pos, kind: "margin" });
+			h.push({ pos, kind: "margin" });
+		}
+	}
+
+	for (const pos of opts?.guides?.v ?? []) v.push({ pos, kind: "margin" });
+	for (const pos of opts?.guides?.h ?? []) h.push({ pos, kind: "margin" });
 
 	for (const r of otherRects) {
 		const refV = { refStart: r.y, refEnd: r.y + r.h };

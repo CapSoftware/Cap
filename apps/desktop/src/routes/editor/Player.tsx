@@ -19,6 +19,8 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
+import IconLucideGrid3x3 from "~icons/lucide/grid-3x3";
+import IconLucideRuler from "~icons/lucide/ruler";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
 	CanvasElementsOverlay,
@@ -38,6 +40,14 @@ import {
 	createPreviewBoundsReaction,
 	createPreviewBoundsUpdater,
 } from "./preview-bounds";
+import {
+	gridVisible,
+	PreviewGridOverlay,
+	PreviewRulersOverlay,
+	rulersVisible,
+	toggleGrid,
+	toggleRulers,
+} from "./preview-guides";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
 import { EditorButton, Slider } from "./ui";
@@ -331,6 +341,10 @@ export function PlayerContent(props: { compactness?: number }) {
 				),
 		},
 		{
+			combo: "Mod+Quote",
+			handler: toggleGrid,
+		},
+		{
 			combo: "Mod+=",
 			handler: () =>
 				editorState.timeline.transform.updateZoom(
@@ -391,6 +405,27 @@ export function PlayerContent(props: { compactness?: number }) {
 						<span class="max-[1200px]:hidden">Crop</span>
 					</EditorButton>
 					<FrameButton />
+					<EditorButton<typeof KToggleButton>
+						tooltipText="Grid"
+						kbd={["meta", "'"]}
+						pressed={gridVisible()}
+						onChange={() => toggleGrid()}
+						as={KToggleButton}
+						variant="text"
+						leftIcon={<IconLucideGrid3x3 />}
+					>
+						<span class="max-[1200px]:hidden">Grid</span>
+					</EditorButton>
+					<EditorButton<typeof KToggleButton>
+						tooltipText="Rulers"
+						pressed={rulersVisible()}
+						onChange={() => toggleRulers()}
+						as={KToggleButton}
+						variant="text"
+						leftIcon={<IconLucideRuler />}
+					>
+						<span class="max-[1200px]:hidden">Rulers</span>
+					</EditorButton>
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
 					<span class="text-xs text-ed-text-2">Preview</span>
@@ -778,6 +813,7 @@ function PreviewCanvas(props: {
 						)}
 					</Show>
 					<Show when={hasFrame()}>
+						<PreviewGridOverlay size={size()} />
 						<CanvasElementsOverlay size={size()} />
 						<div class="absolute inset-0 isolate pointer-events-none">
 							<MaskOverlay size={size()} />
@@ -787,6 +823,7 @@ function PreviewCanvas(props: {
 						<CaptionOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />
+						<PreviewRulersOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
 					</Show>
 				</div>
