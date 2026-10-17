@@ -17,9 +17,57 @@ pub fn read_cursor_events(
 }
 
 pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
-        .flat_map(|px| [px[0], px[1], px[2]])
-        .collect()
+    let num_pixels = rgba.len() / 4;
+    let mut out = vec![0u8; num_pixels * 3];
+    let mut src = rgba;
+    let mut dst = out.as_mut_slice();
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use core::arch::aarch64::{uint8x16x3_t, vld4q_u8, vst3q_u8};
+        let blocks = src.len() / 64;
+        if blocks > 0 {
+            unsafe {
+                let mut s_ptr = src.as_ptr();
+                let mut d_ptr = dst.as_mut_ptr();
+                for _ in 0..blocks {
+                    let quad = vld4q_u8(s_ptr);
+                    vst3q_u8(d_ptr, uint8x16x3_t(quad.0, quad.1, quad.2));
+                    s_ptr = s_ptr.add(64);
+                    d_ptr = d_ptr.add(48);
+                }
+            }
+            src = &src[blocks * 64..];
+            dst = &mut dst[blocks * 48..];
+        }
+    }
+
+    while src.len() >= 16 && dst.len() >= 12 {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = src[4];
+        dst[4] = src[5];
+        dst[5] = src[6];
+        dst[6] = src[8];
+        dst[7] = src[9];
+        dst[8] = src[10];
+        dst[9] = src[12];
+        dst[10] = src[13];
+        dst[11] = src[14];
+        src = &src[16..];
+        dst = &mut dst[12..];
+    }
+
+    while src.len() >= 4 && dst.len() >= 3 {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        src = &src[4..];
+        dst = &mut dst[3..];
+    }
+
+    out
 }
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
@@ -75,11 +123,8 @@ pub fn encode_jpeg_rgba_as_rgb(
     rgba: &image::RgbaImage,
     quality: u8,
 ) -> image::ImageResult<Vec<u8>> {
-    use image::buffer::ConvertBuffer as _;
-    let rgb: image::RgbImage = rgba.convert();
-    let mut encoded = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality).encode_image(&rgb)?;
-    Ok(encoded)
+    let rgb = rgba_to_rgb(rgba.as_raw());
+    encode_jpeg_rgb(&rgb, rgba.width(), rgba.height(), quality)
 }
 
 pub fn save_rgb_image(
@@ -193,6 +238,27 @@ mod tests {
     }
 
     #[test]
+    fn rgba_to_rgb_matches_reference_across_lengths() {
+        for count in [0, 1, 2, 3, 4, 15, 16, 17, 31, 32, 63, 64, 65, 137, 256] {
+            let mut input = Vec::with_capacity(count * 4);
+            let mut expected = Vec::with_capacity(count * 3);
+            for i in 0..count {
+                let r = (i * 3 + 1) as u8;
+                let g = (i * 7 + 2) as u8;
+                let b = (i * 11 + 3) as u8;
+                let a = (i * 13 + 4) as u8;
+                input.extend_from_slice(&[r, g, b, a]);
+                expected.extend_from_slice(&[r, g, b]);
+            }
+            assert_eq!(
+                rgba_to_rgb(&input),
+                expected,
+                "failed at pixel count {count}"
+            );
+        }
+    }
+
+    #[test]
     fn png_round_trips_rgba() {
         let rgba = [10, 20, 30, 40, 50, 60, 70, 255];
         let png = encode_png_rgba(&rgba, 2, 1).unwrap();
@@ -202,12 +268,21 @@ mod tests {
 
     #[test]
     fn jpeg_paths_agree_on_the_same_pixels() {
+        use image::buffer::ConvertBuffer as _;
+
         let rgba = image::RgbaImage::from_fn(9, 7, |x, y| {
             image::Rgba([(x * 20) as u8, (y * 30) as u8, 90, 128])
         });
-        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        let legacy_rgb: image::RgbImage = rgba.convert();
+        let mut legacy = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut legacy, 80)
+            .encode_image(&legacy_rgb)
+            .unwrap();
+
         let from_image = encode_jpeg_rgba_as_rgb(&rgba, 80).unwrap();
-        assert_eq!(from_slice, from_image);
+        assert_eq!(from_image, legacy);
+        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        assert_eq!(from_slice, legacy);
         let bgra = decode_jpeg_to_bgra(&from_slice).unwrap();
         assert_eq!(bgra.dimensions(), (9, 7));
     }
