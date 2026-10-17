@@ -5845,6 +5845,8 @@ async fn handle_recording_end_inner(
         }
         let requested = handle.state::<crate::RequestedInputsState>().snapshot();
         if clean_generation.is_none()
+            && !editor_took_foreground
+            && window.is_visible().unwrap_or(false)
             && !requested.microphone.pending
             && requested.microphone.error.is_none()
             && requested.microphone.value == app.selected_mic_label
