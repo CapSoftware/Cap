@@ -187,13 +187,6 @@ reason = "NEW (minor): caption chunking decides that a boundary word is a weak o
 link = ""
 
 [[xfail]]
-case = "captions/legacy-migration/ends-at-timeline-end"
-class = "caption-migration"
-bound = { count = 1 }
-reason = "NEW (minor): loading a legacy (output-timed) project drops a caption that ends exactly at the timeline end: synchronize_captions maps each end through source_start + (end - start) / timescale, which rounds just below the timeline end after a clip transition (clips 41/15 s and 82/15 s, 0.2 s transition: 7.9999999 < 8.0), so the end does not map and the whole caption is discarded"
-link = ""
-
-[[xfail]]
 case = "editing/export/basic/seed-23"
 class = "future"
 platforms = ["linux"]
