@@ -36,6 +36,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           RUSTUP_TOOLCHAIN: stable
         run: |
           set -euo pipefail
@@ -48,8 +49,14 @@ jobs:
           fi
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
           python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --output "$RUNNER_TEMP/risk.txt"
-          if grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt" \
-            || grep -qE '^(\.github/workflows/perf-budget\.yml|scripts/verify/perf-(ab|build)\.py)$' "$RUNNER_TEMP/changed.txt"; then
+          # A change to the budget itself is measured only from this
+          # repository's branches, so a fork cannot queue the macOS job by
+          # editing these files.
+          own_files=false
+          if [[ "$SAME_REPO" == true ]] && grep -qE '^(\.github/workflows/perf-budget\.yml|scripts/verify/perf-(ab|build)\.py)$' "$RUNNER_TEMP/changed.txt"; then
+            own_files=true
+          fi
+          if grep -qx 'escalate=true' "$RUNNER_TEMP/risk.txt" || grep -qx 'engine=true' "$RUNNER_TEMP/risk.txt" || [[ "$own_files" == true ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No engine or high-risk code changed: nothing to time." | tee -a "$GITHUB_STEP_SUMMARY"
