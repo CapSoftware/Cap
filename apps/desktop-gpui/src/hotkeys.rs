@@ -32,6 +32,9 @@ use crate::{
     store,
 };
 
+#[cfg(target_os = "linux")]
+mod wayland_shortcut;
+
 /// `HotkeyAction` (`hotkeys.rs:52-71` over there); the variants are the
 /// camelCase store keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -522,6 +525,12 @@ async fn run_portal_stop(
             tokio::select! {
                 biased;
                 _ = cancel.recv_async() => return Ok(()),
+                event = changed.next() => {
+                    let event = event.ok_or_else(|| anyhow::anyhow!("Recording shortcut change stream closed"))?;
+                    if wayland_shortcut::stop_binding_changed(&event, &session_path, shortcut) {
+                        anyhow::bail!("The recording shortcut changed; recording must stop before proving the new shortcut");
+                    }
+                }
                 event = activated.next() => {
                     let event = event.ok_or_else(|| anyhow::anyhow!("Recording shortcut activation stream closed"))?;
                     if event.session_handle().as_str() == session_path && event.shortcut_id() == shortcut_id { events.send(WaylandStopEvent::Key(HotKeyState::Pressed))?; }
@@ -529,10 +538,6 @@ async fn run_portal_stop(
                 event = deactivated.next() => {
                     let event = event.ok_or_else(|| anyhow::anyhow!("Recording shortcut release stream closed"))?;
                     if event.session_handle().as_str() == session_path && event.shortcut_id() == shortcut_id { events.send(WaylandStopEvent::Key(HotKeyState::Released))?; }
-                }
-                event = changed.next() => {
-                    let event = event.ok_or_else(|| anyhow::anyhow!("Recording shortcut change stream closed"))?;
-                    if event.session_handle().as_str() == session_path { anyhow::bail!("The recording shortcut changed; recording must stop before proving the new shortcut"); }
                 }
                 _ = closed.next() => anyhow::bail!("The recording shortcut session closed"),
             }
