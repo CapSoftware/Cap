@@ -1,8 +1,7 @@
 name: Baseline diff
 
 # Report artifacts expire after 90 days and the baseline branch never
-# changes, so a weekly cron re-runs the baseline in the same shape as main's
-# nightly runs (FULL, three repeats of real capture on both runner pools).
+# changes, so the baseline is re-run weekly.
 
 on:
   workflow_run:
@@ -22,7 +21,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: baseline-diff-${{ github.event.workflow_run.id || inputs.main-run || 'refresh' }}
@@ -35,6 +33,8 @@ jobs:
   refresh:
     if: github.event_name == 'schedule'
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      actions: write
     steps:
       - name: Re-run the baseline
         env:
@@ -45,12 +45,15 @@ jobs:
             --raw-field tier=full --raw-field repeat=3 --raw-field runners=both
 
   diff:
+    permissions:
+      contents: read
+      actions: read
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'schedule')
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
