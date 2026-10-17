@@ -322,7 +322,12 @@ fn soak_specs() -> Vec<Spec> {
             },
             seconds,
             stimulus_fps: STIMULUS_FPS_30,
-            holds: vec![(seconds / 3.0, 3.0), (2.0 * seconds / 3.0, 10.0)],
+            // Every hold ends by five sixths of the length: the stimulus
+            // cannot show its last picture during one.
+            holds: vec![
+                (seconds / 3.0, (seconds / 10.0).min(3.0)),
+                (2.0 * seconds / 3.0, (seconds / 6.0).min(10.0)),
+            ],
             camera_drops_at: vec![],
             gated: true,
             mic_delay: 0.0,
@@ -335,7 +340,7 @@ fn soak_specs() -> Vec<Spec> {
             mode: Mode::Instant,
             seconds,
             stimulus_fps: STIMULUS_FPS_30,
-            holds: vec![(seconds / 2.0, 5.0)],
+            holds: vec![(seconds / 2.0, (seconds / 6.0).min(5.0))],
             camera_drops_at: vec![],
             gated: true,
             mic_delay: 0.0,
