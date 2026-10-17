@@ -397,10 +397,17 @@ pub fn find_incomplete_recordings_in(
     list_recordings_in(dirs)
         .into_iter()
         .filter(|item| {
-            matches!(
-                item.status,
-                RecordingStatus::InProgress | RecordingStatus::NeedsRemux
-            ) && active_recording != Some(item.path.as_path())
+            let waiting = match &item.status {
+                RecordingStatus::InProgress | RecordingStatus::NeedsRemux => true,
+                RecordingStatus::Failed { error } => {
+                    is_interrupted_failure(error)
+                        && RecordingMeta::load_for_project(&item.path)
+                            .is_ok_and(|meta| reopened_interrupted(&item.path, &meta).is_some())
+                }
+                _ => false,
+            };
+            waiting
+                && active_recording != Some(item.path.as_path())
                 && is_recording_after_recovery_cutoff(&item.pretty_name, item.sort_time_millis)
         })
         .filter_map(|item| {
@@ -430,6 +437,49 @@ pub fn find_incomplete_recordings_in(
             })
         })
         .collect()
+}
+
+/// Failure messages that record an interruption rather than a failed track:
+/// the Tauri app relabels every recording still in progress at launch as
+/// "Recording crashed" (`load_upload_resume_candidate_at`), and GPUI's instant
+/// stop path writes `INSTANT_STOPPED_BEFORE_COMPLETION`. Their segments are as
+/// intact as any other interrupted recording's, so they get the same validated
+/// recovery instead of a dead end (#2606).
+fn is_interrupted_failure(error: &str) -> bool {
+    error == "Recording crashed" || error == crate::recording::INSTANT_STOPPED_BEFORE_COMPLETION
+}
+
+/// The metadata as it stood before an interruption was recorded as a failure,
+/// or `None` when the failure is anything else or diagnostics still hold a
+/// requested-track failure.
+fn reopened_interrupted(project_path: &Path, meta: &RecordingMeta) -> Option<RecordingMeta> {
+    let mut reopened = meta.clone();
+    match &mut reopened.inner {
+        RecordingMetaInner::Instant(instant) => {
+            let InstantRecordingMeta::Failed { error } = instant else {
+                return None;
+            };
+            if !is_interrupted_failure(error) {
+                return None;
+            }
+            *instant = InstantRecordingMeta::InProgress { recording: false };
+        }
+        RecordingMetaInner::Studio(studio) => {
+            let StudioRecordingMeta::MultipleSegments { inner } = &mut **studio else {
+                return None;
+            };
+            let interrupted = matches!(
+                &inner.status,
+                Some(StudioRecordingStatus::Failed { error }) if is_interrupted_failure(error)
+            );
+            if !interrupted {
+                return None;
+            }
+            inner.status = Some(StudioRecordingStatus::InProgress);
+            studio.ensure_ordinary_media_access(project_path).ok()?;
+        }
+    }
+    Some(reopened)
 }
 
 pub fn find_incomplete_recordings() -> Vec<IncompleteRecordingItem> {
@@ -480,26 +530,53 @@ fn recover_incomplete_recording_in(
 
     let meta = RecordingMeta::load_for_project(&canonical_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
+    let reopened = reopened_interrupted(&canonical_path, &meta);
     if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
         let _upload_lock = UploadLock::acquire(&canonical_path).map_err(|error| {
             format!("Could not lock the instant recording for recovery: {error}")
         })?;
-        return crate::recording::recover_instant_recording(&canonical_path)
+        if let Some(reopened) = &reopened {
+            crate::recording::save_instant_metadata(reopened)
+                .map_err(|error| format!("Could not reopen the instant recording: {error:#}"))?;
+        }
+        let result = crate::recording::recover_instant_recording(&canonical_path)
             .map_err(|error| format!("Could not save the instant recording: {error:#}"));
+        if result.is_err()
+            && reopened.is_some()
+            && let Err(error) = crate::recording::save_instant_metadata(&meta)
+        {
+            tracing::warn!(path = %canonical_path.display(), %error, "failed to restore interrupted instant metadata");
+        }
+        return result;
     }
     let Some(studio) = meta.studio_meta() else {
         return Err("Only incomplete studio recordings can be recovered".to_string());
     };
-    if !matches!(
+    if let Some(reopened) = &reopened {
+        reopened
+            .save_for_project()
+            .map_err(|error| format!("Could not reopen the recording: {error}"))?;
+    } else if !matches!(
         studio.status(),
         StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux
     ) {
         return Err("Recording is not waiting for recovery".to_string());
     }
 
-    let incomplete = RecoveryManager::inspect_recording(&canonical_path)
+    let result = recover_studio_recording(&canonical_path);
+    if result.is_err()
+        && reopened.is_some()
+        && let Err(error) = meta.save_for_project()
+    {
+        tracing::warn!(path = %canonical_path.display(), %error, "failed to restore interrupted studio metadata");
+    }
+    result
+}
+
+fn recover_studio_recording(canonical_path: &Path) -> Result<PathBuf, String> {
+    let incomplete = RecoveryManager::inspect_recording(canonical_path)
         .ok_or_else(|| "No recoverable segments found".to_string())?;
-    crate::recording::ensure_finalization_storage(&canonical_path)
+    crate::recording::ensure_finalization_storage(canonical_path)
         .map_err(|error| format!("{error:#}"))?;
     let recovered = RecoveryManager::recover(&incomplete)
         .map_err(|error| format!("Failed to recover recording: {error}"))?;
@@ -2295,5 +2372,247 @@ mod tests {
         assert_eq!(image::image_dimensions(&second[0]).unwrap(), (392, 392));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Encodes `seconds` of 30fps video the way the recorder does, then drops
+    /// the encoder without finishing it, which leaves the directory as a
+    /// killed process would: files closed, an in-progress manifest, and
+    /// whatever the trailing segment had reached.
+    fn crashed_fragments(directory: &Path, seconds: u64) {
+        use cap_enc_ffmpeg::segmented_stream::{
+            SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+        };
+
+        let _ = ffmpeg::init();
+        let mut encoder = SegmentedVideoEncoder::init(
+            directory.to_path_buf(),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig {
+                segment_duration: std::time::Duration::from_secs(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..seconds * 30 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + (index % 160) as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(
+                    frame,
+                    std::time::Duration::from_micros(index * 1_000_000 / 30),
+                )
+                .unwrap();
+        }
+        drop(encoder);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["is_complete"], false);
+    }
+
+    fn crashed_instant_bundle(recordings: &Path, error: &str) -> PathBuf {
+        let bundle = recordings.join("crashed-instant.cap");
+        crashed_fragments(&bundle.join("content/display"), 4);
+        RecordingMeta {
+            platform: None,
+            project_path: bundle.clone(),
+            pretty_name: "Crashed instant recording".into(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                error: error.into(),
+            }),
+        }
+        .save_for_project()
+        .unwrap();
+        bundle
+    }
+
+    fn crashed_studio_bundle(recordings: &Path, error: &str) -> PathBuf {
+        let bundle = recordings.join("crashed-studio.cap");
+        crashed_fragments(&bundle.join("content/segments/segment-0/display"), 4);
+        let segment = serde_json::from_value(serde_json::json!({
+            "display": { "path": "content/segments/segment-0/display.mp4", "fps": 30 }
+        }))
+        .unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: bundle.clone(),
+            pretty_name: "Crashed studio recording".into(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: cap_project::MultipleSegments {
+                    segments: vec![segment],
+                    cursors: Default::default(),
+                    status: Some(StudioRecordingStatus::Failed {
+                        error: error.into(),
+                    }),
+                },
+            })),
+        }
+        .save_for_project()
+        .unwrap();
+        bundle
+    }
+
+    /// Every video packet decodes, in-process so CI needs no ffmpeg binary.
+    fn plays_cleanly(path: &Path) -> bool {
+        let Ok(mut input) = ffmpeg::format::input(path) else {
+            return false;
+        };
+        let Some(stream) = input.streams().best(ffmpeg::media::Type::Video) else {
+            return false;
+        };
+        let index = stream.index();
+        let Ok(mut decoder) = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .and_then(|context| context.decoder().video())
+        else {
+            return false;
+        };
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut decoded = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            if decoder.send_packet(&packet).is_err() {
+                return false;
+            }
+            while decoder.receive_frame(&mut frame).is_ok() {
+                decoded += 1;
+            }
+        }
+        if decoder.send_eof().is_err() {
+            return false;
+        }
+        while decoder.receive_frame(&mut frame).is_ok() {
+            decoded += 1;
+        }
+        decoded >= 60
+    }
+
+    #[test]
+    fn crashed_instant_recordings_are_offered_and_recovered() {
+        for error in [
+            "Recording crashed",
+            crate::recording::INSTANT_STOPPED_BEFORE_COMPLETION,
+        ] {
+            let root = temp_dir("crashed-instant");
+            let recordings = root.join("recordings");
+            let bundle = crashed_instant_bundle(&recordings, error);
+            let dirs = std::slice::from_ref(&recordings);
+
+            let found = find_incomplete_recordings_in(dirs, None);
+            assert_eq!(found.len(), 1, "{error}");
+            assert_eq!(found[0].project_path, bundle);
+
+            let recovered = recover_incomplete_recording_in(dirs, &bundle).unwrap();
+            let meta = RecordingMeta::load_for_project(&recovered).unwrap();
+            assert!(
+                matches!(
+                    meta.inner,
+                    RecordingMetaInner::Instant(InstantRecordingMeta::Complete { fps: 30, .. })
+                ),
+                "{error}: {:?}",
+                meta.inner
+            );
+            let output = recovered.join("content/output.mp4");
+            assert!(ffmpeg::format::input(&output).unwrap().duration() >= 2_000_000);
+            assert!(plays_cleanly(&output));
+            assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn crashed_studio_recordings_are_offered_and_recovered() {
+        let root = temp_dir("crashed-studio");
+        let recordings = root.join("recordings");
+        let bundle = crashed_studio_bundle(&recordings, "Recording crashed");
+        let dirs = std::slice::from_ref(&recordings);
+
+        let found = find_incomplete_recordings_in(dirs, None);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].segment_count > 0);
+
+        let recovered = recover_incomplete_recording_in(dirs, &bundle).unwrap();
+        let meta = RecordingMeta::load_for_project(&recovered).unwrap();
+        let studio = meta.studio_meta().unwrap();
+        assert!(matches!(studio.status(), StudioRecordingStatus::Complete));
+        let display = recovered.join("content/segments/segment-0/display.mp4");
+        assert!(ffmpeg::format::input(&display).unwrap().duration() >= 2_000_000);
+        assert!(plays_cleanly(&display));
+        assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn track_failures_are_never_reopened() {
+        let root = temp_dir("track-failure");
+        let recordings = root.join("recordings");
+        let dirs = std::slice::from_ref(&recordings);
+
+        let instant = crashed_instant_bundle(&recordings, "required audio failed");
+        assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+        assert!(recover_incomplete_recording_in(dirs, &instant).is_err());
+        std::fs::remove_dir_all(&instant).unwrap();
+
+        let studio = crashed_studio_bundle(&recordings, "Recording crashed");
+        std::fs::write(
+            studio.join("recording-diagnostics.json"),
+            br#"{"version":2,"segments":[{"trackFailures":["mic"]}]}"#,
+        )
+        .unwrap();
+        assert!(find_incomplete_recordings_in(dirs, None).is_empty());
+        assert!(recover_incomplete_recording_in(dirs, &studio).is_err());
+        assert!(matches!(
+            RecordingMeta::load_for_project(&studio)
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Failed { error } if error == "Recording crashed"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_recovery_keeps_the_interrupted_label() {
+        let root = temp_dir("crashed-unrecoverable");
+        let recordings = root.join("recordings");
+        let bundle = recordings.join("broken.cap");
+        let display = bundle.join("content/display");
+        std::fs::create_dir_all(&display).unwrap();
+        std::fs::write(display.join("init.mp4"), [0; 8]).unwrap();
+        std::fs::write(display.join("segment_001.m4s"), complete_m4s_fragment()).unwrap();
+        RecordingMeta {
+            platform: None,
+            project_path: bundle.clone(),
+            pretty_name: "Broken instant recording".into(),
+            sharing: None,
+            upload: None,
+            inner: RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                error: "Recording crashed".into(),
+            }),
+        }
+        .save_for_project()
+        .unwrap();
+
+        let dirs = std::slice::from_ref(&recordings);
+        assert!(recover_incomplete_recording_in(dirs, &bundle).is_err());
+        assert!(matches!(
+            RecordingMeta::load_for_project(&bundle).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Failed { error })
+                if error == "Recording crashed"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
