@@ -7018,6 +7018,7 @@ mod tests {
                 excluded_windows: Vec::new(),
                 camera_feed: None,
                 mic_feed: None,
+                mic_meter: None,
                 linux_instant_camera: None,
                 start_gate: None,
             }),
