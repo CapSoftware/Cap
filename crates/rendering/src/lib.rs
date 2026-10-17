@@ -3545,7 +3545,10 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        Coord::new(Self::display_layout(options, project, resolution_base).content_offset)
+        Coord::new(
+            Self::display_layout(options, project, resolution_base, options.screen_size)
+                .content_offset,
+        )
     }
 
     /// Placement of the display card in output-frame pixels.
@@ -3561,10 +3564,23 @@ impl ProjectUniforms {
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
+        source_size: XY<u32>,
     ) -> DisplayLayout {
-        let base = Self::display_base_offset(options, project, resolution_base).coord;
+        let aspect = Self::display_source_aspect(options, project, source_size);
+        let base = Self::display_base_offset(options, project, resolution_base, aspect).coord;
         let output_size = Self::get_output_size(options, project, resolution_base);
-        Self::display_layout_in_box(options, project, output_size, base)
+        Self::display_layout_in_box(project, output_size, base, aspect)
+    }
+
+    fn display_source_aspect(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        source_size: XY<u32>,
+    ) -> f64 {
+        let crop_size = Self::get_crop(options, project).size.map(f64::from);
+        let source_scale = source_size.map(f64::from) / options.screen_size.map(f64::from);
+        let crop_size = crop_size * source_scale;
+        (crop_size.x / crop_size.y.max(f64::EPSILON)).max(f64::EPSILON)
     }
 
     fn styled_display_layout(
@@ -3572,22 +3588,25 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         output_size: (u32, u32),
         resolution_base: XY<u32>,
+        source_size: XY<u32>,
     ) -> DisplayLayout {
         let canvas = XY::new(output_size.0 as f64, output_size.1 as f64);
         let styled_output = Self::get_output_size(options, project, resolution_base);
         let styled_canvas = XY::new(styled_output.0 as f64, styled_output.1 as f64);
-        let styled_offset = Self::display_base_offset(options, project, resolution_base).coord;
+        let aspect = Self::display_source_aspect(options, project, source_size);
+        let styled_offset =
+            Self::display_base_offset(options, project, resolution_base, aspect).coord;
         let content = (styled_canvas - styled_offset) - styled_offset;
         let scale = (canvas.x / styled_canvas.x).min(canvas.y / styled_canvas.y);
         let base = (canvas - content * scale) / 2.0;
-        Self::display_layout_in_box(options, project, output_size, base)
+        Self::display_layout_in_box(project, output_size, base, aspect)
     }
 
     fn display_layout_in_box(
-        options: &RenderOptions,
         project: &ProjectConfiguration,
         output_size: (u32, u32),
         base: XY<f64>,
+        aspect: f64,
     ) -> DisplayLayout {
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
         // Same op order as the legacy display_size (end - offset - offset) so
@@ -3600,8 +3619,6 @@ impl ProjectUniforms {
             (base, box_size, base, box_size)
         } else {
             let insets = frame_chrome::chrome_insets(style);
-            let crop = Self::get_crop(options, project);
-            let aspect = (crop.size.x as f64 / f64::from(crop.size.y.max(1))).max(f64::EPSILON);
             // Insets are fractions of the content height; solve for the
             // largest content that keeps the outer card inside the box.
             let outer_w_per_h = aspect + insets.left + insets.right;
@@ -3643,6 +3660,7 @@ impl ProjectUniforms {
         options: &RenderOptions,
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
+        cropped_aspect: f64,
     ) -> Coord<FrameSpace> {
         let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -3672,8 +3690,6 @@ impl ProjectUniforms {
         ));
 
         let cropped_size = crop_end.coord - crop_start.coord;
-
-        let cropped_aspect = cropped_size.x / cropped_size.y;
 
         let padding = {
             let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
@@ -3719,7 +3735,10 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        Coord::new(Self::display_layout(options, project, resolution_base).content_size)
+        Coord::new(
+            Self::display_layout(options, project, resolution_base, options.screen_size)
+                .content_size,
+        )
     }
 
     fn display_bounds(
@@ -4036,6 +4055,12 @@ impl ProjectUniforms {
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
+        let source_size = segment_frames
+            .screen_frame
+            .as_ref()
+            .map_or(segment_frames.screen_size, |frame| {
+                XY::new(frame.width(), frame.height())
+            });
         let fps_f32 = fps.max(1) as f32;
         let timeline_time = f64::from(frame_number) / f64::from(fps.max(1));
         let frame_time = timeline_time as f32;
@@ -4049,9 +4074,9 @@ impl ProjectUniforms {
         let has_layout_override =
             base_crop.size != styled_crop.size || base_padding != project.background.padding;
         let display_layout = if has_layout_override {
-            Self::styled_display_layout(options, project, output_size, resolution_base)
+            Self::styled_display_layout(options, project, output_size, resolution_base, source_size)
         } else {
-            Self::display_layout(options, project, resolution_base)
+            Self::display_layout(options, project, resolution_base, source_size)
         };
         let prev_frame_time = if frame_number == 0 {
             0.0
@@ -4711,12 +4736,6 @@ impl ProjectUniforms {
             )
         };
 
-        let source_size = segment_frames
-            .screen_frame
-            .as_ref()
-            .map_or(segment_frames.screen_size, |frame| {
-                XY::new(frame.width(), frame.height())
-            });
         let display = display.for_source_frame(source_size);
         let display_outer_bounds = if frame_chrome.is_none() {
             display.target_bounds
@@ -5397,9 +5416,19 @@ mod tests {
             };
             project.background.padding = 25.0;
             let output = ProjectUniforms::get_output_size(&options, &project, resolution);
-            let base = ProjectUniforms::display_layout(&options, &project, resolution);
-            let copied =
-                ProjectUniforms::styled_display_layout(&options, &project, output, resolution);
+            let base = ProjectUniforms::display_layout(
+                &options,
+                &project,
+                resolution,
+                options.screen_size,
+            );
+            let copied = ProjectUniforms::styled_display_layout(
+                &options,
+                &project,
+                output,
+                resolution,
+                options.screen_size,
+            );
             for (before, after) in [
                 (base.content_size.x, copied.content_size.x),
                 (base.content_size.y, copied.content_size.y),
@@ -5411,8 +5440,13 @@ mod tests {
                 );
             }
             project.background.padding += 0.01;
-            let resized =
-                ProjectUniforms::styled_display_layout(&options, &project, output, resolution);
+            let resized = ProjectUniforms::styled_display_layout(
+                &options,
+                &project,
+                output,
+                resolution,
+                options.screen_size,
+            );
             assert!((copied.content_size.x - resized.content_size.x).abs() < 4.0);
             assert!((copied.content_size.y - resized.content_size.y).abs() < 4.0);
         }
@@ -5480,7 +5514,12 @@ mod tests {
         let mut project = ProjectConfiguration::default();
         project.background.padding = 25.0;
 
-        let layout = ProjectUniforms::display_layout(&options, &project, XY::new(2688, 1512));
+        let layout = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            XY::new(2688, 1512),
+            options.screen_size,
+        );
 
         assert_eq!(layout.outer_offset, layout.content_offset);
         assert_eq!(layout.outer_size, layout.content_size);
@@ -5498,7 +5537,12 @@ mod tests {
 
         let resolution_base = XY::new(2112, 1188);
         let (out_w, out_h) = ProjectUniforms::get_output_size(&options, &project, resolution_base);
-        let layout = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let layout = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
         let insets = frame_chrome::chrome_insets(FrameStyle::Browser);
 
         // The video keeps the recording's aspect ratio.
@@ -5537,9 +5581,19 @@ mod tests {
         });
 
         let resolution_base = XY::new(2304, 1296);
-        let centered = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let centered = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
         project.background.display_position = Some(XY::new(0.25, 0.75));
-        let moved = ProjectUniforms::display_layout(&options, &project, resolution_base);
+        let moved = ProjectUniforms::display_layout(
+            &options,
+            &project,
+            resolution_base,
+            options.screen_size,
+        );
 
         let outer_delta = moved.outer_offset - centered.outer_offset;
         let content_delta = moved.content_offset - centered.content_offset;
@@ -8841,7 +8895,7 @@ mod notch_bounds_tests {
             NOTCH,
             &options(),
             project,
-            ProjectUniforms::display_layout(&options(), project, SCREEN),
+            ProjectUniforms::display_layout(&options(), project, SCREEN, SCREEN),
             zoom,
         )
     }
