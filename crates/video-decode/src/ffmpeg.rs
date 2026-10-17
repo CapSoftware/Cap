@@ -410,7 +410,8 @@ impl FFmpegDecoder {
         // before a keyframe landed on that keyframe, past the request. The
         // reader decodes forward to the request from wherever the seek lands.
         const SEEK_MARGIN_US: i64 = 2_000;
-        let timestamp_us = ((f64::from(requested_time) * 1_000_000.0) as i64 - SEEK_MARGIN_US).max(0);
+        let timestamp_us =
+            ((f64::from(requested_time) * 1_000_000.0) as i64 - SEEK_MARGIN_US).max(0);
         let position = rescale::Rescale::rescale(&timestamp_us, (1, 1_000_000), rescale::TIME_BASE);
 
         self.decoder.flush();
