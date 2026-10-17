@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "cap-screenshot-mask-cache-benchmark"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "cap_gpui_kernels"
+path = "lib.rs"
+
+[[example]]
+name = "screenshot-mask-cache-benchmark"
+path = "../../examples/screenshot-mask-cache-benchmark.rs"
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
