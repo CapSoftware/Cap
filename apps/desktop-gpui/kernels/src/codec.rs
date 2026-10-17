@@ -42,7 +42,6 @@ pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
         }
     }
 
-    // Portable 4-pixel chunk unrolled fallback
     while src.len() >= 16 && dst.len() >= 12 {
         dst[0] = src[0];
         dst[1] = src[1];
@@ -269,12 +268,21 @@ mod tests {
 
     #[test]
     fn jpeg_paths_agree_on_the_same_pixels() {
+        use image::buffer::ConvertBuffer as _;
+
         let rgba = image::RgbaImage::from_fn(9, 7, |x, y| {
             image::Rgba([(x * 20) as u8, (y * 30) as u8, 90, 128])
         });
-        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        let legacy_rgb: image::RgbImage = rgba.convert();
+        let mut legacy = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut legacy, 80)
+            .encode_image(&legacy_rgb)
+            .unwrap();
+
         let from_image = encode_jpeg_rgba_as_rgb(&rgba, 80).unwrap();
-        assert_eq!(from_slice, from_image);
+        assert_eq!(from_image, legacy);
+        let from_slice = encode_jpeg_rgb(&rgba_to_rgb(rgba.as_raw()), 9, 7, 80).unwrap();
+        assert_eq!(from_slice, legacy);
         let bgra = decode_jpeg_to_bgra(&from_slice).unwrap();
         assert_eq!(bgra.dimensions(), (9, 7));
     }
