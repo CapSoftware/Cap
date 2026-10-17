@@ -574,7 +574,6 @@ impl FfmpegDecoder {
         };
 
         let time_base = this.decoder().time_base();
-        let start_time = this.start_time();
         let video_width = this.decoder().width();
         let video_height = this.decoder().height();
         let is_hw = this.is_hardware_accelerated();
@@ -626,7 +625,6 @@ impl FfmpegDecoder {
             };
 
             let sw_time_base = sw_this.decoder().time_base();
-            let sw_start_time = sw_this.start_time();
 
             let mut sw_cache = BTreeMap::<u32, CachedFrame>::new();
             let mut sw_last_active_frame = None::<u32>;
@@ -661,8 +659,7 @@ impl FfmpegDecoder {
                 return;
             }
             if let Some(frame) = first_software_frame {
-                let current_frame =
-                    pts_to_frame(frame.pts().unwrap_or(0) - sw_start_time, sw_time_base, fps);
+                let current_frame = pts_to_frame(frame.pts().unwrap_or(0), sw_time_base, fps);
                 let mut cache_frame = CachedFrame::Raw {
                     frame,
                     number: current_frame,
@@ -896,8 +893,7 @@ impl FfmpegDecoder {
                             if let Ok(frame) = &frame
                                 && let Some(pts) = frame.pts()
                             {
-                                sw_reader_at =
-                                    Some(pts_to_frame(pts - sw_start_time, sw_time_base, fps));
+                                sw_reader_at = Some(pts_to_frame(pts, sw_time_base, fps));
                             }
                             break;
                         }
@@ -913,7 +909,7 @@ impl FfmpegDecoder {
                             sw_prev_vended = None;
                             continue;
                         };
-                        let current_frame = pts_to_frame(pts - sw_start_time, sw_time_base, fps);
+                        let current_frame = pts_to_frame(pts, sw_time_base, fps);
 
                         if let Some(prev) = sw_prev_vended
                             && current_frame > prev + 1
@@ -1138,7 +1134,7 @@ impl FfmpegDecoder {
             return;
         }
         if let Some(frame) = first_frame_result {
-            let current_frame = pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
+            let current_frame = pts_to_frame(frame.pts().unwrap_or(0), time_base, fps);
             let mut cache_frame = CachedFrame::Raw {
                 frame,
                 number: current_frame,
@@ -1208,8 +1204,7 @@ impl FfmpegDecoder {
                             match frames.next() {
                                 Some(Ok(frame)) => {
                                     if let Some(pts) = frame.pts() {
-                                        let current_frame =
-                                            pts_to_frame(pts - start_time, time_base, fps);
+                                        let current_frame = pts_to_frame(pts, time_base, fps);
                                         if let Some(prev) = prev_vended
                                             && current_frame > prev + 1
                                         {
@@ -1465,7 +1460,7 @@ impl FfmpegDecoder {
                         if let Ok(frame) = &frame
                             && let Some(pts) = frame.pts()
                         {
-                            reader_at = Some(pts_to_frame(pts - start_time, time_base, fps));
+                            reader_at = Some(pts_to_frame(pts, time_base, fps));
                         }
                         break;
                     }
@@ -1481,7 +1476,7 @@ impl FfmpegDecoder {
                         prev_vended = None;
                         continue;
                     };
-                    let current_frame = pts_to_frame(pts - start_time, time_base, fps);
+                    let current_frame = pts_to_frame(pts, time_base, fps);
 
                     if let Some(prev) = prev_vended
                         && current_frame > prev + 1
