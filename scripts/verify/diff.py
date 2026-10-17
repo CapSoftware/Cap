@@ -326,6 +326,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--title", default="baseline vs main")
     ap.add_argument("--na", help="file of 'case-glob<TAB>reason' lines: cases n/a on the baseline")
+    ap.add_argument("--fail-on-worse", action="store_true", help="exit 1 when any lane has WORSE or junit WORSE rows")
     args = ap.parse_args()
 
     na = load_na(args.na)
@@ -400,7 +401,18 @@ def main():
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(out, fh, indent=1, default=list)
+    if args.fail_on_worse:
+        # A unit test that main no longer has was renamed or removed with the
+        # code it tested; the case-level rows cover the product.
+        def counted(items):
+            return [item for item in items or [] if not any(r.startswith("missing on main (baseline") for r in item[1])]
+
+        worse = sum(len(counted(lane.get("WORSE"))) + len(counted(lane.get("JUNIT-WORSE"))) for lane in out.values())
+        if worse:
+            print(f"\n{worse} row(s) worse than the baseline", file=sys.stderr)
+            return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
