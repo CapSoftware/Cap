@@ -1949,14 +1949,14 @@ impl TimelineConfiguration {
 
         if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
             let effective = hold_start - held_time_before(&holds, hold_start);
-            let mapping = self.get_frame_mapping_unheld(effective).or_else(|| {
-                // A closing title holds the last source instant before the exclusive endpoint.
-                self.get_frame_mapping_unheld(effective.next_down().max(0.0))
-            })?;
-            let source = match mapping {
-                TimelineFrameMapping::Single { source, .. }
-                | TimelineFrameMapping::Hold { source, .. } => source,
-                TimelineFrameMapping::Transition { incoming, .. } => incoming,
+            let source = match self.get_frame_mapping_unheld(effective) {
+                Some(
+                    TimelineFrameMapping::Single { source, .. }
+                    | TimelineFrameMapping::Hold { source, .. },
+                ) => source,
+                Some(TimelineFrameMapping::Transition { incoming, .. }) => incoming,
+                // A closing title starts at the clips' exclusive end, so it holds their last instant.
+                None => self.last_source()?,
             };
             return Some(TimelineFrameMapping::Hold {
                 source,
@@ -1998,6 +1998,19 @@ impl TimelineConfiguration {
                 output_end: clamp_end(output_end),
             },
             hold @ TimelineFrameMapping::Hold { .. } => hold,
+        })
+    }
+
+    fn last_source(&self) -> Option<TimelineSource<'_>> {
+        let (segment_index, segment) = self
+            .segments
+            .iter()
+            .enumerate()
+            .rfind(|(_, segment)| segment.duration() > 0.0)?;
+        Some(TimelineSource {
+            source_time: segment.end.next_down(),
+            segment_index,
+            segment,
         })
     }
 
@@ -3741,6 +3754,21 @@ mod tests {
                 }
             }
             assert!(timeline.get_frame_mapping(outro_end).is_none());
+        }
+    }
+
+    #[test]
+    fn closing_title_after_an_intro_maps_despite_rounding() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 1.2;
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0), fullscreen_text(4.2, 6.2)];
+        for time in [4.2, 5.0, 6.1] {
+            assert!(matches!(
+                timeline.get_frame_mapping(time),
+                Some(TimelineFrameMapping::Hold { source, output_end })
+                    if source.segment_index == 0 && source.source_time < 1.2 && output_end == 6.2
+            ));
         }
     }
 
