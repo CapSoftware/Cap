@@ -56,6 +56,7 @@ import { clientEnv } from "~/utils/env";
 import { hideCurrentWindow } from "~/utils/hide-window";
 import {
 	importImageFromPicker,
+	importScreenStudioFromPicker,
 	importVideoFromPicker,
 	showImportError,
 } from "~/utils/importMedia";
@@ -1230,6 +1231,15 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		}
 	};
 
+	const handleScreenStudioImport = async () => {
+		try {
+			await importScreenStudioFromPicker({ hideCurrentWindow: true });
+		} catch (e) {
+			console.error("Failed to import Screen Studio project:", e);
+			await showImportError("Screen Studio project", e);
+		}
+	};
+
 	const handleImageImport = async () => {
 		try {
 			await importImageFromPicker({ hideCurrentWindow: true });
@@ -1560,6 +1570,18 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 										{props.variant === "screenshot" ? "Import image" : "Import"}
 									</span>
 								</Button>
+								<Show when={props.variant === "recording"}>
+									<Button
+										variant="gray"
+										size="sm"
+										class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
+										onClick={handleScreenStudioImport}
+										title="Import a Screen Studio project"
+									>
+										<IconLucideImport class="size-3.5" />
+										<span>Screen Studio</span>
+									</Button>
+								</Show>
 							</Show>
 						</div>
 					}

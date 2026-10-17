@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { homeDir, join } from "@tauri-apps/api/path";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { hideCurrentWindow } from "~/utils/hide-window";
 import { commands } from "~/utils/tauri";
@@ -85,8 +86,26 @@ export const importImageFromPicker = async (options?: ImportOptions) => {
 	return await importImagePath(path, options);
 };
 
+export const importScreenStudioFromPicker = async (options?: ImportOptions) => {
+	const defaultPath = await homeDir()
+		.then((home) => join(home, "Screen Studio Projects"))
+		.catch(() => undefined);
+	const result = await dialog.open({
+		title: "Import a Screen Studio project",
+		defaultPath,
+		filters: [{ name: "Screen Studio Project", extensions: ["screenstudio"] }],
+		multiple: false,
+	});
+	const path = selectedPath(result);
+	if (!path) return null;
+	const projectPath = await commands.importScreenStudioProject(path);
+	await commands.showWindow({ Editor: { project_path: projectPath } });
+	await maybeHideCurrentWindow(options);
+	return projectPath;
+};
+
 export const showImportError = async (
-	mediaType: "video" | "image",
+	mediaType: "video" | "image" | "Screen Studio project",
 	error: unknown,
 ) => {
 	const message = error instanceof Error ? error.message : String(error);
