@@ -2133,6 +2133,7 @@ impl MainWindow {
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
             start_gate: None,
+            start_cancel: None,
         };
 
         // `RecordingSettingsStore.target`: what the Start shortcuts fall back
