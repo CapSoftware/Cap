@@ -45,18 +45,22 @@ def main():
             dest = deps / source.name
             shutil.copy2(source, dest)
             binaries[row["target"]["name"]] = str(dest)
-            # macOS binaries load FFmpeg from @executable_path/../Frameworks,
-            # which scripts/setup.js fills for the debug and release profiles.
+            # macOS binaries load FFmpeg from @executable_path/../Frameworks.
+            # scripts/setup.js puts the framework in target/Frameworks; local
+            # builds may also have one per profile.
             target_dir = source.parent.parent.parent
             link = out / "Frameworks"
-            for profile in (source.parent.parent.name, "release", "debug"):
-                frameworks = target_dir / profile / "Frameworks"
+            candidates = [target_dir / source.parent.parent.name / "Frameworks", target_dir / "Frameworks"]
+            candidates += [target_dir / profile / "Frameworks" for profile in ("release", "debug")]
+            for frameworks in candidates:
                 if frameworks.exists() and not link.exists():
                     link.symlink_to(frameworks, target_is_directory=True)
                     break
     missing = [t for t in TARGETS if t not in binaries]
     if missing:
         sys.exit(f"missing test binaries: {missing}")
+    if sys.platform == "darwin" and not (out / "Frameworks").exists():
+        sys.exit("no FFmpeg Frameworks directory next to the target dir: run scripts/setup.js")
     (out / "binaries.json").write_text(json.dumps({"worktree": str(worktree), "binaries": binaries}, indent=2))
     print(json.dumps(binaries, indent=2))
 

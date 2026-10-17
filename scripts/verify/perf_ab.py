@@ -93,22 +93,44 @@ def main():
 
     rows = []
     failed = []
+    broken = []
+
+    def check(name, label, result, report):
+        # A test binary exits 0, or 101 when a case fails. Anything else (a
+        # signal, a missing library) means nothing was measured.
+        if result["exit"] in (0, 101) and result["outcomes"]:
+            return True
+        log = report / "test.log"
+        tail = log.read_text(errors="replace").splitlines()[-15:] if log.exists() else []
+        print(f"::error::{name} {label}: exit {result['exit']}, {len(result['outcomes'])} cases reported")
+        print("\n".join(tail))
+        return False
     for name, target, case, tier in WORKLOADS:
         # Untimed warm-up per side: generates fixtures and warms caches.
+        usable = True
         for label, side in sides.items():
-            run_once(side, target, case, tier, fixtures, out / name / f"warm-{label}")
+            report = out / name / f"warm-{label}"
+            usable &= check(name, label, run_once(side, target, case, tier, fixtures, report), report)
+        if not usable:
+            rows.append((name, None, None, None, None, "BROKEN: a test binary did not run its cases"))
+            broken.append(name)
+            continue
         samples = {"base": [], "head": []}
         for pair in range(args.pairs):
             order = ("base", "head") if pair % 2 == 0 else ("head", "base")
             for label in order:
-                result = run_once(
-                    sides[label], target, case, tier, fixtures, out / name / f"{pair}-{label}"
-                )
+                report = out / name / f"{pair}-{label}"
+                result = run_once(sides[label], target, case, tier, fixtures, report)
+                if not check(name, label, result, report):
+                    broken.append(name)
                 samples[label].append(result)
                 print(
                     f"{name} pair {pair} {label}: cpu {result['cpu']:.2f}s wall {result['wall']:.2f}s exit {result['exit']}",
                     flush=True,
                 )
+        if name in broken:
+            rows.append((name, None, None, None, None, "BROKEN: a test binary did not run its cases"))
+            continue
         statuses = {label: [s["outcomes"] for s in runs] for label, runs in samples.items()}
         if statuses["base"][0] != statuses["head"][0]:
             # Correctness is the suite's job; a case that now passes or fails
@@ -151,10 +173,11 @@ def main():
     if args.summary:
         with open(args.summary, "a") as summary:
             summary.write(text)
+    if broken:
+        print(f"::error::not measured: {', '.join(sorted(set(broken)))}")
     if failed:
         print(f"::error::slower than the base build: {', '.join(failed)}")
-        return 1
-    return 0
+    return 1 if broken or failed else 0
 
 
 if __name__ == "__main__":
