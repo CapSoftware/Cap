@@ -508,7 +508,10 @@ impl EditorWindow {
     /// `overlayVisible()` (`:238`): only while paused, and only once the
     /// renderer has reported a layout.
     pub(crate) fn canvas_overlay_visible(&self) -> bool {
-        !self.playing && self.frame_layout.is_some() && self.crop.is_none()
+        !self.playing
+            && self.frame_layout.is_some()
+            && self.crop.is_none()
+            && !self.watch_preview_open
     }
 
     fn scene_mode_at(&self, time: f64) -> SceneMode {

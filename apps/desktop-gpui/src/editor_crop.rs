@@ -1495,6 +1495,7 @@ impl EditorWindow {
         if self.crop.is_some() {
             return;
         }
+        self.dismiss_watch_preview(cx);
         let Some(target) = self.display_resolution() else {
             tracing::warn!("crop: no display recording to crop");
             return;
