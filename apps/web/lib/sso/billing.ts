@@ -11,6 +11,7 @@ import {
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull } from "drizzle-orm";
 import type Stripe from "stripe";
+import { stripeDocumentUrl } from "@/lib/billing/invoices";
 import {
 	isSupportedCurrency,
 	SUPPORTED_CURRENCIES,
@@ -849,6 +850,7 @@ async function requireSsoBillingAccount(
 	return {
 		customerId: record.stripeCustomerId,
 		subscriptionId: record.stripeSubscriptionId,
+		ownerId: owner.id,
 	};
 }
 
@@ -876,33 +878,22 @@ export type SsoInvoices = {
 	hasMore: boolean;
 };
 
-function invoicePdfUrl(value: string | null | undefined): string | null {
-	if (!value) return null;
-	try {
-		const url = new URL(value);
-		if (
-			url.protocol !== "https:" ||
-			!["pay.stripe.com", "invoice.stripe.com"].includes(url.hostname) ||
-			url.username ||
-			url.password ||
-			url.port
-		)
-			return null;
-		return url.toString();
-	} catch {
-		return null;
-	}
-}
-
 export async function listSsoInvoices(
 	organizationId: Organisation.OrganisationId,
+	options?: { startingAfter?: string; limit?: number; ownerId?: string },
 ): Promise<SsoInvoices> {
-	const { customerId, subscriptionId } =
+	const { customerId, subscriptionId, ownerId } =
 		await requireSsoBillingAccount(organizationId);
+	if (options?.ownerId && options.ownerId !== ownerId) {
+		throw new Error("Billing account ownership has changed.");
+	}
 	const result = await stripe().invoices.list({
 		customer: customerId,
 		subscription: subscriptionId,
-		limit: 100,
+		limit: options?.limit ?? 100,
+		...(options?.startingAfter
+			? { starting_after: options.startingAfter }
+			: {}),
 	});
 	if (
 		result.data.some(
@@ -921,7 +912,7 @@ export async function listSsoInvoices(
 			total: invoice.total,
 			currency: invoice.currency,
 			status: invoice.status,
-			pdfUrl: invoicePdfUrl(invoice.invoice_pdf),
+			pdfUrl: stripeDocumentUrl(invoice.invoice_pdf),
 		})),
 		hasMore: result.has_more,
 	};

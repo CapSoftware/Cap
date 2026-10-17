@@ -15,7 +15,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
-import { Moon, MoreVertical, Sun } from "lucide-react";
+import { Moon, MoreVertical, ReceiptText, Sun } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -68,6 +68,7 @@ const Top = () => {
 		"/dashboard/settings/organization/content": "Organization Settings",
 		"/dashboard/settings/organization/billing": "Organization Settings",
 		"/dashboard/settings/organization/members": "Organization Settings",
+		"/dashboard/settings/invoices": "Invoices",
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/settings/notifications": "Notification Settings",
 		"/dashboard/spaces": "Spaces",
@@ -251,6 +252,14 @@ const User = () => {
 				onClick: () => setMenuOpen(false),
 				iconClassName: "text-gray-11 group-hover:text-gray-12",
 				showCondition: true,
+			},
+			{
+				name: "Invoices",
+				icon: <ReceiptText className="size-5" />,
+				href: "/dashboard/settings/invoices",
+				onClick: () => setMenuOpen(false),
+				iconClassName: "text-gray-11 group-hover:text-gray-12",
+				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
 			},
 			{
 				name: "Sign Out",

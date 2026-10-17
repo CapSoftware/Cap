@@ -63,6 +63,7 @@
 		"./auth/session": "./auth/session.ts",
 		"./auth/sso": "./auth/sso.ts",
 		"./auth/sso-state": "./auth/sso-state.ts",
+		"./billing/license-customers": "./billing/license-customers.ts",
 		"./schema": "./schema.ts",
 		"./video-sharing-default": "./video-sharing-default.ts",
 		"./loops/*": "./loops/*.ts",
