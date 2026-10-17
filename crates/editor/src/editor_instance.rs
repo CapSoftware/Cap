@@ -1118,12 +1118,23 @@ impl EditorInstance {
                                     _ = preview_rx.changed() => {
                                         continue;
                                     }
-                                    frames = outgoing_media.decoders.get_frames_initial(
-                                        outgoing.source_time as f32,
-                                        project.requires_camera(),
-                                        true,
-                                        outgoing_offsets,
-                                    ) => frames,
+                                    frames = async {
+                                        let decoders = if outgoing.segment.recording_clip
+                                            == segment.recording_clip
+                                        {
+                                            outgoing_media.decoders.transition_side().await
+                                        } else {
+                                            &outgoing_media.decoders
+                                        };
+                                        decoders
+                                            .get_frames_initial(
+                                                outgoing.source_time as f32,
+                                                project.requires_camera(),
+                                                true,
+                                                outgoing_offsets,
+                                            )
+                                            .await
+                                    } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
                                     let outgoing_zoom = outgoing_zoom_timelines
