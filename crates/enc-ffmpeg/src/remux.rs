@@ -892,11 +892,15 @@ fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
     capture_fps_from_timestamps(timestamps)
 }
 
-/// The most common gap between frames, in 5% bins, refined by the median of
-/// the gaps within 20% of it: frames land one capture interval apart
-/// whenever the screen changes, whatever the holds between bursts. Arrival
-/// jitter leaves the median a frame or two per second off, so a rate within
-/// 5% of a standard capture rate is that rate.
+/// The shortest gap between frames that recurs in runs, in 5% bins, refined
+/// by the median of the gaps within 20% of it. Frames land one capture
+/// interval apart whenever the screen changes, whatever the holds between
+/// them, and content that changes at a lower rate for most of a recording
+/// still has its faster stretches captured at the full rate. A late frame
+/// leaves one short gap between two long ones, so only gaps beside another
+/// gap of the same length count. Arrival jitter leaves the median a frame or
+/// two per second off, so a rate within 5% of a standard capture rate is
+/// that rate.
 pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
     const MIN_GAPS: usize = 10;
     const BIN_RATIO: f64 = 1.05;
@@ -915,19 +919,29 @@ pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
     if gaps.len() < MIN_GAPS {
         return None;
     }
-    let bin_of = |gap: f64| (gap.ln() / BIN_RATIO.ln()).round() as i64;
-    let mut counts = std::collections::BTreeMap::<i64, usize>::new();
-    for gap in &gaps {
-        *counts.entry(bin_of(*gap)).or_default() += 1;
-    }
-    // Ties go to the shorter gap: a rate above the capture rate costs
-    // nothing, one below it drops frames.
-    let (bin, _) = counts
+    let within = |center: f64| {
+        gaps.iter()
+            .map(|gap| (gap / center - 1.0).abs() <= CLUSTER_TOLERANCE)
+            .collect::<Vec<_>>()
+    };
+    let in_runs = |within: &[bool]| {
+        (0..within.len())
+            .filter(|&i| {
+                within[i]
+                    && ((i > 0 && within[i - 1]) || within.get(i + 1).copied().unwrap_or(false))
+            })
+            .count()
+    };
+    let bins: std::collections::BTreeSet<i64> = gaps
         .iter()
-        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
-    // A bin is narrower than the jitter, so the most common one can sit to
-    // one side of the interval: recentre on the cluster's median.
-    let mut interval = BIN_RATIO.powi(*bin as i32);
+        .map(|gap| (gap.ln() / BIN_RATIO.ln()).round() as i64)
+        .collect();
+    // A bin is narrower than the jitter, so the first one with support can
+    // sit to one side of the interval: recentre on the cluster's median.
+    let mut interval = bins
+        .into_iter()
+        .map(|bin| BIN_RATIO.powi(bin as i32))
+        .find(|center| in_runs(&within(*center)) >= MIN_GAPS)?;
     for _ in 0..3 {
         let mut cluster: Vec<f64> = gaps
             .iter()
@@ -1845,6 +1859,36 @@ mod tests {
             .map(|(i, t)| t.as_secs_f64() + jitter(i as u64, 0.0015))
             .collect();
         assert_eq!(capture_fps_from_timestamps(bursts), Some(60));
+    }
+
+    #[test]
+    fn capture_fps_of_mostly_slower_content_is_its_fastest_run() {
+        // A 60 fps capture of content that changes 30 times a second for
+        // most of it, with idle holds and one 12-frame scroll at 60 fps.
+        let mut timestamps = Vec::new();
+        let mut t = 0.0;
+        for burst in 0..200 {
+            for i in 0..10 {
+                t += 1.0 / 30.0;
+                timestamps.push(t + jitter(burst * 10 + i, 0.0015));
+            }
+            t += 0.5;
+        }
+        for i in 0..12 {
+            t += 1.0 / 60.0;
+            timestamps.push(t + jitter(5000 + i, 0.001));
+        }
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(60));
+    }
+
+    #[test]
+    fn capture_fps_ignores_the_short_gap_after_a_late_frame() {
+        // 30 fps with every seventh frame 12 ms late: each late frame leaves
+        // one 21 ms gap between a 45 ms one and a 33 ms one.
+        let timestamps = (0..600u64)
+            .map(|i| i as f64 / 30.0 + if i % 7 == 0 { 0.012 } else { 0.0 } + jitter(i, 0.001))
+            .collect();
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(30));
     }
 
     #[test]
