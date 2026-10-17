@@ -763,32 +763,36 @@ impl MediaFoundationDecoder {
         let mut timestamp = 0i64;
         let mut sample: Option<IMFSample> = None;
 
-        unsafe {
-            self.source_reader
-                .ReadSample(
-                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                    0,
-                    Some(&mut stream_index),
-                    Some(&mut flags),
-                    Some(&mut timestamp),
-                    Some(&mut sample),
-                )
-                .map_err(|e| format!("ReadSample failed: {e:?}"))?;
-        }
-
         const MF_SOURCE_READERF_ENDOFSTREAM: u32 = 0x00000001;
         const MF_SOURCE_READERF_ERROR: u32 = 0x00000002;
 
-        if flags & MF_SOURCE_READERF_ENDOFSTREAM != 0 {
-            return Ok(None);
-        }
+        // A stream tick (a gap in the stream) comes without a sample; only the end-of-stream
+        // flag means no samples follow.
+        let sample = loop {
+            unsafe {
+                self.source_reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                        0,
+                        Some(&mut stream_index),
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("ReadSample failed: {e:?}"))?;
+            }
 
-        if flags & MF_SOURCE_READERF_ERROR != 0 {
-            return Err("Stream error".to_string());
-        }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM != 0 {
+                return Ok(None);
+            }
 
-        let Some(sample) = sample else {
-            return Ok(None);
+            if flags & MF_SOURCE_READERF_ERROR != 0 {
+                return Err("Stream error".to_string());
+            }
+
+            if let Some(sample) = sample.take() {
+                break sample;
+            }
         };
 
         let buffer = unsafe {

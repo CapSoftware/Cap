@@ -731,7 +731,7 @@ pub fn spawn_cursor_recorder(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
@@ -954,6 +954,23 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if cursor_info.hCursor.is_invalid() {
             return None;
+        }
+
+        // Rendering, trimming and PNG-encoding the cursor every tick only to hash it is wasted
+        // while the shape is unchanged. Keyed on the handle, so a cursor scheme change that keeps
+        // the system cursor handles shows the old image until the shape changes; key on the
+        // bitmap contents instead if that ever matters.
+        thread_local! {
+            static LAST_CURSOR: std::cell::RefCell<Option<(usize, CursorData)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let handle = cursor_info.hCursor.0 as usize;
+        if let Some(cached) = LAST_CURSOR.with_borrow(|last| {
+            last.as_ref()
+                .filter(|(last_handle, _)| *last_handle == handle)
+                .map(|(_, data)| data.clone())
+        }) {
+            return Some(cached);
         }
 
         // Get icon info
@@ -1229,11 +1246,13 @@ fn get_cursor_data() -> Option<CursorData> {
             )
             .ok()?;
 
-        Some(CursorData {
+        let data = CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
-        })
+        };
+        LAST_CURSOR.set(Some((handle, data.clone())));
+        Some(data)
     }
 }
 
