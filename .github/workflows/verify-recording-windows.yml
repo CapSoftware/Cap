@@ -8,7 +8,7 @@ name: Verify recording (Windows, bring-up)
 
 on:
   push:
-    branches: [ci/windows-real-capture]
+    branches: [ci/windows-real-capture, ci/windows-pacing-proof]
   workflow_dispatch:
     inputs:
       tier:
