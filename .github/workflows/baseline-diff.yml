@@ -65,10 +65,17 @@ jobs:
           workflow=$(gh run view "$MAIN_RUN" --repo "$GITHUB_REPOSITORY" --json workflowDatabaseId --jq .workflowDatabaseId)
           baseline="$BASELINE_INPUT"
           if [[ -z "$baseline" ]]; then
-            # Baseline runs fail (0.6.0 has known bugs) but must not be cancelled.
-            baseline=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASELINE_BRANCH" \
-              --status completed --limit 20 --json databaseId,conclusion \
-              --jq '[.[] | select(.conclusion != "cancelled")][0].databaseId // empty')
+            # Baseline runs fail (0.6.0 has known bugs), but a run with a
+            # cancelled or timed-out job stopped before reporting every case.
+            for candidate in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$BASELINE_BRANCH" \
+              --status completed --limit 20 --json databaseId --jq '.[].databaseId'); do
+              stopped=$(gh run view "$candidate" --repo "$GITHUB_REPOSITORY" --json conclusion,jobs \
+                --jq '[.conclusion, .jobs[].conclusion] | map(select(. == "cancelled" or . == "timed_out")) | length')
+              if [[ "$stopped" == 0 ]]; then
+                baseline="$candidate"
+                break
+              fi
+            done
           fi
           if [[ -z "$baseline" ]]; then
             echo "::error::no completed baseline run of workflow $workflow on $BASELINE_BRANCH"
