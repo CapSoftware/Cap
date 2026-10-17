@@ -15,8 +15,8 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel},
+        atomic::AtomicBool,
+        mpsc::{SyncSender, TrySendError, sync_channel},
     },
     time::Duration,
 };
