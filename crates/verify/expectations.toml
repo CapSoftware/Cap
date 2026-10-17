@@ -63,30 +63,6 @@ bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
 reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
 link = ""
 
-[[xfail]]
-case = "seek/seek-gop/storm30/ffmpeg"
-class = "stale"
-flaky = true
-bound = { screen-frames = 4, camera-frames = 4, delta = 2, frame = [1, 900] }
-reason = "FFmpeg decoder backward-seek lookback tolerance (MAX_FRAME_LOOKBACK_TOLERANCE in crates/rendering/src/decoder/ffmpeg.rs): a backward seek whose frame is not cached is answered with a cached frame up to 2 source frames older. The fast tier passes; the full tier's 3000 seeks hit it once (macOS, 1 frame stale). Bound: a few seeks, never more than the 2 frames the tolerance reaches"
-link = ""
-
-[[xfail]]
-case = "seek/seek-native/storm30/ffmpeg"
-class = "stale"
-flaky = true
-bound = { screen-frames = 4, camera-frames = 4, delta = 2, frame = [1, 900] }
-reason = "Same FFmpeg lookback tolerance as seek/seek-gop/storm30/ffmpeg on the native fixture: the fast tier passes, the full tier hits it once (macOS, 1 frame stale)"
-link = ""
-
-[[xfail]]
-case = "seek/vfr-holds/storm60/ffmpeg"
-class = "stale"
-flaky = true
-bound = { screen-frames = 4, camera-frames = 4, delta = 2, frame = [1, 1800] }
-reason = "Same FFmpeg lookback tolerance as seek/seek-gop/storm30/ffmpeg over long VFR holds: the fast tier passes, the full tier hits it on 2 camera seeks (macOS, 2 frames stale)"
-link = ""
-
 # Decode deadline under machine starvation. These apply only to a case the
 # starvation sentinel saw stall (starved = true) and only with the signature
 # of the mechanism; the same symptom on a healthy machine is a failure.
@@ -188,14 +164,6 @@ flaky = true
 bound = { screen-frames = 1, delta = 1, frame = [149, 149] }
 reason = "During a cross-fade both clips read the same AVAssetReader decoder at two positions; a reset for one position drops the other position's last vended frame from the cache, so at 60 fps the incoming side of output frame 149 (2.483 s) shows source frame 115 instead of 116. Not the IOSurface source lifetime bug: it stays with that fix (sol-avf proof run 38762654200). Same frame in export and in offline playback. Fires in almost every run but depends on the decoder's cache state, which its 250 ms idle timeout (IDLE_READER_TIMEOUT) clears: a 300 ms pause in the request stream at 2.0, 2.42 or 2.48 s makes offline playback correct (measured on Apple silicon), and the export passed once on macos-15 (push run 38763177849). Bound: that one screen frame, one source frame stale"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
-
-[[xfail]]
-case = "seek/seek-native/keyframes60/ffmpeg"
-class = "stale"
-platforms = ["linux", "windows"]
-bound = { screen-frames = 2, camera-frames = 2, delta = 61, frame = [124, 490] }
-reason = "NEW: FFmpeg decoder. Off macOS this fixture is libx264 (the AVFoundation encoder is unavailable), so its keyframe set and shuffled request order differ from macOS. Request 124 shows source frame 0 for 61, the first-frame shortcut bug of seek/seek-gop/home-then-play30/ffmpeg; request 490 shows 243 for 244: the 2-frame backward lookback tolerance. Identical on Linux and Windows"
-link = ""
 
 [[xfail]]
 case = "editing/mapping/duration-covered"
