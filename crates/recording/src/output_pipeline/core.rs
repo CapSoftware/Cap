@@ -3512,10 +3512,11 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         // followed the arm within a frame interval.
         let mut held_frame: Option<TVideo::Frame> = None;
         let mut wall_clock_origin = timestamps.instant();
-        // Set when the start gate puts the video origin at its arm point (see
-        // `RecordingStartGate::video_origin_lead`). Capture times flow through
-        // clock remapping and drift tracking unchanged; only the muxed
-        // timeline is offset.
+        // Set when the start gate starts the video where the audio starts:
+        // the arm point, or the pipeline epoch if the gate was armed before it
+        // (see `RecordingStartGate::video_origin_lead`). Capture times flow
+        // through clock remapping and drift tracking unchanged; only the
+        // muxed timeline is offset.
         let mut origin_lead: Option<(Instant, Duration)> = None;
 
         let res = stop_token
@@ -3576,9 +3577,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                     gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
                                 "Start gate admitted first video frame"
                             );
+                            let origin = audio_epoch(timestamps, Some(gate));
                             origin_lead = gate
-                                .armed_instant()
-                                .zip(gate.video_origin_lead(timestamp));
+                                .video_origin_lead(timestamp, origin)
+                                .map(|lead| (origin.instant(), lead));
                         }
                         wall_clock_origin = gate
                             .armed_instant()
@@ -3729,9 +3731,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             if !gate.admits_video(timestamp) {
                                 continue;
                             }
+                            let origin = audio_epoch(timestamps, Some(gate));
                             origin_lead = gate
-                                .armed_instant()
-                                .zip(gate.video_origin_lead(timestamp));
+                                .video_origin_lead(timestamp, origin)
+                                .map(|lead| (origin.instant(), lead));
                             wall_clock_origin = gate
                                 .armed_instant()
                                 .unwrap_or(timestamps.instant());
@@ -8857,11 +8860,17 @@ mod tests {
             assert!(timestamps.len() >= 3, "{timestamps:?}");
         }
 
-        #[tokio::test]
-        async fn primed_instant_video_starts_at_the_arm_point() {
+        /// A gated Instant pipeline, its gate armed after the pipeline epoch
+        /// or (`armed_first`) 40 ms before it. Its origin is where the audio
+        /// starts, the later of the two; frames are captured 20, 53 and 86 ms
+        /// after it.
+        async fn record_gated_instant(armed_first: bool) -> (Instant, Vec<Duration>, Timestamp) {
             let temp_dir = tempfile::tempdir().unwrap();
             let gate = RecordingStartGate::new();
             gate.set_video_origin_at_arm();
+            let early_arm = armed_first.then(Timestamps::now);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let epoch = Timestamps::now();
             let (sender, receiver) = flume::bounded(8);
             let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
             let pipeline = OutputPipeline::builder(temp_dir.path().join("instant.mp4"))
@@ -8869,18 +8878,19 @@ mod tests {
                     VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
                     receiver,
                 ))
-                .with_timestamps(Timestamps::now())
+                .with_timestamps(epoch)
                 .with_start_gate(Some(gate.clone()))
                 .build::<ObservedMuxer>(sent.clone())
                 .await
                 .unwrap();
 
-            let armed = Timestamps::now();
+            let armed = early_arm.unwrap_or_else(Timestamps::now);
             assert!(gate.arm_at(armed));
-            // Fresh frames from 20 ms after the arm point, one frame interval
+            let origin = if armed_first { epoch } else { armed };
+            // Fresh frames from 20 ms after the origin, one frame interval
             // apart, each delivered when it is captured.
             for offset_ms in [20u64, 53, 86] {
-                let captured = armed.instant() + Duration::from_millis(offset_ms);
+                let captured = origin.instant() + Duration::from_millis(offset_ms);
                 tokio::time::sleep_until(captured.into()).await;
                 sender
                     .send_async(StaticFrame {
@@ -8891,14 +8901,17 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(33)).await;
             let outcome = pipeline.stop().await.unwrap();
+            let timestamps = sent.lock().unwrap().clone();
+            (origin.instant(), timestamps, outcome.first_timestamp)
+        }
 
-            match outcome.first_timestamp {
-                Timestamp::Instant(instant) => assert_eq!(instant, armed.instant()),
+        fn assert_starts_at_origin(origin: Instant, timestamps: &[Duration], first: Timestamp) {
+            match first {
+                Timestamp::Instant(instant) => assert_eq!(instant, origin),
                 other => panic!("unexpected first timestamp {other:?}"),
             }
-            let timestamps = sent.lock().unwrap().clone();
             assert_eq!(timestamps.first(), Some(&Duration::ZERO));
-            // Later frames keep their capture times relative to the arm point.
+            // Later frames keep their capture times relative to the origin.
             for (index, expected_ms) in [(1, 53), (2, 86)] {
                 let muxed = timestamps.get(index).copied().expect("frame muxed");
                 assert!(
@@ -8906,6 +8919,18 @@ mod tests {
                     "{timestamps:?}"
                 );
             }
+        }
+
+        #[tokio::test]
+        async fn primed_instant_video_starts_at_the_arm_point() {
+            let (origin, timestamps, first) = record_gated_instant(false).await;
+            assert_starts_at_origin(origin, &timestamps, first);
+        }
+
+        #[tokio::test]
+        async fn primed_instant_video_armed_before_the_epoch_starts_at_the_epoch() {
+            let (origin, timestamps, first) = record_gated_instant(true).await;
+            assert_starts_at_origin(origin, &timestamps, first);
         }
 
         #[tokio::test]

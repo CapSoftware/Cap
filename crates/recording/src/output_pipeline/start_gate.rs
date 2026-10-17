@@ -54,16 +54,23 @@ impl RecordingStartGate {
         self.0.video_origin_at_arm.store(true, Ordering::Release);
     }
 
-    /// How far the first admitted video frame was captured after the arm
-    /// point, when [`Self::set_video_origin_at_arm`] is on. The video track
-    /// then starts at the arm point: the first frame is shown from there and
-    /// every later frame is muxed this much later than its offset from the
-    /// first, so each keeps its capture time relative to the arm point.
-    pub(crate) fn video_origin_lead(&self, admitted: Timestamp) -> Option<Duration> {
+    /// How far the first admitted video frame was captured after `origin`,
+    /// when [`Self::set_video_origin_at_arm`] is on and the gate is open.
+    /// `origin` is where the recording's audio starts: the arm point, or the
+    /// pipeline epoch if the gate was armed before it. The video track then
+    /// starts there too: the first frame is shown from the origin and every
+    /// later frame is muxed this much later than its offset from the first,
+    /// so each keeps its capture time relative to the origin.
+    pub(crate) fn video_origin_lead(
+        &self,
+        admitted: Timestamp,
+        origin: Timestamps,
+    ) -> Option<Duration> {
         if !self.0.video_origin_at_arm.load(Ordering::Acquire) {
             return None;
         }
-        let offset = self.offset_secs(admitted)?;
+        self.armed_at_or_failsafe()?;
+        let offset = admitted.signed_duration_since_secs(origin);
         Some(Duration::from_secs_f64(offset.max(0.0)))
     }
 
@@ -179,18 +186,38 @@ mod tests {
     fn video_origin_lead_only_when_asked() {
         let armed = Timestamps::now();
         let admitted = at(armed, 21);
+        let near = |lead: Option<Duration>, ms: u64| {
+            lead.is_some_and(|lead| {
+                lead.abs_diff(Duration::from_millis(ms)) < Duration::from_micros(1)
+            })
+        };
 
         let gate = RecordingStartGate::new();
         assert!(gate.arm_at(armed));
-        assert_eq!(gate.video_origin_lead(admitted), None);
+        assert_eq!(gate.video_origin_lead(admitted, armed), None);
 
         let gate = RecordingStartGate::new();
         gate.set_video_origin_at_arm();
-        assert_eq!(gate.video_origin_lead(admitted), None, "closed gate");
+        assert_eq!(gate.video_origin_lead(admitted, armed), None, "closed gate");
         assert!(gate.arm_at(armed));
-        let lead = gate.video_origin_lead(admitted).unwrap();
-        assert!(lead.abs_diff(Duration::from_millis(21)) < Duration::from_micros(1));
-        assert_eq!(gate.video_origin_lead(at(armed, 0)), Some(Duration::ZERO));
+        assert!(near(gate.video_origin_lead(admitted, armed), 21));
+        assert_eq!(
+            gate.video_origin_lead(at(armed, 0), armed),
+            Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn video_origin_lead_counts_from_a_pipeline_epoch_after_the_arm_point() {
+        let armed = Timestamps::now();
+        std::thread::sleep(Duration::from_millis(5));
+        let epoch = Timestamps::now();
+        let gate = RecordingStartGate::new();
+        gate.set_video_origin_at_arm();
+        assert!(gate.arm_at(armed));
+        let admitted = Timestamp::Instant(epoch.instant() + Duration::from_millis(12));
+        let lead = gate.video_origin_lead(admitted, epoch).unwrap();
+        assert!(lead.abs_diff(Duration::from_millis(12)) < Duration::from_micros(1));
     }
 
     #[test]
