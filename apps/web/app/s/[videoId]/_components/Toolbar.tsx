@@ -236,7 +236,7 @@ export const Toolbar = ({
 		<>
 			<motion.div
 				layout
-				className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full border border-gray-5 md:max-w-fit"
+				className="flex overflow-hidden p-2 mx-auto max-w-full bg-gray-1 rounded-full border border-gray-5 md:max-w-fit"
 			>
 				<AnimatePresence initial={false} mode="popLayout">
 					{commentBoxOpen && canComment ? (

@@ -42,7 +42,7 @@ const SummaryChapters = ({
 	if (aiLoading || (!hasSummary && !hasChapters)) return null;
 
 	return (
-		<div className="p-4 bg-white rounded-2xl border border-gray-3">
+		<div className="p-4 bg-gray-1 rounded-2xl border border-gray-3">
 			{hasSummary && (
 				<>
 					<h3 className="text-lg font-medium">Summary</h3>
@@ -63,7 +63,7 @@ const SummaryChapters = ({
 								className="flex items-center w-full p-2 text-left rounded transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9"
 								onClick={() => handleSeek(chapter.start)}
 							>
-								<span className="w-16 text-xs text-gray-500">
+								<span className="w-16 text-xs text-gray-10">
 									{formatTimeMinutes(chapter.start)}
 								</span>
 								<span className="ml-2 text-sm">{chapter.title}</span>

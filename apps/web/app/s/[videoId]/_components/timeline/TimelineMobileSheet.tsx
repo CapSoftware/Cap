@@ -54,7 +54,7 @@ export function TimelineMobileSheet({
 					<motion.div
 						role="dialog"
 						aria-label="Comments at this point"
-						className="relative w-full rounded-t-2xl border-t border-gray-5 bg-white pb-[env(safe-area-inset-bottom)]"
+						className="relative w-full rounded-t-2xl border-t border-gray-5 bg-gray-1 pb-[env(safe-area-inset-bottom)]"
 						initial={reduceMotion ? { opacity: 0 } : { y: "100%" }}
 						animate={reduceMotion ? { opacity: 1 } : { y: 0 }}
 						exit={reduceMotion ? { opacity: 0 } : { y: "100%" }}
