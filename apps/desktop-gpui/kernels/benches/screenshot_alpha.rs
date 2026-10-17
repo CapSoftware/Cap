@@ -80,7 +80,11 @@ fn main() {
             mixed.extend_from_slice(&[r, g, b, a]);
         }
 
-        // 1. is_opaque on opaque buffer
+        let mut late_translucent = opaque.clone();
+        if let Some(alpha) = late_translucent.last_mut() {
+            *alpha = 128;
+        }
+
         {
             let b = baseline::is_opaque(&opaque);
             let c = candidate::is_opaque(&opaque);
@@ -102,7 +106,6 @@ fn main() {
             }
         }
 
-        // 2. has_translucent_pixel on opaque buffer
         {
             let b = baseline::has_translucent_pixel(&opaque);
             let c = candidate::has_translucent_pixel(&opaque);
@@ -124,7 +127,6 @@ fn main() {
             }
         }
 
-        // 3. flatten_onto_white on opaque buffer
         {
             let b = baseline::flatten_onto_white(&opaque);
             let c = candidate::flatten_onto_white(&opaque);
@@ -146,7 +148,6 @@ fn main() {
             }
         }
 
-        // 4. flatten_onto_white on mixed buffer
         {
             let b = baseline::flatten_onto_white(&mixed);
             let c = candidate::flatten_onto_white(&mixed);
@@ -168,7 +169,27 @@ fn main() {
             }
         }
 
-        // 5. premultiply on opaque buffer
+        {
+            let b = baseline::flatten_onto_white(&late_translucent);
+            let c = candidate::flatten_onto_white(&late_translucent);
+            assert_eq!(b, c);
+            for sample in 0..20 {
+                let start_o = Instant::now();
+                black_box(baseline::flatten_onto_white(black_box(&late_translucent)));
+                let old_t = start_o.elapsed().as_nanos();
+
+                let start_n = Instant::now();
+                black_box(candidate::flatten_onto_white(black_box(&late_translucent)));
+                let new_t = start_n.elapsed().as_nanos();
+                if sample >= 5 {
+                    println!(
+                        "flatten_white_late_translucent,{name},{num_pixels},{},{old_t},{new_t}",
+                        sample - 5
+                    );
+                }
+            }
+        }
+
         {
             let mut buf_b = opaque.clone();
             let mut buf_c = opaque.clone();
@@ -195,7 +216,6 @@ fn main() {
             }
         }
 
-        // 6. premultiply on mixed buffer
         {
             let mut buf_b = mixed.clone();
             let mut buf_c = mixed.clone();
@@ -222,7 +242,32 @@ fn main() {
             }
         }
 
-        // 7. demultiply on opaque buffer
+        {
+            let mut buf_b = late_translucent.clone();
+            let mut buf_c = late_translucent.clone();
+            baseline::premultiply(&mut buf_b);
+            candidate::premultiply(&mut buf_c);
+            assert_eq!(buf_b, buf_c);
+            for sample in 0..20 {
+                buf_b.copy_from_slice(&late_translucent);
+                buf_c.copy_from_slice(&late_translucent);
+
+                let start_o = Instant::now();
+                baseline::premultiply(black_box(&mut buf_b));
+                let old_t = start_o.elapsed().as_nanos();
+
+                let start_n = Instant::now();
+                candidate::premultiply(black_box(&mut buf_c));
+                let new_t = start_n.elapsed().as_nanos();
+                if sample >= 5 {
+                    println!(
+                        "premultiply_late_translucent,{name},{num_pixels},{},{old_t},{new_t}",
+                        sample - 5
+                    );
+                }
+            }
+        }
+
         {
             let mut buf_b = opaque.clone();
             let mut buf_c = opaque.clone();
@@ -243,6 +288,58 @@ fn main() {
                 if sample >= 5 {
                     println!(
                         "demultiply_solid,{name},{num_pixels},{},{old_t},{new_t}",
+                        sample - 5
+                    );
+                }
+            }
+        }
+
+        {
+            let mut buf_b = mixed.clone();
+            let mut buf_c = mixed.clone();
+            baseline::demultiply(&mut buf_b);
+            candidate::demultiply(&mut buf_c);
+            assert_eq!(buf_b, buf_c);
+            for sample in 0..20 {
+                buf_b.copy_from_slice(&mixed);
+                buf_c.copy_from_slice(&mixed);
+
+                let start_o = Instant::now();
+                baseline::demultiply(black_box(&mut buf_b));
+                let old_t = start_o.elapsed().as_nanos();
+
+                let start_n = Instant::now();
+                candidate::demultiply(black_box(&mut buf_c));
+                let new_t = start_n.elapsed().as_nanos();
+                if sample >= 5 {
+                    println!(
+                        "demultiply_mixed,{name},{num_pixels},{},{old_t},{new_t}",
+                        sample - 5
+                    );
+                }
+            }
+        }
+
+        {
+            let mut buf_b = late_translucent.clone();
+            let mut buf_c = late_translucent.clone();
+            baseline::demultiply(&mut buf_b);
+            candidate::demultiply(&mut buf_c);
+            assert_eq!(buf_b, buf_c);
+            for sample in 0..20 {
+                buf_b.copy_from_slice(&late_translucent);
+                buf_c.copy_from_slice(&late_translucent);
+
+                let start_o = Instant::now();
+                baseline::demultiply(black_box(&mut buf_b));
+                let old_t = start_o.elapsed().as_nanos();
+
+                let start_n = Instant::now();
+                candidate::demultiply(black_box(&mut buf_c));
+                let new_t = start_n.elapsed().as_nanos();
+                if sample >= 5 {
+                    println!(
+                        "demultiply_late_translucent,{name},{num_pixels},{},{old_t},{new_t}",
                         sample - 5
                     );
                 }
