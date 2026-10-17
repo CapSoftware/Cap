@@ -6106,6 +6106,11 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
         let index = editors.iter().position(|(path, _)| path == &key);
         index.map(|index| editors.remove(index).1)
     };
+    let transform = handle.and_then(|handle| {
+        handle
+            .update(cx, |view, _window, _cx| view.timeline_transform())
+            .ok()
+    });
 
     if let Some(handle) = handle {
         if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
@@ -6124,7 +6129,16 @@ pub fn reload_editor(project_path: &Path, cx: &mut App) {
     }
 
     tracing::info!(path = %key.display(), "reloading editor after import");
-    open_editor(key, cx);
+    open_editor(key.clone(), cx);
+    if let Some(transform) = transform
+        && let Some(handle) = editor_window_handle(&key, cx)
+    {
+        handle
+            .update(cx, |view, _window, _cx| {
+                view.restore_timeline_transform(transform)
+            })
+            .ok();
+    }
 }
 
 /// `editor_window_for_path` (`src-tauri/src/windows.rs:3699-3706`): the live
