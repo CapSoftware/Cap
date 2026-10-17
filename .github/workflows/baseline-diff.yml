@@ -115,6 +115,21 @@ jobs:
             echo "$side: $(find "$dest" -name '*.jsonl' | wc -l) report files"
           done
 
+      - name: Baseline covers main's runners
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Lanes as diff.py names them: shard numbers and tiers dropped.
+          lanes() {
+            find "$1" -mindepth 1 -maxdepth 1 -type d -name 'verify-*' -printf '%f\n' \
+              | sed -E 's/^verify-recording-report-/verify-recording-/; s/-(fast|full)(-[0-9]+)?$//' | sort -u
+          }
+          missing=$(comm -23 <(lanes "$RUNNER_TEMP/reports/main") <(lanes "$RUNNER_TEMP/reports/baseline"))
+          if [[ -n "$missing" ]]; then
+            echo "::error::the baseline run has no reports for: $(echo $missing)"
+            exit 1
+          fi
+
       - name: Diff
         run: |
           python3 scripts/verify/diff.py \
