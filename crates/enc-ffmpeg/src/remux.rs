@@ -750,6 +750,25 @@ fn get_media_duration_inner(path: &Path) -> Option<Duration> {
     Some(Duration::from_micros(duration_ts as u64))
 }
 
+/// The stream's base frame rate (`r_frame_rate`): the rate every timestamp of
+/// a variable-rate track sits on, unlike `get_video_fps`'s average, which a
+/// mostly static screen recording pulls far below its capture rate.
+pub fn get_video_base_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = (|| {
+        let input = avformat::input(path).ok()?;
+        let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+        let rate = stream.rate();
+        if rate.numerator() <= 0 || rate.denominator() <= 0 {
+            return None;
+        }
+        let fps = (rate.numerator() as f64 / rate.denominator() as f64).round() as u32;
+        (1..=240).contains(&fps).then_some(fps)
+    })();
+    restore_ffmpeg_logs();
+    result
+}
+
 pub fn get_video_fps(path: &Path) -> Option<u32> {
     suppress_ffmpeg_logs();
     let result = get_video_fps_inner(path);

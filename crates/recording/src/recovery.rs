@@ -9,7 +9,7 @@ use cap_enc_ffmpeg::fragmented_mp4::{read_fragment_prefix, tail_is_complete};
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
     concatenate_m4s_segments_with_init_validated, concatenate_video_fragments, get_media_duration,
-    get_video_fps, merge_video_audio, probe_media_valid, probe_video_can_decode,
+    get_video_base_fps, merge_video_audio, probe_media_valid, probe_video_can_decode,
     probe_video_seek_points, remux_file,
 };
 use cap_project::{
@@ -2529,7 +2529,15 @@ impl RecoveryManager {
                     original_segments.and_then(|segs| segs.get(segment_index as usize));
 
                 let display_path = segment_dir.join("display.mp4");
-                let fps = get_video_fps(&display_path).unwrap_or(30);
+                // Decoders number frames on this rate. The file's average rate
+                // is far lower for a mostly static screen (11 fps for a 120 fps
+                // capture), and on that coarse grid playback and export drop
+                // every picture shorter than one step.
+                let fps = original_segment
+                    .map(|s| s.display.fps)
+                    .filter(|fps| *fps > 0)
+                    .or_else(|| get_video_base_fps(&display_path))
+                    .unwrap_or(30);
 
                 let cursor_path = segment_dir.join("cursor.json");
                 let keyboard_path = {
@@ -4911,6 +4919,30 @@ mod clean_studio_snapshot_tests {
         assert!(matches!(observer.latest(), PreparingStudioState::Ended));
         assert!(project.join(OUTPUT).is_file());
         assert!(RecoveryLock::acquire(project).is_ok());
+    }
+
+    #[test]
+    fn studio_finalization_keeps_the_recorded_display_fps() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let mut meta = RecordingMeta::load_for_project(project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!()
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!()
+        };
+        inner.segments[0].display.fps = 120;
+        meta.save_for_project().unwrap();
+
+        assert!(RecoveryManager::remux_if_needed(project).unwrap());
+        let meta = RecordingMeta::load_for_project(project).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = meta.studio_meta().unwrap() else {
+            panic!()
+        };
+        let display = meta.path(&inner.segments[0].display.path);
+        assert_ne!(cap_enc_ffmpeg::remux::get_video_fps(&display), Some(120));
+        assert_eq!(inner.segments[0].display.fps, 120);
     }
 
     #[test]
