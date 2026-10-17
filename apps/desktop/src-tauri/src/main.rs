@@ -45,9 +45,14 @@ fn main() {
         std::env::set_var("RUST_LOG", "trace");
     }
 
+    // Works around black webviews (#1948), but on WebKitGTK 2.54+ it leaves
+    // transparent windows unpainted (#2624), and a user-set value wins.
     #[cfg(target_os = "linux")]
-    unsafe {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() && webkitgtk_version() < (2, 54)
+    {
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
     }
 
     // We have to hold onto the ClientInitGuard until the very end
@@ -594,4 +599,13 @@ mod benchmark_log_directory_tests {
         assert!(!actual.join("logs").exists());
         assert!(!actual.join("result.json").exists());
     }
+}
+
+#[cfg(target_os = "linux")]
+fn webkitgtk_version() -> (u32, u32) {
+    unsafe extern "C" {
+        fn webkit_get_major_version() -> u32;
+        fn webkit_get_minor_version() -> u32;
+    }
+    unsafe { (webkit_get_major_version(), webkit_get_minor_version()) }
 }
