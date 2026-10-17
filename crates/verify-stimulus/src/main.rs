@@ -512,8 +512,9 @@ mod app {
                         DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
                         DXGI_SAMPLE_DESC,
                     },
-                    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-                    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
+                    DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+                    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_DISCARD, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice,
                     IDXGIFactory2, IDXGISwapChain1,
                 },
             },
@@ -561,24 +562,43 @@ mod app {
                     .and_then(|adapter| adapter.GetParent())
             }
             .map_err(|e| format!("device factory: {e}"))?;
-            let desc = DXGI_SWAP_CHAIN_DESC1 {
-                Width: size.0,
-                Height: size.1,
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                Scaling: DXGI_SCALING_NONE,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                ..Default::default()
-            };
-            let swap_chain =
-                unsafe { factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None) }
-                    .map_err(|e| format!("CreateSwapChainForHwnd: {e}"))?;
+            // Flip model first; the blit model is the fallback where the
+            // display driver has no flip support. Both present through D3D,
+            // which the compositor reads only once the copy has completed.
+            let attempts = [
+                (DXGI_SWAP_EFFECT_FLIP_DISCARD, 2, DXGI_SCALING_NONE),
+                (DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 2, DXGI_SCALING_STRETCH),
+                (DXGI_SWAP_EFFECT_DISCARD, 1, DXGI_SCALING_STRETCH),
+            ];
+            let mut errors = Vec::new();
+            let mut created = None;
+            for (effect, buffers, scaling) in attempts {
+                let desc = DXGI_SWAP_CHAIN_DESC1 {
+                    Width: size.0,
+                    Height: size.1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    BufferCount: buffers,
+                    Scaling: scaling,
+                    SwapEffect: effect,
+                    AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                    ..Default::default()
+                };
+                match unsafe { factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None) } {
+                    Ok(swap_chain) => {
+                        eprintln!("stimulus swap chain: {effect:?}, {buffers} buffers");
+                        created = Some(swap_chain);
+                        break;
+                    }
+                    Err(e) => errors.push(format!("{effect:?}: {e}")),
+                }
+            }
+            let swap_chain = created
+                .ok_or_else(|| format!("CreateSwapChainForHwnd: {}", errors.join("; ")))?;
             Ok(Canvas {
                 context,
                 swap_chain,
