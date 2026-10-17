@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { parse } from "jsonc-parser";
 
 const root = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const manifest = JSON.parse(
@@ -13,12 +13,13 @@ const manifest = JSON.parse(
 const version = spawnSync("bun", ["--version"], { encoding: "utf8" });
 assert.equal(version.status, 0, version.error?.message ?? version.stderr);
 assert.equal(`bun@${version.stdout.trim()}`, manifest.packageManager);
-const parsed = ts.parseConfigFileTextToJson(
-	"bun.lock",
+const parseErrors = [];
+const lock = parse(
 	readFileSync(path.join(root, "bun.lock"), "utf8"),
+	parseErrors,
+	{ allowTrailingComma: true },
 );
-assert.equal(parsed.error, undefined, "bun.lock must be valid JSONC");
-const lock = parsed.config;
+assert.deepEqual(parseErrors, [], "bun.lock must be valid JSONC");
 let checked = 0;
 for (const [directory, workspace] of Object.entries(lock.workspaces)) {
 	const dependencies = {

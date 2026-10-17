@@ -3,9 +3,7 @@ import { Effect } from "effect";
 import { useEffectQuery } from "../EffectRuntime";
 import { AnalyticsRequest } from "../Requests/AnalyticsRequest";
 
-type AnalyticsDataLoader = Effect.Effect.Success<
-	typeof AnalyticsRequest.DataLoaderResolver
->;
+type AnalyticsDataLoader = AnalyticsRequest.DataLoaderResolver["Service"];
 
 export function useVideosAnalyticsQuery(
 	videoIds: Video.VideoId[],
@@ -37,7 +35,7 @@ export function useVideosAnalyticsQuery(
 								new AnalyticsRequest.AnalyticsRequest({ videoId }),
 								dataloader,
 							).pipe(
-								Effect.catchAll((error: unknown) => {
+								Effect.catch((error: unknown) => {
 									console.warn(
 										`Failed to fetch analytics for video ${videoId}:`,
 										error,

@@ -71,26 +71,23 @@ pub struct KbdChip {
 }
 
 impl KbdChip {
-    /// The tooltip variant: a light chip on the tooltip's dark bubble.
     pub fn tooltip(theme: &Theme, key: impl AsRef<str>) -> Self {
         Self {
             key: kbd_symbol(key.as_ref()),
             size: KbdSize::Sm,
-            bg: theme.gray(1),
-            text: theme.gray(12),
+            bg: theme.surface_raised.into(),
+            text: theme.text_secondary.into(),
             border: None,
         }
     }
 
-    /// `HotkeyText`'s square: `bg-gray-5 border-gray-6`, the most tactile of
-    /// the three and the one meant to be legible on its own.
     pub fn row(theme: &Theme, key: impl AsRef<str>) -> Self {
         Self {
             key: kbd_symbol(key.as_ref()),
             size: KbdSize::Md,
-            bg: theme.gray(5),
-            text: theme.gray(12),
-            border: Some(theme.gray(6)),
+            bg: theme.surface_raised.into(),
+            text: theme.text_primary.into(),
+            border: Some(theme.border.into()),
         }
     }
 }
@@ -106,7 +103,7 @@ impl RenderOnce for KbdChip {
         } = self;
         let (padding_x, padding_y, text_size, min_size): (Pixels, Pixels, Pixels, Option<Pixels>) =
             match size {
-                KbdSize::Sm => (px(5.), px(2.), px(10.), None),
+                KbdSize::Sm => (px(4.), px(0.), px(11.), None),
                 KbdSize::Md => (px(4.), px(2.), px(11.), Some(px(24.))),
             };
 
@@ -118,7 +115,10 @@ impl RenderOnce for KbdChip {
             .px(padding_x)
             .py(padding_y)
             .when_some(min_size, |this, size| this.min_w(size).h(size))
-            .rounded(px(6.))
+            .rounded(crate::theme::radius(match size {
+                KbdSize::Sm => crate::theme::RadiusToken::Small,
+                KbdSize::Md => crate::theme::RadiusToken::Compact,
+            }))
             .bg(bg)
             .text_size(text_size)
             .text_color(text)

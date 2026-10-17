@@ -5,7 +5,6 @@
 	"types": "./src/index.ts",
 	"type": "module",
 	"dependencies": {
-		"@effect/platform": "^0.92.1",
-		"effect": "^3.18.4"
+		"effect": "^4.0.4"
 	}
 }

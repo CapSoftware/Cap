@@ -1,6 +1,5 @@
-import { HttpApiSchema } from "@effect/platform";
-import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { OrganisationId } from "./Organisation.ts";
@@ -12,27 +11,27 @@ import { UserId } from "./User.ts";
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;
 
-export const FolderColor = Schema.Literal("normal", "blue", "red", "yellow");
+export const FolderColor = Schema.Literals(["normal", "blue", "red", "yellow"]);
 export type FolderColor = (typeof FolderColor)["Type"];
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"FolderNotFoundError",
 	{},
-	HttpApiSchema.annotations({ status: 404 }),
+	{ httpApiStatus: 404 },
 ) {}
 
 // A folder can't be declared within itself.
 export class RecursiveDefinitionError extends Schema.TaggedError<RecursiveDefinitionError>()(
 	"RecursiveDefinitionError",
 	{},
-	HttpApiSchema.annotations({ status: 409 }),
+	{ httpApiStatus: 409 },
 ) {}
 
 // Attempted to assign a parent to a folder which doesn't exist.
 export class ParentNotFoundError extends Schema.TaggedError<ParentNotFoundError>()(
 	"ParentNotFoundError",
 	{},
-	HttpApiSchema.annotations({ status: 404 }),
+	{ httpApiStatus: 404 },
 ) {}
 
 export class Folder extends Schema.Class<Folder>("Folder")({
@@ -60,7 +59,7 @@ export type FolderUpdate = Schema.Schema.Type<typeof FolderUpdate>;
 export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderDelete", {
 		payload: FolderId,
-		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+		error: Schema.Union([NotFoundError, InternalError, PolicyDeniedError]),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("FolderCreate", {
 		payload: Schema.Struct({
@@ -70,16 +69,16 @@ export class FolderRpcs extends RpcGroup.make(
 			spaceId: Schema.OptionFromUndefinedOr(SpaceIdOrOrganisationId),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),
-		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+		error: Schema.Union([NotFoundError, InternalError, PolicyDeniedError]),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,
-		error: Schema.Union(
+		error: Schema.Union([
 			RecursiveDefinitionError,
 			ParentNotFoundError,
 			PolicyDeniedError,
 			NotFoundError,
 			InternalError,
-		),
+		]),
 	}).middleware(RpcAuthMiddleware),
 ) {}

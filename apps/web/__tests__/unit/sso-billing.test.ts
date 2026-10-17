@@ -220,17 +220,38 @@ function paidInvoice(priceId = STRIPE_SAML_SSO_PRICE_ID): Stripe.Invoice {
 		id: "in_sso",
 		status: "paid",
 		customer: "cus_owner",
-		subscription: "sub_sso",
+		parent: {
+			type: "subscription_details",
+			quote_details: null,
+			subscription_details: {
+				metadata: null,
+				subscription: "sub_sso",
+			},
+		},
 		lines: {
 			has_more: false,
 			data: [
 				{
-					type: "subscription",
-					proration: false,
+					parent: {
+						type: "subscription_item_details",
+						invoice_item_details: null,
+						subscription_item_details: {
+							invoice_item: null,
+							proration: false,
+							proration_details: null,
+							subscription: "sub_sso",
+							subscription_item: "si_sso",
+						},
+					},
 					amount: 20000,
-					price: { id: priceId },
-					subscription: "sub_sso",
-					subscription_item: "si_sso",
+					pricing: {
+						type: "price_details",
+						price_details: {
+							price: priceId,
+							product: STRIPE_SAML_SSO_PRODUCT_ID,
+						},
+						unit_amount_decimal: null,
+					},
 					period: { start: periodEnd - 30 * 86400, end: periodEnd },
 				},
 			],
@@ -248,13 +269,13 @@ function ssoSubscription(
 		status: "active",
 		currency: "usd",
 		metadata: { type: "saml_sso", organizationId, userId },
-		current_period_end: periodEnd,
 		cancel_at_period_end: false,
 		items: {
 			has_more: false,
 			data: [
 				{
 					id: "si_sso",
+					current_period_end: periodEnd,
 					quantity: 1,
 					price: {
 						id: priceId,
@@ -381,7 +402,7 @@ beforeEach(() => {
 		async (id: string) => {
 			expect(transactionContext.getStore()).not.toBe(true);
 			const session = state.sessions.get(id);
-			if (!session || session.status !== "open") {
+			if (session?.status !== "open") {
 				throw new Error("Checkout is not open");
 			}
 			const expired = { ...session, status: "expired" as const, url: null };
@@ -620,12 +641,37 @@ describe("verified organization SSO subscription synchronization", () => {
 
 	it("does not derive paid-through from an unrelated paid invoice", async () => {
 		const invoice = paidInvoice();
-		invoice.subscription = "sub_other";
+		if (!invoice.parent?.subscription_details)
+			throw new Error("Missing invoice subscription");
+		invoice.parent.subscription_details.subscription = "sub_other";
 		mocks.stripe.subscriptions.retrieve.mockResolvedValue(
 			ssoSubscription({ latest_invoice: invoice }),
 		);
 		expect(hasSsoAccess(await syncSsoSubscription("sub_sso"))).toBe(false);
 	});
+
+	it.each(["wrong price", "prorated line", "unrelated item"] as const)(
+		"does not grant access for a paid invoice with %s",
+		async (mismatch) => {
+			const invoice = paidInvoice();
+			const line = invoice.lines.data[0];
+			if (
+				!line?.parent?.subscription_item_details ||
+				!line.pricing?.price_details
+			)
+				throw new Error("Missing invoice line details");
+			if (mismatch === "wrong price")
+				line.pricing.price_details.price = "price_other";
+			if (mismatch === "prorated line")
+				line.parent.subscription_item_details.proration = true;
+			if (mismatch === "unrelated item")
+				line.parent.subscription_item_details.subscription_item = "si_other";
+			mocks.stripe.subscriptions.retrieve.mockResolvedValue(
+				ssoSubscription({ latest_invoice: invoice }),
+			);
+			expect(hasSsoAccess(await syncSsoSubscription("sub_sso"))).toBe(false);
+		},
+	);
 
 	it("rejects metadata-only entitlement on an unapproved product price", async () => {
 		const subscription = ssoSubscription({}, "price_unknown");
@@ -1303,12 +1349,24 @@ describe("read-only SSO invoices", () => {
 
 	it.each([
 		{ customer: "cus_unrelated" },
-		{ subscription: "sub_pro" },
-		{ subscription: null },
+		{ parentSubscription: "sub_pro" },
+		{ parentSubscription: null },
 		{ customer: null },
 	])("rejects mismatched returned invoice: %j", async (overrides) => {
+		const invoice = paidInvoice();
+		if ("customer" in overrides) invoice.customer = overrides.customer;
+		if ("parentSubscription" in overrides) {
+			if (overrides.parentSubscription === null) {
+				invoice.parent = null;
+			} else {
+				if (!invoice.parent?.subscription_details)
+					throw new Error("Missing invoice subscription");
+				invoice.parent.subscription_details.subscription =
+					overrides.parentSubscription;
+			}
+		}
 		mocks.stripe.invoices.list.mockResolvedValue({
-			data: [{ ...paidInvoice(), ...overrides }],
+			data: [invoice],
 			has_more: false,
 		});
 		await expect(listSsoInvoices(organizationId)).rejects.toThrow(
@@ -1346,12 +1404,17 @@ describe("read-only SSO invoices", () => {
 		mocks.stripe.subscriptions.retrieve.mockResolvedValue(
 			ssoSubscription({ customer: { id: "cus_owner" } as Stripe.Customer }),
 		);
+		const invoice = paidInvoice();
+		if (!invoice.parent?.subscription_details)
+			throw new Error("Missing invoice subscription");
+		invoice.parent.subscription_details.subscription = {
+			id: "sub_sso",
+		} as Stripe.Subscription;
 		mocks.stripe.invoices.list.mockResolvedValue({
 			data: [
 				{
-					...paidInvoice(),
+					...invoice,
 					customer: { id: "cus_owner" },
-					subscription: { id: "sub_sso" },
 					invoice_pdf: "https://invoice.stripe.com/i/acct_test/inv_test/pdf",
 				},
 			],

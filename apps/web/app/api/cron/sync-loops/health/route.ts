@@ -1,34 +1,32 @@
 import { timingSafeEqual } from "node:crypto";
 import { readLoopsHealth } from "@cap/database/loops/health";
+import { Effect, Layer, Schema } from "effect";
+import { HttpServerRequest } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerRequest,
-} from "@effect/platform";
-import { Effect, Layer, Schema } from "effect";
+} from "effect/http-api";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("LoopsHealthApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.get("health")`/api/cron/sync-loops/health`
-			.addSuccess(
-				Schema.Struct({
-					healthy: Schema.Boolean,
-					checkedAt: Schema.String,
-					totalJobs: Schema.Number,
-					overdueJobs: Schema.Number,
-					failingJobs: Schema.Number,
-				}),
-			)
-			.addError(HttpApiError.Unauthorized)
-			.addError(HttpApiError.InternalServerError),
+		HttpApiEndpoint.get("health", "/api/cron/sync-loops/health", {
+			success: Schema.Struct({
+				healthy: Schema.Boolean,
+				checkedAt: Schema.String,
+				totalJobs: Schema.Number,
+				overdueJobs: Schema.Number,
+				failingJobs: Schema.Number,
+			}),
+			error: [HttpApiError.Unauthorized, HttpApiError.InternalServerError],
+		}),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("health", () =>

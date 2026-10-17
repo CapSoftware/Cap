@@ -55,6 +55,7 @@ mod radio_cards;
 mod segmented;
 mod select;
 mod selection_header;
+mod skeleton;
 mod slider;
 mod surface;
 mod tab_rail;
@@ -106,6 +107,7 @@ pub use segmented::{SegmentOption, SegmentedControl, option_at};
 pub use select::Select;
 #[allow(unused_imports)]
 pub use selection_header::{SelectionHeader, selection_label, zoom_selection_label};
+pub use skeleton::{skeleton_block, skeleton_pulse, skeleton_text};
 #[allow(unused_imports)]
 pub use slider::{
     Slider, SliderDrag, SliderTrack, fraction_from_x, snap_to_step, value_at as slider_value_at,
@@ -123,6 +125,6 @@ pub use text_input::{
 #[allow(unused_imports)]
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]
-pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};
+pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip};
 #[cfg(target_os = "windows")]
 pub use windows_caption::windows_caption_controls;

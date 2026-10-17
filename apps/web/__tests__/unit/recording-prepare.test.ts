@@ -1,4 +1,3 @@
-import type { HttpApi } from "@effect/platform";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,11 +15,10 @@ vi.mock("@/lib/desktop-recording-source", () => ({
 
 vi.mock("@/lib/server", async () => {
 	const { Database } = await import("@cap/web-backend");
-	const { HttpAuthMiddleware, Organisation, User, DatabaseError } =
+	const { HttpAuthMiddleware, CurrentUser, Organisation, User, DatabaseError } =
 		await import("@cap/web-domain");
-	const { HttpApiBuilder, HttpApiError, HttpServer } = await import(
-		"@effect/platform"
-	);
+	const { HttpApiError } = await import("effect/http-api");
+	const { HttpRouter, HttpServer } = await import("effect/http");
 	const { Effect, Layer, Option } = await import("effect");
 	const client = {
 		select: () => ({
@@ -29,7 +27,7 @@ vi.mock("@/lib/server", async () => {
 	} as unknown as import("@cap/web-backend/src/Database").DbClient;
 	const database = Layer.succeed(
 		Database,
-		Database.make({
+		Database.of({
 			use: (callback) =>
 				Effect.tryPromise({
 					try: () => callback(client),
@@ -39,32 +37,39 @@ vi.mock("@/lib/server", async () => {
 	);
 	const auth = Layer.succeed(
 		HttpAuthMiddleware,
-		Effect.suspend(() =>
-			mocks.userId
-				? Effect.succeed({
-						id: User.UserId.make(mocks.userId),
-						email: "owner@example.com",
-						activeOrganizationId: Organisation.OrganisationId.make("org"),
-						iconUrlOrKey: Option.none(),
-					})
-				: Effect.fail(new HttpApiError.Unauthorized()),
+		HttpAuthMiddleware.of((httpEffect) =>
+			Effect.suspend(() =>
+				mocks.userId
+					? Effect.succeed({
+							id: User.UserId.make(mocks.userId),
+							email: "owner@example.com",
+							activeOrganizationId: Organisation.OrganisationId.make("org"),
+							iconUrlOrKey: Option.none(),
+						})
+					: Effect.fail(new HttpApiError.Unauthorized()),
+			).pipe(
+				Effect.flatMap((user) =>
+					Effect.provideService(httpEffect, CurrentUser, user),
+				),
+			),
 		),
 	);
 	return {
 		apiToHandler: (
 			api: import("effect").Layer.Layer<
-				HttpApi.Api,
+				never,
 				never,
 				| import("@cap/web-backend").Database
 				| import("@cap/web-domain").HttpAuthMiddleware
+				| import("effect/http").HttpRouter.HttpRouter
 			>,
 		) => {
-			const handler = api.pipe(
-				Layer.provideMerge(auth),
-				Layer.provideMerge(database),
-				Layer.merge(HttpServer.layerContext),
-				HttpApiBuilder.toWebHandler,
+			const routes = api.pipe(
+				Layer.provide(auth),
+				Layer.provide(database),
+				Layer.provide(HttpServer.layerServices),
 			);
+			const handler = HttpRouter.toWebHandler(routes);
 			mocks.dispose = handler.dispose;
 			return handler.handler;
 		},

@@ -10,7 +10,7 @@ import {
 } from "@cap/web-domain";
 import { AssemblyAI } from "assemblyai";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { Either, Option, Schema } from "effect";
+import { Option, Result, Schema } from "effect";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
 	ASSEMBLYAI_SPEECH_MODELS,
@@ -332,18 +332,18 @@ async function processNextLiveChunk(options: {
 				parsed = JSON.parse(manifestJson);
 			} catch {}
 			const decoded = parsed
-				? Schema.decodeUnknownEither(Video.SegmentManifest)(parsed)
+				? Schema.decodeUnknownResult(Video.SegmentManifest)(parsed)
 				: null;
 
-			if (decoded && Either.isRight(decoded)) {
+			if (decoded && Result.isSuccess(decoded)) {
 				const next = planNextLiveChunk({
-					manifest: decoded.right,
+					manifest: decoded.success,
 					lastProcessedIndex,
 					targetSeconds,
 				});
 				if (next.action !== "wait") {
 					decision = next;
-					decodedManifest = decoded.right;
+					decodedManifest = decoded.success;
 					break;
 				}
 			}
@@ -613,10 +613,10 @@ async function promoteLiveTranscript(
 		if (!manifestJson) {
 			return { promoted: false, reason: "manifest missing" };
 		}
-		const decoded = Schema.decodeUnknownEither(Video.SegmentManifest)(
+		const decoded = Schema.decodeUnknownResult(Video.SegmentManifest)(
 			JSON.parse(manifestJson),
 		);
-		if (Either.isLeft(decoded)) {
+		if (Result.isFailure(decoded)) {
 			return { promoted: false, reason: "manifest invalid" };
 		}
 
@@ -631,7 +631,7 @@ async function promoteLiveTranscript(
 			return { promoted: false, reason: "live artifact missing" };
 		}
 
-		const eligible = canPromoteLiveTranscript(artifact, decoded.right);
+		const eligible = canPromoteLiveTranscript(artifact, decoded.success);
 		if (!eligible.ok) {
 			await queueFullPassFallback(videoId, userId);
 			return { promoted: false, reason: eligible.reason };

@@ -108,7 +108,7 @@ export async function GET() {
 						const resolvedAvatar = author.avatar
 							? yield* imageUploads
 									.resolveImageUrl(author.avatar)
-									.pipe(Effect.catchAll(() => Effect.succeed(null)))
+									.pipe(Effect.catch(() => Effect.succeed(null)))
 							: null;
 
 						return APINotification.parse({
@@ -126,7 +126,7 @@ export async function GET() {
 							},
 						});
 					}).pipe(
-						Effect.catchAll((error) => {
+						Effect.catch((error) => {
 							console.error("Invalid notification data:", error);
 							return Effect.succeed(null);
 						}),

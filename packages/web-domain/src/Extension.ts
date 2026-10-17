@@ -1,11 +1,11 @@
+import { Schema } from "effect";
 import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
 	HttpApiSchema,
 	OpenApi,
-} from "@effect/platform";
-import { Schema } from "effect";
+} from "effect/http-api";
 
 import { HttpAuthMiddleware } from "./Authentication.ts";
 import { InternalServerError } from "./Http/Errors.ts";
@@ -55,8 +55,8 @@ export const ExtensionBootstrapSuccess = Schema.Struct({
 
 export const ExtensionUploadProgressUpdateInput = Schema.Struct({
 	videoId: Video.VideoId,
-	uploaded: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
-	total: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+	uploaded: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+	total: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	updatedAt: Schema.DateFromString,
 });
 
@@ -66,69 +66,63 @@ export class ExtensionHttpApi extends HttpApiGroup.make("extension")
 	// it), and the credential is only minted by the same-origin consent-form
 	// POST below.
 	.add(
-		HttpApiEndpoint.get("startAuth", ExtensionApiPaths.startAuth)
-			.setUrlParams(ExtensionAuthStartParams)
-			.addError(HttpApiError.BadRequest)
-			.addError(InternalServerError),
+		HttpApiEndpoint.get("startAuth", ExtensionApiPaths.startAuth, {
+			query: ExtensionAuthStartParams,
+			error: [HttpApiError.BadRequest, InternalServerError],
+		}),
 	)
 	.add(
-		HttpApiEndpoint.post("approveAuth", ExtensionApiPaths.approveAuth)
-			.setPayload(
-				ExtensionAuthStartParams.pipe(
-					HttpApiSchema.withEncoding({ kind: "UrlParams" }),
-				),
-			)
-			.addError(HttpApiError.BadRequest)
-			.addError(InternalServerError),
+		HttpApiEndpoint.post("approveAuth", ExtensionApiPaths.approveAuth, {
+			payload: ExtensionAuthStartParams.pipe(HttpApiSchema.asFormUrlEncoded()),
+			error: [HttpApiError.BadRequest, InternalServerError],
+		}),
 	)
 	.add(
-		HttpApiEndpoint.post("revokeAuth", ExtensionApiPaths.revokeAuth)
-			.middleware(HttpAuthMiddleware)
-			.addSuccess(Schema.Struct({ success: Schema.Boolean }))
-			.addError(InternalServerError),
+		HttpApiEndpoint.post("revokeAuth", ExtensionApiPaths.revokeAuth, {
+			success: Schema.Struct({ success: Schema.Boolean }),
+			error: InternalServerError,
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("bootstrap", ExtensionApiPaths.bootstrap)
-			.middleware(HttpAuthMiddleware)
-			.addSuccess(ExtensionBootstrapSuccess)
-			.addError(InternalServerError),
+		HttpApiEndpoint.get("bootstrap", ExtensionApiPaths.bootstrap, {
+			success: ExtensionBootstrapSuccess,
+			error: InternalServerError,
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
 		HttpApiEndpoint.post(
 			"createInstantRecording",
 			ExtensionApiPaths.createInstantRecording,
-		)
-			.middleware(HttpAuthMiddleware)
-			.setPayload(Video.InstantRecordingCreateInput)
-			.addSuccess(Video.InstantRecordingCreateSuccess)
-			.addError(InternalServerError)
-			.addError(PolicyDeniedError),
+			{
+				payload: Video.InstantRecordingCreateInput,
+				success: Video.InstantRecordingCreateSuccess,
+				error: [InternalServerError, PolicyDeniedError],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
 		HttpApiEndpoint.post(
 			"updateInstantRecordingProgress",
 			ExtensionApiPaths.updateInstantRecordingProgress,
-		)
-			.middleware(HttpAuthMiddleware)
-			.setPayload(ExtensionUploadProgressUpdateInput)
-			.addSuccess(Schema.Struct({ success: Schema.Boolean }))
-			.addError(InternalServerError)
-			.addError(Video.NotFoundError)
-			.addError(PolicyDeniedError),
+			{
+				payload: ExtensionUploadProgressUpdateInput,
+				success: Schema.Struct({ success: Schema.Boolean }),
+				error: [InternalServerError, Video.NotFoundError, PolicyDeniedError],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.del(
+		HttpApiEndpoint.delete(
 			"deleteInstantRecording",
 			`${INSTANT_RECORDINGS_PATH}/:videoId`,
-		)
-			.setPath(Schema.Struct({ videoId: Video.VideoId }))
-			.middleware(HttpAuthMiddleware)
-			.addSuccess(Schema.Struct({ success: Schema.Boolean }))
-			.addError(InternalServerError)
-			.addError(Video.NotFoundError)
-			.addError(PolicyDeniedError),
+			{
+				params: Schema.Struct({ videoId: Video.VideoId }),
+				success: Schema.Struct({ success: Schema.Boolean }),
+				error: [InternalServerError, Video.NotFoundError, PolicyDeniedError],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
-	.annotateContext(
+	.annotateMerge(
 		OpenApi.annotations({
 			title: "Chrome Extension",
 			description: "Endpoints used by the first-party Cap Chrome recorder.",

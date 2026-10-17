@@ -5,7 +5,7 @@ import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
-import UAParser from "ua-parser-js";
+import { UAParser } from "ua-parser-js";
 
 import { getAnonymousName } from "@/lib/anonymous-names";
 import {
@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
 								isAnonymous: false,
 							}),
 						).pipe(
-							Effect.catchAll((error) => {
+							Effect.catch((error) => {
 								console.error("Failed to send first view email:", error);
 								return Effect.void;
 							}),
@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
 							location,
 						}),
 					).pipe(
-						Effect.catchAll((error) => {
+						Effect.catch((error) => {
 							console.error(
 								"Failed to create anonymous view notification:",
 								error,
@@ -227,7 +227,7 @@ export async function POST(request: NextRequest) {
 								isAnonymous: true,
 							}),
 						).pipe(
-							Effect.catchAll((error) => {
+							Effect.catch((error) => {
 								console.error("Failed to send first view email:", error);
 								return Effect.void;
 							}),
@@ -247,7 +247,7 @@ export async function POST(request: NextRequest) {
 							isAnonymous: true,
 						}),
 					).pipe(
-						Effect.catchAll((error) => {
+						Effect.catch((error) => {
 							console.error("Failed to send first view email:", error);
 							return Effect.void;
 						}),

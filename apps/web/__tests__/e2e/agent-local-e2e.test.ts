@@ -6,8 +6,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { parseEnv } from "node:util";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { parse } from "dotenv";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -470,8 +470,8 @@ const startApiServer = async () => {
 
 agentE2e("Cap agent local Docker E2E", () => {
 	beforeAll(async () => {
-		const workspaceEnvironment = parse(
-			await readFile(resolve(process.cwd(), "../../.env")),
+		const workspaceEnvironment = parseEnv(
+			await readFile(resolve(process.cwd(), "../../.env"), "utf8"),
 		);
 		Object.assign(process.env, {
 			DATABASE_URL: databaseUrl,

@@ -10,32 +10,38 @@ vi.mock("@cap/database/crypto", () => ({
 	decrypt: async (value: string) => value,
 }));
 vi.mock("@cap/web-backend/src/Database.ts", async () => {
-	const { Effect } = await import("effect");
-	class Database extends Effect.Service<Database>()("Database", {
-		sync: () => ({}),
-	}) {}
+	const { Context, Layer } = await import("effect");
+	class Database extends Context.Service<Database, Record<string, never>>()(
+		"Database",
+	) {
+		static readonly Default = Layer.succeed(this, {});
+	}
 	return { Database };
 });
 vi.mock("@cap/web-backend/src/Aws.ts", async () => {
-	const { Effect } = await import("effect");
-	class AwsCredentials extends Effect.Service<AwsCredentials>()(
-		"AwsCredentials",
-		{
-			sync: () => ({
-				credentials: {
-					accessKeyId: "default-key",
-					secretAccessKey: "test-secret",
-				},
-			}),
+	const { Context, Layer } = await import("effect");
+	const service = {
+		credentials: {
+			accessKeyId: "default-key",
+			secretAccessKey: "test-secret",
 		},
-	) {}
+	};
+	class AwsCredentials extends Context.Service<
+		AwsCredentials,
+		typeof service
+	>()("AwsCredentials") {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return { AwsCredentials };
 });
 vi.mock("@cap/web-backend/src/S3Buckets/S3BucketsRepo.ts", async () => {
-	const { Effect } = await import("effect");
-	class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()("S3BucketsRepo", {
-		sync: () => ({ getById: mocks.getById }),
-	}) {}
+	const { Context, Layer } = await import("effect");
+	const service = { getById: mocks.getById };
+	class S3BucketsRepo extends Context.Service<S3BucketsRepo, typeof service>()(
+		"S3BucketsRepo",
+	) {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return { S3BucketsRepo };
 });
 
@@ -66,15 +72,13 @@ async function storageFixture() {
 	const runtime = ManagedRuntime.make(
 		S3Buckets.Default.pipe(
 			Layer.provide(
-				Layer.setConfigProvider(
-					ConfigProvider.fromMap(
-						new Map([
-							["CAP_AWS_REGION", "us-east-1"],
-							["CAP_AWS_BUCKET", "capso"],
-							["S3_INTERNAL_ENDPOINT", endpoint],
-							["S3_PUBLIC_ENDPOINT", endpoint],
-						]),
-					),
+				ConfigProvider.layer(
+					ConfigProvider.fromEnvRecord({
+						CAP_AWS_REGION: "us-east-1",
+						CAP_AWS_BUCKET: "capso",
+						S3_INTERNAL_ENDPOINT: endpoint,
+						S3_PUBLIC_ENDPOINT: endpoint,
+					}),
 				),
 			),
 		),

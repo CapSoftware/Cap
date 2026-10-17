@@ -1,10 +1,10 @@
+import { Layer } from "effect";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-} from "@effect/platform";
-import { Layer } from "effect";
+} from "effect/http-api";
 import { revokeMcpToken } from "@/lib/mcp-auth";
 import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
@@ -37,11 +37,11 @@ async function revoke(request: Request) {
 
 class Api extends HttpApi.make("CapMcpRevocationApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.post("revoke")`/api/mcp/oauth/revoke`,
+		HttpApiEndpoint.post("revoke", "/api/mcp/oauth/revoke"),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("revoke", () => mcpRequest(revoke)),

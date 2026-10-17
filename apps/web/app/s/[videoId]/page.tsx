@@ -240,7 +240,7 @@ const getShareVideoPageCatchers = (
 ) => ({
 	PolicyDenied: (e: Policy.PolicyDeniedError) =>
 		renderPolicyDenied(videoId, e.reason),
-	NoSuchElementException: () => renderNoSuchElement(awaitRecording),
+	NoSuchElementError: () => renderNoSuchElement(awaitRecording),
 });
 
 export async function generateMetadata(
@@ -399,14 +399,17 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		const [row] = yield* Effect.promise(loadVideo);
 
 		if (row) {
-			yield* videosPolicy.canViewLoaded(row, Option.fromNullable(row.password));
+			yield* videosPolicy.canViewLoaded(
+				row,
+				Option.fromNullishOr(row.password),
+			);
 		}
 
-		return Option.fromNullable(
+		return Option.fromNullishOr(
 			row && row.organizationTombstoneAt === null ? toShareVideo(row) : null,
 		);
 	}).pipe(
-		Effect.flatten,
+		Effect.flatMap(Effect.fromOption),
 		Effect.map((video) => ({ needsPassword: false, video }) as const),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
@@ -671,7 +674,7 @@ async function AuthorizedContent({
 					.where(eq(comments.id, replyId.value))
 					.limit(1),
 			);
-			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
+			toplLevelCommentId = Option.fromNullishOr(parentComment?.parentCommentId);
 		}
 
 		const commentToBringToTheTop = Option.orElse(
@@ -714,7 +717,7 @@ async function AuthorizedContent({
 					comments.map(
 						Effect.fn(function* (c) {
 							return Object.assign(c, {
-								authorImage: yield* Option.fromNullable(c.authorImage).pipe(
+								authorImage: yield* Option.fromNullishOr(c.authorImage).pipe(
 									Option.map(imageUploads.resolveImageUrl),
 									Effect.transposeOption,
 									Effect.map(Option.getOrNull),

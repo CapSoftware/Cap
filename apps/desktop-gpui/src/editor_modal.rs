@@ -229,7 +229,8 @@ impl Render for EditorModal {
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::hsla(0., 0., 0., 0.5))
+            .bg(theme.surface_overlay)
+            .font_family(crate::theme::ui_font())
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .map(|this| {
                 MouseButton::all().into_iter().fold(this, |this, button| {
@@ -259,11 +260,11 @@ impl Render for EditorModal {
                     .flex_col()
                     .gap(px(padding.min(12.)))
                     .p(px(padding))
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .bg(Hsla::from(theme.gray_1))
-                    .text_color(Hsla::from(theme.gray_12))
+                    .border_color(Hsla::from(theme.surface_subtle))
+                    .bg(Hsla::from(theme.surface))
+                    .text_color(Hsla::from(theme.text_primary))
                     .shadow_lg()
                     .child(
                         div()
@@ -286,7 +287,7 @@ impl Render for EditorModal {
                                 div()
                                     .flex_shrink_0()
                                     .text_size(px(13.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(self.detail.clone()),
                             ),
                     )
@@ -301,12 +302,14 @@ impl Render for EditorModal {
                                     .id(("editor-modal-action", index))
                                     .flex_1()
                                     .min_w(px(0.))
-                                    .rounded(px(10.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Medium,
+                                    ))
                                     .p(px(2.))
                                     .border_1()
-                                    .border_color(Hsla::from(theme.gray_3))
+                                    .border_color(Hsla::from(theme.surface_subtle))
                                     .when(self.interaction.selected == index, |this| {
-                                        this.border_color(Hsla::from(theme.gray_12))
+                                        this.border_color(Hsla::from(theme.text_primary))
                                     })
                                     .child(
                                         ui::Button::plain(

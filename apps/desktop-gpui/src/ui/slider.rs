@@ -166,7 +166,7 @@ impl Slider {
     /// gets from `0 1px 3px rgba(0,0,0,.25)`.
     pub fn thumb_shadow(mut self) -> Self {
         if let Some(thumb) = self.thumb.as_mut() {
-            thumb.shadow = crate::theme::thumb_shadow();
+            thumb.shadow = crate::theme::shadow(crate::theme::ShadowToken::One);
         }
         self
     }
@@ -248,7 +248,7 @@ impl RenderOnce for Slider {
                     .relative()
                     .w_full()
                     .h(track_height)
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(track_bg)
                     .child(
                         canvas(
@@ -265,7 +265,7 @@ impl RenderOnce for Slider {
                             .top_0()
                             .h_full()
                             .w(gpui::relative(fraction))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(color)
                     }))
                     .children(thumb.map(|thumb| {
@@ -275,7 +275,7 @@ impl RenderOnce for Slider {
                             .left(gpui::relative(fraction))
                             .ml(px(-f32::from(thumb.size) / 2.))
                             .size(thumb.size)
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(thumb.fill)
                             .shadow(thumb.shadow.clone())
                             .when_some(thumb.border, |this, border| {

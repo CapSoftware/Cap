@@ -2,32 +2,143 @@
 // Copyright 2021-2023 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(target_os = "android")]
 use crate::{
   dpi::{PhysicalPosition, PhysicalSize, Position, Size},
   error, event,
   event_loop::{self, ControlFlow},
-  keyboard::{Key, KeyCode, KeyLocation, NativeKeyCode},
+  keyboard::{KeyCode, NativeKeyCode},
   monitor,
   window::{self, ResizeDirection, Theme, WindowSizeConstraints},
 };
 use crossbeam_channel::{Receiver, Sender};
 use ndk::{
   configuration::Configuration,
-  event::{InputEvent, KeyAction, MotionAction},
   looper::{ForeignLooper, Poll, ThreadLooper},
 };
 use std::{
-  collections::VecDeque,
-  sync::RwLock,
+  collections::{HashSet, VecDeque},
+  error::Error,
+  fmt,
+  sync::{LazyLock, RwLock},
   time::{Duration, Instant},
 };
 
-pub mod ndk_glue;
-use ndk_glue::{Event, Rect};
+#[derive(Debug)]
+pub struct JniCallError {
+  source: jni::errors::Error,
+  java_exception: Option<String>,
+}
 
-lazy_static! {
-  static ref CONFIG: RwLock<Configuration> = RwLock::new(Configuration::new());
+impl JniCallError {
+  fn new(source: jni::errors::Error, java_exception: Option<String>) -> Self {
+    Self {
+      source,
+      java_exception,
+    }
+  }
+}
+
+impl From<jni::errors::Error> for JniCallError {
+  fn from(source: jni::errors::Error) -> Self {
+    Self::new(source, None)
+  }
+}
+
+impl fmt::Display for JniCallError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match &self.java_exception {
+      Some(java_exception) => write!(f, "{}: {java_exception}", self.source),
+      None => self.source.fmt(f),
+    }
+  }
+}
+
+impl Error for JniCallError {
+  fn source(&self) -> Option<&(dyn Error + 'static)> {
+    Some(&self.source)
+  }
+}
+
+/// Logs and clears a pending Java exception while preserving the original JNI error.
+macro_rules! jni_handle_error {
+  ($env:ident, $e:expr) => {{
+    let e = $e;
+    let message = (|| -> jni::errors::Result<Option<String>> {
+      if $env.exception_check()? {
+        let throwable = $env.exception_occurred()?;
+        $env.exception_clear()?;
+
+        let message = $env
+          .call_method(&throwable, "toString", "()Ljava/lang/String;", &[])?
+          .l()?;
+        let message: jni::objects::JString = message.into();
+        return $env.get_string(&message).map(|s| Some(s.into()));
+      }
+
+      Ok(None)
+    })();
+
+    let java_exception = match message {
+      Ok(Some(message)) => {
+        log::error!(
+          "tao: JNI call failed at {}:{} with Java exception: {message}",
+          file!(),
+          line!()
+        );
+        Some(message)
+      }
+      Ok(None) => {
+        log::error!("tao: JNI call failed at {}:{}: {e}", file!(), line!());
+        None
+      }
+      Err(err) => {
+        let message = format!("failed to read Java exception: {err}");
+        log::error!(
+          "tao: JNI call failed at {}:{}: {e}; {message}",
+          file!(),
+          line!()
+        );
+        Some(message)
+      }
+    };
+
+    $crate::platform_impl::platform::JniCallError::new(e, java_exception)
+  }};
+}
+
+macro_rules! jni_call_method {
+  ($env:ident, $obj:expr, $method:expr, $sig:expr, $args:expr, $ret_typ:ident) => {{
+    $env
+      .call_method($obj, $method, $sig, $args)
+      .and_then(|v| v.$ret_typ())
+      .map_err(|e| jni_handle_error!($env, e))
+  }};
+
+  ($env:ident, $obj:expr, $method:expr, $sig:expr, $ret_typ:ident) => {
+    jni_call_method!($env, $obj, $method, $sig, &[], $ret_typ)
+  };
+}
+
+pub mod ndk_glue;
+use ndk_glue::{ActivityId, Event, Rect, WindowEvent};
+
+static CONFIG: LazyLock<RwLock<Configuration>> =
+  LazyLock::new(|| RwLock::new(Configuration::new()));
+
+#[derive(Debug)]
+pub enum OsError {
+  JniCallError(JniCallError),
+  NoAvailableActivity,
+}
+
+impl std::error::Error for OsError {}
+impl std::fmt::Display for OsError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      OsError::JniCallError(e) => write!(f, "JNI error: {e}"),
+      OsError::NoAvailableActivity => write!(f, "no available activity"),
+    }
+  }
 }
 
 enum EventSource {
@@ -59,21 +170,11 @@ pub struct EventLoop<T: 'static> {
   first_event: Option<EventSource>,
   start_cause: event::StartCause,
   looper: ThreadLooper,
-  running: bool,
+  running: HashSet<window::WindowId>,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PlatformSpecificEventLoopAttributes {}
-
-macro_rules! call_event_handler {
-  ( $event_handler:expr, $window_target:expr, $cf:expr, $event:expr ) => {{
-    if let ControlFlow::ExitWithCode(code) = $cf {
-      $event_handler($event, $window_target, &mut ControlFlow::ExitWithCode(code));
-    } else {
-      $event_handler($event, $window_target, &mut $cf);
-    }
-  }};
-}
 
 impl<T: 'static> EventLoop<T> {
   pub(crate) fn new(_: &PlatformSpecificEventLoopAttributes) -> Self {
@@ -91,7 +192,7 @@ impl<T: 'static> EventLoop<T> {
       first_event: None,
       start_cause: event::StartCause::Init,
       looper: ThreadLooper::for_thread().unwrap(),
-      running: false,
+      running: HashSet::new(),
     }
   }
 
@@ -108,242 +209,273 @@ impl<T: 'static> EventLoop<T> {
   where
     F: FnMut(event::Event<'_, T>, &event_loop::EventLoopWindowTarget<T>, &mut ControlFlow),
   {
-    let mut control_flow = ControlFlow::default();
+    let event_handler = &mut event_handler;
+    let control_flow = &mut ControlFlow::default();
 
-    'event_loop: loop {
-      call_event_handler!(
+    loop {
+      self.call_event_handler(
         event_handler,
-        self.window_target(),
         control_flow,
-        event::Event::NewEvents(self.start_cause)
+        event::Event::NewEvents(self.start_cause),
       );
 
-      let mut redraw = false;
-      let mut resized = false;
+      let mut redraw_window_id = None;
+      let mut resized_window_id = None;
 
       match self.first_event.take() {
         Some(EventSource::Callback) => match ndk_glue::poll_events().unwrap() {
-          Event::Resume => {
-            call_event_handler!(
+          Event::Resume { id: window_id } => {
+            self.call_event_handler(
               event_handler,
-              self.window_target(),
-              control_flow,
-              event::Event::Resumed
-            );
-          }
-          Event::WindowResized => resized = true,
-          Event::WindowRedrawNeeded => redraw = true,
-          Event::Pause => {
-            call_event_handler!(
-              event_handler,
-              self.window_target(),
-              control_flow,
-              event::Event::Suspended
-            );
-          }
-          Event::Stop => self.running = false,
-          Event::Start => self.running = true,
-          Event::ConfigChanged => {
-            // #[allow(deprecated)] // TODO: use ndk-context instead
-            // let am = ndk_glue::native_activity().asset_manager();
-            // let config = Configuration::from_asset_manager(&am);
-            // let old_scale_factor = MonitorHandle.scale_factor();
-            // *CONFIG.write().unwrap() = config;
-            // let scale_factor = MonitorHandle.scale_factor();
-            // if (scale_factor - old_scale_factor).abs() < f64::EPSILON {
-            //   let mut size = MonitorHandle.size();
-            //   let event = event::Event::WindowEvent {
-            //     window_id: window::WindowId(WindowId),
-            //     event: event::WindowEvent::ScaleFactorChanged {
-            //       new_inner_size: &mut size,
-            //       scale_factor,
-            //     },
-            //   };
-            //   call_event_handler!(event_handler, self.window_target(), control_flow, event);
-            // }
-          }
-          Event::WindowHasFocus => {
-            call_event_handler!(
-              event_handler,
-              self.window_target(),
               control_flow,
               event::Event::WindowEvent {
-                window_id: window::WindowId(WindowId),
-                event: event::WindowEvent::Focused(true),
-              }
+                window_id,
+                event: event::WindowEvent::Resumed,
+              },
             );
           }
-          Event::WindowLostFocus => {
-            call_event_handler!(
+          Event::WindowEvent {
+            id: window_id,
+            event,
+          } => match event {
+            WindowEvent::Resized => resized_window_id = Some(window_id),
+            WindowEvent::RedrawNeeded => redraw_window_id = Some(window_id),
+            WindowEvent::Started => {
+              self.running.insert(window_id);
+              self.call_event_handler(
+                event_handler,
+                control_flow,
+                event::Event::WindowEvent {
+                  window_id,
+                  event: event::WindowEvent::Started,
+                },
+              );
+            }
+            WindowEvent::Focused(focused) => {
+              self.call_event_handler(
+                event_handler,
+                control_flow,
+                event::Event::WindowEvent {
+                  window_id,
+                  event: event::WindowEvent::Focused(focused),
+                },
+              );
+            }
+            WindowEvent::Stopped => {
+              self.running.remove(&window_id);
+              self.call_event_handler(
+                event_handler,
+                control_flow,
+                event::Event::WindowEvent {
+                  window_id,
+                  event: event::WindowEvent::Stopped,
+                },
+              );
+            }
+            WindowEvent::Destroyed => {
+              self.running.remove(&window_id);
+              self.call_event_handler(
+                event_handler,
+                control_flow,
+                event::Event::WindowEvent {
+                  window_id,
+                  event: event::WindowEvent::Destroyed,
+                },
+              );
+            }
+            _ => {}
+          },
+          Event::Pause { id: window_id } => {
+            self.call_event_handler(
               event_handler,
-              self.window_target(),
               control_flow,
               event::Event::WindowEvent {
-                window_id: window::WindowId(WindowId),
-                event: event::WindowEvent::Focused(false),
-              }
+                window_id,
+                event: event::WindowEvent::Suspended,
+              },
             );
           }
-          _ => {}
-        },
-        Some(EventSource::InputQueue) => {
-          if let Some(input_queue) = ndk_glue::input_queue().as_ref() {
-            while let Ok(Some(event)) = input_queue.event() {
-              if let Some(event) = input_queue.pre_dispatch(event) {
-                let mut handled = true;
-                let window_id = window::WindowId(WindowId);
-                let device_id = event::DeviceId(DeviceId);
-                match &event {
-                  InputEvent::MotionEvent(motion_event) => {
-                    let phase = match motion_event.action() {
-                      MotionAction::Down | MotionAction::PointerDown => {
-                        Some(event::TouchPhase::Started)
-                      }
-                      MotionAction::Up | MotionAction::PointerUp => Some(event::TouchPhase::Ended),
-                      MotionAction::Move => Some(event::TouchPhase::Moved),
-                      MotionAction::Cancel => Some(event::TouchPhase::Cancelled),
-                      _ => {
-                        handled = false;
-                        None // TODO mouse events
-                      }
-                    };
-                    if let Some(phase) = phase {
-                      let pointers: Box<dyn Iterator<Item = ndk::event::Pointer<'_>>> = match phase
-                      {
-                        event::TouchPhase::Started | event::TouchPhase::Ended => {
-                          Box::new(std::iter::once(
-                            motion_event.pointer_at_index(motion_event.pointer_index()),
-                          ))
-                        }
-                        event::TouchPhase::Moved | event::TouchPhase::Cancelled => {
-                          Box::new(motion_event.pointers())
-                        }
-                      };
-
-                      for pointer in pointers {
-                        let location = PhysicalPosition {
-                          x: pointer.x() as _,
-                          y: pointer.y() as _,
-                        };
-                        let event = event::Event::WindowEvent {
-                          window_id,
-                          event: event::WindowEvent::Touch(event::Touch {
-                            device_id,
-                            phase,
-                            location,
-                            id: pointer.pointer_id() as u64,
-                            force: None,
-                          }),
-                        };
-                        call_event_handler!(
-                          event_handler,
-                          self.window_target(),
-                          control_flow,
-                          event
-                        );
-                      }
-                    }
-                  }
-                  InputEvent::KeyEvent(key) => {
-                    let state = match key.action() {
-                      KeyAction::Down => event::ElementState::Pressed,
-                      KeyAction::Up => event::ElementState::Released,
-                      _ => event::ElementState::Released,
-                    };
-
-                    let keycode = key.key_code();
-                    let native = NativeKeyCode::Android(keycode.into());
-                    let physical_key = KeyCode::Unidentified(native);
-                    let logical_key = keycode_to_logical(keycode, native);
-                    // TODO: maybe use getUnicodeChar to get the logical key
-
-                    let event = event::Event::WindowEvent {
-                      window_id,
-                      event: event::WindowEvent::KeyboardInput {
-                        device_id,
-                        event: event::KeyEvent {
-                          state,
-                          physical_key,
-                          logical_key,
-                          location: keycode_to_location(keycode),
-                          repeat: key.repeat_count() > 0,
-                          text: None,
-                          platform_specific: KeyEventExtra {},
-                        },
-                        is_synthetic: false,
-                      },
-                    };
-                    call_event_handler!(event_handler, self.window_target(), control_flow, event);
-                  }
-                  _ => {}
-                };
-                input_queue.finish_event(event, handled);
-              }
+          Event::Opened => {
+            let urls = ndk_glue::take_intent_urls();
+            if !urls.is_empty() {
+              self.call_event_handler(event_handler, control_flow, event::Event::Opened { urls });
             }
           }
+          //Event::ConfigChanged => {
+          // #[allow(deprecated)] // TODO: use ndk-context instead
+          // let am = ndk_glue::native_activity().asset_manager();
+          // let config = Configuration::from_asset_manager(&am);
+          // let old_scale_factor = MonitorHandle.scale_factor();
+          // *CONFIG.write().unwrap() = config;
+          // let scale_factor = MonitorHandle.scale_factor();
+          // if (scale_factor - old_scale_factor).abs() < f64::EPSILON {
+          //   let mut size = MonitorHandle.size();
+          //   let event = event::Event::WindowEvent {
+          //     window_id: window::WindowId(WindowId),
+          //     event: event::WindowEvent::ScaleFactorChanged {
+          //       new_inner_size: &mut size,
+          //       scale_factor,
+          //     },
+          //   };
+          //   self.call_event_handler(event_handler, control_flow, event);
+          // }
+          //}
+          _ => {}
+        },
+
+        Some(EventSource::InputQueue) => {
+          /*
+            if let Some(input_queue) = ndk_glue::input_queue().as_ref() {
+              while let Ok(Some(event)) = input_queue.event() {
+                if let Some(event) = input_queue.pre_dispatch(event) {
+                  let mut handled = true;
+                  let window_id = window::WindowId(WindowId);
+                  let device_id = event::DeviceId(DeviceId);
+                  match &event {
+                    InputEvent::MotionEvent(motion_event) => {
+                      let phase = match motion_event.action() {
+                        MotionAction::Down | MotionAction::PointerDown => {
+                          Some(event::TouchPhase::Started)
+                        }
+                        MotionAction::Up | MotionAction::PointerUp => Some(event::TouchPhase::Ended),
+                        MotionAction::Move => Some(event::TouchPhase::Moved),
+                        MotionAction::Cancel => Some(event::TouchPhase::Cancelled),
+                        _ => {
+                          handled = false;
+                          None // TODO mouse events
+                        }
+                      };
+                      if let Some(phase) = phase {
+                        let pointers: Box<dyn Iterator<Item = ndk::event::Pointer<'_>>> = match phase
+                        {
+                          event::TouchPhase::Started | event::TouchPhase::Ended => {
+                            Box::new(std::iter::once(
+                              motion_event.pointer_at_index(motion_event.pointer_index()),
+                            ))
+                          }
+                          event::TouchPhase::Moved | event::TouchPhase::Cancelled => {
+                            Box::new(motion_event.pointers())
+                          }
+                        };
+
+                        for pointer in pointers {
+                          let location = PhysicalPosition {
+                            x: pointer.x() as _,
+                            y: pointer.y() as _,
+                          };
+                          let event = event::Event::WindowEvent {
+                            window_id,
+                            event: event::WindowEvent::Touch(event::Touch {
+                              device_id,
+                              phase,
+                              location,
+                              id: pointer.pointer_id() as u64,
+                              force: None,
+                            }),
+                          };
+                          self.call_event_handler(
+                            event_handler,
+                            control_flow,
+                            event
+                          );
+                        }
+                      }
+                    }
+                    InputEvent::KeyEvent(key) => {
+                      let state = match key.action() {
+                        KeyAction::Down => event::ElementState::Pressed,
+                        KeyAction::Up => event::ElementState::Released,
+                        _ => event::ElementState::Released,
+                      };
+
+                      let keycode = key.key_code();
+                      let native = NativeKeyCode::Android(keycode.into());
+                      let physical_key = KeyCode::Unidentified(native);
+                      let logical_key = keycode_to_logical(keycode, native);
+                      // TODO: maybe use getUnicodeChar to get the logical key
+
+                      let event = event::Event::WindowEvent {
+                        window_id,
+                        event: event::WindowEvent::KeyboardInput {
+                          device_id,
+                          event: event::KeyEvent {
+                            state,
+                            physical_key,
+                            logical_key,
+                            location: keycode_to_location(keycode),
+                            repeat: key.repeat_count() > 0,
+                            text: None,
+                            platform_specific: KeyEventExtra {},
+                          },
+                          is_synthetic: false,
+                        },
+                      };
+                      self.call_event_handler(
+                        event_handler,
+                        control_flow,
+                        event,
+                      );
+                    }
+                    _ => {}
+                  };
+                  input_queue.finish_event(event, handled);
+                }
+              }
+            }
+          */
         }
-        Some(EventSource::User) => {
-          while let Ok(event) = self.receiver.try_recv() {
-            call_event_handler!(
-              event_handler,
-              self.window_target(),
-              control_flow,
-              event::Event::UserEvent(event)
-            );
-          }
-        }
-        None => {}
+        _ => {}
       }
 
-      call_event_handler!(
+      // We need to treat every event as if they were from [`EventLoopProxy::send_event`]
+      //
+      // > All return values may also imply ALOOPER_POLL_WAKE. If you call this in a loop,
+      // > you must treat all return values as if they also indicated ALOOPER_POLL_WAKE.
+      // > https://developer.android.com/ndk/reference/group/looper#alooper_pollonce
+      while let Ok(event) = self.receiver.try_recv() {
+        self.call_event_handler(event_handler, control_flow, event::Event::UserEvent(event));
+      }
+
+      self.call_event_handler(event_handler, control_flow, event::Event::MainEventsCleared);
+
+      if let Some(window_id) = resized_window_id {
+        if self.running.contains(&window_id) {
+          let size = MonitorHandle.size();
+          let event = event::Event::WindowEvent {
+            window_id,
+            event: event::WindowEvent::Resized(size),
+          };
+          self.call_event_handler(event_handler, control_flow, event);
+        }
+      }
+
+      if let Some(window_id) = redraw_window_id {
+        if self.running.contains(&window_id) {
+          let event = event::Event::RedrawRequested(window_id);
+          self.call_event_handler(event_handler, control_flow, event);
+        }
+      }
+
+      self.call_event_handler(
         event_handler,
-        self.window_target(),
         control_flow,
-        event::Event::MainEventsCleared
+        event::Event::RedrawEventsCleared,
       );
 
-      if resized && self.running {
-        let size = MonitorHandle.size();
-        let event = event::Event::WindowEvent {
-          window_id: window::WindowId(WindowId),
-          event: event::WindowEvent::Resized(size),
-        };
-        call_event_handler!(event_handler, self.window_target(), control_flow, event);
-      }
-
-      if redraw && self.running {
-        let event = event::Event::RedrawRequested(window::WindowId(WindowId));
-        call_event_handler!(event_handler, self.window_target(), control_flow, event);
-      }
-
-      call_event_handler!(
-        event_handler,
-        self.window_target(),
-        control_flow,
-        event::Event::RedrawEventsCleared
-      );
-
-      match control_flow {
+      match *control_flow {
         ControlFlow::ExitWithCode(code) => {
-          self.first_event = poll(
-            self
-              .looper
-              .poll_once_timeout(Duration::from_millis(0))
-              .unwrap(),
-          );
+          self.first_event = poll(self.looper.poll_once_timeout(Duration::ZERO).unwrap());
           self.start_cause = event::StartCause::WaitCancelled {
             start: Instant::now(),
             requested_resume: None,
           };
-          break 'event_loop code;
+
+          self.call_event_handler(event_handler, control_flow, event::Event::LoopDestroyed);
+
+          return code;
         }
         ControlFlow::Poll => {
-          self.first_event = poll(
-            self
-              .looper
-              .poll_all_timeout(Duration::from_millis(0))
-              .unwrap(),
-          );
+          self.first_event = poll(self.looper.poll_all_timeout(Duration::ZERO).unwrap());
           self.start_cause = event::StartCause::Poll;
         }
         ControlFlow::Wait => {
@@ -377,6 +509,25 @@ impl<T: 'static> EventLoop<T> {
     }
   }
 
+  fn call_event_handler<F>(
+    &self,
+    event_handler: &mut F,
+    control_flow: &mut ControlFlow,
+    event: event::Event<'_, T>,
+  ) where
+    F: FnMut(event::Event<'_, T>, &event_loop::EventLoopWindowTarget<T>, &mut ControlFlow),
+  {
+    if let ControlFlow::ExitWithCode(code) = *control_flow {
+      event_handler(
+        event,
+        self.window_target(),
+        &mut ControlFlow::ExitWithCode(code),
+      );
+    } else {
+      event_handler(event, self.window_target(), control_flow);
+    }
+  }
+
   pub fn window_target(&self) -> &event_loop::EventLoopWindowTarget<T> {
     &self.window_target
   }
@@ -396,7 +547,7 @@ pub struct EventLoopProxy<T: 'static> {
 
 impl<T> EventLoopProxy<T> {
   pub fn send_event(&self, event: T) -> Result<(), event_loop::EventLoopClosed<T>> {
-    _ = self.queue.try_send(event);
+    let _ = self.queue.send(event);
     self.looper.wake();
     Ok(())
   }
@@ -426,7 +577,7 @@ impl<T: 'static> EventLoopWindowTarget<T> {
   #[inline]
   pub fn monitor_from_point(&self, _x: f64, _y: f64) -> Option<MonitorHandle> {
     warn!("`Window::monitor_from_point` is ignored on Android");
-    return None;
+    None
   }
 
   pub fn available_monitors(&self) -> VecDeque<MonitorHandle> {
@@ -456,11 +607,11 @@ impl<T: 'static> EventLoopWindowTarget<T> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct WindowId;
+pub struct WindowId(ActivityId);
 
 impl WindowId {
   pub fn dummy() -> Self {
-    WindowId
+    WindowId(0)
   }
 }
 
@@ -473,23 +624,56 @@ impl DeviceId {
   }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct PlatformSpecificWindowBuilderAttributes;
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PlatformSpecificWindowBuilderAttributes {
+  pub activity_id: Option<ActivityId>,
+  pub activity_name: Option<String>,
+  pub created_by_activity_name: Option<String>,
+}
 
-pub struct Window;
+pub struct Window {
+  activity_id: ActivityId,
+  activity_name: String,
+}
 
 impl Window {
   pub fn new<T: 'static>(
     _el: &EventLoopWindowTarget<T>,
     _window_attrs: window::WindowAttributes,
-    _: PlatformSpecificWindowBuilderAttributes,
+    pl_attrs: PlatformSpecificWindowBuilderAttributes,
   ) -> Result<Self, error::OsError> {
     // FIXME this ignores requested window attributes
-    Ok(Self)
+
+    let (activity_id, activity_name) = match pl_attrs.activity_name {
+      Some(activity_name) => {
+        let ctx = if let Some(created_by_activity_name) = pl_attrs.created_by_activity_name {
+          ndk_glue::CONTEXTS
+            .lock()
+            .unwrap()
+            .values()
+            .find(|ctx| ctx.activity_name == created_by_activity_name)
+            .cloned()
+        } else {
+          ndk_glue::main_android_context()
+        }
+        .ok_or_else(|| os_error!(OsError::NoAvailableActivity))?;
+        let activity_id = ctx
+          .create_activity(&activity_name)
+          .map_err(|error| os_error!(OsError::JniCallError(error)))?;
+        (activity_id, activity_name)
+      }
+      None => ndk_glue::next_available_activity()
+        .map(|(activity_id, ctx)| (activity_id, ctx.activity_name.clone()))
+        .ok_or_else(|| os_error!(OsError::NoAvailableActivity))?,
+    };
+    Ok(Self {
+      activity_id,
+      activity_name,
+    })
   }
 
   pub fn id(&self) -> WindowId {
-    WindowId
+    WindowId(self.activity_id)
   }
 
   pub fn primary_monitor(&self) -> Option<monitor::MonitorHandle> {
@@ -704,10 +888,10 @@ impl Window {
   pub fn raw_window_handle_rwh_04(&self) -> rwh_04::RawWindowHandle {
     // TODO: Use main activity instead?
     let mut handle = rwh_04::AndroidNdkHandle::empty();
-    if let Some(w) = ndk_glue::window_manager().as_ref() {
+    if let Some(w) = ndk_glue::activity_window_manager(self.activity_id).as_ref() {
       handle.a_native_window = w.as_obj().as_raw() as *mut _;
     } else {
-      panic!("Cannot get the native window, it's null and will always be null before Event::Resumed and after Event::Suspended. Make sure you only call this function between those events.");
+      panic!("Cannot get the native window, it's null and will always be null before WindowEvent::Resumed and after WindowEvent::Suspended. Make sure you only call this function between those events.");
     };
     rwh_04::RawWindowHandle::AndroidNdk(handle)
   }
@@ -716,10 +900,10 @@ impl Window {
   pub fn raw_window_handle_rwh_05(&self) -> rwh_05::RawWindowHandle {
     // TODO: Use main activity instead?
     let mut handle = rwh_05::AndroidNdkWindowHandle::empty();
-    if let Some(w) = ndk_glue::window_manager().as_ref() {
+    if let Some(w) = ndk_glue::activity_window_manager(self.activity_id).as_ref() {
       handle.a_native_window = w.as_obj().as_raw() as *mut _;
     } else {
-      panic!("Cannot get the native window, it's null and will always be null before Event::Resumed and after Event::Suspended. Make sure you only call this function between those events.");
+      panic!("Cannot get the native window, it's null and will always be null before WindowEvent::Resumed and after WindowEvent::Suspended. Make sure you only call this function between those events.");
     };
     rwh_05::RawWindowHandle::AndroidNdk(handle)
   }
@@ -732,7 +916,7 @@ impl Window {
   #[cfg(feature = "rwh_06")]
   pub fn raw_window_handle_rwh_06(&self) -> Result<rwh_06::RawWindowHandle, rwh_06::HandleError> {
     // TODO: Use main activity instead?
-    if let Some(w) = ndk_glue::window_manager().as_ref() {
+    if let Some(w) = ndk_glue::activity_window_manager(self.activity_id).as_ref() {
       let native_window =
         unsafe { std::ptr::NonNull::new_unchecked(w.as_obj().as_raw() as *mut _) };
       // native_window shuldn't be null
@@ -757,18 +941,12 @@ impl Window {
     ndk_glue::content_rect()
   }
 
+  pub fn activity_name(&self) -> &str {
+    &self.activity_name
+  }
+
   pub fn theme(&self) -> Theme {
     Theme::Light
-  }
-}
-
-#[derive(Default, Clone, Debug)]
-pub struct OsError;
-
-use std::fmt::{self, Display, Formatter};
-impl Display for OsError {
-  fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-    write!(fmt, "Android OS Error")
   }
 }
 
@@ -777,47 +955,103 @@ pub(crate) use crate::icon::NoIcon as PlatformIcon;
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct MonitorHandle;
 
+fn current_window_metrics_size(
+  env: &mut jni::JNIEnv<'_>,
+  window_manager: &jni::objects::JObject<'_>,
+) -> Option<PhysicalSize<u32>> {
+  let metrics = jni_call_method!(
+    env,
+    window_manager,
+    "getCurrentWindowMetrics",
+    "()Landroid/view/WindowMetrics;",
+    l
+  )
+  .ok()?;
+
+  let rect = jni_call_method!(env, &metrics, "getBounds", "()Landroid/graphics/Rect;", l).ok()?;
+  let width = jni_call_method!(env, &rect, "width", "()I", i).ok()?;
+  let height = jni_call_method!(env, &rect, "height", "()I", i).ok()?;
+  Some(PhysicalSize::new(width as u32, height as u32))
+}
+
+fn legacy_display_metrics_size(
+  env: &mut jni::JNIEnv<'_>,
+  window_manager: &jni::objects::JObject<'_>,
+) -> Option<PhysicalSize<u32>> {
+  let display = jni_call_method!(
+    env,
+    window_manager,
+    "getDefaultDisplay",
+    "()Landroid/view/Display;",
+    l
+  )
+  .ok()?;
+  let display_metrics = env
+    .new_object("android/util/DisplayMetrics", "()V", &[])
+    .ok()?;
+
+  jni_call_method!(
+    env,
+    &display,
+    "getRealMetrics",
+    "(Landroid/util/DisplayMetrics;)V",
+    &[(&display_metrics).into()],
+    v
+  )
+  .ok()?;
+
+  let width = env
+    .get_field(&display_metrics, "widthPixels", "I")
+    .and_then(|v| v.i())
+    .ok()?;
+  let height = env
+    .get_field(&display_metrics, "heightPixels", "I")
+    .and_then(|v| v.i())
+    .ok()?;
+
+  Some(PhysicalSize::new(width as u32, height as u32))
+}
+
 impl MonitorHandle {
   pub fn name(&self) -> Option<String> {
     Some("Android Device".to_owned())
   }
 
   pub fn size(&self) -> PhysicalSize<u32> {
+    // TODO: support multi-window (main_window_manager might be incorrect)
+
     // TODO decide how to get JNIENV
-    if let Some(w) = ndk_glue::window_manager().as_ref() {
-      let ctx = ndk_context::android_context();
-      let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.unwrap();
-      let mut env = vm.attach_current_thread().unwrap();
-      let window_manager = w.as_obj();
-      let metrics = env
-        .call_method(
-          window_manager,
-          "getCurrentWindowMetrics",
-          "()Landroid/view/WindowMetrics;",
-          &[],
-        )
-        .unwrap()
-        .l()
-        .unwrap();
-      let rect = env
-        .call_method(&metrics, "getBounds", "()Landroid/graphics/Rect;", &[])
-        .unwrap()
-        .l()
-        .unwrap();
-      let width = env
-        .call_method(&rect, "width", "()I", &[])
-        .unwrap()
-        .i()
-        .unwrap();
-      let height = env
-        .call_method(&rect, "height", "()I", &[])
-        .unwrap()
-        .i()
-        .unwrap();
-      PhysicalSize::new(width as u32, height as u32)
+    let window_manager = ndk_glue::main_window_manager();
+    let Some(w) = window_manager.as_ref() else {
+      return PhysicalSize::new(0, 0);
+    };
+    let Some(ctx) = ndk_glue::main_android_context() else {
+      return PhysicalSize::new(0, 0);
+    };
+    let Ok(vm) = (unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }) else {
+      return PhysicalSize::new(0, 0);
+    };
+    let Ok(mut env) = vm.attach_current_thread() else {
+      return PhysicalSize::new(0, 0);
+    };
+    let window_manager = w.as_obj();
+
+    let sdk_int = env
+      .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+      .and_then(|v| v.i())
+      .unwrap_or(0);
+
+    let metrics_size = if sdk_int >= 30 {
+      current_window_metrics_size(&mut env, window_manager)
     } else {
-      PhysicalSize::new(0, 0)
+      legacy_display_metrics_size(&mut env, window_manager)
+    };
+
+    if metrics_size.is_none() && env.exception_check().unwrap_or(false) {
+      let _ = env.exception_clear();
     }
+
+    metrics_size.unwrap_or(PhysicalSize::new(0, 0))
   }
 
   pub fn position(&self) -> PhysicalPosition<i32> {
@@ -834,17 +1068,17 @@ impl MonitorHandle {
 
   pub fn video_modes(&self) -> impl Iterator<Item = monitor::VideoMode> {
     let size = self.size().into();
-    let mut v = Vec::new();
     // FIXME this is not the real refresh rate
     // (it is guarunteed to support 32 bit color though)
-    v.push(monitor::VideoMode {
+    let v = vec![monitor::VideoMode {
       video_mode: VideoMode {
         size,
         bit_depth: 32,
         refresh_rate: 60,
         monitor: self.clone(),
       },
-    });
+    }];
+
     v.into_iter()
   }
 }
@@ -877,6 +1111,7 @@ impl VideoMode {
   }
 }
 
+/*
 fn keycode_to_logical(keycode: ndk::event::Keycode, native: NativeKeyCode) -> Key<'static> {
   use ndk::event::Keycode::*;
 
@@ -1251,6 +1486,7 @@ fn keycode_to_location(keycode: ndk::event::Keycode) -> KeyLocation {
     _ => KeyLocation::Standard,
   }
 }
+*/
 
 // FIXME: Implement android
 pub fn keycode_to_scancode(_code: KeyCode) -> Option<u32> {

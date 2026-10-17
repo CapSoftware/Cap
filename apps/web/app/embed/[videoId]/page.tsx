@@ -165,9 +165,9 @@ export default async function EmbedVideoPage(
 				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
-		return Option.fromNullable(video);
+		return Option.fromNullishOr(video);
 	}).pipe(
-		Effect.flatten,
+		Effect.flatMap(Effect.fromOption),
 		Effect.map((video) => ({ needsPassword: false, video }) as const),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
@@ -194,7 +194,7 @@ export default async function EmbedVideoPage(
 		)),
 		Effect.catchTags({
 			PolicyDenied: renderEmbedPolicyDenied,
-			NoSuchElementException: renderNoSuchElement,
+			NoSuchElementError: renderNoSuchElement,
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
@@ -360,7 +360,7 @@ async function EmbedContent({
 
 	const ownerImageUrl = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
-		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
+		return yield* Option.fromNullishOr(videoOwner[0]?.image).pipe(
 			Option.map(imageUploads.resolveImageUrl),
 			Effect.transposeOption,
 			Effect.map(Option.getOrNull),

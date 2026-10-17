@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import * as Db from "@cap/database/schema";
 import { Agent } from "@cap/web-domain";
-import { HttpServerRequest } from "@effect/platform";
 import { and, eq, isNull, lte, or } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
+import { HttpServerRequest } from "effect/http";
 import { Database } from "./Database.ts";
 
 const requestId = () => crypto.randomUUID();
@@ -100,7 +100,7 @@ export const AgentHttpAuthMiddlewareLive = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database;
 
-		return Agent.AgentHttpAuthMiddleware.of(
+		return Agent.AgentHttpAuthMiddleware.of((httpEffect) =>
 			Effect.gen(function* () {
 				const headers = yield* HttpServerRequest.schemaHeaders(
 					Schema.Struct({ authorization: Schema.optional(Schema.String) }),
@@ -153,7 +153,7 @@ export const AgentHttpAuthMiddlewareLive = Layer.effect(
 										),
 									),
 							)
-							.pipe(Effect.catchAll(() => Effect.void));
+							.pipe(Effect.catch(() => Effect.void));
 					}
 					return Agent.AgentPrincipal.of({
 						id: row.id,
@@ -202,8 +202,11 @@ export const AgentHttpAuthMiddlewareLive = Layer.effect(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
 					DatabaseError: () => Effect.fail(temporarilyUnavailable()),
-					ParseError: () => Effect.fail(authRequired()),
+					SchemaError: () => Effect.fail(authRequired()),
 				}),
+				Effect.flatMap((principal) =>
+					Effect.provideService(httpEffect, Agent.AgentPrincipal, principal),
+				),
 			),
 		);
 	}),

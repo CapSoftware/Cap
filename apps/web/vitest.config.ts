@@ -2,8 +2,8 @@ import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-	esbuild: {
-		jsx: "automatic",
+	oxc: {
+		jsx: { runtime: "automatic" },
 	},
 	test: {
 		// Hoisted UI peers must use web React; CommonJS UI imports still need require in Node-based jsdom tests.
@@ -25,14 +25,9 @@ export default defineConfig({
 					enabled: true,
 					include: ["next/link", "next/image", "react-remove-scroll"],
 				},
-				web: {
+				client: {
 					enabled: true,
 					include: ["next/link", "next/image", "react-remove-scroll"],
-					esbuildOptions: {
-						banner: {
-							js: `import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`,
-						},
-					},
 				},
 			},
 		},

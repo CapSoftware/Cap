@@ -72,7 +72,7 @@ export async function getVideoAnalytics(
 
 			const querySql = (sql: string) =>
 				tinybird.querySql<{ views: number }>(sql).pipe(
-					Effect.catchAll((e) => {
+					Effect.catch((e) => {
 						console.error("tinybird sql error", e);
 						return Effect.succeed({ data: [] });
 					}),

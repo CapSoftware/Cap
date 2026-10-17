@@ -7,16 +7,16 @@ import {
 	Videos,
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
+import { Effect, Layer, Option, Schema } from "effect";
+import { HttpServerResponse } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerResponse,
-} from "@effect/platform";
-import { eq } from "drizzle-orm";
-import { Effect, Layer, Option, Schema } from "effect";
+} from "effect/http-api";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -33,7 +33,7 @@ export const dynamic = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
-	videoType: Schema.Literal(
+	videoType: Schema.Literals([
 		"video",
 		"audio",
 		"master",
@@ -43,32 +43,35 @@ const GetPlaylistParams = Schema.Struct({
 		"segments-video",
 		"segments-audio",
 		"segments-status",
-	),
-	requireComplete: Schema.OptionFromUndefinedOr(Schema.String),
-	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
-	fileType: Schema.OptionFromUndefinedOr(Schema.String),
+	]),
+	requireComplete: Schema.OptionFromOptionalKey(Schema.String),
+	thumbnail: Schema.OptionFromOptionalKey(Schema.String),
+	fileType: Schema.OptionFromOptionalKey(Schema.String),
 });
 
 class Api extends HttpApi.make("CapWebApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.get("getVideoSrc")`/api/playlist`
-			.setUrlParams(GetPlaylistParams)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Unauthorized)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getVideoSrc", "/api/playlist", {
+			query: GetPlaylistParams,
+			error: [
+				HttpApiError.Forbidden,
+				HttpApiError.BadRequest,
+				HttpApiError.Unauthorized,
+				HttpApiError.InternalServerError,
+				HttpApiError.NotFound,
+			],
+		}),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			Effect.gen(function* () {
 				const storage = yield* Storage;
 				const videos = yield* Videos;
 
-				return handlers.handle("getVideoSrc", ({ request, urlParams }) =>
+				return handlers.handle("getVideoSrc", ({ request, query: urlParams }) =>
 					Effect.gen(function* () {
 						const requestHost =
 							request.headers["x-forwarded-host"] ?? request.headers.host;
@@ -85,9 +88,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						const [video] = yield* videos
 							.getByIdForViewing(urlParams.videoId)
 							.pipe(
-								Effect.flatten,
-								Effect.catchTag("NoSuchElementException", () =>
-									Effect.fail(new HttpApiError.NotFound()),
+								Effect.flatMap((result) =>
+									Option.isSome(result)
+										? Effect.succeed(result.value)
+										: Effect.fail(new HttpApiError.NotFound()),
 								),
 							);
 
@@ -102,7 +106,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						);
 					}).pipe(
 						provideOptionalAuth,
-						Effect.tapErrorCause(Effect.logError),
+						Effect.tapCause(Effect.logError),
 						Effect.catchTags({
 							VerifyVideoPasswordError: () =>
 								Effect.fail(new HttpApiError.Forbidden()),
@@ -111,7 +115,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								Effect.fail(new HttpApiError.InternalServerError()),
 							StorageError: () =>
 								Effect.fail(new HttpApiError.InternalServerError()),
-							UnknownException: () =>
+							UnknownError: () =>
 								Effect.fail(new HttpApiError.InternalServerError()),
 						}),
 						Effect.provideService(Storage, storage),
@@ -208,7 +212,7 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.InternalServerError());
 			}
 
-			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
+			let manifest = yield* Schema.decodeUnknownEffect(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
 			if (
@@ -381,17 +385,17 @@ const getPlaylistResponse = (
 			return yield* bucket
 				.getObject(`${video.ownerId}/${video.id}/transcription.vtt`)
 				.pipe(
-					Effect.andThen(
-						Option.match({
-							onNone: () => Effect.fail(new HttpApiError.NotFound()),
-							onSome: (c) =>
-								HttpServerResponse.text(c).pipe(
-									HttpServerResponse.setHeaders({
-										...CACHE_CONTROL_HEADERS,
-										"Content-Type": "text/vtt",
-									}),
-								),
-						}),
+					Effect.flatMap((content) =>
+						Option.isSome(content)
+							? Effect.succeed(
+									HttpServerResponse.text(content.value).pipe(
+										HttpServerResponse.setHeaders({
+											...CACHE_CONTROL_HEADERS,
+											"Content-Type": "text/vtt",
+										}),
+									),
+								)
+							: Effect.fail(new HttpApiError.NotFound()),
 					),
 					Effect.withSpan("fetchTranscription"),
 				);

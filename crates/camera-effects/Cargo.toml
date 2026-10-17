@@ -21,15 +21,15 @@ tokio.workspace = true
 libloading = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))'.dependencies]
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
 libc = "0.2"
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "coreml", "api-23"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "coreml", "api-23"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "directml", "api-23"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "directml", "api-23"] }

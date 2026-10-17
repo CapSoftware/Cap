@@ -7,9 +7,8 @@
 @import "@radix-ui/colors/green.css";
 @import "@radix-ui/colors/purple.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.cjs";
 
 @font-face {
 	font-family: "Neue Montreal";
@@ -77,8 +76,8 @@
 	--text-secondary: #ffffff;
 	color-scheme: light;
 	font-family:
-		"Neue Montreal", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-		"Segoe UI", sans-serif;
+		"Neue Montreal", ui-sans-serif, system-ui, -apple-system,
+		BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 @layer base {

@@ -1,13 +1,12 @@
 import { serverEnv } from "@cap/env";
+import { ByteSize, Effect, Layer } from "effect";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-	HttpServerRequest,
-	HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer, Option } from "effect";
+} from "effect/http-api";
 import { start } from "workflow/api";
 import { apiToHandler } from "@/lib/server";
 import { getSlackConfig } from "@/lib/slack/client";
@@ -19,7 +18,7 @@ const MAX_BODY_BYTES = 1_000_000;
 
 class Api extends HttpApi.make("CapSlackEventsApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.post("receiveSlackEvent")`/api/integrations/slack/events`,
+		HttpApiEndpoint.post("receiveSlackEvent", "/api/integrations/slack/events"),
 	),
 ) {}
 
@@ -33,7 +32,7 @@ const jsonResponse = (body: unknown, status = 200) =>
 		},
 	});
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("receiveSlackEvent", () =>
@@ -44,8 +43,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					}
 					const request = yield* HttpServerRequest.HttpServerRequest;
 					const body = yield* request.text.pipe(
-						HttpServerRequest.withMaxBodySize(Option.some(MAX_BODY_BYTES)),
-						Effect.catchAll(() => Effect.succeed("")),
+						Effect.provideService(
+							HttpServerRequest.MaxBodySize,
+							ByteSize.bytes(MAX_BODY_BYTES),
+						),
+						Effect.catch(() => Effect.succeed("")),
 					);
 					if (
 						!verifySlackSignature({
@@ -84,7 +86,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								);
 							}),
 						),
-						Effect.catchAll(() => Effect.succeed(false)),
+						Effect.catch(() => Effect.succeed(false)),
 					);
 					if (!queued) {
 						return jsonResponse({ error: "Could not queue Slack event" }, 503);

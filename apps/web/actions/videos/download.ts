@@ -147,7 +147,7 @@ export async function getVideoDownloadInfo(
 			);
 			const exists = yield* bucket.headObject(downloadKey).pipe(
 				Effect.as(true),
-				Effect.catchAll(() => Effect.succeed(false)),
+				Effect.catch(() => Effect.succeed(false)),
 			);
 			if (!exists) return null;
 			return yield* bucket.getSignedObjectUrl(downloadKey);

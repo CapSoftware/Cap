@@ -148,10 +148,10 @@ function makeStorageVideo(input: {
 		public: false,
 		source: { type: "MediaConvert" },
 		metadata: Option.none(),
-		bucketId: Option.fromNullable(input.bucketId).pipe(
+		bucketId: Option.fromNullishOr(input.bucketId).pipe(
 			Option.map(S3Bucket.S3BucketId.make),
 		),
-		storageIntegrationId: Option.fromNullable(input.storageIntegrationId).pipe(
+		storageIntegrationId: Option.fromNullishOr(input.storageIntegrationId).pipe(
 			Option.map(StorageDomain.StorageIntegrationId.make),
 		),
 		folderId: Option.none(),

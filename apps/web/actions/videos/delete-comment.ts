@@ -117,7 +117,7 @@ export async function deleteComment({
 			}).pipe(
 				// catchAllCause, not catchAll: a defect (missing credential, storage
 				// layer panic) must not fail the action either — the row is gone.
-				Effect.catchAllCause((cause) =>
+				Effect.catchCause((cause) =>
 					Effect.logError("Failed to delete comment media objects", cause),
 				),
 				EffectRuntime.runPromise,

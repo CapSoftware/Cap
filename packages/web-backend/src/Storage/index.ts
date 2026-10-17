@@ -8,7 +8,7 @@ import {
 	type User,
 	type Video,
 } from "@cap/web-domain";
-import { Effect, Exit, Option } from "effect";
+import { Context, Effect, Exit, Layer, Option } from "effect";
 
 import { S3Buckets } from "../S3Buckets/index.ts";
 import type { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
@@ -151,7 +151,7 @@ const parseSourceKey = (source: string) => {
 };
 
 const requireDriveObject = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	integrationId: StorageDomain.StorageIntegrationId,
 	key: string,
 ) =>
@@ -233,7 +233,7 @@ const makeS3MultipartAccess = (s3: S3BucketAccess): MultipartAccess => ({
 });
 
 const makeGoogleDriveTokenStore = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	integration: typeof Db.storageIntegrations.$inferSelect,
 ): GoogleDriveTokenStore => ({
 	cacheKey: integration.id,
@@ -387,7 +387,7 @@ const copyS3ObjectForRecording = (
 					(uploadId, exit) =>
 						Exit.isFailure(exit)
 							? s3.multipart.abort(key, uploadId).pipe(
-									Effect.catchAll(() =>
+									Effect.catch(() =>
 										Effect.logWarning("Recording multipart copy abort failed"),
 									),
 									Effect.asVoid,
@@ -540,7 +540,7 @@ const makeGoogleDriveAccess = ({
 	integration,
 	config,
 }: {
-	repo: StorageRepo;
+	repo: StorageRepo["Service"];
 	integration: typeof Db.storageIntegrations.$inferSelect;
 	config: GoogleDriveIntegrationConfig;
 }) => {
@@ -663,7 +663,7 @@ const makeGoogleDriveAccess = ({
 				stored.value.providerObjectId,
 				tokenStore,
 			).pipe(
-				Effect.catchAll((error) =>
+				Effect.catch((error) =>
 					isMissingDriveObject(error) ? Effect.void : Effect.fail(error),
 				),
 			);
@@ -1130,235 +1130,241 @@ type WritableStorageAccess = {
 	storageIntegrationId: Option.Option<StorageDomain.StorageIntegrationId>;
 };
 
-export class Storage extends Effect.Service<Storage>()("Storage", {
-	effect: Effect.gen(function* () {
-		const repo = yield* StorageRepo;
-		const s3Buckets = yield* S3Buckets;
+const makeStorage = Effect.gen(function* () {
+	const repo = yield* StorageRepo;
+	const s3Buckets = yield* S3Buckets;
 
-		const getS3WritableAccessForUser = Effect.fn(
-			"Storage.getS3WritableAccessForUser",
-		)(function* (
-			userId: User.UserId,
-			organizationId?: Organisation.OrganisationId,
-		) {
-			if (organizationId) {
-				const organizationBucket = yield* mapStorageError(
-					s3Buckets.getBucketAccessForOrganization(organizationId),
-				);
-
-				if (Option.isSome(organizationBucket)) {
-					const [s3, customBucket] = organizationBucket.value;
-					return {
-						access: makeS3Access(s3),
-						bucketId: Option.map(customBucket, (bucket) => bucket.id),
-						storageIntegrationId: Option.none(),
-					};
-				}
-			}
-
-			const [s3, customBucket] = yield* mapStorageError(
-				s3Buckets.getBucketAccessForUser(userId),
-			);
-			return {
-				access: makeS3Access(s3),
-				bucketId: Option.map(customBucket, (bucket) => bucket.id),
-				storageIntegrationId: Option.none(),
-			};
-		});
-
-		const getDriveAccess = Effect.fn("Storage.getDriveAccess")(function* (
-			integrationId: StorageDomain.StorageIntegrationId,
-		) {
-			const integration = yield* mapStorageError(
-				repo.getIntegrationById(integrationId),
-			).pipe(
-				Effect.flatMap(
-					Option.match({
-						onNone: () =>
-							Effect.fail(
-								new StorageDomain.StorageError({
-									cause: new Error("Storage integration not found"),
-								}),
-							),
-						onSome: Effect.succeed,
-					}),
-				),
-			);
-			const config = yield* mapStorageError(
-				repo.getGoogleDriveConfig(integration),
-			);
-			return makeGoogleDriveAccess({ repo, integration, config });
-		});
-
-		const getOrganizationWritableAccess = Effect.fn(
-			"Storage.getOrganizationWritableAccess",
-		)(function* (organizationId: Organisation.OrganisationId) {
-			const activeIntegration = yield* mapStorageError(
-				repo.getActiveIntegrationForOrganization(organizationId),
-			);
-			if (Option.isSome(activeIntegration)) {
-				const access = yield* getDriveAccess(activeIntegration.value.id);
-				return Option.some<WritableStorageAccess>({
-					access,
-					bucketId: Option.none(),
-					storageIntegrationId: Option.some(activeIntegration.value.id),
-				});
-			}
-
+	const getS3WritableAccessForUser = Effect.fn(
+		"Storage.getS3WritableAccessForUser",
+	)(function* (
+		userId: User.UserId,
+		organizationId?: Organisation.OrganisationId,
+	) {
+		if (organizationId) {
 			const organizationBucket = yield* mapStorageError(
 				s3Buckets.getBucketAccessForOrganization(organizationId),
 			);
+
 			if (Option.isSome(organizationBucket)) {
 				const [s3, customBucket] = organizationBucket.value;
-				return Option.some<WritableStorageAccess>({
+				return {
 					access: makeS3Access(s3),
 					bucketId: Option.map(customBucket, (bucket) => bucket.id),
 					storageIntegrationId: Option.none(),
-				});
-			}
-
-			return Option.none<WritableStorageAccess>();
-		});
-
-		const getWritableAccessForUser = Effect.fn(
-			"Storage.getWritableAccessForUser",
-		)(function* (
-			userId: User.UserId,
-			organizationId?: Organisation.OrganisationId,
-		) {
-			if (organizationId) {
-				const organizationAccess =
-					yield* getOrganizationWritableAccess(organizationId);
-
-				if (Option.isSome(organizationAccess)) {
-					return organizationAccess.value;
-				}
-			}
-
-			const activeIntegration = yield* mapStorageError(
-				repo.getActiveIntegrationForUser(userId),
-			);
-			if (Option.isSome(activeIntegration)) {
-				const access = yield* getDriveAccess(activeIntegration.value.id);
-				return {
-					access,
-					bucketId: Option.none(),
-					storageIntegrationId: Option.some(activeIntegration.value.id),
 				};
 			}
+		}
 
-			return yield* getS3WritableAccessForUser(userId);
-		});
+		const [s3, customBucket] = yield* mapStorageError(
+			s3Buckets.getBucketAccessForUser(userId),
+		);
+		return {
+			access: makeS3Access(s3),
+			bucketId: Option.map(customBucket, (bucket) => bucket.id),
+			storageIntegrationId: Option.none(),
+		};
+	});
 
-		const getAccessForVideo = Effect.fn("Storage.getAccessForVideo")(function* (
-			video: Video.Video,
-			options?: { resolvePublishedOutput?: boolean },
-		) {
-			if (Option.isSome(video.storageIntegrationId)) {
-				const access = yield* getDriveAccess(video.storageIntegrationId.value);
-				return [
-					options?.resolvePublishedOutput === false
-						? access
-						: withPublishedRecordingOutput(video, access),
-					Option.none(),
-				] as const;
+	const getDriveAccess = Effect.fn("Storage.getDriveAccess")(function* (
+		integrationId: StorageDomain.StorageIntegrationId,
+	) {
+		const integration = yield* mapStorageError(
+			repo.getIntegrationById(integrationId),
+		).pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () =>
+						Effect.fail(
+							new StorageDomain.StorageError({
+								cause: new Error("Storage integration not found"),
+							}),
+						),
+					onSome: Effect.succeed,
+				}),
+			),
+		);
+		const config = yield* mapStorageError(
+			repo.getGoogleDriveConfig(integration),
+		);
+		return makeGoogleDriveAccess({ repo, integration, config });
+	});
+
+	const getOrganizationWritableAccess = Effect.fn(
+		"Storage.getOrganizationWritableAccess",
+	)(function* (organizationId: Organisation.OrganisationId) {
+		const activeIntegration = yield* mapStorageError(
+			repo.getActiveIntegrationForOrganization(organizationId),
+		);
+		if (Option.isSome(activeIntegration)) {
+			const access = yield* getDriveAccess(activeIntegration.value.id);
+			return Option.some<WritableStorageAccess>({
+				access,
+				bucketId: Option.none(),
+				storageIntegrationId: Option.some(activeIntegration.value.id),
+			});
+		}
+
+		const organizationBucket = yield* mapStorageError(
+			s3Buckets.getBucketAccessForOrganization(organizationId),
+		);
+		if (Option.isSome(organizationBucket)) {
+			const [s3, customBucket] = organizationBucket.value;
+			return Option.some<WritableStorageAccess>({
+				access: makeS3Access(s3),
+				bucketId: Option.map(customBucket, (bucket) => bucket.id),
+				storageIntegrationId: Option.none(),
+			});
+		}
+
+		return Option.none<WritableStorageAccess>();
+	});
+
+	const getWritableAccessForUser = Effect.fn(
+		"Storage.getWritableAccessForUser",
+	)(function* (
+		userId: User.UserId,
+		organizationId?: Organisation.OrganisationId,
+	) {
+		if (organizationId) {
+			const organizationAccess =
+				yield* getOrganizationWritableAccess(organizationId);
+
+			if (Option.isSome(organizationAccess)) {
+				return organizationAccess.value;
 			}
+		}
 
-			const [s3, customBucket] = yield* mapStorageError(
-				s3Buckets.getBucketAccess(video.bucketId),
-			);
-			const access = makeS3Access(s3);
+		const activeIntegration = yield* mapStorageError(
+			repo.getActiveIntegrationForUser(userId),
+		);
+		if (Option.isSome(activeIntegration)) {
+			const access = yield* getDriveAccess(activeIntegration.value.id);
+			return {
+				access,
+				bucketId: Option.none(),
+				storageIntegrationId: Option.some(activeIntegration.value.id),
+			};
+		}
+
+		return yield* getS3WritableAccessForUser(userId);
+	});
+
+	const getAccessForVideo = Effect.fn("Storage.getAccessForVideo")(function* (
+		video: Video.Video,
+		options?: { resolvePublishedOutput?: boolean },
+	) {
+		if (Option.isSome(video.storageIntegrationId)) {
+			const access = yield* getDriveAccess(video.storageIntegrationId.value);
 			return [
 				options?.resolvePublishedOutput === false
 					? access
 					: withPublishedRecordingOutput(video, access),
-				customBucket,
+				Option.none(),
 			] as const;
-		});
+		}
 
-		const createUploadTargetForUser = Effect.fn(
-			"Storage.createUploadTargetForUser",
-		)(function* (
-			userId: User.UserId,
-			key: string,
-			input: UploadTargetInput,
-			organizationId?: Organisation.OrganisationId,
-		) {
-			const writable = yield* getWritableAccessForUser(userId, organizationId);
-			const upload = yield* writable.access.createUploadTarget(key, input);
-			return { ...writable, upload };
-		});
-
-		const createUploadTargetForVideo = Effect.fn(
-			"Storage.createUploadTargetForVideo",
-		)(function* (video: Video.Video, key: string, input: UploadTargetInput) {
-			const [access] = yield* getAccessForVideo(video);
-			return yield* access.createUploadTarget(key, input);
-		});
-
-		const syncVideoDisplayNames = Effect.fn("Storage.syncVideoDisplayNames")(
-			function* (videoId: Video.VideoId) {
-				for (let attempt = 0; attempt < 3; attempt++) {
-					const current = yield* mapStorageError(
-						repo.getVideoForNameSync(videoId),
-					);
-					if (Option.isNone(current) || !current.value.storageIntegrationId)
-						return;
-					const video = current.value;
-					const integrationId = current.value.storageIntegrationId;
-					const integration = yield* mapStorageError(
-						repo.getIntegrationById(integrationId),
-					);
-					if (Option.isNone(integration)) {
-						return yield* Effect.fail(
-							new StorageDomain.StorageError({
-								cause: new Error("Storage integration not found"),
-							}),
-						);
-					}
-					const config = yield* mapStorageError(
-						repo.getGoogleDriveConfig(integration.value),
-					);
-					const synced = yield* syncGoogleDriveVideoNames(
-						repo,
-						config,
-						{ ...video, storageIntegrationId: integrationId },
-						makeGoogleDriveTokenStore(repo, integration.value),
-					);
-					const latest = yield* mapStorageError(
-						repo.getVideoForNameSync(videoId),
-					);
-					if (Option.isNone(latest)) return;
-					if (
-						synced &&
-						latest.value.name === video.name &&
-						latest.value.ownerId === video.ownerId &&
-						latest.value.storageIntegrationId === integrationId
-					)
-						return;
-				}
-				return yield* Effect.fail(
-					new StorageDomain.StorageError({
-						cause: new Error(
-							"Video changed during Google Drive name synchronization",
-						),
-					}),
-				);
-			},
+		const [s3, customBucket] = yield* mapStorageError(
+			s3Buckets.getBucketAccess(video.bucketId),
 		);
+		const access = makeS3Access(s3);
+		return [
+			options?.resolvePublishedOutput === false
+				? access
+				: withPublishedRecordingOutput(video, access),
+			customBucket,
+		] as const;
+	});
 
-		return {
-			getS3WritableAccessForUser,
-			getOrganizationWritableAccess,
-			getWritableAccessForUser,
-			getAccessForVideo,
-			createUploadTargetForUser,
-			createUploadTargetForVideo,
-			syncVideoDisplayNames,
-		};
-	}),
-	dependencies: [StorageRepo.Default, S3Buckets.Default],
-}) {
+	const createUploadTargetForUser = Effect.fn(
+		"Storage.createUploadTargetForUser",
+	)(function* (
+		userId: User.UserId,
+		key: string,
+		input: UploadTargetInput,
+		organizationId?: Organisation.OrganisationId,
+	) {
+		const writable = yield* getWritableAccessForUser(userId, organizationId);
+		const upload = yield* writable.access.createUploadTarget(key, input);
+		return { ...writable, upload };
+	});
+
+	const createUploadTargetForVideo = Effect.fn(
+		"Storage.createUploadTargetForVideo",
+	)(function* (video: Video.Video, key: string, input: UploadTargetInput) {
+		const [access] = yield* getAccessForVideo(video);
+		return yield* access.createUploadTarget(key, input);
+	});
+
+	const syncVideoDisplayNames = Effect.fn("Storage.syncVideoDisplayNames")(
+		function* (videoId: Video.VideoId) {
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const current = yield* mapStorageError(
+					repo.getVideoForNameSync(videoId),
+				);
+				if (Option.isNone(current) || !current.value.storageIntegrationId)
+					return;
+				const video = current.value;
+				const integrationId = current.value.storageIntegrationId;
+				const integration = yield* mapStorageError(
+					repo.getIntegrationById(integrationId),
+				);
+				if (Option.isNone(integration)) {
+					return yield* Effect.fail(
+						new StorageDomain.StorageError({
+							cause: new Error("Storage integration not found"),
+						}),
+					);
+				}
+				const config = yield* mapStorageError(
+					repo.getGoogleDriveConfig(integration.value),
+				);
+				const synced = yield* syncGoogleDriveVideoNames(
+					repo,
+					config,
+					{ ...video, storageIntegrationId: integrationId },
+					makeGoogleDriveTokenStore(repo, integration.value),
+				);
+				const latest = yield* mapStorageError(
+					repo.getVideoForNameSync(videoId),
+				);
+				if (Option.isNone(latest)) return;
+				if (
+					synced &&
+					latest.value.name === video.name &&
+					latest.value.ownerId === video.ownerId &&
+					latest.value.storageIntegrationId === integrationId
+				)
+					return;
+			}
+			return yield* Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error(
+						"Video changed during Google Drive name synchronization",
+					),
+				}),
+			);
+		},
+	);
+
+	return {
+		getS3WritableAccessForUser,
+		getOrganizationWritableAccess,
+		getWritableAccessForUser,
+		getAccessForVideo,
+		createUploadTargetForUser,
+		createUploadTargetForVideo,
+		syncVideoDisplayNames,
+	};
+});
+
+export class Storage extends Context.Service<
+	Storage,
+	Effect.Success<typeof makeStorage>
+>()("Storage") {
+	static readonly DefaultWithoutDependencies = Layer.effect(this, makeStorage);
+	static readonly Default = this.DefaultWithoutDependencies.pipe(
+		Layer.provide(Layer.mergeAll(StorageRepo.Default, S3Buckets.Default)),
+	);
 	static getWritableAccessForUser = (
 		userId: User.UserId,
 		organizationId?: Organisation.OrganisationId,

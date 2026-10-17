@@ -16,6 +16,7 @@ const KNOWN: usize = 1;
 const DISABLED: usize = 2;
 const UPDATING: usize = 4;
 const DWMWA_NCRENDERING_POLICY: u32 = 2;
+const DWMWA_CLOAK: u32 = 13;
 const DWMNCRP_USEWINDOWSTYLE: u32 = 0;
 const DWMNCRP_DISABLED: u32 = 1;
 
@@ -65,8 +66,11 @@ fn apply_policy(hwnd: HWND, disabled: bool) -> io::Result<()> {
     } else {
         DWMNCRP_USEWINDOWSTYLE
     };
-    // A native frame can remain visible after Main hides; visible windows retain normal DWM policy.
-    let result = unsafe {
+    let cloak = i32::from(disabled);
+    // A hidden Main can stay composited as a blank framed rectangle even with
+    // NC rendering disabled (seen on Windows 11 with the window hidden and
+    // uncloaked), so a hidden Main is also cloaked out of DWM composition.
+    let policy_result = unsafe {
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_NCRENDERING_POLICY,
@@ -74,12 +78,26 @@ fn apply_policy(hwnd: HWND, disabled: bool) -> io::Result<()> {
             std::mem::size_of_val(&policy) as u32,
         )
     };
+    let cloak_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            std::ptr::addr_of!(cloak).cast(),
+            std::mem::size_of_val(&cloak) as u32,
+        )
+    };
+    let succeeded = policy_result >= 0 && cloak_result >= 0;
     if state(hwnd) == Some(updating) {
-        write_state(hwnd, if result >= 0 { desired } else { previous })?;
+        write_state(hwnd, if succeeded { desired } else { previous })?;
     }
-    if result < 0 {
+    if policy_result < 0 {
         return Err(io::Error::other(format!(
-            "Main frame DWM policy {policy} failed: HRESULT {result:#010x}"
+            "Main frame DWM policy {policy} failed: HRESULT {policy_result:#010x}"
+        )));
+    }
+    if cloak_result < 0 {
+        return Err(io::Error::other(format!(
+            "Main frame DWM cloak {cloak} failed: HRESULT {cloak_result:#010x}"
         )));
     }
     Ok(())

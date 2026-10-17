@@ -8,6 +8,7 @@
 		"outDir": "dist",
 		"noEmit": false,
 		"emitDeclarationOnly": true,
+		"types": ["node"],
 		"lib": ["DOM", "DOM.Iterable", "ES2022"]
 	}
 }

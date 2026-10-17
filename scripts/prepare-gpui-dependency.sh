@@ -9,7 +9,7 @@ patch_paths=(
 	"apps/desktop-gpui/patches/zed-linux.patch"
 )
 patch_files=("${patch_paths[@]/#/$repo_root/}")
-base_revision="5d1f83d9f27a19bec1fb241dc33b42238af9cf8d"
+base_revision="f8d8a90d914d26b68fb126040386fb08c2ada78a"
 remote="https://github.com/wingleeio/zed.git"
 
 copy_patched_paths() {

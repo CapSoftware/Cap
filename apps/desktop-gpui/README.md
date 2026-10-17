@@ -73,9 +73,7 @@ only for the Tauri app and that gpui's tree does not want. Nesting a second
 workspace here leaves the root `Cargo.lock`, the `cargo hakari` workspace-hack
 and CI completely untouched.
 
-`rust-toolchain.toml` pins `stable` rather than the root's 1.88.0, because
-gpui's dependencies need 1.89+ (`smol_str` 0.3.6, `cosmic-text` 0.19). The
-nearest toolchain file wins, so the Tauri app is unaffected.
+`rust-toolchain.toml` pins Rust 1.99.0, matching the root toolchain.
 
 ## Shipping and updates
 

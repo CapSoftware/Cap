@@ -718,7 +718,7 @@ impl Window {
   /// - **iOS:** Can only be called on the main thread. Returns the top left coordinates of the
   ///   window in the screen space coordinate system.
   /// - **Android:** Always returns [`NotSupportedError`].
-  /// - **Linux(Wayland)**: Has no effect, since Wayland doesn't support a global cordinate system
+  /// - **Linux(Wayland)**: Has no effect, since Wayland doesn't support a global coordinate system
   #[inline]
   pub fn outer_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
     self.window.outer_position()
@@ -828,7 +828,7 @@ impl Window {
   ///
   /// ## Platform-specific
   ///
-  /// - **iOS / Android:** Unsupported. Returns ane empty string.
+  /// - **iOS / Android:** Unsupported. Returns an empty string.
   #[inline]
   pub fn title(&self) -> String {
     self.window.title()
@@ -1662,7 +1662,7 @@ pub enum ResizeDirection {
   West,
 }
 
-#[allow(dead_code)]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn hit_test(
   (left, top, right, bottom): (i32, i32, i32, i32),
   cx: i32,

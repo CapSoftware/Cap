@@ -125,7 +125,7 @@ async function loadDesktopSegmentsManifest({
 	const json = Option.getOrNull(content);
 	if (!json) return { status: "missing-manifest" };
 	try {
-		const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(
+		const manifest = await Schema.decodeUnknownEffect(Video.SegmentManifest)(
 			JSON.parse(json),
 		)
 			.pipe(Effect.mapError(getErrorMessage))

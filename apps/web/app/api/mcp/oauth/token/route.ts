@@ -1,10 +1,10 @@
+import { Layer } from "effect";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-} from "@effect/platform";
-import { Layer } from "effect";
+} from "effect/http-api";
 import { exchangeMcpCode, refreshMcpTokens } from "@/lib/mcp-auth";
 import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
@@ -52,11 +52,11 @@ async function token(request: Request) {
 
 class Api extends HttpApi.make("CapMcpTokenApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.post("token")`/api/mcp/oauth/token`,
+		HttpApiEndpoint.post("token", "/api/mcp/oauth/token"),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("token", () => mcpRequest(token)),

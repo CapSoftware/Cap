@@ -1,33 +1,31 @@
 import { timingSafeEqual } from "node:crypto";
 import { customerCopy } from "@cap/database/loops/customer-copy";
 import { runLoopsSync } from "@cap/database/loops/worker";
+import { Effect, Layer, Schema } from "effect";
+import { HttpServerRequest } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerRequest,
-} from "@effect/platform";
-import { Effect, Layer, Schema } from "effect";
+} from "effect/http-api";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("LoopsSyncApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.get("sync")`/api/cron/sync-loops`
-			.addSuccess(
-				Schema.Struct({
-					enabled: Schema.Boolean,
-					processed: Schema.Number,
-					failed: Schema.Number,
-				}),
-			)
-			.addError(HttpApiError.Unauthorized)
-			.addError(HttpApiError.InternalServerError),
+		HttpApiEndpoint.get("sync", "/api/cron/sync-loops", {
+			success: Schema.Struct({
+				enabled: Schema.Boolean,
+				processed: Schema.Number,
+				failed: Schema.Number,
+			}),
+			error: [HttpApiError.Unauthorized, HttpApiError.InternalServerError],
+		}),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("sync", () =>

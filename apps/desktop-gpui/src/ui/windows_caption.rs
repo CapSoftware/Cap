@@ -14,7 +14,6 @@ pub fn windows_caption_controls(
 ) -> Div {
     let dark = theme.is_dark();
     let hover = rgba(if dark { 0xffffff0d } else { 0x0000000d });
-    let pressed = rgba(if dark { 0xe9e9e908 } else { 0x00000008 });
     let button = |id: &'static str, icon: &'static str, height: f32, enabled: bool| {
         let foreground = Theme::with_alpha(
             rgb(if dark { 0xffffff } else { 0x12161f }),
@@ -35,21 +34,13 @@ pub fn windows_caption_controls(
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .when(enabled, |button| {
-                button
-                    .hover(move |style| {
-                        style.bg(if id == "caption-close" {
-                            rgb(0xc42b1c)
-                        } else {
-                            hover
-                        })
+                button.hover(move |style| {
+                    style.bg(if id == "caption-close" {
+                        rgb(0xc42b1c)
+                    } else {
+                        hover
                     })
-                    .active(move |style| {
-                        style.bg(if id == "caption-close" {
-                            rgba(0xc42b1ce6)
-                        } else {
-                            pressed
-                        })
-                    })
+                })
             })
             .child(
                 svg()

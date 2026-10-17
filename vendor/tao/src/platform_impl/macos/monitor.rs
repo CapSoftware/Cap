@@ -20,7 +20,7 @@ use core_graphics::{
 };
 use objc2::{msg_send, rc::Retained};
 use objc2_app_kit::NSScreen;
-use objc2_foundation::{MainThreadMarker, NSString, NSUInteger};
+use objc2_foundation::{ns_string, MainThreadMarker, NSString, NSUInteger};
 
 #[derive(Clone)]
 pub struct VideoMode {
@@ -318,7 +318,7 @@ impl MonitorHandle {
       let uuid = ffi::CGDisplayCreateUUIDFromDisplayID(self.0);
       let screens = NSScreen::screens(mtm);
       let count: NSUInteger = msg_send![&screens, count];
-      let key = NSString::from_str("NSScreenNumber");
+      let key = ns_string!("NSScreenNumber");
       for i in 0..count {
         let screen: Retained<NSScreen> = msg_send![&screens, objectAtIndex: i as NSUInteger];
         let device_description = NSScreen::deviceDescription(&screen);

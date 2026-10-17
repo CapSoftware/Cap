@@ -202,7 +202,7 @@ pub enum NativeKeyCode {
 /// - The keys that the specification calls "MetaLeft" and "MetaRight" are named "SuperLeft" and
 ///   "SuperRight" here.
 /// - The key that the specification calls "Super" is reported as `Unidentified` here.
-/// - The `Unidentified` variant here, can still identifiy a key through it's `NativeKeyCode`.
+/// - The `Unidentified` variant here, can still identify a key through it's `NativeKeyCode`.
 ///
 /// [`KeyboardEvent.code`]: https://w3c.github.io/uievents-code/#code-value-tables
 #[non_exhaustive]
@@ -837,8 +837,8 @@ impl fmt::Display for KeyCode {
 /// - The `Super` variant here, is named `Meta` in the aforementioned specification. (There's
 ///   another key which the specification calls `Super`. That does not exist here.)
 /// - The `Space` variant here, can be identified by the character it generates in the
-///   specificaiton.
-/// - The `Unidentified` variant here, can still identifiy a key through it's `NativeKeyCode`.
+///   specification.
+/// - The `Unidentified` variant here, can still identify a key through it's `NativeKeyCode`.
 /// - The `Dead` variant here, can specify the character which is inserted when pressing the
 ///   dead-key twice.
 ///

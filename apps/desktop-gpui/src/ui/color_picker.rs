@@ -269,11 +269,10 @@ impl RenderOnce for ColorPicker {
             .flex_col()
             .p(px(PAD))
             .gap(px(GAP))
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
-            .shadow(theme.editor.pop_shadow())
+            .border_color(Hsla::from(theme.border_secondary))
+            .bg(Hsla::from(theme.surface_secondary))
             // A press on the panel body must not fall through to the
             // caller's click-away backdrop underneath.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -283,7 +282,7 @@ impl RenderOnce for ColorPicker {
                     .relative()
                     .w(px(SV_WIDTH))
                     .h(px(SV_HEIGHT))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .overflow_hidden()
                     .bg(linear_gradient(
                         90.,
@@ -301,7 +300,7 @@ impl RenderOnce for ColorPicker {
                             .left(px(sv_thumb.x))
                             .top(px(sv_thumb.y))
                             .size(px(THUMB))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_2()
                             .border_color(gpui::white())
                             .bg(rgb_hsla(rgb))
@@ -321,7 +320,7 @@ impl RenderOnce for ColorPicker {
                             .flex_row()
                             .w_full()
                             .h_full()
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .overflow_hidden()
                             .children(HUE_LEGS.iter().map(|(from, to)| {
                                 div().flex_1().h_full().bg(linear_gradient(
@@ -337,7 +336,7 @@ impl RenderOnce for ColorPicker {
                             .left(px(hue_thumb_x))
                             .top(px((HUE_HEIGHT - THUMB) / 2.))
                             .size(px(THUMB))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_2()
                             .border_color(gpui::white())
                             .bg(rgb_hsla(hue_rgb))
@@ -355,7 +354,7 @@ impl RenderOnce for ColorPicker {
                     .child(
                         div()
                             .size(px(32.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .flex_none()
                             .bg(rgb_hsla(rgb))
                             .border_1()

@@ -5,12 +5,12 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
 import { PublicCollection, Space } from "@cap/web-domain";
 import { eq, type SQL, sql } from "drizzle-orm";
-import { Either, Schema } from "effect";
+import { Result, Schema } from "effect";
 import { revalidatePath } from "next/cache";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { getSpaceAccess } from "../organization/space-authorization";
 
-const decodeSettingsPatch = Schema.decodeUnknownEither(
+const decodeSettingsPatch = Schema.decodeUnknownResult(
 	PublicCollection.PublicPageSettingsUpdate,
 );
 
@@ -42,10 +42,10 @@ export async function setSpaceCollectionVisibility(input: {
 	let settingsPatch: PublicCollection.PublicPageSettingsUpdate | undefined;
 	if (input.settings !== undefined) {
 		const decoded = decodeSettingsPatch(input.settings);
-		if (Either.isLeft(decoded)) {
+		if (Result.isFailure(decoded)) {
 			return { success: false, error: "Invalid public page settings" };
 		}
-		settingsPatch = decoded.right;
+		settingsPatch = decoded.success;
 	}
 
 	const id = Space.SpaceId.make(input.spaceId);

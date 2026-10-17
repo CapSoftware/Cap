@@ -996,7 +996,7 @@ export default function CapDetailScreen() {
 													contentFit="cover"
 													recyclingKey={detail.cap.id}
 													source={thumbnailSource}
-													style={StyleSheet.absoluteFillObject}
+													style={StyleSheet.absoluteFill}
 												/>
 											) : null}
 											<View style={styles.videoLoadingIndicator}>
@@ -1012,7 +1012,7 @@ export default function CapDetailScreen() {
 													contentFit="cover"
 													recyclingKey={detail.cap.id}
 													source={thumbnailSource}
-													style={StyleSheet.absoluteFillObject}
+													style={StyleSheet.absoluteFill}
 												/>
 											) : null}
 											<View pointerEvents="none" style={styles.posterScrim} />
@@ -1401,7 +1401,7 @@ const styles = StyleSheet.create({
 		height: "100%",
 	},
 	videoLoadingOverlay: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
 		backgroundColor: colors.black,
@@ -1415,17 +1415,17 @@ const styles = StyleSheet.create({
 		backgroundColor: "rgba(0, 0, 0, 0.62)",
 	},
 	posterOverlay: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
 		backgroundColor: colors.black,
 	},
 	posterScrim: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		backgroundColor: "rgba(0, 0, 0, 0.18)",
 	},
 	videoErrorOverlay: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
 		gap: 10,

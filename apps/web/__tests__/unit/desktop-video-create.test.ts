@@ -81,11 +81,12 @@ vi.mock("@cap/utils", () => ({
 }));
 
 vi.mock("@cap/web-backend", async () => {
-	const { Effect } = await import("effect");
+	const { Context, Layer } = await import("effect");
 	const { makeCurrentUserLayer } = await import("@cap/web-backend/src/Auth");
-	class Videos extends Effect.Service<Videos>()("Videos", {
-		sync: () => ({ delete: deletion.deleteVideo }),
-	}) {}
+	const service = { delete: deletion.deleteVideo };
+	class Videos extends Context.Service<Videos, typeof service>()("Videos") {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return {
 		makeCurrentUserLayer,
 		Videos,

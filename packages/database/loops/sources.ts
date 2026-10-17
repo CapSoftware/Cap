@@ -73,13 +73,13 @@ export async function readLoopsProfile(
 		const [result] = await rows<typeof activation>(cap, activationQuery, [
 			userId,
 		]);
-		activation = result;
+		activation = result ?? { hasVideo: null, hasSharedVideo: null };
 	} else {
 		const [result] = await rows<typeof activation>(cap, legacyActivationQuery, [
 			userId,
 			userId,
 		]);
-		activation = result;
+		activation = result ?? { hasVideo: null, hasSharedVideo: null };
 	}
 	const entitlement = await rows<License>(
 		licenses,

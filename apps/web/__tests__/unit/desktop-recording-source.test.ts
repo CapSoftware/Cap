@@ -138,7 +138,7 @@ function storageFixture(provider = "s3") {
 		bucketName: "recordings",
 		provider,
 		getObject: vi.fn((key: string) =>
-			checked(() => Option.fromNullable(objects.get(key)?.body)),
+			checked(() => Option.fromNullishOr(objects.get(key)?.body)),
 		),
 		headObject: vi.fn((key: string) =>
 			checked(() => {

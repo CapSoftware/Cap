@@ -1,10 +1,10 @@
+import { Layer } from "effect";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-} from "@effect/platform";
-import { Layer } from "effect";
+} from "effect/http-api";
 import {
 	authenticateMcpBearer,
 	mcpIssuer,
@@ -127,12 +127,12 @@ async function handleGet(request: Request) {
 
 class Api extends HttpApi.make("CapMcpTransportApi").add(
 	HttpApiGroup.make("root")
-		.add(HttpApiEndpoint.options("options")`/api/mcp`)
-		.add(HttpApiEndpoint.post("post")`/api/mcp`)
-		.add(HttpApiEndpoint.get("get")`/api/mcp`),
+		.add(HttpApiEndpoint.options("options", "/api/mcp"))
+		.add(HttpApiEndpoint.post("post", "/api/mcp"))
+		.add(HttpApiEndpoint.get("get", "/api/mcp")),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers

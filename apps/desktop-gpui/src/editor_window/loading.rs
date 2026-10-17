@@ -8,28 +8,11 @@ use gpui::{
 use crate::theme::Theme;
 
 fn block(theme: &Theme, width: f32, height: f32) -> Div {
-    div()
-        .w(px(width))
-        .h(px(height))
-        .flex_none()
-        .rounded(px(5.))
-        .bg(Hsla::from(theme.editor.ctl_hover))
+    crate::ui::skeleton_block(theme, px(width), px(height))
 }
 
 fn pulse(id: &'static str, content: Div, animated: bool) -> AnyElement {
-    if !animated {
-        return content.into_any_element();
-    }
-    content
-        .with_animation(
-            id,
-            Animation::new(Duration::from_millis(1800)).repeat(),
-            |element, progress| {
-                let opacity = 0.78 + 0.22 * (progress * std::f32::consts::TAU).cos();
-                element.opacity(opacity)
-            },
-        )
-        .into_any_element()
+    crate::ui::skeleton_pulse(id, content, animated)
 }
 
 pub(super) fn preview(theme: &Theme, animated: bool) -> AnyElement {
@@ -40,16 +23,16 @@ pub(super) fn preview(theme: &Theme, animated: bool) -> AnyElement {
         .items_center()
         .justify_center()
         .p(px(24.))
-        .bg(Hsla::from(theme.editor.card))
+        .bg(Hsla::from(theme.surface))
         .child(pulse(
             "editor-preview-skeleton",
             div()
                 .w_full()
                 .h_full()
-                .rounded(px(12.))
-                .bg(Hsla::from(theme.editor.ctl))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                .bg(Hsla::from(theme.surface_subtle))
                 .border_1()
-                .border_color(Hsla::from(theme.editor.line)),
+                .border_color(Hsla::from(theme.border)),
             animated,
         ))
         .into_any_element()
@@ -82,7 +65,7 @@ pub(super) fn sidebar(theme: &Theme, animated: bool) -> AnyElement {
                             .children((0..4).map(|_| block(theme, 64., 48.).flex_1().min_w_0()))
                     })),
             )
-            .child(div().h(px(1.)).w_full().bg(Hsla::from(theme.editor.line)))
+            .child(div().h(px(1.)).w_full().bg(Hsla::from(theme.border)))
             .children([72., 88., 64.].into_iter().map(|width| {
                 div()
                     .flex()

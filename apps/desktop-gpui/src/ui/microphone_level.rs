@@ -1,6 +1,6 @@
 use gpui::{
     Context, Entity, Hsla, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _,
 };
 
 use crate::feeds::{self, Feeds};
@@ -65,7 +65,7 @@ impl MicrophoneLevel {
                 div()
                     .h_full()
                     .w(gpui::relative(fill))
-                    .rounded(px(10.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .bg(background),
             )
         })

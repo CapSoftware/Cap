@@ -15,14 +15,17 @@ const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/web-backend", async () => {
 	const { drizzle } = await import("drizzle-orm/mysql-proxy");
-	const { Effect } = await import("effect");
+	const { Context, Effect, Layer } = await import("effect");
 	const client = drizzle(mocks.query);
-	class Database extends Effect.Service<Database>()("Database", {
-		succeed: {
-			use: <T>(callback: (db: typeof client) => Promise<T>) =>
-				Effect.promise(() => callback(client)),
-		},
-	}) {}
+	const service = {
+		use: <T>(callback: (db: typeof client) => Promise<T>) =>
+			Effect.promise(() => callback(client)),
+	};
+	class Database extends Context.Service<Database, typeof service>()(
+		"Database",
+	) {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return { Database };
 });
 

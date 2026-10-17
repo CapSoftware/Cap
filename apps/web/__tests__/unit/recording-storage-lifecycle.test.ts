@@ -11,7 +11,7 @@ import {
 } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { Cause, Effect, Exit, Logger, Option, Schema } from "effect";
+import { Cause, Effect, Exit, Logger, Option, Result, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -31,17 +31,23 @@ vi.mock("@cap/database/helpers", async (importOriginal) => ({
 	nanoId: () => mocks.nextId,
 }));
 vi.mock("@cap/web-backend/src/S3Buckets/index.ts", async () => {
-	const { Effect } = await import("effect");
-	class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
-		sync: () => ({ getBucketAccess: mocks.bucketAccess }),
-	}) {}
+	const { Context, Layer } = await import("effect");
+	const service = { getBucketAccess: mocks.bucketAccess };
+	class S3Buckets extends Context.Service<S3Buckets, typeof service>()(
+		"S3Buckets",
+	) {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return { S3Buckets };
 });
 vi.mock("@cap/web-backend/src/Tinybird/index.ts", async () => {
-	const { Effect } = await import("effect");
-	class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
-		sync: () => ({ querySql: () => Effect.succeed({ data: [] }) }),
-	}) {}
+	const { Context, Effect, Layer } = await import("effect");
+	const service = { querySql: () => Effect.succeed({ data: [] }) };
+	class Tinybird extends Context.Service<Tinybird, typeof service>()(
+		"Tinybird",
+	) {
+		static readonly Default = Layer.succeed(this, service);
+	}
 	return { Tinybird };
 });
 vi.mock(
@@ -663,7 +669,7 @@ async function driveFixture() {
 		.spyOn(repo, "getObjectByKey")
 		.mockImplementation((_integration, key) =>
 			Effect.sync(() =>
-				Option.map(Option.fromNullable(records.get(key)), (object) =>
+				Option.map(Option.fromNullishOr(records.get(key)), (object) =>
 					structuredClone(object),
 				),
 			),
@@ -783,7 +789,7 @@ function runVideoOperation(
 		}).pipe(
 			Effect.provide(Videos.Default),
 			Effect.provideService(CurrentUser, { ...currentUser, id: userId }),
-			Effect.provide(Logger.remove(Logger.defaultLogger)),
+			Effect.provide(Logger.layer([Logger.make(() => {})])),
 		),
 	);
 }
@@ -853,7 +859,7 @@ describe("recording storage lifecycle", () => {
 				).pipe(
 					Effect.provide(Videos.Default),
 					Effect.provideService(CurrentUser, currentUser),
-					Effect.provide(Logger.remove(Logger.defaultLogger)),
+					Effect.provide(Logger.layer([Logger.make(() => {})])),
 				),
 			);
 			const progress = Option.getOrThrow(result);
@@ -1424,7 +1430,7 @@ describe("recording storage lifecycle", () => {
 			const result = await Effect.runPromiseExit(drive.access.getObject(key));
 			if (Exit.isSuccess(result))
 				throw new Error("Transient Drive failure was not propagated");
-			expect(Option.getOrThrow(Cause.failureOption(result.cause))).toBe(error);
+			expect(Result.getOrThrow(Cause.findError(result.cause))).toBe(error);
 			expect(drive.records.get(key)?.providerObjectId).toBe("original-file");
 			expect(mocks.driveFind).not.toHaveBeenCalled();
 			expect(drive.updateIndex).not.toHaveBeenCalled();
@@ -1444,7 +1450,7 @@ describe("recording storage lifecycle", () => {
 			);
 			if (Exit.isSuccess(result))
 				throw new Error("Transient Drive metadata failure was not propagated");
-			expect(Option.getOrThrow(Cause.failureOption(result.cause))).toBe(error);
+			expect(Result.getOrThrow(Cause.findError(result.cause))).toBe(error);
 			expect(mocks.driveFind).not.toHaveBeenCalled();
 			expect(drive.records.get(outputKey)?.providerObjectId).toBe(
 				"original-file",
@@ -1463,7 +1469,7 @@ describe("recording storage lifecycle", () => {
 		);
 		if (Exit.isSuccess(networkResult))
 			throw new Error("Network failure was not propagated");
-		expect(Option.getOrThrow(Cause.failureOption(networkResult.cause))).toBe(
+		expect(Result.getOrThrow(Cause.findError(networkResult.cause))).toBe(
 			networkError,
 		);
 		const databaseError = new DatabaseError({
@@ -1475,9 +1481,9 @@ describe("recording storage lifecycle", () => {
 		);
 		if (Exit.isSuccess(databaseResult))
 			throw new Error("Database failure was not propagated");
-		expect(
-			Option.getOrThrow(Cause.failureOption(databaseResult.cause)).cause,
-		).toBe(databaseError);
+		expect(Result.getOrThrow(Cause.findError(databaseResult.cause)).cause).toBe(
+			databaseError,
+		);
 		expect(mocks.driveFind).not.toHaveBeenCalled();
 		expect(drive.updateIndex).not.toHaveBeenCalled();
 	});
@@ -1531,7 +1537,7 @@ describe("recording storage lifecycle", () => {
 			);
 			if (Exit.isSuccess(result))
 				throw new Error("Missing Drive metadata was not reported");
-			const error = Option.getOrThrow(Cause.failureOption(result.cause));
+			const error = Result.getOrThrow(Cause.findError(result.cause));
 			const cause =
 				error.cause instanceof StorageDomain.StorageError
 					? error.cause.cause
@@ -1601,7 +1607,7 @@ describe("recording storage lifecycle", () => {
 		);
 		if (Exit.isSuccess(result))
 			throw new Error("Recovery failure was not propagated");
-		expect(Option.getOrThrow(Cause.failureOption(result.cause))).toBe(error);
+		expect(Result.getOrThrow(Cause.findError(result.cause))).toBe(error);
 		expect(drive.records.get(outputKey)?.providerObjectId).toBe(
 			"original-file",
 		);
@@ -1682,7 +1688,7 @@ describe("recording storage lifecycle", () => {
 			});
 			mocks.driveDelete.mockReturnValue(
 				Effect.promise(() => gate).pipe(
-					Effect.zipRight(
+					Effect.andThen(
 						status === 404
 							? Effect.fail(
 									new StorageDomain.StorageError({

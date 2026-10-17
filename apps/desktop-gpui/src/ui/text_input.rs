@@ -1616,11 +1616,11 @@ impl TextInput {
             bg: None,
             border: None,
             focus_border: None,
-            text: theme.gray(12),
-            muted: theme.gray(10),
-            icon_color: theme.gray(10),
-            caret_color: theme.gray(12),
-            selection_color: selection_tint(),
+            text: gpui::Hsla::from(theme.text_primary),
+            muted: gpui::Hsla::from(theme.text_muted),
+            icon_color: gpui::Hsla::from(theme.icon),
+            caret_color: gpui::Hsla::from(theme.text_primary),
+            selection_color: theme.primary_subtle.into(),
             flex: false,
             full_width: false,
             fixed_width: None,
@@ -1639,7 +1639,7 @@ impl TextInput {
         Self {
             bg: Some(theme.settings_fill()),
             border: Some(theme.settings_border()),
-            focus_border: Some(Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT), 0.8)),
+            focus_border: Some(theme.ring_primary.into()),
             text: theme.settings_text(),
             muted: theme.settings_muted(),
             caret_color: theme.settings_text(),
@@ -1656,12 +1656,12 @@ impl TextInput {
             height: Some(px(36.)),
             radius: px(6.),
             gap: px(4.),
-            bg: Some(theme.body_fill(2)),
-            border: Some(theme.body_border(5)),
+            bg: Some(gpui::Hsla::from(theme.surface_subtle)),
+            border: Some(gpui::Hsla::from(theme.border)),
             icon: Some(SharedString::from("icons/search.svg")),
-            text: theme.gray(12),
-            muted: theme.gray(10),
-            caret_color: theme.gray(12),
+            text: gpui::Hsla::from(theme.text_primary),
+            muted: gpui::Hsla::from(theme.text_muted),
+            caret_color: gpui::Hsla::from(theme.text_primary),
             flex: true,
             ..Self::base(theme, id, state)
         }
@@ -1673,13 +1673,13 @@ impl TextInput {
         Self {
             radius: px(7.),
             text_size: px(13.),
-            bg: Some(Hsla::from(theme.editor.ctl)),
+            bg: Some(Hsla::from(theme.surface_subtle)),
             border: None,
-            focus_border: Some(Hsla::from(theme.editor.accent)),
-            text: Hsla::from(theme.editor.text_1),
-            muted: Hsla::from(theme.editor.text_3),
-            icon_color: Hsla::from(theme.editor.text_3),
-            caret_color: Hsla::from(theme.editor.text_1),
+            focus_border: Some(Hsla::from(theme.primary)),
+            text: Hsla::from(theme.text_primary),
+            muted: Hsla::from(theme.text_muted),
+            icon_color: Hsla::from(theme.text_muted),
+            caret_color: Hsla::from(theme.text_primary),
             ..Self::base(theme, id, state)
         }
     }
@@ -1791,14 +1791,6 @@ impl TextInput {
         self.full_width = false;
         self
     }
-}
-
-/// The selection wash. `--macos-settings-accent` resolves to the user's system
-/// accent in the shipping app and gpui exposes no query for it, so this is the
-/// same macOS blue the toggles already deviate to, at the 30 % a focused
-/// `<input>`'s selection paints at.
-fn selection_tint() -> Hsla {
-    Theme::with_alpha(gpui::rgb(Theme::SETTINGS_ACCENT), 0.30)
 }
 
 // -- Rendering ----------------------------------------------------------------

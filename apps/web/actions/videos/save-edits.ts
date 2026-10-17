@@ -53,7 +53,7 @@ async function objectExists(
 ) {
 	return await bucket.headObject(key).pipe(
 		Effect.as(true),
-		Effect.catchAll(() => Effect.succeed(false)),
+		Effect.catch(() => Effect.succeed(false)),
 		runPromise,
 	);
 }

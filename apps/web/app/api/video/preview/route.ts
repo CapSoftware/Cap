@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 			const previewKey = getPreviewGifKey(video.ownerId, video.id);
 			const hasPreview = yield* bucket.headObject(previewKey).pipe(
 				Effect.as(true),
-				Effect.catchAll(() => Effect.succeed(false)),
+				Effect.catch(() => Effect.succeed(false)),
 			);
 
 			if (!hasPreview) return null;

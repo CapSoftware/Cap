@@ -45,11 +45,6 @@ import {
 	Video,
 } from "@cap/web-domain";
 import {
-	HttpApiBuilder,
-	HttpServerRequest,
-	HttpServerResponse,
-} from "@effect/platform";
-import {
 	and,
 	desc,
 	eq,
@@ -63,6 +58,8 @@ import {
 } from "drizzle-orm";
 import { union } from "drizzle-orm/mysql-core";
 import { Effect, Layer, Option, Schema } from "effect";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder } from "effect/http-api";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import { downloadLoomVideo } from "@/actions/loom";
@@ -383,7 +380,7 @@ const withMappedErrors = <A, E, R>(
 				Effect.fail(
 					temporarilyUnavailable(requestId, "The Cap library is unavailable"),
 				),
-			NoSuchElementException: () => Effect.fail(notFound(requestId)),
+			NoSuchElementError: () => Effect.fail(notFound(requestId)),
 			PolicyDenied: () => Effect.fail(forbidden(requestId)),
 			S3Error: () =>
 				Effect.fail(
@@ -403,7 +400,7 @@ const withMappedErrors = <A, E, R>(
 			VerifyVideoPasswordError: () => Effect.fail(passwordRequired(requestId)),
 			VideoNotFoundError: () => Effect.fail(notFound(requestId)),
 		}),
-		Effect.tapErrorCause(Effect.logError),
+		Effect.tapCause(Effect.logError),
 	);
 
 const toCurrentUser = (
@@ -936,7 +933,7 @@ const getContext = Effect.fn("Agent.getContext")(function* (
 					aggregate: result.count,
 					reason: null,
 				})),
-				Effect.catchAll(() =>
+				Effect.catch(() =>
 					Effect.succeed({
 						status: "unavailable" as const,
 						aggregate: null,
@@ -1705,7 +1702,7 @@ const updateAgentImage = Effect.fn("Agent.updateImage")(function* (input: {
 					if (!account) return yield* notFound(input.requestId);
 					yield* imageUploads.applyUpdate({
 						payload: image ? Option.some(image) : Option.none(),
-						existing: Option.fromNullable(account.image),
+						existing: Option.fromNullishOr(account.image),
 						keyPrefix: `users/${principal.id}`,
 						update: (db, urlOrKey) =>
 							db
@@ -1754,7 +1751,7 @@ const updateAgentImage = Effect.fn("Agent.updateImage")(function* (input: {
 							: `organizations/${organizationTarget.organizationId}/shareable-links`;
 					yield* imageUploads.applyUpdate({
 						payload: image ? Option.some(image) : Option.none(),
-						existing: Option.fromNullable(existing),
+						existing: Option.fromNullishOr(existing),
 						keyPrefix,
 						update: (db, urlOrKey) =>
 							db
@@ -1798,7 +1795,7 @@ const updateAgentImage = Effect.fn("Agent.updateImage")(function* (input: {
 					} | null;
 					yield* imageUploads.applyUpdate({
 						payload: image ? Option.some(image) : Option.none(),
-						existing: Option.fromNullable(
+						existing: Option.fromNullishOr(
 							settings?.publicPage?.logoUrl as
 								| ImageUpload.ImageUrlOrKey
 								| undefined,
@@ -2543,22 +2540,22 @@ const AgentHandlersLive = HttpApiBuilder.group(
 	"agent",
 	(handlers) =>
 		handlers
-			.handle("listCaps", ({ urlParams }) => {
+			.handle("listCaps", ({ query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(listCaps(urlParams, requestId), requestId);
 			})
-			.handle("getCap", ({ path }) => {
+			.handle("getCap", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					getViewableCap(path.id).pipe(Effect.map(({ cap }) => cap)),
 					requestId,
 				);
 			})
-			.handle("getContext", ({ path }) => {
+			.handle("getContext", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(getContext(path.id, requestId), requestId);
 			})
-			.handle("getStatus", ({ path }) => {
+			.handle("getStatus", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2568,7 +2565,7 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getTranscript", ({ path, urlParams }) => {
+			.handle("getTranscript", ({ params: path, query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2601,7 +2598,7 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getDownload", ({ path }) => {
+			.handle("getDownload", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2629,11 +2626,11 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("unlockCap", ({ path }) => {
+			.handle("unlockCap", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(unlockCap(path.id, requestId), requestId);
 			})
-			.handle("createComment", ({ path, payload }) => {
+			.handle("createComment", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2663,7 +2660,7 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createReply", ({ path, payload }) => {
+			.handle("createReply", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2693,7 +2690,7 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createReaction", ({ path, payload }) => {
+			.handle("createReaction", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2723,7 +2720,7 @@ const AgentHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateCap", ({ path, payload }) => {
+			.handle("updateCap", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2797,7 +2794,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getOrganization", ({ path }) => {
+			.handle("getOrganization", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2816,7 +2813,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listOrganizationMembers", ({ path }) => {
+			.handle("listOrganizationMembers", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2875,7 +2872,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listOrganizationInvites", ({ path }) => {
+			.handle("listOrganizationInvites", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2914,7 +2911,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listFolders", ({ path, urlParams }) => {
+			.handle("listFolders", ({ params: path, query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -2972,7 +2969,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listSpaces", ({ path }) => {
+			.handle("listSpaces", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3026,7 +3023,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listSpaceMembers", ({ path }) => {
+			.handle("listSpaceMembers", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3064,7 +3061,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listNotifications", ({ urlParams }) => {
+			.handle("listNotifications", ({ query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3135,7 +3132,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getAnalytics", ({ urlParams }) => {
+			.handle("getAnalytics", ({ query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3184,7 +3181,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getCapSettings", ({ path }) => {
+			.handle("getCapSettings", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3224,7 +3221,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getCapShares", ({ path }) => {
+			.handle("getCapShares", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3298,7 +3295,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listStorageIntegrations", ({ path }) => {
+			.handle("listStorageIntegrations", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3357,99 +3354,106 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listOrganizationGoogleDriveFolders", ({ path, urlParams }) => {
-				const requestId = makeRequestId();
-				return withMappedErrors(
-					Effect.gen(function* () {
-						const principal = yield* Agent.AgentPrincipal;
-						yield* requireScope(principal, "integrations:read", requestId);
-						const management = yield* AgentManagement;
-						yield* management.requireOrganizationManager(
-							principal.id,
-							path.organizationId,
-						);
-						const database = yield* Database;
-						const [account] = yield* database.use((db) =>
-							db
-								.select({
-									stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
-									thirdPartyStripeSubscriptionId:
-										Db.users.thirdPartyStripeSubscriptionId,
-								})
-								.from(Db.users)
-								.where(eq(Db.users.id, principal.id))
-								.limit(1),
-						);
-						if (!account || !userIsPro(account)) {
-							return yield* forbidden(
-								requestId,
-								"Cap Pro is required to manage storage integrations",
+			.handle(
+				"listOrganizationGoogleDriveFolders",
+				({ params: path, query: urlParams }) => {
+					const requestId = makeRequestId();
+					return withMappedErrors(
+						Effect.gen(function* () {
+							const principal = yield* Agent.AgentPrincipal;
+							yield* requireScope(principal, "integrations:read", requestId);
+							const management = yield* AgentManagement;
+							yield* management.requireOrganizationManager(
+								principal.id,
+								path.organizationId,
 							);
-						}
-						const drive = yield* getAgentOrganizationDrive(path.organizationId);
-						if (!drive || drive.status !== "active") {
-							return yield* notReady(
-								requestId,
-								"Google Drive is not connected",
+							const database = yield* Database;
+							const [account] = yield* database.use((db) =>
+								db
+									.select({
+										stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+										thirdPartyStripeSubscriptionId:
+											Db.users.thirdPartyStripeSubscriptionId,
+									})
+									.from(Db.users)
+									.where(eq(Db.users.id, principal.id))
+									.limit(1),
 							);
-						}
-						const config = yield* parseAgentDriveConfig(drive.encryptedConfig);
-						const accessToken = yield* getGoogleDriveAccessToken(config);
-						const parentId = urlParams.parentId?.trim() || "root";
-						const escapedParentId = parentId
-							.replace(/\\/g, "\\\\")
-							.replace(/'/g, "\\'");
-						const url = new URL("https://www.googleapis.com/drive/v3/files");
-						url.searchParams.set(
-							"q",
-							`'${escapedParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-						);
-						url.searchParams.set("fields", "files(id,name,driveId)");
-						url.searchParams.set("spaces", "drive");
-						url.searchParams.set("supportsAllDrives", "true");
-						url.searchParams.set("includeItemsFromAllDrives", "true");
-						if (config.driveId) {
-							url.searchParams.set("corpora", "drive");
-							url.searchParams.set("driveId", config.driveId);
-						}
-						const body = yield* Effect.tryPromise(async () => {
-							const response = await fetch(url, {
-								headers: { Authorization: `Bearer ${accessToken}` },
-							});
-							if (!response.ok) {
-								throw new Error(
-									`Google Drive returned HTTP ${response.status}`,
+							if (!account || !userIsPro(account)) {
+								return yield* forbidden(
+									requestId,
+									"Cap Pro is required to manage storage integrations",
 								);
 							}
-							return (await response.json()) as {
-								files?: Array<{
-									id?: string;
-									name?: string;
-									driveId?: string | null;
-								}>;
+							const drive = yield* getAgentOrganizationDrive(
+								path.organizationId,
+							);
+							if (!drive || drive.status !== "active") {
+								return yield* notReady(
+									requestId,
+									"Google Drive is not connected",
+								);
+							}
+							const config = yield* parseAgentDriveConfig(
+								drive.encryptedConfig,
+							);
+							const accessToken = yield* getGoogleDriveAccessToken(config);
+							const parentId = urlParams.parentId?.trim() || "root";
+							const escapedParentId = parentId
+								.replace(/\\/g, "\\\\")
+								.replace(/'/g, "\\'");
+							const url = new URL("https://www.googleapis.com/drive/v3/files");
+							url.searchParams.set(
+								"q",
+								`'${escapedParentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+							);
+							url.searchParams.set("fields", "files(id,name,driveId)");
+							url.searchParams.set("spaces", "drive");
+							url.searchParams.set("supportsAllDrives", "true");
+							url.searchParams.set("includeItemsFromAllDrives", "true");
+							if (config.driveId) {
+								url.searchParams.set("corpora", "drive");
+								url.searchParams.set("driveId", config.driveId);
+							}
+							const body = yield* Effect.tryPromise(async () => {
+								const response = await fetch(url, {
+									headers: { Authorization: `Bearer ${accessToken}` },
+								});
+								if (!response.ok) {
+									throw new Error(
+										`Google Drive returned HTTP ${response.status}`,
+									);
+								}
+								return (await response.json()) as {
+									files?: Array<{
+										id?: string;
+										name?: string;
+										driveId?: string | null;
+									}>;
+								};
+							});
+							return {
+								folders:
+									body.files?.flatMap((folder) =>
+										folder.id && folder.name
+											? [
+													{
+														id: folder.id,
+														name: folder.name,
+														driveId: folder.driveId ?? null,
+														driveName: null,
+													},
+												]
+											: [],
+									) ?? [],
+								requestId,
 							};
-						});
-						return {
-							folders:
-								body.files?.flatMap((folder) =>
-									folder.id && folder.name
-										? [
-												{
-													id: folder.id,
-													name: folder.name,
-													driveId: folder.driveId ?? null,
-													driveName: null,
-												},
-											]
-										: [],
-								) ?? [],
-							requestId,
-						};
-					}),
-					requestId,
-				);
-			})
-			.handle("getOrganizationBilling", ({ path }) => {
+						}),
+						requestId,
+					);
+				},
+			)
+			.handle("getOrganizationBilling", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3506,7 +3510,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getDeveloperAppContext", ({ path }) => {
+			.handle("getDeveloperAppContext", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3545,7 +3549,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listDeveloperVideos", ({ path, urlParams }) => {
+			.handle("listDeveloperVideos", ({ params: path, query: urlParams }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3605,52 +3609,55 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("listDeveloperTransactions", ({ path, urlParams }) => {
-				const requestId = makeRequestId();
-				return withMappedErrors(
-					Effect.gen(function* () {
-						const principal = yield* Agent.AgentPrincipal;
-						yield* requireScope(principal, "developer:read", requestId);
-						const limit = parseAgentLimit(urlParams.limit);
-						const decodedCursor = decodeAgentCursor(urlParams.cursor);
-						if (limit === null || decodedCursor === undefined) {
-							return yield* badRequest(requestId, "Pagination is invalid");
-						}
-						const cursor = decodedCursor
-							? {
-									createdAt: new Date(decodedCursor.updatedAt),
-									id: decodedCursor.id,
-								}
-							: null;
-						const management = yield* AgentManagement;
-						const rows = yield* management.listDeveloperTransactions(
-							principal.id,
-							path.appId,
-							limit,
-							cursor,
-						);
-						const hasMore = rows.length > limit;
-						const page = rows.slice(0, limit);
-						const next = hasMore ? page.at(-1) : undefined;
-						return {
-							transactions: page.map((transaction) => ({
-								...transaction,
-								referenceId: transaction.referenceId ?? null,
-								referenceType: transaction.referenceType ?? null,
-								createdAt: transaction.createdAt.toISOString(),
-							})),
-							nextCursor: next
-								? encodeAgentCursor({
-										updatedAt: next.createdAt.toISOString(),
-										id: next.id,
-									})
-								: null,
-							requestId,
-						};
-					}),
-					requestId,
-				);
-			})
+			.handle(
+				"listDeveloperTransactions",
+				({ params: path, query: urlParams }) => {
+					const requestId = makeRequestId();
+					return withMappedErrors(
+						Effect.gen(function* () {
+							const principal = yield* Agent.AgentPrincipal;
+							yield* requireScope(principal, "developer:read", requestId);
+							const limit = parseAgentLimit(urlParams.limit);
+							const decodedCursor = decodeAgentCursor(urlParams.cursor);
+							if (limit === null || decodedCursor === undefined) {
+								return yield* badRequest(requestId, "Pagination is invalid");
+							}
+							const cursor = decodedCursor
+								? {
+										createdAt: new Date(decodedCursor.updatedAt),
+										id: decodedCursor.id,
+									}
+								: null;
+							const management = yield* AgentManagement;
+							const rows = yield* management.listDeveloperTransactions(
+								principal.id,
+								path.appId,
+								limit,
+								cursor,
+							);
+							const hasMore = rows.length > limit;
+							const page = rows.slice(0, limit);
+							const next = hasMore ? page.at(-1) : undefined;
+							return {
+								transactions: page.map((transaction) => ({
+									...transaction,
+									referenceId: transaction.referenceId ?? null,
+									referenceType: transaction.referenceType ?? null,
+									createdAt: transaction.createdAt.toISOString(),
+								})),
+								nextCursor: next
+									? encodeAgentCursor({
+											updatedAt: next.createdAt.toISOString(),
+											id: next.id,
+										})
+									: null,
+								requestId,
+							};
+						}),
+						requestId,
+					);
+				},
+			)
 			.handle("createDeveloperApp", ({ payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
@@ -3737,7 +3744,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateDeveloperApp", ({ path, payload }) => {
+			.handle("updateDeveloperApp", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3812,7 +3819,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteDeveloperApp", ({ path }) => {
+			.handle("deleteDeveloperApp", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3871,7 +3878,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("addDeveloperDomain", ({ path, payload }) => {
+			.handle("addDeveloperDomain", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3932,7 +3939,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeDeveloperDomain", ({ path }) => {
+			.handle("removeDeveloperDomain", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -3983,7 +3990,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("rotateDeveloperKeys", ({ path }) => {
+			.handle("rotateDeveloperKeys", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4076,7 +4083,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateDeveloperAutoTopUp", ({ path, payload }) => {
+			.handle("updateDeveloperAutoTopUp", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4147,7 +4154,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createDeveloperCreditsCheckout", ({ path, payload }) => {
+			.handle("createDeveloperCreditsCheckout", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4262,7 +4269,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteDeveloperVideo", ({ path }) => {
+			.handle("deleteDeveloperVideo", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4318,7 +4325,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createSubscriptionCheckout", ({ path, payload }) => {
+			.handle("createSubscriptionCheckout", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4442,7 +4449,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createBillingPortal", ({ path }) => {
+			.handle("createBillingPortal", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4515,14 +4522,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteOrganization", ({ path }) => {
+			.handle("deleteOrganization", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentOrganizationDelete(path.organizationId, requestId),
 					requestId,
 				);
 			})
-			.handle("setOrganizationDomain", ({ path, payload }) => {
+			.handle("setOrganizationDomain", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				const domain = payload.domain.trim().toLowerCase();
 				if (
@@ -4545,7 +4552,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeOrganizationDomain", ({ path }) => {
+			.handle("removeOrganizationDomain", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentOrganizationDomain({
@@ -4556,7 +4563,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("verifyOrganizationDomain", ({ path }) => {
+			.handle("verifyOrganizationDomain", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentOrganizationDomain({
@@ -4567,14 +4574,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("getOperation", ({ path }) => {
+			.handle("getOperation", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					getAgentOperation(path.operationId, requestId),
 					requestId,
 				);
 			})
-			.handle("updateOrganization", ({ path, payload }) => {
+			.handle("updateOrganization", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4653,7 +4660,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationSettings", ({ path, payload }) => {
+			.handle("updateOrganizationSettings", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4758,7 +4765,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createOrganizationInvite", ({ path, payload }) => {
+			.handle("createOrganizationInvite", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4930,7 +4937,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteOrganizationInvite", ({ path }) => {
+			.handle("deleteOrganizationInvite", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -4979,7 +4986,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationMember", ({ path, payload }) => {
+			.handle("updateOrganizationMember", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -5066,7 +5073,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationMemberSeat", ({ path, payload }) => {
+			.handle("updateOrganizationMemberSeat", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -5256,7 +5263,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeOrganizationMember", ({ path }) => {
+			.handle("removeOrganizationMember", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -5749,7 +5756,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationIcon", ({ path, payload }) => {
+			.handle("updateOrganizationIcon", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -5764,7 +5771,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeOrganizationIcon", ({ path }) => {
+			.handle("removeOrganizationIcon", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -5779,7 +5786,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateShareableLinkIcon", ({ path, payload }) => {
+			.handle("updateShareableLinkIcon", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -5794,7 +5801,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeShareableLinkIcon", ({ path }) => {
+			.handle("removeShareableLinkIcon", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -5809,7 +5816,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationS3", ({ path, payload }) => {
+			.handle("updateOrganizationS3", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -5904,7 +5911,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("testOrganizationS3", ({ path, payload }) => {
+			.handle("testOrganizationS3", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -5954,7 +5961,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeOrganizationS3", ({ path }) => {
+			.handle("removeOrganizationS3", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -6009,7 +6016,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("connectOrganizationGoogleDrive", ({ path }) => {
+			.handle("connectOrganizationGoogleDrive", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -6052,7 +6059,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("disconnectOrganizationGoogleDrive", ({ path }) => {
+			.handle("disconnectOrganizationGoogleDrive", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -6127,40 +6134,82 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateOrganizationStorageProvider", ({ path, payload }) => {
-				const requestId = makeRequestId();
-				return withMappedErrors(
-					Effect.gen(function* () {
-						yield* requireAgentWrites(requestId);
-						yield* requireUserConfirmedRequest(requestId);
-						const principal = yield* Agent.AgentPrincipal;
-						yield* requireAgentStorageManager(
-							principal,
-							path.organizationId,
-							"integrations:write",
-							requestId,
-						);
-						return yield* runAgentMutation({
-							principal,
-							operation: "update_organization_storage_provider",
-							idempotencyKey: yield* requestIdempotencyKey,
-							request: { path, provider: payload.provider },
-							requestId,
-							decodeReplay: decodeMutationResponse,
-							execute: async (tx) => {
-								if (payload.provider === "s3") {
-									const [bucket] = await tx
-										.select({ id: Db.s3Buckets.id })
-										.from(Db.s3Buckets)
+			.handle(
+				"updateOrganizationStorageProvider",
+				({ params: path, payload }) => {
+					const requestId = makeRequestId();
+					return withMappedErrors(
+						Effect.gen(function* () {
+							yield* requireAgentWrites(requestId);
+							yield* requireUserConfirmedRequest(requestId);
+							const principal = yield* Agent.AgentPrincipal;
+							yield* requireAgentStorageManager(
+								principal,
+								path.organizationId,
+								"integrations:write",
+								requestId,
+							);
+							return yield* runAgentMutation({
+								principal,
+								operation: "update_organization_storage_provider",
+								idempotencyKey: yield* requestIdempotencyKey,
+								request: { path, provider: payload.provider },
+								requestId,
+								decodeReplay: decodeMutationResponse,
+								execute: async (tx) => {
+									if (payload.provider === "s3") {
+										const [bucket] = await tx
+											.select({ id: Db.s3Buckets.id })
+											.from(Db.s3Buckets)
+											.where(
+												and(
+													eq(Db.s3Buckets.organizationId, path.organizationId),
+													eq(Db.s3Buckets.active, true),
+												),
+											)
+											.orderBy(desc(Db.s3Buckets.updatedAt))
+											.limit(1);
+										if (!bucket) return { state: "not_found" };
+										await tx
+											.update(Db.storageIntegrations)
+											.set({ active: false })
+											.where(
+												eq(
+													Db.storageIntegrations.organizationId,
+													path.organizationId,
+												),
+											);
+										return {
+											state: "success",
+											response: mutationResponse(
+												"storage_provider",
+												bucket.id,
+												"activated",
+												requestId,
+												new Date(),
+											),
+										};
+									}
+									const [drive] = await tx
+										.select({ id: Db.storageIntegrations.id })
+										.from(Db.storageIntegrations)
 										.where(
 											and(
-												eq(Db.s3Buckets.organizationId, path.organizationId),
-												eq(Db.s3Buckets.active, true),
+												eq(
+													Db.storageIntegrations.organizationId,
+													path.organizationId,
+												),
+												eq(
+													Db.storageIntegrations.provider,
+													googleDriveProvider,
+												),
+												eq(Db.storageIntegrations.status, "active"),
 											),
 										)
-										.orderBy(desc(Db.s3Buckets.updatedAt))
-										.limit(1);
-									if (!bucket) return { state: "not_found" };
+										.orderBy(desc(Db.storageIntegrations.updatedAt))
+										.limit(1)
+										.for("update");
+									if (!drive) return { state: "not_found" };
 									await tx
 										.update(Db.storageIntegrations)
 										.set({ active: false })
@@ -6170,218 +6219,186 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 												path.organizationId,
 											),
 										);
+									await tx
+										.update(Db.storageIntegrations)
+										.set({ active: true })
+										.where(eq(Db.storageIntegrations.id, drive.id));
 									return {
 										state: "success",
 										response: mutationResponse(
 											"storage_provider",
-											bucket.id,
+											drive.id,
 											"activated",
 											requestId,
 											new Date(),
 										),
 									};
-								}
-								const [drive] = await tx
-									.select({ id: Db.storageIntegrations.id })
-									.from(Db.storageIntegrations)
-									.where(
-										and(
-											eq(
-												Db.storageIntegrations.organizationId,
-												path.organizationId,
-											),
-											eq(Db.storageIntegrations.provider, googleDriveProvider),
-											eq(Db.storageIntegrations.status, "active"),
-										),
-									)
-									.orderBy(desc(Db.storageIntegrations.updatedAt))
-									.limit(1)
-									.for("update");
-								if (!drive) return { state: "not_found" };
-								await tx
-									.update(Db.storageIntegrations)
-									.set({ active: false })
-									.where(
-										eq(
-											Db.storageIntegrations.organizationId,
-											path.organizationId,
-										),
-									);
-								await tx
-									.update(Db.storageIntegrations)
-									.set({ active: true })
-									.where(eq(Db.storageIntegrations.id, drive.id));
-								return {
-									state: "success",
-									response: mutationResponse(
-										"storage_provider",
-										drive.id,
-										"activated",
-										requestId,
-										new Date(),
-									),
-								};
-							},
-						});
-					}),
-					requestId,
-				);
-			})
-			.handle("setOrganizationGoogleDriveLocation", ({ path, payload }) => {
-				const requestId = makeRequestId();
-				return withMappedErrors(
-					Effect.gen(function* () {
-						yield* requireAgentWrites(requestId);
-						yield* requireUserConfirmedRequest(requestId);
-						const principal = yield* Agent.AgentPrincipal;
-						yield* requireAgentStorageManager(
-							principal,
-							path.organizationId,
-							"integrations:write",
-							requestId,
-						);
-						const folderId = payload.folderId.trim();
-						if (folderId.length === 0 || folderId.length > 255) {
-							return yield* badRequest(
+								},
+							});
+						}),
+						requestId,
+					);
+				},
+			)
+			.handle(
+				"setOrganizationGoogleDriveLocation",
+				({ params: path, payload }) => {
+					const requestId = makeRequestId();
+					return withMappedErrors(
+						Effect.gen(function* () {
+							yield* requireAgentWrites(requestId);
+							yield* requireUserConfirmedRequest(requestId);
+							const principal = yield* Agent.AgentPrincipal;
+							yield* requireAgentStorageManager(
+								principal,
+								path.organizationId,
+								"integrations:write",
 								requestId,
-								"Google Drive folder ID is invalid",
 							);
-						}
-						return yield* runAgentExternalMutation({
-							principal,
-							operation: "set_organization_google_drive_location",
-							idempotencyKey: yield* requestIdempotencyKey,
-							request: { path, ...payload, folderId },
-							requestId,
-							decodeReplay: decodeMutationResponse,
-							execute: (providerIdempotencyKey) =>
-								Effect.gen(function* () {
-									const drive = yield* getAgentOrganizationDrive(
-										path.organizationId,
-									);
-									if (!drive || drive.status !== "active") {
-										return yield* notReady(
-											requestId,
-											"Google Drive is not connected",
+							const folderId = payload.folderId.trim();
+							if (folderId.length === 0 || folderId.length > 255) {
+								return yield* badRequest(
+									requestId,
+									"Google Drive folder ID is invalid",
+								);
+							}
+							return yield* runAgentExternalMutation({
+								principal,
+								operation: "set_organization_google_drive_location",
+								idempotencyKey: yield* requestIdempotencyKey,
+								request: { path, ...payload, folderId },
+								requestId,
+								decodeReplay: decodeMutationResponse,
+								execute: (providerIdempotencyKey) =>
+									Effect.gen(function* () {
+										const drive = yield* getAgentOrganizationDrive(
+											path.organizationId,
 										);
-									}
-									const config = yield* parseAgentDriveConfig(
-										drive.encryptedConfig,
-									);
-									const location =
-										folderId === "root"
-											? {
-													id: "root",
-													name: "My Drive",
-													driveId: null,
-													driveName: null,
-												}
-											: yield* getGoogleDriveFolderLocation(config, folderId);
-									const nextConfig: GoogleDriveIntegrationConfig = {
-										...config,
-										folderId: location.id,
-										folderName: payload.folderName ?? location.name,
-										driveId: payload.driveId ?? location.driveId ?? null,
-										driveName: payload.driveName ?? location.driveName ?? null,
-										folderLayout: "userVideo",
-									};
-									const email = yield* getGoogleDriveUserEmail(nextConfig);
-									const encryptedConfig = yield* Effect.tryPromise(() =>
-										encrypt(
-											JSON.stringify({
-												...nextConfig,
-												email: email ?? undefined,
-											}),
-										),
-									);
-									const displayName = email
-										? `Google Drive (${email})`
-										: "Google Drive";
-									const database = yield* Database;
-									const object = yield* database.use((db) =>
-										db
-											.select({ id: Db.storageObjects.id })
-											.from(Db.storageObjects)
-											.where(eq(Db.storageObjects.integrationId, drive.id))
-											.limit(1),
-									);
-									const video = yield* database.use((db) =>
-										db
-											.select({ id: Db.videos.id })
-											.from(Db.videos)
-											.where(eq(Db.videos.storageIntegrationId, drive.id))
-											.limit(1),
-									);
-									const hasStoredData = object.length > 0 || video.length > 0;
-									const nextId = hasStoredData
-										? StorageDomain.StorageIntegrationId.make(
-												deterministicAgentId(
-													"google_drive_location",
-													drive.id,
-													providerIdempotencyKey,
-												),
-											)
-										: drive.id;
-									yield* database.use((db) =>
-										db.transaction(async (tx) => {
-											if (hasStoredData) {
-												if (drive.active) {
+										if (!drive || drive.status !== "active") {
+											return yield* notReady(
+												requestId,
+												"Google Drive is not connected",
+											);
+										}
+										const config = yield* parseAgentDriveConfig(
+											drive.encryptedConfig,
+										);
+										const location =
+											folderId === "root"
+												? {
+														id: "root",
+														name: "My Drive",
+														driveId: null,
+														driveName: null,
+													}
+												: yield* getGoogleDriveFolderLocation(config, folderId);
+										const nextConfig: GoogleDriveIntegrationConfig = {
+											...config,
+											folderId: location.id,
+											folderName: payload.folderName ?? location.name,
+											driveId: payload.driveId ?? location.driveId ?? null,
+											driveName:
+												payload.driveName ?? location.driveName ?? null,
+											folderLayout: "userVideo",
+										};
+										const email = yield* getGoogleDriveUserEmail(nextConfig);
+										const encryptedConfig = yield* Effect.tryPromise(() =>
+											encrypt(
+												JSON.stringify({
+													...nextConfig,
+													email: email ?? undefined,
+												}),
+											),
+										);
+										const displayName = email
+											? `Google Drive (${email})`
+											: "Google Drive";
+										const database = yield* Database;
+										const object = yield* database.use((db) =>
+											db
+												.select({ id: Db.storageObjects.id })
+												.from(Db.storageObjects)
+												.where(eq(Db.storageObjects.integrationId, drive.id))
+												.limit(1),
+										);
+										const video = yield* database.use((db) =>
+											db
+												.select({ id: Db.videos.id })
+												.from(Db.videos)
+												.where(eq(Db.videos.storageIntegrationId, drive.id))
+												.limit(1),
+										);
+										const hasStoredData = object.length > 0 || video.length > 0;
+										const nextId = hasStoredData
+											? StorageDomain.StorageIntegrationId.make(
+													deterministicAgentId(
+														"google_drive_location",
+														drive.id,
+														providerIdempotencyKey,
+													),
+												)
+											: drive.id;
+										yield* database.use((db) =>
+											db.transaction(async (tx) => {
+												if (hasStoredData) {
+													if (drive.active) {
+														await tx
+															.update(Db.storageIntegrations)
+															.set({ active: false })
+															.where(
+																eq(
+																	Db.storageIntegrations.organizationId,
+																	path.organizationId,
+																),
+															);
+													}
 													await tx
-														.update(Db.storageIntegrations)
-														.set({ active: false })
-														.where(
-															eq(
-																Db.storageIntegrations.organizationId,
-																path.organizationId,
-															),
-														);
-												}
-												await tx
-													.insert(Db.storageIntegrations)
-													.values({
-														id: nextId,
-														ownerId: principal.id,
-														organizationId: path.organizationId,
-														provider: googleDriveProvider,
-														displayName,
-														status: "active",
-														active: drive.active,
-														encryptedConfig,
-													})
-													.onDuplicateKeyUpdate({
-														set: {
+														.insert(Db.storageIntegrations)
+														.values({
+															id: nextId,
+															ownerId: principal.id,
+															organizationId: path.organizationId,
+															provider: googleDriveProvider,
 															displayName,
 															status: "active",
 															active: drive.active,
 															encryptedConfig,
-														},
-													});
-												return;
-											}
-											await tx
-												.update(Db.storageIntegrations)
-												.set({
-													displayName,
-													status: "active",
-													encryptedConfig,
-													googleDriveStorageQuotaCache: null,
-												})
-												.where(eq(Db.storageIntegrations.id, drive.id));
-										}),
-									);
-									return mutationResponse(
-										"storage_google_drive",
-										nextId,
-										"location_updated",
-										requestId,
-										new Date(),
-									);
-								}),
-						});
-					}),
-					requestId,
-				);
-			})
+														})
+														.onDuplicateKeyUpdate({
+															set: {
+																displayName,
+																status: "active",
+																active: drive.active,
+																encryptedConfig,
+															},
+														});
+													return;
+												}
+												await tx
+													.update(Db.storageIntegrations)
+													.set({
+														displayName,
+														status: "active",
+														encryptedConfig,
+														googleDriveStorageQuotaCache: null,
+													})
+													.where(eq(Db.storageIntegrations.id, drive.id));
+											}),
+										);
+										return mutationResponse(
+											"storage_google_drive",
+											nextId,
+											"location_updated",
+											requestId,
+											new Date(),
+										);
+									}),
+							});
+						}),
+						requestId,
+					);
+				},
+			)
 			.handle("updateNotificationPreferences", ({ payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
@@ -6651,7 +6668,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("completeUpload", ({ path, payload }) => {
+			.handle("completeUpload", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -6899,7 +6916,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								const measured = yield* Effect.tryPromise(() =>
 									probeVideoViaMediaServer(candidateUrl, { maxRetries: 0 }),
 								).pipe(
-									Effect.catchAll(() =>
+									Effect.catch(() =>
 										deleteStoredKeyIfPresent(candidateRawFileKey).pipe(
 											Effect.zipRight(
 												Effect.fail(
@@ -7115,7 +7132,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("importLoomCap", ({ path, payload }) => {
+			.handle("importLoomCap", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentLoomImport({
@@ -7126,7 +7143,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("processCap", ({ path, payload }) => {
+			.handle("processCap", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7286,7 +7303,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("replaceTranscript", ({ path, payload }) => {
+			.handle("replaceTranscript", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7385,7 +7402,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateCapPassword", ({ path }) => {
+			.handle("updateCapPassword", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7464,7 +7481,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("duplicateCap", ({ path }) => {
+			.handle("duplicateCap", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentCapOperation({
@@ -7476,7 +7493,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteCap", ({ path }) => {
+			.handle("deleteCap", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					queueAgentCapOperation({
@@ -7488,7 +7505,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateCapSettings", ({ path, payload }) => {
+			.handle("updateCapSettings", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7556,7 +7573,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateCapDate", ({ path, payload }) => {
+			.handle("updateCapDate", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7617,7 +7634,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteFeedback", ({ path }) => {
+			.handle("deleteFeedback", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7669,7 +7686,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("moveCap", ({ path, payload }) => {
+			.handle("moveCap", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7810,7 +7827,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("shareCapWithOrganization", ({ path, payload }) => {
+			.handle("shareCapWithOrganization", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7910,7 +7927,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeCapOrganizationShare", ({ path }) => {
+			.handle("removeCapOrganizationShare", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -7959,7 +7976,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("shareCapWithSpace", ({ path, payload }) => {
+			.handle("shareCapWithSpace", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8044,7 +8061,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeCapSpaceShare", ({ path }) => {
+			.handle("removeCapSpaceShare", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8093,7 +8110,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createFolder", ({ path, payload }) => {
+			.handle("createFolder", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8193,7 +8210,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateFolder", ({ path, payload }) => {
+			.handle("updateFolder", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8313,7 +8330,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateFolderPublicPage", ({ path, payload }) => {
+			.handle("updateFolderPublicPage", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentCollectionPublicPage({
@@ -8324,7 +8341,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateFolderLogo", ({ path, payload }) => {
+			.handle("updateFolderLogo", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -8335,7 +8352,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeFolderLogo", ({ path }) => {
+			.handle("removeFolderLogo", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -8346,7 +8363,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteFolder", ({ path }) => {
+			.handle("deleteFolder", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8446,7 +8463,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("createSpace", ({ path, payload }) => {
+			.handle("createSpace", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8557,7 +8574,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateSpace", ({ path, payload }) => {
+			.handle("updateSpace", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8664,7 +8681,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateSpacePublicPage", ({ path, payload }) => {
+			.handle("updateSpacePublicPage", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentCollectionPublicPage({
@@ -8675,7 +8692,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateSpaceLogo", ({ path, payload }) => {
+			.handle("updateSpaceLogo", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -8686,7 +8703,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeSpaceLogo", ({ path }) => {
+			.handle("removeSpaceLogo", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					updateAgentImage({
@@ -8697,7 +8714,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("deleteSpace", ({ path }) => {
+			.handle("deleteSpace", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8753,7 +8770,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("addSpaceMember", ({ path, payload }) => {
+			.handle("addSpaceMember", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8827,7 +8844,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("updateSpaceMember", ({ path, payload }) => {
+			.handle("updateSpaceMember", ({ params: path, payload }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8890,7 +8907,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 					requestId,
 				);
 			})
-			.handle("removeSpaceMember", ({ path }) => {
+			.handle("removeSpaceMember", ({ params: path }) => {
 				const requestId = makeRequestId();
 				return withMappedErrors(
 					Effect.gen(function* () {
@@ -8981,7 +8998,7 @@ const AgentAuthHandlersLive = HttpApiBuilder.group(
 							),
 						),
 					),
-					Effect.tapErrorCause(Effect.logError),
+					Effect.tapCause(Effect.logError),
 				);
 			})
 			.handle("getAuthStatus", () => getAgentAuthStatus(makeRequestId()))
@@ -8996,12 +9013,12 @@ const AgentAuthHandlersLive = HttpApiBuilder.group(
 							),
 						),
 					),
-					Effect.tapErrorCause(Effect.logError),
+					Effect.tapCause(Effect.logError),
 				);
 			}),
 );
 
-const ApiLive = HttpApiBuilder.api(Agent.AgentApiContract).pipe(
+const ApiLive = HttpApiBuilder.layer(Agent.AgentApiContract).pipe(
 	Layer.provide(
 		Layer.mergeAll(
 			AgentHandlersLive,

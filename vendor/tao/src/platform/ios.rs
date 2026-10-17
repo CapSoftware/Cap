@@ -102,6 +102,9 @@ pub trait WindowExtIOS {
 
   /// Sets the badge count on iOS launcher. 0 hides the count
   fn set_badge_count(&self, count: i32);
+
+  /// Returns the identifier of the UIScene tied to this UIWindow.
+  fn scene_identifier(&self) -> String;
 }
 
 impl WindowExtIOS for Window {
@@ -150,6 +153,11 @@ impl WindowExtIOS for Window {
   #[inline]
   fn set_badge_count(&self, count: i32) {
     self.window.set_badge_count(count)
+  }
+
+  #[inline]
+  fn scene_identifier(&self) -> String {
+    self.window.scene_identifier()
   }
 }
 
@@ -219,6 +227,12 @@ pub trait WindowBuilderExtIOS {
   /// This sets the initial value returned by
   /// [`-[UIViewController prefersStatusBarHidden]`](https://developer.apple.com/documentation/uikit/uiviewcontroller/1621440-prefersstatusbarhidden?language=objc).
   fn with_prefers_status_bar_hidden(self, hidden: bool) -> WindowBuilder;
+
+  /// Sets the identifier of the UIScene that is requesting the creation of this new scene,
+  /// establishing a relationship between the two scenes.
+  ///
+  /// By default the system uses the foreground scene.
+  fn with_requesting_scene_identifier(self, identifier: String) -> WindowBuilder;
 }
 
 impl WindowBuilderExtIOS for WindowBuilder {
@@ -260,6 +274,15 @@ impl WindowBuilderExtIOS for WindowBuilder {
   #[inline]
   fn with_prefers_status_bar_hidden(mut self, hidden: bool) -> WindowBuilder {
     self.platform_specific.prefers_status_bar_hidden = hidden;
+    self
+  }
+
+  #[inline]
+  fn with_requesting_scene_identifier(mut self, identifier: String) -> WindowBuilder {
+    self
+      .platform_specific
+      .requesting_scene_identifier
+      .replace(identifier);
     self
   }
 }
@@ -342,4 +365,14 @@ bitflags! {
         const ALL = ScreenEdge::TOP.bits() | ScreenEdge::LEFT.bits()
             | ScreenEdge::BOTTOM.bits() | ScreenEdge::RIGHT.bits();
     }
+}
+
+pub(crate) fn operating_system_version() -> (isize, isize, isize) {
+  let process_info = objc2_foundation::NSProcessInfo::processInfo();
+  let version = process_info.operatingSystemVersion();
+  (
+    version.majorVersion,
+    version.minorVersion,
+    version.patchVersion,
+  )
 }

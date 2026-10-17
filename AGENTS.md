@@ -68,9 +68,15 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - TypeScript / JS / JSON / CSS: **tab indent** and **double-quoted** strings, enforced by Biome (see `biome.json`). Do not configure per-file overrides.
 - Rust: `rustfmt` default style + the denied clippy lints in the Pre-Generation Invariants above.
 - Naming: files kebab‑case (`user-menu.tsx`); React/Solid components PascalCase; hooks `useX`; Rust modules snake_case; crates kebab‑case.
-- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Docker for MySQL/MinIO.
+- Runtime: Node 20.12+, Bun 1.4.3, Rust 1.99+, Docker for MySQL/MinIO.
 
 (See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
+
+## Desktop Design Tokens
+- `apps/desktop-gpui/CSS.md` holds the desktop app's design tokens and the rules for using them. Read it before any desktop UI work and always follow it.
+- `apps/desktop-gpui/platform.css` is compiled into GPUI light/dark colors, radii and shadows by the desktop build script. Some legacy UI styling remains; for new and migrated UI, take colors, radii and shadows from its semantic tokens, never hardcode values or derive ad-hoc tints. Do not invent more CSS or tokens; raise missing roles for a design decision.
+- Keep `platform.css` and the Theme CSS block in `CSS.md` identical.
+- These rules cover the desktop app only; `apps/web` and `apps/desktop` keep their own styles.
 
 ## Testing
 - TS/JS: Vitest where present (e.g., desktop). Name tests `*.test.ts(x)` near sources.

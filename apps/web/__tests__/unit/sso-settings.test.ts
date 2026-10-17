@@ -299,7 +299,7 @@ function makeFixture({
 			getConnection: mocks.getConnection,
 			listConnections: mocks.listConnections,
 		},
-		portal: { generateLink: mocks.generateLink },
+		adminPortal: { generateLink: mocks.generateLink },
 	});
 	mocks.getRegisteredSsoOrganization.mockResolvedValue(organization);
 	mocks.getOrganization.mockResolvedValue(remote);

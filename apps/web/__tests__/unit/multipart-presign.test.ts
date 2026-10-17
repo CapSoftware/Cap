@@ -29,8 +29,8 @@ vi.mock("@/lib/desktop-reupload", () => ({
 vi.mock("@cap/web-backend", async () => {
 	const { Context, Layer } = await import("effect");
 	return {
-		Database: Context.GenericTag("test/Database"),
-		VideosPolicy: Context.GenericTag("test/VideosPolicy"),
+		Database: Context.Service("test/Database"),
+		VideosPolicy: Context.Service("test/VideosPolicy"),
 		Storage: { getAccessForVideo: mocks.storage },
 		makeCurrentUserLayer: () => Layer.empty,
 		provideOptionalAuth: (effect: unknown) => effect,
@@ -52,12 +52,12 @@ vi.mock("@/lib/server", async () => {
 			Effect.runPromise(
 				effect.pipe(
 					Effect.provide(
-						Layer.succeed(Context.GenericTag("test/VideosPolicy"), {
+						Layer.succeed(Context.Service("test/VideosPolicy"), {
 							getOwnedById: mocks.getOwnedById,
 						}),
 					),
 					Effect.provide(
-						Layer.succeed(Context.GenericTag("test/Database"), {
+						Layer.succeed(Context.Service("test/Database"), {
 							use: (callback: (client: unknown) => Promise<unknown>) =>
 								Effect.tryPromise(() => callback(mocks.database())),
 						}),

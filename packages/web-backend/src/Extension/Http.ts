@@ -6,13 +6,9 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import {
-	HttpApiBuilder,
-	HttpApiError,
-	HttpServerRequest,
-	HttpServerResponse,
-} from "@effect/platform";
 import { Effect, Option, Schema } from "effect";
+import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApiBuilder, HttpApiError } from "effect/http-api";
 
 import { getCurrentUser } from "../Auth.ts";
 import { handleDomainError } from "../Http/Errors.ts";
@@ -208,7 +204,7 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 			const videos = yield* Videos;
 
 			return handlers
-				.handle("startAuth", ({ urlParams }) =>
+				.handle("startAuth", ({ query }) =>
 					Effect.gen(function* () {
 						const request = yield* HttpServerRequest.HttpServerRequest;
 
@@ -221,15 +217,15 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 						// (Sec-Fetch-Site: cross-site via accounts.google.com) land
 						// here without weakening the minting endpoint.
 						const redirectUri = yield* validateExtensionRedirectUri(
-							urlParams.redirectUri,
+							query.redirectUri,
 						);
 						const currentUser = yield* getCurrentUser;
 
 						if (Option.isNone(currentUser)) {
 							return redirectToLogin(
 								consentPageUrl(request.url, {
-									redirectUri: urlParams.redirectUri,
-									state: urlParams.state,
+									redirectUri: query.redirectUri,
+									state: query.state,
 								}),
 							);
 						}
@@ -237,10 +233,10 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 						return renderConsentPage({
 							email: currentUser.value.email,
 							redirectUri,
-							state: urlParams.state,
+							state: query.state,
 						});
 					}).pipe(
-						Effect.catchTag("UnknownException", () =>
+						Effect.catchTag("UnknownError", () =>
 							Effect.fail(new Http.InternalServerError({ cause: "unknown" })),
 						),
 						handleDomainError,
@@ -299,7 +295,7 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 						Effect.catchTag("AuthKeyMintRateLimited", () =>
 							Effect.fail(new HttpApiError.BadRequest()),
 						),
-						Effect.catchTag("UnknownException", () =>
+						Effect.catchTag("UnknownError", () =>
 							Effect.fail(new Http.InternalServerError({ cause: "unknown" })),
 						),
 						handleDomainError,
@@ -318,7 +314,7 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 
 						return { success: true };
 					}).pipe(
-						Effect.catchTag("ParseError", () =>
+						Effect.catchTag("SchemaError", () =>
 							Effect.fail(new HttpApiError.BadRequest()),
 						),
 						handleDomainError,
@@ -371,8 +367,8 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 						handleDomainError,
 					),
 				)
-				.handle("deleteInstantRecording", ({ path }) =>
-					videos.delete(path.videoId).pipe(
+				.handle("deleteInstantRecording", ({ params }) =>
+					videos.delete(params.videoId).pipe(
 						Effect.as({ success: true }),
 						Effect.catchTag("VideoNotFoundError", (error) =>
 							Effect.fail(error),

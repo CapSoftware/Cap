@@ -106,7 +106,7 @@ impl WindowExtUnix for Window {
     window: gtk::ApplicationWindow,
   ) -> Result<Window, OsError> {
     let window = UnixWindow::new_from_gtk_window(&event_loop_window_target.p, window)?;
-    Ok(Window { window: window })
+    Ok(Window { window })
   }
 
   fn set_badge_count(&self, count: Option<i64>, desktop_filename: Option<String>) {
@@ -123,7 +123,7 @@ pub trait WindowBuilderExtUnix {
 
   /// Whether to enable or disable the internal draw for transparent window.
   ///
-  /// When tranparent attribute is enabled, we will call `connect_draw` and draw a transparent background.
+  /// When transparent attribute is enabled, we will call `connect_draw` and draw a transparent background.
   /// For anyone who wants to draw the background themselves, set this to `false`.
   /// Default is `true`.
   fn with_transparent_draw(self, draw: bool) -> WindowBuilder;
@@ -138,7 +138,7 @@ pub trait WindowBuilderExtUnix {
   /// Default is `false` but is always `true` if [`WindowAttributes::transparent`](crate::window::WindowAttributes::transparent) is `true`
   fn with_rgba_visual(self, rgba_visual: bool) -> WindowBuilder;
 
-  /// Wether to set this window as app paintable
+  /// Whether to set this window as app paintable
   ///
   /// <https://docs.gtk.org/gtk3/method.Widget.set_app_paintable.html>
   ///

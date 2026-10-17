@@ -548,7 +548,7 @@ impl EditorWindow {
                         .flex_col()
                         .gap(px(6.))
                         .p(px(6.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         // The card is opaque so the `ring` below shows as a
                         // ring rather than filling it: gpui paints a box shadow
                         // behind the whole element.
@@ -557,14 +557,14 @@ impl EditorWindow {
                         // `border-blue-9 ring-1 ring-blue-9`, which on a 1px
                         // border reads as a 2px edge.
                         .border_color(if selected {
-                            Hsla::from(theme.blue_9)
+                            Hsla::from(theme.primary)
                         } else {
-                            Hsla::from(theme.gray_3)
+                            Hsla::from(theme.surface_subtle)
                         })
                         .when(selected, |this| {
                             // `ring-1 ring-blue-9`: a 1px spread with no blur.
                             this.shadow(vec![gpui::BoxShadow {
-                                color: Hsla::from(theme.blue_9),
+                                color: Hsla::from(theme.primary),
                                 offset: gpui::point(px(0.), px(0.)),
                                 blur_radius: px(0.),
                                 spread_radius: px(1.),
@@ -575,7 +575,7 @@ impl EditorWindow {
                             div()
                                 .w_full()
                                 .h(px(60.75))
-                                .rounded(px(6.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                                 .overflow_hidden()
                                 .children(self.preset_image(index).map(|image| {
                                     img(image).size_full().object_fit(gpui::ObjectFit::Fill)
@@ -586,9 +586,10 @@ impl EditorWindow {
                                 .px(px(2.))
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.gray_12))
+                                .text_color(Hsla::from(theme.text_primary))
                                 .child(preset.label),
                         )
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                         .tooltip({
                             let description = SharedString::from(preset.description);
                             move |_window, cx| {

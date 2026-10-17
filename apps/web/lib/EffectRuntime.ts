@@ -1,5 +1,5 @@
-import { FetchHttpClient } from "@effect/platform";
 import { Layer, ManagedRuntime } from "effect";
+import { FetchHttpClient } from "effect/http";
 import {
 	makeUseEffectMutation,
 	makeUseEffectQuery,

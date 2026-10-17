@@ -19,8 +19,9 @@
 	},
 	"devDependencies": {
 		"@cap/web-domain": "workspace:*",
+		"@types/node": "^26.6.5",
 		"tsconfig": "workspace:*",
-		"typescript": "^5.8.3",
-		"vitest": "^3.2.0"
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.4"
 	}
 }

@@ -179,7 +179,7 @@ impl MonitorHandle {
 
   #[inline]
   pub fn name(&self) -> Option<String> {
-    let monitor_info = get_monitor_info(self.hmonitor()).unwrap();
+    let monitor_info = get_monitor_info(self.hmonitor()).ok()?;
     Some(util::wchar_ptr_to_string(PCWSTR::from_raw(
       monitor_info.szDevice.as_ptr(),
     )))
@@ -197,7 +197,12 @@ impl MonitorHandle {
 
   #[inline]
   pub fn size(&self) -> PhysicalSize<u32> {
-    let monitor_info = get_monitor_info(self.hmonitor()).unwrap();
+    let Ok(monitor_info) = get_monitor_info(self.hmonitor()) else {
+      return PhysicalSize {
+        width: 0,
+        height: 0,
+      };
+    };
     PhysicalSize {
       width: (monitor_info.monitorInfo.rcMonitor.right - monitor_info.monitorInfo.rcMonitor.left)
         as u32,
@@ -208,7 +213,9 @@ impl MonitorHandle {
 
   #[inline]
   pub fn position(&self) -> PhysicalPosition<i32> {
-    let monitor_info = get_monitor_info(self.hmonitor()).unwrap();
+    let Ok(monitor_info) = get_monitor_info(self.hmonitor()) else {
+      return PhysicalPosition { x: 0, y: 0 };
+    };
     PhysicalPosition {
       x: monitor_info.monitorInfo.rcMonitor.left,
       y: monitor_info.monitorInfo.rcMonitor.top,
@@ -230,12 +237,15 @@ impl MonitorHandle {
     // fields are probably changing, but we aren't looking at those fields
     // anyway), so we're using a BTreeSet deduplicate
     let mut modes = BTreeSet::new();
-    let mut i = 0;
 
+    let Ok(monitor_info) = get_monitor_info(self.hmonitor()) else {
+      return modes.into_iter();
+    };
+
+    let device_name = PCWSTR::from_raw(monitor_info.szDevice.as_ptr());
+    let mut i = 0;
     loop {
       unsafe {
-        let monitor_info = get_monitor_info(self.hmonitor()).unwrap();
-        let device_name = PCWSTR::from_raw(monitor_info.szDevice.as_ptr());
         let mut mode: DEVMODEW = mem::zeroed();
         mode.dmSize = mem::size_of_val(&mode) as u16;
         if !EnumDisplaySettingsExW(

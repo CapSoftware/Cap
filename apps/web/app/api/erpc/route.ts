@@ -1,20 +1,26 @@
 import { RpcAuthMiddlewareLive, RpcsLive } from "@cap/web-backend";
 import { Rpcs } from "@cap/web-domain";
-import { HttpServer } from "@effect/platform";
-import { RpcSerialization, RpcServer } from "@effect/rpc";
 import { Layer } from "effect";
+import { HttpRouter, HttpServer } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 import { Dependencies } from "@/lib/server";
 
-const rpcLayer = Layer.mergeAll(
-	RpcAuthMiddlewareLive,
-	RpcsLive,
-	RpcSerialization.layerJson,
-	HttpServer.layerContext,
+const routes = RpcServer.layerHttp({
+	group: Rpcs,
+	path: "/api/erpc",
+	protocol: "http",
+}).pipe(
+	Layer.provide(
+		Layer.mergeAll(
+			RpcAuthMiddlewareLive,
+			RpcsLive,
+			RpcSerialization.layerJson,
+		).pipe(Layer.provide(Dependencies)),
+	),
+	Layer.provide(HttpServer.layerServices),
 );
 
-const { handler } = RpcServer.toWebHandler(Rpcs, {
-	layer: Layer.provide(Dependencies)(rpcLayer),
-});
+const { handler } = HttpRouter.toWebHandler(routes);
 
 export const GET = (r: Request) => handler(r);
 export const POST = (r: Request) => handler(r);

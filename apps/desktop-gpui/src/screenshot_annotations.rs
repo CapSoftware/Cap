@@ -76,7 +76,7 @@ impl Tool {
     pub fn icon(self) -> &'static str {
         match self {
             Tool::Select => "icons/mouse-pointer-2.svg",
-            Tool::Draw => "icons/pencil.svg",
+            Tool::Draw => "icons/brush.svg",
             Tool::Arrow => "icons/arrow-up-right.svg",
             Tool::Rectangle => "icons/square.svg",
             Tool::Mask => "icons/eye-off.svg",
@@ -133,7 +133,7 @@ pub fn annotation_icon(annotation_type: AnnotationType) -> &'static str {
         AnnotationType::Circle => "icons/circle.svg",
         AnnotationType::Mask => "icons/eye-off.svg",
         AnnotationType::Text => "icons/type.svg",
-        AnnotationType::Draw => "icons/pencil.svg",
+        AnnotationType::Draw => "icons/brush.svg",
     }
 }
 
@@ -2601,17 +2601,17 @@ impl ScreenshotEditorWindow {
             .justify_center()
             .h(px(24.))
             .px(px(10.))
-            .rounded(px(6.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
             .cursor_pointer()
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
             .when(active, |this| {
-                this.bg(theme.blue_9).text_color(gpui::white())
+                this.bg(theme.primary).text_color(gpui::white())
             })
             .when(!active, |this| {
-                this.bg(theme.gray_3)
-                    .text_color(theme.gray_11)
-                    .hover(|style| style.bg(theme.gray_4))
+                this.bg(theme.surface_subtle)
+                    .text_color(theme.text_secondary)
+                    .hover(|style| style.bg(theme.hover_bg))
             })
             .child(label)
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -2667,9 +2667,9 @@ impl ScreenshotEditorWindow {
             track,
         )
         .row_width(width)
-        .track(px(4.), theme.gray_4.into())
-        .fill(theme.blue_9.into())
-        .thumb(px(14.), gpui::white(), Some(theme.gray_6.into()))
+        .track(px(4.), theme.hover_bg.into())
+        .fill(theme.primary.into())
+        .thumb(px(14.), gpui::white(), Some(theme.border.into()))
         .on_drag_start(
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
@@ -2811,12 +2811,12 @@ impl ScreenshotEditorWindow {
                 div()
                     .id(target.id())
                     .size(px(20.))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .overflow_hidden()
                     .cursor_pointer()
                     .border_1()
-                    .border_color(theme.gray_5)
-                    .hover(|style| style.border_color(theme.gray_7))
+                    .border_color(theme.active_bg)
+                    .hover(|style| style.border_color(theme.border_strong))
                     .when(transparent, |this| this.children(checker_quarters(20.)))
                     .when(!transparent, |this| {
                         this.bg(annotation_color(&value, 1.).unwrap_or(gpui::transparent_black()))
@@ -2898,13 +2898,18 @@ impl ScreenshotEditorWindow {
                         div()
                             .id("screenshot-annotation-swatch-transparent")
                             .size(px(20.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .overflow_hidden()
                             .cursor_pointer()
                             .border_1()
-                            .border_color(if selected { theme.blue_9 } else { theme.gray_4 })
+                            .border_color(if selected {
+                                theme.primary
+                            } else {
+                                theme.hover_bg
+                            })
                             .when(selected, |this| this.border_2())
                             .children(checker_quarters(20.))
+                            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                             .tooltip(move |_window, cx| {
                                 ui::Tooltip::new(&theme, "Transparent").view(cx)
                             })
@@ -2937,7 +2942,7 @@ impl ScreenshotEditorWindow {
                         div()
                             .id(("screenshot-annotation-swatch", index))
                             .size(px(20.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .cursor_pointer()
                             .border_1()
                             .border_color(Theme::with_alpha(gpui::rgb(0x000000), 0.1))
@@ -2985,21 +2990,15 @@ impl ScreenshotEditorWindow {
                         .flex()
                         .flex_col()
                         .gap(px(10.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .border_1()
-                        .border_color(theme.gray_4)
+                        .border_color(theme.hover_bg)
                         .bg(if theme.is_dark() {
-                            theme.gray_2
+                            theme.surface_secondary
                         } else {
-                            theme.gray_1
+                            theme.surface
                         })
-                        .shadow(vec![gpui::BoxShadow {
-                            color: Theme::with_alpha(gpui::rgb(0x000000), 0.18),
-                            offset: gpui::point(px(0.), px(8.)),
-                            blur_radius: px(24.),
-                            spread_radius: px(0.),
-                            inset: false,
-                        }])
+                        .shadow(crate::theme::shadow(crate::theme::ShadowToken::Two))
                         .child(
                             // `RgbInput` (`ColorPicker.tsx:47-102`).
                             div()
@@ -3010,10 +3009,12 @@ impl ScreenshotEditorWindow {
                                 .child(
                                     div()
                                         .size(px(32.))
-                                        .rounded(px(8.))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Default,
+                                        ))
                                         .overflow_hidden()
                                         .border_1()
-                                        .border_color(theme.gray_4)
+                                        .border_color(theme.hover_bg)
                                         .when(annotation_color(&value, 1.).is_none(), |this| {
                                             this.children(checker_quarters(32.))
                                         })
@@ -3144,19 +3145,19 @@ impl ScreenshotEditorWindow {
                         .path("icons/layers.svg")
                         .size(px(32.))
                         .mb(px(8.))
-                        .text_color(theme.gray_7),
+                        .text_color(theme.border_strong),
                 )
                 .child(
                     div()
                         .text_size(px(12.))
-                        .text_color(theme.gray_10)
+                        .text_color(theme.text_secondary)
                         .child("No layers yet"),
                 )
                 .child(
                     div()
                         .mt(px(4.))
                         .text_size(px(10.))
-                        .text_color(theme.gray_8)
+                        .text_color(theme.border_strong)
                         .child("Use the tools above to add annotations"),
                 )
                 .into_any_element();
@@ -3217,8 +3218,8 @@ impl ScreenshotEditorWindow {
                     .right(px(8.))
                     .top(px(target as f32 * LAYER_ROW_HEIGHT - 1.))
                     .h(px(2.))
-                    .rounded_full()
-                    .bg(theme.blue_9)
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(theme.primary)
             }))
             .into_any_element()
     }
@@ -3247,12 +3248,12 @@ impl ScreenshotEditorWindow {
             .h(px(LAYER_ROW_HEIGHT))
             .px(px(8.))
             .mx(px(4.))
-            .rounded(px(6.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
             .cursor_pointer()
-            .when(dragging, |this| this.opacity(0.5).bg(theme.gray_3))
-            .when(selected && !dragging, |this| this.bg(theme.blue_3))
+            .when(dragging, |this| this.opacity(0.5).bg(theme.surface_subtle))
+            .when(selected && !dragging, |this| this.bg(theme.primary_subtle))
             .when(!selected && !dragging, |this| {
-                this.hover(|style| style.bg(theme.gray_3))
+                this.hover(|style| style.bg(theme.surface_subtle))
             })
             .child(
                 div()
@@ -3262,8 +3263,8 @@ impl ScreenshotEditorWindow {
                     .justify_center()
                     .flex_shrink_0()
                     .cursor(CursorStyle::OpenHand)
-                    .text_color(theme.gray_8)
-                    .hover(|style| style.text_color(theme.gray_11))
+                    .text_color(theme.border_strong)
+                    .hover(|style| style.text_color(theme.text_secondary))
                     .child(svg().path("icons/grip-vertical.svg").size(px(14.)))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -3280,16 +3281,20 @@ impl ScreenshotEditorWindow {
                     .justify_center()
                     .size(px(24.))
                     .flex_shrink_0()
-                    .rounded(px(4.))
-                    .bg(if selected { theme.blue_5 } else { theme.gray_3 })
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                    .bg(if selected {
+                        theme.primary_subtle
+                    } else {
+                        theme.surface_subtle
+                    })
                     .child(
                         svg()
                             .path(annotation_icon(annotation.annotation_type))
                             .size(px(14.))
                             .text_color(if selected {
-                                theme.blue_11
+                                theme.text_interactive
                             } else {
-                                theme.gray_11
+                                theme.text_secondary
                             }),
                     ),
             )
@@ -3300,9 +3305,9 @@ impl ScreenshotEditorWindow {
                     .truncate()
                     .text_size(px(12.))
                     .text_color(if selected {
-                        theme.blue_12
+                        theme.text_interactive
                     } else {
-                        theme.gray_12
+                        theme.text_primary
                     })
                     .child(layer_label(annotation)),
             )
@@ -3314,12 +3319,16 @@ impl ScreenshotEditorWindow {
                     .justify_center()
                     .flex_shrink_0()
                     .p(px(2.))
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .cursor_pointer()
                     .opacity(0.)
-                    .text_color(theme.gray_9)
+                    .text_color(theme.text_muted)
                     .group_hover("screenshot-layer-row", |style| style.opacity(1.))
-                    .hover(|style| style.bg(theme.red_3).text_color(theme.red_11))
+                    .hover(|style| {
+                        style
+                            .bg(theme.negative_subtle)
+                            .text_color(theme.text_danger)
+                    })
                     .child(svg().path("icons/x.svg").size(px(12.)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -3900,9 +3909,9 @@ fn config_item(
                 .flex_shrink_0()
                 .text_size(px(11.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.gray_10)
+                .text_color(theme.text_secondary)
                 .child(label)
-                .children(value.map(|value| div().text_color(theme.gray_11).child(value))),
+                .children(value.map(|value| div().text_color(theme.text_secondary).child(value))),
         )
         .child(control)
         .into_any_element()

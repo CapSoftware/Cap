@@ -115,6 +115,18 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
     meta.save_for_project()
         .map_err(|e| anyhow!("saving screenshot meta: {e}"))?;
 
+    default_config()
+        .write(&bundle)
+        .map_err(|e| anyhow!("saving screenshot project config: {e}"))?;
+
+    let png = bundle.join("original.png");
+    write_png(png.clone(), image).await?;
+    Ok(png)
+}
+
+/// The project a fresh capture starts from, and what the editor's Reset
+/// returns to: no annotations, a transparent background and no shadow.
+pub fn default_config() -> cap_project::ProjectConfiguration {
     let mut config = cap_project::ProjectConfiguration::default();
     config.background.source = cap_project::BackgroundSource::Color {
         value: [255, 255, 255],
@@ -122,12 +134,6 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
     };
     config.background.shadow = 0.0;
     config
-        .write(&bundle)
-        .map_err(|e| anyhow!("saving screenshot project config: {e}"))?;
-
-    let png = bundle.join("original.png");
-    write_png(png.clone(), image).await?;
-    Ok(png)
 }
 
 /// The Tauri encode settings (`recording.rs:2987-3016`): RGB stays RGB, a
