@@ -834,6 +834,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let initial_icon = Image::from_bytes(get_mode_icon(current_mode))?;
 
     let _ = TrayIconBuilder::with_id("tray")
+        .tooltip(app.config().product_name.as_deref().unwrap_or("Cap"))
         .icon(initial_icon)
         .icon_as_template(cfg!(target_os = "macos"))
         .menu(&menu)
