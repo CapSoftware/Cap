@@ -104,6 +104,7 @@ jobs:
         run: |
           node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
           bun run --cwd apps/desktop vitest run scripts/prepare.test.js
+          bun run --cwd apps/desktop vitest run --project solid
 
       - name: Test Loops profile sync
         run: |
