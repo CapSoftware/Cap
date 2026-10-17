@@ -2928,7 +2928,10 @@ async fn run_export(
         let total = base.total_frames(fps);
         (PreparedBase::Mp4(base), total)
     } else {
-        let base = builder.build().await.map_err(|error| error.to_string())?;
+        let base = builder
+            .build_video_only()
+            .await
+            .map_err(|error| error.to_string())?;
         let total = base.total_frames(fps);
         (PreparedBase::Other(base), total)
     };

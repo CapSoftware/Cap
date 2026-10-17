@@ -85,14 +85,18 @@ impl ExporterBuilder {
     }
 
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
-        self.build_inner(None).await
+        self.build_inner(None, true).await
+    }
+
+    pub async fn build_video_only(self) -> Result<ExporterBase, ExporterBuildError> {
+        self.build_inner(None, false).await
     }
 
     pub async fn build_for_mp4(
         self,
         cancellation: Arc<AtomicBool>,
     ) -> Result<Mp4ExporterBase, ExporterBuildError> {
-        self.build_inner(Some(cancellation))
+        self.build_inner(Some(cancellation), true)
             .await
             .map(Mp4ExporterBase)
     }
@@ -110,6 +114,7 @@ impl ExporterBuilder {
     async fn build_inner(
         mut self,
         cancellation: Option<Arc<AtomicBool>>,
+        include_audio: bool,
     ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
@@ -179,6 +184,15 @@ impl ExporterBuilder {
             let (segments, audio) =
                 finish_audio_preparation(segments, preparation, &control.stop).await?;
             (segments, Some(audio))
+        } else if !include_audio {
+            let segments = cap_editor::create_segments_without_audio(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await
+            .map_err(Error::MediaLoad)?;
+            (segments, None)
         } else {
             let segments = cap_editor::create_segments(
                 &recording_meta,
