@@ -36,6 +36,15 @@ fn portrait_vertical_without_padding_fills_the_output() {
 
 #[tokio::test]
 async fn imported_portrait_fills_a_vertical_output() {
+    let instance = cap_rendering::create_wgpu_instance_sync();
+    if instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .is_err()
+    {
+        eprintln!("no GPU adapter available, skipping portrait layout regression");
+        return;
+    }
     let options = RenderOptions {
         screen_size: XY::new(1920, 1080),
         camera_size: None,
