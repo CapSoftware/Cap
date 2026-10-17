@@ -165,6 +165,40 @@ For the AssemblyAI EU gateway, set
 serves Claude and Gemini models, so you must also override `AI_MODEL` and
 `AI_STREAM_MODEL` (the defaults are OpenAI-family models that are US-only).
 
+### Local Transcription
+
+To transcribe without AssemblyAI, point `STT_BASE_URL` at any OpenAI-compatible
+`/audio/transcriptions` endpoint that returns word timestamps
+(`response_format=verbose_json` with `timestamp_granularities[]=word`), such as
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server`,
+faster-whisper-server, or speaches. When set, it is used instead of
+`ASSEMBLY_API_KEY` for recorded videos, with no fallback to AssemblyAI if the
+endpoint is down. Live transcription during recording still requires
+AssemblyAI.
+
+```bash
+STT_BASE_URL=http://whisper:9000/v1
+STT_MODEL=large-v3-turbo     # Defaults to whisper-1
+STT_API_KEY=your-key         # If the endpoint requires one
+```
+
+`STT_MODEL` is ignored by `whisper-server`; speaches expects a full model id
+such as `Systran/faster-whisper-large-v3`.
+
+For `whisper-server`, serve the OpenAI path, let it convert audio with ffmpeg,
+and enable voice activity detection so silent recordings are reported as having
+no audio instead of producing hallucinated text:
+
+```bash
+whisper-server -m ggml-large-v3-turbo.bin --host 0.0.0.0 --port 9000 \
+  --inference-path /v1/audio/transcriptions --convert -l auto \
+  --vad -vm ggml-silero-v5.1.2.bin
+```
+
+The server transcribes one recording at a time. On Apple Silicon, run it
+natively rather than in Docker so it can use the Metal GPU, and point Cap's
+container at the host with `STT_BASE_URL=http://host.docker.internal:9000/v1`.
+
 ### Google OAuth
 
 ```bash
