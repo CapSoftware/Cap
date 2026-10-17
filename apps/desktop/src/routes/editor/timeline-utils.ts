@@ -1,4 +1,7 @@
-import type { KeyboardTrackSegment } from "~/utils/tauri";
+import type {
+	KeyboardTrackSegment,
+	LockableTimelineTrack,
+} from "~/utils/tauri";
 import {
 	type ClipTransition,
 	clipDuration,
@@ -51,6 +54,40 @@ export function shiftCaptionTimesAfterCut(
 			}
 		}
 	}
+}
+
+type RippleTrackTimeline = {
+	styleSegments: Array<{ start: number; end: number }>;
+	imageSegments: Array<{ start: number; end: number }>;
+	zoomSegments: Array<{ start: number; end: number }>;
+	sceneSegments?: Array<{ start: number; end: number }> | null;
+	maskSegments: Array<{ start: number; end: number }>;
+	textSegments: Array<{ start: number; end: number }>;
+	captionSegments?: Array<{ start: number; end: number }> | null;
+	audioSegments?: Array<{ start: number; end: number }> | null;
+	camera3dSegments?: Array<{ start: number; end: number }> | null;
+};
+
+export function unlockedRippleTracks(
+	timeline: RippleTrackTimeline,
+	lockedTracks: ReadonlyArray<LockableTimelineTrack>,
+) {
+	const tracks: Array<
+		[LockableTimelineTrack, Array<{ start: number; end: number }>]
+	> = [
+		["style", timeline.styleSegments],
+		["image", timeline.imageSegments],
+		["zoom", timeline.zoomSegments],
+		["scene", timeline.sceneSegments ?? []],
+		["mask", timeline.maskSegments],
+		["text", timeline.textSegments],
+		["caption", timeline.captionSegments ?? []],
+		["audio", timeline.audioSegments ?? []],
+		["3d", timeline.camera3dSegments ?? []],
+	];
+	return tracks
+		.filter(([kind]) => !lockedTracks.includes(kind))
+		.map(([, track]) => track);
 }
 
 export function rippleDeleteFromTrack(
@@ -347,7 +384,10 @@ export function rippleDeleteAllTracks(
 		end: number;
 		removeHoldAtStart?: boolean;
 	},
+	lockedTracks: ReadonlyArray<LockableTimelineTrack> = [],
 ) {
+	const ripples = (track: LockableTimelineTrack) =>
+		!lockedTracks.includes(track);
 	// The clip cut below works in the gapless recording-flow domain, but the
 	// overlay tracks live in output time, which includes fullscreen-text
 	// holds. Convert the cut range before touching them, and let the held
@@ -405,11 +445,15 @@ export function rippleDeleteAllTracks(
 		0,
 		durationBefore - clipTimelineDuration(timeline.segments, nextTransitions),
 	);
-	const overlayShift =
-		shiftDuration +
-		(overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart));
-	for (const track of [timeline.styleSegments, timeline.imageSegments]) {
-		if (track)
+	const removedHoldTime = ripples("text")
+		? overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart)
+		: 0;
+	const overlayShift = shiftDuration + removedHoldTime;
+	for (const [kind, track] of [
+		["style", timeline.styleSegments],
+		["image", timeline.imageSegments],
+	] as const) {
+		if (track && ripples(kind))
 			rippleDeleteFromTrack(
 				track,
 				overlayCutStart,
@@ -417,56 +461,56 @@ export function rippleDeleteAllTracks(
 				overlayShift,
 			);
 	}
-	if (timeline.zoomSegments)
+	if (timeline.zoomSegments && ripples("zoom"))
 		rippleDeleteFromTrack(
 			timeline.zoomSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.sceneSegments)
+	if (timeline.sceneSegments && ripples("scene"))
 		rippleDeleteFromTrack(
 			timeline.sceneSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.maskSegments)
+	if (timeline.maskSegments && ripples("mask"))
 		rippleDeleteMaskTrack(
 			timeline.maskSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.textSegments)
+	if (timeline.textSegments && ripples("text"))
 		rippleDeleteFromTrack(
 			timeline.textSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.captionSegments)
+	if (timeline.captionSegments && ripples("caption"))
 		rippleDeleteFromTrack(
 			timeline.captionSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.keyboardSegments)
+	if (timeline.keyboardSegments && ripples("keyboard"))
 		rippleDeleteKeyboardTrack(
 			timeline.keyboardSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.audioSegments)
+	if (timeline.audioSegments && ripples("audio"))
 		rippleDeleteAudioTrack(
 			timeline.audioSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-	if (timeline.camera3dSegments) {
+	if (timeline.camera3dSegments && ripples("3d")) {
 		rippleDeleteCamera3DTrack(
 			timeline.camera3dSegments,
 			overlayCutStart,
@@ -479,6 +523,7 @@ export function rippleDeleteAllTracks(
 export function deleteClipAndRippleAllTracks(
 	timeline: Parameters<typeof rippleDeleteAllTracks>[0],
 	segmentIndex: number,
+	lockedTracks: ReadonlyArray<LockableTimelineTrack> = [],
 ) {
 	const segment = timeline.segments[segmentIndex];
 	if (!segment || timeline.segments.length < 2) return false;
@@ -499,16 +544,83 @@ export function deleteClipAndRippleAllTracks(
 			segmentIndex + 1,
 		)?.duration ?? 0;
 	const end = start + clipDuration(segment);
-	rippleDeleteAllTracks(timeline, start, end, segmentIndex, {
-		start: start + incomingDuration,
-		end: end - outgoingDuration,
-		removeHoldAtStart: true,
-	});
+	rippleDeleteAllTracks(
+		timeline,
+		start,
+		end,
+		segmentIndex,
+		{
+			start: start + incomingDuration,
+			end: end - outgoingDuration,
+			removeHoldAtStart: true,
+		},
+		lockedTracks,
+	);
 	return true;
 }
 
 if (import.meta.vitest) {
 	const { expect, it } = import.meta.vitest;
+
+	it("leaves locked tracks in place when a clip is deleted", () => {
+		const timeline = {
+			segments: [
+				{ start: 0, end: 5, timescale: 1 },
+				{ start: 5, end: 10, timescale: 1 },
+			],
+			transitions: [] as ClipTransition[],
+			zoomSegments: [{ start: 7, end: 8 }],
+			keyboardSegments: [
+				{
+					id: "keyboard-1",
+					start: 7,
+					end: 8,
+					displayText: "a",
+					keys: [{ key: "a", timeOffset: 0 }],
+				},
+			],
+		};
+
+		expect(deleteClipAndRippleAllTracks(timeline, 0, ["keyboard"])).toBe(true);
+
+		expect(timeline.zoomSegments).toEqual([{ start: 2, end: 3 }]);
+		expect(timeline.keyboardSegments[0].start).toBe(7);
+		expect(timeline.keyboardSegments[0].end).toBe(8);
+	});
+
+	it("keeps a locked hold's time when cutting the clip around it", () => {
+		const timeline = {
+			segments: [{ start: 0, end: 10, timescale: 1 }],
+			transitions: [] as ClipTransition[],
+			textSegments: [
+				{ start: 2, end: 4, enabled: true, layout: "fullscreen" as const },
+			],
+			zoomSegments: [{ start: 9, end: 10 }],
+		};
+
+		rippleDeleteAllTracks(timeline, 1, 3, undefined, undefined, ["text"]);
+
+		expect(timeline.textSegments).toHaveLength(1);
+		expect(timeline.zoomSegments).toEqual([{ start: 7, end: 8 }]);
+	});
+
+	it("filters locked tracks out of boundary ripples", () => {
+		const zoom = [{ start: 1, end: 2 }];
+		const scene = [{ start: 3, end: 4 }];
+		const tracks = unlockedRippleTracks(
+			{
+				styleSegments: [],
+				imageSegments: [],
+				zoomSegments: zoom,
+				sceneSegments: scene,
+				maskSegments: [],
+				textSegments: [],
+			},
+			["zoom"],
+		);
+		expect(tracks).toContain(scene);
+		expect(tracks).not.toContain(zoom);
+	});
 
 	it("ripple-deletes overlay tracks in hold-extended output time", () => {
 		// Fullscreen text at output [2,4] pauses the recording for 2s, so
