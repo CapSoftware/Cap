@@ -21,17 +21,19 @@ import sys
 import time
 from pathlib import Path
 
+# A head build is slower when its median CPU time exceeds the base's by more
+# than the workload's limit, and in most pairs. Limits sit above the noise of
+# identical code on blacksmith-6vcpu-macos-26 (run 38995088761): export-basic
+# +0.8%, seek-storm +0.9%, export-jitter-camera-40s -4.4%. Real-time playback
+# CPU varied by 15% there, so playback is reported without a limit.
 WORKLOADS = [
-    # name, test target, case glob, tier
-    ("export-basic", "export", "export/basic/*", "fast"),
-    ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast"),
-    ("seek-storm", "seek", "seek/*/storm30/*", "fast"),
-    ("playback-basic", "playback", "playback/basic/*", "fast"),
+    # name, test target, case glob, tier, CPU limit (None: report only)
+    ("export-basic", "export", "export/basic/*", "fast", 0.05),
+    ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast", 0.08),
+    ("seek-storm", "seek", "seek/*/storm30/*", "fast", 0.05),
+    ("playback-basic", "playback", "playback/basic/*", "fast", None),
 ]
 
-# A head build is slower only when its median CPU time exceeds the base's by
-# more than this, and in most pairs.
-CPU_LIMIT = 0.05
 WALL_WARN = 0.08
 
 
@@ -105,7 +107,7 @@ def main():
         print(f"::error::{name} {label}: exit {result['exit']}, {len(result['outcomes'])} cases reported")
         print("\n".join(tail))
         return False
-    for name, target, case, tier in WORKLOADS:
+    for name, target, case, tier, cpu_limit in WORKLOADS:
         # Untimed warm-up per side: generates fixtures and warms caches.
         usable = True
         for label, side in sides.items():
@@ -144,8 +146,8 @@ def main():
         slower_pairs = sum(
             h["cpu"] > b["cpu"] for b, h in zip(samples["base"], samples["head"])
         )
-        verdict = "ok"
-        if cpu_delta > CPU_LIMIT and slower_pairs * 4 >= args.pairs * 3:
+        verdict = "ok" if cpu_limit is not None else "reported only"
+        if cpu_limit is not None and cpu_delta > cpu_limit and slower_pairs * 4 >= args.pairs * 3:
             verdict = f"SLOWER: CPU +{cpu_delta:.1%}, slower in {slower_pairs} of {args.pairs} pairs"
             failed.append(name)
         elif wall_delta > WALL_WARN:
