@@ -21,20 +21,27 @@ struct PresetCase {
     grain: f32,
 }
 
-fn presets() -> [PresetCase; 8] {
+fn presets() -> [PresetCase; 9] {
     [
         PresetCase {
-            name: "teal-orange",
+            name: "none",
+            filters: &[],
+            overlay: None,
+            vignette: 0.,
+            grain: 0.,
+        },
+        PresetCase {
+            name: "cinematic",
             filters: &[
                 candidate::Filter::Contrast(1.12),
                 candidate::Filter::Saturate(1.12),
             ],
             overlay: Some(candidate::Overlay {
                 angle: 135.,
-                from: [0., 0.5, 0.6, 0.15],
-                to: [1., 0.5, 0., 0.15],
+                from: [13. / 255., 148. / 255., 136. / 255., 0.45],
+                to: [251. / 255., 146. / 255., 60. / 255., 0.4],
             }),
-            vignette: 0.2,
+            vignette: 0.18,
             grain: 0.12,
         },
         PresetCase {
@@ -45,7 +52,7 @@ fn presets() -> [PresetCase; 8] {
                 candidate::Filter::Brightness(1.03),
             ],
             overlay: None,
-            vignette: 0.4,
+            vignette: 0.32,
             grain: 0.35,
         },
         PresetCase {
@@ -56,16 +63,12 @@ fn presets() -> [PresetCase; 8] {
                 candidate::Filter::Saturate(0.8),
                 candidate::Filter::Brightness(1.05),
             ],
-            overlay: Some(candidate::Overlay {
-                angle: 45.,
-                from: [1., 0.9, 0.7, 0.1],
-                to: [0.8, 0.4, 0.1, 0.1],
-            }),
-            vignette: 0.3,
+            overlay: None,
+            vignette: 0.14,
             grain: 0.28,
         },
         PresetCase {
-            name: "cinematic",
+            name: "frost",
             filters: &[
                 candidate::Filter::Saturate(0.88),
                 candidate::Filter::Contrast(1.06),
@@ -73,14 +76,14 @@ fn presets() -> [PresetCase; 8] {
             ],
             overlay: Some(candidate::Overlay {
                 angle: 180.,
-                from: [0., 0.2, 0.4, 0.12],
-                to: [0.9, 0.6, 0.2, 0.12],
+                from: [125. / 255., 211. / 255., 252. / 255., 0.5],
+                to: [59. / 255., 130. / 255., 246. / 255., 0.3],
             }),
-            vignette: 0.25,
+            vignette: 0.,
             grain: 0.,
         },
         PresetCase {
-            name: "warm-glow",
+            name: "golden",
             filters: &[
                 candidate::Filter::Sepia(0.3),
                 candidate::Filter::Saturate(1.2),
@@ -88,30 +91,30 @@ fn presets() -> [PresetCase; 8] {
                 candidate::Filter::Brightness(1.06),
             ],
             overlay: Some(candidate::Overlay {
-                angle: 120.,
-                from: [1., 0.8, 0.4, 0.2],
-                to: [1., 0.3, 0.1, 0.05],
+                angle: 180.,
+                from: [253. / 255., 186. / 255., 116. / 255., 0.4],
+                to: [251. / 255., 113. / 255., 36. / 255., 0.25],
             }),
-            vignette: 0.15,
+            vignette: 0.1,
             grain: 0.,
         },
         PresetCase {
-            name: "moody",
+            name: "midnight",
             filters: &[
                 candidate::Filter::Brightness(0.85),
                 candidate::Filter::Contrast(1.16),
                 candidate::Filter::Saturate(0.75),
             ],
             overlay: Some(candidate::Overlay {
-                angle: 220.,
-                from: [0.1, 0.1, 0.3, 0.25],
-                to: [0., 0., 0., 0.1],
+                angle: 180.,
+                from: [15. / 255., 23. / 255., 42. / 255., 0.5],
+                to: [19. / 255., 78. / 255., 74. / 255., 0.45],
             }),
-            vignette: 0.5,
+            vignette: 0.28,
             grain: 0.18,
         },
         PresetCase {
-            name: "vibrant",
+            name: "vivid",
             filters: &[
                 candidate::Filter::Saturate(1.45),
                 candidate::Filter::Contrast(1.14),
@@ -121,11 +124,19 @@ fn presets() -> [PresetCase; 8] {
             grain: 0.,
         },
         PresetCase {
-            name: "clean",
-            filters: &[],
-            overlay: None,
+            name: "dreamy",
+            filters: &[
+                candidate::Filter::Brightness(1.1),
+                candidate::Filter::Contrast(0.85),
+                candidate::Filter::Saturate(0.95),
+            ],
+            overlay: Some(candidate::Overlay {
+                angle: 180.,
+                from: [251. / 255., 207. / 255., 232. / 255., 0.45],
+                to: [196. / 255., 181. / 255., 253. / 255., 0.35],
+            }),
             vignette: 0.,
-            grain: 0.,
+            grain: 0.1,
         },
     ]
 }
