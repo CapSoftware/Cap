@@ -19,10 +19,25 @@ pub struct TextLayer {
     text_renderer: TextRenderer,
     viewport: Viewport,
     buffers: Vec<Buffer>,
+    buffer_keys: Vec<Option<PlainShapeKey>>,
+    previous_plain_buffers: Vec<(PlainShapeKey, Buffer)>,
     draws: Vec<TextDraw>,
     segment_renderers: Vec<TextRenderer>,
     background: Option<TextBackgroundResources>,
     segmented_render: bool,
+}
+
+#[derive(Clone, PartialEq)]
+struct PlainShapeKey {
+    content: String,
+    font_family: String,
+    font_weight: u16,
+    italic: bool,
+    letter_spacing: u32,
+    align: TextAlign,
+    font_size: u32,
+    line_height: u32,
+    wrap_width: u32,
 }
 
 #[repr(C)]
@@ -371,6 +386,8 @@ impl TextLayer {
             text_renderer,
             viewport,
             buffers: Vec::new(),
+            buffer_keys: Vec::new(),
+            previous_plain_buffers: Vec::new(),
             draws: Vec::new(),
             segment_renderers: Vec::new(),
             background: None,
@@ -436,7 +453,31 @@ impl TextLayer {
         }
         buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffers.push(buffer);
+        self.buffer_keys.push(None);
         self.buffers.len() - 1
+    }
+
+    fn shape_plain(
+        &mut self,
+        key: PlainShapeKey,
+        attrs: &Attrs<'_>,
+        align: Align,
+        metrics: Metrics,
+        wrap_width: f32,
+    ) -> usize {
+        if let Some(index) = self
+            .previous_plain_buffers
+            .iter()
+            .position(|(cached, _)| *cached == key)
+        {
+            let (key, buffer) = self.previous_plain_buffers.swap_remove(index);
+            self.buffers.push(buffer);
+            self.buffer_keys.push(Some(key));
+            return self.buffers.len() - 1;
+        }
+        let index = self.shape(&key.content, attrs, align, metrics, wrap_width, None);
+        self.buffer_keys[index] = Some(key);
+        index
     }
 
     fn prepare_with_mode(
@@ -447,7 +488,13 @@ impl TextLayer {
         texts: &[PreparedText],
         force_segmented: bool,
     ) {
-        self.buffers.clear();
+        self.previous_plain_buffers.clear();
+        self.previous_plain_buffers.extend(
+            self.buffer_keys
+                .drain(..)
+                .zip(self.buffers.drain(..))
+                .filter_map(|(key, buffer)| Some((key?, buffer))),
+        );
         self.draws.clear();
         let mut backgrounds: Vec<TextBackgroundUniforms> = Vec::new();
         let output_px = [output_size.0.max(1) as f32, output_size.1.max(1) as f32];
@@ -514,7 +561,23 @@ impl TextLayer {
             };
 
             let content = text.content.as_str();
-            let plain = self.shape(content, &attrs, align, metrics, wrap_width, None);
+            let plain = self.shape_plain(
+                PlainShapeKey {
+                    content: text.content.clone(),
+                    font_family: text.font_family.clone(),
+                    font_weight: weight.0,
+                    italic: text.italic,
+                    letter_spacing: text.letter_spacing.to_bits(),
+                    align: text.align,
+                    font_size: metrics.font_size.to_bits(),
+                    line_height: metrics.line_height.to_bits(),
+                    wrap_width: wrap_width.to_bits(),
+                },
+                &attrs,
+                align,
+                metrics,
+                wrap_width,
+            );
             let laid_out_height =
                 self.buffers[plain].layout_runs().count() as f32 * metrics.line_height;
             // The glyphs' own horizontal extent across every line, so a
@@ -1016,5 +1079,157 @@ mod gpu_tests {
             let [red, green, _, _] = pixel(&pixels, x, y);
             red > 200 && green > 200
         })));
+    }
+
+    fn overlay(bounds: [f32; 4], content: &str, font_size: f32) -> PreparedText {
+        PreparedText {
+            content: content.to_string(),
+            color: [1.0; 4],
+            background_color: None,
+            font_size,
+            ..text(bounds, [0.0; 4])
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layouts_render_like_fresh_ones_and_follow_text_changes() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut first = overlay([4.0, 4.0, 60.0, 60.0], "Hi\nyo", 20.0);
+        first.shadow = 0.8;
+        first.stroke = Some((1.0, [1.0, 0.0, 0.0, 1.0]));
+        let mut second = overlay([4.0, 30.0, 60.0, 60.0], "gq", 16.0);
+        second.gradient_color = Some([0.0, 0.0, 1.0, 1.0]);
+        let texts = [first.clone(), second];
+
+        let mut reused = TextLayer::new(&device, &queue);
+        reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &texts);
+        reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &texts);
+        assert!(reused.previous_plain_buffers.is_empty());
+
+        let mut fresh = TextLayer::new(&device, &queue);
+        fresh.prepare(&device, &queue, (OUTPUT, OUTPUT), &texts);
+        let pixels = render_pixels(&device, &queue, &reused);
+        assert!(pixels.chunks_exact(4).any(|pixel| pixel != [255; 4]));
+        assert_eq!(pixels, render_pixels(&device, &queue, &fresh));
+
+        let mut edited = first;
+        edited.content = "Hi".to_string();
+        reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[edited.clone()]);
+        assert_eq!(reused.buffers[0].layout_runs().count(), 1);
+        let mut fresh = TextLayer::new(&device, &queue);
+        fresh.prepare(&device, &queue, (OUTPUT, OUTPUT), &[edited]);
+        assert_eq!(
+            render_pixels(&device, &queue, &reused),
+            render_pixels(&device, &queue, &fresh)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn reused_layouts_follow_each_shaping_input() {
+        type Edit = (&'static str, fn(&mut PreparedText));
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let base = PreparedText {
+            color: [0.0, 0.0, 0.0, 1.0],
+            line_height: 1.25,
+            ..overlay([4.0, 4.0, 60.0, 60.0], "Hi yo\ngq", 16.0)
+        };
+        let edits: [Edit; 8] = [
+            ("font size", |text| {
+                text.font_size = 20.0;
+                text.line_height = 1.0;
+            }),
+            ("font family", |text| {
+                text.font_family = "monospace".to_string()
+            }),
+            ("font weight", |text| text.font_weight = 800.0),
+            ("italic", |text| text.italic = true),
+            ("letter spacing", |text| text.letter_spacing = 3.0),
+            ("alignment", |text| text.align = TextAlign::Right),
+            ("line height", |text| text.line_height = 2.0),
+            ("wrap width", |text| text.bounds[2] = 24.0),
+        ];
+        let render_fresh = |text: &PreparedText| {
+            let mut layer = TextLayer::new(&device, &queue);
+            layer.prepare(
+                &device,
+                &queue,
+                (OUTPUT, OUTPUT),
+                std::slice::from_ref(text),
+            );
+            render_pixels(&device, &queue, &layer)
+        };
+        let base_pixels = render_fresh(&base);
+        assert!(base_pixels.chunks_exact(4).any(|pixel| pixel != [255; 4]));
+
+        for (name, edit) in edits {
+            let mut edited = base.clone();
+            edit(&mut edited);
+            let expected = render_fresh(&edited);
+            assert!(
+                expected != base_pixels,
+                "{name} edit should change the output"
+            );
+
+            let mut reused = TextLayer::new(&device, &queue);
+            reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[base.clone()]);
+            reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[edited]);
+            assert!(
+                render_pixels(&device, &queue, &reused) == expected,
+                "{name} edit reused a stale layout"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn benchmark_text_layer_prepare() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let output = (1920, 1080);
+        let mut title = overlay(
+            [160.0, 120.0, 1760.0, 260.0],
+            "Shipping the new recording engine",
+            96.0,
+        );
+        title.align = TextAlign::Center;
+        title.shadow = 0.6;
+        let mut body = overlay(
+            [160.0, 700.0, 1760.0, 960.0],
+            "Cap records your screen, camera and microphone together, then lets you trim, zoom and add captions before you share a link with your team.",
+            44.0,
+        );
+        body.background_color = Some([0.0, 0.0, 0.0, 0.6]);
+        let mut label = overlay([80.0, 40.0, 600.0, 110.0], "Live demo", 48.0);
+        label.stroke = Some((3.0, [0.0, 0.0, 0.0, 1.0]));
+        let cases = [
+            ("1 title", vec![title.clone()]),
+            ("title + body + label", vec![title, body, label]),
+        ];
+
+        for (name, texts) in cases {
+            let mut layer = TextLayer::new(&device, &queue);
+            for _ in 0..30 {
+                layer.prepare(&device, &queue, output, &texts);
+            }
+            let mut samples = Vec::with_capacity(300);
+            for frame in 0..300 {
+                let mut texts = texts.clone();
+                for text in &mut texts {
+                    text.opacity = 0.5 + (frame % 30) as f32 / 60.0;
+                }
+                let start = std::time::Instant::now();
+                layer.prepare(&device, &queue, output, &texts);
+                samples.push(start.elapsed().as_secs_f64() * 1e6);
+            }
+            device.poll(wgpu::PollType::Wait).unwrap();
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "text layer prepare [{name}]: p50 {:.1} us, p95 {:.1} us, mean {:.1} us",
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                samples.iter().sum::<f64>() / samples.len() as f64,
+            );
+        }
     }
 }
