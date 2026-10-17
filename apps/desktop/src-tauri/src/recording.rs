@@ -2163,13 +2163,13 @@ async fn start_recording_prepared(
             let (sender, receiver) = tokio::sync::oneshot::channel();
             prompt_app.dialog()
                 .message(format!(
-                    "Only {:.2} GiB is available on your recordings drive. The recording may stop early if space runs out. Free up space, or record anyway.",
+                    "录制磁盘仅剩 {:.2} GiB。空间耗尽时录制可能提前结束。请先释放空间，或继续录制。",
                     bytes as f64 / 1_073_741_824.0,
                 ))
-                .title("Low storage space")
+                .title("空间不足")
                 .kind(MessageDialogKind::Warning)
                 .buttons(MessageDialogButtons::OkCancelCustom(
-                    "Record anyway".to_string(),
+                    "仍然录制".to_string(),
                     "Go back".to_string(),
                 ))
                 .show(move |confirmed| {
