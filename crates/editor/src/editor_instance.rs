@@ -1017,7 +1017,7 @@ impl EditorInstance {
                             zoom_timelines.clear();
                             outgoing_zoom_timelines.clear();
                         }
-                        project.clone()
+                        Arc::new(project.clone())
                     };
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {

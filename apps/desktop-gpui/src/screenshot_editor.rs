@@ -319,7 +319,7 @@ async fn render_still(
 
     let uniforms = ProjectUniforms::new(
         constants,
-        config,
+        &Arc::new(config.clone()),
         0,
         30,
         resolution_base,

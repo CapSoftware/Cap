@@ -29,7 +29,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{path::PathBuf, time::Instant};
+use std::{borrow::Cow, path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 
 pub mod camera3d;
@@ -770,6 +770,7 @@ pub async fn render_video_to_channel(
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
 
+    let project = &Arc::new(project.clone());
     let start_time = Instant::now();
 
     let duration = get_duration(recordings, recording_meta, meta, project);
@@ -1346,6 +1347,7 @@ pub async fn render_video_to_channel_nv12(
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
 ) -> Result<(), RenderingError> {
+    let project = &Arc::new(project.clone());
     let ffmpeg_init_start = Instant::now();
     ffmpeg::init().unwrap();
     let ffmpeg_init_ms = ffmpeg_init_start.elapsed().as_millis() as u64;
@@ -2091,7 +2093,7 @@ impl InFlightFrame {
 
 struct TransitionExportContext<'a> {
     constants: &'a RenderVideoConstants,
-    project: &'a ProjectConfiguration,
+    project: &'a Arc<ProjectConfiguration>,
     render_segments: &'a [RenderSegment],
     outgoing_zoom_timelines: &'a mut [ZoomTransformTimeline],
     precomputed_cursor_timelines: &'a [Arc<PrecomputedCursorTimeline>],
@@ -2898,7 +2900,7 @@ pub struct ProjectUniforms {
     /// their edges); the cursor and click-ripple layers scale by it.
     pub cursor_clip_visibility: f32,
     pub click_ripples: Vec<ClickRipple>,
-    pub project: ProjectConfiguration,
+    pub project: Arc<ProjectConfiguration>,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
     pub split: Option<SplitLayoutComputed>,
@@ -3915,7 +3917,7 @@ impl ProjectUniforms {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -3961,7 +3963,7 @@ impl ProjectUniforms {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_precomputed_cursor(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -4024,7 +4026,7 @@ impl ProjectUniforms {
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
         constants: &RenderVideoConstants,
-        project: &ProjectConfiguration,
+        shared_project: &Arc<ProjectConfiguration>,
         frame_number: u32,
         fps: u32,
         resolution_base: XY<u32>,
@@ -4034,6 +4036,7 @@ impl ProjectUniforms {
         zoom_timeline: &ZoomTransformTimeline,
         cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
     ) -> Self {
+        let project = shared_project.as_ref();
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
         let fps_f32 = fps.max(1) as f32;
@@ -5108,7 +5111,10 @@ impl ProjectUniforms {
             frame_chrome,
             notch,
             display_outer_bounds,
-            project: styled_project.into_owned(),
+            project: match styled_project {
+                Cow::Borrowed(_) => Arc::clone(shared_project),
+                Cow::Owned(styled) => Arc::new(styled),
+            },
             zoom,
             scene,
             split: split_layout,
@@ -5907,7 +5913,15 @@ mod style_image_tests {
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 6.0, size);
         let at = |project: &ProjectConfiguration, frame| {
             ProjectUniforms::new(
-                &constants, project, frame, 60, size, &cursor, &frames, 6.0, &zoom,
+                &constants,
+                &Arc::new(project.clone()),
+                frame,
+                60,
+                size,
+                &cursor,
+                &frames,
+                6.0,
+                &zoom,
             )
         };
         let uniforms = at(&project, 180);
@@ -6133,7 +6147,7 @@ mod style_image_tests {
         for frame_number in [41, 42, 60, 83, 84] {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6206,7 +6220,7 @@ mod style_image_tests {
         );
         let uniforms = ProjectUniforms::new(
             &constants,
-            &project,
+            &Arc::new(project.clone()),
             60,
             60,
             XY::new(160, 90),
@@ -6233,7 +6247,7 @@ mod style_image_tests {
         let visibility_at = |frame_number: u32| {
             ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(160, 90),
@@ -6606,7 +6620,7 @@ mod nv12_flush_tests {
         for frame_number in 0..5u32 {
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(4, 4),
@@ -6723,7 +6737,7 @@ mod nv12_flush_tests {
             let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 7,
                 60,
                 XY::new(4, 4),
@@ -9280,7 +9294,7 @@ mod project_uniforms_tests {
                 }
                 let uniforms = ProjectUniforms::new(
                     &constants,
-                    &project,
+                    &Arc::new(project.clone()),
                     0,
                     30,
                     screen_size,
@@ -9587,7 +9601,7 @@ mod project_uniforms_tests {
             );
             let uniforms = ProjectUniforms::new(
                 &constants,
-                &project,
+                &Arc::new(project.clone()),
                 frame_number,
                 60,
                 XY::new(800, 450),
@@ -9616,7 +9630,7 @@ mod project_uniforms_tests {
                 assert!((opacity - expected).abs() < 0.001);
             }
             let mut display_uniforms = uniforms.clone();
-            display_uniforms.project.cursor.hide = true;
+            Arc::make_mut(&mut display_uniforms.project).cursor.hide = true;
             let display = renderer
                 .render_immediate(frames.clone(), display_uniforms, &events, true, &mut layers)
                 .await
@@ -9628,7 +9642,7 @@ mod project_uniforms_tests {
             for ripple_only in [false, true] {
                 let mut overlay_uniforms = uniforms.clone();
                 if ripple_only {
-                    overlay_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut overlay_uniforms.project).cursor.hide = true;
                     overlay_uniforms.click_ripples = vec![ClickRipple {
                         position: Coord::new(position),
                         progress: 0.35,
@@ -9652,7 +9666,7 @@ mod project_uniforms_tests {
                 cursor_only_frames.camera_frame = None;
                 let mut cursor_only_uniforms = ProjectUniforms::new(
                     &constants,
-                    &project,
+                    &Arc::new(project.clone()),
                     frame_number,
                     60,
                     XY::new(800, 450),
@@ -9661,12 +9675,14 @@ mod project_uniforms_tests {
                     4.0,
                     &zoom_timeline,
                 );
-                cursor_only_uniforms.project.background.source = BackgroundSource::Color {
+                Arc::make_mut(&mut cursor_only_uniforms.project)
+                    .background
+                    .source = BackgroundSource::Color {
                     value: [0, 0, 0],
                     alpha: 0,
                 };
                 if ripple_only {
-                    cursor_only_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut cursor_only_uniforms.project).cursor.hide = true;
                     cursor_only_uniforms.click_ripples = vec![ClickRipple {
                         position: Coord::new(position),
                         progress: 0.35,
@@ -9709,7 +9725,7 @@ mod project_uniforms_tests {
                     );
                     report_pixel_changes("overlay vs original", &overlay, &display, marker_center);
                     let mut hidden_uniforms = uniforms.clone();
-                    hidden_uniforms.project.cursor.hide = true;
+                    Arc::make_mut(&mut hidden_uniforms.project).cursor.hide = true;
                     let hidden_repeat = renderer
                         .render_immediate(
                             frames.clone(),
@@ -9838,6 +9854,147 @@ mod project_uniforms_tests {
         let delta = focus.coord.x - current.position.coord.x;
         assert!(delta < 0.2, "focus moved too far ahead: {delta}");
         assert!(delta > -0.25, "focus lagged too far behind: {delta}");
+    }
+
+    fn uniforms_at(
+        constants: &RenderVideoConstants,
+        project: &Arc<ProjectConfiguration>,
+        frame_number: u32,
+    ) -> ProjectUniforms {
+        let screen_size = constants.options.screen_size;
+        let events = CursorEvents::default();
+        let mut zoom_timeline =
+            ZoomTransformTimeline::from_project(project, &events, 60.0, screen_size);
+        zoom_timeline.ensure_precomputed_until(60.0);
+        let frames = DecodedSegmentFrames {
+            screen_size,
+            screen_frame: Some(DecodedFrame::new(Vec::new(), screen_size.x, screen_size.y)),
+            camera_frame: None,
+            segment_time: frame_number as f32 / 30.0,
+            recording_time: frame_number as f32 / 30.0,
+            segment_has_camera: false,
+        };
+        ProjectUniforms::new(
+            constants,
+            project,
+            frame_number,
+            30,
+            screen_size,
+            &events,
+            &frames,
+            60.0,
+            &zoom_timeline,
+        )
+    }
+
+    fn captioned_project(segments: u32) -> ProjectConfiguration {
+        let captions: Vec<_> = (0..segments)
+            .map(|i| {
+                let start = f64::from(i) * 3.0;
+                serde_json::json!({
+                    "id": format!("caption-{i}"),
+                    "start": start,
+                    "end": start + 2.5,
+                    "text": "the quick brown fox jumps over the lazy dog",
+                    "words": (0..8).map(|w| serde_json::json!({
+                        "text": format!("word{w}"),
+                        "start": start + f64::from(w) * 0.3,
+                        "end": start + f64::from(w) * 0.3 + 0.25,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{"recordingClip": 0, "start": 0.0, "end": f64::from(segments) * 3.0, "timescale": 1.0}],
+                "zoomSegments": [],
+                "captionSegments": captions,
+            },
+            "captions": {"segments": captions, "settings": {}},
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn uniforms_share_the_project_unless_a_style_segment_is_active() {
+        let constants = cursor_test_constants().await;
+        let mut project = captioned_project(10);
+        project.timeline.as_mut().unwrap().style_segments = serde_json::from_value(
+            serde_json::json!([{"start": 1.0, "end": 2.0, "overrides": {"background": {"padding": 30.0}}}]),
+        )
+        .unwrap();
+        let project = Arc::new(project);
+
+        let before = uniforms_at(&constants, &project, 15);
+        let styled = uniforms_at(&constants, &project, 45);
+        let after = uniforms_at(&constants, &project, 75);
+
+        assert!(Arc::ptr_eq(&before.project, &project));
+        assert!(Arc::ptr_eq(&after.project, &project));
+        assert!(!Arc::ptr_eq(&styled.project, &project));
+        assert_eq!(styled.project.background.padding, 30.0);
+        assert_eq!(
+            styled.project.captions.as_ref().unwrap().segments.len(),
+            project.captions.as_ref().unwrap().segments.len()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_project_uniforms() {
+        use std::hint::black_box;
+
+        let constants = cursor_test_constants().await;
+        let screen_size = constants.options.screen_size;
+        let events = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size,
+            screen_frame: Some(DecodedFrame::new(Vec::new(), screen_size.x, screen_size.y)),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        for (transcript, segments) in [
+            ("none", 0),
+            ("10 min", 200),
+            ("30 min", 600),
+            ("60 min", 1200),
+        ] {
+            let project = Arc::new(captioned_project(segments));
+            let mut zoom_timeline =
+                ZoomTransformTimeline::from_project(&project, &events, 60.0, screen_size);
+            zoom_timeline.ensure_precomputed_until(60.0);
+            let mut runs: Vec<f64> = (0..400)
+                .map(|frame| {
+                    let start = Instant::now();
+                    let uniforms = ProjectUniforms::new(
+                        &constants,
+                        &project,
+                        frame % 1800,
+                        30,
+                        screen_size,
+                        &events,
+                        &frames,
+                        60.0,
+                        &zoom_timeline,
+                    );
+                    let elapsed = start.elapsed().as_secs_f64() * 1_000_000.0;
+                    black_box(uniforms);
+                    elapsed
+                })
+                .collect();
+            runs.sort_by(f64::total_cmp);
+            println!(
+                "{}",
+                serde_json::json!({
+                    "transcript": transcript,
+                    "caption_segments": segments,
+                    "median_us": runs[runs.len() / 2],
+                    "p95_us": runs[runs.len() * 95 / 100],
+                })
+            );
+        }
     }
 }
 
