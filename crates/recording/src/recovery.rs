@@ -4387,8 +4387,6 @@ mod clean_studio_snapshot_tests {
         studio_project_with_frames(status, 30, (0..60).map(|index| index * 1_000_000 / 30))
     }
 
-    /// A Studio project whose display frames are captured at `frame_times_us`
-    /// on a `frame_rate` capture, with that rate in its metadata.
     fn studio_project_with_frames(
         status: StudioRecordingStatus,
         frame_rate: u32,
