@@ -506,13 +506,17 @@ impl Capturer {
             .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
             .unwrap_or(2);
 
+        let item_size = item.Size().map_err(NewCapturerError::ItemSize)?;
+
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             settings.pixel_format.as_directx(),
             frame_pool_size,
-            item.Size().map_err(NewCapturerError::ItemSize)?,
+            item_size,
         )
         .map_err(NewCapturerError::FramePool)?;
+
+        let pool_size = Arc::new(Mutex::new((item_size.Width, item_size.Height)));
 
         let session = frame_pool
             .CreateCaptureSession(&item)
@@ -575,6 +579,8 @@ impl Capturer {
                     let stop_flag = stop_flag.clone();
                     let staging_pool = staging_pool.clone();
                     let callback_activity = callback_activity.clone();
+                    let pixel_format = settings.pixel_format;
+                    let pool_size = pool_size.clone();
 
                     move |frame_pool, _| {
                         let _activity_guard = callback_activity.enter();
@@ -591,11 +597,51 @@ impl Capturer {
 
                         let size = frame.ContentSize()?;
 
+                        // The item can change size mid-capture (a recorded
+                        // window is resized, or the display's resolution
+                        // changes). The pool keeps handing out surfaces at its
+                        // creation size, so the frame's own ContentSize stops
+                        // describing its texture and every later frame reads
+                        // back as black. Recreate the pool for the new size and
+                        // skip this frame; the next one arrives correctly sized.
+                        {
+                            let mut pool_size = pool_size
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if (size.Width, size.Height) != *pool_size {
+                                drop(frame);
+                                // IDirect3DDevice is not Send, so it is rebuilt
+                                // here from the capture device rather than held
+                                // across the event handler.
+                                let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
+                                let direct3d_device =
+                                    unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?
+                                        .cast::<IDirect3DDevice>()?;
+                                frame_pool.Recreate(
+                                    &direct3d_device,
+                                    pixel_format.as_directx(),
+                                    frame_pool_size,
+                                    size,
+                                )?;
+                                *pool_size = (size.Width, size.Height);
+                                return Ok(());
+                            }
+                        }
+
                         let surface = frame.Surface()?;
                         let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
                         let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
 
                         let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                            // A shrunk item leaves the crop box hanging off the
+                            // edge of the source texture, which copies nothing
+                            // and would vend a stale surface as if it were live.
+                            if crop.right > size.Width.max(0) as u32
+                                || crop.bottom > size.Height.max(0) as u32
+                            {
+                                return Ok(());
+                            }
+
                             unsafe {
                                 d3d_context.CopySubresourceRegion(
                                     &cropped_texture,
