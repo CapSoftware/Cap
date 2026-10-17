@@ -566,6 +566,14 @@ async fn run_preview(
     )
     .map_err(|error| PreparingPreviewError::Render(error.to_string()))?;
     control.check()?;
+    layers.prepare_for_video_dimensions(
+        &constants.device,
+        screen_size.x,
+        screen_size.y,
+        camera_size.map(|size| size.x),
+        camera_size.map(|size| size.y),
+    );
+    control.check()?;
     layers.preload_cursor_assets(
         &constants,
         project.cursor.use_svg,
