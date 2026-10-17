@@ -24,21 +24,23 @@ pub fn unpad_rgba_to_bgra(
         return Some(Vec::new());
     }
 
-    let mut tight = vec![0; output_len];
-    for (source, target) in data
-        .chunks_exact(stride)
-        .zip(tight.chunks_exact_mut(row_bytes))
-        .take(rows)
-    {
-        for (source, target) in source[..row_bytes]
-            .chunks_exact(4)
-            .zip(target.chunks_exact_mut(4))
-        {
-            target[0] = source[2];
-            target[1] = source[1];
-            target[2] = source[0];
-            target[3] = source[3];
+    let mut tight = Vec::with_capacity(output_len);
+    let dest: *mut u8 = tight.as_mut_ptr();
+    // SAFETY: dest is unused spare capacity; every output byte is written before set_len.
+    unsafe {
+        for row in 0..rows {
+            let src = data.as_ptr().add(row * stride);
+            let dst = dest.add(row * row_bytes);
+            for col in 0..width {
+                let s = src.add(col * 4);
+                let d = dst.add(col * 4);
+                *d = *s.add(2);
+                *d.add(1) = *s.add(1);
+                *d.add(2) = *s;
+                *d.add(3) = *s.add(3);
+            }
         }
+        tight.set_len(output_len);
     }
     Some(tight)
 }
@@ -264,6 +266,32 @@ mod tests {
             vec![3, 2, 1, 4, 7, 6, 5, 8, 11, 10, 9, 12, 15, 14, 13, 16]
         );
         assert_eq!(unpad_rows(&PADDED, 8, 10, 1).unwrap(), PADDED[..8].to_vec());
+    }
+
+    #[test]
+    fn unpads_wgpu_aligned_stride_without_copying_padding() {
+        let width = 3usize;
+        let height = 2usize;
+        let stride = 256;
+        let mut data = vec![99u8; stride * height];
+        for row in 0..height {
+            for column in 0..width {
+                let base = row * stride + column * 4;
+                data[base] = 10;
+                data[base + 1] = 20;
+                data[base + 2] = 30;
+                data[base + 3] = 255;
+            }
+        }
+        let out = unpad_rgba_to_bgra(&data, width, stride, height).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                30, 20, 10, 255, 30, 20, 10, 255, 30, 20, 10, 255, 30, 20, 10, 255, 30, 20, 10,
+                255, 30, 20, 10, 255
+            ]
+        );
+        assert!(!out.contains(&99));
     }
 
     #[test]
