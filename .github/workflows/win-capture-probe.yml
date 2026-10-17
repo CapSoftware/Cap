@@ -12,17 +12,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [blacksmith-8vcpu-windows-2025, windows-2022]
+        runner: [windows-2022, windows-2025]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - name: Session and desktop
+        continue-on-error: true
         shell: pwsh
         run: |
           whoami
           "UserInteractive: $([Environment]::UserInteractive)"
           "Session: $((Get-Process -Id $PID).SessionId)"
-          query session 2>&1
+          query session 2>&1; $global:LASTEXITCODE = 0
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -37,6 +38,7 @@ jobs:
           } catch { "CopyFromScreen failed: $_" }
 
       - name: Graphics Capture and D3D11
+        continue-on-error: true
         shell: powershell
         run: |
           try {
@@ -57,6 +59,7 @@ jobs:
           Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, CurrentHorizontalResolution, CurrentVerticalResolution | Format-List
 
       - name: Audio
+        continue-on-error: true
         shell: pwsh
         run: |
           Get-Service audiosrv, AudioEndpointBuilder -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
@@ -66,6 +69,7 @@ jobs:
           Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
 
       - name: Media Foundation encoders
+        continue-on-error: true
         shell: pwsh
         run: |
           Get-ChildItem 'HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\Categories\f79eac7d-e545-4387-bdee-d647d7bde42a' -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty "HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\$($_.PSChildName)" -ErrorAction SilentlyContinue).'(default)' }
