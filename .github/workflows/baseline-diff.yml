@@ -99,12 +99,19 @@ jobs:
             mkdir -p "$dest"
             # Real capture also uploads its reports alone; runs from before
             # that only have the artifact with the recordings.
-            gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" \
-              --pattern 'verify-report-*' --pattern 'verify-recording-report-*' || true
-            if [[ -z "$(find "$dest" -maxdepth 1 -name 'verify-*' -print -quit)" ]]; then
-              gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" --pattern 'verify-recording-*'
-              find "$dest" -type d -name verify-scratch -prune -exec rm -r {} +
+            names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" --paginate --jq '.artifacts[].name')
+            if grep -q '^verify-report-' <<< "$names"; then
+              pattern='verify-report-*'
+            elif grep -q '^verify-recording-report-' <<< "$names"; then
+              pattern='verify-recording-report-*'
+            elif grep -q '^verify-recording-' <<< "$names"; then
+              pattern='verify-recording-*'
+            else
+              echo "::error::run $run has no verification reports"
+              exit 1
             fi
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "$dest" --pattern "$pattern"
+            find "$dest" -type d -name verify-scratch -prune -exec rm -r {} +
             echo "$side: $(find "$dest" -name '*.jsonl' | wc -l) report files"
           done
 
