@@ -2,6 +2,7 @@ export type TranscriptTextEntry = {
 	text: string;
 	startTime: number;
 	endTime: number;
+	speaker?: string | null;
 };
 
 const PARAGRAPH_GAP_SECONDS = 1.75;
@@ -30,12 +31,17 @@ export function formatTranscriptAsParagraphs(
 		const text = entry.text.trim();
 		if (!text) continue;
 
-		current = current ? `${current} ${text}` : text;
+		current = current
+			? `${current} ${text}`
+			: `${entry.speaker ? `Speaker ${entry.speaker}: ` : ""}${text}`;
 
 		const next = entries[index + 1];
 		if (!next) break;
 
-		if (current.length >= HARD_PARAGRAPH_CHAR_LIMIT) {
+		if (
+			(entry.speaker ?? null) !== (next.speaker ?? null) ||
+			current.length >= HARD_PARAGRAPH_CHAR_LIMIT
+		) {
 			paragraphs.push(current);
 			current = "";
 			continue;
