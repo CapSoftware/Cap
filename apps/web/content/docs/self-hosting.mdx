@@ -42,6 +42,7 @@ Best for VPS, home servers, or any Docker-capable host.
 - Media server (FFmpeg processing)
 - MySQL database
 - MinIO (S3-compatible storage)
+- Scheduled maintenance (`cap-cron`)
 
 **Steps:**
 1. Clone the repository
@@ -88,6 +89,23 @@ For Coolify users, use `docker-compose.coolify.yml` which includes environment v
 5. Deploy
 
 > **Note:** The Coolify compose file uses slightly different environment variable names: `WEB_URL` instead of `CAP_URL`, and `S3_PUBLIC_ENDPOINT` instead of `S3_PUBLIC_URL`.
+
+## Scheduled Maintenance
+
+Cap Web relies on a few scheduled endpoints to recover work that stalls. On Cap.so these run as Vercel Cron Jobs; in the Docker Compose and Coolify deployments the `cap-cron` service calls them on the same UTC schedule:
+
+| Endpoint | Schedule | Purpose |
+|---|---|---|
+| `/api/cron/recover-failed-video-processing` | :07, :22, :37, :52 | Retries uploads that failed with transient media server errors and restarts processing, transcription and AI generation stalled for over an hour |
+| `/api/cron/finalize-stale-desktop-segments` | Every 15 minutes | Finalizes segmented desktop recordings whose upload never completed |
+| `/api/cron/cleanup-agent-api` | 03:17 daily | Deletes expired Agent API records |
+
+The endpoints require `Authorization: Bearer $CRON_SECRET`, and the same `CRON_SECRET` must be set on `cap-web` and `cap-cron`. Without the scheduler, videos that hit a transient processing error stay stuck. If you run Cap Web without these compose files, call the endpoints on the schedule above from your own scheduler.
+
+Check it with:
+```bash
+docker compose logs cap-cron
+```
 
 ## Connecting Cap Desktop
 
@@ -194,6 +212,7 @@ The default `docker-compose.yml` contains **hardcoded placeholder secrets** that
 - **Forge authentication sessions** (via `NEXTAUTH_SECRET`)
 - **Decrypt sensitive database fields** (via `DATABASE_ENCRYPTION_KEY`)
 - **Spoof webhook requests** (via `MEDIA_SERVER_WEBHOOK_SECRET`)
+- **Trigger maintenance endpoints** (via `CRON_SECRET`)
 
 This is fine for local development or testing on a private network, but **you must generate unique secrets before exposing Cap to the internet**.
 </Warning>
@@ -203,15 +222,16 @@ This is fine for local development or testing on a private network, but **you mu
 openssl rand -hex 32
 ```
 
-Run this command three times to generate values for:
+Run this command four times to generate values for:
 - `NEXTAUTH_SECRET`
 - `DATABASE_ENCRYPTION_KEY`
 - `MEDIA_SERVER_WEBHOOK_SECRET`
+- `CRON_SECRET`
 
 **Full production checklist:**
 
 - [ ] Set secure passwords: `MYSQL_PASSWORD`, `MINIO_ROOT_PASSWORD`
-- [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`
+- [ ] Set secure secrets: `DATABASE_ENCRYPTION_KEY`, `NEXTAUTH_SECRET`, `MEDIA_SERVER_WEBHOOK_SECRET`, `CRON_SECRET`
 - [ ] Set `CAP_URL` to your public URL
 - [ ] Set `S3_PUBLIC_URL` to your MinIO/S3 public URL
 - [ ] Configure a reverse proxy (nginx, Caddy, Traefik) with SSL
