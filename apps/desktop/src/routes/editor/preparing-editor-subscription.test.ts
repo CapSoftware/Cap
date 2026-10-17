@@ -21,7 +21,7 @@ function state(sequence = 1): PreparingEditorChanged {
 			phase: "preparing",
 		},
 		playback: { playheadSeconds: 0, playing: false, buffering: false },
-		seed: { title: "Recording", tracks: ["display"] },
+		seed: { title: "录制", tracks: ["display"] },
 	};
 }
 

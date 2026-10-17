@@ -22,52 +22,52 @@ type TrackMeta = {
 
 const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 	style: {
-		description: "Change background, camera and cursor for part of your video.",
+		description: "为视频的某一段更换背景、摄像头和光标。",
 		unavailableHint: "",
 	},
 	image: {
-		description: "Place images and logos on your video.",
+		description: "在视频中放置图片和 Logo。",
 		unavailableHint: "",
 	},
 	clip: {
-		description: "Your recorded screen footage.",
+		description: "你录制的屏幕画面。",
 		unavailableHint: "",
 	},
 	zoom: {
-		description: "Smooth zoom-ins that follow the action.",
+		description: "跟随动作的平滑缩放。",
 		unavailableHint: "",
 	},
 	caption: {
-		description: "Auto-transcribe your recording into on-screen subtitles.",
+		description: "自动将录制内容转写为屏幕字幕。",
 		unavailableHint: "",
 	},
 	keyboard: {
-		description: "Display key presses on screen as you type.",
+		description: "打字时在屏幕上显示按键。",
 		unavailableHint: "",
 	},
 	text: {
-		description: "Add custom text overlays and titles to the canvas.",
+		description: "在画布上添加自定义文字叠加与标题。",
 		unavailableHint: "",
 	},
 	mask: {
-		description: "Blur or black out private areas of the screen.",
+		description: "对屏幕上的隐私区域进行模糊或涂黑处理。",
 		unavailableHint: "",
 	},
 	audio: {
-		description: "Add background music or import your own audio.",
+		description: "添加背景音乐，或导入你自己的音频。",
 		unavailableHint: "",
 	},
 	scene: {
-		description: "Switch layouts between your screen and camera.",
-		unavailableHint: "Record with a camera to use scenes.",
+		description: "在屏幕和摄像头之间切换布局。",
+		unavailableHint: "使用摄像头录制才能使用场景。",
 	},
 	"3d": {
-		description: "Add cinematic 3D camera shots to your recording.",
+		description: "为录制添加电影感的 3D 运镜。",
 		unavailableHint: "",
 	},
 };
 
-const DEFAULT_HINT = "Choose a track to add to your timeline.";
+const DEFAULT_HINT = "选择要添加到时间线的轨道。";
 
 // Comes straight from the shared `--track-*` CSS variable defined in theme.css,
 // so the picker swatch is the exact same colour as the timeline segment.
@@ -189,7 +189,7 @@ export function TrackManager(props: {
 					onMouseDown={(e) => e.stopPropagation()}
 				>
 					<IconLucidePlus class="size-3 shrink-0 transition-transform duration-200 ease-out group-data-[expanded]/trigger:rotate-45" />
-					<span class="whitespace-nowrap">Add track</span>
+					<span class="whitespace-nowrap">添加轨道</span>
 				</Popover.Trigger>
 			</Popover.Anchor>
 			<Popover.Portal>

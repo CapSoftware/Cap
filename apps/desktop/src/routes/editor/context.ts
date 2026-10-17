@@ -944,7 +944,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						totalDuration(),
 					);
 					if (!placement) {
-						toast.error("No room for another 3D shot");
+						toast.error("没有空间再添加 3D 镜头了");
 						return;
 					}
 					insertCamera3DShots([
@@ -962,7 +962,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				applyCamera3DAutoScene: (count: number) => {
 					const generated = camera3DAutoSceneSegments(count);
 					if (generated.length === 0) {
-						toast.error("This recording is too short for a 3D scene");
+						toast.error("这段录制太短，无法生成 3D 场景");
 						return;
 					}
 					batch(() => {
@@ -1138,7 +1138,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						selectAddedOverlay("image", placement.lane, placement.start);
 					} catch (error) {
 						toast.error(
-							error instanceof Error ? error.message : "Unable to import image",
+							error instanceof Error ? error.message : "无法导入图片",
 						);
 					} finally {
 						setEditorState("importingImage", false);
@@ -2176,7 +2176,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 						if (!segments) {
 							toast.error(
-								"The timeline changed while keyboard events were generated. Try again.",
+								"生成键盘事件时时间线发生了变化，请重试。",
 							);
 							return;
 						}
@@ -2192,7 +2192,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						});
 					} catch (error) {
 						console.error("Failed to initialize keyboard segments", error);
-						toast.error("Unable to generate keyboard events");
+						toast.error("无法生成键盘事件");
 					}
 				})();
 			});

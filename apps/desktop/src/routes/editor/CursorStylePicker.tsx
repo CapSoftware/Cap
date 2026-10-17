@@ -84,9 +84,9 @@ function CursorStyleCard(props: {
 }) {
 	const label = () =>
 		props.style === "auto"
-			? "Default"
+			? "默认"
 			: props.style === "circle"
-				? "Circle"
+				? "圆形"
 				: CURSOR_FAMILIES[props.style].label;
 
 	const tile = () => (
@@ -106,8 +106,8 @@ function CursorStyleCard(props: {
 				{(family) => <CursorArrow svg={CURSOR_FAMILIES[family()].arrow} />}
 			</Show>
 			<Show when={props.style === "auto"}>
-				<span class="text-xs font-medium text-ed-text-1">Default</span>
-				<span class="text-[11px] text-ed-text-2">Recorded cursors</span>
+				<span class="text-xs font-medium text-ed-text-1">默认</span>
+				<span class="text-[11px] text-ed-text-2">已记录的光标</span>
 			</Show>
 		</div>
 	);
@@ -145,7 +145,7 @@ export function CursorStylePicker() {
 	const selected = createMemo(() => selectedCursorStyle(project.cursor.type));
 
 	return (
-		<Section name="Cursor style">
+		<Section name="光标样式">
 			<KRadioGroup
 				class="grid grid-cols-4 gap-2"
 				value={selected()}
@@ -171,7 +171,7 @@ export function CursorRippleSection() {
 
 	return (
 		<KCollapsible open={ripple().enabled}>
-			<Field name="Click Ripple" inline>
+			<Field name="点击涟漪" inline>
 				<Toggle
 					checked={ripple().enabled}
 					onChange={(value) => updateRipple({ enabled: value })}
@@ -179,14 +179,14 @@ export function CursorRippleSection() {
 			</Field>
 			<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 				<div class="flex flex-col gap-2 pt-1 pb-3.5">
-					<Field name="Color">
+					<Field name="颜色">
 						<RgbInput
 							value={ripple().color}
 							onChange={(color) => updateRipple({ color })}
 						/>
 					</Field>
 					<Field
-						name="Strength"
+						name="强度"
 						inline
 						value={`${Math.round(ripple().strength * 100)}%`}
 					>
@@ -200,7 +200,7 @@ export function CursorRippleSection() {
 						/>
 					</Field>
 					<Field
-						name="Size"
+						name="大小"
 						inline
 						value={`${Math.round(ripple().size * 100)}%`}
 					>
@@ -214,7 +214,7 @@ export function CursorRippleSection() {
 						/>
 					</Field>
 					<Field
-						name="Duration"
+						name="时长"
 						inline
 						value={`${ripple().duration.toFixed(2)}s`}
 					>

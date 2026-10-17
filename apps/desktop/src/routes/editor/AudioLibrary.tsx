@@ -204,7 +204,7 @@ export function AudioLibraryPanel(props: {
 		} catch (error) {
 			if (!acceptsImport(request)) return;
 			console.error("Failed to add audio track", error);
-			toast.error("Failed to add audio track");
+			toast.error("添加音频轨道失败");
 		} finally {
 			if (imports.finish(request)) setBusyId(null);
 		}
@@ -217,14 +217,14 @@ export function AudioLibraryPanel(props: {
 		try {
 			const selected = await open({
 				multiple: false,
-				filters: [{ name: "Audio", extensions: [...AUDIO_IMPORT_EXTENSIONS] }],
+				filters: [{ name: "音频", extensions: [...AUDIO_IMPORT_EXTENSIONS] }],
 			});
 			if (typeof selected !== "string" || !acceptsImport(request)) return;
 			commit(request, await commands.importAudioTrackFile(selected));
 		} catch (error) {
 			if (!acceptsImport(request)) return;
 			console.error("Failed to import audio file", error);
-			toast.error("Failed to import audio file");
+			toast.error("导入音频文件失败");
 		} finally {
 			if (imports.finish(request)) setUploading(false);
 		}
@@ -234,17 +234,17 @@ export function AudioLibraryPanel(props: {
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-row gap-2 items-center">
 				<EditorButton onClick={close} leftIcon={<IconLucideCheck />}>
-					Done
+					完成
 				</EditorButton>
 				<span class="text-sm text-gray-10">
-					{isReplace() ? "Change audio" : "Add audio"}
+					{isReplace() ? "更换音频" : "添加音频"}
 				</span>
 			</div>
 
 			<p class="text-xs text-gray-10">
 				{isReplace()
-					? "Pick a different track for this segment"
-					: "Add audio, music or other sounds to your video"}
+					? "为该片段选择其他轨道"
+					: "为视频添加音频、音乐或其他声音"}
 			</p>
 
 			<Show when={categories().length > 0}>
@@ -266,7 +266,7 @@ export function AudioLibraryPanel(props: {
 						)}
 					</For>
 					<span class="text-[11px] text-gray-9">
-						More categories coming soon
+						更多分类即将推出
 					</span>
 				</div>
 			</Show>
@@ -308,7 +308,7 @@ export function AudioLibraryPanel(props: {
 											type="button"
 											class="absolute inset-0 w-full h-full"
 											aria-label={
-												isPreviewing() ? "Pause preview" : "Play preview"
+												isPreviewing() ? "暂停预览" : "播放预览"
 											}
 											onClick={() => togglePreview(track.id)}
 										>
@@ -346,7 +346,7 @@ export function AudioLibraryPanel(props: {
 
 										<button
 											type="button"
-											aria-label={isReplace() ? "Use track" : "Add to timeline"}
+											aria-label={isReplace() ? "使用轨道" : "添加到时间线"}
 											class={cx(
 												"flex absolute top-1 right-1 justify-center items-center rounded-full border backdrop-blur-sm transition-all size-5",
 												"opacity-0 group-hover/tile:opacity-100",
@@ -403,7 +403,7 @@ export function AudioLibraryPanel(props: {
 					</Show>
 				</span>
 				<span class="text-[13px] font-medium text-gray-12">
-					{uploading() ? "Importing…" : "Upload your own"}
+					{uploading() ? "导入中…" : "上传你自己的"}
 				</span>
 				<span class="text-[11px] text-gray-9">
 					MP3, WAV, M4A, OGG, FLAC, AAC

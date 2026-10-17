@@ -14,7 +14,7 @@ export function IntegrationConfigHeader(props: { title: string }) {
 				onClick={() => navigate("/settings/integrations")}
 			>
 				<IconLucideArrowLeft class="size-3.5" />
-				Back
+				返回
 			</Button>
 			<h3 class="text-sm font-semibold tracking-tight text-gray-12">
 				{props.title}

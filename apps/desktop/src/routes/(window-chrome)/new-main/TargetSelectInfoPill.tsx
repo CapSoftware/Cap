@@ -38,12 +38,12 @@ export default function TargetSelectInfoPill<T>(props: {
 			}}
 		>
 			{!props.permissionGranted
-				? "Allow"
+				? "允许"
 				: props.disconnected
-					? "Not connected"
+					? "未连接"
 					: props.value !== null
-						? "On"
-						: "Off"}
+						? "开"
+						: "关"}
 		</Dynamic>
 	);
 }

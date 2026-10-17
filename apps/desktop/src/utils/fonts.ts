@@ -13,9 +13,9 @@ export function listSystemFonts(): Promise<string[]> {
 }
 
 export const GENERIC_FONT_OPTIONS = [
-	{ value: "sans-serif", label: "System Sans" },
+	{ value: "sans-serif", label: "系统无衬线字体" },
 	{ value: "serif", label: "System Serif" },
-	{ value: "monospace", label: "System Mono" },
+	{ value: "monospace", label: "系统等宽字体" },
 ];
 
 const GENERIC_VALUES = new Set(GENERIC_FONT_OPTIONS.map((o) => o.value));

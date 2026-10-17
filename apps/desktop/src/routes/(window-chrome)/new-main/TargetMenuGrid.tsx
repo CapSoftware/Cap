@@ -196,11 +196,11 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			return (
 				<EmptyState
 					icon={<IconLucideSquarePlay class="size-5 text-gray-10" />}
-					title="No recordings yet"
-					description="Your screen recordings will appear here. Start recording to get started!"
+					title="还没有录制"
+					description="你的屏幕录制会显示在这里。开始录制试试吧！"
 					action={
 						onViewAll
-							? { label: "View All Recordings", onClick: onViewAll }
+							? { label: "查看全部录制", onClick: onViewAll }
 							: undefined
 					}
 				/>
@@ -211,11 +211,11 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			return (
 				<EmptyState
 					icon={<IconLucideImage class="size-5 text-gray-10" />}
-					title="No screenshots yet"
-					description="Your screenshots will appear here. Take a screenshot to get started!"
+					title="还没有截图"
+					description="你的截图会显示在这里。截一张图试试吧！"
 					action={
 						onViewAll
-							? { label: "View All Screenshots", onClick: onViewAll }
+							? { label: "查看全部截图", onClick: onViewAll }
 							: undefined
 					}
 				/>
@@ -226,8 +226,8 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 			<div class="col-span-2 py-6 text-sm text-center text-gray-11">
 				{props.emptyMessage ??
 					(props.variant === "display"
-						? "No displays found"
-						: "No windows found")}
+						? "未找到显示器"
+						: "未找到窗口")}
 			</div>
 		);
 	};
@@ -408,7 +408,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											{(onViewAll) => (
 												<ViewAllButton
 													onClick={onViewAll()}
-													label="View All Recordings"
+													label="查看全部录制"
 												/>
 											)}
 										</Show>
@@ -470,7 +470,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											{(onViewAll) => (
 												<ViewAllButton
 													onClick={onViewAll()}
-													label="View All Screenshots"
+													label="查看全部截图"
 												/>
 											)}
 										</Show>

@@ -464,7 +464,7 @@ function Inner(props: {
 	});
 
 	const appendRecordedClip = async (recordingPath: string) => {
-		const toastId = toast.loading("Adding clip…");
+		const toastId = toast.loading("正在添加片段…");
 		try {
 			const pending = requestHandoffPlayback(false);
 			if (pending && !(await pending)) {
@@ -478,7 +478,7 @@ function Inner(props: {
 			await flushProjectConfig();
 			await commands.addExistingRecordingToEditor(recordingPath);
 			await commands.deleteRecordingDirectory(recordingPath).catch(() => {});
-			toast.success("Clip added", { id: toastId });
+			toast.success("片段已添加", { id: toastId });
 			window.location.reload();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -540,7 +540,7 @@ function Inner(props: {
 				} catch (error) {
 					console.error("Failed to save the project before closing", error);
 					toast.error(
-						"Could not save your edits. Keep the editor open and try again.",
+						"无法保存你的编辑。请保持编辑器打开后重试。",
 					);
 					return;
 				}
@@ -552,12 +552,12 @@ function Inner(props: {
 				}
 
 				const resumeExport = await ask(
-					"An export is currently running. Keep this editor open to continue it, or quit the editor and cancel the export.",
+					"当前正在导出。保持编辑器打开可继续导出，退出编辑器则会取消导出。",
 					{
-						title: "Export in Progress",
+						title: "正在导出",
 						kind: "warning",
-						okLabel: "Resume Export",
-						cancelLabel: "Quit Editor",
+						okLabel: "继续导出",
+						cancelLabel: "退出编辑器",
 					},
 				);
 
@@ -916,10 +916,10 @@ function Inner(props: {
 								id="editor-handoff-error-title"
 								class="text-sm font-medium text-ed-text-1"
 							>
-								Couldn’t open the editor
+								无法打开编辑器
 							</h2>
 							<p class="mt-2 text-xs text-ed-text-2">
-								Try again to finish opening your recording.
+								请重试以完成打开录制。
 							</p>
 							<button
 								type="button"
@@ -931,7 +931,7 @@ function Inner(props: {
 								}
 								onClick={() => void preparingSession?.retryHandoff()}
 							>
-								Try again
+								重试
 							</button>
 						</div>
 					</div>
@@ -990,7 +990,7 @@ function Inner(props: {
 									class="flex-none flex items-center justify-center cursor-col-resize select-none group z-10"
 									style={{ width: "12px" }}
 									onMouseDown={handleSplitResizeStart}
-									aria-label="Resize captions panel"
+									aria-label="调整字幕面板大小"
 									role="separator"
 									aria-orientation="vertical"
 								>
@@ -1023,7 +1023,7 @@ function Inner(props: {
 							<div
 								role="separator"
 								aria-orientation="horizontal"
-								aria-label="Resize timeline height"
+								aria-label="调整时间线高度"
 								class="group absolute left-2 right-2 h-[14px] -top-[11px] z-20 cursor-row-resize select-none"
 								onMouseDown={handleTimelineResizeStart}
 							>
@@ -1096,24 +1096,24 @@ function Dialogs() {
 
 								return (
 									<DialogContent
-										title="Create Preset"
+										title="创建预设"
 										confirm={
 											<Dialog.ConfirmButton
 												disabled={createPreset.isPending}
 												onClick={() => createPreset.mutate()}
 											>
-												Create
+												创建
 											</Dialog.ConfirmButton>
 										}
 									>
-										<Subfield name="Name" required />
+										<Subfield name="名称" required />
 										<Input
 											class="mt-2"
 											value={form.name}
-											placeholder="Enter preset name..."
+											placeholder="输入预设名称…"
 											onInput={(e) => setForm("name", e.currentTarget.value)}
 										/>
-										<Subfield name="Set as default" class="mt-4">
+										<Subfield name="设为默认" class="mt-4">
 											<Toggle
 												checked={form.default}
 												onChange={(checked) => setForm("default", checked)}
@@ -1144,17 +1144,17 @@ function Dialogs() {
 
 								return (
 									<DialogContent
-										title="Rename Preset"
+										title="重命名预设"
 										confirm={
 											<Dialog.ConfirmButton
 												disabled={renamePreset.isPending}
 												onClick={() => renamePreset.mutate()}
 											>
-												Rename
+												重命名
 											</Dialog.ConfirmButton>
 										}
 									>
-										<Subfield name="Name" required />
+										<Subfield name="名称" required />
 										<Input
 											class="mt-2"
 											value={name()}
@@ -1183,19 +1183,19 @@ function Dialogs() {
 
 								return (
 									<DialogContent
-										title="Delete Preset"
+										title="删除预设"
 										confirm={
 											<Dialog.ConfirmButton
 												variant="destructive"
 												onClick={() => deletePreset.mutate()}
 												disabled={deletePreset.isPending}
 											>
-												Delete
+												删除
 											</Dialog.ConfirmButton>
 										}
 									>
 										<p class="text-gray-11">
-											Are you sure you want to delete this preset?
+											确定要删除这个预设吗？
 										</p>
 									</DialogContent>
 								);
@@ -1467,7 +1467,7 @@ function Dialogs() {
 										return;
 									if (!cropTargetValid()) {
 										toast.error(
-											"Crop target changed. Reopen Crop to continue.",
+											"裁剪目标已更改。请重新打开裁剪后继续。",
 										);
 										return;
 									}
@@ -1525,7 +1525,7 @@ function Dialogs() {
 									aspect() === null;
 
 								const ratioLabel = (ratio: Ratio | null) =>
-									ratio ? `${ratio[0]}:${ratio[1]}` : "Free";
+									ratio ? `${ratio[0]}:${ratio[1]}` : "免费版";
 								const ratioSelected = (ratio: Ratio | null) => {
 									const current = aspect();
 									if (!ratio || !current) return ratio === current;
@@ -1569,11 +1569,11 @@ function Dialogs() {
 									<>
 										<div class="flex h-[52px] shrink-0 items-center justify-between px-5">
 											<KDialog.Title class="text-sm font-semibold text-ed-text-1">
-												Crop
+												裁剪
 											</KDialog.Title>
 											<EditorButton
 												leftIcon={<IconLucideX />}
-												tooltipText="Close"
+												tooltipText="关闭"
 												onClick={closeCrop}
 											/>
 										</div>
@@ -1608,7 +1608,7 @@ function Dialogs() {
 													>
 														<img
 															class="block h-full w-full select-none pointer-events-none"
-															alt="Current frame"
+															alt="当前帧"
 															onError={() => {
 																const url = frameUrl();
 																if (url) {
@@ -1629,14 +1629,14 @@ function Dialogs() {
 													<div class="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 rounded-xl bg-ed-stage">
 														<div class="size-6 animate-spin rounded-full border-2 border-ed-line-strong border-t-ed-accent" />
 														<span class="text-xs font-medium text-ed-text-2">
-															Loading frame…
+															正在加载帧…
 														</span>
 													</div>
 												</Show>
 											</div>
 
 											<div class="flex w-[300px] shrink-0 flex-col gap-3 rounded-xl bg-ed-card-2 p-3.5">
-												<span class={inspectorLabel}>Preview</span>
+												<span class={inspectorLabel}>预览</span>
 												<div class="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-ed-stage">
 													<canvas
 														ref={previewCanvas}
@@ -1646,7 +1646,7 @@ function Dialogs() {
 														<div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ed-stage">
 															<div class="size-5 animate-spin rounded-full border-2 border-ed-line-strong border-t-ed-accent" />
 															<span class="text-[11px] font-medium text-ed-text-3">
-																Rendering preview…
+																正在渲染预览…
 															</span>
 														</div>
 													</Show>
@@ -1654,7 +1654,7 @@ function Dialogs() {
 
 												<div class="h-px bg-ed-line" />
 
-												<span class={inspectorLabel}>Aspect ratio</span>
+												<span class={inspectorLabel}>宽高比</span>
 												<div class="grid grid-cols-3 gap-1.5">
 													<For each={[null, ...COMMON_RATIOS]}>
 														{(ratio) => (
@@ -1677,7 +1677,7 @@ function Dialogs() {
 												</div>
 												<div class={inspectorRow}>
 													<span class="text-xs text-ed-text-2">
-														Snap to ratios
+														吸附到预设比例
 													</span>
 													<Toggle
 														size="sm"
@@ -1689,7 +1689,7 @@ function Dialogs() {
 												<div class="h-px bg-ed-line" />
 
 												<div class={inspectorRow}>
-													<span class="text-xs text-ed-text-2">Size</span>
+													<span class="text-xs text-ed-text-2">大小</span>
 													<div class="flex items-center gap-1.5">
 														<BoundInput field="width" max={display.width} />
 														<span class="w-2 text-center text-xs text-ed-text-3">
@@ -1699,7 +1699,7 @@ function Dialogs() {
 													</div>
 												</div>
 												<div class={inspectorRow}>
-													<span class="text-xs text-ed-text-2">Position</span>
+													<span class="text-xs text-ed-text-2">位置</span>
 													<div class="flex items-center gap-1.5">
 														<BoundInput field="x" />
 														<span class="w-2" />
@@ -1727,7 +1727,7 @@ function Dialogs() {
 															});
 														}}
 													>
-														Center
+														居中
 													</button>
 													<button
 														type="button"
@@ -1735,7 +1735,7 @@ function Dialogs() {
 														disabled={isFull()}
 														onClick={() => cropperRef?.fill()}
 													>
-														Full
+														完整
 													</button>
 													<button
 														type="button"
@@ -1746,7 +1746,7 @@ function Dialogs() {
 															setAspect(null);
 														}}
 													>
-														Reset
+														重置
 													</button>
 												</div>
 											</div>
@@ -1756,7 +1756,7 @@ function Dialogs() {
 											<kbd class="rounded-[4px] bg-ed-ctl px-1 font-sans text-ed-text-2">
 												⇧
 											</kbd>{" "}
-											to skip snapping
+											跳过吸附
 										</p>
 										<div class="flex h-14 shrink-0 items-center justify-between gap-3 border-t border-ed-line px-5">
 											<div class="min-w-0 text-xs text-ed-text-2">
@@ -1764,8 +1764,7 @@ function Dialogs() {
 													when={cropTargetValid()}
 													fallback={
 														<p role="alert" class="text-orange-11">
-															Crop target changed. Close and reopen Crop to
-															continue.
+															裁剪目标已更改。请关闭并重新打开裁剪后继续。
 														</p>
 													}
 												>
@@ -1775,7 +1774,7 @@ function Dialogs() {
 												</Show>
 											</div>
 											<div class="flex shrink-0 items-center gap-2">
-												<EditorButton onClick={closeCrop}>Cancel</EditorButton>
+												<EditorButton onClick={closeCrop}>取消</EditorButton>
 												<button
 													type="button"
 													class={cx(
@@ -1793,7 +1792,7 @@ function Dialogs() {
 													}
 													onClick={saveCrop}
 												>
-													Save
+													保存
 												</button>
 											</div>
 										</div>

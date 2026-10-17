@@ -64,7 +64,7 @@ function palettePreview(config: AnimatedGradientConfig) {
 
 function controlValue(control: AnimatedGradientControl, value: number) {
 	if (control.key === "direction") return `${Math.round(value)}°`;
-	if (control.key === MOTION_KEY && value === 0) return "Still";
+	if (control.key === MOTION_KEY && value === 0) return "静止";
 	return control.step < 1 ? value.toFixed(1) : String(Math.round(value));
 }
 
@@ -231,7 +231,7 @@ export function AnimatedGradientEditor(props: {
 			)
 				applyConfig(next);
 		} catch {
-			if (!disposed) setError("Could not create a random gradient. Try again.");
+			if (!disposed) setError("无法生成随机渐变，请重试。");
 		} finally {
 			if (!disposed) setRandomizing(false);
 		}
@@ -338,7 +338,7 @@ export function AnimatedGradientEditor(props: {
 				setError(
 					error instanceof SavedGradientLimitError
 						? `You can save up to ${MAX_SAVED} gradients. Delete one to add another.`
-						: "Could not save this gradient. Try again.",
+						: "无法保存该渐变，请重试。",
 				);
 		} finally {
 			if (!disposed) setSaving(false);
@@ -357,7 +357,7 @@ export function AnimatedGradientEditor(props: {
 			if (disposed) return;
 			await library.refetch();
 		} catch {
-			if (!disposed) setError("Could not delete this gradient. Try again.");
+			if (!disposed) setError("无法删除该渐变，请重试。");
 		} finally {
 			if (!disposed) setDeletingId(null);
 		}
@@ -377,12 +377,12 @@ export function AnimatedGradientEditor(props: {
 					</Show>
 
 					<Section
-						name="Presets"
+						name="预设"
 						action={
 							<EditorButton
 								size="sm"
 								leftIcon={<IconLucideSave />}
-								title="Save the current gradient"
+								title="保存当前渐变"
 								aria-pressed={saveOpen()}
 								class={
 									saveOpen() ? "bg-ed-ctl-hover text-ed-text-1" : undefined
@@ -395,7 +395,7 @@ export function AnimatedGradientEditor(props: {
 								}
 								onClick={() => (saveOpen() ? closeSave() : setSaveOpen(true))}
 							>
-								Save
+								保存
 							</EditorButton>
 						}
 					>
@@ -403,8 +403,8 @@ export function AnimatedGradientEditor(props: {
 							<div class="grid grid-cols-7 gap-2">
 								<button
 									type="button"
-									title="Randomize"
-									aria-label="Randomize gradient"
+									title="随机"
+									aria-label="随机渐变"
 									disabled={randomizing()}
 									class={cx(
 										swatchClass,
@@ -436,8 +436,8 @@ export function AnimatedGradientEditor(props: {
 									<Input
 										ref={(element) => queueMicrotask(() => element.focus())}
 										class="min-w-0 flex-1"
-										placeholder="Name this gradient"
-										aria-label="Saved gradient name"
+										placeholder="为渐变命名"
+										aria-label="已保存的渐变名称"
 										maxLength={80}
 										value={presetName()}
 										disabled={saving()}
@@ -460,11 +460,11 @@ export function AnimatedGradientEditor(props: {
 										disabled={!presetName().trim() || saving()}
 										onClick={() => void savePreset()}
 									>
-										{saving() ? "Saving…" : "Save"}
+										{saving() ? "保存中…" : "保存"}
 									</button>
 									<button
 										type="button"
-										aria-label="Cancel"
+										aria-label="取消"
 										class="rounded-md p-1.5 text-ed-text-3 outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover hover:text-ed-text-1"
 										onClick={closeSave}
 									>
@@ -473,7 +473,7 @@ export function AnimatedGradientEditor(props: {
 								</div>
 							</Show>
 							<Show when={savedPresets().length > 0}>
-								<span class="text-[11px] text-ed-text-3">Saved</span>
+								<span class="text-[11px] text-ed-text-3">已保存</span>
 								<div class="grid grid-cols-7 gap-2">
 									<For each={savedPresets()}>
 										{(preset) => (
@@ -493,7 +493,7 @@ export function AnimatedGradientEditor(props: {
 												<Show when={isSelected(preset)}>
 													<button
 														type="button"
-														title="Delete"
+														title="删除"
 														aria-label={`Delete ${preset.name}`}
 														disabled={deletingId() !== null}
 														class="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-ed-text-1 text-ed-card shadow-ed-card outline-hidden transition-colors duration-150 hover:bg-red-11 hover:text-white disabled:opacity-40"
@@ -513,18 +513,18 @@ export function AnimatedGradientEditor(props: {
 					<div class="w-full border-t border-ed-line" />
 
 					<Section
-						name="Colours"
+						name="颜色"
 						action={
 							<EditorButton
 								size="sm"
 								leftIcon={<IconLucidePlus />}
-								title="Add a colour"
+								title="添加颜色"
 								disabled={current().colorStops.length >= MAX_STOPS}
 								onClick={() =>
 									addStop(largestGapPosition(current().colorStops))
 								}
 							>
-								Add
+								添加
 							</EditorButton>
 						}
 					>
@@ -637,7 +637,7 @@ export function AnimatedGradientEditor(props: {
 											</span>
 											<button
 												type="button"
-												title="Remove colour"
+												title="移除颜色"
 												aria-label={`Remove colour ${stopIndex() + 1}`}
 												disabled={current().colorStops.length <= MIN_STOPS}
 												class="rounded-md p-1.5 text-ed-text-3 outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover hover:text-ed-text-1 disabled:opacity-30 disabled:hover:bg-transparent"
@@ -670,7 +670,7 @@ export function AnimatedGradientEditor(props: {
 						{(control) => (
 							<Field
 								inline
-								name="Motion"
+								name="运动"
 								value={controlValue(control(), current()[MOTION_KEY])}
 							>
 								<Slider
@@ -679,7 +679,7 @@ export function AnimatedGradientEditor(props: {
 									maxValue={control().max}
 									step={control().step}
 									formatTooltip={(value) => controlValue(control(), value)}
-									aria-label="Motion speed"
+									aria-label="运动速度"
 									onChange={([next]) =>
 										updateConfig((value) => {
 											value[MOTION_KEY] = next;
@@ -702,10 +702,10 @@ export function AnimatedGradientEditor(props: {
 								<EditorButton
 									size="sm"
 									leftIcon={<IconLucideRotateCcw />}
-									title="Reset fine-tune settings"
+									title="重置微调设置"
 									onClick={resetFineTune}
 								>
-									Reset
+									重置
 								</EditorButton>
 							</Show>
 						</div>

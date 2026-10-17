@@ -38,10 +38,10 @@ export function PresetsDropdown() {
 				as={KDropdownMenu.Trigger}
 				leftIcon={<IconCapPresets />}
 				rightIcon={<IconCapChevronDown />}
-				title="Presets"
-				aria-label="Presets"
+				title="预设"
+				aria-label="预设"
 			>
-				<span class="max-[1200px]:hidden">Presets</span>
+				<span class="max-[1200px]:hidden">预设</span>
 			</EditorButton>
 			<KDropdownMenu.Portal>
 				<Suspense>
@@ -61,10 +61,10 @@ export function PresetsDropdown() {
 										applyDefaultPreset();
 									}}
 								>
-									<span class="mr-auto">Default</span>
+									<span class="mr-auto">默认</span>
 									<Show when={(presets.query.data?.default ?? null) === null}>
 										<span class="px-2 py-1 text-[11px] rounded-full bg-ed-ctl text-ed-text-2">
-											Default
+											默认
 										</span>
 									</Show>
 									<IconCapSettings class="text-ed-text-3 group-hover:text-[currentColor] shrink-0" />
@@ -82,10 +82,10 @@ export function PresetsDropdown() {
 												applyDefaultPreset();
 											}}
 										>
-											Apply
+											应用
 										</DropdownItem>
 										<DropdownItem onSelect={() => presets.setDefault(null)}>
-											Set as default
+											设为默认
 										</DropdownItem>
 									</MenuItemList>
 								</KDropdownMenu.Portal>
@@ -94,7 +94,7 @@ export function PresetsDropdown() {
 								each={presets.query.data?.presets ?? []}
 								fallback={
 									<div class="py-1 w-full text-sm text-center text-ed-text-3">
-										No saved presets
+										没有已保存的预设
 									</div>
 								}
 							>
@@ -121,7 +121,7 @@ export function PresetsDropdown() {
 												<span class="mr-auto">{preset.name}</span>
 												<Show when={presets.query.data?.default === i()}>
 													<span class="px-2 py-1 text-[11px] rounded-full bg-ed-ctl text-ed-text-2">
-														Default
+														默认
 													</span>
 												</Show>
 												<IconCapSettings class="text-ed-text-3 group-hover:text-[currentColor] shrink-0" />
@@ -139,7 +139,7 @@ export function PresetsDropdown() {
 															applyPreset();
 														}}
 													>
-														Apply
+														应用
 													</DropdownItem>
 													<DropdownItem
 														onSelect={async () => {
@@ -149,12 +149,12 @@ export function PresetsDropdown() {
 															);
 														}}
 													>
-														Save settings to preset
+														将设置保存为预设
 													</DropdownItem>
 													<DropdownItem
 														onSelect={() => presets.setDefault(i())}
 													>
-														Set as default
+														设为默认
 													</DropdownItem>
 													<DropdownItem
 														onSelect={() =>
@@ -165,7 +165,7 @@ export function PresetsDropdown() {
 															})
 														}
 													>
-														Rename
+														重命名
 													</DropdownItem>
 													<DropdownItem
 														onClick={() =>
@@ -176,7 +176,7 @@ export function PresetsDropdown() {
 															})
 														}
 													>
-														Delete
+														删除
 													</DropdownItem>
 												</MenuItemList>
 											</KDropdownMenu.Portal>
@@ -192,7 +192,7 @@ export function PresetsDropdown() {
 							<DropdownItem
 								onSelect={() => setDialog({ type: "createPreset", open: true })}
 							>
-								<span>Create new preset</span>
+								<span>创建新预设</span>
 								<IconCapCirclePlus class="ml-auto" />
 							</DropdownItem>
 						</MenuItemList>

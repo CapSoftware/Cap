@@ -20,10 +20,10 @@ import {
 // The mirror of this sequence lives in `render_switch_overlay` in the native
 // app's `settings_pages.rs`.
 const SWITCH_SENTENCES = [
-	"Switching to the native Cap app.",
-	"It will look almost identical. That is the point.",
-	"Same Cap, rebuilt fully native for performance.",
-	"Experimental. Your recordings and settings come with you.",
+	"正在切换到原生 Cap 应用。",
+	"看起来几乎一模一样，这正是我们的目的。",
+	"同一个 Cap，为性能全面重写为原生实现。",
+	"实验性功能。你的录制和设置会一并迁移。",
 ];
 const SENTENCE_MS = 1300;
 const COUNTDOWN_FROM = 5;
@@ -97,7 +97,7 @@ function Inner(props: {
 							error:
 								typeof error === "string"
 									? error
-									: "Couldn't open the native app.",
+									: "无法打开原生应用。",
 						}
 					: state,
 			);
@@ -158,11 +158,11 @@ function Inner(props: {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Show when={props.osType === "macos"}>
-					<Section title="Preview">
+					<Section title="预览">
 						<SectionRows>
 							<ToggleSettingItem
-								label="Native camera preview"
-								description="Render the camera preview using a native GPU surface instead of through the webview. Experimental and off by default."
+								label="原生摄像头预览"
+								description="使用原生 GPU 表面渲染摄像头预览，而非经由 webview。实验性功能，默认关闭。"
 								value={!!settings.enableNativeCameraPreview}
 								onChange={(value) =>
 									handleChange("enableNativeCameraPreview", value)
@@ -172,11 +172,11 @@ function Inner(props: {
 					</Section>
 				</Show>
 
-				<Section title="Reliability">
+				<Section title="稳定性">
 					<SectionRows>
 						<ToggleSettingItem
-							label="Out-of-process muxer"
-							description="Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
+							label="独立进程封装器"
+							description="在独立子进程中运行分段 MP4 封装器，这样封装器崩溃也不会影响录制。需要随附的 cap-muxer 可执行文件。"
 							value={!!settings.outOfProcessMuxer}
 							onChange={(value) => handleChange("outOfProcessMuxer", value)}
 						/>
@@ -184,7 +184,7 @@ function Inner(props: {
 				</Section>
 
 				<Show when={gpuiAvailable()}>
-					<Section title="Native app">
+					<Section title="原生应用">
 						<SectionRows>
 							<ToggleSettingItem
 								label="Cap GPUI"
@@ -244,7 +244,7 @@ function Inner(props: {
 							class="rounded-lg border border-white/25 px-4 py-2 text-sm text-white transition-colors hover:bg-white/10"
 							onClick={cancelTakeover}
 						>
-							Cancel
+							取消
 						</button>
 					</div>
 				)}

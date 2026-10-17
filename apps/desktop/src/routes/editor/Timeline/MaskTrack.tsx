@@ -330,8 +330,8 @@ export function MaskTrack(props: {
 						fallback={<div class="w-full rounded-lg bg-transparent" />}
 					>
 						<div class="cap-empty-lane pointer-events-none">
-							<span>Combine sensitive blur or highlight masks</span>
-							<span class="cap-empty-lane-action">· Add mask</span>
+							<span>合并敏感信息模糊或高亮遮罩</span>
+							<span class="cap-empty-lane-action">· 添加遮罩</span>
 						</div>
 					</Show>
 				}
@@ -344,7 +344,7 @@ export function MaskTrack(props: {
 					});
 
 					const contentLabel = () =>
-						segment.maskType === "sensitive" ? "Sensitive" : "Highlight";
+						segment.maskType === "sensitive" ? "敏感" : "高亮";
 
 					const segmentWidth = () => segment.end - segment.start;
 
@@ -473,7 +473,7 @@ export function MaskTrack(props: {
 								<SegmentLabel
 									full={() => (
 										<div class="cap-seg-labels">
-											<span class="cap-seg-label">Mask</span>
+											<span class="cap-seg-label">遮罩</span>
 											<span class="cap-seg-sublabel">{contentLabel()}</span>
 										</div>
 									)}

@@ -22,26 +22,26 @@ type ModeButtonConfig = {
 const MODE_BUTTONS: ModeButtonConfig[] = [
 	{
 		mode: "instant",
-		label: "Instant mode",
+		label: "Instant 模式",
 		description:
-			"No rendering required — uploads on the fly so you can share the link the moment you stop.",
+			"无需渲染——边录边传，停止录制的瞬间就能分享链接。",
 		settingsSection: "instant-quality",
 		icon: (p) => <IconCapInstant {...p} />,
 		iconClass: "size-4 invert dark:invert-0",
 	},
 	{
 		mode: "studio",
-		label: "Studio mode",
+		label: "Studio 模式",
 		description:
-			"Saves to your computer and opens the editor when you stop. Choose recording quality in settings.",
+			"停止后保存到你的电脑并打开编辑器。可在设置中选择录制画质。",
 		settingsSection: "studio-quality",
 		icon: (p) => <IconCapFilmCut {...p} />,
 		iconClass: "size-[0.9rem] invert dark:invert-0",
 	},
 	{
 		mode: "screenshot",
-		label: "Screenshot mode",
-		description: "Capture and annotate stills.",
+		label: "Screenshot 模式",
+		description: "截取静止画面并添加标注。",
 		settingsSection: null,
 		icon: (p) => <IconCapScreenshot {...p} />,
 		iconClass: "size-[0.9rem] invert dark:invert-0",
@@ -80,7 +80,7 @@ const Mode = (props: ModeProps) => {
 					"absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-5 group focus:outline-none",
 					props.locked && "opacity-50",
 				)}
-				aria-label="Recording mode info"
+				aria-label="录制模式说明"
 			>
 				<IconCapInfo class="invert transition-opacity duration-200 size-2.5 dark:invert-0 group-hover:opacity-50" />
 			</button>
@@ -135,7 +135,7 @@ const Mode = (props: ModeProps) => {
 												class="flex gap-1.5 items-center px-2 py-1 -mx-1 text-[11px] rounded-md transition-colors text-gray-4 hover:bg-gray-11 hover:text-gray-1"
 											>
 												<IconCapSettings class="size-3" />
-												<span>Quality settings</span>
+												<span>画质设置</span>
 											</button>
 										)}
 									</Show>

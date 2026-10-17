@@ -144,9 +144,9 @@ export function KeyboardTrack(props: {
 				each={keyboardSegments()}
 				fallback={
 					<div class="cap-empty-lane pointer-events-none">
-						<span>No keyboard events</span>
+						<span>没有键盘事件</span>
 						<span class="cap-empty-lane-action">
-							· Record keyboard presses or generate from recording
+							· 记录键盘按键，或从录制中生成
 						</span>
 					</div>
 				}
@@ -178,7 +178,7 @@ export function KeyboardTrack(props: {
 							segColor="var(--track-keyboard)"
 							class="group"
 							selected={isSelected()}
-							title={segment.displayText || "Keyboard"}
+							title={segment.displayText || "键盘"}
 							segment={{
 								start: segment.start,
 								end: Math.min(segment.end, totalDuration()),

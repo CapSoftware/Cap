@@ -25,7 +25,7 @@ export default function Debug() {
 			if (update) {
 				setUpdateStatus(`Update available: v${update.version}`);
 			} else {
-				setUpdateStatus("No update available");
+				setUpdateStatus("无可用更新");
 			}
 		} catch (e) {
 			setUpdateStatus(`Error: ${e}`);
@@ -39,7 +39,7 @@ export default function Debug() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${fakeVersion} of Cap is available, would you like to install it?`,
-			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+			{ title: "更新 Cap", okLabel: "更新", cancelLabel: "Ignore" },
 		);
 
 		if (shouldUpdate) {
@@ -58,13 +58,13 @@ export default function Debug() {
 
 	return (
 		<main class="w-full h-full bg-gray-2 text-(--text-primary) p-4">
-			<h2 class="text-2xl font-bold">Debug Windows</h2>
+			<h2 class="text-2xl font-bold">调试窗口</h2>
 			<div class="p-2 mb-4">
 				<button
 					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-sm"
 					onClick={() => commands.showWindow("Onboarding")}
 				>
-					Show Onboarding Window
+					显示引导窗口
 				</button>
 				<button
 					class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-sm"
@@ -72,14 +72,14 @@ export default function Debug() {
 						commands.showWindow({ InProgressRecording: { countdown: 3 } })
 					}
 				>
-					Show Recording Controls Window
+					显示录制控制面板
 				</button>
 			</div>
 
-			<h2 class="text-2xl font-bold mt-4">Updates</h2>
+			<h2 class="text-2xl font-bold mt-4">更新</h2>
 			<div class="p-2 mb-4">
 				<p class="mb-2 text-sm text-(--text-secondary)">
-					Current version: v{version()}
+					当前版本：v{version()}
 				</p>
 				<div class="flex flex-row gap-2 items-center">
 					<button
@@ -87,26 +87,26 @@ export default function Debug() {
 						onClick={checkForUpdates}
 						disabled={isChecking()}
 					>
-						Check for Updates
+						检查更新
 					</button>
 					<button
 						class="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-sm"
 						onClick={() => navigate("/update")}
 					>
-						Go to Update Page
+						前往更新页面
 					</button>
 					<button
 						class="bg-purple-500 hover:bg-purple-600 text-white font-medium py-2 px-4 rounded-sm disabled:opacity-50"
 						onClick={simulateUpdatePopup}
 						disabled={isChecking()}
 					>
-						Simulate Update Flow
+						模拟更新流程
 					</button>
 				</div>
 				{updateStatus() && <p class="mt-2 text-sm">{updateStatus()}</p>}
 			</div>
 
-			<h2 class="text-2xl font-bold mt-4">Fail Points</h2>
+			<h2 class="text-2xl font-bold mt-4">失败点</h2>
 			<ul class="p-2">
 				<For each={orderedFails()}>
 					{(fail) => {

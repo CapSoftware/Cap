@@ -88,15 +88,15 @@ export function SceneTrack(props: {
 	const getSceneLabel = (mode: string | undefined) => {
 		switch (mode) {
 			case "cameraOnly":
-				return "Camera Only";
+				return "仅摄像头";
 			case "hideCamera":
-				return "Hide Camera";
+				return "隐藏摄像头";
 			case "splitScreen":
-				return "Split Screen";
+				return "分屏";
 			case "floating":
-				return "Floating";
+				return "浮动";
 			default:
-				return "Default";
+				return "默认";
 		}
 	};
 
@@ -215,8 +215,8 @@ export function SceneTrack(props: {
 				each={project.timeline?.sceneSegments}
 				fallback={
 					<div class="cap-empty-lane pointer-events-none">
-						<span>Switch layouts between your screen and camera</span>
-						<span class="cap-empty-lane-action">· Add scene</span>
+						<span>在屏幕和摄像头之间切换布局</span>
+						<span class="cap-empty-lane-action">· 添加场景</span>
 					</div>
 				}
 			>
@@ -537,7 +537,7 @@ export function SceneTrack(props: {
 								<SegmentLabel
 									full={() => (
 										<div class="cap-seg-labels animate-in fade-in">
-											<span class="cap-seg-label">Scene</span>
+											<span class="cap-seg-label">场景</span>
 											<span class="cap-seg-sublabel truncate">
 												{getSceneLabel(segment.mode)}
 											</span>

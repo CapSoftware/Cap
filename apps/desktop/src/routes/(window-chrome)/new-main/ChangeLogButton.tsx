@@ -64,7 +64,7 @@ const ChangelogButton = () => {
 	});
 
 	return (
-		<Tooltip openDelay={0} content="Changelog">
+		<Tooltip openDelay={0} content="更新日志">
 			<button
 				type="button"
 				onClick={handleChangelogClick}

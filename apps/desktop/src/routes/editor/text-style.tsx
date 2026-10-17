@@ -16,38 +16,38 @@ export const FONT_OPTIONS = [
 ];
 
 export const CAPTION_POSITION_OPTIONS = [
-	{ value: "manual", label: "Manual" },
-	{ value: "top-left", label: "Top Left" },
-	{ value: "top-center", label: "Top Center" },
-	{ value: "top-right", label: "Top Right" },
-	{ value: "bottom-left", label: "Bottom Left" },
-	{ value: "bottom-center", label: "Bottom Center" },
-	{ value: "bottom-right", label: "Bottom Right" },
+	{ value: "manual", label: "手动" },
+	{ value: "top-left", label: "左上" },
+	{ value: "top-center", label: "顶部居中" },
+	{ value: "top-right", label: "右上" },
+	{ value: "bottom-left", label: "左下" },
+	{ value: "bottom-center", label: "底部居中" },
+	{ value: "bottom-right", label: "右下" },
 ];
 
 export const KEYBOARD_POSITION_OPTIONS = [
-	{ value: "top-left", label: "Top Left" },
-	{ value: "top-center", label: "Top Center" },
-	{ value: "top-right", label: "Top Right" },
-	{ value: "bottom-left", label: "Bottom Left" },
-	{ value: "bottom-center", label: "Bottom Center" },
-	{ value: "bottom-right", label: "Bottom Right" },
+	{ value: "top-left", label: "左上" },
+	{ value: "top-center", label: "顶部居中" },
+	{ value: "top-right", label: "右上" },
+	{ value: "bottom-left", label: "左下" },
+	{ value: "bottom-center", label: "底部居中" },
+	{ value: "bottom-right", label: "右下" },
 ];
 
 export const TEXT_WEIGHT_OPTIONS = [
-	{ label: "Normal", value: 400 },
-	{ label: "Medium", value: 500 },
-	{ label: "Bold", value: 700 },
+	{ label: "常规", value: 400 },
+	{ label: "中", value: 500 },
+	{ label: "粗体", value: 700 },
 ];
 
 export const TEXT_SEGMENT_WEIGHT_OPTIONS = [
-	{ label: "Light", value: 300 },
-	{ label: "Regular", value: 400 },
-	{ label: "Medium", value: 500 },
-	{ label: "Semibold", value: 600 },
-	{ label: "Bold", value: 700 },
-	{ label: "Extra Bold", value: 800 },
-	{ label: "Black", value: 900 },
+	{ label: "浅色", value: 300 },
+	{ label: "常规", value: 400 },
+	{ label: "中", value: 500 },
+	{ label: "半粗", value: 600 },
+	{ label: "粗体", value: 700 },
+	{ label: "特粗", value: 800 },
+	{ label: "黑色", value: 900 },
 ];
 
 export const TEXT_ANIMATION_OPTIONS: {
@@ -55,46 +55,46 @@ export const TEXT_ANIMATION_OPTIONS: {
 	label: string;
 }[] = [
 	{ value: "none", label: "None" },
-	{ value: "fade", label: "Fade" },
-	{ value: "slideUp", label: "Slide up" },
-	{ value: "slideDown", label: "Slide down" },
-	{ value: "slideLeft", label: "Slide left" },
-	{ value: "slideRight", label: "Slide right" },
-	{ value: "pop", label: "Pop" },
-	{ value: "zoom", label: "Zoom" },
-	{ value: "bounce", label: "Bounce" },
-	{ value: "wipe", label: "Wipe" },
-	{ value: "words", label: "Words" },
-	{ value: "letters", label: "Letters" },
-	{ value: "tracking", label: "Tracking" },
-	{ value: "typewriter", label: "Typewriter" },
+	{ value: "fade", label: "淡入淡出" },
+	{ value: "slideUp", label: "向上滑动" },
+	{ value: "slideDown", label: "向下滑动" },
+	{ value: "slideLeft", label: "向左滑动" },
+	{ value: "slideRight", label: "向右滑动" },
+	{ value: "pop", label: "弹出" },
+	{ value: "zoom", label: "缩放" },
+	{ value: "bounce", label: "弹跳" },
+	{ value: "wipe", label: "擦除" },
+	{ value: "words", label: "文字" },
+	{ value: "letters", label: "字母" },
+	{ value: "tracking", label: "字距" },
+	{ value: "typewriter", label: "打字机" },
 ];
 
 export const TEXT_BACKGROUND_STYLE_OPTIONS: {
 	value: TextBackgroundStyle;
 	label: string;
 }[] = [
-	{ value: "box", label: "Box" },
-	{ value: "pill", label: "Pill" },
-	{ value: "highlight", label: "Highlight" },
+	{ value: "box", label: "方框" },
+	{ value: "pill", label: "胶囊" },
+	{ value: "highlight", label: "高亮" },
 ];
 
 export const CAPTION_ANIMATION_OPTIONS = [
 	{ value: "none", label: "None" },
-	{ value: "bounce", label: "Bounce" },
-	{ value: "pop", label: "Pop" },
+	{ value: "bounce", label: "弹跳" },
+	{ value: "pop", label: "弹出" },
 ];
 
 export const CAPTION_HIGHLIGHT_STYLE_OPTIONS = [
-	{ value: "color", label: "Color" },
-	{ value: "pill", label: "Pill" },
+	{ value: "color", label: "颜色" },
+	{ value: "pill", label: "胶囊" },
 ];
 
 export function getTextWeightLabel(weight: number | null | undefined) {
 	const option = TEXT_WEIGHT_OPTIONS.find((option) => option.value === weight);
 	if (option) return option.label;
 	if (weight != null) return `Custom (${weight})`;
-	return "Normal";
+	return "常规";
 }
 
 export function HexColorInput(props: {

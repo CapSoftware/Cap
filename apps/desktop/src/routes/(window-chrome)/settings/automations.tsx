@@ -113,57 +113,57 @@ const TRIGGER_ICONS: Record<Trigger, IconComponent> = {
 };
 
 const TRIGGER_PHRASE: Record<Trigger, string> = {
-	screenshotTaken: "Screenshot taken",
-	studioRecordingFinished: "Studio recording ends",
-	instantRecordingFinished: "Instant recording ends",
-	recordingStarted: "Recording starts",
-	uploadCompleted: "Upload completes",
-	videoImported: "Video imported",
-	recordingDeleted: "Recording deleted",
+	screenshotTaken: "已截图",
+	studioRecordingFinished: "Studio 录制结束",
+	instantRecordingFinished: "Instant 录制结束",
+	recordingStarted: "录制开始",
+	uploadCompleted: "上传完成",
+	videoImported: "视频已导入",
+	recordingDeleted: "录制已删除",
 };
 
 const ACTION_SHORT: Record<ActionType, string> = {
-	copyToClipboard: "Copy to clipboard",
-	saveToLocation: "Save to folder",
-	export: "Export",
-	upload: "Upload & copy link",
-	revealInFileManager: "Reveal in file manager",
-	openFile: "Open file",
-	recognizeTextToClipboard: "Copy text (OCR)",
+	copyToClipboard: "复制到剪贴板",
+	saveToLocation: "保存到文件夹",
+	export: "导出",
+	upload: "上传并复制链接",
+	revealInFileManager: "在文件管理器中显示",
+	openFile: "打开文件",
+	recognizeTextToClipboard: "复制文字（OCR）",
 	notify: "Notify",
-	openEditor: "Open editor",
-	skipEditor: "Skip editor",
-	applyPreset: "Apply preset",
-	runCommand: "Run command",
-	webhook: "Send webhook",
-	deleteLocalFiles: "Delete local files",
+	openEditor: "打开编辑器",
+	skipEditor: "跳过编辑器",
+	applyPreset: "应用预设",
+	runCommand: "运行命令",
+	webhook: "发送 webhook",
+	deleteLocalFiles: "删除本地文件",
 };
 
 const TRIGGER_NOUN: Record<Trigger, string> = {
-	screenshotTaken: "Screenshot",
-	studioRecordingFinished: "Studio recording",
-	instantRecordingFinished: "Instant recording",
-	recordingStarted: "Recording start",
+	screenshotTaken: "截图",
+	studioRecordingFinished: "Studio 录制",
+	instantRecordingFinished: "Instant 录制",
+	recordingStarted: "录制开始",
 	uploadCompleted: "Upload",
-	videoImported: "Import",
+	videoImported: "导入",
 	recordingDeleted: "Deletion",
 };
 
 const ACTION_NOUN: Record<ActionType, string> = {
-	copyToClipboard: "Clipboard",
-	saveToLocation: "Folder",
-	export: "Export",
+	copyToClipboard: "剪贴板",
+	saveToLocation: "文件夹",
+	export: "导出",
 	upload: "Upload",
 	revealInFileManager: "Reveal",
 	openFile: "Open",
 	recognizeTextToClipboard: "Text",
 	notify: "Notify",
-	openEditor: "Editor",
-	skipEditor: "Skip editor",
-	applyPreset: "Preset",
-	runCommand: "Command",
+	openEditor: "编辑器",
+	skipEditor: "跳过编辑器",
+	applyPreset: "预设",
+	runCommand: "命令",
 	webhook: "Webhook",
-	deleteLocalFiles: "Delete",
+	deleteLocalFiles: "删除",
 };
 
 const FPS_PRESETS = [15, 30, 60] as const;
@@ -204,103 +204,103 @@ function buildRule(opts: {
 const TEMPLATES: Template[] = [
 	{
 		id: "copy-screenshot",
-		name: "Auto-copy new screenshots to clipboard",
-		description: "Snap a screenshot and it's right there, ready to paste.",
+		name: "自动将新截图复制到剪贴板",
+		description: "截图后立刻就在手边，随时可粘贴。",
 		icon: IconLucideCopy,
 		build: () =>
 			buildRule({
-				name: "Auto-copy new screenshots to clipboard",
+				name: "自动将新截图复制到剪贴板",
 				trigger: "screenshotTaken",
 				actions: [{ type: "copyToClipboard", source: "raw" }],
 			}),
 	},
 	{
 		id: "ocr-screenshot",
-		name: "Pull the text out of screenshots",
-		description: "Cap reads the text in your screenshot and copies it for you.",
+		name: "从截图中提取文字",
+		description: "Cap 会识别截图中的文字并为你复制。",
 		icon: IconLucideScanText,
 		build: () =>
 			buildRule({
-				name: "Pull the text out of screenshots",
+				name: "从截图中提取文字",
 				trigger: "screenshotTaken",
 				actions: [{ type: "recognizeTextToClipboard" }],
 			}),
 	},
 	{
 		id: "save-screenshot",
-		name: "Tuck screenshots into a folder",
-		description: "Send every new screenshot straight to a folder you pick.",
+		name: "把截图收纳到文件夹",
+		description: "把每张新截图直接发送到你指定的文件夹。",
 		icon: IconLucideFolderDown,
 		build: () =>
 			buildRule({
-				name: "Tuck screenshots into a folder",
+				name: "把截图收纳到文件夹",
 				trigger: "screenshotTaken",
 				actions: [defaultActionForType("saveToLocation")],
 			}),
 	},
 	{
 		id: "reveal-screenshot",
-		name: "Jump to each new screenshot",
-		description: "Pop open every screenshot in Finder the moment you take it.",
+		name: "自动跳转到每张新截图",
+		description: "每次截图后立即在访达中打开。",
 		icon: IconLucideFolderOpen,
 		build: () =>
 			buildRule({
-				name: "Jump to each new screenshot",
+				name: "自动跳转到每张新截图",
 				trigger: "screenshotTaken",
 				actions: [{ type: "revealInFileManager" }],
 			}),
 	},
 	{
 		id: "export-studio",
-		name: "Auto-export when you finish recording",
-		description: "Render an MP4 the second a Studio recording wraps up.",
+		name: "录制结束后自动导出",
+		description: "Studio 录制一结束就渲染 MP4。",
 		icon: IconLucideFilm,
 		build: () =>
 			buildRule({
-				name: "Auto-export when you finish recording",
+				name: "录制结束后自动导出",
 				trigger: "studioRecordingFinished",
 				actions: [defaultActionForType("export")],
 			}),
 	},
 	{
 		id: "upload-share",
-		name: "Upload and grab the share link",
+		name: "上传并获取分享链接",
 		description:
-			"Finish a recording and the link is waiting on your clipboard.",
+			"录制结束后，链接已在剪贴板中等你。",
 		icon: IconLucideLink,
 		build: () =>
 			buildRule({
-				name: "Upload and grab the share link",
+				name: "上传并获取分享链接",
 				trigger: "studioRecordingFinished",
 				actions: [defaultActionForType("upload")],
 			}),
 	},
 	{
 		id: "notify-upload",
-		name: "Ping me when an upload is ready",
-		description: "Get a gentle desktop nudge once your recording is shareable.",
+		name: "上传完成时提醒我",
+		description: "录制可分享后，给你一个温和的桌面提醒。",
 		icon: IconLucideBell,
 		build: () =>
 			buildRule({
-				name: "Ping me when an upload is ready",
+				name: "上传完成时提醒我",
 				trigger: "uploadCompleted",
 				actions: [
 					{
 						type: "notify",
 						titleTemplate: "Cap",
-						bodyTemplate: "Your recording is ready to share.",
+						bodyTemplate: "你的录制已可分享。",
 					},
 				],
 			}),
 	},
 	{
 		id: "webhook-share",
-		name: "Tell Slack when you share something",
-		description: "Send the share link to Slack, Discord, or your own webhook.",
+		name: "分享内容时通知 Slack",
+		description: "把分享链接发送到 Slack、Discord 或你自己的 webhook。",
 		icon: IconLucideWebhook,
 		build: () =>
 			buildRule({
-				name: "Tell Slack when you share something",
+				name: "分享内容时通知 Slack",
 				trigger: "instantRecordingFinished",
 				actions: [
 					{
@@ -466,7 +466,7 @@ export default function AutomationsSettings() {
 			});
 		} catch (e) {
 			console.error("Failed to save automations", e);
-			toast.error("Failed to save automations");
+			toast.error("保存自动化规则失败");
 		}
 	};
 
@@ -501,7 +501,7 @@ export default function AutomationsSettings() {
 			setTestReports(ruleId, report);
 			const unsupported = report.actionChecks.filter((c) => !c.supported);
 			if (unsupported.length === 0) {
-				toast.success("All actions supported on this device");
+				toast.success("此设备支持的所有动作");
 			} else {
 				toast(
 					`${unsupported.length} action(s) not supported here: ${unsupported
@@ -511,7 +511,7 @@ export default function AutomationsSettings() {
 			}
 		} catch (e) {
 			console.error("Failed to test automation", e);
-			toast.error("Failed to test automation");
+			toast.error("测试自动化规则失败");
 		}
 	};
 
@@ -519,8 +519,8 @@ export default function AutomationsSettings() {
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Automations"
-					description="Run actions automatically when something happens in Cap. Rules are shared with the Cap CLI."
+					title="自动化"
+					description="当 Cap 中发生特定事件时自动执行动作。规则与 Cap CLI 共用。"
 				>
 					<Suspense
 						fallback={<div class="h-24 rounded-xl bg-gray-3 animate-pulse" />}
@@ -558,8 +558,8 @@ export default function AutomationsSettings() {
 				</Section>
 
 				<Section
-					title="Templates"
-					description="One click to add a ready-made automation. Tweak anything afterwards."
+					title="模板"
+					description="一键添加现成的自动化规则，之后可随意调整。"
 				>
 					<div class="grid grid-cols-2 gap-2.5">
 						<For each={TEMPLATES}>
@@ -584,10 +584,9 @@ function EmptyState(props: { onCreate: () => void }) {
 				<div class="flex justify-center items-center mb-1 rounded-full size-11 bg-gray-3 text-gray-10">
 					<IconLucideZap class="size-5" />
 				</div>
-				<p class="text-[13px] font-medium text-gray-12">No automations yet</p>
+				<p class="text-[13px] font-medium text-gray-12">还没有自动化规则</p>
 				<p class="max-w-xs text-xs leading-relaxed text-gray-10">
-					Pick a template below to get started in one click, or build your own
-					from scratch.
+					从下方选择一个模板即可一键开始，也可以从零自己搭建。
 				</p>
 				<Button
 					variant="gray"
@@ -596,7 +595,7 @@ function EmptyState(props: { onCreate: () => void }) {
 					class="flex gap-1.5 items-center mt-1"
 				>
 					<IconLucidePlus class="size-3.5" />
-					Start from scratch
+					从零开始
 				</Button>
 			</div>
 		</SectionCard>
@@ -611,7 +610,7 @@ function AddRuleButton(props: { onClick: () => void }) {
 			class="flex gap-1.5 justify-center items-center py-2.5 w-full text-[13px] rounded-xl border border-dashed transition-colors border-gray-4 text-gray-10 hover:text-gray-12 hover:border-gray-6 hover:bg-gray-2"
 		>
 			<IconLucidePlus class="size-4" />
-			New automation
+			新建自动化
 		</button>
 	);
 }
@@ -692,7 +691,7 @@ function RuleCard(props: {
 				<button
 					type="button"
 					onClick={props.onToggleExpand}
-					title={props.expanded ? "Collapse" : "Edit"}
+					title={props.expanded ? "折叠" : "编辑"}
 					class="flex justify-center items-center rounded-lg transition-colors size-7 text-gray-10 hover:text-gray-12 hover:bg-gray-3"
 				>
 					<IconLucideChevronDown
@@ -749,7 +748,7 @@ function RuleEditorBody(props: {
 
 	return (
 		<div class="p-4 space-y-5">
-			<Field label="Name">
+			<Field label="名称">
 				<TextInput
 					value={props.rule.name}
 					placeholder={autoRuleName(props.rule)}
@@ -762,7 +761,7 @@ function RuleEditorBody(props: {
 			</Field>
 
 			<div class="space-y-1.5">
-				<GroupLabel>When this happens</GroupLabel>
+				<GroupLabel>当此事件发生时</GroupLabel>
 				<SelectInput<Trigger>
 					value={props.rule.trigger}
 					options={ALL_TRIGGERS.map((t) => ({
@@ -779,15 +778,15 @@ function RuleEditorBody(props: {
 
 			<div class="space-y-2">
 				<div class="flex justify-between items-center">
-					<GroupLabel>Only run if</GroupLabel>
+					<GroupLabel>仅在满足以下条件时运行</GroupLabel>
 					<div class="flex gap-2 items-center">
 						<Show when={props.rule.conditions.length > 1}>
 							<SelectInput<MatchMode>
 								class="w-28"
 								value={props.rule.matchMode}
 								options={[
-									{ value: "all", label: "Match all" },
-									{ value: "any", label: "Match any" },
+									{ value: "all", label: "满足全部条件" },
+									{ value: "any", label: "满足任一条件" },
 								]}
 								onChange={(v) =>
 									props.onChange((r) => {
@@ -797,7 +796,7 @@ function RuleEditorBody(props: {
 							/>
 						</Show>
 						<Button variant="gray" size="xs" onClick={addCondition}>
-							Add condition
+							添加条件
 						</Button>
 					</div>
 				</div>
@@ -805,7 +804,7 @@ function RuleEditorBody(props: {
 					when={props.rule.conditions.length > 0}
 					fallback={
 						<p class="text-xs text-gray-9">
-							Runs for every {TRIGGER_PHRASE[props.rule.trigger].toLowerCase()}.
+							运行间隔：每 {TRIGGER_PHRASE[props.rule.trigger].toLowerCase()}.
 						</p>
 					}
 				>
@@ -837,9 +836,9 @@ function RuleEditorBody(props: {
 
 			<div class="space-y-2">
 				<div class="flex justify-between items-center">
-					<GroupLabel>Then do this</GroupLabel>
+					<GroupLabel>然后执行此操作</GroupLabel>
 					<Button variant="gray" size="xs" onClick={addAction}>
-						Add action
+						添加动作
 					</Button>
 				</div>
 				<div class="space-y-2">
@@ -878,15 +877,14 @@ function RuleEditorBody(props: {
 
 			<Show when={hasDangerous()}>
 				<p class="text-xs leading-relaxed text-amber-600 dark:text-amber-500">
-					This automation runs commands or sends network requests. Only use
-					values you trust — they execute automatically with your permissions.
+					此自动化会运行命令或发送网络请求。请只使用你信任的值——它们会以你的权限自动执行。
 				</p>
 			</Show>
 
 			<div class="flex justify-between items-center pt-4 border-t border-gray-3 -mx-4 px-4 -mb-4 pb-4 mt-2">
-				<span title="Checks which actions are supported on this device. Does not run the automation.">
+				<span title="检查此设备支持哪些动作，不会实际运行该自动化。">
 					<Button variant="gray" size="xs" onClick={props.onTest}>
-						Check compatibility
+						检查兼容性
 					</Button>
 				</span>
 				<button
@@ -895,7 +893,7 @@ function RuleEditorBody(props: {
 					class="flex gap-1.5 items-center px-2 h-6 text-[0.75rem] rounded-lg transition-colors text-gray-10 hover:text-red-500 hover:bg-red-500/10"
 				>
 					<IconLucideTrash2 class="size-3.5" />
-					Delete
+					删除
 				</button>
 			</div>
 		</div>
@@ -928,13 +926,13 @@ function ConditionRow(props: {
 						onChange={props.onChange}
 					/>
 				</div>
-				<RowButton onClick={props.onRemove} title="Remove condition">
+				<RowButton onClick={props.onRemove} title="移除条件">
 					<IconLucideX class="size-4" />
 				</RowButton>
 			</div>
 			<Show when={!applies()}>
 				<p class="px-1 text-[11px] text-amber-600 dark:text-amber-500">
-					This condition never matches for the selected trigger.
+					此条件对所选触发器永远不会匹配。
 				</p>
 			</Show>
 		</div>
@@ -952,9 +950,9 @@ function ConditionValue(props: {
 				<SelectInput<CaptureTargetKind>
 					value={c.target}
 					options={[
-						{ value: "display", label: "Display" },
-						{ value: "window", label: "Window" },
-						{ value: "area", label: "Area" },
+						{ value: "display", label: "显示器" },
+						{ value: "window", label: "窗口" },
+						{ value: "area", label: "区域" },
 					]}
 					onChange={(v) =>
 						props.onChange((cond) => {
@@ -998,7 +996,7 @@ function ConditionValue(props: {
 			return (
 				<TextInput
 					value={c.pattern}
-					placeholder="e.g. Slack"
+					placeholder="例如 Slack"
 					onInput={(v) =>
 						props.onChange((cond) => {
 							if (cond.type === "windowTitleContains") cond.pattern = v;
@@ -1010,7 +1008,7 @@ function ConditionValue(props: {
 			return (
 				<TextInput
 					value={c.id}
-					placeholder="Organization ID"
+					placeholder="组织 ID"
 					onInput={(v) =>
 						props.onChange((cond) => {
 							if (cond.type === "organizationIs") cond.id = v;
@@ -1048,34 +1046,34 @@ function ActionRow(props: {
 				/>
 				<Show when={props.support === false}>
 					<span
-						title="Not supported on this device; will be skipped"
+						title="此设备不支持，将被跳过"
 						class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-500"
 					>
-						Skipped here
+						此处已跳过
 					</span>
 				</Show>
 				<RowButton
 					onClick={() => props.onMove(-1)}
-					title="Move up"
+					title="上移"
 					disabled={props.isFirst}
 				>
 					<IconLucideChevronUp class="size-4" />
 				</RowButton>
 				<RowButton
 					onClick={() => props.onMove(1)}
-					title="Move down"
+					title="下移"
 					disabled={props.isLast}
 				>
 					<IconLucideChevronDown class="size-4" />
 				</RowButton>
-				<RowButton onClick={props.onRemove} title="Remove action">
+				<RowButton onClick={props.onRemove} title="移除动作">
 					<IconLucideX class="size-4" />
 				</RowButton>
 			</div>
 			<ActionParams action={props.action} onChange={props.onChange} />
 			<Show when={!applies()}>
 				<p class="text-[11px] text-amber-600 dark:text-amber-500">
-					This action has no effect for the selected trigger.
+					此动作对所选触发器无效。
 				</p>
 			</Show>
 		</div>
@@ -1090,12 +1088,12 @@ function ActionParams(props: {
 	switch (a.type) {
 		case "copyToClipboard":
 			return (
-				<Field label="Source">
+				<Field label="来源">
 					<SelectInput<ClipboardSource>
 						value={a.source}
 						options={[
-							{ value: "raw", label: "Original capture" },
-							{ value: "rendered", label: "Edited / rendered" },
+							{ value: "raw", label: "原始画面" },
+							{ value: "rendered", label: "已编辑 / 已渲染" },
 						]}
 						onChange={(v) =>
 							props.onChange((act) => {
@@ -1108,7 +1106,7 @@ function ActionParams(props: {
 		case "saveToLocation":
 			return (
 				<div class="flex gap-2">
-					<Field label="Folder">
+					<Field label="文件夹">
 						<div class="flex gap-2">
 							<TextInput
 								value={a.dir}
@@ -1130,11 +1128,11 @@ function ActionParams(props: {
 										});
 								}}
 							>
-								Browse
+								浏览
 							</Button>
 						</div>
 					</Field>
-					<Field label="Filename template (optional)">
+					<Field label="文件名模板（可选）">
 						<TextInput
 							value={a.filenameTemplate ?? ""}
 							placeholder="{date}-{window}"
@@ -1153,7 +1151,7 @@ function ActionParams(props: {
 		case "upload":
 			return (
 				<div class="space-y-2">
-					<Field label="Organization ID (optional)">
+					<Field label="组织 ID（可选）">
 						<TextInput
 							value={a.organizationId ?? ""}
 							onInput={(v) =>
@@ -1175,7 +1173,7 @@ function ActionParams(props: {
 									})
 								}
 							/>
-							Copy link to clipboard
+							复制链接到剪贴板
 						</label>
 						<label class="flex gap-2 items-center text-[13px] text-gray-12">
 							<Toggle
@@ -1187,7 +1185,7 @@ function ActionParams(props: {
 									})
 								}
 							/>
-							Open in browser
+							在浏览器中打开
 						</label>
 					</div>
 				</div>
@@ -1196,7 +1194,7 @@ function ActionParams(props: {
 			return (
 				<div class="space-y-2">
 					<div class="flex gap-2">
-						<Field label="Program">
+						<Field label="程序">
 							<TextInput
 								value={a.program}
 								placeholder="/usr/local/bin/my-script"
@@ -1207,7 +1205,7 @@ function ActionParams(props: {
 								}
 							/>
 						</Field>
-						<Field label="Arguments (space-separated)">
+						<Field label="参数（以空格分隔）">
 							<TextInput
 								value={a.args.join(" ")}
 								onInput={(v) =>
@@ -1229,7 +1227,7 @@ function ActionParams(props: {
 								})
 							}
 						/>
-						Run through shell
+						通过 shell 运行
 					</label>
 				</div>
 			);
@@ -1248,7 +1246,7 @@ function ActionParams(props: {
 								}
 							/>
 						</Field>
-						<Field label="Method">
+						<Field label="方式">
 							<SelectInput<string>
 								class="w-28"
 								value={a.method}
@@ -1265,7 +1263,7 @@ function ActionParams(props: {
 							/>
 						</Field>
 					</div>
-					<Field label="Body template (optional)">
+					<Field label="正文模板（可选）">
 						<TextInput
 							value={a.bodyTemplate ?? ""}
 							placeholder='{"text":"{share_link}"}'
@@ -1282,7 +1280,7 @@ function ActionParams(props: {
 		case "notify":
 			return (
 				<div class="flex gap-2">
-					<Field label="Title">
+					<Field label="标题">
 						<TextInput
 							value={a.titleTemplate}
 							onInput={(v) =>
@@ -1292,7 +1290,7 @@ function ActionParams(props: {
 							}
 						/>
 					</Field>
-					<Field label="Body">
+					<Field label="正文">
 						<TextInput
 							value={a.bodyTemplate}
 							onInput={(v) =>
@@ -1306,7 +1304,7 @@ function ActionParams(props: {
 			);
 		case "applyPreset":
 			return (
-				<Field label="Preset">
+				<Field label="预设">
 					<PresetSelect
 						value={a.name}
 						onChange={(name) =>
@@ -1339,7 +1337,7 @@ function PresetSelect(props: {
 			when={props.allowNone || names().length > 0}
 			fallback={
 				<p class="px-0.5 py-1.5 text-[11px] text-gray-9">
-					No presets yet — create one in the editor first.
+					还没有预设——请先在编辑器中创建一个。
 				</p>
 			}
 		>
@@ -1372,7 +1370,7 @@ function ExportParams(props: {
 	return (
 		<div class="space-y-2">
 			<div class="flex gap-2">
-				<Field label="Format">
+				<Field label="格式">
 					<SelectInput<ExportFormat>
 						value={a.profile.format}
 						options={[
@@ -1387,7 +1385,7 @@ function ExportParams(props: {
 						}
 					/>
 				</Field>
-				<Field label="Resolution">
+				<Field label="分辨率">
 					<SelectInput
 						value={resolutionValue()}
 						options={RESOLUTION_PRESETS.map((r) => ({
@@ -1405,7 +1403,7 @@ function ExportParams(props: {
 				</Field>
 			</div>
 			<div class="flex gap-2">
-				<Field label="Frame rate">
+				<Field label="帧率">
 					<SelectInput
 						value={String(a.profile.fps)}
 						options={FPS_PRESETS.map((f) => ({
@@ -1420,7 +1418,7 @@ function ExportParams(props: {
 					/>
 				</Field>
 				<Show when={a.profile.format === "mp4"}>
-					<Field label="Compression">
+					<Field label="压缩">
 						<SelectInput<ExportCompression>
 							value={a.profile.compression ?? "web"}
 							options={[
@@ -1446,7 +1444,7 @@ function ExportParams(props: {
 								? ""
 								: a.destination.customPath.dir
 						}
-						placeholder="Project folder"
+						placeholder="项目文件夹"
 						onInput={(v) =>
 							props.onChange((act) => {
 								if (act.type === "export")
@@ -1467,7 +1465,7 @@ function ExportParams(props: {
 								});
 						}}
 					>
-						Browse
+						浏览
 					</Button>
 				</div>
 			</Field>

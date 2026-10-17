@@ -33,13 +33,13 @@ export function clipMergeBlocker(
 export function clipMergeBlockerHint(blocker: ClipMergeBlocker): string {
 	switch (blocker) {
 		case "edge":
-			return "No clip on that side";
+			return "该侧没有片段";
 		case "different-recording":
-			return "Different recording";
+			return "其他录制";
 		case "gap":
-			return "Footage was cut between them";
+			return "两者之间的画面已被剪切";
 		case "speed":
-			return "Match the clip speeds first";
+			return "请先匹配片段速度";
 	}
 }
 

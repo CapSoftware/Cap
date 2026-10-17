@@ -29,7 +29,7 @@ export function Section(
 						</h3>
 						<Show when={props.pro}>
 							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
-								Pro
+								专业版
 							</span>
 						</Show>
 					</div>

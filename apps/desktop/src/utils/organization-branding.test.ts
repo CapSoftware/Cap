@@ -109,7 +109,7 @@ describe("desktop organization branding", () => {
 		expect(getOrganizationBrandColorSwatches(organizations[1])).toEqual([
 			{ key: "secondary", label: "Secondary", color: "#FFFFFF" },
 			{ key: "accent", label: "Accent", color: "#FF4766" },
-			{ key: "background", label: "Background", color: "#000000" },
+			{ key: "background", label: "背景", color: "#000000" },
 		]);
 		expect(getOrganizationBrandColorSwatches(null)).toEqual([]);
 	});

@@ -5,10 +5,10 @@ import {
 } from "./preparing-editor-model";
 
 const TRACK_NAMES = {
-	display: "Screen",
-	camera: "Camera",
-	microphone: "Microphone",
-	systemAudio: "System audio",
+	display: "屏幕",
+	camera: "摄像头",
+	microphone: "麦克风",
+	systemAudio: "系统音频",
 };
 
 export function PreparingTimeline(props: { model: PreparingEditorModel }) {
@@ -27,29 +27,29 @@ export function PreparingTimeline(props: { model: PreparingEditorModel }) {
 	};
 	const status = () => {
 		if (props.model.progress().phase === "unavailable") {
-			return "Your recording will be available when preparation finishes";
+			return "准备完成后即可查看你的录制";
 		}
 		if (props.model.progress().phase === "handoff")
-			return "Opening your editor";
-		if (props.model.playback().buffering) return "Preparing the next part";
+			return "正在打开编辑器";
+		if (props.model.playback().buffering) return "正在准备下一部分";
 		if (timeline().playableUntil > 0) {
 			return `Playable to ${preparingTime(timeline().playableUntil)}`;
 		}
-		return "Preparing playback";
+		return "正在准备播放";
 	};
 	return (
 		<div
 			class="flex flex-col h-full rounded-xl bg-ed-card shadow-ed-card overflow-hidden px-3 pt-2.5 pb-3"
-			aria-label="Recording timeline"
+			aria-label="录制时间线"
 		>
 			<div class="flex items-end h-[26px] shrink-0">
 				<div class="w-[104px] pl-1 shrink-0 text-[11px] text-ed-text-3">
-					Timeline
+					时间线
 				</div>
 				<div class="flex flex-1 justify-between gap-2 pb-1 text-[10px] tabular-nums text-ed-text-3">
 					<Show
 						when={timeline().totalDuration}
-						fallback={<span>Recording duration is being checked</span>}
+						fallback={<span>正在检查录制时长</span>}
 					>
 						{(duration) => (
 							<For each={[0, 0.25, 0.5, 0.75, 1]}>

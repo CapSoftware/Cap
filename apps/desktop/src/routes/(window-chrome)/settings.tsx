@@ -198,17 +198,17 @@ export default function Settings(props: RouteSectionProps) {
 	const settingsItems = [
 		{
 			href: "general",
-			name: "General",
+			name: "通用",
 			icon: IconCapSettings,
 		},
 		{
 			href: "quality",
-			name: "Recording quality",
+			name: "录制画质",
 			icon: IconLucideSlidersHorizontal,
 		},
 		{
 			href: "hotkeys",
-			name: "Shortcuts",
+			name: "快捷键",
 			icon: IconCapHotkeys,
 		},
 		{
@@ -218,53 +218,53 @@ export default function Settings(props: RouteSectionProps) {
 		},
 		{
 			href: "recordings",
-			name: "Recordings",
+			name: "录制",
 			icon: IconLucideSquarePlay,
 		},
 		{
 			href: "screenshots",
-			name: "Screenshots",
+			name: "截图",
 			icon: IconLucideImage,
 		},
 		{
 			href: "automations",
-			name: "Automations",
+			name: "自动化",
 			icon: IconLucideZap,
 		},
 		{
 			href: "transcription",
-			name: "Transcription",
+			name: "转录",
 			icon: IconCapCaptions,
 		},
 		{
 			href: "integrations",
-			name: "Integrations",
+			name: "集成",
 			icon: IconLucideUnplug,
 		},
 		{
 			href: "license",
-			name: "Plan & license",
+			name: "版本与许可证",
 			icon: IconLucideGift,
 		},
 		{
 			href: "experimental",
-			name: "Experimental",
+			name: "实验性",
 			icon: IconCapSettings,
 		},
 		{
 			href: "feedback",
-			name: "Feedback",
+			name: "反馈",
 			icon: IconLucideMessageSquarePlus,
 		},
 		{
 			href: "changelog",
-			name: "Changelog",
+			name: "更新日志",
 			icon: IconLucideBell,
 		},
 	];
 	const accountName = createMemo(() => {
-		if (!auth()) return "Click to sign in";
-		if (!userProfile.isSuccess) return "Signed in";
+		if (!auth()) return "点击登录";
+		if (!userProfile.isSuccess) return "已登录";
 
 		const name = userProfile.data?.name?.trim();
 		if (name) return name;
@@ -272,7 +272,7 @@ export default function Settings(props: RouteSectionProps) {
 		const email = userProfile.data?.email?.trim();
 		if (email) return email;
 
-		return "Signed in";
+		return "已登录";
 	});
 	const accountRemoteImageUrl = createMemo(() => {
 		if (!userProfile.isSuccess) return null;
@@ -417,10 +417,10 @@ export default function Settings(props: RouteSectionProps) {
 	const copyVersion = async (appVersion: string) => {
 		try {
 			await writeText(appVersion);
-			toast.success("Version copied to clipboard");
+			toast.success("版本号已复制到剪贴板");
 		} catch (error) {
 			console.error("Failed to copy app version:", error);
-			toast.error("Failed to copy version");
+			toast.error("复制版本号失败");
 		}
 	};
 
@@ -432,9 +432,9 @@ export default function Settings(props: RouteSectionProps) {
 
 			if (!update) {
 				await dialog.message(
-					"You're already using the latest version of Cap.",
+					"你已经在使用最新版本的 Cap。",
 					{
-						title: "No Update Available",
+						title: "无可用更新",
 						kind: "info",
 					},
 				);
@@ -443,7 +443,7 @@ export default function Settings(props: RouteSectionProps) {
 
 			const shouldUpdate = await dialog.confirm(
 				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+				{ title: "更新 Cap", okLabel: "更新", cancelLabel: "Ignore" },
 			);
 
 			if (shouldUpdate) navigate("/update");
@@ -452,7 +452,7 @@ export default function Settings(props: RouteSectionProps) {
 			const openDownload = await dialog
 				.confirm(
 					"Couldn't check for updates automatically. You can download the latest version of Cap from cap.so/download \u2014 your data won't be lost.",
-					{ title: "Update Cap", okLabel: "Download", cancelLabel: "Later" },
+					{ title: "更新 Cap", okLabel: "下载", cancelLabel: "Later" },
 				)
 				.catch(() => false);
 			if (openDownload) await shell.open("https://cap.so/download");
@@ -501,7 +501,7 @@ export default function Settings(props: RouteSectionProps) {
 							{accountName()}
 						</p>
 						<p class="h-[13px] truncate text-[11px] leading-[13px] text-gray-10">
-							Account
+							账户
 						</p>
 					</div>
 				</button>
@@ -528,7 +528,7 @@ export default function Settings(props: RouteSectionProps) {
 								<button
 									type="button"
 									class="-ml-1 cursor-copy rounded px-1 py-0.5 transition-colors hover:bg-gray-3 hover:text-gray-12"
-									title="Copy version to clipboard"
+									title="复制版本号到剪贴板"
 									aria-label={`Copy version ${v()} to clipboard`}
 									onClick={() => copyVersion(v())}
 								>
@@ -542,7 +542,7 @@ export default function Settings(props: RouteSectionProps) {
 											shell.open("https://cap.so/download/versions")
 										}
 									>
-										View previous versions
+										查看历史版本
 									</button>
 									<button
 										type="button"
@@ -552,7 +552,7 @@ export default function Settings(props: RouteSectionProps) {
 									>
 										{isCheckingForUpdates()
 											? "Checking..."
-											: "Check for updates"}
+											: "检查更新"}
 									</button>
 								</div>
 							</div>
@@ -566,10 +566,10 @@ export default function Settings(props: RouteSectionProps) {
 					>
 						{auth() ? (
 							<Button onClick={handleAuth} variant="gray" class="w-full">
-								Sign Out
+								退出登录
 							</Button>
 						) : (
-							<SignInButton>Sign In</SignInButton>
+							<SignInButton>登录</SignInButton>
 						)}
 					</Show>
 				</div>

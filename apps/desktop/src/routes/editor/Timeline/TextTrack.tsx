@@ -306,8 +306,8 @@ export function TextTrack(props: {
 						fallback={<div class="w-full rounded-lg bg-transparent" />}
 					>
 						<div class="cap-empty-lane pointer-events-none">
-							<span>Set a label over your video</span>
-							<span class="cap-empty-lane-action">· Add text</span>
+							<span>在视频上设置标签</span>
+							<span class="cap-empty-lane-action">· 添加文字</span>
 						</div>
 					</Show>
 				}
@@ -339,13 +339,13 @@ export function TextTrack(props: {
 									"font-weight": segment.fontWeight ?? 700,
 								}}
 							>
-								{segment.content || "Label"}
+								{segment.content || "标签"}
 							</span>
 						</div>
 					);
 
 					const textTitle = () => {
-						const base = `Text · ${segment.content || "Label"}`;
+						const base = `Text · ${segment.content || "标签"}`;
 						return segment.layout === "fullscreen"
 							? `${base} · Fullscreen: pauses the video while shown`
 							: base;

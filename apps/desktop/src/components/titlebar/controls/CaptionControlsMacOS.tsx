@@ -113,10 +113,10 @@ function TrafficLightButton(props: TrafficLightButtonProps) {
 			type="button"
 			aria-label={
 				props.type === "close"
-					? "Close window"
+					? "关闭窗口"
 					: props.type === "minimize"
-						? "Minimize window"
-						: "Expand or collapse window"
+						? "最小化窗口"
+						: "展开或折叠窗口"
 			}
 			class={cx(
 				"size-3.5 rounded-full flex items-center justify-center transition-colors duration-100",

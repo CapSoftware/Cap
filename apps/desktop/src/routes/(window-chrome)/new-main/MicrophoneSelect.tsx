@@ -21,7 +21,7 @@ import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
 
-const NO_MICROPHONE = "No Microphone";
+const NO_MICROPHONE = "无麦克风";
 
 export default function MicrophoneSelect(props: {
 	disabled?: boolean;
@@ -104,7 +104,7 @@ export default function MicrophoneSelect(props: {
 				<IconCapMicrophone class={DEVICE_ROW_ICON_CLASS} />
 				<p
 					class={cx(DEVICE_ROW_LABEL_CLASS, notConnected() && "text-gray-10")}
-					title={notConnected() ? "Not connected" : undefined}
+					title={notConnected() ? "未连接" : undefined}
 				>
 					{props.value ?? NO_MICROPHONE}
 				</p>
@@ -119,8 +119,8 @@ export default function MicrophoneSelect(props: {
 							}}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Microphone settings"
-							aria-label="Microphone settings"
+							title="麦克风设置"
+							aria-label="麦克风设置"
 						>
 							<IconLucideSettings class="size-3.5" />
 						</button>

@@ -95,7 +95,7 @@ export function RecoveryToast() {
 										const e = error();
 										if (e instanceof Error) return e.message;
 										if (typeof e === "string") return e;
-										return "Recovery failed. The recording may be corrupted.";
+										return "恢复失败。录制可能已损坏。";
 									};
 									return (
 										<p class="text-red-11 text-[10px] mt-1">{errorMessage()}</p>
@@ -110,14 +110,14 @@ export function RecoveryToast() {
 								variant="primary"
 								size="xs"
 							>
-								{recoverMutation.isPending ? "..." : "Recover"}
+								{recoverMutation.isPending ? "..." : "恢复"}
 							</Button>
 							<Button
 								onClick={async () => {
 									const projectPath = rec().projectPath;
 									if (
 										!(await ask(
-											"Are you sure you want to delete this recording?",
+											"确定要删除这段录制吗？",
 										))
 									)
 										return;
@@ -127,7 +127,7 @@ export function RecoveryToast() {
 								variant="gray"
 								size="xs"
 							>
-								Discard
+								丢弃
 							</Button>
 						</div>
 					</div>

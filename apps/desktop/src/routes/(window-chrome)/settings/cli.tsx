@@ -38,7 +38,7 @@ export default function CliSettings() {
 	const installButtonLabel = () => {
 		if (isInstalling())
 			return status()?.installed ? "Repairing..." : "Installing...";
-		return status()?.installed ? "Repair" : "Install CLI";
+		return status()?.installed ? "修复" : "安装 CLI";
 	};
 
 	const handleInstall = async () => {
@@ -46,9 +46,9 @@ export default function CliSettings() {
 
 		try {
 			mutate(await installCli());
-			toast.success("Cap CLI installed");
+			toast.success("Cap CLI 已安装");
 		} catch (error) {
-			toast.error(errorMessage(error, "Failed to install CLI"));
+			toast.error(errorMessage(error, "安装 CLI 失败"));
 			await refetch();
 		} finally {
 			setIsInstalling(false);
@@ -60,9 +60,9 @@ export default function CliSettings() {
 
 		try {
 			mutate(await uninstallCli());
-			toast.success("Cap CLI removed");
+			toast.success("Cap CLI 已移除");
 		} catch (error) {
-			toast.error(errorMessage(error, "Failed to remove CLI"));
+			toast.error(errorMessage(error, "移除 CLI 失败"));
 			await refetch();
 		} finally {
 			setIsUninstalling(false);
@@ -71,15 +71,15 @@ export default function CliSettings() {
 
 	const copyPathCommand = async (command: string) => {
 		await writeText(command);
-		toast.success("Copied to clipboard");
+		toast.success("已复制到剪贴板");
 	};
 
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Command Line"
-					description="Install the Cap command for terminals, agents, scripts, and local automation."
+					title="命令行"
+					description="安装 Cap 命令，供终端、智能体、脚本和本地自动化使用。"
 				>
 					<SectionCard padded>
 						<Show
@@ -93,7 +93,7 @@ export default function CliSettings() {
 								>
 									<div class="flex flex-col gap-2">
 										<p class="text-xs leading-relaxed text-red-11">
-											Couldn't load CLI status:{" "}
+											无法加载 CLI 状态：{" "}
 											{errorMessage(status.error, "unknown error")}
 										</p>
 										<Button
@@ -102,7 +102,7 @@ export default function CliSettings() {
 											class="self-start"
 											onClick={() => refetch()}
 										>
-											Retry
+											重试
 										</Button>
 									</div>
 								</Show>
@@ -114,13 +114,12 @@ export default function CliSettings() {
 										<div class="flex flex-col gap-1 min-w-0">
 											<p class="text-[13px] text-gray-12">
 												{currentStatus().installed
-													? "Installed"
-													: "Not installed"}
+													? "已安装"
+													: "未安装"}
 											</p>
 											<p class="text-xs leading-snug text-gray-10">
-												The desktop app installs a local{" "}
-												<code class="font-mono text-gray-12">cap</code> command
-												that points back to the bundled CLI.
+												桌面应用会安装一个本地{" "}
+												<code class="font-mono text-gray-12">cap</code> 命令，指向随附的 CLI。
 											</p>
 										</div>
 										<div class="flex shrink-0 gap-2">
@@ -131,7 +130,7 @@ export default function CliSettings() {
 													disabled={isUninstalling()}
 													onClick={handleUninstall}
 												>
-													{isUninstalling() ? "Removing..." : "Remove"}
+													{isUninstalling() ? "Removing..." : "移除"}
 												</Button>
 											</Show>
 											<Button
@@ -146,9 +145,9 @@ export default function CliSettings() {
 									</div>
 
 									<div class="grid gap-2 text-xs">
-										<PathRow label="Command" value={currentStatus().shimPath} />
+										<PathRow label="命令" value={currentStatus().shimPath} />
 										<PathRow
-											label="Target"
+											label="目标"
 											value={currentStatus().targetPath}
 										/>
 									</div>
@@ -170,19 +169,18 @@ export default function CliSettings() {
 													when={currentStatus().pathConfigured}
 													fallback={
 														<>
-															Add{" "}
+															添加{" "}
 															<code class="font-mono text-gray-12">
 																{currentStatus().pathEntry}
 															</code>{" "}
-															to your PATH to use{" "}
+															添加到 PATH 后即可使用{" "}
 															<code class="font-mono text-gray-12">cap</code>{" "}
 															from a new terminal.
 														</>
 													}
 												>
 													Added <code class="font-mono text-gray-12">cap</code>{" "}
-													to your PATH. Restart your terminal to use it, or run
-													this now:
+													添加到 PATH。重启终端后即可使用，或者现在运行：
 												</Show>
 											</p>
 											<div class="flex items-center gap-2">
@@ -196,7 +194,7 @@ export default function CliSettings() {
 														copyPathCommand(currentStatus().shellCommand)
 													}
 												>
-													Copy
+													复制
 												</Button>
 											</div>
 										</div>

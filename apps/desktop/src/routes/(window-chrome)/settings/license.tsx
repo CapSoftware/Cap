@@ -32,42 +32,42 @@ export default function Page() {
 		<div class="cap-settings-page h-full overflow-y-auto custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Plan & license"
-					description="Your Cap plan and desktop license, in one place."
+					title="版本与许可证"
+					description="你的 Cap 版本与桌面版许可证，尽在一处。"
 				/>
 				<Show when={license.isPending}>
-					<p class="text-xs text-gray-10">Loading your plan…</p>
+					<p class="text-xs text-gray-10">正在加载你的版本信息…</p>
 				</Show>
 				<Show when={license.isError}>
 					<SectionCard padded>
-						<p class="mb-3 text-xs text-gray-10">Couldn't load your plan.</p>
+						<p class="mb-3 text-xs text-gray-10">无法加载你的版本信息。</p>
 						<Button
 							size="sm"
 							variant="gray"
 							onClick={() => void license.refetch()}
 						>
-							Try again
+							重试
 						</Button>
 					</SectionCard>
 				</Show>
 				<Show when={license.data}>
 					{(current) => (
 						<>
-							<Section title="Your plan">
+							<Section title="你的版本">
 								<SectionCard padded>
 									<p class="text-lg font-semibold text-gray-12">
 										{current().type === "pro"
-											? "Cap Pro"
+											? "Cap 专业版"
 											: current().type === "commercial"
-												? "Desktop License"
-												: "Cap Free"}
+												? "桌面版许可证"
+												: "Cap 免费版"}
 									</p>
 									<p class="mt-1 text-xs leading-relaxed text-gray-10">
 										{current().type === "pro"
-											? "Your account includes cloud sharing, Pro features and a desktop license for commercial use."
+											? "你的账户包含云分享、专业版功能，以及可用于商业用途的桌面版许可证。"
 											: current().type === "commercial"
-												? "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features."
-												: "Record and edit locally for personal use. Choose a paid plan for commercial use or more cloud features."}
+												? "桌面版许可证涵盖商业录制与剪辑。Cap 专业版额外提供云分享与协作功能。"
+												: "本地录制与剪辑，供个人使用。商业用途或需要更多云端功能请选择付费版本。"}
 									</p>
 									<Show when={auth.data}>
 										<Button
@@ -77,38 +77,35 @@ export default function Page() {
 											disabled={refreshPlan.isPending}
 											onClick={() => refreshPlan.mutate()}
 										>
-											{refreshPlan.isPending ? "Checking…" : "Refresh plan"}
+											{refreshPlan.isPending ? "检查中…" : "刷新版本信息"}
 										</Button>
 										<Show when={refreshPlan.isError}>
 											<p class="mt-2 text-xs text-gray-10">
-												Couldn't refresh your plan. Please try again.
+												无法刷新你的版本信息，请重试。
 											</p>
 										</Show>
 									</Show>
 									<Show when={!auth.data}>
 										<p class="mt-3 text-xs leading-relaxed text-gray-10">
-											Already have Cap Pro? Sign in with your account from the
-											sidebar.
+											已经有 Cap 专业版？从侧边栏用你的账户登录。
 										</p>
 									</Show>
 								</SectionCard>
 							</Section>
 							<Section
-								title="Explore plans"
-								description="Compare current pricing and everything included on our website."
+								title="查看各版本"
+								description="在我们网站上查看最新价格与各版本包含的功能。"
 							>
 								<SectionCard padded>
 									<div class="space-y-3 text-xs leading-relaxed text-gray-10">
 										<p>
 											<span class="font-medium text-gray-12">
-												Desktop License
+												桌面版许可证
 											</span>{" "}
-											· Commercial use of the desktop recorder and editor.
+											· 桌面录制与编辑器的商业使用授权。
 										</p>
 										<p>
-											<span class="font-medium text-gray-12">Cap Pro</span> · A
-											desktop license, plus cloud sharing, AI features and
-											collaboration.
+											<span class="font-medium text-gray-12">Cap 专业版</span> · 桌面版许可证，外加云分享、AI 功能和协作。
 										</p>
 										<Button
 											size="sm"
@@ -117,7 +114,7 @@ export default function Page() {
 										>
 											View plans & pricing ↗
 										</Button>
-										<p>Opens cap.so/pricing in your browser.</p>
+										<p>在你的浏览器中打开 cap.so/pricing。</p>
 									</div>
 								</SectionCard>
 							</Section>
@@ -146,16 +143,16 @@ export default function Page() {
 									}
 								>
 									{(commercial) => (
-										<Section title="Desktop license">
+										<Section title="桌面版许可证">
 											<SectionCard padded>
-												<p class="mb-2 text-xs text-gray-10">License key</p>
+												<p class="mb-2 text-xs text-gray-10">许可证密钥</p>
 												<pre class="overflow-x-auto p-3 text-xs rounded-lg bg-gray-3 text-gray-11">
 													{commercial().licenseKey}
 												</pre>
 												<Show when={commercial().expiryDate}>
 													{(expiry) => (
 														<p class="mt-3 text-xs text-gray-10">
-															Expires {new Date(expiry()).toLocaleDateString()}
+															过期时间 {new Date(expiry()).toLocaleDateString()}
 														</p>
 													)}
 												</Show>
@@ -172,7 +169,7 @@ export default function Page() {
 														});
 													}}
 												>
-													Deactivate license
+													停用许可证
 												</Button>
 											</SectionCard>
 										</Section>
@@ -234,9 +231,9 @@ function LicenseKeyActivate(props: {
 					return (
 						<div class="p-6 mx-auto w-full rounded-xl border text-gray-12 bg-gray-2 border-gray-3">
 							<div class="space-y-3">
-								<h3 class="mb-2 text-xl text-center">Have a license key?</h3>
+								<h3 class="mb-2 text-xl text-center">有许可证密钥？</h3>
 								<Input
-									placeholder="License key"
+									placeholder="许可证密钥"
 									value={licenseKey()}
 									onInput={(e) => setLicenseKey(e.currentTarget.value)}
 									class="w-full bg-gray-3 border-gray-4"
@@ -253,7 +250,7 @@ function LicenseKeyActivate(props: {
 									>
 										{activateLicenseKey.isPending
 											? "Activating..."
-											: "Activate License"}
+											: "激活许可证"}
 									</Button>
 								</div>
 								<Show when={activateLicenseKey.isError}>

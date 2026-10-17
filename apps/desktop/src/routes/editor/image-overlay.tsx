@@ -253,7 +253,7 @@ export function ImageOverlay(props: {
 								</span>
 								<button
 									type="button"
-									aria-label="Rotate image"
+									aria-label="旋转图片"
 									class="absolute -top-7 left-1/2 size-3 -translate-x-1/2 rounded-full border border-white bg-blue-9 cursor-crosshair"
 									onMouseDown={(event) => drag(event, index, "rotate")}
 								/>
@@ -268,7 +268,7 @@ export function ImageOverlay(props: {
 									{(corner) => (
 										<button
 											type="button"
-											aria-label="Resize image"
+											aria-label="缩放图片"
 											class="absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-blue-9"
 											style={{
 												left: corner.x < 0 ? "0" : "100%",

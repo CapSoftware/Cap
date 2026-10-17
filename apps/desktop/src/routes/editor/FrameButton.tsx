@@ -31,31 +31,31 @@ const FRAME_STYLES: Array<{
 	{
 		value: "none",
 		label: "None",
-		description: "Show the recording as-is",
+		description: "按原样显示录制",
 		icon: IconLucideBan,
 	},
 	{
 		value: "macOS",
 		label: "macOS",
-		description: "Window chrome with traffic lights",
+		description: "带交通灯按钮的窗口外观",
 		icon: IconLucideAppWindowMac,
 	},
 	{
 		value: "windows",
 		label: "Windows",
-		description: "Title bar with window controls",
+		description: "带窗口控制按钮的标题栏",
 		icon: IconLucideAppWindow,
 	},
 	{
 		value: "browser",
-		label: "Browser",
-		description: "Browser chrome with address bar",
+		label: "浏览器",
+		description: "带地址栏的浏览器外观",
 		icon: IconLucideGlobe,
 	},
 	{
 		value: "macbook",
 		label: "MacBook",
-		description: "Laptop bezel around the recording",
+		description: "为录制加上笔记本边框",
 		icon: IconLucideLaptop,
 	},
 ];
@@ -85,9 +85,9 @@ function FrameSettings() {
 	return (
 		<>
 			<div class="flex flex-col gap-0.5 px-4 pt-3.5 pb-3 border-b shrink-0 border-ed-line">
-				<span class="text-[13px] font-semibold text-ed-text-1">Frame</span>
+				<span class="text-[13px] font-semibold text-ed-text-1">帧</span>
 				<span class="text-[0.6875rem] leading-snug text-ed-text-3">
-					Wrap your recording in a window or device frame.
+					为录制套上窗口或设备边框。
 				</span>
 			</div>
 			<Show when={selectedStyle()}>
@@ -137,7 +137,7 @@ function FrameSettings() {
 				<Show when={style() !== "none" && project.background.frame}>
 					{(frame) => (
 						<div class="flex flex-col gap-3 p-3 border-t border-ed-line">
-							<SettingRow name="Theme">
+							<SettingRow name="主题">
 								<KTabs
 									class="w-40"
 									value={frame().theme}
@@ -150,10 +150,10 @@ function FrameSettings() {
 											value="light"
 											class={THEME_TAB_TRIGGER_CLASS}
 										>
-											Light
+											浅色
 										</KTabs.Trigger>
 										<KTabs.Trigger value="dark" class={THEME_TAB_TRIGGER_CLASS}>
-											Dark
+											深色
 										</KTabs.Trigger>
 										<KTabs.Indicator class="overflow-hidden absolute inset-0 rounded-lg transition-transform flex p-0.5 peer-focus-visible:outline-solid outline-2 outline-ed-accent outline-offset-2">
 											<div class="flex-1 rounded-md bg-ed-card shadow-[0_1px_2px_rgba(0,0,0,0.12),0_0_0_0.5px_rgba(0,0,0,0.06)] dark:bg-white/12 dark:shadow-none" />
@@ -175,11 +175,11 @@ function FrameSettings() {
 								</SettingRow>
 							</Show>
 							<Show when={frame().style === "macOS"}>
-								<SettingRow name="Title">
+								<SettingRow name="标题">
 									<div class="w-40">
 										<Input
 											value={frame().title}
-											placeholder="Window title"
+											placeholder="窗口标题"
 											onInput={(e) =>
 												updateFrame({ title: e.currentTarget.value })
 											}
@@ -228,7 +228,7 @@ function ScopedFrameButton() {
 			<EditorButton<typeof KPopover.Trigger>
 				as={KPopover.Trigger}
 				variant="text"
-				tooltipText="Add a frame"
+				tooltipText="添加边框"
 				leftIcon={
 					<Dynamic
 						component={hasFrame() ? activeStyle().icon : IconLucideAppWindowMac}
@@ -237,7 +237,7 @@ function ScopedFrameButton() {
 				rightIcon={<IconCapChevronDown />}
 			>
 				<span class="max-[1200px]:hidden">
-					{hasFrame() ? activeStyle().label : "Frame"}
+					{hasFrame() ? activeStyle().label : "帧"}
 				</span>
 			</EditorButton>
 			<KPopover.Portal>

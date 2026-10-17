@@ -14,21 +14,21 @@ const modeOptions = [
 		mode: "instant" as RecordingMode,
 		title: "Instant",
 		description:
-			"Share instantly with a link. Your recording uploads as you record, so you can share it immediately when you're done.",
+			"用链接即时分享。录制的同时就在上传，录完即可立刻分享。",
 		icon: IconCapInstant,
 	},
 	{
 		mode: "studio" as RecordingMode,
 		title: "Studio",
 		description:
-			"Record locally in the highest quality for editing later. Perfect for creating polished content with effects and transitions.",
+			"在本地以最高画质录制以便日后剪辑。适合制作带特效和转场的精致内容。",
 		icon: IconCapFilmCut,
 	},
 	{
 		mode: "screenshot" as RecordingMode,
-		title: "Screenshot",
+		title: "截图",
 		description:
-			"Capture and annotate screenshots instantly. Great for quick captures, bug reports, and visual communication.",
+			"即刻截屏并添加标注。适合快速截图、问题反馈和可视化沟通。",
 		icon: IconCapScreenshot,
 	},
 ];
@@ -53,9 +53,9 @@ export default function ModeInfoPanel(props: ModeInfoPanelProps) {
 					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">返回</span>
 				</button>
-				<span class="text-xs font-medium text-gray-11">Recording Modes</span>
+				<span class="text-xs font-medium text-gray-11">录制模式</span>
 			</div>
 			<div class="flex flex-col flex-1 min-h-0 pt-4">
 				<div class="px-1 custom-scroll flex-1 overflow-y-auto">

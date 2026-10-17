@@ -266,21 +266,21 @@ const cameraSettingsKeys = (camera: CameraWithDetails) => [
 
 const formatCameraSetting = (format: CameraDeviceSettings) => {
 	const size =
-		format.width && format.height ? `${format.width}×${format.height}` : "Auto";
-	const rate = format.frameRate ? `${Math.round(format.frameRate)}fps` : "Auto";
+		format.width && format.height ? `${format.width}×${format.height}` : "自动";
+	const rate = format.frameRate ? `${Math.round(format.frameRate)}fps` : "自动";
 	return `${size} @ ${rate}`;
 };
 
 const formatMicrophoneSetting = (setting: MicrophoneDeviceSettings) => {
-	const rate = setting.sampleRate ? `${setting.sampleRate / 1000}kHz` : "Auto";
+	const rate = setting.sampleRate ? `${setting.sampleRate / 1000}kHz` : "自动";
 	const channels =
 		setting.channels === 1
-			? "Mono"
+			? "单声道"
 			: setting.channels === 2
-				? "Stereo"
+				? "立体声"
 				: setting.channels
 					? `${setting.channels}ch`
-					: "Auto";
+					: "自动";
 	return `${rate} ${channels}`;
 };
 
@@ -484,8 +484,8 @@ function CameraListItem(props: {
 			<button
 				type="button"
 				disabled={props.disabled}
-				title="Device settings"
-				aria-label="Device settings"
+				title="设备设置"
+				aria-label="设备设置"
 				onPointerDown={(event) => event.stopPropagation()}
 				onClick={(event) => {
 					event.preventDefault();
@@ -521,9 +521,9 @@ function MicrophoneListItem(props: {
 		if (!props.mic.sampleRate) return null;
 		const channels =
 			props.mic.channels === 1
-				? "Mono"
+				? "单声道"
 				: props.mic.channels === 2
-					? "Stereo"
+					? "立体声"
 					: `${props.mic.channels}ch`;
 		return `${props.mic.sampleRate / 1000}kHz ${channels}`;
 	};
@@ -579,8 +579,8 @@ function MicrophoneListItem(props: {
 			<button
 				type="button"
 				disabled={props.disabled}
-				title="Device settings"
-				aria-label="Device settings"
+				title="设备设置"
+				aria-label="设备设置"
 				onPointerDown={(event) => event.stopPropagation()}
 				onClick={(event) => {
 					event.preventDefault();
@@ -665,7 +665,7 @@ function CameraSettingsPanel(props: {
 				)}
 			>
 				<div class="flex-1 min-w-0">
-					<div class="truncate">Default</div>
+					<div class="truncate">默认</div>
 					<Show when={defaultSetting()}>
 						{(setting) => (
 							<div
@@ -714,7 +714,7 @@ function CameraSettingsPanel(props: {
 													: "text-amber-11",
 											)}
 										>
-											Compatibility mode may reduce this setting.
+											兼容模式可能会降低此设置。
 										</div>
 									</Show>
 								</div>
@@ -792,7 +792,7 @@ function MicrophoneSettingsPanel(props: {
 				)}
 			>
 				<div class="flex-1 min-w-0">
-					<div class="truncate">Default</div>
+					<div class="truncate">默认</div>
 					<Show when={defaultSetting()}>
 						{(setting) => (
 							<div
@@ -842,7 +842,7 @@ function MicrophoneSettingsPanel(props: {
 													: "text-amber-11",
 											)}
 										>
-											Compatibility mode may reduce this setting.
+											兼容模式可能会降低此设置。
 										</div>
 									</Show>
 								</div>
@@ -1024,7 +1024,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 				</div>
 			</Show>
 			<Show when={props.isLoading}>
-				<div class="py-6 text-sm text-center text-gray-11">Loading...</div>
+				<div class="py-6 text-sm text-center text-gray-11">加载中…</div>
 			</Show>
 			<Show when={!props.isLoading && !props.errorMessage}>
 				<button
@@ -1046,7 +1046,7 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 				>
 					<IconLucideCircleOff class="size-4 shrink-0" />
 					<span class="truncate flex-1">
-						{props.variant === "camera" ? "No Camera" : "No Microphone"}
+						{props.variant === "camera" ? "无摄像头" : "无麦克风"}
 					</span>
 					<Show when={isNoneSelected()}>
 						<IconLucideCheck class="size-4 shrink-0" />
@@ -1189,7 +1189,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	};
 
 	const settingsSubtitle = () =>
-		props.variant === "camera" ? "Camera settings" : "Microphone settings";
+		props.variant === "camera" ? "摄像头设置" : "麦克风设置";
 
 	const settingsTitle = () => {
 		const target = settingsTarget();
@@ -1198,28 +1198,28 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	};
 	const placeholder =
 		props.variant === "display"
-			? "Search displays"
+			? "搜索显示器"
 			: props.variant === "window"
-				? "Search windows"
+				? "搜索窗口"
 				: props.variant === "recording"
-					? "Search recordings"
+					? "搜索录制"
 					: props.variant === "screenshot"
-						? "Search screenshots"
+						? "搜索截图"
 						: props.variant === "camera"
-							? "Search cameras"
-							: "Search microphones";
+							? "搜索摄像头"
+							: "搜索麦克风";
 	const noResultsMessage =
 		props.variant === "display"
-			? "No matching displays"
+			? "没有匹配的显示器"
 			: props.variant === "window"
-				? "No matching windows"
+				? "没有匹配的窗口"
 				: props.variant === "recording"
-					? "No matching recordings"
+					? "没有匹配的录制"
 					: props.variant === "screenshot"
-						? "No matching screenshots"
+						? "没有匹配的截图"
 						: props.variant === "camera"
-							? "No matching cameras"
-							: "No matching microphones";
+							? "没有匹配的摄像头"
+							: "没有匹配的麦克风";
 
 	const handleVideoImport = async () => {
 		try {
@@ -1418,7 +1418,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							}
 							disabled={cameraProps.disabled}
 							emptyMessage={
-								trimmedSearch() ? noResultsMessage : "No cameras found"
+								trimmedSearch() ? noResultsMessage : "未找到摄像头"
 							}
 							permissions={cameraProps.permissions}
 							deviceSettings={cameraProps.deviceSettings}
@@ -1476,7 +1476,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							onSettingsRequested={(mic) => handleSettingsTargetChange(mic)}
 							disabled={micProps.disabled}
 							emptyMessage={
-								trimmedSearch() ? noResultsMessage : "No microphones found"
+								trimmedSearch() ? noResultsMessage : "未找到麦克风"
 							}
 							permissions={micProps.permissions}
 							deviceSettings={micProps.deviceSettings}
@@ -1509,10 +1509,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					class="flex h-[36px] gap-1 items-center shrink-0 rounded-md px-2 text-xs
 					text-gray-11 transition-colors hover:text-gray-12 hover:bg-gray-4
 					focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
-					aria-label={inSettingsMode() ? "Back to list" : "Back"}
+					aria-label={inSettingsMode() ? "返回列表" : "返回"}
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
-					<span class="font-medium text-gray-12">Back</span>
+					<span class="font-medium text-gray-12">返回</span>
 				</button>
 				<Show
 					when={inSettingsMode()}
@@ -1557,7 +1557,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 								>
 									<IconLucideImport class="size-3.5" />
 									<span>
-										{props.variant === "screenshot" ? "Import image" : "Import"}
+										{props.variant === "screenshot" ? "导入图片" : "导入"}
 									</span>
 								</Button>
 							</Show>
@@ -1690,7 +1690,7 @@ function createUpdateCheck() {
 		try {
 			shouldUpdate = await dialog.confirm(
 				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+				{ title: "更新 Cap", okLabel: "更新", cancelLabel: "Ignore" },
 			);
 		} catch (e) {
 			console.error("Failed to show update dialog:", e);
@@ -1730,20 +1730,20 @@ function createUpdateReadyToast() {
 										toast.error(
 											typeof error === "string"
 												? error
-												: "Unable to restart Cap safely.",
+												: "无法安全地重启 Cap。",
 										);
 									})
 									.finally(() => setInstallingUpdate(false));
 							}}
 						>
-							{update.installed ? "Restart now" : "Install and restart"}
+							{update.installed ? "立即重启" : "安装并重启"}
 						</button>
 						<button
 							type="button"
 							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors text-gray-11 hover:text-gray-12"
 							onClick={() => toast.dismiss(t.id)}
 						>
-							Dismiss
+							忽略
 						</button>
 					</div>
 				</div>
@@ -1759,7 +1759,7 @@ function createUpdateReadyToast() {
 
 function MainWindowHelpButton() {
 	return (
-		<Tooltip content={<span>Help & Tour</span>}>
+		<Tooltip content={<span>帮助与导览</span>}>
 			<button
 				type="button"
 				onClick={() => {
@@ -1788,7 +1788,7 @@ function Page() {
 			await commands.cancelEditorRecordingFlow();
 		} catch (error) {
 			toast.error(
-				typeof error === "string" ? error : "Could not go back to the editor",
+				typeof error === "string" ? error : "无法返回编辑器",
 			);
 		}
 	};
@@ -2283,12 +2283,12 @@ function Page() {
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
-		return "Unable to load displays. Try using the Display button.";
+		return "无法加载显示器。请改用「显示器」按钮。";
 	};
 
 	const windowErrorMessage = () => {
 		if (!windowTargets.error) return undefined;
-		return "Unable to load windows. Try using the Window button.";
+		return "无法加载窗口。请改用「窗口」按钮。";
 	};
 
 	const selectDisplayTarget = async (target: CaptureDisplayWithThumbnail) => {
@@ -2777,7 +2777,7 @@ function Page() {
 				console.error("Failed to recover recording:", error);
 				await dialog
 					.message(recordingOpenErrorMessage(error, projectPath), {
-						title: "Recover Recording",
+						title: "恢复录制",
 						kind: "error",
 					})
 					.catch((dialogError: unknown) => {
@@ -2795,7 +2795,7 @@ function Page() {
 		} else {
 			const link = recording.sharing?.link;
 			if (!link) {
-				toast.error("This recording isn't ready to open yet.");
+				toast.error("这段录制还没准备好打开。");
 				return;
 			}
 			await shell.open(link);
@@ -2896,7 +2896,7 @@ function Page() {
 								onClick={() => {
 									toggleTargetMode("display");
 								}}
-								name="Display"
+								name="显示器"
 								class="flex-1 rounded-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 							/>
 							<TargetDropdownButton
@@ -2917,7 +2917,7 @@ function Page() {
 									});
 								}}
 								aria-haspopup="menu"
-								aria-label="Choose display"
+								aria-label="选择显示器"
 							/>
 						</div>
 						<div
@@ -2935,7 +2935,7 @@ function Page() {
 								onClick={() => {
 									toggleTargetMode("window");
 								}}
-								name="Window"
+								name="窗口"
 								class="flex-1 rounded-none border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 							/>
 							<TargetDropdownButton
@@ -2956,7 +2956,7 @@ function Page() {
 									});
 								}}
 								aria-haspopup="menu"
-								aria-label="Choose window"
+								aria-label="选择窗口"
 							/>
 						</div>
 					</div>
@@ -2968,7 +2968,7 @@ function Page() {
 							onClick={() => {
 								toggleTargetMode("area");
 							}}
-							name="Area"
+							name="区域"
 							class="flex-1"
 						/>
 						<TargetTypeButton
@@ -2978,7 +2978,7 @@ function Page() {
 							onClick={() => {
 								toggleTargetMode("camera");
 							}}
-							name="Camera Only"
+							name="仅摄像头"
 							class="flex-1"
 						/>
 					</div>
@@ -3020,22 +3020,21 @@ function Page() {
 					role="dialog"
 					aria-label={
 						cleanCapture.data?.mode === "instant"
-							? "Clean Instant recording"
-							: "Clean Studio recording"
+							? "清理 Instant 录制"
+							: "清理 Studio 录制"
 					}
 				>
-					<strong>Record without Cap's preview and controls</strong>
+					<strong>录制时不显示 Cap 的预览和控制面板</strong>
 					<p class="text-sm">
 						{cleanCapture.data?.mode === "instant"
-							? "Any selected camera will be included in the video with its preview appearance. Cap's preview and controls will hide."
-							: "Any selected camera will keep recording as a separate editable track. Cap's preview and controls will hide."}
+							? "所选摄像头会以预览中的样子出现在视频里。Cap 的预览和控制面板会隐藏。"
+							: "所选摄像头会作为独立轨道继续录制，并可单独编辑。Cap 的预览和控制面板会隐藏。"}
 					</p>
 					<p class="text-sm">
-						Press <strong>{cleanCapture.data?.shortcut}</strong> to start, then
-						use it to stop.{" "}
+						按 <strong>{cleanCapture.data?.shortcut}</strong> 开始录制，再按一次停止。{" "}
 						{cleanCapture.data?.mode === "instant"
-							? "Open Cap to stop and show controls."
-							: "Open Cap to pause and show controls."}
+							? "打开 Cap 即可停止并显示控制面板。"
+							: "打开 Cap 即可暂停并显示控制面板。"}
 					</p>
 					<button
 						type="button"
@@ -3043,7 +3042,7 @@ function Page() {
 						disabled={stopRequested()}
 						onClick={() => stopRecording.mutate()}
 					>
-						Cancel
+						取消
 					</button>
 				</div>
 			</Show>
@@ -3055,7 +3054,7 @@ function Page() {
 					<MainWindowHelpButton />
 					<div class="flex-1 min-h-9 min-w-0" data-tauri-drag-region />
 					<div class="flex gap-1 items-center shrink-0" data-tauri-drag-region>
-						<Tooltip content={<span>Settings</span>}>
+						<Tooltip content={<span>设置</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -3067,7 +3066,7 @@ function Page() {
 								<IconLucideSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Screenshots</span>}>
+						<Tooltip content={<span>截图</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -3086,7 +3085,7 @@ function Page() {
 								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Recordings</span>}>
+						<Tooltip content={<span>录制</span>}>
 							<button
 								type="button"
 								onClick={() => {
@@ -3105,12 +3104,12 @@ function Page() {
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Teleprompter</span>}>
+						<Tooltip content={<span>提词器</span>}>
 							<button
 								type="button"
 								onClick={() => void openTeleprompter()}
 								class="flex justify-center items-center size-5 focus:outline-hidden"
-								aria-label="Open teleprompter"
+								aria-label="打开提词器"
 							>
 								<IconLucideScanText class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
@@ -3164,8 +3163,8 @@ function Page() {
 											fallback={
 												<span class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-(--blue-400) text-gray-1 dark:text-gray-12">
 													{license.data?.type === "commercial"
-														? "Commercial"
-														: "Pro"}
+														? "商业"
+														: "专业版"}
 												</span>
 											}
 										>
@@ -3176,7 +3175,7 @@ function Page() {
 												}}
 												class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5"
 											>
-												Personal
+												个人版
 											</button>
 										</Show>
 									</Suspense>
@@ -3191,17 +3190,17 @@ function Page() {
 								</div>
 								<div class="flex min-w-0 flex-col leading-tight">
 									<span class="truncate text-[13px] font-medium text-gray-12">
-										Record a new clip
+										录制新片段
 									</span>
 									<span class="truncate text-[11px] text-gray-11">
-										Adds to {flow().projectName}
+										添加到 {flow().projectName}
 									</span>
 								</div>
-								<Tooltip content={<span>Back to editor</span>}>
+								<Tooltip content={<span>返回编辑器</span>}>
 									<button
 										type="button"
 										onClick={() => void cancelEditorRecordingFlow()}
-										aria-label="Back to editor"
+										aria-label="返回编辑器"
 										class="flex size-6 shrink-0 items-center justify-center rounded-full text-gray-10 transition-colors hover:bg-gray-4 hover:text-gray-12 focus:outline-hidden"
 									>
 										<IconCapX class="size-2.5" />
@@ -3229,7 +3228,7 @@ function Page() {
 				<Show when={signIn.isPending}>
 					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
 						<div class="flex flex-col gap-4 justify-center items-center">
-							<span>Signing In...</span>
+							<span>正在登录…</span>
 
 							<Button
 								onClick={() => {
@@ -3239,7 +3238,7 @@ function Page() {
 								variant="gray"
 								class="w-full"
 							>
-								Cancel Sign In
+								取消登录
 							</Button>
 						</div>
 					</div>
@@ -3279,7 +3278,7 @@ function Page() {
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
 									errorMessage={
-										recordings.error ? "Failed to load recordings" : undefined
+										recordings.error ? "加载录制列表失败" : undefined
 									}
 									onSelect={openRecording}
 									disabled={isRecording()}
@@ -3303,7 +3302,7 @@ function Page() {
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
 									errorMessage={
-										screenshots.error ? "Failed to load screenshots" : undefined
+										screenshots.error ? "加载截图列表失败" : undefined
 									}
 									onSelect={openScreenshot}
 									disabled={isRecording()}
@@ -3400,7 +3399,7 @@ function Page() {
 						<Show when={cleanCapture.data?.phase === "paused"}>
 							<div class="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-3 p-2 text-sm">
 								<div class="min-w-0">
-									<span>Recording paused. Cap will hide before resuming.</span>
+									<span>录制已暂停。Cap 会在继续前隐藏。</span>
 								</div>
 								<button
 									type="button"
@@ -3411,7 +3410,7 @@ function Page() {
 											.catch((error: unknown) => toast.error(String(error)))
 									}
 								>
-									Resume
+									继续
 								</button>
 							</div>
 						</Show>
@@ -3427,7 +3426,7 @@ function Page() {
 							>
 								<IconCapStopCircle class="size-4" />
 							</Show>
-							<span>Stop Recording</span>
+							<span>停止录制</span>
 						</button>
 					</div>
 				</div>

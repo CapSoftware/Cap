@@ -34,7 +34,7 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 				)}
 				{ostype() === "windows" && <div class="w-3 shrink-0" />}
 				<span class="truncate text-[13px] font-medium">
-					{props.model.seed().title || "Recording"}
+					{props.model.seed().title || "录制"}
 				</span>
 				<span class="ml-1.5 text-[13px] text-ed-text-3">.cap</span>
 				<div class="flex gap-1 ml-3">
@@ -42,7 +42,7 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 						type="button"
 						disabled
 						class={DISABLED_CONTROL}
-						aria-label="Undo"
+						aria-label="撤销"
 					>
 						↶
 					</button>
@@ -50,7 +50,7 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 						type="button"
 						disabled
 						class={DISABLED_CONTROL}
-						aria-label="Redo"
+						aria-label="重做"
 					>
 						↷
 					</button>
@@ -59,18 +59,18 @@ function PreparingHeader(props: { model: PreparingEditorModel }) {
 			</div>
 			<div class="flex gap-1 items-center justify-end max-[900px]:pr-1">
 				<button type="button" disabled class={DISABLED_CONTROL}>
-					Presets
+					预设
 				</button>
 				<button type="button" disabled class={DISABLED_CONTROL}>
-					Clips
+					片段
 				</button>
 				<button
 					type="button"
 					disabled
 					class="ml-1.5 h-[30px] px-3.5 rounded-lg bg-ed-accent/40 text-white/70 text-[13px] font-medium"
-					title="Available when your recording is ready to edit"
+					title="录制可编辑后即可使用"
 				>
-					Export
+					导出
 				</button>
 			</div>
 			{ostype() === "windows" && (
@@ -86,13 +86,13 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 			<div class="flex flex-row items-center px-3 h-11 shrink-0">
 				<div class="flex flex-row flex-1 gap-0.5 items-center">
 					<button type="button" disabled class={DISABLED_CONTROL}>
-						Aspect ratio
+						宽高比
 					</button>
 					<button type="button" disabled class={DISABLED_CONTROL}>
-						Captions
+						字幕
 					</button>
 				</div>
-				<span class="text-[11px] text-ed-text-3">Preview</span>
+				<span class="text-[11px] text-ed-text-3">预览</span>
 			</div>
 			<div class="relative flex flex-1 min-h-0 justify-center items-center p-4">
 				<PreparingFrame />
@@ -107,7 +107,7 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 				<div class="flex gap-3.5 items-center">
 					<button
 						type="button"
-						aria-label="Go to beginning"
+						aria-label="跳到开头"
 						disabled={!props.model.canPlay()}
 						class={DISABLED_CONTROL}
 						onClick={() => void props.model.seek(0)}
@@ -116,7 +116,7 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 					</button>
 					<button
 						type="button"
-						aria-label={props.model.playback().playing ? "Pause" : "Play"}
+						aria-label={props.model.playback().playing ? "暂停" : "播放"}
 						disabled={!props.model.canPlay()}
 						class="flex items-center justify-center size-8 rounded-full bg-ed-ctl-hover text-ed-text-1 disabled:opacity-40"
 						onClick={() =>
@@ -132,7 +132,7 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 					</button>
 					<button
 						type="button"
-						aria-label="Go to playable end"
+						aria-label="跳到可播放结尾"
 						disabled={!props.model.canPlay()}
 						class={DISABLED_CONTROL}
 						onClick={() =>
@@ -143,7 +143,7 @@ function PreparingPlayer(props: { model: PreparingEditorModel }) {
 					</button>
 				</div>
 				<div class="flex-1 text-right text-[11px] text-ed-text-3" role="status">
-					{props.model.playback().buffering ? "Preparing playback" : ""}
+					{props.model.playback().buffering ? "正在准备播放" : ""}
 				</div>
 			</div>
 		</div>
@@ -168,9 +168,9 @@ function PreparingSidebar() {
 			</div>
 			<div class="flex flex-col gap-5 px-4 py-4">
 				<div>
-					<h2 class="text-[12px] font-medium text-ed-text-2">Background</h2>
+					<h2 class="text-[12px] font-medium text-ed-text-2">背景</h2>
 					<p class="mt-2 text-[12px] text-ed-text-3">
-						Choose a background for your recording.
+						为你的录制选择背景。
 					</p>
 				</div>
 				<div class="h-px bg-ed-line" />
@@ -203,7 +203,7 @@ export function EditorSkeleton() {
 		<div
 			class="flex flex-col flex-1 min-h-0"
 			aria-busy="true"
-			aria-label="Recording editor"
+			aria-label="录制编辑器"
 			data-preparing-editor
 		>
 			<PreparingHeader model={model} />

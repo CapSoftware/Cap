@@ -201,13 +201,13 @@ export function OverlayTrack(
 						fallback={
 							<>
 								<span>
-									Change background, camera and cursor for part of your video
+									为视频的某一段更换背景、摄像头和光标
 								</span>
-								<span class="cap-empty-lane-action">· Add style</span>
+								<span class="cap-empty-lane-action">· 添加样式</span>
 							</>
 						}
 					>
-						<span>Place images and logos on your video</span>
+						<span>在视频中放置图片和 Logo</span>
 						<span class="cap-empty-lane-action">
 							{editorState.importingImage
 								? "· Importing image…"

@@ -6,7 +6,7 @@ export async function openPricingPage() {
 		await commands.showWindow("Upgrade");
 	} catch {
 		toast.error(
-			"Couldn't open your browser. Visit cap.so/pricing to view plans.",
+			"无法打开浏览器。请访问 cap.so/pricing 查看各版本。",
 		);
 	}
 }
