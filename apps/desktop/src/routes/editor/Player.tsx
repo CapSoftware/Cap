@@ -309,16 +309,59 @@ export function PlayerContent(props: { compactness?: number }) {
 		);
 	}
 
-	// Register keyboard shortcuts in one place
+	const seekToStart = async () => {
+		const pending = requestHandoffPlayback(false, 0);
+		if (pending) {
+			editorState.timeline.transform.setPosition(0);
+			await pending;
+			return;
+		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+		setEditorState("playbackTime", 0);
+		setEditorState("previewTime", null);
+		editorState.timeline.transform.setPosition(0);
+		if (!handoffPlaybackPending()) {
+			await commands.seekTo(0);
+		}
+	};
+
+	const seekToEnd = async () => {
+		const total = totalDuration();
+		if (!Number.isFinite(total) || total < 0) return;
+		const pending = requestHandoffPlayback(false, total);
+		if (pending) {
+			await pending;
+			return;
+		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+		setEditorState("playbackTime", total);
+		setEditorState("previewTime", null);
+		if (!handoffPlaybackPending()) {
+			await commands.seekTo(Math.floor(total * FPS));
+		}
+	};
+
+	const hasActiveOverlayNudge = () => {
+		if (editorState.canvasSelection) return true;
+		const selType = editorState.timeline.selection?.type;
+		return selType === "text" || selType === "image";
+	};
+
 	useEditorShortcuts(() => {
-		const el = document.activeElement;
+		const el = document.activeElement as HTMLElement | null;
 		if (!el) return true;
 		const tagName = el.tagName.toLowerCase();
-		const isContentEditable = el.getAttribute("contenteditable") === "true";
+		const role = el.getAttribute("role");
 		return !(
 			tagName === "input" ||
 			tagName === "textarea" ||
-			isContentEditable
+			tagName === "select" ||
+			el.isContentEditable ||
+			role === "slider" ||
+			role === "listbox" ||
+			role === "menu"
 		);
 	}, [
 		{
@@ -360,6 +403,28 @@ export function PlayerContent(props: { compactness?: number }) {
 
 				await handlePlayPauseClick();
 			},
+		},
+		{
+			combo: "ArrowUp",
+			handler: () => {
+				if (hasActiveOverlayNudge()) return;
+				void seekToStart();
+			},
+		},
+		{
+			combo: "Home",
+			handler: () => void seekToStart(),
+		},
+		{
+			combo: "ArrowDown",
+			handler: () => {
+				if (hasActiveOverlayNudge()) return;
+				void seekToEnd();
+			},
+		},
+		{
+			combo: "End",
+			handler: () => void seekToEnd(),
 		},
 	]);
 
@@ -448,18 +513,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					<button
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
-						onClick={async () => {
-							const pending = requestHandoffPlayback(false, 0);
-							if (pending) {
-								editorState.timeline.transform.setPosition(0);
-								await pending;
-								return;
-							}
-							await commands.stopPlayback();
-							setEditorState("playing", false);
-							setEditorState("playbackTime", 0);
-							editorState.timeline.transform.setPosition(0);
-						}}
+						onClick={seekToStart}
 					>
 						<IconCapPrev class="size-3.5" />
 					</button>
@@ -479,16 +533,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					<button
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
-						onClick={async () => {
-							const pending = requestHandoffPlayback(false, totalDuration());
-							if (pending) {
-								await pending;
-								return;
-							}
-							await commands.stopPlayback();
-							setEditorState("playing", false);
-							setEditorState("playbackTime", totalDuration());
-						}}
+						onClick={seekToEnd}
 					>
 						<IconCapNext class="size-3.5" />
 					</button>

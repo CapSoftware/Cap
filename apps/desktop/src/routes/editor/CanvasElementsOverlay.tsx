@@ -652,6 +652,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 		if (!rect) return;
 
 		e.preventDefault();
+		e.stopPropagation();
 		const px = e.shiftKey ? 10 : 1;
 		const x = clamp(
 			rect.x + (dir[0] * px) / props.size.width,
