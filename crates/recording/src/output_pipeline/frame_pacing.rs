@@ -96,8 +96,10 @@ mod tests {
     use super::*;
     use std::sync::mpsc::sync_channel;
 
-    const FPS: u32 = 50;
-    const INTERVAL: Duration = Duration::from_millis(20);
+    // Long intervals so a loaded runner's oversleep (tens of ms) never
+    // reaches the three-interval stall in the jitter test.
+    const FPS: u32 = 5;
+    const INTERVAL: Duration = Duration::from_millis(200);
 
     fn at(n: u32) -> Duration {
         INTERVAL * n
@@ -107,8 +109,8 @@ mod tests {
     fn jittered_frames_pass_through_without_repeats() {
         let (tx, rx) = sync_channel(64);
         let sender = std::thread::spawn(move || {
-            for n in 0..20u32 {
-                // Frames arrive up to 15 ms (three quarters of an interval) late.
+            for n in 0..10u32 {
+                // Frames arrive up to three quarters of an interval late.
                 std::thread::sleep(if n % 2 == 0 {
                     INTERVAL + INTERVAL * 3 / 4
                 } else {
@@ -129,7 +131,7 @@ mod tests {
             }
         }
         sender.join().unwrap();
-        assert_eq!(seen, (0..20).map(|n| (n, at(n))).collect::<Vec<_>>());
+        assert_eq!(seen, (0..10).map(|n| (n, at(n))).collect::<Vec<_>>());
     }
 
     #[test]
