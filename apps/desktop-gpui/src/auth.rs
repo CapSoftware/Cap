@@ -417,6 +417,13 @@ fn start_local_callback(cancel: ArcAtomic) -> Result<LocalCallback, String> {
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    if stream
+                        .set_nonblocking(false)
+                        .and_then(|()| stream.set_read_timeout(Some(Duration::from_secs(1))))
+                        .is_err()
+                    {
+                        continue;
+                    }
                     let mut buffer = [0u8; 4096];
                     let read = match stream.read(&mut buffer) {
                         Ok(read) => read,
@@ -515,6 +522,28 @@ fn query_map(url: &reqwest::Url) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_connection_does_not_block_sign_in_callback() {
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let callback = start_local_callback(cancel.clone()).unwrap();
+        let idle = std::net::TcpStream::connect(("127.0.0.1", callback.port)).unwrap();
+        let mut browser = std::net::TcpStream::connect(("127.0.0.1", callback.port)).unwrap();
+        browser
+            .write_all(b"GET /?api_key=key-1&user_id=user-1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+
+        let result = callback.complete.recv_timeout(Duration::from_secs(3));
+        cancel.store(true, Ordering::Relaxed);
+        drop(idle);
+        assert_eq!(
+            result.unwrap(),
+            Some(AuthParams::ApiKey {
+                api_key: "key-1".into(),
+                user_id: "user-1".into(),
+            })
+        );
+    }
 
     #[test]
     fn parses_api_key_callback() {
