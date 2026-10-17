@@ -451,7 +451,7 @@ impl Mp4ExportSettings {
                     if !has_audio {
                         return None;
                     }
-                    match AACEncoder::init(AudioRenderer::info(), o) {
+                    match AACEncoder::init_for_export(AudioRenderer::info(), o) {
                         Ok(audio) => {
                             detached_audio = Some(audio);
                             None
