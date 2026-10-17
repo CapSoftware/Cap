@@ -1991,6 +1991,12 @@ pub struct SharedPauseState {
 }
 
 impl SharedPauseState {
+    /// The flag that is set while the recording is paused.
+    #[cfg(windows)]
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.flag.clone()
+    }
+
     pub fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,
