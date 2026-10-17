@@ -14,7 +14,7 @@
 //! `off` skips. Without Screen Recording permission the cases skip unless
 //! `CAP_VERIFY_REQUIRE_CAPTURE=1`.
 
-#![cfg(target_os = "macos")]
+#![cfg(any(target_os = "macos", windows))]
 
 use std::{
     collections::BTreeMap,
@@ -29,7 +29,7 @@ use std::{
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
 use cap_recording::{
-    NativeCameraFrame, RecordingDefaults, SendableShareableContent, StudioQuality,
+    NativeCameraFrame, RecordingDefaults, StudioQuality,
     feeds::{
         Admission, camera::synthetic::SyntheticCamera, microphone::synthetic::SyntheticMicrophone,
     },
@@ -38,10 +38,11 @@ use cap_recording::{
     screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
-use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+#[cfg(target_os = "macos")]
+use cap_verify::fixture_avf;
 use cap_verify::{
     audio_code::{self, AudioSource, MarkerPlacement},
-    fixture_avf, media,
+    media,
     report::{self, Case, Tier},
     sched,
     stimulus::{
@@ -50,6 +51,89 @@ use cap_verify::{
     },
     video_code::{self, FrameMarker, Readout, StreamKind},
 };
+
+use platform::{Shareable, host_timestamp};
+
+/// What differs between the macOS and Windows hosts: the capture permission
+/// check, the host clock the sources are stamped with and thread priority.
+#[cfg(target_os = "macos")]
+mod platform {
+    use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
+
+    pub type Shareable = cap_recording::SendableShareableContent;
+
+    /// ScreenCaptureKit's shareable content, which also checks the Screen
+    /// Recording permission.
+    pub async fn shareable() -> anyhow::Result<Shareable> {
+        cidre::sc::ShareableContent::current()
+            .await
+            .map(Shareable::from)
+            .map_err(|e| {
+                anyhow::anyhow!("ScreenCaptureKit unavailable ({e:?}); grant Screen Recording")
+            })
+    }
+
+    pub fn host_timestamp(ticks: u64) -> Timestamp {
+        Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(ticks))
+    }
+
+    /// Host ticks to nanoseconds: ticks * numer / denom.
+    pub fn timebase() -> [u64; 2] {
+        let info = cidre::mach::TimeBaseInfo::new();
+        [u64::from(info.numer), u64::from(info.denom)]
+    }
+
+    pub fn raise_thread_qos() {
+        const QOS_CLASS_USER_INITIATED: u32 = 0x19;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
+        }
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+    }
+
+    /// Every host has an output device for the system audio stimulus.
+    pub fn system_audio_output() -> bool {
+        true
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
+
+    pub type Shareable = ();
+
+    /// Windows Graphics Capture needs no permission; recording itself fails
+    /// when the session has no desktop.
+    pub async fn shareable() -> anyhow::Result<Shareable> {
+        Ok(())
+    }
+
+    pub fn host_timestamp(ticks: u64) -> Timestamp {
+        Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(ticks as i64))
+    }
+
+    /// Host ticks to nanoseconds: ticks * numer / denom.
+    pub fn timebase() -> [u64; 2] {
+        [1_000_000_000, cap_verify::sched::qpc_frequency()]
+    }
+
+    pub fn raise_thread_qos() {
+        const THREAD_PRIORITY_ABOVE_NORMAL: i32 = 1;
+        unsafe extern "system" {
+            fn GetCurrentThread() -> isize;
+            fn SetThreadPriority(thread: isize, priority: i32) -> i32;
+        }
+        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+    }
+
+    /// Hosted Windows runners run the audio service with no endpoints: there
+    /// is nothing to play the system audio stimulus on or to loop back.
+    pub fn system_audio_output() -> bool {
+        use cpal::traits::HostTrait;
+        cpal::default_host().default_output_device().is_some()
+    }
+}
 
 static ATTEMPT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -342,13 +426,8 @@ fn env_flag(name: &str) -> bool {
 /// high priority; at utility priority a loaded runner delays them and their
 /// lateness shows up as recording timing errors. Run the runtime at the
 /// priority the product itself asks for its recording threads.
-#[cfg(target_os = "macos")]
 fn raise_thread_qos() {
-    const QOS_CLASS_USER_INITIATED: u32 = 0x19;
-    unsafe extern "C" {
-        fn pthread_set_qos_class_self_np(qos: u32, relative_priority: i32) -> i32;
-    }
-    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0) };
+    platform::raise_thread_qos();
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -380,10 +459,10 @@ fn real_capture() {
         return;
     };
     let rt = runtime();
-    let shareable = match rt.block_on(cidre::sc::ShareableContent::current()) {
-        Ok(content) => SendableShareableContent::from(content),
+    let shareable = match rt.block_on(platform::shareable()) {
+        Ok(content) => content,
         Err(e) => {
-            let message = format!("ScreenCaptureKit unavailable ({e:?}); grant Screen Recording");
+            let message = format!("{e:#}");
             if env_flag("CAP_VERIFY_REQUIRE_CAPTURE") {
                 panic!("{message}");
             }
@@ -653,10 +732,7 @@ fn start_feeds(
                         }
                     }
                     trace.handoff(n as u32, delivered, wake, pri, || {
-                        mic.try_push(
-                            chunk,
-                            Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
-                        )
+                        mic.try_push(chunk, host_timestamp(capture))
                     });
                 }
                 trace.end = sched::thread_state(thread);
@@ -929,7 +1005,6 @@ fn persist_sources(
         .map(|d| PathBuf::from(d).join("sources"))
         .unwrap_or_else(|| fallback.to_path_buf());
     let path = dir.join(format!("{stem}.json"));
-    let info = cidre::mach::TimeBaseInfo::new();
     let sources: Vec<serde_json::Value> = rec
         .sources
         .iter()
@@ -960,7 +1035,7 @@ fn persist_sources(
         .collect();
     let value = serde_json::json!({
         "attempt": stem,
-        "timebase": [info.numer, info.denom],
+        "timebase": platform::timebase(),
         "reference": reference,
         "window_secs": [rec.started, rec.stopped],
         "columns": ["index", "due", "wake", "built", "pushed", "admission", "pri"],
@@ -974,16 +1049,43 @@ fn persist_sources(
     path
 }
 
+#[cfg(target_os = "macos")]
 fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
     let (w, h) = CAMERA_SIZE;
     let rgba = video_code::marker_rgba(FrameMarker::new(StreamKind::Camera, 0, slot), w, h);
     let sample_buf = camera_sample(&rgba, w, h, capture).ok()?;
     Some(NativeCameraFrame {
         sample_buf,
-        timestamp: Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(capture)),
+        timestamp: host_timestamp(capture),
     })
 }
 
+/// An NV12 frame in a Media Foundation memory buffer, as the Windows camera
+/// feed hands native frames to the encoder.
+#[cfg(windows)]
+fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
+    use cap_mediafoundation_utils::IMFMediaBufferExt;
+    use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
+
+    let (w, h) = CAMERA_SIZE;
+    let rgba = video_code::marker_rgba(FrameMarker::new(StreamKind::Camera, 0, slot), w, h);
+    let nv12 = video_code::rgba_to_nv12(&rgba, w, h);
+    let buffer = unsafe { MFCreateMemoryBuffer(nv12.len() as u32) }.ok()?;
+    buffer.lock_for_write().ok()?.copy_from_slice(&nv12);
+    unsafe { buffer.SetCurrentLength(nv12.len() as u32) }.ok()?;
+    #[allow(clippy::arc_with_non_send_sync)]
+    let buffer = Arc::new(std::sync::Mutex::new(buffer));
+    Some(NativeCameraFrame {
+        buffer,
+        pixel_format: cap_camera_windows::PixelFormat::NV12,
+        width: w as u32,
+        height: h as u32,
+        is_bottom_up: false,
+        timestamp: host_timestamp(capture),
+    })
+}
+
+#[cfg(target_os = "macos")]
 fn camera_sample(
     rgba: &[u8],
     w: usize,
@@ -1014,21 +1116,14 @@ enum Handle {
 /// reach the recording.
 async fn capture_setup(
     capture: CaptureMode,
-) -> anyhow::Result<(
-    ScreenCaptureTarget,
-    Vec<scap_targets::WindowId>,
-    SendableShareableContent,
-)> {
+) -> anyhow::Result<(ScreenCaptureTarget, Vec<scap_targets::WindowId>, Shareable)> {
     let stimulus_window = find_window(WINDOW_TITLE);
     let excluded = scap_targets::Window::list()
         .into_iter()
         .map(|w| w.id())
         .filter(|id| Some(id) != stimulus_window.as_ref())
         .collect();
-    let shareable = cidre::sc::ShareableContent::current()
-        .await
-        .map_err(|e| anyhow::anyhow!("shareable content: {e:?}"))?
-        .into();
+    let shareable = platform::shareable().await?;
     let target = match capture {
         CaptureMode::Display => ScreenCaptureTarget::Display {
             id: scap_targets::Display::primary().id(),
@@ -1052,17 +1147,48 @@ fn studio_builder(
     system_audio: bool,
 ) -> (studio_recording::ActorBuilder, u32) {
     let defaults = RecordingDefaults::default();
-    let builder = defaults
-        .apply_to_studio_builder(
-            studio_recording::Actor::builder(project, target).with_system_audio(system_audio),
-            camera,
-            None,
-        )
-        .with_excluded_windows(excluded)
+    let builder = defaults.apply_to_studio_builder(
+        studio_recording::Actor::builder(project, target).with_system_audio(system_audio),
+        camera,
+        None,
+    );
+    // Windows Graphics Capture records the display without per-window
+    // exclusion; the stimulus covers it full screen.
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_excluded_windows(excluded);
+    #[cfg(windows)]
+    let _ = excluded;
+    let builder = builder
         .with_keyboard_capture(false)
         .with_fragmented(fragmented)
         .with_quality(StudioQuality::Balanced);
     (builder, defaults.studio_max_fps(camera, None))
+}
+
+async fn build_studio(
+    builder: studio_recording::ActorBuilder,
+    shareable: &Shareable,
+) -> anyhow::Result<studio_recording::ActorHandle> {
+    #[cfg(target_os = "macos")]
+    return builder.build(Some(shareable.clone())).await;
+    #[cfg(windows)]
+    {
+        let () = *shareable;
+        builder.build().await
+    }
+}
+
+async fn build_instant(
+    builder: instant_recording::ActorBuilder,
+    shareable: &Shareable,
+) -> anyhow::Result<instant_recording::ActorHandle> {
+    #[cfg(target_os = "macos")]
+    return builder.build(Some(shareable.clone())).await;
+    #[cfg(windows)]
+    {
+        let () = *shareable;
+        builder.build().await
+    }
 }
 
 fn stimulus_binary() -> PathBuf {
@@ -1076,7 +1202,7 @@ fn stimulus_binary() -> PathBuf {
                 .parent()
                 .and_then(|deps| deps.parent())
                 .expect("target profile directory")
-                .join("cap-verify-stimulus");
+                .join(format!("cap-verify-stimulus{}", std::env::consts::EXE_SUFFIX));
             assert!(
                 path.exists(),
                 "{} not found: build it first with `cargo build -p cap-verify-stimulus` (same profile), or set CAP_VERIFY_STIMULUS_BIN",
@@ -1118,7 +1244,7 @@ struct Recorded {
 async fn run_case(
     spec: &Spec,
     capture: CaptureMode,
-    shareable: &SendableShareableContent,
+    shareable: &Shareable,
     case: &mut Case,
 ) -> anyhow::Result<()> {
     let scratch = scratch_root().join(format!(
@@ -1626,8 +1752,8 @@ fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
     };
     let state = sched::ThreadState {
         policy: 2,
-        base_pri: 97,
-        cur_pri: 97,
+        base_pri: sched::REALTIME_PRIORITY,
+        cur_pri: sched::REALTIME_PRIORITY,
         max_pri: 63,
         cpu_us: 0,
     };
@@ -1675,7 +1801,7 @@ fn simulated_handoffs(
                 built,
                 pushed,
                 admission: admission(slot),
-                pri: 97,
+                pri: sched::REALTIME_PRIORITY,
             }
         })
         .collect()
@@ -1757,12 +1883,16 @@ fn source_lateness_is_attributed_to_the_source_or_to_cap() {
     );
     // A source below the real-time band is a harness failure.
     let mut demoted = overslept.clone();
-    demoted.handoffs[100].pri = 31;
+    demoted.handoffs[100].pri = sched::REALTIME_PRIORITY - 1;
     assert!(source_scheduling(&demoted, reference, window).is_err());
     assert!(source_scheduling(&overslept, reference, window).is_ok());
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "its expected class is a macOS expectation (recording/instant/screen-mic-system sync-screen-mic)"
+)]
 fn sentinel_freezes_excuse_only_failures_localized_inside_them() {
     let reference = host_now();
     // A sentinel log with a 300 ms gap at 9.9 s and a 60 ms gap at 5 s.
@@ -1919,7 +2049,7 @@ fn scratch_root() -> PathBuf {
 async fn record(
     spec: &Spec,
     capture: CaptureMode,
-    _preflight: &SendableShareableContent,
+    _preflight: &Shareable,
     scratch: &Path,
     reference: u64,
     case: &mut Case,
@@ -1929,7 +2059,9 @@ async fn record(
         seconds: spec.seconds,
         holds: spec.holds.clone(),
         busy: true,
-        audio: spec.system_audio && stimulus_plays_system_audio(),
+        audio: spec.system_audio
+            && stimulus_plays_system_audio()
+            && platform::system_audio_output(),
         warmup: match capture {
             CaptureMode::Display => 2.0,
             CaptureMode::Window => 2.0,
@@ -1972,6 +2104,10 @@ async fn record(
 
     let project = scratch.join("recording.cap");
     let defaults = RecordingDefaults::default();
+    let system_audio = spec.system_audio && platform::system_audio_output();
+    if spec.system_audio && !system_audio {
+        case.note("no audio output device: recorded without system audio");
+    }
     let gate = spec.gated.then(cap_recording::RecordingStartGate::new);
     let (handle, max_fps) = match spec.mode {
         Mode::Studio { fragmented, .. } => {
@@ -1981,7 +2117,7 @@ async fn record(
                 excluded,
                 fragmented,
                 camera,
-                spec.system_audio,
+                system_audio,
             );
             let mut builder = builder;
             if spec.mic {
@@ -1994,15 +2130,16 @@ async fn record(
                 builder = builder.with_camera_feed(lock.clone());
             }
             (
-                Handle::Studio(builder.build(Some(shareable.clone())).await?),
+                Handle::Studio(build_studio(builder, &shareable).await?),
                 max_fps,
             )
         }
         Mode::Instant => {
             let builder = instant_recording::Actor::builder(project.clone(), target)
-                .with_system_audio(spec.system_audio)
-                .with_max_output_size(defaults.instant_mode_max_resolution)
-                .with_excluded_windows(excluded);
+                .with_system_audio(system_audio)
+                .with_max_output_size(defaults.instant_mode_max_resolution);
+            #[cfg(target_os = "macos")]
+            let builder = builder.with_excluded_windows(excluded);
             let builder = if spec.mic {
                 builder.with_mic_feed(mic_lock.clone())
             } else {
@@ -2013,22 +2150,16 @@ async fn record(
                 None => builder,
             };
             (
-                Handle::Instant(builder.build(Some(shareable.clone())).await?),
+                Handle::Instant(build_instant(builder, &shareable).await?),
                 cap_recording::DEFAULT_INSTANT_MODE_FPS,
             )
         }
         Mode::StudioCrashed => {
-            let (builder, max_fps) = studio_builder(
-                project.clone(),
-                target,
-                excluded,
-                true,
-                false,
-                spec.system_audio,
-            );
+            let (builder, max_fps) =
+                studio_builder(project.clone(), target, excluded, true, false, system_audio);
             let builder = builder.with_mic_feed(mic_lock.clone());
             (
-                Handle::Studio(builder.build(Some(shareable.clone())).await?),
+                Handle::Studio(build_studio(builder, &shareable).await?),
                 max_fps,
             )
         }
@@ -2053,12 +2184,7 @@ async fn record(
     let crashed = if spec.mode == Mode::StudioCrashed {
         let snapshot = scratch.join("crash-snapshot.cap");
         let snapshot_started = host_now();
-        let status = std::process::Command::new("cp")
-            .arg("-cR")
-            .arg(&project)
-            .arg(&snapshot)
-            .status()?;
-        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        snapshot_live_project(&project, &snapshot)?;
         case.note(format!(
             "crash snapshot at {:.3}s, cloned in {:.3}s",
             host_secs(snapshot_started, reference),
@@ -2169,6 +2295,40 @@ async fn record(
 /// fragments are 2 s, see `MacOSFragmentedM4SMuxerConfig`) plus the encoder
 /// pipeline still in flight.
 const CRASH_LOSS_BUDGET: f64 = 3.0;
+
+/// Copies the live project as a crash would leave it on disk: APFS clones on
+/// macOS; a file-by-file copy on Windows, where the recorder's files are open
+/// for shared reading.
+fn snapshot_live_project(project: &Path, snapshot: &Path) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("cp")
+            .arg("-cR")
+            .arg(project)
+            .arg(snapshot)
+            .status()?;
+        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                let target = to.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_dir(&entry.path(), &target)?;
+                } else {
+                    std::fs::copy(entry.path(), &target)?;
+                }
+            }
+            Ok(())
+        }
+        copy_dir(project, snapshot)
+            .map_err(|e| anyhow::anyhow!("snapshot of the live recording failed: {e}"))
+    }
+}
 
 async fn finalize_instant(
     recording: &mut instant_recording::CompletedRecording,

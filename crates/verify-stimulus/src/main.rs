@@ -1,12 +1,12 @@
 //! `cap-verify-stimulus <spec json> <log path>`: see `cap_verify::stimulus`.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
-    eprintln!("cap-verify-stimulus only runs on macOS");
+    eprintln!("cap-verify-stimulus only runs on macOS and Windows");
     std::process::exit(2);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn main() {
     if let Err(e) = app::run() {
         println!("error {e}");
@@ -14,12 +14,11 @@ fn main() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod app {
     use std::{
         fs::File,
         io::{BufRead, Write},
-        num::NonZeroU32,
         path::PathBuf,
         sync::{
             Arc, Mutex,
@@ -36,6 +35,7 @@ mod app {
         video_code::{self, FrameMarker, PixelOrder, StreamKind},
     };
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    #[cfg(target_os = "macos")]
     use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
     use winit::{
         application::ApplicationHandler,
@@ -81,11 +81,16 @@ mod app {
         });
         let sentinel = Sentinel::start(log_path.with_file_name(SENTINEL_FILE));
 
-        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        let event_loop = EventLoop::<Command>::with_user_event()
-            .with_activation_policy(ActivationPolicy::Regular)
-            .with_activate_ignoring_other_apps(true)
-            .build()?;
+        #[cfg(target_os = "macos")]
+        let event_loop = {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            EventLoop::<Command>::with_user_event()
+                .with_activation_policy(ActivationPolicy::Regular)
+                .with_activate_ignoring_other_apps(true)
+                .build()?
+        };
+        #[cfg(windows)]
+        let event_loop = EventLoop::<Command>::with_user_event().build()?;
         let proxy = event_loop.create_proxy();
         spawn_stdin_reader(proxy);
 
@@ -124,15 +129,21 @@ mod app {
         let observer = start_observer(app.log.clone());
         let (qos, realtime) = raise_priority(app.spec.fps);
         app.log.write(&StimulusEvent::Priority { qos, realtime });
-        let process_info = NSProcessInfo::processInfo();
-        let activity = unsafe {
-            process_info.beginActivityWithOptions_reason(
-                NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
-                &NSString::from_str("Present recording verification markers on schedule"),
-            )
+        #[cfg(target_os = "macos")]
+        let result = {
+            let process_info = NSProcessInfo::processInfo();
+            let activity = unsafe {
+                process_info.beginActivityWithOptions_reason(
+                    NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                    &NSString::from_str("Present recording verification markers on schedule"),
+                )
+            };
+            let result = event_loop.run_app(&mut app);
+            unsafe { process_info.endActivity(&activity) };
+            result
         };
+        #[cfg(windows)]
         let result = event_loop.run_app(&mut app);
-        unsafe { process_info.endActivity(&activity) };
         result?;
         drop(observer);
         drop(audio);
@@ -190,10 +201,17 @@ mod app {
                 .thread
                 .join()
                 .map_err(|_| anyhow::anyhow!("sentinel panicked"))?;
-            let info = cidre::mach::TimeBaseInfo::new();
+            // Host ticks to nanoseconds: ticks * numer / denom.
+            #[cfg(target_os = "macos")]
+            let timebase = {
+                let info = cidre::mach::TimeBaseInfo::new();
+                [u64::from(info.numer), u64::from(info.denom)]
+            };
+            #[cfg(windows)]
+            let timebase = [1_000_000_000, sched::qpc_frequency()];
             let mut out = serde_json::json!({
                 "period_secs": SENTINEL_PERIOD_SECS,
-                "timebase": [info.numer, info.denom],
+                "timebase": timebase,
                 "first": wakes.first(),
                 "realtime": realtime,
                 "end": end,
@@ -230,6 +248,18 @@ mod app {
     /// while pictures are being presented is the window server or capture
     /// service stalling (the input never reached the screen or the capture
     /// service), not the recorder.
+    #[cfg(windows)]
+    fn start_observer(log: Arc<Log>) -> Observer {
+        log.write(&StimulusEvent::ObserverUnavailable {
+            reason: "no independent capture observer on Windows".into(),
+        });
+        Observer {
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            thread: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn start_observer(log: Arc<Log>) -> Observer {
         use cidre::{ns, sc};
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -309,7 +339,7 @@ mod app {
         epoch: Arc<AtomicU64>,
         go_at: Option<(Instant, u64)>,
         window: Option<Arc<Window>>,
-        surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+        surface: Option<canvas::Canvas>,
         size: (u32, u32),
         shown: Option<u32>,
         ready: bool,
@@ -384,21 +414,10 @@ mod app {
             if w == 0 || h == 0 {
                 return;
             }
-            if surface
-                .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
-                .is_err()
-            {
-                return;
-            }
-            let Ok(mut buffer) = surface.buffer_mut() else {
-                return;
-            };
-            let (w, h) = (w as usize, h as usize);
-            let band = if self.spec.busy { h / 8 } else { 0 };
-            {
-                let bytes: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), w * h * 4)
-                };
+            let busy = self.spec.busy;
+            let presented = canvas::present(surface, w, h, |bytes| {
+                let (w, h) = (w as usize, h as usize);
+                let band = if busy { h / 8 } else { 0 };
                 let stride = w * 4;
                 let marker = FrameMarker::new(StreamKind::Screen, 0, index);
                 video_code::draw_marker(
@@ -419,8 +438,8 @@ mod app {
                         (salt << 1) | 1,
                     );
                 }
-            }
-            if buffer.present().is_ok() {
+            });
+            if presented {
                 let host = host_now();
                 if self.shown != Some(index) {
                     self.log.write(&StimulusEvent::Frame {
@@ -434,6 +453,60 @@ mod app {
                     self.presented_at = Some((index, Instant::now()));
                 }
             }
+        }
+    }
+
+    /// Where the stimulus draws BGRA pictures and presents them. softbuffer
+    /// presents on Windows with a GDI blit into the window's redirection
+    /// surface, which the compositor (and so Windows Graphics Capture) can
+    /// sample half done: recordings showed markers whose top rows were the new
+    /// picture and bottom rows the old one (run 39000141528). On Windows the
+    /// blit starts right after a composition pass (`DwmFlush`), so it is done
+    /// long before the next one. A DXGI swap chain was not an option on hosted
+    /// runners: their Hyper-V display rejected a flip-model swap chain
+    /// (DXGI_ERROR_INVALID_CALL, run 39002964457) and creating the other
+    /// swap effects crashed the stimulus.
+    mod canvas {
+        use super::*;
+        use std::num::NonZeroU32;
+
+        pub type Canvas = softbuffer::Surface<Arc<Window>, Arc<Window>>;
+
+        pub fn new(window: &Arc<Window>) -> Result<Canvas, String> {
+            softbuffer::Context::new(window.clone())
+                .and_then(|context| softbuffer::Surface::new(&context, window.clone()))
+                .map_err(|e| e.to_string())
+        }
+
+        #[cfg(windows)]
+        fn after_composition() {
+            #[link(name = "dwmapi")]
+            unsafe extern "system" {
+                fn DwmFlush() -> i32;
+            }
+            unsafe { DwmFlush() };
+        }
+
+        pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
+            if canvas
+                .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
+                .is_err()
+            {
+                return false;
+            }
+            let Ok(mut buffer) = canvas.buffer_mut() else {
+                return false;
+            };
+            let bytes: &mut [u8] = unsafe {
+                std::slice::from_raw_parts_mut(
+                    buffer.as_mut_ptr().cast::<u8>(),
+                    w as usize * h as usize * 4,
+                )
+            };
+            paint(bytes);
+            #[cfg(windows)]
+            after_composition();
+            buffer.present().is_ok()
         }
     }
 
@@ -485,9 +558,7 @@ mod app {
             };
             let size = window.inner_size();
             self.size = (size.width, size.height);
-            let surface = softbuffer::Context::new(window.clone())
-                .and_then(|context| softbuffer::Surface::new(&context, window.clone()));
-            match surface {
+            match canvas::new(&window) {
                 Ok(s) => self.surface = Some(s),
                 Err(e) => {
                     self.error = Some(format!("surface: {e}"));
@@ -694,6 +765,7 @@ mod app {
         epoch: Arc<AtomicU64>,
         log: Arc<Log>,
     ) -> Result<cpal::Stream, String> {
+        #[cfg(target_os = "macos")]
         use cpal::host::coreaudio::StreamInstantExt;
 
         let host = cpal::default_host();
@@ -760,7 +832,16 @@ mod app {
             .build_output_stream(
                 &config.config(),
                 move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    state.fill(data, info.timestamp().callback.as_host_time());
+                    #[cfg(target_os = "macos")]
+                    let callback_host = info.timestamp().callback.as_host_time();
+                    // cpal's WASAPI instants have no host-clock accessor; the
+                    // callback runs at the start of the buffer it fills.
+                    #[cfg(windows)]
+                    let callback_host = {
+                        let _ = info;
+                        host_now()
+                    };
+                    state.fill(data, callback_host);
                 },
                 |e| eprintln!("stimulus audio error: {e}"),
                 None,
