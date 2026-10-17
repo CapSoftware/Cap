@@ -593,6 +593,9 @@ impl FfmpegDecoder {
         // Previous vended frame number since the last reset, for pts-hole
         // discovery (the reader vends in pts order between resets).
         let mut prev_vended: Option<u32> = None;
+        // Newest frame the reader has vended since its last reset: where the
+        // reader is. The last sent frame is not, as it can be a cache hit.
+        let mut reader_at: Option<u32> = None;
 
         let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
         let first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
@@ -636,6 +639,9 @@ impl FfmpegDecoder {
             let mut sw_gap_hold: Option<OutputFrame> = None;
             // Previous vended frame number since the last reset.
             let mut sw_prev_vended: Option<u32> = None;
+            // Newest frame the reader has vended since its last reset: where the
+            // reader is. The last sent frame is not, as it can be a cache hit.
+            let mut sw_reader_at: Option<u32> = None;
             let sw_last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let sw_first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let mut sw_frames = sw_this.frames();
@@ -669,6 +675,7 @@ impl FfmpegDecoder {
                 // The pre-decoded frame is a real vend: without seeding
                 // this, an opening static hold would never be recorded.
                 sw_prev_vended = Some(current_frame);
+                sw_reader_at = Some(current_frame);
             }
 
             let sw_decoder_type = DecoderType::FFmpegSoftware;
@@ -748,6 +755,16 @@ impl FfmpegDecoder {
                         continue;
                     }
 
+                    // Nothing precedes the stream's first frame, so it holds
+                    // for any earlier request; a later one needs a seek.
+                    if let Some(first_frame) = sw_first_ever_frame.borrow().clone()
+                        && requested_frame <= first_frame.number
+                    {
+                        *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                        let _ = reply.send(first_frame.frame);
+                        continue;
+                    }
+
                     if is_backward_seek {
                         let best_cached_frame = sw_cache
                             .range(..=requested_frame)
@@ -766,14 +783,6 @@ impl FfmpegDecoder {
                             continue;
                         }
 
-                        if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
-                            && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
-                        {
-                            *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                            let _ = reply.send(first_frame.frame);
-                            continue;
-                        }
-
                         if let Err(error) = sw_this.reset(requested_time)
                             && let Some(control) = &managed
                         {
@@ -787,6 +796,7 @@ impl FfmpegDecoder {
                         *sw_last_sent_frame.borrow_mut() = None;
                         sw_cache.clear();
                         sw_prev_vended = None;
+                        sw_reader_at = None;
                     }
 
                     // Requests inside a KNOWN pts hole are answered with the
@@ -836,6 +846,11 @@ impl FfmpegDecoder {
                     let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                     let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
+                    // The reader has already passed this uncached frame: it fell
+                    // outside the cache window, or the last sent frame was a cache
+                    // hit away from the reader. Reading on cannot reach it.
+                    let behind_reader = sw_reader_at.is_some_and(|at| requested_frame <= at);
+
                     let is_far_forward = sw_last_sent_frame.borrow().as_ref().map_or_else(
                         || {
                             if sw_first_ever_frame.borrow().is_some() {
@@ -855,7 +870,7 @@ impl FfmpegDecoder {
                         },
                     );
 
-                    if is_far_forward {
+                    if is_far_forward || behind_reader {
                         if let Err(error) = sw_this.reset(requested_time)
                             && let Some(control) = &managed
                         {
@@ -869,6 +884,7 @@ impl FfmpegDecoder {
                         *sw_last_sent_frame.borrow_mut() = None;
                         sw_cache.clear();
                         sw_prev_vended = None;
+                        sw_reader_at = None;
                     }
 
                     let mut exit = false;
@@ -895,6 +911,13 @@ impl FfmpegDecoder {
                             // the vend continuity that hole discovery
                             // relies on.
                             sw_prev_vended = None;
+                            // The reader has still moved past it.
+                            if let Ok(frame) = &frame
+                                && let Some(pts) = frame.pts()
+                            {
+                                sw_reader_at =
+                                    Some(pts_to_frame(pts - sw_start_time, sw_time_base, fps));
+                            }
                             break;
                         }
 
@@ -917,6 +940,7 @@ impl FfmpegDecoder {
                             record_pts_hole(&mut sw_pts_holes, prev, current_frame);
                         }
                         sw_prev_vended = Some(current_frame);
+                        sw_reader_at = Some(current_frame);
 
                         let mut cache_frame = CachedFrame::Raw {
                             frame,
@@ -1146,6 +1170,7 @@ impl FfmpegDecoder {
             // The pre-decoded frame is a real vend: without seeding this,
             // an opening static hold would never be recorded.
             prev_vended = Some(current_frame);
+            reader_at = Some(current_frame);
             info!(
                 "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                 name, current_frame, video_width, video_height
@@ -1210,6 +1235,7 @@ impl FfmpegDecoder {
                                             record_pts_hole(&mut pts_holes, prev, current_frame);
                                         }
                                         prev_vended = Some(current_frame);
+                                        reader_at = Some(current_frame);
                                         let mut cache_frame = CachedFrame::Raw {
                                             frame,
                                             number: current_frame,
@@ -1312,6 +1338,16 @@ impl FfmpegDecoder {
                     continue;
                 }
 
+                // Nothing precedes the stream's first frame, so it holds
+                // for any earlier request; a later one needs a seek.
+                if let Some(first_frame) = first_ever_frame.borrow().clone()
+                    && requested_frame <= first_frame.number
+                {
+                    *last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                    let _ = reply.send(first_frame.frame);
+                    continue;
+                }
+
                 if is_backward_seek {
                     let best_cached_frame = cache
                         .range(..=requested_frame)
@@ -1330,14 +1366,6 @@ impl FfmpegDecoder {
                         continue;
                     }
 
-                    if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
-                        && let Some(first_frame) = first_ever_frame.borrow().clone()
-                    {
-                        *last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                        let _ = reply.send(first_frame.frame);
-                        continue;
-                    }
-
                     if let Err(error) = this.reset(requested_time)
                         && let Some(control) = &managed
                     {
@@ -1352,6 +1380,7 @@ impl FfmpegDecoder {
                     *last_sent_frame.borrow_mut() = None;
                     cache.clear();
                     prev_vended = None;
+                    reader_at = None;
                 }
 
                 // Requests inside a KNOWN pts hole are answered with the
@@ -1406,6 +1435,11 @@ impl FfmpegDecoder {
                 let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                 let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
+                // The reader has already passed this uncached frame: it fell
+                // outside the cache window, or the last sent frame was a cache
+                // hit away from the reader. Reading on cannot reach it.
+                let behind_reader = reader_at.is_some_and(|at| requested_frame <= at);
+
                 let is_far_forward = last_sent_frame.borrow().as_ref().map_or_else(
                     || {
                         if first_ever_frame.borrow().is_some() {
@@ -1423,7 +1457,7 @@ impl FfmpegDecoder {
                     |last| requested_frame.saturating_sub(last.number) > FRAME_CACHE_SIZE as u32,
                 );
 
-                if is_far_forward {
+                if is_far_forward || behind_reader {
                     if let Err(error) = this.reset(requested_time)
                         && let Some(control) = &managed
                     {
@@ -1438,6 +1472,7 @@ impl FfmpegDecoder {
                     *last_sent_frame.borrow_mut() = None;
                     cache.clear();
                     prev_vended = None;
+                    reader_at = None;
                 }
 
                 let mut exit = false;
@@ -1463,6 +1498,12 @@ impl FfmpegDecoder {
                         // The frame just pulled is discarded: it breaks the
                         // vend continuity that hole discovery relies on.
                         prev_vended = None;
+                        // The reader has still moved past it.
+                        if let Ok(frame) = &frame
+                            && let Some(pts) = frame.pts()
+                        {
+                            reader_at = Some(pts_to_frame(pts - start_time, time_base, fps));
+                        }
                         break;
                     }
 
@@ -1485,6 +1526,7 @@ impl FfmpegDecoder {
                         record_pts_hole(&mut pts_holes, prev, current_frame);
                     }
                     prev_vended = Some(current_frame);
+                    reader_at = Some(current_frame);
 
                     let mut cache_frame = CachedFrame::Raw {
                         frame,
