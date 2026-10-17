@@ -1,0 +1,73 @@
+name: Windows capture probe (scratch)
+
+on:
+  push:
+    branches: [scratch/win-capture-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-8vcpu-windows-2025, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Session and desktop
+        shell: pwsh
+        run: |
+          whoami
+          "UserInteractive: $([Environment]::UserInteractive)"
+          "Session: $((Get-Process -Id $PID).SessionId)"
+          query session 2>&1
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber | Format-List
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          "Primary screen: $($b.Width)x$($b.Height)"
+          try {
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $colors = @{}
+            for ($x = 0; $x -lt $b.Width; $x += 37) { for ($y = 0; $y -lt $b.Height; $y += 37) { $colors[$bmp.GetPixel($x, $y).ToArgb()] = 1 } }
+            "CopyFromScreen OK, distinct sampled colours: $($colors.Count)"
+          } catch { "CopyFromScreen failed: $_" }
+
+      - name: Graphics Capture and D3D11
+        shell: powershell
+        run: |
+          try {
+            $null = [Windows.Graphics.Capture.GraphicsCaptureSession, Windows.Graphics.Capture, ContentType = WindowsRuntime]
+            "GraphicsCaptureSession.IsSupported: $([Windows.Graphics.Capture.GraphicsCaptureSession]::IsSupported())"
+          } catch { "WinRT Graphics.Capture unavailable: $_" }
+          Add-Type -TypeDefinition @'
+          using System; using System.Runtime.InteropServices;
+          public static class D3D {
+            [DllImport("d3d11.dll")] public static extern int D3D11CreateDevice(IntPtr adapter, int driverType, IntPtr software, uint flags, IntPtr levels, uint numLevels, uint sdk, out IntPtr device, out int level, out IntPtr context);
+            public static string Try(int type, uint flags) { IntPtr d, c; int l; int hr = D3D11CreateDevice(IntPtr.Zero, type, IntPtr.Zero, flags, IntPtr.Zero, 0, 7, out d, out l, out c); return String.Format("hr=0x{0:X8} level=0x{1:X}", hr, l); }
+          }
+          '@
+          "D3D11 hardware: $([D3D]::Try(1, 0x20))"
+          "D3D11 WARP:     $([D3D]::Try(5, 0x20))"
+          "D3D11 hardware +video: $([D3D]::Try(1, 0x820))"
+          "D3D11 WARP +video:     $([D3D]::Try(5, 0x820))"
+          Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, CurrentHorizontalResolution, CurrentVerticalResolution | Format-List
+
+      - name: Audio
+        shell: pwsh
+        run: |
+          Get-Service audiosrv, AudioEndpointBuilder -ErrorAction SilentlyContinue | Format-Table Name, Status, StartType
+          Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
+          Get-CimInstance Win32_SoundDevice | Format-Table Name, Status
+          try { Start-Service audiosrv -ErrorAction Stop; "audiosrv started" } catch { "audiosrv start failed: $_" }
+          Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Format-Table FriendlyName, Status
+
+      - name: Media Foundation encoders
+        shell: pwsh
+        run: |
+          Get-ChildItem 'HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\Categories\f79eac7d-e545-4387-bdee-d647d7bde42a' -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty "HKLM:\SOFTWARE\Classes\MediaFoundation\Transforms\$($_.PSChildName)" -ErrorAction SilentlyContinue).'(default)' }
+          Test-Path C:\Windows\System32\mfh264enc.dll
+          Get-WindowsCapability -Online -Name 'Media.MediaFeaturePack*' -ErrorAction SilentlyContinue | Format-Table Name, State
