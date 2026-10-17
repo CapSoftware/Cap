@@ -27,6 +27,19 @@ pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 7] {
+    let click_spring = cursor.click_spring_config();
+    [
+        u32::from(cursor.raw),
+        cursor.tension.to_bits(),
+        cursor.mass.to_bits(),
+        cursor.friction.to_bits(),
+        click_spring.tension.to_bits(),
+        click_spring.mass.to_bits(),
+        click_spring.friction.to_bits(),
+    ]
+}
+
 #[derive(Default)]
 pub(super) struct PreviewCursorCache {
     entries: Vec<PreviewCursorCacheEntry>,
@@ -73,15 +86,7 @@ impl PreviewCursorCache {
             friction: project.cursor.friction,
         };
         let click_spring = project.cursor.click_spring_config();
-        let settings = [
-            u32::from(project.cursor.raw),
-            smoothing.tension.to_bits(),
-            smoothing.mass.to_bits(),
-            smoothing.friction.to_bits(),
-            click_spring.tension.to_bits(),
-            click_spring.mass.to_bits(),
-            click_spring.friction.to_bits(),
-        ];
+        let settings = cursor_timeline_settings(&project.cursor);
 
         if let Some(index) = self.entries.iter().position(|entry| {
             entry.recording_clip == recording_clip
@@ -1973,6 +1978,9 @@ mod tests {
         project.cursor.rotation_amount += 0.1;
         project.cursor.stop_movement_in_last_seconds = Some(0.5);
         project.cursor.click_spring = Some(project.cursor.click_spring_config());
+        project.background.padding += 1.0;
+        project.audio.mic_volume_db += 1.0;
+        project.cursor.motion_blur += 0.1;
         let repeated = cache.get(0, &Arc::clone(&cursor), &project).unwrap();
 
         assert!(Arc::ptr_eq(&first, &repeated));
