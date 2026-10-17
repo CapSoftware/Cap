@@ -3137,6 +3137,12 @@ pub mod synthetic {
                     done_tx,
                 }),
             });
+            // A recording subscription attaches to the input's stream
+            // health, which opening a real input registers.
+            #[cfg(any(target_os = "linux", windows))]
+            let _ = feed
+                .stream_health
+                .insert(STREAM_ID, Arc::new(StreamHealth::new(STREAM_ID)));
             Self {
                 feed: MicrophoneFeed::spawn(feed),
                 sample_rate,

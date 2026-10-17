@@ -47,6 +47,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup
+        id: setup
         uses: ./.github/actions/engine-verify-setup
         with:
           target: x86_64-pc-windows-msvc
@@ -59,6 +60,17 @@ jobs:
           cargo build --locked --profile ci-verify -p cap-verify-stimulus
           cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
+
+      - name: Save build cache
+        if: steps.setup.outputs.build-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/ci-verify/
+          key: ${{ steps.setup.outputs.build-cache-key }}
 
       - name: Real-capture recording oracle
         shell: bash

@@ -1752,8 +1752,8 @@ fn test_trace(name: &'static str, handoffs: Vec<Handoff>) -> SourceTrace {
     };
     let state = sched::ThreadState {
         policy: 2,
-        base_pri: 97,
-        cur_pri: 97,
+        base_pri: sched::REALTIME_PRIORITY,
+        cur_pri: sched::REALTIME_PRIORITY,
         max_pri: 63,
         cpu_us: 0,
     };
@@ -1801,7 +1801,7 @@ fn simulated_handoffs(
                 built,
                 pushed,
                 admission: admission(slot),
-                pri: 97,
+                pri: sched::REALTIME_PRIORITY,
             }
         })
         .collect()
@@ -1883,12 +1883,16 @@ fn source_lateness_is_attributed_to_the_source_or_to_cap() {
     );
     // A source below the real-time band is a harness failure.
     let mut demoted = overslept.clone();
-    demoted.handoffs[100].pri = 31;
+    demoted.handoffs[100].pri = sched::REALTIME_PRIORITY - 1;
     assert!(source_scheduling(&demoted, reference, window).is_err());
     assert!(source_scheduling(&overslept, reference, window).is_ok());
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "its expected class is a macOS expectation (recording/instant/screen-mic-system sync-screen-mic)"
+)]
 fn sentinel_freezes_excuse_only_failures_localized_inside_them() {
     let reference = host_now();
     // A sentinel log with a 300 ms gap at 9.9 s and a 60 ms gap at 5 s.
