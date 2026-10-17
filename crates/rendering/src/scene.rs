@@ -379,6 +379,7 @@ mod tests {
             split_layout: None,
             transition_in: transition,
             transition_out: transition,
+            fill_frame_position: None,
         }
     }
 

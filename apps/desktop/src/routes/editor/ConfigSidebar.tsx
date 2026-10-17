@@ -2803,6 +2803,41 @@ function BackgroundConfig(props: {
 						formatTooltip="%"
 					/>
 				</Field>
+				<Show
+					when={
+						project.aspectRatio &&
+						(project.background.frame?.style ?? "none") === "none"
+					}
+				>
+					<Subfield name="Fill Frame">
+						<Toggle
+							checked={project.background.fillFrame ?? false}
+							onChange={(fill) => setProject("background", "fillFrame", fill)}
+						/>
+					</Subfield>
+					<Show when={project.background.fillFrame}>
+						<Subfield name="Follow Cursor">
+							<Toggle
+								checked={project.background.fillFrameFollowCursor ?? true}
+								onChange={(follow) =>
+									setProject("background", "fillFrameFollowCursor", follow)
+								}
+							/>
+						</Subfield>
+						<Show when={!(project.background.fillFrameFollowCursor ?? true)}>
+							<Field name="Screen Position">
+								<PositionPad
+									value={() =>
+										project.background.fillFramePosition ?? { x: 0.5, y: 0.5 }
+									}
+									onChange={(pos) =>
+										setProject("background", "fillFramePosition", pos)
+									}
+								/>
+							</Field>
+						</Show>
+					</Show>
+				</Show>
 				<Field
 					inline
 					name="Padding"
@@ -3397,7 +3432,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 						value={[project.camera.size]}
 						onChange={(v) => setProject("camera", "size", v[0])}
 						minValue={20}
-						maxValue={80}
+						maxValue={100}
 						step={0.1}
 						formatTooltip="%"
 					/>
@@ -4977,8 +5012,13 @@ function SceneSegmentConfig(props: {
 	segmentIndex: number;
 	segment: SceneSegment;
 }) {
-	const { setProject, setEditorState, projectActions, editorInstance } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		setEditorState,
+		projectActions,
+		editorInstance,
+	} = useEditorContext();
 
 	const hasCamera = () =>
 		!editorInstance.recordings.segments.every((s) => s.camera === null);
@@ -5194,6 +5234,61 @@ function SceneSegmentConfig(props: {
 						value={() => split().cameraPosition}
 						onChange={(pos) => updateSplit({ cameraPosition: pos })}
 					/>
+				</Field>
+			</Show>
+			<Show
+				when={
+					(props.segment.mode === "default" ||
+						props.segment.mode === "hideCamera") &&
+					!!project.aspectRatio &&
+					project.background.fillFrame &&
+					(project.background.frame?.style ?? "none") === "none"
+				}
+			>
+				<div class="w-full border-t border-ed-line" />
+				<Field name="Screen Position">
+					<div class="flex flex-col gap-2">
+						<span class="text-[11px] text-ed-text-3">
+							Fill Frame keeps this point of the screen centered during this
+							scene.
+						</span>
+						<PositionPad
+							value={() =>
+								props.segment.fillFramePosition ??
+								((project.background.fillFrameFollowCursor ?? true)
+									? { x: 0.5, y: 0.5 }
+									: (project.background.fillFramePosition ?? {
+											x: 0.5,
+											y: 0.5,
+										}))
+							}
+							onChange={(pos) =>
+								setProject(
+									"timeline",
+									"sceneSegments",
+									props.segmentIndex,
+									"fillFramePosition",
+									pos,
+								)
+							}
+						/>
+						<Show when={props.segment.fillFramePosition}>
+							<EditorButton
+								size="sm"
+								onClick={() =>
+									setProject(
+										"timeline",
+										"sceneSegments",
+										props.segmentIndex,
+										"fillFramePosition",
+										null,
+									)
+								}
+							>
+								Follow the default behavior
+							</EditorButton>
+						</Show>
+					</div>
 				</Field>
 			</Show>
 		</>

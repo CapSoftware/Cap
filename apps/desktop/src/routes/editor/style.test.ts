@@ -29,6 +29,9 @@ const background: BackgroundConfiguration = {
 	border: null,
 	frame: null,
 	notch: null,
+	fillFrame: false,
+	fillFrameFollowCursor: true,
+	fillFramePosition: { x: 0.5, y: 0.5 },
 };
 const camera: Camera = {
 	hide: true,
