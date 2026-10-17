@@ -397,6 +397,7 @@ mod tests {
                     shape: crate::camera::CameraPreviewShape::Full,
                     mirrored: true,
                     background_blur: cap_project::BackgroundBlurMode::Heavy,
+                    rotation: 0,
                 }
             })
         );

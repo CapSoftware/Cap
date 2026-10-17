@@ -32,10 +32,14 @@ import {
 	CameraResizeHandles,
 	type CameraWindowState,
 	cameraBorderRadius,
+	cameraFrameTransform,
 	cameraPreviewDimensions,
+	cameraRotationSwapsAxes,
 	cameraToolbarScale,
 	getDefaultCameraWindowState,
 	normalizeBackgroundBlurMode,
+	normalizeCameraRotation,
+	orientedCameraAspectRatio,
 } from "~/components/CameraPreviewChrome";
 import { generalSettingsStore } from "~/store";
 import { cameraPresentationInput } from "~/utils/camera-presentation";
@@ -300,6 +304,7 @@ function NativeCameraPreviewPage(props: {
 			size: state.size,
 			shape: state.shape,
 			mirrored: state.mirrored,
+			rotation: normalizeCameraRotation(state.rotation),
 			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
 		});
 	});
@@ -418,6 +423,7 @@ function LegacyCameraPreviewPage(props: {
 			size: state.size,
 			shape: state.shape,
 			mirrored: state.mirrored,
+			rotation: normalizeCameraRotation(state.rotation),
 			background_blur: normalizeBackgroundBlurMode(state.backgroundBlur),
 		});
 		void previewStateSync.catch((error) =>
@@ -750,13 +756,15 @@ function LegacyCameraPreviewPage(props: {
 				state.shape,
 				frameDimensions()?.width,
 				frameDimensions()?.height,
+				normalizeCameraRotation(state.rotation),
 			] as const,
-		async ([size, shape, frameWidth, frameHeight]) => {
+		async ([size, shape, frameWidth, frameHeight, rotation]) => {
 			const { width: windowWidth, height: windowHeight } =
 				cameraPreviewDimensions(
 					size,
 					shape,
 					frameWidth && frameHeight ? frameWidth / frameHeight : undefined,
+					rotation,
 				);
 			const totalHeight = windowHeight + CAMERA_TOOLBAR_HEIGHT;
 
@@ -934,6 +942,7 @@ function LegacyCameraPreviewPage(props: {
 							size: state.size,
 							shape: state.shape,
 							mirrored: state.mirrored,
+							rotation: normalizeCameraRotation(state.rotation),
 							background_blur: normalizeBackgroundBlurMode(
 								state.backgroundBlur,
 							),
@@ -1053,11 +1062,20 @@ function Canvas(props: {
 		const dimensions = props.frameDimensions();
 		if (!dimensions) return {};
 
-		const aspectRatio = dimensions.width / dimensions.height;
+		const sourceAspectRatio = dimensions.width / dimensions.height;
+		const aspectRatio = orientedCameraAspectRatio(
+			sourceAspectRatio,
+			props.state.rotation,
+		);
 
 		const targetSize =
 			props.containerSize ??
-			cameraPreviewDimensions(props.state.size, props.state.shape, aspectRatio);
+			cameraPreviewDimensions(
+				props.state.size,
+				props.state.shape,
+				sourceAspectRatio,
+				props.state.rotation,
+			);
 		const targetAspectRatio = targetSize.width / targetSize.height;
 		const size =
 			aspectRatio > targetAspectRatio
@@ -1070,16 +1088,19 @@ function Canvas(props: {
 						width: targetSize.width,
 					};
 
-		const left = (size.width - targetSize.width) / 2;
-		const top = (size.height - targetSize.height) / 2;
+		const element = cameraRotationSwapsAxes(props.state.rotation)
+			? { width: size.height, height: size.width }
+			: size;
+		const left = (targetSize.width - element.width) / 2;
+		const top = (targetSize.height - element.height) / 2;
 
 		return {
 			opacity: props.opacity,
-			width: `${size.width}px`,
-			height: `${size.height}px`,
-			left: `-${left}px`,
-			top: `-${top}px`,
-			transform: props.state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+			width: `${element.width}px`,
+			height: `${element.height}px`,
+			left: `${left}px`,
+			top: `${top}px`,
+			transform: cameraFrameTransform(props.state),
 		};
 	};
 

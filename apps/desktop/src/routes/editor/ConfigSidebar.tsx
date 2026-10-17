@@ -42,7 +42,10 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
-import { cameraBackgroundOptions } from "~/components/CameraPreviewChrome";
+import {
+	cameraBackgroundOptions,
+	normalizeCameraRotation,
+} from "~/components/CameraPreviewChrome";
 import { Toggle } from "~/components/Toggle";
 import {
 	animatedGradientsStore,
@@ -3270,6 +3273,22 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								checked={project.camera.mirror}
 								onChange={(mirror) => setProject("camera", "mirror", mirror)}
 							/>
+						</Subfield>
+						<Subfield name="Rotate Camera">
+							<EditorButton
+								leftIcon={<IconLucideRotateCw />}
+								onClick={() =>
+									setProject(
+										"camera",
+										"rotation",
+										normalizeCameraRotation(
+											(project.camera.rotation ?? 0) + 90,
+										),
+									)
+								}
+							>
+								{normalizeCameraRotation(project.camera.rotation)}°
+							</EditorButton>
 						</Subfield>
 						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>

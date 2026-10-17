@@ -2,7 +2,7 @@ struct StateUniforms {
     shape: f32,
     size: f32,
     mirrored: f32,
-    _padding: f32,
+    rotation: f32,
 }
 
 struct WindowUniforms {
@@ -97,6 +97,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Apply mirroring if enabled
     if (uniforms.mirrored == 1.0) {
         final_uv.x = 1.0 - final_uv.x;
+    }
+
+    let quarter_turns = u32(round(uniforms.rotation / 90.0)) % 4u;
+    if (quarter_turns == 1u) {
+        final_uv = vec2<f32>(final_uv.y, 1.0 - final_uv.x);
+    } else if (quarter_turns == 2u) {
+        final_uv = vec2<f32>(1.0 - final_uv.x, 1.0 - final_uv.y);
+    } else if (quarter_turns == 3u) {
+        final_uv = vec2<f32>(1.0 - final_uv.y, final_uv.x);
     }
 
     // Shape constants: 0 = Round, 1 = Square, 2 = Full

@@ -6715,6 +6715,7 @@ fn apply_recording_camera_preview_state(
     config.camera.background_blur = cap_project::BackgroundBlurConfig {
         mode: camera_preview_state.background_blur,
     };
+    config.camera.rotation = camera_preview_state.rotation_degrees();
 }
 
 fn should_enable_notch_overlay(
@@ -10399,6 +10400,7 @@ mod preparing_presentation_parity_tests {
                     expected.camera.rounding_type = CornerStyle::Rounded;
                 }
                 expected.camera.background_blur.mode = blur;
+                expected.camera.rotation = 90;
                 apply_recording_camera_preview_state(
                     &mut config,
                     &crate::camera::CameraPreviewState {
@@ -10406,6 +10408,7 @@ mod preparing_presentation_parity_tests {
                         shape: shape.clone(),
                         mirrored: false,
                         background_blur: blur,
+                        rotation: 90,
                     },
                 );
                 assert_eq!(value(&config), value(&expected));
