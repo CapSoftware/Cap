@@ -190,14 +190,6 @@ reason = "During a cross-fade both clips read the same AVAssetReader decoder at 
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
 [[xfail]]
-case = "audio/audio-mix-*-a2/long-crossfade/mp4-*"
-class = "stale"
-platforms = ["linux", "windows"]
-bound = { screen-frames = 18, delta = 49, frame = [61, 115] }
-reason = "FFmpeg decoder, same-clip cross-fade (cuts 0.3-4.1 s and 3.9-7.8 s of one recording, 1.8 s transition): both sides read one decoder at two positions, so blend frames take a side up to 49 source frames stale (frame 61: 80 for 129; 18 frames, output frames 61 to 110, 6 of them where the stale side is the weaker one, inside the 1.8 s transition at output frames 61 to 115). Same mechanism as editing/export/same-clip-transition/forward/ffmpeg; identical on Linux and Windows and for the 30 s full-tier fixture (same cuts)"
-link = ""
-
-[[xfail]]
 case = "seek/seek-native/keyframes60/ffmpeg"
 class = "stale"
 platforms = ["linux", "windows"]
@@ -231,6 +223,14 @@ case = "captions/legacy-migration/ends-at-timeline-end"
 class = "caption-migration"
 bound = { count = 1 }
 reason = "NEW (minor): loading a legacy (output-timed) project drops a caption that ends exactly at the timeline end: synchronize_captions maps each end through source_start + (end - start) / timescale, which rounds just below the timeline end after a clip transition (clips 41/15 s and 82/15 s, 0.2 s transition: 7.9999999 < 8.0), so the end does not map and the whole caption is discarded"
+link = ""
+
+[[xfail]]
+case = "editing/export/basic/seed-23"
+class = "future"
+platforms = ["linux"]
+bound = { camera-frames = 1, delta = 8, frame = [8, 8] }
+reason = "NEW: Linux only (software renderer): in seed 23's 3 s same-clip cross-fade, output frame 8 shows incoming camera source frame 84 instead of 76. The FFmpeg decoder answers every camera request with the requested frame (traced: request 76 read 76, run 38997099068, identical on macOS), so a later camera frame reaches the renderer's shared camera layer, which draws the outgoing and incoming sides in turn. Before #2661 the shared decoder made output frames 7 to 12 up to 70 frames stale and hid it. Deterministic on Linux; macOS and Windows pass"
 link = ""
 
 [[xfail]]
