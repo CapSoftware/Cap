@@ -1307,6 +1307,21 @@ fn take_pooled_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers
     Some(pool.swap_remove(index).2)
 }
 
+/// Layers are never shared across keys: they cache per-project assets under
+/// ids that are only unique within a recording.
+pub fn take_reusable_layers(device: &wgpu::Device, key: &str) -> Option<RendererLayers> {
+    take_pooled_layers(device, key).map(|mut layers| {
+        layers.reset_frame_state();
+        layers
+    })
+}
+
+/// Only return layers after a clean render; a failed render may leave layer
+/// state behind.
+pub fn return_reusable_layers(device: wgpu::Device, key: String, layers: RendererLayers) {
+    return_pooled_layers(device, key, layers);
+}
+
 /// Builds a fresh set of layers for the next project's first render, off
 /// its critical path (an idle engine calls this between tasks).
 pub fn prebuild_spare_layers(
@@ -7685,7 +7700,7 @@ fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
 }
 
 impl RendererLayers {
-    fn reset_frame_state(&mut self) {
+    pub fn reset_frame_state(&mut self) {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();

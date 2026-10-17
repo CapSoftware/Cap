@@ -100,6 +100,7 @@ struct PreviewSource<'a> {
     render_constants: &'a RenderVideoConstants,
     segments: Vec<PreviewSegment<'a>>,
     total_duration: f64,
+    layers_reuse_key: Option<String>,
 }
 
 struct PreviewSegment<'a> {
@@ -130,6 +131,7 @@ async fn render_preview_with_base(
             })
             .collect(),
         total_duration,
+        layers_reuse_key: None,
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -184,6 +186,7 @@ pub async fn render_preview_with_editor(
             })
             .collect(),
         total_duration,
+        layers_reuse_key: Some(format!("preview:{}", editor.project_path.display())),
     };
     render_preview_frame(source, frame_time, settings).await
 }
@@ -219,6 +222,7 @@ async fn render_preview_frame(
         render_constants,
         segments,
         total_duration,
+        layers_reuse_key,
     } = source;
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
@@ -285,11 +289,16 @@ async fn render_preview_frame(
     );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
-    let mut layers = RendererLayers::new_with_options(
-        &render_constants.device,
-        &render_constants.queue,
-        render_constants.is_software_adapter,
-    );
+    let mut layers = layers_reuse_key
+        .as_deref()
+        .and_then(|key| cap_rendering::take_reusable_layers(&render_constants.device, key))
+        .unwrap_or_else(|| {
+            RendererLayers::new_with_options(
+                &render_constants.device,
+                &render_constants.queue,
+                render_constants.is_software_adapter,
+            )
+        });
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
         let outgoing_media = segments
@@ -390,6 +399,10 @@ async fn render_preview_frame(
         let encoder_efficiency = 0.5;
         (total_bitrate * encoder_efficiency * duration_seconds) / (8.0 * 1024.0 * 1024.0)
     };
+
+    if let Some(key) = layers_reuse_key {
+        cap_rendering::return_reusable_layers(render_constants.device.clone(), key, layers);
+    }
 
     Ok(ExportPreviewResult {
         jpeg_base64: STANDARD.encode(&jpeg_buffer),
