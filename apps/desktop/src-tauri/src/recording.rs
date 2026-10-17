@@ -5379,26 +5379,89 @@ pub async fn take_screenshot(
     app: AppHandle,
     target: ScreenCaptureTarget,
 ) -> Result<PathBuf, String> {
-    use crate::NewScreenshotAdded;
-    use crate::notifications;
-    use crate::{PendingScreenshot, PendingScreenshots};
+    let image = capture_screen_image(&app, target.clone()).await?;
+
+    AppSounds::Notification.play();
+
+    save_screenshot_project(&app, image, &target, true)
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[tracing::instrument(name = "capture_ocr_text", skip(app))]
+pub async fn capture_ocr_text(
+    app: AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<String, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let settings = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let image = capture_screen_image(&app, target.clone())
+        .await
+        .map_err(|error| notify_ocr_error(&app, error))?;
+
+    let text = crate::screenshot_editor::recognize_text_from_dynamic_image(&image)
+        .await
+        .map_err(|error| notify_ocr_error(&app, error))?;
+    let text = text.trim().to_string();
+
+    if text.is_empty() {
+        return Err(notify_ocr_error(
+            &app,
+            "No text was found in the selected area".to_string(),
+        ));
+    }
+
+    app.clipboard()
+        .write_text(text.clone())
+        .map_err(|e| notify_ocr_error(&app, format!("Failed to copy text to clipboard: {e}")))?;
+
+    AppSounds::Notification.play();
+
+    if settings.ocr_keep_screenshot
+        && let Err(e) = save_screenshot_project(&app, image, &target, false)
+    {
+        error!("Failed to save OCR screenshot: {e}");
+    }
+
+    if settings.enable_notifications && settings.ocr_show_notification {
+        use tauri_plugin_notification::NotificationExt;
+
+        let preview: String = text.chars().take(120).collect();
+        app.notification()
+            .builder()
+            .title("Text copied to clipboard")
+            .body(preview)
+            .show()
+            .ok();
+    }
+
+    Ok(text)
+}
+
+fn notify_ocr_error(app: &AppHandle, error: String) -> String {
+    use tauri_plugin_notification::NotificationExt;
+
+    app.notification()
+        .builder()
+        .title("Failed to copy text")
+        .body(&error)
+        .show()
+        .ok();
+    error
+}
+
+pub async fn capture_screen_image(
+    app: &AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<image::DynamicImage, String> {
     use cap_recording::screenshot::capture_screenshot;
-    use image::ImageEncoder;
-    use std::time::Instant;
 
-    let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
-    let general_settings = general_settings.as_ref();
-
-    let project_name = format_project_name(
-        general_settings
-            .and_then(|s| s.default_project_name_template.clone())
-            .as_deref(),
-        target.title().as_deref().unwrap_or("Unknown"),
-        target.kind_str(),
-        RecordingMode::Screenshot,
-        None,
-    );
-
+    let mut hidden_windows = Vec::new();
     let mut hid_any = false;
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label)
@@ -5411,8 +5474,13 @@ pub async fn take_screenshot(
                     | CapWindowId::RecordingsOverlay
             )
         {
+            let was_visible = window.is_visible().unwrap_or(false);
             hide_overlay(&window);
             hid_any = true;
+            if was_visible && !matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+                let ignores_cursor = matches!(id, CapWindowId::WindowCaptureOccluder { .. });
+                hidden_windows.push((window, ignores_cursor));
+            }
         }
     }
 
@@ -5420,13 +5488,45 @@ pub async fn take_screenshot(
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
-    let automation_target = target.clone();
-
-    let image = capture_screenshot(target)
+    let result = capture_screenshot(target)
         .await
-        .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
+        .map_err(|e| format!("Failed to capture screenshot: {e}"));
 
-    AppSounds::Notification.play();
+    for (window, ignores_cursor) in hidden_windows {
+        // Target-select overlays stay suspended so their lifecycle controls reveal timing.
+        let _ = window.show();
+        let _ = window.set_ignore_cursor_events(ignores_cursor);
+    }
+
+    result
+}
+
+pub fn save_screenshot_project(
+    app: &AppHandle,
+    image: image::DynamicImage,
+    target: &ScreenCaptureTarget,
+    run_side_effects: bool,
+) -> Result<PathBuf, String> {
+    use crate::NewScreenshotAdded;
+    use crate::notifications;
+    use crate::{PendingScreenshot, PendingScreenshots};
+    use image::ImageEncoder;
+    use std::time::Instant;
+
+    let general_settings = GeneralSettingsStore::get(app).ok().flatten();
+    let general_settings = general_settings.as_ref();
+
+    let project_name = format_project_name(
+        general_settings
+            .and_then(|s| s.default_project_name_template.clone())
+            .as_deref(),
+        target.title().as_deref().unwrap_or("Unknown"),
+        target.kind_str(),
+        RecordingMode::Screenshot,
+        None,
+    );
+
+    let automation_target = target.clone();
 
     let image_width = image.width();
     let image_height = image.height();
@@ -5551,16 +5651,18 @@ pub async fn take_screenshot(
                 }
                 .emit(&app_handle);
 
-                crate::automation::run_screenshot_automations(
-                    app_handle.clone(),
-                    image_path_for_emit.clone(),
-                    &automation_target,
-                );
+                if run_side_effects {
+                    crate::automation::run_screenshot_automations(
+                        app_handle.clone(),
+                        image_path_for_emit.clone(),
+                        &automation_target,
+                    );
 
-                notifications::send_notification(
-                    &app_handle,
-                    notifications::NotificationType::ScreenshotSaved,
-                );
+                    notifications::send_notification(
+                        &app_handle,
+                        notifications::NotificationType::ScreenshotSaved,
+                    );
+                }
             }
             Ok(Err(e)) => {
                 error!("Failed to encode PNG: {e}");

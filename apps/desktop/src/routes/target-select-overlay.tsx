@@ -197,7 +197,7 @@ function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
-		targetMode: "display" | "window" | "area" | "camera";
+		targetMode: "display" | "window" | "area" | "camera" | "ocr";
 		overlayInstance: string;
 	}>();
 	const [options, setOptions] = useOptions();
@@ -303,7 +303,16 @@ function Inner() {
 	});
 
 	createEffect(
-		(prevMode: "display" | "window" | "area" | "camera" | null | undefined) => {
+		(
+			prevMode:
+				| "display"
+				| "window"
+				| "area"
+				| "camera"
+				| "ocr"
+				| null
+				| undefined,
+		) => {
 			const mode = options.targetMode ?? null;
 			if (prevMode === "area" && mode !== "area") {
 				const target = pendingAreaTarget();
@@ -754,8 +763,16 @@ function Inner() {
 					);
 				}}
 			</Match>
-			<Match when={options.targetMode === "area" && params.displayId}>
+			<Match
+				when={
+					(options.targetMode === "area" || options.targetMode === "ocr") &&
+					params.displayId
+				}
+			>
 				{(displayId) => {
+					const isOcr = () => options.targetMode === "ocr";
+					const isImmediateCapture = () =>
+						isOcr() || options.mode === "screenshot";
 					let controlsEl: HTMLDivElement | undefined;
 					let cropperRef: CropperRef | undefined;
 
@@ -787,19 +804,19 @@ function Inner() {
 					const [screenshotSnapToRatio, setScreenshotSnapToRatio] =
 						createSignal(true);
 					const minSize = () =>
-						options.mode === "screenshot" ? MIN_SCREENSHOT_SIZE : MIN_SIZE;
+						isImmediateCapture() ? MIN_SCREENSHOT_SIZE : MIN_SIZE;
 					const currentAspect = () =>
-						options.mode === "screenshot"
+						isImmediateCapture()
 							? screenshotAspect()
 							: areaSelectionPreferences.aspectRatio;
 					const currentSnapToRatio = () =>
-						options.mode === "screenshot"
+						isImmediateCapture()
 							? screenshotSnapToRatio()
 							: areaSelectionPreferences.snapToRatio;
 					const effectiveInitialAreaBounds = createMemo(() => {
 						const explicitBounds = initialAreaBounds();
 						if (explicitBounds) return explicitBounds;
-						if (options.mode === "screenshot") return undefined;
+						if (isImmediateCapture()) return undefined;
 						return getLockedAreaBounds(
 							areaSelectionPreferences,
 							displayId(),
@@ -869,7 +886,7 @@ function Inner() {
 					});
 					const isSelectionLocked = createMemo(
 						() =>
-							options.mode !== "screenshot" &&
+							!isImmediateCapture() &&
 							getLockedAreaBounds(
 								areaSelectionPreferences,
 								displayId(),
@@ -878,7 +895,7 @@ function Inner() {
 					);
 
 					function setAspect(aspect: Ratio | null) {
-						if (options.mode === "screenshot") {
+						if (isImmediateCapture()) {
 							setScreenshotAspect(aspect);
 							return;
 						}
@@ -889,7 +906,7 @@ function Inner() {
 					}
 
 					function setSnapToRatio(enabled: boolean) {
-						if (options.mode === "screenshot") {
+						if (isImmediateCapture()) {
 							setScreenshotSnapToRatio(enabled);
 							return;
 						}
@@ -898,7 +915,7 @@ function Inner() {
 
 					function persistLockedSelection() {
 						if (
-							options.mode === "screenshot" ||
+							isImmediateCapture() ||
 							!areaSelectionPreferences.locked ||
 							areaSelectionPreferences.screenId !== displayId() ||
 							!isValid()
@@ -934,7 +951,7 @@ function Inner() {
 						}
 						if (
 							isInteracting() ||
-							options.mode === "screenshot" ||
+							isImmediateCapture() ||
 							!areaSelectionPreferences.locked ||
 							areaSelectionPreferences.screenId !== displayId() ||
 							!isValid() ||
@@ -1003,7 +1020,7 @@ function Inner() {
 					});
 
 					createEffect(async () => {
-						if (options.mode === "screenshot") return;
+						if (isImmediateCapture()) return;
 						const bounds = crop();
 						const interacting = isInteracting();
 						const displayInfo = areaDisplayInfo.data;
@@ -1266,6 +1283,52 @@ function Inner() {
 
 						if (was && !interacting) {
 							persistLockedSelection();
+							if (isOcr() && isValid()) {
+								const cropBounds = crop();
+								const target: ScreenCaptureTarget = {
+									variant: "area",
+									screen: displayId(),
+									bounds: {
+										position: {
+											x: cropBounds.x,
+											y: cropBounds.y,
+										},
+										size: {
+											width: cropBounds.width,
+											height: cropBounds.height,
+										},
+									},
+								};
+
+								try {
+									await commands.suspendTargetSelectOverlays();
+									await new Promise((resolve) => setTimeout(resolve, 50));
+
+									await commands.captureOcrText(target);
+									setOptions({
+										targetMode: null,
+										targetModeDismissal: "ocr",
+									});
+									await commands.closeTargetSelectOverlays();
+								} catch (e) {
+									setOptions({
+										targetMode: null,
+										targetModeDismissal: "cancelled",
+									});
+									await commands
+										.closeTargetSelectOverlays()
+										.catch((error) =>
+											console.error(
+												"Failed to close target select overlays",
+												error,
+											),
+										);
+									const message = e instanceof Error ? e.message : String(e);
+									toast.error(`Failed to copy text: ${message}`);
+									console.error("Failed to copy text", e);
+								}
+								return;
+							}
 							if (options.mode === "screenshot" && isValid()) {
 								const cropBounds = crop();
 								const displayInfo = areaDisplayInfo.data;
@@ -1338,7 +1401,9 @@ function Inner() {
 										<div class="min-w-28 px-2 text-base font-normal leading-none tracking-[-0.01em] tabular-nums">
 											{isValid()
 												? `${Math.round(crop().width)} × ${Math.round(crop().height)}`
-												: "Draw an area"}
+												: isOcr()
+													? "Draw an area to copy text"
+													: "Draw an area"}
 										</div>
 
 										<div class="h-6 w-px bg-gray-5" />
@@ -1410,7 +1475,7 @@ function Inner() {
 										>
 											<IconLucideMaximize2 class="size-4" />
 										</button>
-										<Show when={options.mode !== "screenshot"}>
+										<Show when={!isImmediateCapture()}>
 											<button
 												type="button"
 												class="flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-normal transition-colors disabled:cursor-not-allowed disabled:opacity-40"
@@ -1442,7 +1507,7 @@ function Inner() {
 								style={controlsStyle()}
 							>
 								<div class="flex flex-col items-center">
-									<Show when={options.mode !== "screenshot"}>
+									<Show when={!isImmediateCapture()}>
 										<RecordingControls
 											target={{
 												variant: "area",
@@ -1487,7 +1552,7 @@ function Inner() {
 											</small>
 										</div>
 									</Show>
-									<Show when={isValid()}>
+									<Show when={isValid() && !isOcr()}>
 										<ShowCapFreeWarning
 											isInstantMode={options.mode === "instant"}
 										/>

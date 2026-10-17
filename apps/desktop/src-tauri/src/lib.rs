@@ -51,6 +51,7 @@ mod recordings_locations;
 mod recovery;
 mod render_frame_event;
 mod screenshot_editor;
+mod scrolling_capture;
 mod startup;
 #[cfg(debug_assertions)]
 mod stop_editor_benchmark;
@@ -6797,6 +6798,8 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            recording::capture_ocr_text,
+            scrolling_capture::capture_scrolling_window,
             recording::import_current_desktop_background,
             recording::get_default_project_config,
             recording::list_cameras,
@@ -6808,6 +6811,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
             windows::restore_main_window_geometry,
+            windows::show_window_without_activating,
             general_settings::get_default_excluded_windows,
             list_audio_devices,
             list_system_fonts,

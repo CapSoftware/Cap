@@ -168,6 +168,7 @@ export type TargetModeDismissal =
 	| "recordingStudio"
 	| "recordingInstant"
 	| "screenshot"
+	| "ocr"
 	| "superseded"
 	| "cancelled";
 

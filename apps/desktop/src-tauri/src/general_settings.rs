@@ -259,6 +259,10 @@ pub struct GeneralSettingsStore {
     /// own Experimental page hands back. See `gpui_app.rs`.
     #[serde(default)]
     pub enable_gpui_app: bool,
+    #[serde(default)]
+    pub ocr_keep_screenshot: bool,
+    #[serde(default)]
+    pub ocr_show_notification: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -364,6 +368,8 @@ impl Default for GeneralSettingsStore {
             camera_blur_disabled_by_crash: None,
             update_channel: UpdateChannel::Stable,
             enable_gpui_app: false,
+            ocr_keep_screenshot: false,
+            ocr_show_notification: false,
         }
     }
 }
