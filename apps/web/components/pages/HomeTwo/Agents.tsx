@@ -1,9 +1,15 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import { ArrowUpRight } from "lucide-react";
+import {
+	ArrowUpRight,
+	Braces,
+	KeyRound,
+	ShieldCheck,
+	Terminal,
+} from "lucide-react";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { type ComponentType, useRef, useState } from "react";
 import { Eyebrow } from "./Eyebrow";
 import { AGENT } from "./scenes";
 import { LazyMount, useInView, useReducedMotion } from "./scenes/engine";
@@ -16,6 +22,7 @@ import {
 	H_SECTION,
 	MODE_THEME,
 	MONO,
+	type ModeKey,
 } from "./theme";
 
 const DARK = {
@@ -26,30 +33,42 @@ const DARK = {
 
 const SURFACES = ["CLI", "MCP server", "JSON on every command", "REST API"];
 
-const FACTS = [
+type Fact = {
+	title: string;
+	body: string;
+	snippet: string;
+	mode: ModeKey;
+	Icon: ComponentType<{ className?: string }>;
+};
+
+const FACTS: Fact[] = [
 	{
 		title: "One prompt to set up",
 		body: "Paste one prompt from the docs and your agent installs the CLI, the Cap skill, and the MCP server for Claude Code, Cursor, or Codex.",
 		snippet: "cap agents install --target claude --component all",
-		mode: "instant" as const,
+		mode: "instant",
+		Icon: Terminal,
 	},
 	{
 		title: "Every command speaks JSON",
 		body: "Add one flag and the answer comes back as data. Recording and export stream NDJSON events as they happen.",
 		snippet: "cap guide --json",
-		mode: "studio" as const,
+		mode: "studio",
+		Icon: Braces,
 	},
 	{
 		title: "76 MCP tools, zero secrets",
 		body: "Read and manage Caps, comments, sharing, and analytics over MCP. Capture and upload stay in the CLI, so no secret passes through the model.",
 		snippet: "cap mcp serve",
-		mode: "screenshot" as const,
+		mode: "screenshot",
+		Icon: ShieldCheck,
 	},
 	{
 		title: "Least privilege login",
 		body: "Sign in with the creator profile by default, and the agent asks before anything records, uploads, or costs money.",
 		snippet: "cap auth login",
-		mode: "share" as const,
+		mode: "share",
+		Icon: KeyRound,
 	},
 ];
 
@@ -158,28 +177,27 @@ export const Agents = () => {
 							return (
 								<li
 									key={fact.title}
-									className="flex flex-col justify-between rounded-[20px] p-6"
+									className="flex flex-col rounded-[20px] p-6"
 									style={grainBg(BAND)}
 								>
-									<div>
-										<span
-											aria-hidden="true"
-											className="block size-[7px]"
-											style={{ background: theme.accent }}
-										/>
-										<h3 className="mt-5 text-[19px] font-normal leading-[1.1] tracking-[-0.02em] text-[#111111]">
-											{fact.title}
-										</h3>
-										<p
-											className={`${BODY_TEXT} mt-2 text-[14.5px] leading-[1.45] text-[rgba(17,17,17,0.7)]`}
-										>
-											{fact.body}
-										</p>
-									</div>
+									<span
+										className="grid size-9 shrink-0 place-items-center rounded-[9px]"
+										style={{ background: theme.chip, color: theme.glyph }}
+									>
+										<fact.Icon className="size-[18px]" />
+									</span>
+									<h3 className="mt-5 text-balance text-[19px] font-normal leading-[1.1] tracking-[-0.02em] text-[#111111]">
+										{fact.title}
+									</h3>
+									<p
+										className={`${BODY_TEXT} mb-5 mt-2 text-[14.5px] leading-[1.45] text-[rgba(17,17,17,0.7)]`}
+									>
+										{fact.body}
+									</p>
 									<code
 										className={classNames(
 											MONO,
-											"mt-5 block whitespace-pre-wrap break-words rounded-[10px] bg-white px-3 py-2 text-[12px] leading-[1.6] text-[#111111] shadow-[0_0_0_1px_rgba(17,17,17,0.06)]",
+											"mt-auto block whitespace-pre-wrap break-words rounded-[10px] bg-white px-3 py-2 text-[12px] leading-[1.6] text-[#111111] shadow-[0_0_0_1px_rgba(17,17,17,0.06)]",
 										)}
 									>
 										<span className="text-[rgba(17,17,17,0.4)]">$ </span>
@@ -238,7 +256,7 @@ export const Agents = () => {
 						</p>
 						<Link
 							href="/agents"
-							className={classNames(BTN_SECONDARY, "self-start")}
+							className={classNames(BTN_SECONDARY, "mt-auto self-start")}
 						>
 							Explore Cap for Agents
 						</Link>
