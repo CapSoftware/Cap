@@ -6,7 +6,7 @@ machine and compares the medians of the test process's CPU time (user +
 system, from the kernel's rusage) and wall time. CPU time ignores scheduling
 noise better than wall time; pairing cancels most of the machine's state.
 
-    perf_ab.py --base base.json --head head.json --fixtures DIR --out DIR
+    perf-ab.py --base base.json --head head.json --fixtures DIR --out DIR
 
 base.json / head.json map a test target ("export", "seek") to its binary and
 the crate directory to run it from:
@@ -27,7 +27,6 @@ from pathlib import Path
 # +0.8%, seek-storm +0.9%, export-jitter-camera-40s -4.4%. Real-time playback
 # CPU varied by 15% there, so playback is reported without a limit.
 WORKLOADS = [
-    # name, test target, case glob, tier, CPU limit (None: report only)
     ("export-basic", "export", "export/basic/*", "fast", 0.05),
     ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast", 0.08),
     ("seek-storm", "seek", "seek/*/storm30/*", "fast", 0.05),
@@ -108,7 +107,7 @@ def main():
         print("\n".join(tail))
         return False
     for name, target, case, tier, cpu_limit in WORKLOADS:
-        # Untimed warm-up per side: generates fixtures and warms caches.
+        # The first run of a side generates fixtures and fills caches.
         usable = True
         for label, side in sides.items():
             report = out / name / f"warm-{label}"
@@ -133,11 +132,11 @@ def main():
         if name in broken:
             rows.append((name, None, None, None, None, "BROKEN: a test binary did not run its cases"))
             continue
-        statuses = {label: [s["outcomes"] for s in runs] for label, runs in samples.items()}
-        if statuses["base"][0] != statuses["head"][0]:
+        outcomes = [s["outcomes"] for runs in samples.values() for s in runs]
+        if any(o != outcomes[0] for o in outcomes):
             # Correctness is the suite's job; a case that now passes or fails
             # can change how much work runs, so its time is not comparable.
-            rows.append((name, None, None, None, None, "case outcomes differ: timing not compared"))
+            rows.append((name, None, None, None, None, "case outcomes differ between runs: timing not compared"))
             continue
         cpu = {label: statistics.median(s["cpu"] for s in runs) for label, runs in samples.items()}
         wall = {label: statistics.median(s["wall"] for s in runs) for label, runs in samples.items()}

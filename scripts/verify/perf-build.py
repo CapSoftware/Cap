@@ -3,7 +3,7 @@
 worktree with the perf-verify profile and copies them out, so a second build
 in the same target directory cannot replace them.
 
-    perf_build.py WORKTREE OUT_DIR   -> OUT_DIR/binaries.json
+    perf-build.py WORKTREE OUT_DIR   -> OUT_DIR/binaries.json
 """
 import json
 import os
