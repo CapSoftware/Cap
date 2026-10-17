@@ -205,7 +205,8 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 	};
 
 	const isMemberOwner = (id: string) => {
-		return id === activeOrganization?.organization.ownerId;
+		const member = activeOrganization?.members.find((m) => m.userId === id);
+		return member ? member.role === "owner" : id === activeOrganization?.organization.ownerId;
 	};
 
 	return (
