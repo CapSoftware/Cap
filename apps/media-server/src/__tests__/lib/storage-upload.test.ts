@@ -359,4 +359,373 @@ describe("uploadFileToStorage", () => {
 			true,
 		);
 	});
+
+	test("uploads at most two parts concurrently and completes in part order", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 5);
+		const pendingParts = new Map<number, (response: Response) => void>();
+		const signedParts: number[] = [];
+		let completedParts: unknown;
+		let peakUploads = 0;
+
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				signedParts.push(partNumber);
+				return Response.json({
+					url: `https://storage.example.com/part-${partNumber}`,
+				});
+			}
+			if (url.endsWith("/complete")) {
+				completedParts = JSON.parse(String(init?.body)).parts;
+				return Response.json({ objectIdentity: '"completed-object-version"' });
+			}
+			if (url.endsWith("/abort")) {
+				return Response.json({ success: true });
+			}
+			const partNumber = Number(url.split("-").at(-1));
+			return await new Promise<Response>((resolve) => {
+				pendingParts.set(partNumber, resolve);
+				peakUploads = Math.max(peakUploads, pendingParts.size);
+			});
+		}) as typeof fetch;
+
+		const finishPart = (partNumber: number) => {
+			const resolve = pendingParts.get(partNumber);
+			if (!resolve) throw new Error(`Part ${partNumber} is not uploading`);
+			pendingParts.delete(partNumber);
+			resolve(
+				new Response(null, { headers: { etag: `"etag-${partNumber}"` } }),
+			);
+		};
+		const waitForPart = async (partNumber: number) => {
+			for (let i = 0; i < 1_000 && !pendingParts.has(partNumber); i++) {
+				await Bun.sleep(1);
+			}
+			expect(pendingParts.has(partNumber)).toBe(true);
+		};
+
+		const controller = new AbortController();
+		const upload = uploadFileToStorage(
+			uploadFile.path,
+			{
+				type: "multipart",
+				videoId: "video-id",
+				key: "user-id/video-id/result.mp4",
+				uploadId: "upload-id",
+				partSize,
+				signPartUrl: "https://cap.example.com/sign",
+				completeUrl: "https://cap.example.com/complete",
+				abortUrl: "https://cap.example.com/abort",
+			},
+			"video/mp4",
+			controller.signal,
+		);
+		try {
+			await waitForPart(2);
+			expect(signedParts).toEqual([1, 2]);
+			finishPart(2);
+			await waitForPart(3);
+			finishPart(3);
+			await waitForPart(4);
+			finishPart(4);
+			await waitForPart(5);
+			finishPart(5);
+			finishPart(1);
+			expect((await upload).objectIdentity).toBe('"completed-object-version"');
+			expect(peakUploads).toBe(2);
+			expect(signedParts).toEqual([1, 2, 3, 4, 5]);
+			expect(completedParts).toEqual(
+				[1, 2, 3, 4, 5].map((partNumber) => ({
+					partNumber,
+					etag: `"etag-${partNumber}"`,
+					size: partSize,
+				})),
+			);
+		} finally {
+			controller.abort();
+			for (const [partNumber, resolve] of pendingParts) {
+				resolve(
+					new Response(null, {
+						headers: { etag: `"etag-${partNumber}"` },
+					}),
+				);
+			}
+			await upload.catch(() => {});
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("drains concurrent parts before aborting after a failed upload", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 5);
+		const pendingParts = new Map<number, (response: Response) => void>();
+		const events: string[] = [];
+		const signedParts: number[] = [];
+
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				signedParts.push(partNumber);
+				return Response.json({
+					url: `https://storage.example.com/part-${partNumber}`,
+				});
+			}
+			if (url.endsWith("/abort")) {
+				events.push("abort-request");
+				return Response.json({ success: true });
+			}
+			if (url.endsWith("/complete")) {
+				events.push("complete-request");
+				return Response.json({ success: true });
+			}
+			const partNumber = Number(url.split("-").at(-1));
+			return await new Promise<Response>((resolve, reject) => {
+				pendingParts.set(partNumber, resolve);
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						if (!pendingParts.delete(partNumber)) return;
+						events.push(`part-${partNumber}-stopped`);
+						reject(init.signal?.reason);
+					},
+					{ once: true },
+				);
+			});
+		}) as typeof fetch;
+
+		const upload = uploadFileToStorage(
+			uploadFile.path,
+			{
+				type: "multipart",
+				videoId: "video-id",
+				key: "user-id/video-id/result.mp4",
+				uploadId: "upload-id",
+				partSize,
+				signPartUrl: "https://cap.example.com/sign",
+				completeUrl: "https://cap.example.com/complete",
+				abortUrl: "https://cap.example.com/abort",
+			},
+			"video/mp4",
+		);
+		try {
+			for (let i = 0; i < 1_000 && pendingParts.size !== 2; i++) {
+				await Bun.sleep(1);
+			}
+			expect(pendingParts.size).toBe(2);
+			const failPart = pendingParts.get(1);
+			if (!failPart) throw new Error("Part 1 is not uploading");
+			pendingParts.delete(1);
+			failPart(new Response("invalid part", { status: 400 }));
+			await expect(upload).rejects.toThrow("Multipart upload part 1 failed");
+			expect(signedParts).toEqual([1, 2]);
+			expect(pendingParts.size).toBe(0);
+			expect(events.slice(-1)).toEqual(["abort-request"]);
+			expect(events.filter((event) => event.endsWith("-stopped"))).toHaveLength(
+				1,
+			);
+			expect(events).not.toContain("complete-request");
+		} finally {
+			for (const [partNumber, resolve] of pendingParts) {
+				resolve(
+					new Response(null, {
+						headers: { etag: `"etag-${partNumber}"` },
+					}),
+				);
+			}
+			await upload.catch(() => {});
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("stops an active part before aborting when another part cannot be signed", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 2);
+		const events: string[] = [];
+		let activePart = false;
+
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				if (partNumber === 1) {
+					return Response.json({ url: "https://storage.example.com/part-1" });
+				}
+				for (let i = 0; i < 1_000 && !activePart; i++) {
+					await Bun.sleep(1);
+				}
+				return new Response("signing failed", { status: 400 });
+			}
+			if (url.endsWith("/abort")) {
+				events.push("abort-request");
+				return Response.json({ success: true });
+			}
+			if (url.endsWith("/complete")) {
+				events.push("complete-request");
+				return Response.json({ success: true });
+			}
+			return await new Promise<Response>((_, reject) => {
+				activePart = true;
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						activePart = false;
+						events.push("part-1-stopped");
+						reject(init.signal?.reason);
+					},
+					{ once: true },
+				);
+			});
+		}) as typeof fetch;
+
+		try {
+			await expect(
+				uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "multipart",
+						videoId: "video-id",
+						key: "user-id/video-id/result.mp4",
+						uploadId: "upload-id",
+						partSize,
+						signPartUrl: "https://cap.example.com/sign",
+						completeUrl: "https://cap.example.com/complete",
+						abortUrl: "https://cap.example.com/abort",
+					},
+					"video/mp4",
+				),
+			).rejects.toThrow("Multipart part signing failed");
+			expect(activePart).toBe(false);
+			expect(events).toEqual(["part-1-stopped", "abort-request"]);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("retries one transient part failure without canceling other parts", async () => {
+		const uploadFile = await createTempUploadFile(partSize + 1);
+		const attempts = new Map<number, number>();
+		const requests: string[] = [];
+		let completedParts: unknown;
+
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			requests.push(url);
+			if (url.endsWith("/sign")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				return Response.json({
+					url: `https://storage.example.com/part-${partNumber}`,
+				});
+			}
+			if (url.endsWith("/complete")) {
+				completedParts = JSON.parse(String(init?.body)).parts;
+				return Response.json({ objectIdentity: '"completed-object-version"' });
+			}
+			const partNumber = Number(url.split("-").at(-1));
+			const attempt = (attempts.get(partNumber) ?? 0) + 1;
+			attempts.set(partNumber, attempt);
+			if (partNumber === 1 && attempt === 1) {
+				return new Response("temporary failure", { status: 503 });
+			}
+			return new Response(null, { headers: { etag: `"etag-${partNumber}"` } });
+		}) as typeof fetch;
+
+		try {
+			const receipt = await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "multipart",
+					videoId: "video-id",
+					key: "user-id/video-id/result.mp4",
+					uploadId: "upload-id",
+					partSize,
+					signPartUrl: "https://cap.example.com/sign",
+					completeUrl: "https://cap.example.com/complete",
+					abortUrl: "https://cap.example.com/abort",
+				},
+				"video/mp4",
+			);
+			expect(receipt.objectIdentity).toBe('"completed-object-version"');
+			expect(attempts.get(1)).toBe(2);
+			expect(attempts.get(2)).toBe(1);
+			expect(completedParts).toEqual([
+				{ partNumber: 1, etag: '"etag-1"', size: partSize },
+				{ partNumber: 2, etag: '"etag-2"', size: 1 },
+			]);
+			expect(requests.some((url) => url.endsWith("/abort"))).toBe(false);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test("cancels active parts before aborting when the caller stops", async () => {
+		const uploadFile = await createTempUploadFile(partSize * 5);
+		const pendingParts = new Set<number>();
+		const events: string[] = [];
+		const controller = new AbortController();
+
+		globalThis.fetch = (async (input, init) => {
+			const url = String(input);
+			if (url.endsWith("/sign")) {
+				const { partNumber } = JSON.parse(String(init?.body));
+				return Response.json({
+					url: `https://storage.example.com/part-${partNumber}`,
+				});
+			}
+			if (url.endsWith("/abort")) {
+				events.push("abort-request");
+				return Response.json({ success: true });
+			}
+			if (url.endsWith("/complete")) {
+				events.push("complete-request");
+				return Response.json({ success: true });
+			}
+			const partNumber = Number(url.split("-").at(-1));
+			return await new Promise<Response>((_, reject) => {
+				pendingParts.add(partNumber);
+				init?.signal?.addEventListener(
+					"abort",
+					() => {
+						pendingParts.delete(partNumber);
+						events.push(`part-${partNumber}-stopped`);
+						reject(init.signal?.reason);
+					},
+					{ once: true },
+				);
+			});
+		}) as typeof fetch;
+
+		const upload = uploadFileToStorage(
+			uploadFile.path,
+			{
+				type: "multipart",
+				videoId: "video-id",
+				key: "user-id/video-id/result.mp4",
+				uploadId: "upload-id",
+				partSize,
+				signPartUrl: "https://cap.example.com/sign",
+				completeUrl: "https://cap.example.com/complete",
+				abortUrl: "https://cap.example.com/abort",
+			},
+			"video/mp4",
+			controller.signal,
+		);
+		try {
+			for (let i = 0; i < 1_000 && pendingParts.size !== 2; i++) {
+				await Bun.sleep(1);
+			}
+			expect(pendingParts.size).toBe(2);
+			controller.abort(new Error("Upload canceled"));
+			await expect(upload).rejects.toThrow("Upload canceled");
+			expect(pendingParts.size).toBe(0);
+			expect(events.filter((event) => event.endsWith("-stopped"))).toHaveLength(
+				2,
+			);
+			expect(events.slice(-1)).toEqual(["abort-request"]);
+			expect(events).not.toContain("complete-request");
+		} finally {
+			controller.abort();
+			await upload.catch(() => {});
+			await uploadFile.cleanup();
+		}
+	});
 });
