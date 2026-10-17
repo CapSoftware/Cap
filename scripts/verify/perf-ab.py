@@ -70,7 +70,10 @@ def run_once(side, target, case, tier, fixtures, report):
             except json.JSONDecodeError:
                 continue
             if row.get("case"):
-                outcomes[row["case"]] = row.get("outcome")
+                # A case that passed, failed as expected or passed against
+                # an expectation ran to the end: the same work either way.
+                outcome = row.get("outcome")
+                outcomes[row["case"]] = "ran" if outcome in ("pass", "xfail", "xpass") else outcome
     return {
         "cpu": usage.ru_utime + usage.ru_stime,
         "wall": wall,
