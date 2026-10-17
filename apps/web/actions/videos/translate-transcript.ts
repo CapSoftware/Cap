@@ -17,6 +17,11 @@ import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
 } from "./translation-languages";
+import {
+	isCompleteTranslation,
+	joinTranslationChunks,
+	splitTranslationChunks,
+} from "./translation-vtt";
 
 interface TranslateResult {
 	success: boolean;
@@ -75,25 +80,6 @@ export async function translateTranscript(
 
 	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
 
-	try {
-		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-			return yield* bucket.getObject(translatedKey);
-		}).pipe(runPromise);
-
-		if (Option.isSome(existingTranslation)) {
-			return {
-				success: true,
-				translatedVtt: existingTranslation.value,
-				message: "Retrieved cached translation",
-			};
-		}
-	} catch (e) {
-		console.debug("[translateTranscript] No cached translation found:", e);
-	}
-
 	const originalVtt = await Effect.gen(function* () {
 		const [bucket] = yield* Storage.getAccessForVideo(
 			decodeStorageVideo(video),
@@ -105,6 +91,28 @@ export async function translateTranscript(
 
 	if (Option.isNone(originalVtt)) {
 		return { success: false, message: "Original transcript not found" };
+	}
+
+	try {
+		const existingTranslation = await Effect.gen(function* () {
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
+			);
+			return yield* bucket.getObject(translatedKey);
+		}).pipe(runPromise);
+
+		if (
+			Option.isSome(existingTranslation) &&
+			isCompleteTranslation(originalVtt.value, existingTranslation.value)
+		) {
+			return {
+				success: true,
+				translatedVtt: existingTranslation.value,
+				message: "Retrieved cached translation",
+			};
+		}
+	} catch (e) {
+		console.debug("[translateTranscript] No cached translation found:", e);
 	}
 
 	const translatedVtt = await translateVttContent(
@@ -141,8 +149,12 @@ async function translateVttContent(
 	targetLanguage: LanguageCode,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
+	const chunks = splitTranslationChunks(vttContent);
+	if (!chunks) return null;
 
-	const prompt = `Translate the following WebVTT subtitle file to ${targetLanguageName}.
+	const translations: string[] = [];
+	for (const chunk of chunks) {
+		const prompt = `Translate the following WebVTT subtitle file to ${targetLanguageName}.
 
 IMPORTANT RULES:
 1. Keep the "WEBVTT" header exactly as is
@@ -155,27 +167,35 @@ IMPORTANT RULES:
 
 VTT content to translate:
 
-${vttContent}`;
+${chunk}`;
 
-	try {
-		return await runWithAiProviders("generation", async (selection) => {
-			const response = await generateText({
-				model: selection.model(),
-				prompt,
-				maxOutputTokens: 8000,
-				...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
-			});
+		try {
+			const translatedChunk = await runWithAiProviders(
+				"generation",
+				async (selection) => {
+					const response = await generateText({
+						model: selection.model(),
+						prompt,
+						maxOutputTokens: 8000,
+						...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
+					});
 
-			// Validate inside the provider loop so a fulfilled response that
-			// dropped the WEBVTT header falls through to the next provider.
-			if (!response.text.includes("WEBVTT")) {
-				throw new Error("translation response did not contain WEBVTT");
-			}
+					if (
+						response.finishReason === "length" ||
+						!isCompleteTranslation(chunk, response.text)
+					) {
+						throw new Error("translation response has missing or changed cues");
+					}
 
-			return response.text.trim();
-		});
-	} catch (error) {
-		console.error("[translateVttContent] Translation error:", error);
-		return null;
+					return response.text.trim();
+				},
+			);
+			translations.push(translatedChunk);
+		} catch (error) {
+			console.error("[translateVttContent] Translation error:", error);
+			return null;
+		}
 	}
+
+	return joinTranslationChunks(vttContent, chunks, translations);
 }
