@@ -2184,12 +2184,7 @@ async fn record(
     let crashed = if spec.mode == Mode::StudioCrashed {
         let snapshot = scratch.join("crash-snapshot.cap");
         let snapshot_started = host_now();
-        let status = std::process::Command::new("cp")
-            .arg("-cR")
-            .arg(&project)
-            .arg(&snapshot)
-            .status()?;
-        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        snapshot_live_project(&project, &snapshot)?;
         case.note(format!(
             "crash snapshot at {:.3}s, cloned in {:.3}s",
             host_secs(snapshot_started, reference),
@@ -2300,6 +2295,40 @@ async fn record(
 /// fragments are 2 s, see `MacOSFragmentedM4SMuxerConfig`) plus the encoder
 /// pipeline still in flight.
 const CRASH_LOSS_BUDGET: f64 = 3.0;
+
+/// Copies the live project as a crash would leave it on disk: APFS clones on
+/// macOS; a file-by-file copy on Windows, where the recorder's files are open
+/// for shared reading.
+fn snapshot_live_project(project: &Path, snapshot: &Path) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("cp")
+            .arg("-cR")
+            .arg(project)
+            .arg(snapshot)
+            .status()?;
+        anyhow::ensure!(status.success(), "snapshot of the live recording failed");
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                let target = to.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_dir(&entry.path(), &target)?;
+                } else {
+                    std::fs::copy(entry.path(), &target)?;
+                }
+            }
+            Ok(())
+        }
+        copy_dir(project, snapshot)
+            .map_err(|e| anyhow::anyhow!("snapshot of the live recording failed: {e}"))
+    }
+}
 
 async fn finalize_instant(
     recording: &mut instant_recording::CompletedRecording,

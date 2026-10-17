@@ -19,7 +19,6 @@ mod app {
     use std::{
         fs::File,
         io::{BufRead, Write},
-        num::NonZeroU32,
         path::PathBuf,
         sync::{
             Arc, Mutex,
@@ -340,7 +339,7 @@ mod app {
         epoch: Arc<AtomicU64>,
         go_at: Option<(Instant, u64)>,
         window: Option<Arc<Window>>,
-        surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+        surface: Option<canvas::Canvas>,
         size: (u32, u32),
         shown: Option<u32>,
         ready: bool,
@@ -415,21 +414,10 @@ mod app {
             if w == 0 || h == 0 {
                 return;
             }
-            if surface
-                .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
-                .is_err()
-            {
-                return;
-            }
-            let Ok(mut buffer) = surface.buffer_mut() else {
-                return;
-            };
-            let (w, h) = (w as usize, h as usize);
-            let band = if self.spec.busy { h / 8 } else { 0 };
-            {
-                let bytes: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(buffer.as_mut_ptr().cast::<u8>(), w * h * 4)
-                };
+            let busy = self.spec.busy;
+            let presented = canvas::present(surface, w, h, |bytes| {
+                let (w, h) = (w as usize, h as usize);
+                let band = if busy { h / 8 } else { 0 };
                 let stride = w * 4;
                 let marker = FrameMarker::new(StreamKind::Screen, 0, index);
                 video_code::draw_marker(
@@ -450,8 +438,8 @@ mod app {
                         (salt << 1) | 1,
                     );
                 }
-            }
-            if buffer.present().is_ok() {
+            });
+            if presented {
                 let host = host_now();
                 if self.shown != Some(index) {
                     self.log.write(&StimulusEvent::Frame {
@@ -465,6 +453,166 @@ mod app {
                     self.presented_at = Some((index, Instant::now()));
                 }
             }
+        }
+    }
+
+    /// Where the stimulus draws BGRA pictures and presents them.
+    #[cfg(target_os = "macos")]
+    mod canvas {
+        use super::*;
+        use std::num::NonZeroU32;
+
+        pub type Canvas = softbuffer::Surface<Arc<Window>, Arc<Window>>;
+
+        pub fn new(window: &Arc<Window>) -> Result<Canvas, String> {
+            softbuffer::Context::new(window.clone())
+                .and_then(|context| softbuffer::Surface::new(&context, window.clone()))
+                .map_err(|e| e.to_string())
+        }
+
+        pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
+            if canvas
+                .resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
+                .is_err()
+            {
+                return false;
+            }
+            let Ok(mut buffer) = canvas.buffer_mut() else {
+                return false;
+            };
+            let bytes: &mut [u8] = unsafe {
+                std::slice::from_raw_parts_mut(
+                    buffer.as_mut_ptr().cast::<u8>(),
+                    w as usize * h as usize * 4,
+                )
+            };
+            paint(bytes);
+            buffer.present().is_ok()
+        }
+    }
+
+    /// A flip-model DXGI swap chain. softbuffer presents on Windows with a
+    /// GDI blit that the compositor (and so Windows Graphics Capture) can
+    /// sample half done: recordings showed markers whose top rows were the
+    /// new picture and bottom rows the old one (run 39000141528). A flip
+    /// present hands the compositor whole pictures.
+    #[cfg(windows)]
+    mod canvas {
+        use super::*;
+        use windows::Win32::{
+            Foundation::{HMODULE, HWND},
+            Graphics::{
+                Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+                Direct3D11::{
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
+                    ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                },
+                Dxgi::{
+                    Common::{
+                        DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
+                        DXGI_SAMPLE_DESC,
+                    },
+                    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_NONE,
+                    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain1,
+                },
+            },
+        };
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        pub struct Canvas {
+            context: ID3D11DeviceContext,
+            swap_chain: IDXGISwapChain1,
+            size: (u32, u32),
+            pixels: Vec<u8>,
+        }
+
+        pub fn new(window: &Arc<Window>) -> Result<Canvas, String> {
+            let hwnd = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
+                RawWindowHandle::Win32(handle) => HWND(handle.hwnd.get() as *mut core::ffi::c_void),
+                other => return Err(format!("not a Win32 window: {other:?}")),
+            };
+            let size = window.inner_size();
+            let size = (size.width.max(1), size.height.max(1));
+            let mut device: Option<ID3D11Device> = None;
+            let mut context: Option<ID3D11DeviceContext> = None;
+            unsafe {
+                D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    HMODULE::default(),
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut device),
+                    None,
+                    Some(&mut context),
+                )
+            }
+            .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
+            let device = device.ok_or("no D3D11 device")?;
+            let context = context.ok_or("no D3D11 context")?;
+            let factory: IDXGIFactory2 =
+                unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }
+                    .map_err(|e| format!("CreateDXGIFactory2: {e}"))?;
+            let desc = DXGI_SWAP_CHAIN_DESC1 {
+                Width: size.0,
+                Height: size.1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                Scaling: DXGI_SCALING_NONE,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                ..Default::default()
+            };
+            let swap_chain =
+                unsafe { factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None) }
+                    .map_err(|e| format!("CreateSwapChainForHwnd: {e}"))?;
+            Ok(Canvas {
+                context,
+                swap_chain,
+                size,
+                pixels: Vec::new(),
+            })
+        }
+
+        pub fn present(canvas: &mut Canvas, w: u32, h: u32, paint: impl FnOnce(&mut [u8])) -> bool {
+            if canvas.size != (w, h) {
+                let resized = unsafe {
+                    canvas.swap_chain.ResizeBuffers(
+                        0,
+                        w,
+                        h,
+                        DXGI_FORMAT_UNKNOWN,
+                        DXGI_SWAP_CHAIN_FLAG(0),
+                    )
+                };
+                if resized.is_err() {
+                    return false;
+                }
+                canvas.size = (w, h);
+            }
+            canvas.pixels.resize(w as usize * h as usize * 4, 0);
+            paint(&mut canvas.pixels);
+            let Ok(back) = (unsafe { canvas.swap_chain.GetBuffer::<ID3D11Texture2D>(0) }) else {
+                return false;
+            };
+            unsafe {
+                canvas.context.UpdateSubresource(
+                    &back,
+                    0,
+                    None,
+                    canvas.pixels.as_ptr().cast(),
+                    w * 4,
+                    0,
+                );
+            }
+            unsafe { canvas.swap_chain.Present(0, DXGI_PRESENT(0)) }.is_ok()
         }
     }
 
@@ -516,9 +664,7 @@ mod app {
             };
             let size = window.inner_size();
             self.size = (size.width, size.height);
-            let surface = softbuffer::Context::new(window.clone())
-                .and_then(|context| softbuffer::Surface::new(&context, window.clone()));
-            match surface {
+            match canvas::new(&window) {
                 Ok(s) => self.surface = Some(s),
                 Err(e) => {
                     self.error = Some(format!("surface: {e}"));

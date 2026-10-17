@@ -2207,6 +2207,7 @@ dependencies = [
  "scap-screencapturekit",
  "serde_json",
  "softbuffer",
+ "windows 0.60.0",
  "winit",
  "workspace-hack",
 ]
