@@ -1,6 +1,7 @@
 name: Perf counter probe
 on:
-  workflow_dispatch:
+  push:
+    branches: [scratch/perf-counter-probe]
 permissions:
   contents: read
 jobs:
