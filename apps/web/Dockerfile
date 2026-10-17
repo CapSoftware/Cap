@@ -12,7 +12,8 @@ COPY . .
 RUN --mount=type=cache,id=bun-1.4.0,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 ARG NEXT_PUBLIC_DOCKER_BUILD=true
-ENV NEXT_PUBLIC_WEB_URL=http://localhost:3000
+ARG NEXT_PUBLIC_WEB_URL=http://localhost:3000
+ENV NEXT_PUBLIC_WEB_URL=$NEXT_PUBLIC_WEB_URL
 
 RUN bun run build:web
 
