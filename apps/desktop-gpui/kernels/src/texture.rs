@@ -599,6 +599,52 @@ mod tests {
         }
     }
 
+    fn reference_preset_preview_bgra(
+        filter: &[Filter],
+        overlay: Option<Overlay>,
+        vignette: f32,
+        grain: f32,
+        width: u32,
+        height: u32,
+    ) -> image::RgbaImage {
+        let (w, h) = (width.max(1), height.max(1));
+        let (wf, hf) = (w as f32, h as f32);
+        let mut rgba = image::RgbaImage::new(w, h);
+        let grain_opacity = (grain * 1.2).min(1.);
+
+        for (x, y, pixel) in rgba.enumerate_pixels_mut() {
+            let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
+            let scene =
+                gradient_color(gradient_position(xf, yf, wf, hf, SCENE_ANGLE), &SCENE_STOPS);
+            let mut color = apply_filters(scene, filter);
+
+            if let Some(overlay) = overlay {
+                let position = gradient_position(xf, yf, wf, hf, overlay.angle);
+                let source = [
+                    overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
+                    overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
+                    overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
+                    overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
+                ];
+                color = composite_overlay(color, source);
+            }
+
+            let shade = 1. - vignette_alpha(xf, yf, wf, hf, vignette);
+            color = [color[0] * shade, color[1] * shade, color[2] * shade];
+
+            if grain_opacity > 0. {
+                let level =
+                    fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2).clamp(0., 1.);
+                color = composite_overlay(color, [level, level, level, grain_opacity]);
+            }
+
+            let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+            *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
+        }
+
+        rgba
+    }
+
     #[test]
     fn preset_preview_renders_filter_and_overlay_combinations() {
         let filters = [
@@ -615,8 +661,7 @@ mod tests {
         };
         let preview = preset_preview_bgra(&filters, Some(overlay), 0.25, 0.15, 32, 18);
         assert_eq!(preview.dimensions(), (32, 18));
-        for pixel in preview.pixels() {
-            assert_eq!(pixel.0[3], 255);
-        }
+        let reference = reference_preset_preview_bgra(&filters, Some(overlay), 0.25, 0.15, 32, 18);
+        assert_eq!(preview.as_raw(), reference.as_raw());
     }
 }
