@@ -83,6 +83,12 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Chrome Web Store extension id allowed to receive auth keys"),
+			CAP_FIREFOX_EXTENSION_ID: z
+				.string()
+				.optional()
+				.describe(
+					"Firefox identity redirect subdomain (the <id> in https://<id>.extensions.allizom.org, derived from the gecko extension id) allowed to receive auth keys",
+				),
 			CAP_ALLOWED_SIGNUP_DOMAINS: z
 				.string()
 				.optional()
