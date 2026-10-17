@@ -281,6 +281,7 @@ jobs:
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
+          cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
 
   build-gpui:
