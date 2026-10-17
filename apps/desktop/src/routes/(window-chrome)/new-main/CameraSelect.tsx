@@ -27,7 +27,7 @@ import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
 
-const NO_CAMERA = "No Camera";
+const NO_CAMERA = "无摄像头";
 
 export default function CameraSelect(props: {
 	disabled?: boolean;
@@ -101,7 +101,7 @@ export default function CameraSelect(props: {
 	const label = () =>
 		props.value?.display_name ??
 		(hasSelection() ? props.selectedLabel : null) ??
-		(hasSelection() ? "Camera" : NO_CAMERA);
+		(hasSelection() ? "摄像头" : NO_CAMERA);
 
 	const showHiddenIndicator = () =>
 		props.value !== null &&
@@ -136,7 +136,7 @@ export default function CameraSelect(props: {
 				<IconCapCamera class={DEVICE_ROW_ICON_CLASS} />
 				<p
 					class={cx(DEVICE_ROW_LABEL_CLASS, notConnected() && "text-gray-10")}
-					title={notConnected() ? "Not connected" : undefined}
+					title={notConnected() ? "未连接" : undefined}
 				>
 					{label()}
 				</p>
@@ -147,8 +147,8 @@ export default function CameraSelect(props: {
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Show camera preview"
-							aria-label="Show camera preview"
+							title="显示摄像头预览"
+							aria-label="显示摄像头预览"
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>
@@ -163,8 +163,8 @@ export default function CameraSelect(props: {
 							}}
 							onPointerDown={(e) => e.stopPropagation()}
 							class={DEVICE_SHORTCUT_BUTTON_CLASS}
-							title="Camera settings"
-							aria-label="Camera settings"
+							title="摄像头设置"
+							aria-label="摄像头设置"
 						>
 							<IconLucideSettings class="size-3.5" />
 						</button>
@@ -318,7 +318,7 @@ export function CameraSelectBase(props: {
 							onClick={openCameraWindow}
 							onPointerDown={(e) => e.stopPropagation()}
 							class="flex items-center justify-center px-2 py-1 rounded-full bg-gray-6 text-gray-11 hover:bg-gray-7 transition-colors"
-							title="Show camera preview"
+							title="显示摄像头预览"
 						>
 							<IconLucideEyeOff class="size-3.5" />
 						</button>

@@ -185,7 +185,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 			.join("\n");
 
 		await writeText(statsText);
-		toast.success("Performance stats copied to clipboard");
+		toast.success("性能数据已复制到剪贴板");
 	};
 
 	const fpsColor = createMemo(() => {
@@ -224,7 +224,7 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 						border: "1px solid rgba(255, 255, 255, 0.15)",
 					}}
 					onClick={copyStatsToClipboard}
-					title="Click to copy stats"
+					title="点击复制统计信息"
 				>
 					<div class="flex flex-col gap-0.5">
 						<div class="flex items-center gap-2">
@@ -236,14 +236,14 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							</Show>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Frame: </span>
+							<span>帧： </span>
 							<span style={{ color: "#93c5fd" }}>
 								{formatMs(stats().avgFrameMs)}ms
 							</span>
-							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}> avg</span>
+							<span style={{ color: "rgba(255, 255, 255, 0.4)" }}> 平均</span>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Range: </span>
+							<span>范围： </span>
 							<span style={{ color: "#86efac" }}>
 								{formatMs(stats().minFrameMs)}
 							</span>
@@ -253,14 +253,14 @@ export function PerformanceOverlay(_props: PerformanceOverlayProps) {
 							</span>
 						</div>
 						<div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-							<span>Jitter: </span>
+							<span>抖动： </span>
 							<span style={{ color: jitterColor() }}>
 								±{formatMs(stats().jitter)}ms
 							</span>
 						</div>
 						<Show when={stats().droppedFrames > 0}>
 							<div style={{ color: "#f87171" }}>
-								Dropped: {stats().droppedFrames}/{stats().totalFrames}
+								丢帧： {stats().droppedFrames}/{stats().totalFrames}
 							</div>
 						</Show>
 					</div>

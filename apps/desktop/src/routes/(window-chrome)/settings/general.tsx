@@ -62,7 +62,7 @@ import {
 } from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
-	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
+	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "未知";
 
 const getExclusionSecondaryLabel = (entry: WindowExclusion) => {
 	if (entry.ownerName && entry.windowTitle) {
@@ -118,7 +118,7 @@ const MAX_FPS_OPTIONS = [
 	{ value: 24, label: "24 FPS" },
 	{ value: 25, label: "25 FPS" },
 	{ value: 30, label: "30 FPS" },
-	{ value: 60, label: "60 FPS (Recommended)" },
+	{ value: 60, label: "60 FPS（推荐）" },
 	{ value: 120, label: "120 FPS" },
 ] satisfies {
 	value: number;
@@ -157,9 +157,9 @@ function AppearanceSection(props: {
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
-		{ id: "system", name: "System" },
-		{ id: "light", name: "Light" },
-		{ id: "dark", name: "Dark" },
+		{ id: "system", name: "系统" },
+		{ id: "light", name: "浅色" },
+		{ id: "dark", name: "深色" },
 	] satisfies { id: AppTheme; name: string }[];
 
 	const previews = {
@@ -170,8 +170,8 @@ function AppearanceSection(props: {
 
 	return (
 		<Section
-			title="Appearance"
-			description="Match Cap to your system theme or pick a fixed look."
+			title="外观"
+			description="让 Cap 跟随系统主题，或选择固定外观。"
 		>
 			<SectionCard padded>
 				<div
@@ -478,19 +478,19 @@ function Inner(props: {
 
 				{ostype === "macos" && (
 					<Section
-						title="App"
-						description="Choose how Cap shows up on your system."
+						title="应用"
+						description="选择 Cap 在系统中的显示方式。"
 					>
 						<SectionRows>
 							<ToggleSettingItem
-								label="Always show dock icon"
-								description="Keep Cap in the dock even when no windows are open."
+								label="始终显示程序坞图标"
+								description="即使没有打开任何窗口，也把 Cap 保留在程序坞中。"
 								value={!settings.hideDockIcon}
 								onChange={(v) => handleChange("hideDockIcon", !v)}
 							/>
 							<ToggleSettingItem
-								label="System notifications"
-								description="Show notifications for clipboard copies, saved files, and more. You may need to allow Cap in your system's notification settings."
+								label="系统通知"
+								description="为复制到剪贴板、文件已保存等事件显示通知。你可能需要在系统通知设置中允许 Cap。"
 								value={!!settings.enableNotifications}
 								onChange={async (value) => {
 									if (value) {
@@ -508,104 +508,104 @@ function Inner(props: {
 				)}
 
 				<Section
-					title="Recording"
-					description="Behaviour while you record and after you stop."
+					title="录制"
+					description="录制过程中以及停止后的行为。"
 				>
 					<SectionRows>
 						<SelectSettingItem
-							label="Countdown"
-							description="Wait before the recording starts."
+							label="倒计时"
+							description="开始录制前的等待时间。"
 							value={settings.recordingCountdown ?? 0}
 							onChange={(value) => handleChange("recordingCountdown", value)}
 							options={[
-								{ text: "Off", value: 0 },
-								{ text: "3 seconds", value: 3 },
-								{ text: "5 seconds", value: 5 },
-								{ text: "10 seconds", value: 10 },
+								{ text: "关", value: 0 },
+								{ text: "3 秒", value: 3 },
+								{ text: "5 秒", value: 5 },
+								{ text: "10 秒", value: 10 },
 							]}
 						/>
 						<ToggleSettingItem
-							label="Confirm before recording without a microphone"
-							description="Require confirmation when no microphone is selected or the selected microphone is unavailable."
+							label="未选择麦克风时录制前先确认"
+							description="未选择麦克风或所选麦克风不可用时，先弹窗确认。"
 							value={confirmBeforeRecordingWithoutMicrophone()}
 							onChange={handleRecordingStartSafetyChange}
 						/>
 						<ToggleSettingItem
-							label="Studio Sound on new recordings"
-							description="Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
+							label="对新录制启用 Studio Sound"
+							description="自动优化麦克风音频。在编辑器中仍可对任意录制关闭此效果。"
 							value={studioSoundByDefault()}
 							onChange={handleStudioSoundByDefaultChange}
 						/>
 						<SelectSettingItem
-							label="Main window when recording starts"
-							description="What happens to the main window once a recording begins."
+							label="开始录制时的主窗口"
+							description="录制开始后主窗口会怎样。"
 							value={settings.mainWindowRecordingStartBehaviour ?? "close"}
 							onChange={(value) =>
 								handleChange("mainWindowRecordingStartBehaviour", value)
 							}
 							options={[
-								{ text: "Close", value: "close" },
-								{ text: "Minimise", value: "minimise" },
+								{ text: "关闭", value: "close" },
+								{ text: "最小化", value: "minimise" },
 							]}
 						/>
 						<SelectSettingItem
-							label="After a Studio recording"
-							description="What happens once you stop a Studio recording."
+							label="Studio 录制结束后"
+							description="Studio 录制停止后会发生什么。"
 							value={settings.postStudioRecordingBehaviour ?? "openEditor"}
 							onChange={(value) =>
 								handleChange("postStudioRecordingBehaviour", value)
 							}
 							options={[
-								{ text: "Open editor", value: "openEditor" },
-								{ text: "Show in overlay", value: "showOverlay" },
+								{ text: "打开编辑器", value: "openEditor" },
+								{ text: "在叠加层中显示", value: "showOverlay" },
 							]}
 						/>
 						<SelectSettingItem
-							label="After deleting a recording"
-							description="Whether the recording window should reopen."
+							label="删除录制后"
+							description="是否重新打开录制窗口。"
 							value={settings.postDeletionBehaviour ?? "doNothing"}
 							onChange={(value) => handleChange("postDeletionBehaviour", value)}
 							options={[
-								{ text: "Do nothing", value: "doNothing" },
+								{ text: "不执行任何操作", value: "doNothing" },
 								{
-									text: "Reopen recording window",
+									text: "重新打开录制窗口",
 									value: "reopenRecordingWindow",
 								},
 							]}
 						/>
 						<ToggleSettingItem
-							label="Delete Instant recordings after upload"
-							description="Cap removes the local file once it has uploaded successfully."
+							label="上传后删除 Instant 录制"
+							description="上传成功后，Cap 会删除本地文件。"
 							value={settings.deleteInstantRecordingsAfterUpload ?? false}
 							onChange={(v) =>
 								handleChange("deleteInstantRecordingsAfterUpload", v)
 							}
 						/>
 						<ToggleSettingItem
-							label="Crash-recoverable recording"
-							description="Record in fragments that can be recovered after a crash or power loss. Slightly larger files during capture."
+							label="崩溃可恢复录制"
+							description="以分段方式录制，崩溃或断电后仍可恢复。录制期间文件会略大一些。"
 							value={settings.crashRecoveryRecording ?? true}
 							onChange={(value) =>
 								handleChange("crashRecoveryRecording", value)
 							}
 						/>
 						<ToggleSettingItem
-							label="Custom cursor capture (Studio)"
-							description="Capture cursor state separately so you can adjust size and smoothing in the editor."
+							label="自定义光标捕获（Studio）"
+							description="单独记录光标状态，以便在编辑器中调整大小和平滑度。"
 							value={!!settings.custom_cursor_capture2}
 							onChange={(value) =>
 								handleChange("custom_cursor_capture2", value)
 							}
 						/>
 						<ToggleSettingItem
-							label="Auto zoom on clicks"
-							description="Automatically add zoom segments around mouse clicks in Studio recordings."
+							label="点击时自动缩放"
+							description="在 Studio 录制中自动为鼠标点击添加缩放片段。"
 							value={!!settings.autoZoomOnClicks}
 							onChange={(value) => handleChange("autoZoomOnClicks", value)}
 						/>
 						<SettingItem
-							label="Default zoom amount"
-							description="Zoom level for newly created and auto-generated zoom segments."
+							label="默认缩放幅度"
+							description="新建和自动生成的缩放片段的缩放倍数。"
 						>
 							<div class="flex gap-2 items-center w-52">
 								<Slider
@@ -624,23 +624,23 @@ function Inner(props: {
 							</div>
 						</SettingItem>
 						<ToggleSettingItem
-							label="Capture keyboard presses"
-							description="Record key presses so you can add keyboard overlays in the editor."
+							label="记录键盘按键"
+							description="记录按键，以便在编辑器中添加键盘叠加效果。"
 							value={!!settings.captureKeyboardEvents}
 							onChange={(value) => handleChange("captureKeyboardEvents", value)}
 						/>
 						<ToggleSettingItem
-							label="Draw the MacBook notch on screen recordings"
+							label="在屏幕录制中绘制 MacBook 刘海"
 							description="Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
 							value={!!settings.macbookNotchOverlay}
 							onChange={(value) => handleChange("macbookNotchOverlay", value)}
 						/>
 						<SelectSettingItem
-							label="Max capture framerate"
+							label="最大捕获帧率"
 							description={
 								(settings.maxFps ?? 60) > 60
-									? "Maximum framerate for screen capture. Higher values may cause drops or increased CPU usage on some systems."
-									: "Maximum framerate for screen capture."
+									? "屏幕捕获的最大帧率。数值越高，在某些系统上可能掉帧或增加 CPU 占用。"
+									: "屏幕捕获的最大帧率。"
 							}
 							value={settings.maxFps ?? 60}
 							onChange={(value) => handleChange("maxFps", value)}
@@ -798,12 +798,12 @@ function StorageSection(props: {
 	onPick: () => Promise<void>;
 	onReset: () => Promise<void>;
 }) {
-	const defaultLabel = "Default (Application Support)";
+	const defaultLabel = "默认（应用程序支持目录）";
 	const displayPath = () => props.recordingsPath ?? defaultLabel;
 	const isCustom = () => props.recordingsPath !== null;
 
 	return (
-		<Section title="Storage" description="Where Cap saves your recordings.">
+		<Section title="存储" description="Cap 保存录制文件的位置。">
 			<SectionCard padded>
 				<div class="flex flex-col gap-3">
 					<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-3 border border-gray-4 min-w-0">
@@ -814,11 +814,11 @@ function StorageSection(props: {
 					<div class="flex justify-end gap-2">
 						<Show when={isCustom()}>
 							<Button size="sm" variant="gray" onClick={props.onReset}>
-								Reset to Default
+								恢复默认
 							</Button>
 						</Show>
 						<Button size="sm" variant="dark" onClick={props.onPick}>
-							Choose Folder
+							选择文件夹
 						</Button>
 					</div>
 				</div>
@@ -832,11 +832,11 @@ function TelemetryCard(props: {
 	onChange: (value: boolean) => void;
 }) {
 	return (
-		<Section title="Privacy">
+		<Section title="隐私">
 			<SectionRows>
 				<ToggleSettingItem
-					label="Share anonymous telemetry"
-					description="Cap uses anonymous telemetry to improve reliability and fix bugs. We never collect recording contents, window titles, file paths, or personal information."
+					label="分享匿名遥测数据"
+					description="Cap 使用匿名遥测来提升稳定性并修复问题。我们绝不会收集录制内容、窗口标题、文件路径或个人信息。"
 					value={props.value}
 					onChange={props.onChange}
 				/>
@@ -854,14 +854,14 @@ type UpdateChannelOption = {
 const UPDATE_CHANNEL_OPTIONS: UpdateChannelOption[] = [
 	{
 		value: "stable",
-		label: "Stable",
-		description: "Versioned releases (recommended)",
+		label: "稳定版",
+		description: "分版本发布（推荐）",
 	},
 	{
 		value: "nightly",
-		label: "Nightly",
+		label: "每夜版",
 		description:
-			"The newest builds, updated automatically in the background when you're not recording or exporting. May be unstable.",
+			"最新版本，会在你未录制或导出时于后台自动更新。可能不稳定。",
 	},
 ];
 
@@ -876,14 +876,14 @@ function UpdatesSection(props: {
 	);
 
 	return (
-		<Section title="Updates" description="Choose which Cap builds you receive.">
+		<Section title="更新" description="选择接收哪个 Cap 版本。">
 			<SectionCard>
 				<div class="flex flex-col gap-3 px-4 py-4">
 					<div class="flex justify-between items-start gap-4">
 						<div class="flex flex-col gap-0.5 min-w-0">
-							<p class="text-[13px] text-gray-12">Update channel</p>
+							<p class="text-[13px] text-gray-12">更新通道</p>
 							<p class="text-xs leading-snug text-gray-10">
-								Which release channel Cap updates from.
+								Cap 从哪个发布通道获取更新。
 							</p>
 						</div>
 						<SegmentedControl
@@ -899,8 +899,7 @@ function UpdatesSection(props: {
 						<p class="text-xs text-gray-12">{currentOption().description}</p>
 						<Show when={props.value === "nightly"}>
 							<p class="text-[11px] text-gray-10 leading-snug">
-								Switching back to Stable will return you to the latest stable
-								version, which may be older than your current build.
+								切回稳定版会回到最新的稳定版本，可能比你当前使用的版本更旧。
 							</p>
 						</Show>
 					</div>
@@ -960,12 +959,12 @@ function ServerURLSetting(props: {
 	return (
 		<Section
 			title="Self-host"
-			description="Only change this if you are running your own instance of Cap Web."
+			description="只有在你自建 Cap Web 实例时才需要修改此项。"
 		>
 			<SectionCard padded>
 				<div class="flex flex-col gap-3">
 					<label class="flex flex-col gap-1.5">
-						<span class="text-[13px] text-gray-12">Cap Server URL</span>
+						<span class="text-[13px] text-gray-12">Cap 服务器地址</span>
 						<Input
 							class="bg-gray-3"
 							value={value()}
@@ -979,7 +978,7 @@ function ServerURLSetting(props: {
 							disabled={isDefaultValue()}
 							onClick={resetToDefault}
 						>
-							Reset to Default
+							恢复默认
 						</Button>
 						<Button
 							size="sm"
@@ -987,7 +986,7 @@ function ServerURLSetting(props: {
 							disabled={props.value === value()}
 							onClick={() => props.onChange(value())}
 						>
-							Update
+							更新
 						</Button>
 					</div>
 				</div>
@@ -1063,7 +1062,7 @@ function DefaultProjectNameCard(props: {
 		return (
 			<button
 				type="button"
-				title="Click to copy"
+				title="点击复制"
 				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-[background-color,color,transform] duration-150 ease-out bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
@@ -1074,8 +1073,8 @@ function DefaultProjectNameCard(props: {
 
 	return (
 		<Section
-			title="Default project name"
-			description="Template used for new recordings and exported files."
+			title="默认项目名称"
+			description="用于新录制和导出文件的模板。"
 			right={
 				<>
 					<Button
@@ -1093,7 +1092,7 @@ function DefaultProjectNameCard(props: {
 							await updatePreview(newTemplate);
 						}}
 					>
-						Reset
+						重置
 					</Button>
 					<Button
 						size="sm"
@@ -1104,7 +1103,7 @@ function DefaultProjectNameCard(props: {
 							await updatePreview();
 						}}
 					>
-						Save
+						保存
 					</Button>
 				</>
 			}
@@ -1131,17 +1130,16 @@ function DefaultProjectNameCard(props: {
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
 							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
-							<span>Available placeholders</span>
+							<span>可用占位符</span>
 						</Collapsible.Trigger>
 
 						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 							<p class="text-gray-10">
-								Click any placeholder to copy it. Time supports custom formats
-								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
+								点击任意占位符即可复制。时间支持通过以下方式使用自定义格式 <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
 							</p>
 
 							<div class="space-y-1">
-								<p class="font-medium text-gray-12">Recording mode</p>
+								<p class="font-medium text-gray-12">录制模式</p>
 								<p>
 									<CodeView>{"{recording_mode}"}</CodeView> → "Studio",
 									"Instant", or "Screenshot"
@@ -1153,7 +1151,7 @@ function DefaultProjectNameCard(props: {
 							</div>
 
 							<div class="space-y-1">
-								<p class="font-medium text-gray-12">Target</p>
+								<p class="font-medium text-gray-12">目标</p>
 								<p>
 									<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window",
 									or "Area"
@@ -1165,13 +1163,13 @@ function DefaultProjectNameCard(props: {
 							</div>
 
 							<div class="space-y-1">
-								<p class="font-medium text-gray-12">Date &amp; time</p>
+								<p class="font-medium text-gray-12">日期与时间</p>
 								<p>
 									<CodeView>{"{date}"}</CodeView> → {dateString}
 								</p>
 								<p>
 									<CodeView>{"{time}"}</CodeView> →{" "}
-									{macos ? "09:41 AM" : "12:00 PM"}
+									{macos ? "上午 09:41" : "下午 12:00"}
 								</p>
 								<p class="flex flex-col items-start pt-1">
 									<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
@@ -1263,11 +1261,11 @@ function ExcludedWindowsCard(props: {
 
 	return (
 		<Section
-			title="Excluded windows"
+			title="排除的窗口"
 			description={
 				props.isWindows
-					? "Hide windows from recordings. On Windows, only Cap-related windows can be excluded."
-					: "Hide windows from recordings."
+					? "在录制中隐藏窗口。在 Windows 上只能排除与 Cap 相关的窗口。"
+					: "在录制中隐藏窗口。"
 			}
 			right={
 				<>
@@ -1277,7 +1275,7 @@ function ExcludedWindowsCard(props: {
 						disabled={props.isLoading}
 						onClick={handleResetClick}
 					>
-						Reset
+						重置
 					</Button>
 					<Button
 						variant="dark"
@@ -1287,7 +1285,7 @@ function ExcludedWindowsCard(props: {
 						class="flex gap-1.5 items-center"
 					>
 						<IconLucidePlus class="size-3.5" />
-						Add
+						添加
 					</Button>
 				</>
 			}
@@ -1299,11 +1297,10 @@ function ExcludedWindowsCard(props: {
 							<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
 							<div class="min-w-0 flex-1 space-y-1">
 								<p class="text-xs font-medium text-amber-11">
-									Recommended Cap windows are not excluded
+									推荐排除的 Cap 窗口尚未排除
 								</p>
 								<p class="text-[10px] leading-snug text-amber-11">
-									Camera, settings, or recording windows can appear as black
-									boxes in screen recordings. Missing: {missingDefaultLabels()}.
+									摄像头、设置或录制窗口在屏幕录制中可能显示为黑框。缺少： {missingDefaultLabels()}.
 								</p>
 							</div>
 							<Button
@@ -1313,7 +1310,7 @@ function ExcludedWindowsCard(props: {
 								onClick={handleResetClick}
 								class="shrink-0"
 							>
-								Restore
+								恢复
 							</Button>
 						</div>
 					</div>
@@ -1323,7 +1320,7 @@ function ExcludedWindowsCard(props: {
 						when={hasExclusions()}
 						fallback={
 							<p class="text-xs text-gray-10">
-								No windows are currently excluded.
+								当前没有排除任何窗口。
 							</p>
 						}
 					>
@@ -1345,7 +1342,7 @@ function ExcludedWindowsCard(props: {
 											type="button"
 											class="flex justify-center items-center rounded-full transition-colors size-5 text-gray-10 hover:bg-gray-5 hover:text-gray-12"
 											onClick={() => void props.onRemove(index())}
-											aria-label="Remove excluded window"
+											aria-label="移除排除的窗口"
 										>
 											<IconLucideX class="size-3" />
 										</button>

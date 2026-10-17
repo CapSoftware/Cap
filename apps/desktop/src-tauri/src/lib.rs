@@ -3641,7 +3641,7 @@ fn show_exit_blocked(app: &AppHandle, reason: ExitBlocked) {
     );
     app.dialog()
         .message(reason.message())
-        .title("Cap is still busy")
+        .title("Cap 仍在忙碌")
         .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
         .show(|_| {});
 }
@@ -3770,9 +3770,9 @@ pub async fn request_app_exit(app: AppHandle) {
             warn!(%error, "Quit canceled because an editor title could not be saved");
             app.dialog()
                 .message(format!(
-                    "{error}\n\nCap is still open. Your title is still in the editor."
+                    "{error}\n\nCap 仍处于打开状态，你的标题还在编辑器里。"
                 ))
-                .title("Title not saved")
+                .title("标题未保存")
                 .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
                 .show(|_| {});
             return;

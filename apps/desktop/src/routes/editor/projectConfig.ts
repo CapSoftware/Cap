@@ -27,9 +27,9 @@ export const DEFAULT_SCENE_TRANSITION = 0.3;
 export const DEFAULT_CAMERA_SCALE_DURING_ZOOM = 0.7;
 
 export const ASPECT_RATIOS = {
-	wide: { name: "Wide", ratio: [16, 9] },
-	vertical: { name: "Vertical", ratio: [9, 16] },
-	square: { name: "Square", ratio: [1, 1] },
-	classic: { name: "Classic", ratio: [4, 3] },
-	tall: { name: "Tall", ratio: [3, 4] },
+	wide: { name: "宽", ratio: [16, 9] },
+	vertical: { name: "垂直", ratio: [9, 16] },
+	square: { name: "方形", ratio: [1, 1] },
+	classic: { name: "经典", ratio: [4, 3] },
+	tall: { name: "高", ratio: [3, 4] },
 } satisfies Record<AspectRatio, { name: string; ratio: [number, number] }>;

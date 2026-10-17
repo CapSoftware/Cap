@@ -84,7 +84,7 @@ const [lookTab, setLookTab] = createSignal<"moves" | "angles">("moves");
 const BLUR_MODE_LABELS: Record<Exclude<Camera3DBlurMode, "none">, string> = {
 	radial: "Radial",
 	directional: "Directional",
-	tiltShift: "Tilt shift",
+	tiltShift: "移轴",
 };
 
 const BLUR_FINE_SLIDERS: Record<
@@ -92,21 +92,21 @@ const BLUR_FINE_SLIDERS: Record<
 	Array<{ key: Camera3DBlurScalarKey; label: string; unit: string }>
 > = {
 	radial: [
-		{ key: "focusX", label: "Focus X", unit: "" },
-		{ key: "focusY", label: "Focus Y", unit: "" },
-		{ key: "focusSize", label: "Focus size", unit: "" },
-		{ key: "falloff", label: "Falloff", unit: "" },
+		{ key: "focusX", label: "焦点 X", unit: "" },
+		{ key: "focusY", label: "焦点 Y", unit: "" },
+		{ key: "focusSize", label: "焦点大小", unit: "" },
+		{ key: "falloff", label: "衰减", unit: "" },
 	],
 	directional: [
-		{ key: "angle", label: "Angle", unit: "°" },
-		{ key: "dirPosition", label: "Position", unit: "" },
-		{ key: "falloff", label: "Falloff", unit: "" },
+		{ key: "angle", label: "角度", unit: "°" },
+		{ key: "dirPosition", label: "位置", unit: "" },
+		{ key: "falloff", label: "衰减", unit: "" },
 	],
 	tiltShift: [
-		{ key: "focusY", label: "Scan", unit: "" },
-		{ key: "focusSize", label: "Focus size", unit: "" },
-		{ key: "angle", label: "Angle", unit: "°" },
-		{ key: "falloff", label: "Falloff", unit: "" },
+		{ key: "focusY", label: "扫描", unit: "" },
+		{ key: "focusSize", label: "焦点大小", unit: "" },
+		{ key: "angle", label: "角度", unit: "°" },
+		{ key: "falloff", label: "衰减", unit: "" },
 	],
 };
 
@@ -130,7 +130,7 @@ export function ShotCountPills(props: {
 						data-selected={props.current === count}
 						title={
 							count > props.max
-								? "This recording is too short for that many shots"
+								? "这段录制太短，放不下这么多镜头"
 								: `${count} ${count === 1 ? "shot" : "shots"}`
 						}
 						onMouseEnter={() => {
@@ -421,7 +421,7 @@ function OrbitPad(props: {
 				style={{ left: `${x() * 100}%`, top: `${y() * 100}%` }}
 			/>
 			<span class="absolute inset-x-0 bottom-1.5 text-[10px] text-center pointer-events-none text-ed-text-2">
-				Drag to orbit
+				拖动以环绕
 			</span>
 		</div>
 	);
@@ -747,9 +747,9 @@ export function Camera3DShotPanel(props: {
 		<div class="flex flex-col gap-3">
 			<div
 				class="flex flex-row gap-2 items-center px-3 h-9 rounded-[10px] shadow-[0_0_0_1px_var(--ed-line)]"
-				title="Rebuilds every 3D shot on the track"
+				title="重建轨道上的每个 3D 镜头"
 			>
-				<span class="text-[12px] font-medium text-ed-text-2">Auto scene</span>
+				<span class="text-[12px] font-medium text-ed-text-2">自动运镜</span>
 				<div class="ml-auto">
 					<ShotCountPills
 						max={maxAutoCamera3DShots(totalDuration())}
@@ -762,13 +762,13 @@ export function Camera3DShotPanel(props: {
 				</div>
 			</div>
 			<PanelGroup
-				name="Look"
+				name="外观"
 				action={
 					<MiniSegmented
 						value={lookTab()}
 						options={[
-							{ value: "moves", label: "Moves" },
-							{ value: "angles", label: "Angles" },
+							{ value: "moves", label: "运镜" },
+							{ value: "angles", label: "角度" },
 						]}
 						onChange={setLookTab}
 					/>
@@ -808,19 +808,19 @@ export function Camera3DShotPanel(props: {
 			</PanelGroup>
 
 			<PanelGroup
-				name="Camera"
+				name="摄像头"
 				action={
 					<div class="flex flex-row gap-1 items-center">
 						<EditorButton
 							size="sm"
 							onClick={() => flipSegment("horizontal")}
-							tooltipText="Flip horizontal"
+							tooltipText="水平翻转"
 							leftIcon={<IconLucideFlipHorizontal2 />}
 						/>
 						<EditorButton
 							size="sm"
 							onClick={() => flipSegment("vertical")}
-							tooltipText="Flip vertical"
+							tooltipText="垂直翻转"
 							leftIcon={<IconLucideFlipVertical2 />}
 						/>
 					</div>
@@ -836,7 +836,7 @@ export function Camera3DShotPanel(props: {
 							size="sm"
 							onClick={swapPoses}
 							disabled={isStill()}
-							tooltipText="Swap start and end"
+							tooltipText="交换起点与终点"
 							leftIcon={<IconLucideArrowLeftRight />}
 						/>
 					</div>
@@ -848,11 +848,11 @@ export function Camera3DShotPanel(props: {
 						onClick={makeStill}
 						disabled={isStill()}
 						tooltipText={
-							isStill() ? "Already a still shot" : "Hold on the start pose"
+							isStill() ? "已经是定格镜头" : "保持在起始姿态"
 						}
 						leftIcon={<IconLucidePause />}
 					>
-						Still shot
+						定格镜头
 					</EditorButton>
 				</div>
 				<div class="flex flex-row gap-3 mt-3">
@@ -872,14 +872,14 @@ export function Camera3DShotPanel(props: {
 							"Roll",
 							(value) => `${Math.round(value)}°`,
 						)}
-						{compactPoseSlider("panX", "Shift X", (value) => value.toFixed(2))}
-						{compactPoseSlider("panY", "Shift Y", (value) => value.toFixed(2))}
+						{compactPoseSlider("panX", "X 位移", (value) => value.toFixed(2))}
+						{compactPoseSlider("panY", "Y 位移", (value) => value.toFixed(2))}
 					</div>
 				</div>
 			</PanelGroup>
 
 			<PanelGroup
-				name="Depth blur"
+				name="景深模糊"
 				action={
 					<Toggle size="sm" checked={blurOn()} onChange={setBlurEnabled} />
 				}
@@ -888,11 +888,11 @@ export function Camera3DShotPanel(props: {
 					when={blurOn()}
 					fallback={
 						<p class="text-[11px] text-ed-text-3">
-							Turn on to blur everything outside the focus area.
+							开启后会模糊焦点区域之外的一切。
 						</p>
 					}
 				>
-					<Field inline name="Amount" value={`${Math.round(blur().strength)}`}>
+					<Field inline name="数量" value={`${Math.round(blur().strength)}`}>
 						<Slider
 							value={[blur().strength]}
 							onChange={(v) => setBlurValue("strength", v[0])}
@@ -901,7 +901,7 @@ export function Camera3DShotPanel(props: {
 							step={camera3dBlurLimit("strength", blur()).step}
 						/>
 					</Field>
-					<Field inline name="Focus">
+					<Field inline name="焦点">
 						<MiniSegmented
 							class="flex-1"
 							value={activeBlurMode()}
@@ -939,7 +939,7 @@ export function Camera3DShotPanel(props: {
 								);
 							}}
 						</For>
-						<Subfield name="Bokeh">
+						<Subfield name="散景">
 							<Toggle size="sm" checked={blur().bokeh} onChange={setBokeh} />
 						</Subfield>
 					</DrillSection>
@@ -947,12 +947,12 @@ export function Camera3DShotPanel(props: {
 			</PanelGroup>
 
 			<DrillSection
-				name="Timing & advanced"
+				name="时间与高级"
 				summary={`${motionEasing().label} · Lens ${Math.round(selectedPose().fov)}`}
 				open={advancedOpen()}
 				onOpenChange={setAdvancedOpen}
 			>
-				<Field inline name="Motion style" disabled={isStill()}>
+				<Field inline name="运动样式" disabled={isStill()}>
 					<div class="w-40">
 						<KSelect<Camera3DMotionEasing>
 							options={MOTION_EASINGS}
@@ -1006,7 +1006,7 @@ export function Camera3DShotPanel(props: {
 				</Field>
 				<Field
 					inline
-					name="Ease in"
+					name="缓入"
 					value={`${props.segment.transitionIn.toFixed(2)}s`}
 				>
 					<Slider
@@ -1023,7 +1023,7 @@ export function Camera3DShotPanel(props: {
 				</Field>
 				<Field
 					inline
-					name="Ease out"
+					name="缓出"
 					value={`${props.segment.transitionOut.toFixed(2)}s`}
 				>
 					<Slider
@@ -1039,15 +1039,15 @@ export function Camera3DShotPanel(props: {
 					/>
 				</Field>
 				{poseSlider("fov", "Lens", (value) => `${Math.round(value)}°`)}
-				{poseSlider("rotateX", "Rotate X", (value) => `${Math.round(value)}°`)}
-				{poseSlider("rotateY", "Rotate Y", (value) => `${Math.round(value)}°`)}
+				{poseSlider("rotateX", "绕 X 轴旋转", (value) => `${Math.round(value)}°`)}
+				{poseSlider("rotateY", "绕 Y 轴旋转", (value) => `${Math.round(value)}°`)}
 				<div class="flex justify-end pt-1">
 					<EditorButton
 						size="sm"
 						leftIcon={<IconLucideRotateCcw />}
 						onClick={resetCamera}
 					>
-						Reset camera
+						重置摄像头
 					</EditorButton>
 				</div>
 			</DrillSection>

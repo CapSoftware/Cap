@@ -70,17 +70,17 @@ export function handleRecordingResult(
 					? {
 							yes: "Login",
 							no: "Switch to Studio mode",
-							cancel: "Cancel",
+							cancel: "取消",
 						}
 					: {
 							ok: "Login",
-							cancel: "Cancel",
+							cancel: "取消",
 						};
 
 				const result = await dialog.message(
-					"You must be authenticated to start an instant mode recording. Login or switch to Studio mode.",
+					"必须登录后才能开始 Instant 模式录制。请登录或切换到 Studio 模式。",
 					{
-						title: "Authentication required",
+						title: "需要登录验证",
 						buttons,
 					},
 				);
@@ -94,7 +94,7 @@ export function handleRecordingResult(
 			} else if (result === "UpgradeRequired") commands.showWindow("Upgrade");
 			else
 				await dialog.message(`Error: ${result}`, {
-					title: "Error starting recording",
+					title: "启动录制时出错",
 				});
 		})
 		.catch((error: unknown) => {
@@ -102,7 +102,7 @@ export function handleRecordingResult(
 			return dialog.message(
 				error instanceof Error ? error.message : String(error),
 				{
-					title: "Error starting recording",
+					title: "启动录制时出错",
 					kind: "error",
 				},
 			);

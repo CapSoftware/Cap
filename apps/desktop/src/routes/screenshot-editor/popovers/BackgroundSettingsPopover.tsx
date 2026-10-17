@@ -40,9 +40,9 @@ function prewarmBackground(path: string | null | undefined) {
 
 const BACKGROUND_SOURCES = {
 	wallpaper: "Wallpaper",
-	image: "Image",
+	image: "图片",
 	color: "Color",
-	gradient: "Gradient",
+	gradient: "渐变",
 	animatedGradient: "Animated",
 } satisfies Record<BackgroundSource["type"], string>;
 
@@ -136,7 +136,7 @@ type WallpaperName = (typeof WALLPAPER_NAMES)[number];
 
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
-	dark: "Dark",
+	dark: "深色",
 	blue: "Blue",
 	cities: "Cities",
 	purple: "Purple",
@@ -239,7 +239,7 @@ export function BackgroundSettingsPopover() {
 					)
 				}
 				leftIcon={<IconCapImage class="size-4" />}
-				tooltipText="Background"
+				tooltipText="背景"
 				kbd={["B"]}
 			/>
 			<Popover.Portal>
@@ -250,7 +250,7 @@ export function BackgroundSettingsPopover() {
 					>
 						<Field
 							icon={<IconCapImage class="size-4" />}
-							name="Background Image"
+							name="背景图片"
 						>
 							<KTabs
 								value={project.background.source.type}
@@ -372,7 +372,7 @@ export function BackgroundSettingsPopover() {
 															src={photo.url}
 															loading="eager"
 															class="object-cover w-full h-full"
-															alt="Wallpaper option"
+															alt="壁纸选项"
 														/>
 													</KRadioGroup.ItemControl>
 												</KRadioGroup.Item>
@@ -395,7 +395,7 @@ export function BackgroundSettingsPopover() {
 											>
 												<IconCapImage class="text-gray-11 size-6" />
 												<span class="text-gray-12">
-													Click to select or drag and drop image
+													点击选择，或拖放图片
 												</span>
 											</button>
 										}
@@ -405,7 +405,7 @@ export function BackgroundSettingsPopover() {
 												<img
 													src={convertFileSrc(source())}
 													class="object-cover w-full h-full"
-													alt="Selected background"
+													alt="已选背景"
 												/>
 												<div class="absolute top-2 right-2">
 													<button
@@ -559,14 +559,13 @@ export function BackgroundSettingsPopover() {
 								</KTabs.Content>
 								<KTabs.Content value="animatedGradient">
 									<p class="text-xs text-gray-11">
-										This screenshot uses a still frame of the animated gradient.
-										Choose another background above to replace it.
+										此截图使用的是动态渐变的静帧。在上方选择其他背景即可替换。
 									</p>
 								</KTabs.Content>
 							</KTabs>
 						</Field>
 
-						<Field name="Background Blur" icon={<IconCapBgBlur />}>
+						<Field name="背景模糊" icon={<IconCapBgBlur />}>
 							<Slider
 								value={[project.background.blur]}
 								onChange={(v) => setProject("background", "blur", v[0])}

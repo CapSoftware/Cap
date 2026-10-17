@@ -182,7 +182,7 @@ export function TranscriptPanel() {
 				project.timeline?.textSegments,
 			) ?? outputStart;
 		const end = start + defaultDuration;
-		const text = "New caption";
+		const text = "新字幕";
 
 		setProject(
 			produce((p) => {
@@ -228,7 +228,7 @@ export function TranscriptPanel() {
 	const handleExportCaptions = async (format: CaptionExportFormat) => {
 		const cues = exportableCues();
 		if (cues.length === 0) {
-			toast.error("No captions to download");
+			toast.error("没有可下载的字幕");
 			return;
 		}
 
@@ -244,7 +244,7 @@ export function TranscriptPanel() {
 			toast.success(`Captions saved as ${format.toUpperCase()}`);
 		} catch (error) {
 			console.error("Failed to save captions:", error);
-			toast.error("Failed to save captions");
+			toast.error("保存字幕失败");
 		} finally {
 			setExportingFormat(null);
 		}
@@ -427,7 +427,7 @@ export function TranscriptPanel() {
 	return (
 		<div class="flex overflow-hidden flex-col min-h-0 h-full rounded-xl">
 			<div class="px-3 py-2 border-b border-ed-line flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-ed-text-1">Captions</span>
+				<span class="text-xs font-medium text-ed-text-1">字幕</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
@@ -435,7 +435,7 @@ export function TranscriptPanel() {
 						onClick={addCaptionAtPlayhead}
 					>
 						<IconLucidePlus class="size-3" />
-						Add
+						添加
 					</button>
 					<button
 						type="button"
@@ -824,9 +824,9 @@ function TranscriptEditor(props: {
 				fallback={
 					<div class="flex flex-col items-center justify-center h-full text-gray-9">
 						<IconCapCaptions class="size-10 mb-3 text-gray-7" />
-						<span class="text-sm">No captions available</span>
+						<span class="text-sm">没有可用字幕</span>
 						<span class="text-xs mt-1">
-							Generate captions in the editor first
+							请先在编辑器中生成字幕
 						</span>
 						<button
 							type="button"
@@ -834,7 +834,7 @@ function TranscriptEditor(props: {
 							onClick={props.onAddCaption}
 						>
 							<IconLucidePlus class="size-3.5" />
-							Add caption at playhead
+							在播放头处添加字幕
 						</button>
 					</div>
 				}

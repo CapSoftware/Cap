@@ -19,10 +19,10 @@ export default function UpgradeRedirect() {
 
 	return (
 		<div class="flex flex-col items-center justify-center gap-3 h-full text-gray-12">
-			<Show when={failed()} fallback={<p>Opening pricing in your browser…</p>}>
-				<p>Couldn't open your browser. Visit cap.so/pricing to view plans.</p>
+			<Show when={failed()} fallback={<p>正在浏览器中打开价格页面…</p>}>
+				<p>无法打开浏览器。请访问 cap.so/pricing 查看各版本。</p>
 				<Button variant="gray" onClick={() => void openPricing()}>
-					Try again
+					重试
 				</Button>
 			</Show>
 		</div>

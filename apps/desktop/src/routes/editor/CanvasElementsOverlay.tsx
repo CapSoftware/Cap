@@ -691,7 +691,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 						<ElementBox
 							size={props.size}
 							rect={rect()}
-							label="Screen"
+							label="屏幕"
 							selected={selection()?.type === "display"}
 							draggable={displayDraggable()}
 							resizable={displayDraggable()}
@@ -699,15 +699,15 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 								selectedStyle() && selectedStyle()?.overrides.background == null
 									? {
 											message:
-												"Enable a Background override to edit this Style's screen",
-											actionLabel: "Enable override",
+												"启用背景覆盖后才能编辑此样式的屏幕",
+											actionLabel: "启用覆盖",
 											onAction: () => toggleStyleGroup("background", true),
 										}
 									: displayDraggable()
 										? null
 										: {
-												message: "Screen is locked while a zoom is active",
-												actionLabel: "Edit zoom",
+												message: "缩放生效期间屏幕被锁定",
+												actionLabel: "编辑缩放",
 												onAction: selectActiveZoom,
 											}
 							}
@@ -725,7 +725,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 						<ElementBox
 							size={props.size}
 							rect={rect()}
-							label="Camera"
+							label="摄像头"
 							selected={selection()?.type === "camera"}
 							draggable={cameraDraggable()}
 							resizable={cameraResizable()}
@@ -733,15 +733,15 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 								selectedStyle() && selectedStyle()?.overrides.camera == null
 									? {
 											message:
-												"Enable a Camera override to edit this Style's camera",
-											actionLabel: "Enable override",
+												"启用摄像头覆盖后才能编辑此样式的摄像头",
+											actionLabel: "启用覆盖",
 											onAction: () => toggleStyleGroup("camera", true),
 										}
 									: cameraResizable()
 										? null
 										: {
 												message: "Camera size follows the zoom — drag to move",
-												actionLabel: "Edit zoom",
+												actionLabel: "编辑缩放",
 												onAction: selectActiveZoom,
 											}
 							}

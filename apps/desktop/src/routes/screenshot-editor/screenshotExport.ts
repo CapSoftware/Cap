@@ -29,13 +29,13 @@ const hasNoVisibleBackground = (source: {
 export function screenshotShareStatusText(status: ScreenshotExportStatus) {
 	switch (status) {
 		case "rendering":
-			return "Rendering screenshot";
+			return "正在渲染截图";
 		case "encoding":
-			return "Preparing upload";
+			return "正在准备上传";
 		case "uploading":
-			return "Uploading screenshot";
+			return "正在上传截图";
 		default:
-			return "Create shareable link";
+			return "创建分享链接";
 	}
 }
 

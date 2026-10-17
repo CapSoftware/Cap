@@ -244,8 +244,8 @@ describe("MOTION_EASINGS", () => {
 		expect(MOTION_EASINGS.map((easing) => easing.label)).toEqual([
 			"Linear",
 			"Smooth",
-			"Ease in",
-			"Ease out",
+			"缓入",
+			"缓出",
 		]);
 	});
 
@@ -828,7 +828,7 @@ describe("applySceneToRange", () => {
 	it("holds a still shot as a plain pose", () => {
 		const still: Camera3DScene = {
 			id: "still",
-			name: "Still",
+			name: "静止",
 			shots: [
 				{
 					weight: 1,
@@ -1213,7 +1213,7 @@ describe("matchCamera3DLook", () => {
 
 describe("camera3DShotLabel", () => {
 	it("names the look a shot was built from", () => {
-		expect(camera3DShotLabel(newCamera3DShot(0, 4))).toBe("Glide across");
+		expect(camera3DShotLabel(newCamera3DShot(0, 4))).toBe("横向滑移");
 		const angled = defaultCamera3DSegment(0, 4);
 		applyMotionTemplate(angled, anglePresetMotion(ANGLE_PRESETS[1]));
 		expect(camera3DShotLabel(angled)).toBe(ANGLE_PRESETS[1].name);
@@ -1223,11 +1223,11 @@ describe("camera3DShotLabel", () => {
 		const moved = defaultCamera3DSegment(0, 4);
 		const pose = getStartPose(moved);
 		setMotion(moved, pose, { ...pose, zoom: pose.zoom + 1.3 });
-		expect(camera3DShotLabel(moved)).toBe("Custom move");
+		expect(camera3DShotLabel(moved)).toBe("自定义运镜");
 
 		const still = defaultCamera3DSegment(0, 4);
 		setMotion(still, pose, pose);
-		expect(camera3DShotLabel(still)).toBe("Still shot");
+		expect(camera3DShotLabel(still)).toBe("定格镜头");
 	});
 });
 

@@ -60,7 +60,7 @@ export default function S3ConfigPage() {
 		},
 		onSuccess: async () => {
 			await refetch();
-			await commands.globalMessageDialog("S3 configuration saved successfully");
+			await commands.globalMessageDialog("S3 配置保存成功");
 		},
 	}));
 
@@ -77,7 +77,7 @@ export default function S3ConfigPage() {
 		onSuccess: async () => {
 			await refetch();
 			await commands.globalMessageDialog(
-				"S3 configuration deleted successfully",
+				"S3 配置删除成功",
 			);
 		},
 	}));
@@ -117,7 +117,7 @@ export default function S3ConfigPage() {
 		},
 		onSuccess: async () => {
 			await commands.globalMessageDialog(
-				"S3 configuration test successful! Connection is working.",
+				"S3 配置测试成功！连接正常。",
 			);
 		},
 	}));
@@ -157,20 +157,19 @@ export default function S3ConfigPage() {
 	return (
 		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
-				<IntegrationConfigHeader title="S3 Config" />
+				<IntegrationConfigHeader title="S3 配置" />
 				<Section
-					title="Configuration"
+					title="配置"
 					description={
 						<>
-							It should take under 10 minutes to set up and connect your storage
-							bucket to Cap. View the{" "}
+							设置并连接存储桶到 Cap 通常不到 10 分钟。查看{" "}
 							<a
 								href="https://cap.so/docs/s3-config"
 								target="_blank"
 								class="underline text-gray-12"
 								rel="noopener"
 							>
-								Storage Config Guide
+								存储配置指南
 							</a>{" "}
 							to get started.
 						</>
@@ -188,14 +187,14 @@ export default function S3ConfigPage() {
 								<Show when={managedByOrganization()}>
 									{(organization) => (
 										<p class="text-xs leading-relaxed text-gray-10">
-											Managed by your organization: {organization().name}
+											由你的组织管理： {organization().name}
 										</p>
 									)}
 								</Show>
 
 								<div class="space-y-2">
 									<label class="text-[13px] text-gray-12">
-										Storage Provider
+										存储服务商
 									</label>
 									<div class="relative">
 										<select
@@ -213,7 +212,7 @@ export default function S3ConfigPage() {
 											<option value="cloudflare">Cloudflare R2</option>
 											<option value="supabase">Supabase</option>
 											<option value="minio">MinIO</option>
-											<option value="other">Other S3-Compatible</option>
+											<option value="other">其他 S3 兼容服务</option>
 										</select>
 										<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
 											<svg
@@ -249,7 +248,7 @@ export default function S3ConfigPage() {
 									"endpoint",
 									"https://s3.amazonaws.com",
 								)}
-								{renderInput("Bucket Name", "bucketName", "my-bucket")}
+								{renderInput("存储桶名称", "bucketName", "my-bucket")}
 								{renderInput("Region", "region", "us-east-1")}
 							</div>
 						</Suspense>
@@ -272,14 +271,14 @@ export default function S3ConfigPage() {
 									variant="destructive"
 									onClick={() => deleteConfig.mutate()}
 								>
-									{deleteConfig.isPending ? "Removing..." : "Remove Config"}
+									{deleteConfig.isPending ? "Removing..." : "移除配置"}
 								</Button>
 							)}
 							<Button
 								variant="gray"
 								onClick={() => testConfig.mutate(s3Config())}
 							>
-								{testConfig.isPending ? "Testing..." : "Test Connection"}
+								{testConfig.isPending ? "Testing..." : "测试连接"}
 							</Button>
 						</div>
 						<Button
@@ -287,7 +286,7 @@ export default function S3ConfigPage() {
 							variant="primary"
 							onClick={() => saveConfig.mutate(s3Config())}
 						>
-							{saveConfig.isPending ? "Saving..." : "Save"}
+							{saveConfig.isPending ? "Saving..." : "保存"}
 						</Button>
 					</fieldset>
 				</div>

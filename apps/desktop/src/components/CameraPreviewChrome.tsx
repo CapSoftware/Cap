@@ -30,10 +30,10 @@ export const CAMERA_WIDE_ASPECT_RATIO = 16 / 9;
 export const cameraBackgroundOptions = (
 	macOS: boolean,
 ): { name: string; value: BackgroundBlurMode }[] => [
-	{ name: "Off", value: "off" },
-	{ name: "Light Blur", value: "light" },
-	{ name: "Heavy Blur", value: "heavy" },
-	...(macOS ? [{ name: "Remove Background", value: "remove" as const }] : []),
+	{ name: "关", value: "off" },
+	{ name: "轻度模糊", value: "light" },
+	{ name: "重度模糊", value: "heavy" },
+	...(macOS ? [{ name: "移除背景", value: "remove" as const }] : []),
 ];
 const RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
 
@@ -97,14 +97,14 @@ export const cycleBlurMode = (
 };
 
 export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
-	if (typeof mode === "boolean") return mode ? "Blur" : "";
+	if (typeof mode === "boolean") return mode ? "模糊" : "";
 	switch (mode) {
 		case "light":
-			return "Light";
+			return "浅色";
 		case "heavy":
-			return "Heavy";
+			return "特粗";
 		case "remove":
-			return "Cutout";
+			return "抠像";
 		default:
 			return "";
 	}

@@ -596,7 +596,7 @@ function ClipSettingsControl(props: {
 					"pointer-events-auto flex items-center gap-0.5 rounded-full bg-ed-ctl-active px-1.5 py-0.5 text-[10px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1",
 					props.triggerClass,
 				)}
-				aria-label="Clip settings"
+				aria-label="片段设置"
 				onMouseDown={(event) => event.stopPropagation()}
 			>
 				<IconLucideSettings class="size-3" />
@@ -628,9 +628,9 @@ function ClipSettingsControl(props: {
 						</span>
 					</div>
 
-					<ClipMenuSection name="Speed">
+					<ClipMenuSection name="速度">
 						<ClipMenuChips
-							label="Clip speed"
+							label="片段速度"
 							options={CLIP_SPEEDS.map((mult) => [mult, `${mult}x`] as const)}
 							value={props.segment.timescale}
 							onChange={(mult) =>
@@ -639,12 +639,12 @@ function ClipSettingsControl(props: {
 						/>
 					</ClipMenuSection>
 
-					<ClipMenuSection name="Audio">
+					<ClipMenuSection name="音频">
 						<div class="flex h-7 items-center gap-2 px-2 text-[11.5px]">
-							<span class="w-12 shrink-0 text-ed-text-2">Volume</span>
+							<span class="w-12 shrink-0 text-ed-text-2">音量</span>
 							<Slider
 								class="min-w-0 flex-1"
-								aria-label="Clip volume"
+								aria-label="片段音量"
 								value={[Math.round(clipVolume(props.segment) * 100)]}
 								minValue={0}
 								maxValue={200}
@@ -664,8 +664,8 @@ function ClipSettingsControl(props: {
 							fallback={
 								<ClipMenuToggleRow
 									icon={<IconLucideVolumeX />}
-									label="Mute clip"
-									description="Silence this clip's audio"
+									label="片段静音"
+									description="将此片段的音频静音"
 									checked={muted()}
 									onChange={(checked) =>
 										projectActions.setClipSegmentMuted(props.index, checked)
@@ -674,12 +674,12 @@ function ClipSettingsControl(props: {
 							}
 						>
 							<ClipMenuChips
-								label="Audio at this speed"
+								label="该速度下的音频"
 								options={
 									[
 										["mute", "Mute"],
-										["maintainPitch", "Keep pitch"],
-										["matchSpeed", "Match speed"],
+										["maintainPitch", "保持音调"],
+										["matchSpeed", "匹配速度"],
 									] as const
 								}
 								value={props.segment.speedAudioMode ?? "mute"}
@@ -690,11 +690,11 @@ function ClipSettingsControl(props: {
 						</Show>
 					</ClipMenuSection>
 
-					<ClipMenuSection name="Cursor">
+					<ClipMenuSection name="光标">
 						<ClipMenuToggleRow
 							icon={<IconLucideMousePointerBan />}
-							label="Hide cursor"
-							description="Fades out while this clip plays"
+							label="隐藏光标"
+							description="播放此片段时淡出"
 							checked={cursorHidden()}
 							onChange={(checked) =>
 								projectActions.setClipSegmentHideCursor(props.index, checked)
@@ -707,9 +707,9 @@ function ClipSettingsControl(props: {
 					<div class="flex flex-col gap-0.5">
 						<ClipMenuRow
 							icon={<IconLucideScissors />}
-							label="Split at playhead"
+							label="在播放头处分割"
 							kbd="C"
-							hint="Move the playhead into this clip"
+							hint="把播放头移到该片段内"
 							disabled={!canSplitAtPlayhead()}
 							onClick={() => {
 								projectActions.splitClipSegment(playheadTime(), props.index);
@@ -718,7 +718,7 @@ function ClipSettingsControl(props: {
 						/>
 						<ClipMenuRow
 							icon={<IconLucideArrowLeftToLine />}
-							label="Merge with previous clip"
+							label="与前一个片段合并"
 							hint={mergeHint("previous")}
 							disabled={mergeBlocker("previous") !== null}
 							onClick={() => {
@@ -728,7 +728,7 @@ function ClipSettingsControl(props: {
 						/>
 						<ClipMenuRow
 							icon={<IconLucideArrowRightToLine />}
-							label="Merge with next clip"
+							label="与后一个片段合并"
 							hint={mergeHint("next")}
 							disabled={mergeBlocker("next") !== null}
 							onClick={() => {
@@ -741,7 +741,7 @@ function ClipSettingsControl(props: {
 							fallback={
 								<ClipMenuRow
 									icon={<IconLucidePencil />}
-									label="Rename clip"
+									label="重命名片段"
 									onClick={startRename}
 								/>
 							}
@@ -757,7 +757,7 @@ function ClipSettingsControl(props: {
 									class="h-7 min-w-0 flex-1 px-2 text-[12px]"
 									value={draftName()}
 									placeholder={props.defaultLabel}
-									aria-label="Clip name"
+									aria-label="片段名称"
 									onInput={(event) => setDraftName(event.currentTarget.value)}
 									onKeyDown={(event) => {
 										if (event.key === "Enter") {
@@ -778,9 +778,9 @@ function ClipSettingsControl(props: {
 
 					<ClipMenuRow
 						icon={<IconLucideTrash2 />}
-						label="Delete clip"
+						label="删除片段"
 						kbd="⌫"
-						hint="Can't delete the only clip"
+						hint="无法删除唯一的片段"
 						disabled={!canDelete()}
 						danger
 						onClick={() => {
@@ -984,7 +984,7 @@ export function ClipTrack(
 					const defaultClipName = () =>
 						hasMultipleRecordingSegments()
 							? `Clip ${segment().recordingSegment}`
-							: "Clip";
+							: "片段";
 					const clipName = () => segment().name?.trim() || defaultClipName();
 
 					const speedControl = (triggerClass?: string) => (
@@ -1009,7 +1009,7 @@ export function ClipTrack(
 							parts.push("Muted");
 						else if (clipVolume(seg) !== 1)
 							parts.push(`${Math.round(clipVolume(seg) * 100)}% volume`);
-						if (seg.hideCursor) parts.push("Cursor hidden");
+						if (seg.hideCursor) parts.push("光标已隐藏");
 						return parts.join(" · ");
 					};
 
@@ -1391,7 +1391,7 @@ export function ClipTrack(
 													"background-image":
 														"repeating-linear-gradient(-45deg, rgba(127,127,127,0.12) 0px, rgba(127,127,127,0.12) 4px, transparent 4px, transparent 8px)",
 												}}
-												title="Video paused while the fullscreen text is shown"
+												title="显示全屏文字时视频已暂停"
 											>
 												<IconLucidePause
 													class={cx(
@@ -1410,7 +1410,7 @@ export function ClipTrack(
 																: "text-ed-text-3",
 														)}
 													>
-														Paused
+														已暂停
 													</span>
 												</Show>
 											</div>
@@ -1474,7 +1474,7 @@ export function ClipTrack(
 												title={`${transition().type === "cross-fade" ? "Crossfade" : "Fade through black"} · ${transition().duration.toFixed(2)}s`}
 												onMouseDown={(event) => event.stopPropagation()}
 											>
-												<span class="sr-only">Edit clip transition</span>
+												<span class="sr-only">编辑片段转场</span>
 											</Popover.Trigger>
 											<Popover.Portal>
 												<Popover.Content
@@ -1483,7 +1483,7 @@ export function ClipTrack(
 												>
 													<div class="flex items-center justify-between">
 														<span class="text-sm font-medium">
-															Clip transition
+															片段转场
 														</span>
 														<span class="text-xs tabular-nums text-gray-10">
 															{transition().duration.toFixed(2)}s
@@ -1518,7 +1518,7 @@ export function ClipTrack(
 													</div>
 													<input
 														type="range"
-														aria-label="Transition duration"
+														aria-label="转场时长"
 														min={MIN_CLIP_TRANSITION_DURATION}
 														max={maxTransitionDuration(
 															segments()[i() - 1],
@@ -1540,7 +1540,7 @@ export function ClipTrack(
 															projectActions.deleteClipTransition(i())
 														}
 													>
-														Remove transition
+														移除转场
 													</button>
 												</Popover.Content>
 											</Popover.Portal>

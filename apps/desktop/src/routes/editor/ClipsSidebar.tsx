@@ -260,7 +260,7 @@ export function ClipsSidebar(props: { class?: string }) {
 	const importRecordingPath = async (sourcePath: string) => {
 		if (importing()) return;
 		setImporting(true);
-		const toastId = toast.loading("Importing clip…");
+		const toastId = toast.loading("正在导入片段…");
 		try {
 			if (!(await pauseForProjectChange())) {
 				toast.dismiss(toastId);
@@ -269,7 +269,7 @@ export function ClipsSidebar(props: { class?: string }) {
 			}
 			await flushProjectConfig();
 			const count = await commands.addExistingRecordingToEditor(sourcePath);
-			toast.success(count === 1 ? "Clip imported" : `${count} clips imported`, {
+			toast.success(count === 1 ? "片段已导入" : `${count} clips imported`, {
 				id: toastId,
 			});
 			window.location.reload();
@@ -282,7 +282,7 @@ export function ClipsSidebar(props: { class?: string }) {
 
 	const pickMp4 = async () => {
 		const path = await open({
-			filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+			filters: [{ name: "MP4 视频", extensions: ["mp4"] }],
 			multiple: false,
 		});
 		if (typeof path === "string") await importRecordingPath(path);
@@ -301,11 +301,11 @@ export function ClipsSidebar(props: { class?: string }) {
 		const menu = await Menu.new({
 			items: [
 				await MenuItem.new({
-					text: "Existing recording",
+					text: "已有录制",
 					action: () => void pickCapRecording(),
 				}),
 				await MenuItem.new({
-					text: "MP4 Video…",
+					text: "MP4 视频…",
 					action: () => void pickMp4(),
 				}),
 			],
@@ -553,7 +553,7 @@ export function ClipsSidebar(props: { class?: string }) {
 				class="flex flex-none gap-2 items-center px-4 w-full h-[46px] text-[13px] font-medium border-b transition-colors text-ed-text-1 border-ed-line hover:bg-ed-ctl"
 			>
 				<IconCapMoveLeft class="size-4 text-ed-text-2" />
-				Back to editor
+				返回编辑器
 			</button>
 
 			<div class="flex flex-col flex-1 gap-3 p-3 min-h-0">
@@ -565,7 +565,7 @@ export function ClipsSidebar(props: { class?: string }) {
 						onClick={() => void recordNewClip()}
 					>
 						<IconLucideVideo class="size-4" />
-						Record a new clip
+						录制新片段
 					</Button>
 					<Button
 						variant="gray"
@@ -574,12 +574,12 @@ export function ClipsSidebar(props: { class?: string }) {
 						onClick={openImportMenu}
 					>
 						<IconCapCirclePlus class="size-4" />
-						Import
+						导入
 					</Button>
 				</div>
 
 				<div class="flex flex-none gap-2 items-center">
-					<span class="text-sm font-medium text-gray-12">Clips</span>
+					<span class="text-sm font-medium text-gray-12">片段</span>
 					<Show when={recordedClipCount() > 0}>
 						<span class="rounded-md bg-gray-3 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-gray-11">
 							{recordedClipCount()}
@@ -595,9 +595,9 @@ export function ClipsSidebar(props: { class?: string }) {
 								<div class="flex justify-center items-center rounded-full size-10 bg-gray-3 text-gray-9">
 									<IconCapClapperboard class="size-5" />
 								</div>
-								<p class="text-sm font-medium text-gray-12">No clips yet</p>
+								<p class="text-sm font-medium text-gray-12">还没有片段</p>
 								<p class="max-w-[200px] text-xs text-gray-10">
-									Record or import a clip and it will show up here.
+									录制或导入片段后会显示在这里。
 								</p>
 							</div>
 						}
@@ -692,7 +692,7 @@ export function ClipsSidebar(props: { class?: string }) {
 														onClick={() =>
 															startRename(index(), segment.name ?? "")
 														}
-														aria-label="Rename clip"
+														aria-label="重命名片段"
 														class="flex flex-none justify-center items-center rounded-md opacity-0 transition-colors size-7 text-gray-10 hover:bg-gray-5 hover:text-gray-12 group-hover:opacity-100"
 													>
 														<IconCapPencil class="size-3.5" />
@@ -702,7 +702,7 @@ export function ClipsSidebar(props: { class?: string }) {
 															type="button"
 															data-clip-delete
 															onClick={() => deleteClip(index())}
-															aria-label="Remove clip"
+															aria-label="移除片段"
 															class="flex flex-none justify-center items-center rounded-md opacity-0 transition-colors size-7 text-gray-10 hover:bg-red-3 hover:text-red-11 group-hover:opacity-100"
 														>
 															<IconCapTrash class="size-3.5" />

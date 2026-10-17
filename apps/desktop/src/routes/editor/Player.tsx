@@ -89,15 +89,15 @@ export function PlayerContent(props: { compactness?: number }) {
 	});
 
 	const previewOptions = [
-		{ label: "Full", value: "full" as EditorPreviewQuality },
-		{ label: "Half", value: "half" as EditorPreviewQuality },
-		{ label: "Quarter", value: "quarter" as EditorPreviewQuality },
+		{ label: "完整", value: "full" as EditorPreviewQuality },
+		{ label: "一半", value: "half" as EditorPreviewQuality },
+		{ label: "四分之一", value: "quarter" as EditorPreviewQuality },
 	];
 
 	const zoomHint = () =>
 		ostype() === "windows"
-			? "Hold Ctrl and scroll, or press Ctrl +/- to zoom"
-			: "Pinch, or press Cmd +/- to zoom";
+			? "按住 Ctrl 滚动，或按 Ctrl +/- 缩放"
+			: "双指捏合，或按 Cmd +/- 缩放";
 
 	// Load captions on mount
 	onMount(async () => {
@@ -347,7 +347,7 @@ export function PlayerContent(props: { compactness?: number }) {
 				),
 		},
 		{
-			combo: "Space",
+			combo: "空格",
 			handler: async () => {
 				const prevTime = editorState.previewTime;
 
@@ -384,19 +384,19 @@ export function PlayerContent(props: { compactness?: number }) {
 					</Show>
 					<EditorButton
 						variant="text"
-						tooltipText="Crop Video"
+						tooltipText="裁剪视频"
 						onClick={cropDialogHandler}
 						leftIcon={<IconCapCrop />}
 					>
-						<span class="max-[1200px]:hidden">Crop</span>
+						<span class="max-[1200px]:hidden">裁剪</span>
 					</EditorButton>
 					<FrameButton />
 				</div>
 				<div class="flex flex-row flex-none gap-2 items-center">
-					<span class="text-xs text-ed-text-2">Preview</span>
+					<span class="text-xs text-ed-text-2">预览</span>
 					<div
 						role="group"
-						aria-label="Preview quality"
+						aria-label="预览画质"
 						class="inline-flex gap-0.5 p-0.5 rounded-lg shrink-0 bg-ed-ctl"
 					>
 						<For each={previewOptions}>
@@ -463,7 +463,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					>
 						<IconCapPrev class="size-3.5" />
 					</button>
-					<Tooltip kbd={["Space"]} content="Play/Pause video">
+					<Tooltip kbd={["Space"]} content="播放/暂停视频">
 						<button
 							type="button"
 							onClick={handlePlayPauseClick}
@@ -495,7 +495,7 @@ export function PlayerContent(props: { compactness?: number }) {
 				</div>
 				<div class="flex flex-row flex-1 gap-0.5 justify-end items-center min-w-fit">
 					<EditorButton<typeof KToggleButton>
-						tooltipText="Toggle Split"
+						tooltipText="切换分屏"
 						kbd={["S"]}
 						pressed={editorState.timeline.interactMode === "split"}
 						onChange={(v: boolean) =>
@@ -508,7 +508,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
 					<div class="flex flex-row gap-0.5 items-center" title={zoomHint()}>
 						<EditorButton
-							tooltipText="Zoom out"
+							tooltipText="缩小"
 							kbd={["meta", "-"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -546,7 +546,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							}
 						/>
 						<EditorButton
-							tooltipText="Zoom in"
+							tooltipText="放大"
 							kbd={["meta", "+"]}
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -606,7 +606,7 @@ function PreviewCanvas(props: {
 			items: [
 				{
 					id: "performance-mode",
-					text: performanceMode() ? "✓ Performance Mode" : "Performance Mode",
+					text: performanceMode() ? "✓ Performance Mode" : "性能模式",
 					action: () => setPerformanceMode(!performanceMode()),
 				},
 			],

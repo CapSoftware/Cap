@@ -28,10 +28,10 @@ export function CapErrorBoundary(props: ParentProps) {
 						<div class="flex flex-col flex-1 min-h-0 justify-center items-center border-gray-3 overflow-hidden transition-[border-radius] duration-200 text-(--text-secondary) gap-y-4 max-sm:gap-y-2 px-8 text-center">
 							<IconCapLogo class="max-sm:size-16" />
 							<h1 class="text-(--text-primary) text-3xl max-sm:text-xl font-bold">
-								An Error Occured
+								出错了
 							</h1>
 							<p class="mb-2 max-sm:text-sm">
-								We're very sorry, but something has gone wrong.
+								非常抱歉，出现了问题。
 							</p>
 							<div class="flex flex-row gap-4 max-sm:flex-col max-sm:gap-2">
 								<Button
@@ -39,7 +39,7 @@ export function CapErrorBoundary(props: ParentProps) {
 										writeText(`${e.toString()}\n\n${e.stack}`);
 									}}
 								>
-									Copy Error to Clipboard
+									复制错误信息到剪贴板
 								</Button>
 								<Button
 									onClick={() => {
@@ -47,13 +47,13 @@ export function CapErrorBoundary(props: ParentProps) {
 									}}
 									variant="gray"
 								>
-									Reload
+									重新加载
 								</Button>
 								<Button
 									onClick={() => getCurrentWebviewWindow().close()}
 									variant="destructive"
 								>
-									Close
+									关闭
 								</Button>
 							</div>
 

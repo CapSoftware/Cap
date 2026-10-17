@@ -13,7 +13,7 @@ export function defaultStyleSegment(
 		end,
 		track,
 		enabled: true,
-		name: "Style",
+		name: "样式",
 		overrides: {
 			background: null,
 			camera: null,

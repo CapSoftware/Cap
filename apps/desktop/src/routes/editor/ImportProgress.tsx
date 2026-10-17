@@ -10,14 +10,14 @@ import {
 import IconLucideAlertCircle from "~icons/lucide/alert-circle";
 
 const funMessages = [
-	"Adjusting the Cap just right...",
-	"Putting on our thinking Cap...",
-	"Cap-sizing the pixels...",
-	"Wearing our processing Cap...",
-	"Cap-tivating import in progress...",
-	"Flipping our Cap backwards...",
-	"Cap-puccino break? Almost done...",
-	"Cap-able of great things...",
+	"正在把 Cap 调整到刚刚好…",
+	"戴上思考帽…",
+	"正在整理像素…",
+	"正在戴上处理帽…",
+	"导入进行中，很迷人…",
+	"正在把 Cap 翻个面…",
+	"来杯卡布奇诺？就快好了…",
+	"Cap 能成就大事…",
 ];
 
 export type ImportProgressProps = {
@@ -82,12 +82,12 @@ export function ImportProgress(props: ImportProgressProps) {
 								</div>
 
 								<h2 class="text-lg font-medium text-gray-12 mb-2">
-									Import Failed
+									导入失败
 								</h2>
 								<p class="text-sm text-gray-11 mb-6">{errorMessage()}</p>
 
 								<Button variant="gray" onClick={handleClose}>
-									Close
+									关闭
 								</Button>
 							</div>
 						)}
@@ -130,7 +130,7 @@ export function ImportProgress(props: ImportProgressProps) {
 							</div>
 
 							<h2 class="text-lg font-medium text-gray-12 mb-2">
-								Importing Video
+								正在导入视频
 							</h2>
 							<p class="text-sm text-gray-11 animate-pulse h-5 animate-pulse-slow">
 								{funMessages[messageIndex()]}

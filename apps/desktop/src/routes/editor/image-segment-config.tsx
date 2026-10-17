@@ -22,7 +22,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 				<div class="flex flex-col gap-3.5 p-4">
 					<div class="flex gap-2">
 						<input
-							aria-label="Image name"
+							aria-label="图片名称"
 							class="h-8 min-w-0 flex-1 rounded-[7px] border-0 bg-ed-ctl px-2 text-[13px] text-ed-text-1 caret-ed-accent outline-hidden transition-colors duration-150 placeholder:text-ed-text-3 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent"
 							value={image().name}
 							onChange={(event) =>
@@ -31,7 +31,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 									"imageSegments",
 									props.index,
 									"name",
-									event.currentTarget.value.trim() || "Image",
+									event.currentTarget.value.trim() || "图片",
 								)
 							}
 						/>
@@ -55,7 +55,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								role="status"
 								class="rounded-lg bg-orange-3 p-3 text-[13px] text-ed-text-1"
 							>
-								Image unavailable. Replace it to restore this layer.
+								图片不可用。请替换以恢复此图层。
 							</p>
 						}
 					>
@@ -77,7 +77,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								)
 							}
 						>
-							{editorState.importingImage ? "Importing…" : "Replace image"}
+							{editorState.importingImage ? "导入中…" : "替换图片"}
 						</EditorButton>
 						<EditorButton
 							variant="danger"
@@ -85,14 +85,13 @@ export function ImageSegmentConfig(props: { index: number }) {
 								projectActions.deleteOverlaySegments("image", [props.index])
 							}
 						>
-							Delete
+							删除
 						</EditorButton>
 					</div>
 					<div class="flex flex-col gap-2.5 rounded-lg bg-ed-card-2 p-3">
-						<SectionLabel name="Arrange on canvas" />
+						<SectionLabel name="在画布上排列" />
 						<p class="text-[11px] leading-relaxed text-ed-text-3">
-							Drag the image to move it. Pull a corner to resize, or use the
-							rotation handle to turn it. Arrow keys nudge it into place.
+							拖动图片可移动。拉角可缩放，用旋转手柄可转动。方向键可微调位置。
 						</p>
 						<EditorButton
 							class="w-full justify-center"
@@ -104,13 +103,13 @@ export function ImageSegmentConfig(props: { index: number }) {
 								})
 							}
 						>
-							Center on canvas
+							在画布上居中
 						</EditorButton>
 					</div>
 					<div class="flex flex-col">
 						<Field
 							inline
-							name="Opacity"
+							name="不透明度"
 							value={`${(image().opacity * 100).toFixed(1)}%`}
 						>
 							<Slider
@@ -130,7 +129,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								}
 							/>
 						</Field>
-						<Field inline name="Rotation" value={`${image().rotation}°`}>
+						<Field inline name="旋转" value={`${image().rotation}°`}>
 							<Slider
 								value={[image().rotation]}
 								minValue={-180}
@@ -150,7 +149,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 						</Field>
 						<Field
 							inline
-							name="Rounded corners"
+							name="圆角"
 							value={`${image().rounding.toFixed(1)}%`}
 						>
 							<Slider
@@ -170,7 +169,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								}
 							/>
 						</Field>
-						<Field inline name="Lock aspect ratio">
+						<Field inline name="锁定宽高比">
 							<Toggle
 								checked={image().lockAspect}
 								onChange={(value) =>
@@ -184,7 +183,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								}
 							/>
 						</Field>
-						<Field inline name="Flip horizontally">
+						<Field inline name="水平翻转">
 							<Toggle
 								checked={image().flipX}
 								onChange={(value) =>
@@ -198,7 +197,7 @@ export function ImageSegmentConfig(props: { index: number }) {
 								}
 							/>
 						</Field>
-						<Field inline name="Flip vertically">
+						<Field inline name="垂直翻转">
 							<Toggle
 								checked={image().flipY}
 								onChange={(value) =>
@@ -223,11 +222,10 @@ export function ImageSegmentConfig(props: { index: number }) {
 							})
 						}
 					>
-						Center and reset rotation
+						居中并重置旋转
 					</EditorButton>
 					<p class="text-[11px] leading-relaxed text-ed-text-3">
-						Drag the image to move it. Drag a corner to resize. Shift
-						temporarily disables snapping.
+						拖动图片可移动。拖角可缩放。按住 Shift 可临时关闭吸附。
 					</p>
 				</div>
 			)}

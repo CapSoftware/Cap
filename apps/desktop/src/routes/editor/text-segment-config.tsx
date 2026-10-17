@@ -59,9 +59,9 @@ type SegmentedOption<T extends string> = {
 };
 
 const TEXT_ALIGN_OPTIONS: SegmentedOption<TextAlign>[] = [
-	{ value: "left", label: "Align left", icon: IconLucideAlignLeft },
-	{ value: "center", label: "Align center", icon: IconLucideAlignCenter },
-	{ value: "right", label: "Align right", icon: IconLucideAlignRight },
+	{ value: "left", label: "左对齐", icon: IconLucideAlignLeft },
+	{ value: "center", label: "居中对齐", icon: IconLucideAlignCenter },
+	{ value: "right", label: "右对齐", icon: IconLucideAlignRight },
 ];
 
 type BackgroundOption = "none" | TextBackgroundStyle;
@@ -74,8 +74,8 @@ const TEXT_BACKGROUND_OPTIONS: SegmentedOption<BackgroundOption>[] = [
 // The renderer also supports splitLeft/splitRight takeovers; only these two
 // are exposed for now.
 const TEXT_LAYOUT_OPTIONS: SegmentedOption<TextLayout>[] = [
-	{ value: "overlay", label: "Overlay" },
-	{ value: "fullscreen", label: "Fullscreen" },
+	{ value: "overlay", label: "叠加层" },
+	{ value: "fullscreen", label: "全屏" },
 ];
 
 const TEXT_LAYOUT_CENTERS: Partial<
@@ -85,8 +85,8 @@ const TEXT_LAYOUT_CENTERS: Partial<
 };
 
 const ANIMATION_EDGE_OPTIONS: SegmentedOption<"in" | "out">[] = [
-	{ value: "in", label: "In" },
-	{ value: "out", label: "Out" },
+	{ value: "in", label: "进入" },
+	{ value: "out", label: "退出" },
 ];
 
 const DEFAULT_GRADIENT_COLOR = "#7c9cff";
@@ -521,7 +521,7 @@ export function TextSegmentConfig(props: {
 				name={`Text ${props.segmentIndex + 1}`}
 				action={
 					<div class="flex gap-2 items-center">
-						<span class="text-[11px] text-ed-text-3">Enabled</span>
+						<span class="text-[11px] text-ed-text-3">已启用</span>
 						<Toggle
 							size="sm"
 							checked={props.segment.enabled}
@@ -536,7 +536,7 @@ export function TextSegmentConfig(props: {
 			>
 				<textarea
 					class="min-h-[72px] w-full resize-none rounded-[9px] border-0 bg-ed-ctl px-3 py-2 text-[13px] leading-[18px] text-ed-text-1 caret-ed-accent outline-hidden placeholder:text-ed-text-3 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent"
-					placeholder="Type something…"
+					placeholder="输入一些内容…"
 					value={props.segment.content}
 					onInput={(e) =>
 						updateSegment((segment) => {
@@ -547,7 +547,7 @@ export function TextSegmentConfig(props: {
 				<div class="flex gap-2 items-center">
 					<ToggleChip
 						label="I"
-						title="Italic"
+						title="斜体"
 						italic
 						active={props.segment.italic}
 						onClick={() =>
@@ -558,7 +558,7 @@ export function TextSegmentConfig(props: {
 					/>
 					<ToggleChip
 						label="AA"
-						title="Uppercase"
+						title="大写"
 						active={props.segment.uppercase ?? false}
 						onClick={() =>
 							updateSegment((segment) => {
@@ -568,7 +568,7 @@ export function TextSegmentConfig(props: {
 					/>
 					<div class="ml-auto">
 						<Segmented
-							ariaLabel="Text alignment"
+							ariaLabel="文字对齐"
 							options={TEXT_ALIGN_OPTIONS}
 							value={props.segment.align ?? "center"}
 							onChange={(value) =>
@@ -581,7 +581,7 @@ export function TextSegmentConfig(props: {
 				</div>
 			</Section>
 
-			<Section name="Style">
+			<Section name="样式">
 				<div class="flex overflow-x-auto gap-1 hide-scroll">
 					<For each={TEXT_PRESET_GROUPS}>
 						{(group) => (
@@ -618,7 +618,7 @@ export function TextSegmentConfig(props: {
 				</div>
 			</Section>
 
-			<Section name="Font">
+			<Section name="字体">
 				<FontPicker
 					value={props.segment.fontFamily ?? "sans-serif"}
 					onChange={(family) =>
@@ -640,7 +640,7 @@ export function TextSegmentConfig(props: {
 				<div class="flex flex-col">
 					<Field
 						inline
-						name="Size"
+						name="大小"
 						value={Math.round(
 							clampNumber(
 								props.segment.fontSize,
@@ -688,7 +688,7 @@ export function TextSegmentConfig(props: {
 					</Field>
 					<Field
 						inline
-						name="Line height"
+						name="行高"
 						value={clampNumber(props.segment.lineHeight ?? 1.2, 0.8, 2).toFixed(
 							2,
 						)}
@@ -707,7 +707,7 @@ export function TextSegmentConfig(props: {
 					</Field>
 					<Field
 						inline
-						name="Letter spacing"
+						name="字距"
 						value={`${clampNumber(
 							props.segment.letterSpacing ?? 0,
 							-2,
@@ -730,8 +730,8 @@ export function TextSegmentConfig(props: {
 				</div>
 			</Section>
 
-			<Section name="Look">
-				<Field name="Color">
+			<Section name="外观">
+				<Field name="颜色">
 					<HexColorInput
 						value={props.segment.color}
 						brandColorSwatches={props.brandColorSwatches}
@@ -742,7 +742,7 @@ export function TextSegmentConfig(props: {
 						}
 					/>
 				</Field>
-				<Field inline name="Gradient">
+				<Field inline name="渐变">
 					<Toggle
 						size="sm"
 						checked={props.segment.gradientColor != null}
@@ -766,10 +766,10 @@ export function TextSegmentConfig(props: {
 						}
 					/>
 				</Show>
-				<Field name="Background">
+				<Field name="背景">
 					<Segmented
 						stretch
-						ariaLabel="Text background"
+						ariaLabel="文字背景"
 						options={TEXT_BACKGROUND_OPTIONS}
 						value={backgroundOption()}
 						onChange={(value) =>
@@ -799,7 +799,7 @@ export function TextSegmentConfig(props: {
 				<div class="flex flex-col">
 					<Field
 						inline
-						name="Outline"
+						name="描边"
 						value={`${clampNumber(
 							props.segment.strokeWidth ?? 0,
 							0,
@@ -832,7 +832,7 @@ export function TextSegmentConfig(props: {
 					</Show>
 					<Field
 						inline
-						name="Shadow"
+						name="阴影"
 						value={`${Math.round(clampNumber(props.segment.shadow ?? 0, 0, 1) * 100)}%`}
 					>
 						<Slider
@@ -849,7 +849,7 @@ export function TextSegmentConfig(props: {
 					</Field>
 					<Field
 						inline
-						name="Glow"
+						name="辉光"
 						value={`${Math.round(clampNumber(props.segment.glow ?? 0, 0, 1) * 100)}%`}
 					>
 						<Slider
@@ -866,7 +866,7 @@ export function TextSegmentConfig(props: {
 					</Field>
 					<Field
 						inline
-						name="Opacity"
+						name="不透明度"
 						value={`${Math.round(clampNumber(props.segment.opacity ?? 1, 0, 1) * 100)}%`}
 					>
 						<Slider
@@ -885,10 +885,10 @@ export function TextSegmentConfig(props: {
 			</Section>
 
 			<Section
-				name="Animation"
+				name="动画"
 				action={
 					<Segmented
-						ariaLabel="Animation edge"
+						ariaLabel="动画边缘"
 						options={ANIMATION_EDGE_OPTIONS}
 						value={animationEdge()}
 						onChange={setAnimationEdge}
@@ -908,7 +908,7 @@ export function TextSegmentConfig(props: {
 					</For>
 				</div>
 				<Show when={edgeAnimation() !== "none"}>
-					<Field inline name="Duration" value={`${edgeDuration().toFixed(2)}s`}>
+					<Field inline name="时长" value={`${edgeDuration().toFixed(2)}s`}>
 						<Slider
 							value={[edgeDuration()]}
 							onChange={([value]) => setEdgeDuration(value)}
@@ -921,10 +921,10 @@ export function TextSegmentConfig(props: {
 				</Show>
 			</Section>
 
-			<Section name="Layout">
+			<Section name="布局">
 				<Segmented
 					stretch
-					ariaLabel="Text layout"
+					ariaLabel="文字布局"
 					options={TEXT_LAYOUT_OPTIONS}
 					value={layout()}
 					onChange={(value) =>
@@ -941,14 +941,13 @@ export function TextSegmentConfig(props: {
 				/>
 				<Show when={layout() === "fullscreen"}>
 					<p class="text-[12px] leading-snug text-ed-text-3">
-						Pauses the video while the text is shown, then resumes where it left
-						off.
+						显示文字时暂停视频，结束后从原位置继续播放。
 					</p>
 				</Show>
 				<Show when={layout() !== "overlay"}>
 					<Field
 						inline
-						name="Screen transition"
+						name="屏幕转场"
 						value={`${clampNumber(
 							props.segment.layoutTransition ?? 0.5,
 							0.1,

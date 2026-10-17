@@ -144,7 +144,7 @@ export function CaptionsTrack(props: {
 				each={captionSegments()}
 				fallback={
 					<div class="cap-empty-lane">
-						<span>No captions</span>
+						<span>没有字幕</span>
 						<button
 							type="button"
 							class="cap-empty-lane-action outline-hidden"
@@ -155,7 +155,7 @@ export function CaptionsTrack(props: {
 								void props.onGenerate();
 							}}
 						>
-							· {props.isGenerating ? "Generating..." : "Generate captions"}
+							· {props.isGenerating ? "Generating..." : "生成字幕"}
 						</button>
 					</div>
 				}
@@ -175,7 +175,7 @@ export function CaptionsTrack(props: {
 					const captionLabel = () => (
 						<div class="cap-seg-labels">
 							<span class="cap-seg-label truncate max-w-full">
-								{segment.text || "Caption"}
+								{segment.text || "字幕"}
 							</span>
 						</div>
 					);
@@ -187,7 +187,7 @@ export function CaptionsTrack(props: {
 							segColor="var(--track-caption)"
 							class="group"
 							selected={isSelected()}
-							title={segment.text || "Caption"}
+							title={segment.text || "字幕"}
 							segment={{
 								start: segment.start,
 								end: Math.min(segment.end, totalDuration()),

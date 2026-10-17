@@ -64,7 +64,7 @@ export const COMPRESSION_OPTIONS: Array<{
 	bpp: number;
 }> = [
 	{ label: "Maximum", value: "Maximum", bpp: 0.3 },
-	{ label: "Social Media", value: "Social", bpp: 0.15 },
+	{ label: "社交媒体", value: "Social", bpp: 0.15 },
 	{ label: "Web", value: "Web", bpp: 0.08 },
 	{ label: "Potato", value: "Potato", bpp: 0.04 },
 ];
@@ -92,22 +92,22 @@ export const GIF_FPS_OPTIONS = [
 
 export const EXPORT_TO_OPTIONS = [
 	{
-		label: "File",
+		label: "文件",
 		value: "file",
 		icon: IconCapFile,
-		description: "Save to your computer",
+		description: "保存到你的电脑",
 	},
 	{
-		label: "Clipboard",
+		label: "剪贴板",
 		value: "clipboard",
 		icon: IconCapCopy,
-		description: "Copy to paste anywhere",
+		description: "复制后可粘贴到任何地方",
 	},
 	{
-		label: "Shareable Link",
+		label: "分享链接",
 		value: "link",
 		icon: IconCapLink,
-		description: "Share via Cap cloud",
+		description: "通过 Cap 云分享",
 	},
 ] as const;
 
@@ -319,16 +319,16 @@ export function ExportPage() {
 		return estimate
 			? formatEstimatedSize(estimate.size_range_mb)
 			: estimateLoading()
-				? "Calculating…"
-				: "Unavailable";
+				? "计算中…"
+				: "不可用";
 	};
 	const estimatedTimeLabel = () => {
 		const estimate = renderEstimate();
 		return estimate
 			? formatEstimatedTime(estimate.time_range_seconds)
 			: estimateLoading()
-				? "Calculating…"
-				: "Unavailable";
+				? "计算中…"
+				: "不可用";
 	};
 
 	const updateSettings: typeof setSettings = ((
@@ -704,10 +704,10 @@ export function ExportPage() {
 		isMovCursorOnlyExport() ? "mov" : settings.format === "Gif" ? "gif" : "mp4";
 	const exportedAssetLabel = () =>
 		isMovCursorOnlyExport()
-			? "Cursor track"
+			? "光标轨道"
 			: settings.format === "Gif"
 				? "GIF"
-				: "Recording";
+				: "录制";
 	const exportMediumLabel = () =>
 		isMovCursorOnlyExport()
 			? "cursor track"
@@ -717,8 +717,8 @@ export function ExportPage() {
 
 	const handleCancel = async () => {
 		if (
-			await ask("Are you sure you want to cancel the export?", {
-				title: "Cancel Export",
+			await ask("确定要取消导出吗？", {
+				title: "取消导出",
 				kind: "warning",
 			})
 		) {
@@ -766,7 +766,7 @@ export function ExportPage() {
 				return;
 			}
 			commands.globalMessageDialog(
-				error instanceof Error ? error.message : "Failed to copy recording",
+				error instanceof Error ? error.message : "复制录制失败",
 			);
 			setExportState(reconcile({ type: "idle" }));
 		},
@@ -931,7 +931,7 @@ export function ExportPage() {
 			console.error(error);
 			if (!(error instanceof SilentError)) {
 				commands.globalMessageDialog(
-					error instanceof Error ? error.message : "Failed to upload recording",
+					error instanceof Error ? error.message : "上传录制失败",
 				);
 			}
 
@@ -966,14 +966,14 @@ export function ExportPage() {
 		EXPORT_TO_OPTIONS.map((option) => ({
 			value: option.value,
 			label:
-				option.value === "link" && meta().sharing ? "Reupload" : option.label,
+				option.value === "link" && meta().sharing ? "重新上传" : option.label,
 			icon: option.icon,
 			disabled: option.value === "link" && disablesLinkExport(),
 			disabledReason:
 				option.value === "link" && disablesLinkExport()
 					? cursorOnly()
-						? "Cursor-only exports can only be saved to a file or clipboard"
-						: "Transparent exports can only be saved to a file or clipboard"
+						? "仅导出光标时只能保存到文件或剪贴板"
+						: "透明导出只能保存到文件或剪贴板"
 					: undefined,
 		}));
 
@@ -988,11 +988,11 @@ export function ExportPage() {
 				label: option.label,
 				disabled,
 				disabledReason: cursorOnly()
-					? "Cursor-only export always uses transparent MOV"
+					? "仅导出光标时始终使用透明 MOV"
 					: option.value === "Mp4" && requiresTransparentExport()
-						? "MP4 doesn't support transparency"
+						? "MP4 不支持透明"
 						: option.value === "Gif" && settings.exportTo === "link"
-							? "Links require MP4 format"
+							? "链接分享需要 MP4 格式"
 							: undefined,
 			};
 		});
@@ -1039,11 +1039,11 @@ export function ExportPage() {
 						class="flex gap-1.5 items-center h-7 pl-2 pr-2.5 rounded-lg text-[12px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl hover:text-ed-text-1 outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent"
 					>
 						<IconCapMoveLeft class="size-3.5" />
-						Back to editor
+						返回编辑器
 					</button>
 				</div>
 				<h1 class="text-[13px] font-medium text-ed-text-1 pointer-events-none">
-					Export
+					导出
 				</h1>
 				<div data-tauri-drag-region class="flex flex-1 justify-end h-full">
 					{ostype() === "windows" && <CaptionControlsWindows11 />}
@@ -1053,8 +1053,8 @@ export function ExportPage() {
 			<div class="flex-1 min-h-0 flex relative">
 				<div class="flex-1 min-w-0 flex flex-col bg-ed-stage pt-4 px-6 pb-5">
 					<div class="flex items-center gap-1.5 h-[22px] text-[12px] font-medium text-ed-text-2">
-						Preview
-						<Tooltip content="This is a rendered frame from your video. Adjust the settings to see the quality of the final export.">
+						预览
+						<Tooltip content="这是你视频中的一帧渲染画面。调整设置即可查看最终导出效果。">
 							<IconLucideInfo class="size-[13px] text-ed-text-3 hover:text-ed-text-2 cursor-help transition-colors" />
 						</Tooltip>
 					</div>
@@ -1082,8 +1082,8 @@ export function ExportPage() {
 													<span class="text-[12px] text-center text-ed-text-2 break-words">
 														{previewError() ??
 															(previewUnavailable()
-																? "Preview unavailable"
-																: "Generating preview...")}
+																? "预览不可用"
+																: "正在生成预览…")}
 													</span>
 												}
 											>
@@ -1124,7 +1124,7 @@ export function ExportPage() {
 					<div class="flex justify-center">
 						<div class="flex h-11 min-w-[520px] rounded-[10px] bg-ed-card shadow-ed-card">
 							<ExportStat
-								label="Duration"
+								label="时长"
 								value={
 									previewDimensions()
 										? formatDuration(
@@ -1137,12 +1137,12 @@ export function ExportPage() {
 										: undefined
 								}
 							/>
-							<ExportStat label="Output" value={outputDescription()} divided />
+							<ExportStat label="输出" value={outputDescription()} divided />
 							<ExportStat
 								label={
 									estimateLoading() && renderEstimate()
-										? "Refining size…"
-										: "Estimated size"
+										? "正在优化尺寸…"
+										: "预计大小"
 								}
 								value={estimatedSizeLabel()}
 								divided
@@ -1150,8 +1150,8 @@ export function ExportPage() {
 							<ExportStat
 								label={
 									estimateLoading() && renderEstimate()
-										? "Refining time…"
-										: "Export time"
+										? "正在优化时间…"
+										: "导出时间"
 								}
 								value={estimatedTimeLabel()}
 								divided
@@ -1163,7 +1163,7 @@ export function ExportPage() {
 				<div class="w-[400px] shrink-0 border-l border-ed-line flex flex-col bg-ed-card">
 					<div class="custom-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 flex flex-col gap-5">
 						<ExportSection
-							name="Destination"
+							name="目标位置"
 							icon={<IconCapUpload class="size-3.5" />}
 						>
 							<ExportSegmented
@@ -1184,8 +1184,8 @@ export function ExportPage() {
 							<Show when={disablesLinkExport()}>
 								<p class="text-[11px] text-ed-text-3">
 									{cursorOnly()
-										? "Cursor-only exports can only be saved to a file or clipboard."
-										: "Transparent exports can only be saved to a file or clipboard."}
+										? "仅导出光标时只能保存到文件或剪贴板。"
+										: "透明导出只能保存到文件或剪贴板。"}
 								</p>
 							</Show>
 
@@ -1242,7 +1242,7 @@ export function ExportPage() {
 											menu.popup();
 										}}
 									>
-										<span class="text-ed-text-2">Organization</span>
+										<span class="text-ed-text-2">组织</span>
 										<span class="flex items-center gap-1 text-ed-text-1">
 											{
 												(
@@ -1259,7 +1259,7 @@ export function ExportPage() {
 						</ExportSection>
 
 						<ExportSection
-							name="Format"
+							name="格式"
 							icon={<IconLucideVideo class="size-3.5" />}
 							disabled={cursorOnly()}
 						>
@@ -1297,7 +1297,7 @@ export function ExportPage() {
 						</ExportSection>
 
 						<ExportSection
-							name="Resolution"
+							name="分辨率"
 							icon={<IconLucideMonitor class="size-3.5" />}
 						>
 							<ExportSegmented
@@ -1313,7 +1313,7 @@ export function ExportPage() {
 						</ExportSection>
 
 						<ExportSection
-							name="Frame rate"
+							name="帧率"
 							icon={<IconLucideGauge class="size-3.5" />}
 						>
 							<ExportSegmented
@@ -1328,7 +1328,7 @@ export function ExportPage() {
 
 						<Show when={showBitrateControls()}>
 							<ExportSection
-								name="Quality"
+								name="画质"
 								icon={<IconLucideGem class="size-3.5" />}
 							>
 								<ExportSegmented
@@ -1346,11 +1346,11 @@ export function ExportPage() {
 								/>
 								<div class="flex justify-between px-0.5 text-[10.5px] text-ed-text-3">
 									<span>Smaller file</span>
-									<span>Larger file</span>
+									<span>文件更大</span>
 								</div>
 								<ExportToggleRow
-									title="Optimize file size"
-									description="Re-encodes with software for much smaller files (slower)"
+									title="优化文件体积"
+									description="使用软件重新编码以获得更小的文件（较慢）"
 									checked={settings.optimizeFilesize}
 									onChange={(value) =>
 										updateSettings("optimizeFilesize", value)
@@ -1380,8 +1380,8 @@ export function ExportPage() {
 
 							<Show when={advancedMode()}>
 								<ExportToggleRow
-									title="Export cursor only"
-									description="Keeps the same cursor motion and clicks on a transparent background"
+									title="仅导出光标"
+									description="在透明背景上保留同样的光标移动和点击"
 									checked={cursorOnly()}
 									onChange={setCursorOnly}
 								/>
@@ -1390,8 +1390,7 @@ export function ExportPage() {
 									<div class="mt-1 p-3 rounded-[10px] bg-ed-card-2 flex items-start gap-2">
 										<IconLucideAlertTriangle class="mt-px size-3.5 shrink-0 text-ed-text-2" />
 										<p class="text-[11.5px] leading-[15px] text-ed-text-2">
-											Exports as a transparent MOV. Files are large and best for
-											compositing or editing.
+											导出为透明 MOV。文件较大，最适合用于合成或后期剪辑。
 										</p>
 									</div>
 								</Show>
@@ -1399,12 +1398,12 @@ export function ExportPage() {
 								<Show when={showBitrateControls()}>
 									<div class="flex items-center gap-2.5 h-[34px]">
 										<span class="min-w-24 shrink-0 text-[13px] text-ed-text-1">
-											Bits per pixel
+											每像素位数
 										</span>
 										<div class="flex flex-1 items-center min-w-0 px-1 h-8">
 											<input
 												type="range"
-												aria-label="Bits per pixel"
+												aria-label="每像素位数"
 												min="0.02"
 												max="0.5"
 												step="0.01"
@@ -1434,14 +1433,14 @@ export function ExportPage() {
 									</div>
 									<Show when={isCustomBpp()}>
 										<p class="text-[11px] text-ed-text-3">
-											Using a custom bitrate
+											使用自定义码率
 										</p>
 									</Show>
 
 									<Show when={ostype() === "macos"}>
 										<ExportToggleRow
-											title="Force FFmpeg decoder"
-											description="Skip hardware decoder (auto-fallback enabled)"
+											title="强制使用 FFmpeg 解码器"
+											description="跳过硬件解码器（已启用自动回退）"
 											checked={forceFfmpegDecoder()}
 											onChange={setForceFfmpegDecoder}
 										/>
@@ -1471,11 +1470,11 @@ export function ExportPage() {
 								}}
 							>
 								{signIn.isPending ? (
-									"Cancel Sign In"
+									"取消登录"
 								) : (
 									<>
 										<IconCapLink class="size-4" />
-										Sign in to share
+										登录后分享
 									</>
 								)}
 							</button>
@@ -1495,21 +1494,21 @@ export function ExportPage() {
 								{settings.exportTo === "file" && (
 									<>
 										<IconCapFile class="size-4" />
-										Export to File
+										导出到文件
 									</>
 								)}
 								{settings.exportTo === "clipboard" && (
 									<>
 										<IconCapCopy class="size-4" />
-										Export to Clipboard
+										导出到剪贴板
 									</>
 								)}
 								{settings.exportTo === "link" && (
 									<>
 										<IconCapLink class="size-4" />
 										{meta().sharing
-											? "Reupload to same link"
-											: "Create shareable link"}
+											? "重新上传到同一链接"
+											: "创建分享链接"}
 									</>
 								)}
 							</button>
@@ -1556,7 +1555,7 @@ export function ExportPage() {
 						<Show when={renderEstimate()}>
 							{(est) => (
 								<span>
-									Estimated size: {formatEstimatedSize(est().size_range_mb)}
+									预计大小： {formatEstimatedSize(est().size_range_mb)}
 								</span>
 							)}
 						</Show>
@@ -1598,7 +1597,7 @@ export function ExportPage() {
 														heading={
 															renderState.type === "rendering"
 																? `Rendering ${exportMediumLabel()}`
-																: "Preparing export"
+																: "正在准备导出"
 														}
 														state={renderState}
 														onCancel={handleCancel}
@@ -1606,11 +1605,11 @@ export function ExportPage() {
 												)}
 											</Match>
 											<Match when={copyState.type === "copying"}>
-												<ActiveExport heading="Copying to clipboard" />
+												<ActiveExport heading="正在复制到剪贴板" />
 											</Match>
 											<Match when={copyState.type === "done"}>
 												<CompletedExport
-													title="Copied to clipboard"
+													title="已复制到剪贴板"
 													subtitle={`Your ${exportMediumLabel()} is ready to paste`}
 												/>
 											</Match>
@@ -1637,7 +1636,7 @@ export function ExportPage() {
 														heading={
 															renderState.type === "rendering"
 																? `Rendering ${exportMediumLabel()}`
-																: "Preparing export"
+																: "正在准备导出"
 														}
 														state={renderState}
 														onCancel={handleCancel}
@@ -1645,11 +1644,11 @@ export function ExportPage() {
 												)}
 											</Match>
 											<Match when={saveState.type === "copying"}>
-												<ActiveExport heading="Saving to file" />
+												<ActiveExport heading="正在保存到文件" />
 											</Match>
 											<Match when={saveState.type === "done"}>
 												<CompletedExport
-													title="Export complete"
+													title="导出完成"
 													subtitle={`Your ${exportMediumLabel()} is ready`}
 												/>
 											</Match>
@@ -1671,8 +1670,8 @@ export function ExportPage() {
 													<ActiveExport
 														heading={
 															reuploading()
-																? "Reuploading to your link"
-																: "Uploading"
+																? "正在重新上传到你的链接"
+																: "上传中"
 														}
 														percent={uploading.progress}
 													/>
@@ -1691,7 +1690,7 @@ export function ExportPage() {
 														heading={
 															renderState.type === "rendering"
 																? `Rendering ${exportMediumLabel()}`
-																: "Preparing export"
+																: "正在准备导出"
 														}
 														state={renderState}
 														onCancel={handleCancel}
@@ -1702,13 +1701,13 @@ export function ExportPage() {
 												<CompletedExport
 													title={
 														reuploading()
-															? "Reupload complete"
-															: "Upload complete"
+															? "重新上传完成"
+															: "上传完成"
 													}
 													subtitle={
 														reuploading()
-															? "Your latest edit is ready at the same link"
-															: "Your Cap has been uploaded successfully"
+															? "你最新的编辑已在同一链接就绪"
+															: "你的 Cap 视频已上传成功"
 													}
 												/>
 											</Match>
@@ -1742,7 +1741,7 @@ export function ExportPage() {
 													) : (
 														<IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
 													)}
-													<p>Copy Link</p>
+													<p>复制链接</p>
 												</Button>
 												<a href={link()} target="_blank" rel="noreferrer">
 													<Button
@@ -1750,7 +1749,7 @@ export function ExportPage() {
 														class="flex gap-2 justify-center items-center"
 													>
 														<IconCapLink class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
-														<p>Open Link</p>
+														<p>打开链接</p>
 													</Button>
 												</a>
 											</div>
@@ -1770,7 +1769,7 @@ export function ExportPage() {
 												}}
 											>
 												<IconCapFile class="size-4" />
-												Open File
+												打开文件
 											</Button>
 											<Button
 												variant="dark"
@@ -1808,16 +1807,14 @@ export function ExportPage() {
 										}}
 									>
 										<IconCapMoveLeft class="size-4" />
-										Back to editor
+										返回编辑器
 									</Button>
 								</div>
 							</Show>
 
 							<Show when={exportState.type !== "done"}>
 								<p class="max-w-sm text-xs leading-relaxed text-center text-ed-text-2">
-									<span class="font-semibold text-ed-text-1">Tip:</span> Use
-									Instant Mode for your next recording to record and upload on
-									the fly, with no exporting required.
+									<span class="font-semibold text-ed-text-1">Tip:</span> 下次录制时使用 Instant 模式，即可边录边传，无需导出。
 								</p>
 							</Show>
 						</div>
@@ -2026,14 +2023,14 @@ function ActiveExport(props: {
 					{(rendered) => (
 						<p class="text-[12px] tabular-nums text-ed-text-2">
 							{rendered().renderedCount.toLocaleString()} /{" "}
-							{rendered().totalFrames.toLocaleString()} frames
+							{rendered().totalFrames.toLocaleString()} 帧
 						</p>
 					)}
 				</Show>
 			</div>
 			<Show when={props.onCancel}>
 				<Button variant="gray" size="sm" onClick={() => props.onCancel?.()}>
-					Cancel
+					取消
 				</Button>
 			</Show>
 		</div>

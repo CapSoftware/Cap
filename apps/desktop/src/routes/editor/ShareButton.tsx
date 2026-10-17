@@ -64,8 +64,8 @@ function ShareButton() {
 								disabled={hasTransparentBackground()}
 								tooltipText={
 									hasTransparentBackground()
-										? "Share links require a background without transparency"
-										: "Upload your latest edit to the same link"
+										? "分享链接要求背景不透明"
+										: "将最新编辑上传到同一链接"
 								}
 								onClick={() => {
 									setEditorState("timeline", "selection", null);
@@ -79,16 +79,16 @@ function ShareButton() {
 								}}
 								leftIcon={<IconCapUpload />}
 							>
-								Reupload
+								重新上传
 							</EditorButton>
-							<Tooltip content="Open link">
+							<Tooltip content="打开链接">
 								<div class="flex flex-row gap-1.5 items-center px-2.5 h-7 rounded-[7px] transition-colors duration-100 bg-ed-ctl hover:bg-ed-ctl-hover">
 									<a
 										href={selectedUrl().href}
 										target="_blank"
 										rel="noreferrer"
-										title={linkToDisplay() ?? "Open link"}
-										aria-label="Open recording link"
+										title={linkToDisplay() ?? "打开链接"}
+										aria-label="打开录制链接"
 										class="w-full truncate max-w-[200px] max-[1400px]:w-4 max-[1400px]:shrink-0"
 									>
 										<span class="text-xs text-ed-text-2 max-[1400px]:hidden">
@@ -102,7 +102,7 @@ function ShareButton() {
 											customDomain.data?.domain_verified
 										}
 									>
-										<Tooltip content="Select link">
+										<Tooltip content="选择链接">
 											<KSelect
 												value={linkToDisplay()}
 												onChange={(value) =>
@@ -144,7 +144,7 @@ function ShareButton() {
 											</KSelect>
 										</Tooltip>
 									</Show>
-									<Tooltip content="Copy link">
+									<Tooltip content="复制链接">
 										<div
 											class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active"
 											onClick={copyLink}

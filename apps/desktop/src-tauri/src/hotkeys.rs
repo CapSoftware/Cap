@@ -222,7 +222,7 @@ async fn confirm_direct_recording_without_microphone(app: &AppHandle) -> bool {
         Err(message) => {
             app.dialog()
                 .message(message)
-                .title("Microphone unavailable")
+                .title("麦克风不可用")
                 .kind(MessageDialogKind::Warning)
                 .buttons(MessageDialogButtons::Ok)
                 .show(|_| {});
@@ -232,8 +232,8 @@ async fn confirm_direct_recording_without_microphone(app: &AppHandle) -> bool {
 
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
-        .message("This recording will not include your voice.")
-        .title("No microphone detected")
+        .message("本次录制不会包含你的声音。")
+        .title("未检测到麦克风")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Record without microphone".to_string(),

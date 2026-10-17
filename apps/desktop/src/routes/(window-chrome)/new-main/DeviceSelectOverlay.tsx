@@ -221,8 +221,8 @@ export default function DeviceSelectOverlay<T>(
 							fallback={
 								<div class="px-3 py-6 text-center text-sm text-white/50">
 									{searchQuery()
-										? "No matching devices"
-										: (props.emptyMessage ?? "No devices found")}
+										? "没有匹配的设备"
+										: (props.emptyMessage ?? "未找到设备")}
 								</div>
 							}
 						>

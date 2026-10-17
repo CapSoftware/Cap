@@ -115,23 +115,23 @@ type TrackDefinition = {
 };
 
 const trackDefinitions: TrackDefinition[] = [
-	{ type: "style", label: "Style", icon: trackIcons.style, locked: false },
-	{ type: "image", label: "Image", icon: trackIcons.image, locked: false },
+	{ type: "style", label: "样式", icon: trackIcons.style, locked: false },
+	{ type: "image", label: "图片", icon: trackIcons.image, locked: false },
 	{
 		type: "clip",
-		label: "Clip",
+		label: "片段",
 		icon: trackIcons.clip,
 		locked: true,
 	},
 	{
 		type: "caption",
-		label: "Captions",
+		label: "字幕",
 		icon: trackIcons.caption,
 		locked: false,
 	},
 	{
 		type: "keyboard",
-		label: "Keyboard",
+		label: "键盘",
 		icon: trackIcons.keyboard,
 		locked: false,
 	},
@@ -143,25 +143,25 @@ const trackDefinitions: TrackDefinition[] = [
 	},
 	{
 		type: "mask",
-		label: "Mask",
+		label: "遮罩",
 		icon: trackIcons.mask,
 		locked: false,
 	},
 	{
 		type: "audio",
-		label: "Audio",
+		label: "音频",
 		icon: trackIcons.audio,
 		locked: false,
 	},
 	{
 		type: "zoom",
-		label: "Zoom",
+		label: "缩放",
 		icon: trackIcons.zoom,
 		locked: true,
 	},
 	{
 		type: "scene",
-		label: "Scene",
+		label: "场景",
 		icon: trackIcons.scene,
 		locked: false,
 	},
@@ -1279,7 +1279,7 @@ export function Timeline(props: {
 
 			if (result.segments.length < 1) {
 				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
+					"未能生成字幕。音频可能太轻或不够清晰。",
 				);
 				return;
 			}
@@ -1297,7 +1297,7 @@ export function Timeline(props: {
 
 			setEditorState("timeline", "tracks", "caption", true);
 			setEditorState("captions", "isStale", false);
-			toast.success("Captions generated successfully!");
+			toast.success("字幕生成成功！");
 		} catch (error) {
 			console.error("Error generating captions:", error);
 			const errorMessage = getCaptionGenerationErrorMessage(error);
@@ -1479,7 +1479,7 @@ export function Timeline(props: {
 						}}
 					>
 						<div class="flex flex-col gap-1.5 min-h-full">
-							<TrackRow icon={trackIcons.clip} label="Video" type="clip">
+							<TrackRow icon={trackIcons.clip} label="视频" type="clip">
 								<ClipTrack
 									ref={setTimelineRef}
 									handleUpdatePlayhead={handleUpdatePlayhead}
@@ -1488,7 +1488,7 @@ export function Timeline(props: {
 							<Show when={captionTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.caption}
-									label="Captions"
+									label="字幕"
 									type="caption"
 									onDelete={() => handleDeleteSingleTrack("caption")}
 								>
@@ -1505,7 +1505,7 @@ export function Timeline(props: {
 							<Show when={keyboardTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.keyboard}
-									label="Keyboard"
+									label="键盘"
 									type="keyboard"
 									onDelete={() => handleDeleteSingleTrack("keyboard")}
 								>
@@ -1608,15 +1608,15 @@ export function Timeline(props: {
 							</For>
 							<TrackRow
 								icon={trackIcons.zoom}
-								label="Zoom"
+								label="缩放"
 								type="zoom"
 								onDelete={
 									(project.timeline?.zoomSegments?.length ?? 0) > 0
 										? () => handleClearTrackSegments("zoom")
 										: undefined
 								}
-								deleteLabel="Clear all"
-								deleteTitle="Delete all zoom segments"
+								deleteLabel="全部清除"
+								deleteTitle="删除所有缩放片段"
 							>
 								<ZoomTrack
 									onDragStateChanged={(v) => {
@@ -1635,8 +1635,8 @@ export function Timeline(props: {
 											? () => handleClearTrackSegments("3d")
 											: undefined
 									}
-									deleteLabel="Clear all"
-									deleteTitle="Delete all 3D shots"
+									deleteLabel="全部清除"
+									deleteTitle="删除所有 3D 镜头"
 								>
 									<ThreeDTrack
 										onDragStateChanged={(v) => {
@@ -1649,15 +1649,15 @@ export function Timeline(props: {
 							<Show when={sceneTrackVisible()}>
 								<TrackRow
 									icon={trackIcons.scene}
-									label="Scene"
+									label="场景"
 									type="scene"
 									onDelete={
 										(project.timeline?.sceneSegments?.length ?? 0) > 0
 											? () => handleClearTrackSegments("scene")
 											: undefined
 									}
-									deleteLabel="Clear all"
-									deleteTitle="Delete all scene segments"
+									deleteLabel="全部清除"
+									deleteTitle="删除所有场景片段"
 								>
 									<SceneTrack
 										onDragStateChanged={(v) => {
@@ -1920,11 +1920,11 @@ function TrackRow(props: {
 			indicator.style.width = `${bounds.width - 4}px`;
 			indicator.textContent = visual
 				? target === 0
-					? "Front"
+					? "前面"
 					: target === rows.length
-						? "Back"
-						: "Place here"
-				: "Place here";
+						? "返回"
+						: "放在这里"
+				: "放在这里";
 		};
 		const tick = (now: number) => {
 			const bounds = scroll.getBoundingClientRect();
@@ -2032,7 +2032,7 @@ function TrackRow(props: {
 					data-track-reorder={canReorder() ? "" : undefined}
 					title={
 						canReorder()
-							? "Drag this header to reorder. Higher visual layers appear in front. Alt + Up or Down also moves the track."
+							? "拖动此标题可重新排序。层级越高的轨道显示在越前面。也可以用 Alt + 上/下 移动轨道。"
 							: undefined
 					}
 					onMouseDown={startReorder}
@@ -2070,13 +2070,13 @@ function TrackRow(props: {
 					<button
 						type="button"
 						class="absolute right-0 top-1/2 z-30 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-ed-text-3 opacity-0 transition-opacity hover:bg-ed-ctl-active hover:text-red-9 group-hover/icon:opacity-100 focus-visible:opacity-100"
-						aria-label={props.deleteTitle ?? "Delete track"}
+						aria-label={props.deleteTitle ?? "删除轨道"}
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onDelete?.();
 						}}
 						onMouseDown={(e) => e.stopPropagation()}
-						title={props.deleteTitle ?? "Delete track"}
+						title={props.deleteTitle ?? "删除轨道"}
 					>
 						<IconCapTrash class="size-3.5" />
 					</button>

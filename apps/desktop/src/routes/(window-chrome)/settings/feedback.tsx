@@ -50,26 +50,26 @@ async function fetchDiagnostics(): Promise<SystemDiagnostics | null> {
 }
 
 const DIAGNOSTIC_MODES = [
-	{ text: "Studio and Instant", value: "both" },
-	{ text: "Studio only", value: "studio" },
-	{ text: "Instant only", value: "instant" },
+	{ text: "Studio 与 Instant", value: "both" },
+	{ text: "仅 Studio", value: "studio" },
+	{ text: "仅 Instant", value: "instant" },
 ];
 
 const DIAGNOSTIC_DURATIONS = [
-	{ text: "20 seconds", value: 20 },
-	{ text: "40 seconds", value: 40 },
-	{ text: "60 seconds", value: 60 },
+	{ text: "20 秒", value: 20 },
+	{ text: "40 秒", value: 40 },
+	{ text: "60 秒", value: 60 },
 ];
 
 /** Stage names come from the CLI verbatim; unknown ones are shown as-is. */
 const SYNC_STAGE_LABELS: Record<string, string> = {
-	collecting: "Preparing the test",
-	recording: "Recording the test pattern",
-	"pattern-run": "Playing the flash and beep pattern",
-	remuxing: "Finalizing the recording",
-	analyzing: "Analyzing flash and beep timing",
-	exporting: "Exporting the test recording",
-	done: "Wrapping up the sync test",
+	collecting: "正在准备测试",
+	recording: "正在录制测试图案",
+	"pattern-run": "正在播放闪光与提示音序列",
+	remuxing: "正在完成录制",
+	analyzing: "正在分析闪光与提示音时序",
+	exporting: "正在导出测试录像",
+	done: "正在收尾同步测试",
 };
 
 const VERDICT_STYLES: Record<string, string> = {
@@ -80,11 +80,11 @@ const VERDICT_STYLES: Record<string, string> = {
 };
 
 function progressLabel(payload: DiagnosticProgress) {
-	if (payload.phase === "collecting") return "Collecting system info...";
-	if (payload.phase === "done") return "Finishing up...";
+	if (payload.phase === "collecting") return "正在收集系统信息…";
+	if (payload.phase === "done") return "即将完成…";
 	const stage = payload.stage
 		? (SYNC_STAGE_LABELS[payload.stage] ?? payload.stage)
-		: "Running sync test";
+		: "正在运行同步测试";
 	return payload.mode ? `${stage} (${payload.mode})...` : `${stage}...`;
 }
 
@@ -141,7 +141,7 @@ export default function FeedbackTab() {
 	const handleRunDiagnostic = async () => {
 		const confirmed = await confirm(
 			`Cap will take over your screen with a flashing test pattern and play loud beeps for about ${durationSecs()} seconds per pipeline. Take your headphones off, leave the volume audible, and don't use the machine until it finishes.`,
-			{ title: "Run diagnostic?", kind: "warning", okLabel: "Run Diagnostic" },
+			{ title: "要运行诊断吗？", kind: "warning", okLabel: "运行诊断" },
 		);
 		if (!confirmed) return;
 
@@ -165,7 +165,7 @@ export default function FeedbackTab() {
 				}),
 			);
 		} catch (error) {
-			toast.error("Failed to run diagnostic");
+			toast.error("运行诊断失败");
 			console.error("Failed to run diagnostic:", error);
 		} finally {
 			unlisten();
@@ -181,9 +181,9 @@ export default function FeedbackTab() {
 		setSendingReport(true);
 		try {
 			await commands.uploadDiagnosticReport(report.reportPath);
-			toast.success("Diagnostic report sent to Cap");
+			toast.success("诊断报告已发送给 Cap");
 		} catch (error) {
-			toast.error("Failed to send diagnostic report");
+			toast.error("发送诊断报告失败");
 			console.error("Failed to send diagnostic report:", error);
 		} finally {
 			setSendingReport(false);
@@ -197,7 +197,7 @@ export default function FeedbackTab() {
 		try {
 			await commands.revealDiagnosticReport(report.reportPath);
 		} catch (error) {
-			toast.error("Failed to show diagnostic report");
+			toast.error("显示诊断报告失败");
 			console.error("Failed to reveal diagnostic report:", error);
 		}
 	};
@@ -206,9 +206,9 @@ export default function FeedbackTab() {
 		setUploadingLogs(true);
 		try {
 			await commands.uploadLogs();
-			toast.success("Logs uploaded successfully");
+			toast.success("日志上传成功");
 		} catch (error) {
-			toast.error("Failed to upload logs");
+			toast.error("上传日志失败");
 			console.error("Failed to upload logs:", error);
 		} finally {
 			setUploadingLogs(false);
@@ -219,8 +219,8 @@ export default function FeedbackTab() {
 		<div class="cap-settings-page flex flex-col w-full h-full custom-scroll">
 			<SettingsPageContent>
 				<Section
-					title="Feedback"
-					description="Help us improve Cap by submitting feedback or reporting bugs. We'll get right on it."
+					title="反馈"
+					description="提交反馈或报告问题，帮助我们改进 Cap，我们会尽快处理。"
 				>
 					<form
 						class="space-y-4"
@@ -234,7 +234,7 @@ export default function FeedbackTab() {
 								<textarea
 									value={feedback()}
 									onInput={(e) => setFeedback(e.currentTarget.value)}
-									placeholder="Tell us what you think about Cap..."
+									placeholder="告诉我们你对 Cap 的看法…"
 									required
 									minLength={10}
 									class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-hidden focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
@@ -248,7 +248,7 @@ export default function FeedbackTab() {
 							)}
 
 							{submission.result?.success && (
-								<p class="text-sm text-primary">Thank you for your feedback!</p>
+								<p class="text-sm text-primary">感谢你的反馈！</p>
 							)}
 
 							<Button
@@ -258,60 +258,56 @@ export default function FeedbackTab() {
 								disabled={feedback().trim().length < 4}
 								class="mt-2"
 							>
-								{submission.pending ? "Submitting..." : "Submit Feedback"}
+								{submission.pending ? "Submitting..." : "提交反馈"}
 							</Button>
 						</fieldset>
 					</form>
 				</Section>
 
 				<Section
-					title="Join the Community"
-					description="Have questions, want to share ideas, or just hang out? Join the Cap Discord community."
+					title="加入社区"
+					description="有疑问、想交流想法，或者只是想聊聊天？欢迎加入 Cap 的 Discord 社区。"
 				>
 					<Button
 						onClick={() => shell.open("https://cap.link/discord")}
 						size="md"
 						variant="gray"
 					>
-						Join Discord
+						加入 Discord
 					</Button>
 				</Section>
 
 				<Section
-					title="Diagnostic Report"
+					title="诊断报告"
 					description="Runs an audio/video sync test and collects your hardware, displays, cameras, microphones, Cap settings, details of your recent recordings and a copy of Cap's log file, so we can reproduce your setup instead of guessing at it. You can read the whole report before sending it."
 				>
 					<div class="space-y-2.5">
 						<div class="flex gap-2.5 items-start px-3 py-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10">
 							<IconLucideAlertTriangle class="mt-0.5 size-3.5 shrink-0 text-amber-400" />
 							<p class="text-xs leading-relaxed text-gray-11">
-								The sync test takes over your screen with a flashing pattern and
-								plays loud beeps for about {durationSecs()} seconds per
-								pipeline. Take your headphones off and leave the volume audible
-								(the microphone test needs to hear the beeps through your
-								speakers), and don't use the machine until it finishes.
+								同步测试会接管你的屏幕，播放闪烁图案和响亮的提示音，持续约 {durationSecs()} 秒（每条流水线）。请摘下耳机并保持音量可闻（麦克风测试需要从扬声器听到提示音），测试结束前请不要使用这台电脑。
 							</p>
 						</div>
 
 						<fieldset disabled={running()}>
 							<SectionRows>
 								<SelectDiagnosticItem
-									label="Pipelines to test"
-									description="Studio recordings, Instant recordings, or both in one run."
+									label="待测试的流水线"
+									description="Studio 录制、Instant 录制，或两者同时进行。"
 									value={mode()}
 									options={DIAGNOSTIC_MODES}
 									onChange={setMode}
 								/>
 								<SelectDiagnosticItem
-									label="Test duration"
-									description="Longer runs are more sensitive to slow drift."
+									label="测试时长"
+									description="运行时间越长，越容易受缓慢漂移影响。"
 									value={durationSecs()}
 									options={DIAGNOSTIC_DURATIONS}
 									onChange={setDurationSecs}
 								/>
 								<ToggleSettingItem
-									label="Test microphone too"
-									description="Also records your microphone and checks it against the beeps it can hear."
+									label="同时测试麦克风"
+									description="同时录制麦克风，并与听到的提示音进行比对。"
 									value={includeMicrophone()}
 									onChange={setIncludeMicrophone}
 								/>
@@ -325,7 +321,7 @@ export default function FeedbackTab() {
 								variant="dark"
 								disabled={running()}
 							>
-								{running() ? "Running..." : "Run Diagnostic"}
+								{running() ? "Running..." : "运行诊断"}
 							</Button>
 							<Show when={running() && status()}>
 								{(label) => <p class="text-xs text-gray-10">{label()}</p>}
@@ -354,8 +350,7 @@ export default function FeedbackTab() {
 									<Show when={report().syncTestError}>
 										{(error) => (
 											<p class="text-xs leading-relaxed text-amber-400">
-												The sync test couldn't run: {error()}. The report still
-												contains your system information.
+												同步测试无法运行： {error()}。报告仍包含你的系统信息。
 											</p>
 										)}
 									</Show>
@@ -367,14 +362,14 @@ export default function FeedbackTab() {
 											variant="dark"
 											disabled={sendingReport()}
 										>
-											{sendingReport() ? "Sending..." : "Send to Cap"}
+											{sendingReport() ? "Sending..." : "发送到 Cap"}
 										</Button>
 										<Button
 											onClick={handleRevealReport}
 											size="md"
 											variant="gray"
 										>
-											Show File
+											显示文件
 										</Button>
 									</div>
 								</div>
@@ -384,8 +379,8 @@ export default function FeedbackTab() {
 				</Section>
 
 				<Section
-					title="Debug Information"
-					description="Upload Cap's log file to help us diagnose issues. It records what the app did, which can include file paths and the names of things you recorded."
+					title="调试信息"
+					description="上传 Cap 的日志文件，帮助我们排查问题。日志记录了应用的行为，可能包含文件路径和你录制的对象名称。"
 				>
 					<Button
 						onClick={handleUploadLogs}
@@ -393,16 +388,16 @@ export default function FeedbackTab() {
 						variant="gray"
 						disabled={uploadingLogs()}
 					>
-						{uploadingLogs() ? "Uploading..." : "Upload Logs"}
+						{uploadingLogs() ? "Uploading..." : "上传日志"}
 					</Button>
 				</Section>
 
-				<Section title="System Information">
+				<Section title="系统信息">
 					<Show
 						when={!diagnostics.loading && diagnostics()}
 						fallback={
 							<p class="text-xs leading-relaxed text-gray-10">
-								Loading system information...
+								正在加载系统信息…
 							</p>
 						}
 					>
@@ -427,7 +422,7 @@ export default function FeedbackTab() {
 									<Show when={osVersion}>
 										{(ver) => (
 											<div class="space-y-1">
-												<p class="text-gray-11 font-medium">Operating System</p>
+												<p class="text-gray-11 font-medium">操作系统</p>
 												<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded-sm font-mono text-xs">
 													{ver().displayName}
 												</p>
@@ -436,7 +431,7 @@ export default function FeedbackTab() {
 									</Show>
 
 									<div class="space-y-1">
-										<p class="text-gray-11 font-medium">Capture Support</p>
+										<p class="text-gray-11 font-medium">捕获支持</p>
 										<div class="flex gap-2 flex-wrap">
 											<span
 												class={`px-2 py-1 rounded text-xs ${
@@ -445,15 +440,15 @@ export default function FeedbackTab() {
 														: "bg-red-500/20 text-red-400"
 												}`}
 											>
-												Screen Capture:{" "}
-												{captureSupported ? "Supported" : "Not Supported"}
+												屏幕捕获：{" "}
+												{captureSupported ? "支持" : "不支持"}
 											</span>
 										</div>
 									</div>
 
 									<Show when={(d.availableEncoders as string[])?.length > 0}>
 										<div class="space-y-1">
-											<p class="text-gray-11 font-medium">Available Encoders</p>
+											<p class="text-gray-11 font-medium">可用编码器</p>
 											<div class="flex gap-1.5 flex-wrap">
 												<For each={d.availableEncoders as string[]}>
 													{(encoder) => (

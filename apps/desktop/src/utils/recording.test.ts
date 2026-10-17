@@ -29,7 +29,7 @@ describe("recording start cancellation", () => {
 		expect(isRecordingStartCancelled(message)).toBe(false);
 		await handleRecordingResult(Promise.reject(new Error(message)), undefined);
 		expect(dialog.message).toHaveBeenCalledWith(message, {
-			title: "Error starting recording",
+			title: "启动录制时出错",
 			kind: "error",
 		});
 	});

@@ -161,7 +161,7 @@ function FadeControl(props: {
 				<div
 					role="slider"
 					aria-label={
-						props.edge === "in" ? "Fade in duration" : "Fade out duration"
+						props.edge === "in" ? "淡入时长" : "淡出时长"
 					}
 					aria-valuenow={Math.round(props.fadeSeconds * 1000)}
 					tabindex={-1}
@@ -188,7 +188,7 @@ function FadeControl(props: {
 				<div
 					role="slider"
 					aria-label={
-						props.edge === "in" ? "Fade in corner" : "Fade out corner"
+						props.edge === "in" ? "淡入角落" : "淡出角落"
 					}
 					aria-valuenow={Math.round(props.fadeSeconds * 1000)}
 					tabindex={-1}
@@ -412,8 +412,8 @@ export function AudioTrack(props: {
 							props.onRequestAdd(props.laneIndex);
 						}}
 					>
-						<span>Add background music or import your own audio</span>
-						<span class="cap-empty-lane-action">· Add audio</span>
+						<span>添加背景音乐或导入你自己的音频</span>
+						<span class="cap-empty-lane-action">· 添加音频</span>
 					</button>
 				}
 			>
@@ -445,7 +445,7 @@ export function AudioTrack(props: {
 							class="group"
 							selected={isSelected()}
 							muted={!segment.enabled}
-							title={segment.name || "Audio"}
+							title={segment.name || "音频"}
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -522,7 +522,7 @@ export function AudioTrack(props: {
 									full={() => (
 										<div class="cap-seg-labels z-10 max-w-full">
 											<span class="cap-seg-label max-w-full truncate">
-												{segment.name || "Audio"}
+												{segment.name || "音频"}
 											</span>
 											<span class="cap-seg-sublabel">
 												{`${Math.round(segment.end - segment.start)}s`}
@@ -532,7 +532,7 @@ export function AudioTrack(props: {
 									compact={() => (
 										<div class="cap-seg-labels z-10 max-w-full">
 											<span class="cap-seg-label max-w-full truncate">
-												{segment.name || "Audio"}
+												{segment.name || "音频"}
 											</span>
 										</div>
 									)}

@@ -27,21 +27,21 @@ import {
 const STUDIO_OPTIONS = [
 	{
 		value: "balanced",
-		label: "Balanced",
+		label: "均衡",
 		description:
-			"Clear, detailed recordings with a practical file size. Best for everyday use.",
+			"画面清晰、细节丰富，文件体积适中。适合日常使用。",
 	},
 	{
 		value: "compatibility",
-		label: "Smaller files",
+		label: "更小的文件",
 		description:
-			"Uses less disk space. Can reduce detail, especially when recording with a camera.",
+			"占用磁盘更少。可能降低细节，尤其是带摄像头录制时。",
 	},
 	{
 		value: "ultra",
-		label: "Maximum detail",
+		label: "最高细节",
 		description:
-			"Preserves more detail for demanding edits. Creates larger files and needs more disk space.",
+			"为繁重的剪辑保留更多细节，文件更大，也需要更多磁盘空间。",
 	},
 ] satisfies {
 	value: StudioRecordingQuality;
@@ -53,24 +53,24 @@ const INSTANT_OPTIONS = [
 	{
 		value: 1280,
 		label: "720p",
-		description: "Smaller uploads. Good for quick updates.",
+		description: "上传体积更小，适合快速更新。",
 	},
 	{
 		value: 1920,
 		label: "1080p",
 		description:
-			"Clear text and a practical upload size. Recommended with Cap Pro.",
+			"文字清晰，上传体积适中。推荐配合 Cap 专业版使用。",
 	},
 	{
 		value: 2560,
 		label: "1440p",
-		description: "More detail for larger screens. Takes longer to upload.",
+		description: "为更大屏幕保留更多细节，上传耗时更长。",
 	},
 	{
 		value: 3840,
 		label: "4K",
 		description:
-			"The most detail and largest uploads. Best with a fast connection.",
+			"细节最丰富，上传体积最大。建议使用高速网络。",
 	},
 ];
 
@@ -147,7 +147,7 @@ export default function RecordingQualitySettings() {
 			await generalSettingsStore.set({ [key]: value });
 			await store.refetch();
 		} catch {
-			toast.error("Couldn't save your recording settings. Please try again.");
+			toast.error("无法保存你的录制设置，请重试。");
 		} finally {
 			setSaving(false);
 		}
@@ -160,23 +160,23 @@ export default function RecordingQualitySettings() {
 		>
 			<SettingsPageContent>
 				<Section
-					title="Recording quality"
-					description="Choose how new recordings look and how much space they use."
+					title="录制画质"
+					description="选择新录制的画质与占用空间。"
 				/>
 				<Show when={store.isPending}>
-					<p class="text-xs text-gray-10">Loading recording settings…</p>
+					<p class="text-xs text-gray-10">正在加载录制设置…</p>
 				</Show>
 				<Show when={store.isError}>
 					<SectionCard padded>
 						<p class="mb-3 text-xs text-gray-10">
-							Couldn't load your recording settings.
+							无法加载你的录制设置。
 						</p>
 						<Button
 							size="sm"
 							variant="gray"
 							onClick={() => void store.refetch()}
 						>
-							Try again
+							重试
 						</Button>
 					</SectionCard>
 				</Show>
@@ -184,13 +184,13 @@ export default function RecordingQualitySettings() {
 					<div id="settings-section-studio-quality">
 						<Section
 							title="Studio"
-							description="Saved to your computer, ready to edit. All three quality options are available on every plan."
+							description="已保存到你的电脑，随时可以编辑。三档画质在所有版本中都可用。"
 						>
 							<SectionCard padded>
 								<div
 									class="flex flex-col gap-2"
 									role="group"
-									aria-label="Studio recording quality"
+									aria-label="Studio 录制画质"
 								>
 									<For each={STUDIO_OPTIONS}>
 										{(option) => (
@@ -225,7 +225,7 @@ export default function RecordingQualitySettings() {
 														{option.label}
 														<Show when={option.value === "balanced"}>
 															<span class="rounded px-1.5 py-0.5 text-[10px] font-medium text-blue-11 bg-blue-4">
-																Recommended
+																推荐
 															</span>
 														</Show>
 													</span>
@@ -238,8 +238,7 @@ export default function RecordingQualitySettings() {
 									</For>
 								</div>
 								<p class="mt-3 text-xs leading-relaxed text-gray-10">
-									These options affect the original recording. Choose your final
-									export resolution and file size in the editor.
+									这些选项影响原始录制。最终导出的分辨率和文件大小请在编辑器中选择。
 								</p>
 							</SectionCard>
 						</Section>
@@ -247,16 +246,16 @@ export default function RecordingQualitySettings() {
 					<div id="settings-section-instant-quality">
 						<Section
 							title="Instant"
-							description="Uploads while you record, so your share link is ready when you stop."
+							description="录制的同时就在上传，停止时分享链接已就绪。"
 						>
 							<SectionCard padded>
 								<p class="mb-3 text-[13px] font-medium text-gray-12">
-									Maximum resolution
+									最大分辨率
 								</p>
 								<div
 									class="grid grid-cols-4 gap-2"
 									role="group"
-									aria-label="Instant recording resolution"
+									aria-label="Instant 录制分辨率"
 								>
 									<For each={INSTANT_OPTIONS}>
 										{(option) => (
@@ -280,21 +279,19 @@ export default function RecordingQualitySettings() {
 											>
 												{option.label}
 												<Show when={!hasCapPro() && option.value > 1280}>
-													<span class="text-[9px] text-gray-10">Pro</span>
+													<span class="text-[9px] text-gray-10">专业版</span>
 												</Show>
 											</button>
 										)}
 									</For>
 								</div>
 								<p class="mt-3 text-xs leading-relaxed text-gray-10">
-									{instantDescription()} Resolution is limited by the screen or
-									area you record.
+									{instantDescription()} 分辨率受你所录制的屏幕或区域限制。
 								</p>
 								<Show when={!auth.isPending && !hasCapPro()}>
 									<div class="flex flex-col items-start gap-3 mt-4 pt-4 border-t border-gray-4">
 										<p class="text-xs leading-relaxed text-gray-11">
-											720p is included. Cap Pro unlocks 1080p, 1440p and 4K for
-											Instant recordings.
+											默认包含 720p。Cap 专业版可为 Instant 录制解锁 1080p、1440p 和 4K。
 										</p>
 										<Button
 											size="sm"
@@ -308,11 +305,11 @@ export default function RecordingQualitySettings() {
 							</SectionCard>
 						</Section>
 					</div>
-					<Section title="Sharing">
+					<Section title="分享">
 						<SectionRows>
 							<ToggleSettingItem
-								label="Open share links automatically"
-								description="Open the link in your browser when an upload finishes."
+								label="自动打开分享链接"
+								description="上传完成后在浏览器中打开链接。"
 								value={!settings().disableAutoOpenLinks}
 								onChange={(value) => void save("disableAutoOpenLinks", !value)}
 							/>

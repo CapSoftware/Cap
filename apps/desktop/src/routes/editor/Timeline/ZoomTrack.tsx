@@ -36,7 +36,7 @@ const MIN_ZOOM_SEGMENT_PIXEL_WIDTH = 40;
 const MIN_NEW_SEGMENT_PIXEL_WIDTH = 80;
 const MIN_NEW_SEGMENT_SECS_WIDTH = 1;
 const NO_AUTO_ZOOM_CLICKS_MESSAGE =
-	"No clicks found to zoom into. Drag across the lane to add one.";
+	"没有找到可缩放的点击。在轨道上拖动即可手动添加。";
 
 export function ZoomTrack(props: {
 	onDragStateChanged: (v: ZoomSegmentDragState) => void;
@@ -94,7 +94,7 @@ export function ZoomTrack(props: {
 			setProject("timeline", "zoomSegments", zoomSegments);
 		} catch (error) {
 			console.error("Failed to generate zoom segments:", error);
-			toast.error("Failed to generate zoom segments");
+			toast.error("生成缩放片段失败");
 		} finally {
 			setIsGeneratingAutoZoom(false);
 		}
@@ -309,7 +309,7 @@ export function ZoomTrack(props: {
 							when={
 								hasRecordedCursorData() && !sessionDismissedGenerateZoomPrompt()
 							}
-							fallback={<span>Drag across this lane to add a zoom</span>}
+							fallback={<span>在此轨道上横向拖动即可添加缩放</span>}
 						>
 							<div
 								class="relative z-10 flex items-center gap-1.5"
@@ -317,7 +317,7 @@ export function ZoomTrack(props: {
 								onMouseLeave={() => setIsHoveringGenerateZoomButton(false)}
 								onMouseDown={(e) => e.stopPropagation()}
 							>
-								<span>Generate zoom segments automatically</span>
+								<span>自动生成缩放片段</span>
 								<button
 									type="button"
 									class="cap-empty-lane-action outline-hidden"
@@ -326,13 +326,13 @@ export function ZoomTrack(props: {
 										void handleGenerateZoomSegments();
 									}}
 								>
-									· {isGeneratingAutoZoom() ? "Generating..." : "Generate"}
+									· {isGeneratingAutoZoom() ? "Generating..." : "生成"}
 								</button>
 								<button
 									type="button"
 									class="flex shrink-0 justify-center items-center rounded-md outline-hidden text-ed-text-3 hover:text-ed-text-1 hover:bg-ed-ctl-hover size-5 transition-colors"
 									disabled={isGeneratingAutoZoom()}
-									aria-label="Dismiss for this session"
+									aria-label="本次会话内不再提示"
 									onClick={() => setSessionDismissedGenerateZoomPrompt(true)}
 								>
 									<IconLucideX class="size-3" />
@@ -354,7 +354,7 @@ export function ZoomTrack(props: {
 						};
 
 						const zoomModeLabel = () =>
-							segment().mode === "auto" ? "Automatic Zoom" : "Manual Zoom";
+							segment().mode === "auto" ? "自动缩放" : "手动缩放";
 
 						const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
@@ -598,7 +598,7 @@ export function ZoomTrack(props: {
 										items: [
 											{
 												id: "selectAllZoomSegments",
-												text: "Select all zoom segments",
+												text: "选中所有缩放片段",
 												enabled: allIndices.length > 1,
 												action: () =>
 													setEditorState("timeline", "selection", {
@@ -611,7 +611,7 @@ export function ZoomTrack(props: {
 												text:
 													targetIndices.length > 1
 														? `Delete ${targetIndices.length} zoom segments`
-														: "Delete zoom segment",
+														: "删除缩放片段",
 												action: () =>
 													projectActions.deleteZoomSegments(targetIndices),
 											},
@@ -726,7 +726,7 @@ export function ZoomTrack(props: {
 														<span class="cap-seg-label truncate">
 															{visibleBox().width >= 140
 																? zoomModeLabel()
-																: "Zoom"}
+																: "缩放"}
 														</span>
 														<span class="cap-seg-sublabel">
 															{zoomPercentage()}
@@ -735,7 +735,7 @@ export function ZoomTrack(props: {
 												)}
 												compact={() => (
 													<div class="cap-seg-labels">
-														<span class="cap-seg-label">Zoom</span>
+														<span class="cap-seg-label">缩放</span>
 														<span class="cap-seg-sublabel">
 															{zoomPercentage()}
 														</span>

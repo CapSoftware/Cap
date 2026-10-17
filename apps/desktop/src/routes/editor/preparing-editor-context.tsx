@@ -119,7 +119,7 @@ export function createPreparingEditorSession() {
 				"absolute max-w-full max-h-full object-contain rounded-md";
 			canvas.setAttribute(
 				"aria-label",
-				"Recording preview while the editor prepares",
+				"编辑器准备期间的录制预览",
 			);
 		}
 		setCanvases({ active, retained: preserved });

@@ -46,7 +46,7 @@ export function FontPicker(props: {
 				if (option) props.onChange(option.value);
 			}}
 			defaultFilter="contains"
-			placeholder="Search fonts…"
+			placeholder="搜索字体…"
 			itemComponent={(itemProps) => (
 				<MenuItem<typeof KCombobox.Item>
 					as={KCombobox.Item}

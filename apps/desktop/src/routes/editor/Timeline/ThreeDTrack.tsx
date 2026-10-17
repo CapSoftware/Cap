@@ -224,7 +224,7 @@ export function ThreeDTrack(props: {
 						when={pickerOpen()}
 						fallback={
 							<>
-								<span>Add cinematic 3D shots to your recording</span>
+								<span>为录制添加电影感 3D 镜头</span>
 								<div
 									class="flex relative z-10 gap-2 items-center"
 									onMouseDown={(e) => e.stopPropagation()}
@@ -234,20 +234,20 @@ export function ThreeDTrack(props: {
 										class="cap-lane-chip outline-hidden"
 										onClick={() => setPickerOpen(true)}
 									>
-										Auto scene
+										自动运镜
 									</button>
 									<button
 										type="button"
 										class="cap-lane-chip cap-lane-chip-ghost outline-hidden"
 										onClick={() => projectActions.addCamera3DShot()}
 									>
-										+ Add shot
+										+ 添加镜头
 									</button>
 								</div>
 							</>
 						}
 					>
-						<span>How many shots?</span>
+						<span>要几个镜头？</span>
 						<div
 							class="flex relative z-10 gap-1 items-center"
 							onMouseDown={(e) => e.stopPropagation()}
@@ -259,7 +259,7 @@ export function ThreeDTrack(props: {
 							/>
 							<button
 								type="button"
-								aria-label="Close the shot picker"
+								aria-label="关闭镜头选择器"
 								class="flex justify-center items-center ml-1 rounded-md transition-colors outline-hidden text-ed-text-3 hover:text-ed-text-1 hover:bg-ed-ctl-hover size-5"
 								onClick={() => closePicker()}
 							>
@@ -270,7 +270,7 @@ export function ThreeDTrack(props: {
 								class="ml-1 cap-lane-chip cap-lane-chip-ghost outline-hidden"
 								onClick={() => projectActions.addCamera3DShot()}
 							>
-								+ Add shot
+								+ 添加镜头
 							</button>
 						</div>
 					</Show>
@@ -657,9 +657,9 @@ export function ThreeDTrack(props: {
 										<button
 											type="button"
 											aria-label={
-												end ? "Edit the end pose" : "Edit the start pose"
+												end ? "编辑结束姿态" : "编辑起始姿态"
 											}
-											title={end ? "End pose" : "Start pose"}
+											title={end ? "结束姿态" : "起始姿态"}
 											class="cap-pose-dot"
 											data-active={
 												(editorState.timeline.camera3dPose === "end") === end
@@ -727,7 +727,7 @@ function AddShotGhost(props: {
 					{width() >= GHOST_FULL_LABEL_PX
 						? `+ Add shot · Glide across · ${seconds().toFixed(1)}s`
 						: width() >= GHOST_LABEL_PX
-							? "+ Add shot"
+							? "+ 添加镜头"
 							: "+"}
 				</span>
 			</Show>

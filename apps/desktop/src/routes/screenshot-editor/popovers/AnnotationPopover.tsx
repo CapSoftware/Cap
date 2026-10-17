@@ -161,7 +161,7 @@ export function AnnotationPopover() {
 
 									<div class="flex flex-col gap-2">
 										<span class="text-xs font-medium text-gray-11">
-											Opacity
+											不透明度
 										</span>
 										<Slider
 											value={[annotation().opacity * 100]}

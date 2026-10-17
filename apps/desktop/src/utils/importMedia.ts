@@ -59,7 +59,7 @@ export const importVideoFromPicker = async (options?: ImportOptions) => {
 	const result = await dialog.open({
 		filters: [
 			{
-				name: "Video Files",
+				name: "视频文件",
 				extensions: videoExtensions,
 			},
 		],
@@ -74,7 +74,7 @@ export const importImageFromPicker = async (options?: ImportOptions) => {
 	const result = await dialog.open({
 		filters: [
 			{
-				name: "Image Files",
+				name: "图片文件",
 				extensions: imageExtensions,
 			},
 		],
@@ -91,7 +91,7 @@ export const showImportError = async (
 ) => {
 	const message = error instanceof Error ? error.message : String(error);
 	await dialog.message(`Failed to import ${mediaType}: ${message}`, {
-		title: "Import Error",
+		title: "导入错误",
 		kind: "error",
 	});
 };

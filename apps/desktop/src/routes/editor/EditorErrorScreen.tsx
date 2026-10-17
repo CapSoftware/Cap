@@ -186,10 +186,10 @@ export function EditorErrorScreen(props: {
 						</div>
 						<h2 class="text-xl font-semibold text-gray-12">
 							{storageShortage()
-								? "More space needed"
+								? "需要更多空间"
 								: needsRecovery()
-									? "Recording Needs Recovery"
-									: "Unable to Open Recording"}
+									? "录制需要恢复"
+									: "无法打开录制"}
 						</h2>
 						<p class="text-sm text-gray-11">{props.error}</p>
 					</div>
@@ -201,7 +201,7 @@ export function EditorErrorScreen(props: {
 							class="w-full"
 						>
 							<IconRefreshCw class="size-4 mr-2" />
-							Try again
+							重试
 						</Button>
 					</Show>
 
@@ -210,13 +210,13 @@ export function EditorErrorScreen(props: {
 							<div class="space-y-2">
 								<h3 class="font-medium text-gray-12 text-sm">
 									{storageShortage()
-										? "Finish saving your recording"
-										: "Automatic Recovery"}
+										? "完成录制保存"
+										: "自动恢复"}
 								</h3>
 								<p class="text-xs text-gray-11">
 									{storageShortage()
-										? "Free up space on the recording drive, then click Recover Recording. Your recording files have been kept."
-										: "Cap can attempt to recover your recording automatically. This will reconstruct the recording from available segment data."}
+										? "请先释放录制磁盘的空间，然后点击「恢复录制」。你的录像文件已被保留。"
+										: "Cap 可以尝试自动恢复你的录制，会用现有的分段数据重建录像。"}
 								</p>
 							</div>
 
@@ -236,7 +236,7 @@ export function EditorErrorScreen(props: {
 									fallback={
 										<>
 											<IconRefreshCw class="size-4 mr-2" />
-											Recover Recording
+											恢复录制
 										</>
 									}
 								>
@@ -248,7 +248,7 @@ export function EditorErrorScreen(props: {
 							<Show when={recoverMutation.error}>
 								<div class="bg-red-2 border border-red-6 rounded-lg p-3">
 									<p class="text-red-11 text-xs">
-										Recovery failed:{" "}
+										恢复失败：{" "}
 										{recoverMutation.error instanceof Error
 											? recoverMutation.error.message
 											: String(recoverMutation.error)}
@@ -261,11 +261,10 @@ export function EditorErrorScreen(props: {
 					<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
 						<div class="space-y-2">
 							<h3 class="font-medium text-gray-12 text-sm">
-								Manual Investigation
+								手动排查
 							</h3>
 							<p class="text-xs text-gray-11">
-								You can open the recording folder to inspect the raw files
-								directly.
+								你可以打开录制文件夹，直接检查原始文件。
 							</p>
 
 							<div class="bg-gray-3 rounded-lg p-3 space-y-2">
@@ -276,14 +275,12 @@ export function EditorErrorScreen(props: {
 									when={isMac()}
 									fallback={
 										<p class="text-xs text-gray-10 italic">
-											Tip: Double-click inside the folder to browse the
-											contents.
+											提示：双击文件夹内部即可浏览内容。
 										</p>
 									}
 								>
 									<p class="text-xs text-gray-10 italic">
-										Tip: Right-click and select "Show Enclosing Folder" to see
-										the .cap bundle contents.
+										提示：右键选择「显示所在文件夹」即可查看 .cap 包的内容。
 									</p>
 								</Show>
 							</div>
@@ -291,7 +288,7 @@ export function EditorErrorScreen(props: {
 
 						<Button onClick={handleOpenFolder} variant="outline" class="w-full">
 							<IconFolder class="size-4 mr-2" />
-							Open Folder
+							打开文件夹
 						</Button>
 					</div>
 
@@ -301,7 +298,7 @@ export function EditorErrorScreen(props: {
 							onClick={() => window.close()}
 							class="text-sm text-gray-10 hover:text-gray-11 transition-colors"
 						>
-							Close Window
+							关闭窗口
 						</button>
 					</div>
 				</div>

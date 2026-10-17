@@ -93,65 +93,65 @@ const MODEL_DOWNLOAD_STATUS_POLL_MS = 1000;
 const MODEL_OPTIONS: ModelOption[] = [
 	{
 		name: "best",
-		label: "Recommended",
+		label: "推荐",
 		modelName: "parakeet-tdt-0.6b-v3 int8",
 		size: "~640MB",
-		description: "Best balance for most recordings",
+		description: "适合大多数录制的平衡选择",
 	},
 	{
 		name: "best-max",
-		label: "High Accuracy",
+		label: "高准确度",
 		modelName: "parakeet-tdt-0.6b-v3",
 		size: "~2.4GB",
-		description: "Larger download, higher accuracy",
+		description: "下载体积更大，准确度更高",
 	},
 	{
 		name: "small",
 		modelName: "whisper.cpp small",
-		label: "Small",
+		label: "小",
 		size: "466MB",
-		description: "Smallest download",
+		description: "最小下载体积",
 	},
 	{
 		name: "medium",
 		modelName: "whisper.cpp medium",
-		label: "Medium",
+		label: "中",
 		size: "1.5GB",
-		description: "Slower, more accurate",
+		description: "更慢，但更准确",
 	},
 ];
 
 const LANGUAGE_OPTIONS: LanguageOption[] = [
-	{ code: "auto", label: "Auto Detect" },
-	{ code: "en", label: "English" },
-	{ code: "es", label: "Spanish" },
-	{ code: "fr", label: "French" },
-	{ code: "de", label: "German" },
-	{ code: "it", label: "Italian" },
-	{ code: "pt", label: "Portuguese" },
-	{ code: "nl", label: "Dutch" },
-	{ code: "pl", label: "Polish" },
-	{ code: "ru", label: "Russian" },
-	{ code: "sk", label: "Slovak" },
-	{ code: "tr", label: "Turkish" },
-	{ code: "ja", label: "Japanese" },
-	{ code: "ko", label: "Korean" },
-	{ code: "zh", label: "Chinese" },
-	{ code: "ar", label: "Arabic" },
-	{ code: "hi", label: "Hindi" },
-	{ code: "bn", label: "Bengali" },
-	{ code: "ta", label: "Tamil" },
-	{ code: "te", label: "Telugu" },
-	{ code: "mr", label: "Marathi" },
-	{ code: "gu", label: "Gujarati" },
-	{ code: "pa", label: "Punjabi" },
-	{ code: "ur", label: "Urdu" },
-	{ code: "fa", label: "Persian" },
-	{ code: "he", label: "Hebrew" },
-	{ code: "ar", label: "Arabic" },
-	{ code: "hi", label: "Hindi" },
-	{ code: "bn", label: "Bengali" },
-	{ code: "ta", label: "Tamil" },
+	{ code: "auto", label: "自动检测" },
+	{ code: "en", label: "英语" },
+	{ code: "es", label: "西班牙语" },
+	{ code: "fr", label: "法语" },
+	{ code: "de", label: "德语" },
+	{ code: "it", label: "意大利语" },
+	{ code: "pt", label: "葡萄牙语" },
+	{ code: "nl", label: "荷兰语" },
+	{ code: "pl", label: "波兰语" },
+	{ code: "ru", label: "俄语" },
+	{ code: "sk", label: "斯洛伐克语" },
+	{ code: "tr", label: "土耳其语" },
+	{ code: "ja", label: "日语" },
+	{ code: "ko", label: "韩语" },
+	{ code: "zh", label: "中文" },
+	{ code: "ar", label: "阿拉伯语" },
+	{ code: "hi", label: "印地语" },
+	{ code: "bn", label: "孟加拉语" },
+	{ code: "ta", label: "泰米尔语" },
+	{ code: "te", label: "泰卢固语" },
+	{ code: "mr", label: "马拉地语" },
+	{ code: "gu", label: "古吉拉特语" },
+	{ code: "pa", label: "旁遮普语" },
+	{ code: "ur", label: "乌尔都语" },
+	{ code: "fa", label: "波斯语" },
+	{ code: "he", label: "希伯来语" },
+	{ code: "ar", label: "阿拉伯语" },
+	{ code: "hi", label: "印地语" },
+	{ code: "bn", label: "孟加拉语" },
+	{ code: "ta", label: "泰米尔语" },
 ];
 
 const STYLE_PRESET_KEYS = new Set<keyof EditorCaptionSettings>([
@@ -652,7 +652,7 @@ export function CaptionsTab(props: {
 			setIsDownloading(true);
 			setDownloadProgress(0);
 			setDownloadingModel(modelToDownload);
-			setDownloadMessage("Preparing model download");
+			setDownloadMessage("正在准备模型下载");
 			startDownloadStatusPolling();
 
 			if (PARAKEET_DIR_MODELS.has(modelToDownload)) {
@@ -678,14 +678,14 @@ export function CaptionsTab(props: {
 
 			await syncModelDownloadStatus(modelToDownload);
 			addDownloadedModel(modelToDownload);
-			toast.success("Caption model downloaded");
+			toast.success("字幕模型已下载");
 		} catch (error) {
 			console.error("Error downloading model:", error);
 			const active = await syncModelDownloadStatus(modelToDownload).catch(
 				() => false,
 			);
 			if (!active) {
-				toast.error("Failed to download caption model");
+				toast.error("下载字幕模型失败");
 				setDownloadProgress(0);
 				setIsDownloading(false);
 				setDownloadingModel(null);
@@ -708,10 +708,10 @@ export function CaptionsTab(props: {
 			}
 
 			removeDownloadedModel(modelToDelete);
-			toast.success("Caption model deleted");
+			toast.success("字幕模型已删除");
 		} catch (error) {
 			console.error("Error deleting model:", error);
-			toast.error("Failed to delete caption model");
+			toast.error("删除字幕模型失败");
 			await refreshDownloadedModels();
 		} finally {
 			setDeletingModel(null);
@@ -747,10 +747,10 @@ export function CaptionsTab(props: {
 				setEditorState("timeline", "tracks", "caption", true);
 				setEditorState("captions", "isStale", false);
 
-				toast.success("Captions generated successfully!");
+				toast.success("字幕生成成功！");
 			} else {
 				toast.error(
-					"No captions were generated. The audio might be too quiet or unclear.",
+					"未能生成字幕。音频可能太轻或不够清晰。",
 				);
 			}
 		} catch (error) {
@@ -771,14 +771,14 @@ export function CaptionsTab(props: {
 	return (
 		<div class="flex flex-col gap-3.5">
 			<div class="flex flex-row gap-2 items-center min-h-[22px]">
-				<SectionLabel name="Captions" />
+				<SectionLabel name="字幕" />
 				<span class="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-ed-ctl text-ed-text-2">
 					Beta
 				</span>
 			</div>
 
 			<div class="flex flex-col gap-2">
-				<Field name="Model">
+				<Field name="模型">
 					<KSelect<string>
 						options={availableModelOptions().map((model) => model.name)}
 						value={selectedModel()}
@@ -834,7 +834,7 @@ export function CaptionsTab(props: {
 							<div class="flex-1 min-w-0 text-left">
 								<div class="flex gap-1.5 items-center">
 									<span class="text-[13px] font-medium truncate">
-										{selectedModelOption()?.label || "Select a model"}
+										{selectedModelOption()?.label || "选择模型"}
 									</span>
 									<Show when={selectedModelOption()}>
 										<Tooltip
@@ -880,16 +880,15 @@ export function CaptionsTab(props: {
 
 				<Show when={!supportsParakeetTranscription()}>
 					<p class="text-[11px] leading-relaxed text-ed-text-3">
-						Parakeet caption models are unavailable on Intel Macs. Whisper
-						models remain available.
+						Parakeet 字幕模型不支持 Intel 芯片的 Mac，仍可使用 Whisper 模型。
 					</p>
 				</Show>
 
 				<p class="text-[11px] leading-relaxed text-ed-text-3">
-					One time download to your system. All captions are stored locally.
+					一次性下载到你的系统。所有字幕都保存在本地。
 				</p>
 
-				<Field name="Language" inline>
+				<Field name="语言" inline>
 					<KSelect<string>
 						options={LANGUAGE_OPTIONS.map((l) => l.code)}
 						value={selectedLanguage()}
@@ -916,7 +915,7 @@ export function CaptionsTab(props: {
 									const language = LANGUAGE_OPTIONS.find(
 										(l) => l.code === state.selectedOption(),
 									);
-									return <span>{language?.label || "Select a language"}</span>;
+									return <span>{language?.label || "选择语言"}</span>;
 								}}
 							</KSelect.Value>
 							<KSelect.Icon>
@@ -984,7 +983,7 @@ export function CaptionsTab(props: {
 									</div>
 									<p class="text-[11px] leading-relaxed text-ed-text-3">
 										{downloadMessage() ||
-											"Keep Cap open while the model downloads. Editor reloads will reconnect automatically."}
+											"模型下载期间请保持 Cap 打开。编辑器重新加载后会自动重连。"}
 									</p>
 								</div>
 							</Show>
@@ -1001,15 +1000,15 @@ export function CaptionsTab(props: {
 								{isGenerating()
 									? "Generating..."
 									: hasCaptions()
-										? "Regenerate Captions"
-										: "Generate Captions"}
+										? "重新生成字幕"
+										: "生成字幕"}
 							</Button>
 						</Show>
 						<div class="flex gap-2 justify-between items-center text-[11px] text-ed-text-3">
 							<span class="flex gap-1.5 items-center min-w-0">
 								<IconCapCircleCheck class="shrink-0 size-3.5 text-ed-text-3" />
 								<span class="truncate">
-									{selectedModelOption()?.label ?? "Caption"} model downloaded
+									{selectedModelOption()?.label ?? "字幕"} 模型已下载
 								</span>
 							</span>
 							<EditorButton
@@ -1022,7 +1021,7 @@ export function CaptionsTab(props: {
 									deletingModel() === selectedModel()
 								}
 							>
-								{deletingModel() === selectedModel() ? "Deleting..." : "Delete"}
+								{deletingModel() === selectedModel() ? "Deleting..." : "删除"}
 							</EditorButton>
 						</div>
 					</div>
@@ -1037,7 +1036,7 @@ export function CaptionsTab(props: {
 					!hasCaptions() && "opacity-50 pointer-events-none",
 				)}
 			>
-				<Section name="Style">
+				<Section name="样式">
 					<div class="grid grid-cols-2 gap-2">
 						<For each={CAPTION_STYLE_PRESETS}>
 							{(preset) => (
@@ -1063,10 +1062,10 @@ export function CaptionsTab(props: {
 						<Show when={selectedPresetId() === "custom"}>
 							<div class="flex flex-col gap-1.5 p-1.5 text-left rounded-lg ring-2 ring-ed-accent ring-offset-2 ring-offset-ed-card">
 								<div class="flex justify-center items-center h-12 text-[11px] rounded-md bg-ed-card-2 text-ed-text-3">
-									Custom
+									自定义
 								</div>
 								<span class="px-0.5 text-[11px] font-medium text-ed-text-1">
-									Custom
+									自定义
 								</span>
 							</div>
 						</Show>
@@ -1075,9 +1074,9 @@ export function CaptionsTab(props: {
 
 				<div class="w-full border-t border-ed-line" />
 
-				<Section name="Font settings">
+				<Section name="字体设置">
 					<div class="flex flex-col gap-2">
-						<Field name="Font Family" inline>
+						<Field name="字体" inline>
 							<KSelect<string>
 								options={FONT_OPTIONS.map((f) => f.value)}
 								value={getSetting("font")}
@@ -1127,7 +1126,7 @@ export function CaptionsTab(props: {
 							</KSelect>
 						</Field>
 
-						<Field name="Size" inline>
+						<Field name="大小" inline>
 							<Slider
 								value={[getSetting("size")]}
 								onChange={(v) => updateCaptionSetting("size", v[0])}
@@ -1138,7 +1137,7 @@ export function CaptionsTab(props: {
 							/>
 						</Field>
 
-						<Field name="Uppercase" inline>
+						<Field name="大写" inline>
 							<Toggle
 								checked={getSetting("uppercase")}
 								onChange={(checked) =>
@@ -1148,7 +1147,7 @@ export function CaptionsTab(props: {
 							/>
 						</Field>
 
-						<Field name="Active Word Highlight" inline>
+						<Field name="当前词高亮" inline>
 							<Toggle
 								checked={getSetting("activeWordHighlight")}
 								onChange={(checked) =>
@@ -1158,13 +1157,11 @@ export function CaptionsTab(props: {
 							/>
 						</Field>
 						<p class="text-[11px] leading-relaxed text-ed-text-3">
-							This is the first version of captions in Cap. Active word
-							highlighting may be inaccurate in some situations. We're working
-							on a fix for this and it will be released in upcoming versions.
+							这是 Cap 字幕功能的第一个版本。某些情况下，当前词高亮可能不准确。我们正在修复，会在后续版本中发布。
 						</p>
 
 						<Show when={getSetting("activeWordHighlight")}>
-							<Field name="Highlight Style" inline>
+							<Field name="高亮样式" inline>
 								<KSelect<string>
 									options={CAPTION_HIGHLIGHT_STYLE_OPTIONS.map((o) => o.value)}
 									value={getSetting("highlightStyle")}
@@ -1217,7 +1214,7 @@ export function CaptionsTab(props: {
 							</Field>
 						</Show>
 
-						<Field name="Text Color">
+						<Field name="文字颜色">
 							<HexColorInput
 								value={getSetting("color")}
 								brandColorSwatches={props.brandColorSwatches}
@@ -1229,9 +1226,9 @@ export function CaptionsTab(props: {
 
 				<div class="w-full border-t border-ed-line" />
 
-				<Section name="Background settings">
+				<Section name="背景设置">
 					<div class="flex flex-col gap-2">
-						<Field name="Background Color">
+						<Field name="背景颜色">
 							<HexColorInput
 								value={getSetting("backgroundColor")}
 								brandColorSwatches={props.brandColorSwatches}
@@ -1241,7 +1238,7 @@ export function CaptionsTab(props: {
 							/>
 						</Field>
 
-						<Field name="Background Opacity" inline>
+						<Field name="背景不透明度" inline>
 							<Slider
 								value={[getSetting("backgroundOpacity")]}
 								onChange={(v) =>
@@ -1259,7 +1256,7 @@ export function CaptionsTab(props: {
 				<div class="w-full border-t border-ed-line" />
 
 				<div class="flex flex-col gap-2">
-					<Field name="Position" inline>
+					<Field name="位置" inline>
 						<KSelect<string>
 							options={CAPTION_POSITION_OPTIONS.map((p) => p.value)}
 							value={getSetting("position")}
@@ -1310,13 +1307,13 @@ export function CaptionsTab(props: {
 						</KSelect>
 					</Field>
 
-					<Field name="Font Weight" inline>
+					<Field name="字重" inline>
 						<KSelect
 							options={TEXT_WEIGHT_OPTIONS}
 							optionValue="value"
 							optionTextValue="label"
 							value={{
-								label: "Custom",
+								label: "自定义",
 								value: getSetting("fontWeight"),
 							}}
 							onChange={(value) => {
@@ -1369,9 +1366,9 @@ export function CaptionsTab(props: {
 
 				<div class="w-full border-t border-ed-line" />
 
-				<Section name="Animation">
+				<Section name="动画">
 					<div class="flex flex-col gap-2">
-						<Field name="Animation Style" inline>
+						<Field name="动画样式" inline>
 							<KSelect<string>
 								options={CAPTION_ANIMATION_OPTIONS.map((o) => o.value)}
 								value={getSetting("animation")}
@@ -1420,7 +1417,7 @@ export function CaptionsTab(props: {
 							</KSelect>
 						</Field>
 
-						<Field name="Highlight Color">
+						<Field name="高亮颜色">
 							<HexColorInput
 								value={getSetting("highlightColor")}
 								brandColorSwatches={props.brandColorSwatches}
@@ -1431,7 +1428,7 @@ export function CaptionsTab(props: {
 						</Field>
 
 						<Field
-							name="Fade Duration"
+							name="淡入淡出时长"
 							inline
 							value={`${(getSetting("fadeDuration") * 1000).toFixed(0)}ms`}
 						>
@@ -1457,11 +1454,11 @@ export function CaptionsTab(props: {
 				}
 			>
 				<div class="w-full border-t border-ed-line" />
-				<Section name="Selected caption override">
+				<Section name="所选字幕覆盖">
 					<Show when={selectedCaptionSegment()}>
 						{(seg) => (
 							<div class="flex flex-col gap-1">
-								<Subfield name="Start Time">
+								<Subfield name="开始时间">
 									<Input
 										type="number"
 										value={seg().start.toFixed(2)}
@@ -1474,7 +1471,7 @@ export function CaptionsTab(props: {
 										}
 									/>
 								</Subfield>
-								<Subfield name="End Time">
+								<Subfield name="结束时间">
 									<Input
 										type="number"
 										value={seg().end.toFixed(2)}
@@ -1487,7 +1484,7 @@ export function CaptionsTab(props: {
 										}
 									/>
 								</Subfield>
-								<Subfield name="Caption Text">
+								<Subfield name="字幕文字">
 									<Input
 										type="text"
 										value={seg().text}
@@ -1504,7 +1501,7 @@ export function CaptionsTab(props: {
 										}
 									/>
 								</Subfield>
-								<Subfield name="Fade Duration Override">
+								<Subfield name="淡入淡出时长覆盖">
 									<Slider
 										class="flex-1"
 										value={[

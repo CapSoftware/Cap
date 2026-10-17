@@ -130,7 +130,7 @@ export function Header(props: {
 							console.log({ path: `${editorInstance.path}/` });
 							commands.revealItemInDir(`${editorInstance.path}/`);
 						}}
-						tooltipText="Open recording bundle"
+						tooltipText="打开录制文件包"
 						leftIcon={<IconLucideFolder />}
 					/>
 					<EditorButton
@@ -138,13 +138,13 @@ export function Header(props: {
 							clearTimelineSelection();
 
 							if (
-								!(await ask("Are you sure you want to delete this recording?"))
+								!(await ask("确定要删除这段录制吗？"))
 							)
 								return;
 
 							await commands.editorDeleteProject();
 						}}
-						tooltipText="Delete recording"
+						tooltipText="删除录制"
 						leftIcon={<IconCapTrash />}
 					/>
 				</div>
@@ -166,7 +166,7 @@ export function Header(props: {
 					disabled={
 						!projectHistory.canUndo() && !editorState.timeline.selection
 					}
-					tooltipText="Undo"
+					tooltipText="撤销"
 					leftIcon={<IconCapUndo />}
 				/>
 				<EditorButton
@@ -178,15 +178,15 @@ export function Header(props: {
 					disabled={
 						!projectHistory.canRedo() && !editorState.timeline.selection
 					}
-					tooltipText="Redo"
+					tooltipText="重做"
 					leftIcon={<IconCapRedo />}
 				/>
 				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
 				<OrganizationDropdown />
 				<PresetsDropdown />
 				<EditorButton
-					title="Clips"
-					aria-label="Clips"
+					title="片段"
+					aria-label="片段"
 					class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
 					leftIcon={<IconCapClapperboard />}
 					onClick={() => {
@@ -198,12 +198,12 @@ export function Header(props: {
 						}
 					}}
 				>
-					<span class="max-[1200px]:hidden">Clips</span>
+					<span class="max-[1200px]:hidden">片段</span>
 				</EditorButton>
 				<Show when={hasTranscript()}>
 					<EditorButton
-						title={isTranscriptOpen() ? "Back to editor" : "Captions"}
-						aria-label={isTranscriptOpen() ? "Back to editor" : "Captions"}
+						title={isTranscriptOpen() ? "返回编辑器" : "字幕"}
+						aria-label={isTranscriptOpen() ? "返回编辑器" : "字幕"}
 						class={cx(isTranscriptOpen() && "bg-ed-ctl-hover text-ed-text-1")}
 						leftIcon={
 							<Show when={isTranscriptOpen()} fallback={<IconCapCaptions />}>
@@ -220,7 +220,7 @@ export function Header(props: {
 						}}
 					>
 						<span class="max-[1200px]:hidden">
-							{isTranscriptOpen() ? "Back" : "Captions"}
+							{isTranscriptOpen() ? "返回" : "字幕"}
 						</span>
 					</EditorButton>
 				</Show>
@@ -244,7 +244,7 @@ export function Header(props: {
 					}}
 				>
 					<UploadIcon class="size-4" />
-					Export
+					导出
 				</button>
 			</div>
 			{ostype() === "windows" && (

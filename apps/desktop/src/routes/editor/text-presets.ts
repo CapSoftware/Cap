@@ -41,7 +41,7 @@ export type TextPreset = {
 export const TEXT_PRESET_GROUPS = [
 	"All",
 	"Titles",
-	"Lower thirds",
+	"下三分之一字幕条",
 	"Callouts",
 	"Statements",
 	"Code",
@@ -54,9 +54,9 @@ const MONO = ["Menlo", "Consolas", "monospace"];
 export const TEXT_PRESETS: TextPreset[] = [
 	{
 		id: "title",
-		group: "Titles",
-		name: "Title",
-		sample: "Introducing Cap",
+		group: "标题",
+		name: "标题",
+		sample: "隆重介绍 Cap",
 		style: {
 			fontStack: SANS,
 			fontSize: 96,
@@ -82,9 +82,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "headline",
-		group: "Titles",
-		name: "Headline",
-		sample: "Ship faster",
+		group: "标题",
+		name: "标题",
+		sample: "更快交付",
 		style: {
 			fontStack: SANS,
 			fontSize: 112,
@@ -110,9 +110,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "cinematic",
-		group: "Titles",
-		name: "Cinematic",
-		sample: "Chapter one",
+		group: "标题",
+		name: "电影感",
+		sample: "第一章",
 		style: {
 			fontStack: SERIF,
 			fontSize: 64,
@@ -138,9 +138,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "gradient",
-		group: "Titles",
-		name: "Gradient",
-		sample: "Beautiful text",
+		group: "标题",
+		name: "渐变",
+		sample: "精美文字",
 		style: {
 			fontStack: SANS,
 			fontSize: 104,
@@ -166,9 +166,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "lower-third",
-		group: "Lower thirds",
-		name: "Lower third",
-		sample: "Richie McIlroy",
+		group: "下三分之一字幕条",
+		name: "下三分之一字幕条",
+		sample: "张三",
 		center: { x: 0.22, y: 0.85 },
 		style: {
 			fontStack: SANS,
@@ -195,8 +195,8 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "name-tag",
-		group: "Lower thirds",
-		name: "Name tag",
+		group: "下三分之一字幕条",
+		name: "姓名标签",
 		sample: "Richie · Founder",
 		center: { x: 0.2, y: 0.86 },
 		style: {
@@ -224,9 +224,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "caption",
-		group: "Lower thirds",
-		name: "Caption",
-		sample: "Recorded with Cap",
+		group: "下三分之一字幕条",
+		name: "字幕",
+		sample: "由 Cap 录制",
 		center: { x: 0.5, y: 0.88 },
 		style: {
 			fontStack: SANS,
@@ -253,9 +253,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "kicker",
-		group: "Callouts",
-		name: "Kicker",
-		sample: "New feature",
+		group: "标注",
+		name: "引题",
+		sample: "新功能",
 		style: {
 			fontStack: SANS,
 			fontSize: 26,
@@ -281,9 +281,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "label",
-		group: "Callouts",
-		name: "Label",
-		sample: "Pro tip",
+		group: "标注",
+		name: "标签",
+		sample: "小技巧",
 		style: {
 			fontStack: SANS,
 			fontSize: 28,
@@ -309,8 +309,8 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "highlight",
-		group: "Callouts",
-		name: "Highlight",
+		group: "标注",
+		name: "高亮",
 		sample: "the important part",
 		style: {
 			fontStack: SANS,
@@ -337,9 +337,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "sticker",
-		group: "Callouts",
-		name: "Sticker",
-		sample: "Boom!",
+		group: "标注",
+		name: "贴纸",
+		sample: "砰！",
 		style: {
 			fontStack: SANS,
 			fontSize: 88,
@@ -365,9 +365,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "neon",
-		group: "Callouts",
-		name: "Neon",
-		sample: "Glow up",
+		group: "标注",
+		name: "霓虹",
+		sample: "焕彩",
 		style: {
 			fontStack: SANS,
 			fontSize: 84,
@@ -393,8 +393,8 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "stat",
-		group: "Statements",
-		name: "Big stat",
+		group: "陈述",
+		name: "大号数据",
 		sample: "128%",
 		style: {
 			fontStack: SANS,
@@ -421,9 +421,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "quote",
-		group: "Statements",
-		name: "Quote",
-		sample: "“Make it feel effortless”",
+		group: "陈述",
+		name: "引语",
+		sample: "「让它变得毫不费力」",
 		style: {
 			fontStack: SERIF,
 			fontSize: 56,
@@ -449,8 +449,8 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "code",
-		group: "Code",
-		name: "Code",
+		group: "代码",
+		name: "代码",
 		sample: "$ cap record",
 		style: {
 			fontStack: MONO,
@@ -477,9 +477,9 @@ export const TEXT_PRESETS: TextPreset[] = [
 	},
 	{
 		id: "typewriter",
-		group: "Code",
-		name: "Typewriter",
-		sample: "typing it out…",
+		group: "代码",
+		name: "打字机",
+		sample: "正在输入…",
 		style: {
 			fontStack: MONO,
 			fontSize: 44,

@@ -255,7 +255,7 @@ export async function importImagePath(
 	source: string,
 	io: ImageImportIO,
 ): Promise<ImageAsset> {
-	const name = source.split(/[\\/]/).pop() ?? "Image";
+	const name = source.split(/[\\/]/).pop() ?? "图片";
 	const extension = name.split(".").pop()?.toLowerCase();
 	if (
 		!extension ||
@@ -302,7 +302,7 @@ export async function pickImage(
 		directory: false,
 		filters: [
 			{
-				name: "Images",
+				name: "图片",
 				extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
 			},
 		],

@@ -22,15 +22,15 @@ const ADJUST_SLIDERS: {
 	max: number;
 	keepsPreset?: boolean;
 }[] = [
-	{ key: "intensity", label: "Strength", min: 0, max: 100, keepsPreset: true },
-	{ key: "exposure", label: "Exposure", min: -100, max: 100 },
-	{ key: "contrast", label: "Contrast", min: -100, max: 100 },
-	{ key: "saturation", label: "Saturation", min: -100, max: 100 },
-	{ key: "temperature", label: "Temperature", min: -100, max: 100 },
-	{ key: "tint", label: "Tint", min: -100, max: 100 },
-	{ key: "fade", label: "Fade", min: 0, max: 100 },
-	{ key: "splitTone", label: "Split Tone", min: -100, max: 100 },
-	{ key: "vignette", label: "Vignette", min: 0, max: 100 },
+	{ key: "intensity", label: "强度", min: 0, max: 100, keepsPreset: true },
+	{ key: "exposure", label: "曝光", min: -100, max: 100 },
+	{ key: "contrast", label: "对比度", min: -100, max: 100 },
+	{ key: "saturation", label: "饱和度", min: -100, max: 100 },
+	{ key: "temperature", label: "色温", min: -100, max: 100 },
+	{ key: "tint", label: "色调", min: -100, max: 100 },
+	{ key: "fade", label: "淡入淡出", min: 0, max: 100 },
+	{ key: "splitTone", label: "分离色调", min: -100, max: 100 },
+	{ key: "vignette", label: "暗角", min: 0, max: 100 },
 ];
 
 function ColorPresetPreview(props: { preset: ColorPresetDefinition }) {
@@ -120,7 +120,7 @@ export function ColorCorrectionSection(props: {
 
 	return (
 		<>
-			<Section name="Color correction">
+			<Section name="色彩校正">
 				<div class="grid grid-cols-3 gap-2">
 					<For each={COLOR_CORRECTION_PRESETS}>
 						{(preset) => (
@@ -144,7 +144,7 @@ export function ColorCorrectionSection(props: {
 					</For>
 				</div>
 			</Section>
-			<Field inline name="Grain" value={`${(grade().grain * 100).toFixed(1)}%`}>
+			<Field inline name="颗粒" value={`${(grade().grain * 100).toFixed(1)}%`}>
 				<Slider
 					value={[grade().grain * 100]}
 					onChange={(v) => setValue("grain", v[0] / 100, true)}
@@ -155,7 +155,7 @@ export function ColorCorrectionSection(props: {
 				/>
 			</Field>
 			<Show when={props.target === "screen"}>
-				<Field inline name="Apply to cursor">
+				<Field inline name="应用到光标">
 					<Toggle
 						checked={project.colorCorrection.gradeCursor}
 						onChange={(gradeCursor) =>
@@ -167,7 +167,7 @@ export function ColorCorrectionSection(props: {
 			<div class="w-full">
 				<KCollapsible open={adjustOpen()} onOpenChange={handleAdjustToggle}>
 					<KCollapsible.Trigger class="flex gap-1 items-center w-full text-[12px] font-medium text-left group text-ed-text-2 hover:text-ed-text-1 transition-colors duration-200 outline-hidden">
-						Fine-tune colors
+						微调颜色
 						<IconCapChevronDown class="transition-transform duration-200 size-3.5 text-ed-text-3 group-data-expanded:rotate-180" />
 					</KCollapsible.Trigger>
 					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">

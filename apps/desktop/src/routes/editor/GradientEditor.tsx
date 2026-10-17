@@ -130,7 +130,7 @@ export function GradientEditor(props: {
 
 					<div class="flex gap-3 items-end">
 						<div class="flex-1 min-w-0">
-							<span class="text-[11px] text-ed-text-3 mb-1 block">From</span>
+							<span class="text-[11px] text-ed-text-3 mb-1 block">从</span>
 							<div class="flex flex-col gap-2">
 								<RgbInput
 									value={src().from}
@@ -145,7 +145,7 @@ export function GradientEditor(props: {
 							</div>
 						</div>
 						<div class="flex-1 min-w-0">
-							<span class="text-[11px] text-ed-text-3 mb-1 block">To</span>
+							<span class="text-[11px] text-ed-text-3 mb-1 block">到</span>
 							<div class="flex flex-col gap-2">
 								<RgbInput
 									value={src().to}
@@ -164,7 +164,7 @@ export function GradientEditor(props: {
 					<div class="w-full border-t border-ed-line" />
 
 					<div class="flex flex-col">
-						<Field inline name="Angle" value={`${Math.round(angle())}°`}>
+						<Field inline name="角度" value={`${Math.round(angle())}°`}>
 							<Slider
 								value={[angle()]}
 								onChange={(v) => {
@@ -179,7 +179,7 @@ export function GradientEditor(props: {
 
 						<Field
 							inline
-							name="Noise"
+							name="噪点"
 							value={`${noiseIntensity().toFixed(1)}%`}
 						>
 							<Slider
@@ -199,7 +199,7 @@ export function GradientEditor(props: {
 						<Show when={noiseIntensity() > 0}>
 							<Field
 								inline
-								name="Grain Scale"
+								name="颗粒强度"
 								value={`${noiseScale().toFixed(1)}%`}
 							>
 								<Slider
@@ -221,11 +221,11 @@ export function GradientEditor(props: {
 					<div class="w-full border-t border-ed-line" />
 
 					<Section
-						name="Presets"
+						name="预设"
 						action={
 							<EditorButton
 								size="sm"
-								title="Randomize"
+								title="随机"
 								leftIcon={
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
@@ -252,7 +252,7 @@ export function GradientEditor(props: {
 									});
 								}}
 							>
-								Randomize
+								随机
 							</EditorButton>
 						}
 					>

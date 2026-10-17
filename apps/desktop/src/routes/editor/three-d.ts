@@ -340,7 +340,7 @@ const anglePreset = (
 export const ANGLE_PRESETS: Camera3DAnglePreset[] = [
 	anglePreset({
 		id: "spotlight",
-		name: "Spotlight",
+		name: "聚光灯",
 		values: {
 			tiltX: 0,
 			tiltY: 0,
@@ -355,7 +355,7 @@ export const ANGLE_PRESETS: Camera3DAnglePreset[] = [
 	}),
 	anglePreset({
 		id: "perspective",
-		name: "Perspective",
+		name: "透视",
 		values: {
 			tiltX: -28,
 			tiltY: 26,
@@ -370,7 +370,7 @@ export const ANGLE_PRESETS: Camera3DAnglePreset[] = [
 	}),
 	anglePreset({
 		id: "center",
-		name: "Center",
+		name: "居中",
 		values: {
 			tiltX: 0,
 			tiltY: 0,
@@ -385,7 +385,7 @@ export const ANGLE_PRESETS: Camera3DAnglePreset[] = [
 	}),
 	anglePreset({
 		id: "low-angle",
-		name: "Low angle",
+		name: "低角度",
 		values: {
 			tiltX: -50,
 			tiltY: 1,
@@ -400,7 +400,7 @@ export const ANGLE_PRESETS: Camera3DAnglePreset[] = [
 	}),
 	anglePreset({
 		id: "close-up",
-		name: "Close up",
+		name: "特写",
 		values: {
 			tiltX: 26,
 			tiltY: -22,
@@ -466,7 +466,7 @@ const motionTemplate = (
 export const MOTION_TEMPLATES: Camera3DMotionTemplate[] = [
 	motionTemplate({
 		id: "glide-across",
-		name: "Glide across",
+		name: "横向滑移",
 		from: pose({
 			tiltX: -46.65,
 			tiltY: 42.49,
@@ -490,13 +490,13 @@ export const MOTION_TEMPLATES: Camera3DMotionTemplate[] = [
 	}),
 	motionTemplate({
 		id: "drift-down",
-		name: "Drift down",
+		name: "向下漂移",
 		from: pose({ zoom: 0.8, fov: 45, panX: 0.536, panY: -0.452 }),
 		to: pose({ zoom: 0.8, fov: 45, panX: 0.544, panY: 0.5 }),
 	}),
 	motionTemplate({
 		id: "rising-sweep",
-		name: "Rising sweep",
+		name: "上升横扫",
 		from: pose({
 			tiltX: -57.83,
 			tiltY: -8.7,
@@ -518,13 +518,13 @@ export const MOTION_TEMPLATES: Camera3DMotionTemplate[] = [
 	}),
 	motionTemplate({
 		id: "pull-back",
-		name: "Pull back",
+		name: "拉远",
 		from: pose({ rotateX: -14, zoom: 0.715, fov: 45 }),
 		to: pose({ rotateX: -14, zoom: 2.1, fov: 45 }),
 	}),
 	motionTemplate({
 		id: "top-down",
-		name: "Top down",
+		name: "俯视",
 		from: pose({
 			tiltX: 24.8,
 			tiltY: 17.04,
@@ -550,19 +550,19 @@ export const MOTION_TEMPLATES: Camera3DMotionTemplate[] = [
 	}),
 	motionTemplate({
 		id: "tilt-away",
-		name: "Tilt away",
+		name: "倾斜移开",
 		from: pose({ rotateX: -5, zoom: 0.5, fov: 45 }),
 		to: pose({ rotateX: -21, zoom: 0.6, fov: 45 }),
 	}),
 	motionTemplate({
 		id: "unfold",
-		name: "Unfold",
+		name: "展开",
 		from: pose({ rotateX: -42.96, zoom: 2.05, fov: 31 }),
 		to: pose({ rotateX: -12.01, zoom: 2, fov: 31, panY: -0.179 }),
 	}),
 	motionTemplate({
 		id: "slide-by",
-		name: "Slide by",
+		name: "横向滑过",
 		from: pose({
 			tiltX: -30.29,
 			tiltY: 60,
@@ -697,7 +697,7 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 		// Transcribed verbatim from the hand-built reference project: a tight
 		// close-up truck, a fold-down overhead sweep, then a long push in.
 		id: "showcase",
-		name: "Showcase",
+		name: "展示",
 		shots: [
 			{
 				weight: 0.27,
@@ -766,7 +766,7 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 	{
 		// Reveal, orbit, settle: the shape a product walkthrough wants.
 		id: "product-tour",
-		name: "Product tour",
+		name: "产品导览",
 		shots: [
 			templateShot(motionTemplateById("unfold"), 0.3),
 			templateShot(anglePresetMotion(anglePresetById("perspective")), 0.3),
@@ -776,7 +776,7 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 	{
 		// Push in, hold on the detail, then release.
 		id: "punch-in",
-		name: "Punch in",
+		name: "推近",
 		shots: [
 			templateShot(anglePresetMotion(anglePresetById("spotlight")), 0.3),
 			templateShot(anglePresetMotion(anglePresetById("close-up")), 0.3),
@@ -786,9 +786,9 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 ];
 
 export const CAMERA3D_SCENE_DESCRIPTIONS: Record<string, string> = {
-	showcase: "Close-up, overhead sweep, then zoom in",
-	"product-tour": "Reveal, orbit, then settle on your screen",
-	"punch-in": "Zoom into a detail, then pull back",
+	showcase: "特写、俯拍横扫，然后推近",
+	"product-tour": "先揭示、环绕，最后定格在你的屏幕上",
+	"punch-in": "先放大细节，再拉远",
 };
 
 /**
@@ -823,7 +823,7 @@ export const autoCamera3DScene = (count: number): Camera3DScene => {
 					...shot,
 					weight: 1 / wanted,
 				}));
-	return { id: "auto", name: "Auto scene", shots };
+	return { id: "auto", name: "自动运镜", shots };
 };
 
 /** How many shots this recording has room for at the one-second minimum. */
@@ -1086,10 +1086,10 @@ export type Camera3DMotionEasing = {
 
 export const MOTION_EASINGS: Camera3DMotionEasing[] = [
 	// Linear is the default: it is what every template is authored in.
-	{ id: "linear", label: "Linear", out: [0, 0], in: [1, 1] },
-	{ id: "smooth", label: "Smooth", out: [0.65, 0], in: [0.35, 1] },
-	{ id: "easeIn", label: "Ease in", out: [0.32, 0], in: [1, 1] },
-	{ id: "easeOut", label: "Ease out", out: [0, 0], in: [0.68, 1] },
+	{ id: "linear", label: "线性", out: [0, 0], in: [1, 1] },
+	{ id: "smooth", label: "平滑", out: [0.65, 0], in: [0.35, 1] },
+	{ id: "easeIn", label: "缓入", out: [0.32, 0], in: [1, 1] },
+	{ id: "easeOut", label: "缓出", out: [0, 0], in: [0.68, 1] },
 ];
 
 export const LINEAR_MOTION_EASING = MOTION_EASINGS[0];
@@ -1442,7 +1442,7 @@ export const matchCamera3DLook = (
 /** What the timeline segment and the panel header call this shot. */
 export const camera3DShotLabel = (segment: Camera3DSegment) =>
 	matchCamera3DLook(segment)?.name ??
-	(hasCamera3DMotion(segment) ? "Custom move" : "Still shot");
+	(hasCamera3DMotion(segment) ? "自定义运镜" : "定格镜头");
 
 /**
  * The one way the editor authors camera animation: a segment is a start pose
