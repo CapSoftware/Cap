@@ -32,7 +32,6 @@ const THUMBNAIL_SIZE: u32 = 32;
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum LinuxTrayIcon {
-    Default,
     Instant,
     Screenshot,
     Studio,
@@ -43,7 +42,6 @@ enum LinuxTrayIcon {
 impl LinuxTrayIcon {
     fn name(self) -> &'static str {
         match self {
-            Self::Default => "so.cap.desktop-tray-default-symbolic",
             Self::Instant => "so.cap.desktop-tray-instant-symbolic",
             Self::Screenshot => "so.cap.desktop-tray-screenshot-symbolic",
             Self::Studio => "so.cap.desktop-tray-studio-symbolic",
@@ -53,9 +51,6 @@ impl LinuxTrayIcon {
 
     fn svg(self) -> &'static str {
         match self {
-            Self::Default => {
-                include_str!("../icons/linux/so.cap.desktop-tray-default-symbolic.svg")
-            }
             Self::Instant => {
                 include_str!("../icons/linux/so.cap.desktop-tray-instant-symbolic.svg")
             }
@@ -163,12 +158,29 @@ struct CachedPreviousItem {
     thumbnail_width: u32,
     thumbnail_height: u32,
     item_type: PreviousItemType,
-    created_at: std::time::SystemTime,
 }
 
 #[derive(Default)]
 struct PreviousItemsCache {
     items: Vec<CachedPreviousItem>,
+    revision: u64,
+    loaded: bool,
+}
+
+impl PreviousItemsCache {
+    fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn finish_loading(&mut self, revision: u64, items: Vec<CachedPreviousItem>) -> bool {
+        if self.revision != revision {
+            return false;
+        }
+        self.items = items;
+        self.loaded = true;
+        self.invalidate();
+        true
+    }
 }
 
 fn screenshots_path(app: &AppHandle) -> PathBuf {
@@ -234,11 +246,6 @@ fn load_single_item(
     }
 
     let meta = RecordingMeta::load_for_project(path).ok()?;
-    let created_at = path
-        .metadata()
-        .and_then(|m| m.created())
-        .unwrap_or_else(|_| std::time::SystemTime::now());
-
     let is_screenshot = path.extension().and_then(|s| s.to_str()) == Some("cap")
         && path.parent().map(|p| p == screenshots_dir).unwrap_or(false);
 
@@ -278,12 +285,11 @@ fn load_single_item(
         thumbnail_width,
         thumbnail_height,
         item_type,
-        created_at,
     })
 }
 
 fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<CachedPreviousItem> {
-    let mut items = Vec::new();
+    let mut paths = Vec::new();
     let screenshots_dir = screenshots_path(app);
 
     for recordings_dir in crate::recordings_locations::known_recordings_dirs(app) {
@@ -291,9 +297,7 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
             continue;
         };
         for entry in entries.flatten() {
-            if let Some(item) = load_single_item(&entry.path(), &screenshots_dir, load_thumbnails) {
-                items.push(item);
-            }
+            paths.push(entry.path());
         }
     }
 
@@ -302,17 +306,66 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
     {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("cap")
-                && let Some(item) = load_single_item(&path, &screenshots_dir, load_thumbnails)
-            {
-                items.push(item);
+            if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                paths.push(path);
             }
         }
     }
 
-    items.sort_by_key(|b| std::cmp::Reverse(b.created_at));
-    items.truncate(MAX_PREVIOUS_ITEMS);
-    items
+    newest_valid_items(paths, MAX_PREVIOUS_ITEMS, |path| {
+        load_single_item(path, &screenshots_dir, load_thumbnails)
+    })
+}
+
+fn newest_valid_items<T>(
+    paths: Vec<PathBuf>,
+    limit: usize,
+    mut load: impl FnMut(&PathBuf) -> Option<T>,
+) -> Vec<T> {
+    let mut candidates = paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = path.metadata().ok()?;
+            metadata.is_dir().then(|| {
+                let created = metadata
+                    .created()
+                    .unwrap_or_else(|_| std::time::SystemTime::now());
+                (path, created)
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, created)| std::cmp::Reverse(*created));
+    candidates
+        .into_iter()
+        .filter_map(|(path, _)| load(&path))
+        .take(limit)
+        .collect()
+}
+
+fn load_previous_items_in_background(app: AppHandle, cache: Arc<Mutex<PreviousItemsCache>>) {
+    tokio::spawn(async move {
+        if !crate::startup::wait_for_window(&app).await {
+            return;
+        }
+        let worker_app = app.clone();
+        let worker_cache = cache.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            while !crate::app_is_exiting(&worker_app) {
+                let revision = worker_cache.lock().unwrap().revision;
+                let items = load_all_previous_items(&worker_app, true);
+                if worker_cache.lock().unwrap().finish_loading(revision, items) {
+                    return;
+                }
+            }
+        })
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, "Failed to load tray history");
+        }
+        if !crate::app_is_exiting(&app) {
+            refresh_tray_menu(&app, &cache);
+        }
+    });
 }
 
 fn create_previous_submenu(
@@ -324,7 +377,11 @@ fn create_previous_submenu(
         submenu.append(&MenuItem::with_id(
             app,
             "previous_empty",
-            "No recent items",
+            if cache.loaded {
+                "No recent items"
+            } else {
+                "Loading recent items…"
+            },
             false,
             None::<&str>,
         )?)?;
@@ -579,6 +636,7 @@ fn add_new_item_to_cache(cache: &Arc<Mutex<PreviousItemsCache>>, app: &AppHandle
     cache_guard.items.insert(0, new_item);
 
     cache_guard.items.truncate(MAX_PREVIOUS_ITEMS);
+    cache_guard.invalidate();
 }
 
 fn refresh_tray_menu(app: &AppHandle, cache: &Arc<Mutex<PreviousItemsCache>>) {
@@ -759,8 +817,7 @@ fn handle_mode_selection(
 }
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let items = load_all_previous_items(app, false);
-    let cache = Arc::new(Mutex::new(PreviousItemsCache { items }));
+    let cache = Arc::new(Mutex::new(PreviousItemsCache::default()));
 
     app.manage(TrayMenuCache {
         cache: cache.clone(),
@@ -787,7 +844,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
-                    tokio::spawn(async move {
+                    tauri::async_runtime::spawn(async move {
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
                         }
@@ -976,8 +1033,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let is_recording = Arc::clone(&is_recording);
             let app_handle = app.clone();
             move |tray, event| {
-                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                if let tauri::tray::TrayIconEvent::Click { button_state, .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
+                        if button_state != tauri::tray::MouseButtonState::Down {
+                            return;
+                        }
                         let app = app_handle.clone();
                         tokio::spawn(async move {
                             let _ = recording::stop_recording(app.clone(), app.state()).await;
@@ -995,49 +1055,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         && let Err(error) = set_tray_icon_for_mode(&tray, current_mode)
     {
         tracing::warn!("Failed to initialize Linux tray icon: {error}");
-    }
-
-    {
-        let app_clone = app.clone();
-        let cache_clone = cache.clone();
-        std::thread::spawn(move || {
-            let screenshots_dir = screenshots_path(&app_clone);
-            let items_needing_thumbnails: Vec<PathBuf> = {
-                let cache_guard = cache_clone.lock().unwrap();
-                cache_guard
-                    .items
-                    .iter()
-                    .filter(|item| item.thumbnail.is_none())
-                    .map(|item| item.path.clone())
-                    .collect()
-            };
-
-            if items_needing_thumbnails.is_empty() {
-                return;
-            }
-
-            for path in items_needing_thumbnails {
-                if let Some(updated_item) = load_single_item(&path, &screenshots_dir, true) {
-                    let mut cache_guard = cache_clone.lock().unwrap();
-                    if let Some(existing) = cache_guard.items.iter_mut().find(|i| i.path == path) {
-                        existing.thumbnail = updated_item.thumbnail;
-                        existing.thumbnail_width = updated_item.thumbnail_width;
-                        existing.thumbnail_height = updated_item.thumbnail_height;
-                    }
-                }
-            }
-
-            let app_for_refresh = app_clone.clone();
-            let cache_for_refresh = cache_clone.clone();
-            let _ = app_clone.run_on_main_thread(move || {
-                if let Some(tray) = app_for_refresh.tray_by_id("tray") {
-                    let cache_guard = cache_for_refresh.lock().unwrap();
-                    if let Ok(menu) = build_tray_menu(&app_for_refresh, &cache_guard) {
-                        let _ = tray.set_menu(Some(menu));
-                    }
-                }
-            });
-        });
     }
 
     RecordingStarted::listen_any(&app, {
@@ -1114,12 +1131,106 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             // Rebuild once when a storage-folder migration finishes: moved
             // projects changed paths, so cached entries are stale.
             if event.payload.done == event.payload.total {
-                let items = load_all_previous_items(&app_handle, false);
-                cache_clone.lock().unwrap().items = items;
-                refresh_tray_menu(&app_handle, &cache_clone);
+                cache_clone.lock().unwrap().invalidate();
+                load_previous_items_in_background(app_handle.clone(), cache_clone.clone());
             }
         }
     });
 
+    crate::RecordingDeleted::listen_any(&app, {
+        let app = app.clone();
+        let cache = cache.clone();
+        move |event| {
+            {
+                let mut cache = cache.lock().unwrap();
+                cache.items.retain(|item| item.path != event.payload.path);
+                cache.invalidate();
+            }
+            refresh_tray_menu(&app, &cache);
+            load_previous_items_in_background(app.clone(), cache.clone());
+        }
+    });
+
+    load_previous_items_in_background(app.clone(), cache.clone());
+
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clean_stop_icon() -> Result<cap_utils::linux_recording_stop::StopTrayIcon, String> {
+    let image = image::load_from_memory(include_bytes!("../icons/tray-stop-icon.png"))
+        .map_err(|error| error.to_string())?
+        .resize_exact(32, 32, image::imageops::FilterType::Triangle)
+        .into_rgba8();
+    cap_utils::linux_recording_stop::StopTrayIcon::from_rgba(32, 32, image.as_raw())
+}
+
+#[cfg(test)]
+mod startup_history_tests {
+    use super::*;
+
+    #[test]
+    fn history_load_reads_only_enough_valid_metadata_for_the_menu() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = (0..100)
+            .map(|index| {
+                let path = directory.path().join(format!("{index}.cap"));
+                std::fs::create_dir(&path).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let mut reads = 0;
+        let loaded = newest_valid_items(paths.clone(), 6, |_| {
+            reads += 1;
+            (reads > 2).then_some(reads)
+        });
+        assert_eq!(reads, 8);
+        assert_eq!(loaded, vec![3, 4, 5, 6, 7, 8]);
+
+        let mut reference = paths.clone();
+        reference
+            .sort_by_key(|path| std::cmp::Reverse(path.metadata().unwrap().created().unwrap()));
+        reference.truncate(6);
+        assert_eq!(
+            newest_valid_items(paths, 6, |path| Some(path.clone())),
+            reference
+        );
+    }
+
+    #[test]
+    fn a_late_history_scan_cannot_overwrite_new_items_or_moved_folders() {
+        let mut cache = PreviousItemsCache::default();
+        let old_revision = cache.revision;
+        cache.invalidate();
+        assert!(!cache.finish_loading(old_revision, Vec::new()));
+        assert!(!cache.loaded);
+        assert!(cache.finish_loading(cache.revision, Vec::new()));
+        assert!(cache.loaded);
+        assert!(!cache.finish_loading(old_revision, Vec::new()));
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn set_clean_stop_mode(
+    app: &AppHandle,
+    generation: u32,
+    active: bool,
+) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = if crate::clean_capture::wayland_generation(&handle) != Some(generation) {
+            Err("Recording tray transition was superseded".to_string())
+        } else if let Some(tray) = handle.tray_by_id("tray") {
+            tray.set_visible(!active).map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        };
+        let _ = tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .map_err(|_| "Recording tray transition timed out".to_string())?
+        .map_err(|_| "Recording tray transition was lost".to_string())?
 }

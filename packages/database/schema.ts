@@ -1,4 +1,5 @@
 import type {
+	Agent,
 	AiGenerationLanguage,
 	Comment,
 	Folder,
@@ -22,6 +23,7 @@ import {
 	index,
 	int,
 	json,
+	longtext,
 	mysqlTable,
 	primaryKey,
 	text,
@@ -33,7 +35,11 @@ import {
 import { relations } from "drizzle-orm/relations";
 
 import { nanoIdLength } from "./helpers.ts";
-import type { VideoEditSpec, VideoMetadata } from "./types/index.ts";
+import type {
+	VideoCallToAction,
+	VideoEditSpec,
+	VideoMetadata,
+} from "./types/index.ts";
 
 export type AuthApiKeySource = "desktop" | "extension" | "mobile" | "unknown";
 
@@ -127,9 +133,32 @@ export const users = mysqlTable(
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
 		authSessionVersion: int("authSessionVersion").notNull().default(0),
+		marketingOrigin: varchar("marketingOrigin", { length: 20 })
+			.notNull()
+			.default("unknown"),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
+	}),
+);
+
+export const loopsSyncJobs = mysqlTable(
+	"loops_sync_jobs",
+	{
+		userId: nanoId("userId").notNull().primaryKey().$type<User.UserId>(),
+		revision: int("revision").notNull().default(1),
+		nextAttemptAt: datetime("nextAttemptAt", { mode: "date" }).notNull(),
+		leaseToken: varchar("leaseToken", { length: 36 }),
+		leaseUntil: datetime("leaseUntil", { mode: "date" }),
+		failures: int("failures").notNull().default(0),
+		lastError: varchar("lastError", { length: 64 }),
+		profileHash: varchar("profileHash", { length: 64 }),
+		teammateJoinedAt: datetime("teammateJoinedAt", { mode: "date" }),
+		syncedEmail: varchar("syncedEmail", { length: 255 }),
+		lastSyncedAt: datetime("lastSyncedAt", { mode: "date" }),
+	},
+	(table) => ({
+		dueIndex: index("loops_sync_due_idx").on(table.nextAttemptAt),
 	}),
 );
 
@@ -196,6 +225,9 @@ export const organizations = mysqlTable(
 		metadata: json("metadata"),
 		tombstoneAt: timestamp("tombstoneAt"),
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
+		defaultVideoVisibility: varchar("defaultVideoVisibility", {
+			length: 7,
+		}).$type<"private">(),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
 		settings: json("settings").$type<{
@@ -227,6 +259,41 @@ export const organizations = mysqlTable(
 			table.tombstoneAt,
 		),
 		customDomainIndex: index("custom_domain_idx").on(table.customDomain),
+		workosOrganizationIdIndex: uniqueIndex("workos_organization_id_idx").on(
+			table.workosOrganizationId,
+		),
+	}),
+);
+
+export const organizationSso = mysqlTable(
+	"organization_sso",
+	{
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.primaryKey()
+			.$type<Organisation.OrganisationId>(),
+		purchasedByUserId: nanoId("purchasedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
+		stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+		stripePriceId: varchar("stripePriceId", { length: 255 }),
+		status: varchar("status", { length: 32 }).notNull().default("unpaid"),
+		paidThrough: datetime("paidThrough"),
+		currentPeriodEnd: datetime("currentPeriodEnd"),
+		cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").notNull().default(false),
+		checkoutAttemptId: varchar("checkoutAttemptId", { length: 36 }),
+		checkoutCurrency: varchar("checkoutCurrency", { length: 3 }),
+		checkoutPriceId: varchar("checkoutPriceId", { length: 255 }),
+		checkoutSessionId: varchar("checkoutSessionId", { length: 255 }),
+		checkoutStartedAt: datetime("checkoutStartedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		stripeSubscriptionIdIndex: uniqueIndex("sso_stripe_subscription_id_idx").on(
+			table.stripeSubscriptionId,
+		),
 	}),
 );
 
@@ -252,6 +319,35 @@ export const organizationMembers = mysqlTable(
 			table.userId,
 			table.organizationId,
 		),
+	}),
+);
+
+export const integrationInstallations = mysqlTable(
+	"integration_installations",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		provider: varchar("provider", { length: 64 }).notNull(),
+		externalId: varchar("externalId", { length: 255 }).notNull(),
+		displayName: varchar("displayName", { length: 255 }).notNull(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		installedByUserId: nanoId("installedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		encryptedCredentials: encryptedText("encryptedCredentials").notNull(),
+		metadata: json("metadata").notNull().$type<Record<string, unknown>>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		providerExternalIdIndex: uniqueIndex("provider_external_id_idx").on(
+			table.provider,
+			table.externalId,
+		),
+		organizationProviderDisplayNameIndex: index(
+			"organization_provider_display_name_idx",
+		).on(table.organizationId, table.provider, table.displayName),
 	}),
 );
 
@@ -350,6 +446,7 @@ export const videos = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			defaultPlaybackSpeed?: number;
+			callToAction?: VideoCallToAction;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED" | "NO_AUDIO"
@@ -358,9 +455,23 @@ export const videos = mysqlTable(
 			.$type<
 				| { type: "MediaConvert" }
 				| { type: "local" }
-				| { type: "desktopMP4" }
+				| {
+						type: "desktopMP4";
+						outputKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
+				  }
 				| { type: "desktopSegments" }
-				| { type: "webMP4" }
+				| {
+						type: "webMP4";
+						outputKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
+				  }
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
@@ -390,6 +501,7 @@ export const videos = mysqlTable(
 	},
 	(table) => [
 		index("owner_id_idx").on(table.ownerId),
+		index("owner_updated_id_idx").on(table.ownerId, table.updatedAt, table.id),
 		index("is_public_idx").on(table.public),
 		index("folder_id_idx").on(table.folderId),
 		index("storage_integration_id_idx").on(table.storageIntegrationId),
@@ -401,6 +513,11 @@ export const videos = mysqlTable(
 		index("org_effective_created_idx").on(
 			table.orgId,
 			table.effectiveCreatedAt,
+		),
+		index("screenshot_transcription_created_idx").on(
+			table.isScreenshot,
+			table.transcriptionStatus,
+			table.createdAt,
 		),
 	],
 );
@@ -446,11 +563,35 @@ export const sharedVideos = mysqlTable(
 	}),
 );
 
+export const videoViewerGrants = mysqlTable(
+	"video_viewer_grants",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		videoId: nanoId("videoId")
+			.notNull()
+			.$type<Video.VideoId>()
+			.references(() => videos.id, { onDelete: "cascade" }),
+		email: varchar("email", { length: 255 }).notNull(),
+		invitedByUserId: nanoId("invitedByUserId").notNull().$type<User.UserId>(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		revokedAt: timestamp("revokedAt"),
+	},
+	(table) => ({
+		videoEmailUnique: uniqueIndex("video_email_idx").on(
+			table.videoId,
+			table.email,
+		),
+	}),
+);
+
 export const comments = mysqlTable(
 	"comments",
 	{
 		id: nanoId("id").notNull().primaryKey().$type<Comment.CommentId>(),
-		type: varchar("type", { length: 6, enum: ["emoji", "text"] }).notNull(),
+		type: varchar("type", {
+			length: 6,
+			enum: ["emoji", "text", "video", "audio"],
+		}).notNull(),
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
 		authorId: nanoId("authorId").notNull().$type<User.UserId>(),
@@ -459,6 +600,12 @@ export const comments = mysqlTable(
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		parentCommentId:
 			nanoIdNullable("parentCommentId").$type<Comment.CommentId>(),
+		// Media comments ("video"/"audio" type): object key under the parent
+		// video's prefix (`${ownerId}/${videoId}/comments/${commentId}/...`),
+		// served via /api/storage/object which asserts that prefix.
+		mediaKey: varchar("mediaKey", { length: 512 }),
+		mediaDuration: float("mediaDuration"),
+		mediaMeta: json("mediaMeta").$type<Comment.MediaMeta>(),
 	},
 	(table) => ({
 		videoTypeCreatedIndex: index("video_type_created_idx").on(
@@ -630,6 +777,38 @@ export const messengerSupportEmails = mysqlTable(
 	}),
 );
 
+export const signedBaas = mysqlTable(
+	"signed_baas",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		status: varchar("status", { length: 255 }).notNull().default("pending"),
+		stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+		entityName: varchar("entityName", { length: 255 }).notNull(),
+		entityType: varchar("entityType", { length: 255 }).notNull(),
+		entityAddress: varchar("entityAddress", { length: 500 }).notNull(),
+		signerName: varchar("signerName", { length: 255 }).notNull(),
+		signerTitle: varchar("signerTitle", { length: 255 }).notNull(),
+		noticesEmail: varchar("noticesEmail", { length: 255 }).notNull(),
+		signatureData: longtext("signatureData").notNull(),
+		signedAt: timestamp("signedAt"),
+		emailSentAt: timestamp("emailSentAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		organizationIdIndex: uniqueIndex("signed_baa_organization_id_idx").on(
+			table.organizationId,
+		),
+		stripeSubscriptionIdIndex: index("signed_baa_stripe_subscription_idx").on(
+			table.stripeSubscriptionId,
+		),
+	}),
+);
+
 export const s3Buckets = mysqlTable(
 	"s3_buckets",
 	{
@@ -748,6 +927,9 @@ export const storageObjects = mysqlTable(
 			table.integrationId,
 			table.uploadStatus,
 		),
+		integrationObjectKeyPrefixIndex: index(
+			"integration_object_key_prefix_idx",
+		).on(table.integrationId, sql`${table.objectKey}(191)`),
 		videoIdIndex: index("video_id_idx").on(table.videoId),
 		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
 	}),
@@ -781,6 +963,191 @@ export const authApiKeys = mysqlTable(
 			table.createdAt,
 		),
 	}),
+);
+
+export const agentApiKeys = mysqlTable(
+	"agent_api_keys",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
+		name: varchar("name", { length: 100 }).notNull().default("Cap CLI"),
+		scopes: json("scopes").notNull().$type<Agent.AgentScope[]>(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		revokedAt: timestamp("revokedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		lastUsedAt: timestamp("lastUsedAt"),
+	},
+	(table) => [
+		uniqueIndex("token_hash_idx").on(table.tokenHash),
+		index("user_created_at_idx").on(table.userId, table.createdAt),
+		index("expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const agentApiIdempotency = mysqlTable(
+	"agent_api_idempotency",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		operation: varchar("operation", { length: 64 }).notNull(),
+		keyHash: varchar("keyHash", { length: 64 }).notNull(),
+		requestHash: varchar("requestHash", { length: 64 }).notNull(),
+		state: varchar("state", {
+			length: 16,
+			enum: ["pending", "complete"],
+		})
+			.notNull()
+			.default("pending"),
+		statusCode: int("statusCode"),
+		response: json("response").$type<unknown>(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => [
+		uniqueIndex("user_operation_key_idx").on(
+			table.userId,
+			table.operation,
+			table.keyHash,
+		),
+		index("expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const agentApiAuthorizationCodes = mysqlTable(
+	"agent_api_authorization_codes",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		codeChallenge: varchar("codeChallenge", { length: 64 }).notNull(),
+		redirectUri: varchar("redirectUri", { length: 512 }).notNull(),
+		scopes: json("scopes").notNull().$type<Agent.AgentScope[]>(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		consumedAt: timestamp("consumedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("code_hash_idx").on(table.codeHash),
+		index("expires_at_idx").on(table.expiresAt),
+		index("user_created_at_idx").on(table.userId, table.createdAt),
+	],
+);
+
+export const mcpOAuthClients = mysqlTable(
+	"mcp_oauth_clients",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		clientName: varchar("clientName", { length: 100 }).notNull(),
+		redirectUris: json("redirectUris").notNull().$type<string[]>(),
+		activatedAt: timestamp("activatedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("client_id_idx").on(table.clientId),
+		index("inactive_created_at_idx").on(table.activatedAt, table.createdAt),
+	],
+);
+
+export const mcpOAuthRegistrationQuotas = mysqlTable(
+	"mcp_oauth_registration_quotas",
+	{
+		windowId: varchar("windowId", { length: 10 }).notNull().primaryKey(),
+		registrations: int("registrations").notNull().default(0),
+		expiresAt: timestamp("expiresAt").notNull(),
+	},
+	(table) => [index("expires_at_idx").on(table.expiresAt)],
+);
+
+export const mcpOAuthCodes = mysqlTable(
+	"mcp_oauth_codes",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		codeChallenge: varchar("codeChallenge", { length: 64 }).notNull(),
+		redirectUri: varchar("redirectUri", { length: 512 }).notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		expiresAt: timestamp("expiresAt").notNull(),
+		consumedAt: timestamp("consumedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("code_hash_idx").on(table.codeHash),
+		index("expires_at_idx").on(table.expiresAt),
+	],
+);
+
+export const mcpOAuthTokens = mysqlTable(
+	"mcp_oauth_tokens",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		clientId: varchar("clientId", { length: 128 }).notNull(),
+		familyId: nanoId("familyId").notNull(),
+		resource: varchar("resource", { length: 512 }).notNull(),
+		accessHash: varchar("accessHash", { length: 64 }).notNull(),
+		refreshHash: varchar("refreshHash", { length: 64 }).notNull(),
+		accessExpiresAt: timestamp("accessExpiresAt").notNull(),
+		refreshExpiresAt: timestamp("refreshExpiresAt").notNull(),
+		revokedAt: timestamp("revokedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => [
+		uniqueIndex("access_hash_idx").on(table.accessHash),
+		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
+		index("family_id_idx").on(table.familyId),
+		index("client_active_idx").on(
+			table.clientId,
+			table.revokedAt,
+			table.refreshExpiresAt,
+		),
+		index("refresh_expires_at_idx").on(table.refreshExpiresAt),
+	],
+);
+
+export const agentApiOperations = mysqlTable(
+	"agent_api_operations",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		kind: varchar("kind", {
+			length: 32,
+			enum: [
+				"duplicate_cap",
+				"delete_cap",
+				"import_loom",
+				"delete_organization",
+				"set_organization_domain",
+				"remove_organization_domain",
+				"verify_organization_domain",
+				"transfer_org_content",
+			],
+		}).notNull(),
+		resourceId: nanoId("resourceId").notNull(),
+		resultResourceId: nanoIdNullable("resultResourceId"),
+		state: varchar("state", {
+			length: 16,
+			enum: ["queued", "running", "succeeded", "failed"],
+		})
+			.notNull()
+			.default("queued"),
+		payload: json("payload").notNull().$type<unknown>(),
+		result: json("result").$type<unknown>(),
+		errorCode: varchar("errorCode", { length: 64 }),
+		errorMessage: text("errorMessage"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+		completedAt: timestamp("completedAt"),
+	},
+	(table) => [
+		index("user_created_at_idx").on(table.userId, table.createdAt),
+		index("state_updated_at_idx").on(table.state, table.updatedAt),
+		index("resource_id_idx").on(table.resourceId),
+	],
 );
 
 export const commentsRelations = relations(comments, ({ one }) => ({
@@ -852,6 +1219,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
 	messengerConversations: many(messengerConversations),
 	messengerMessages: many(messengerMessages),
 	messengerSupportEmails: many(messengerSupportEmails),
+	integrationInstallations: many(integrationInstallations),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -911,6 +1279,7 @@ export const organizationsRelations = relations(
 		spaces: many(spaces),
 		s3Buckets: many(s3Buckets),
 		storageIntegrations: many(storageIntegrations),
+		integrationInstallations: many(integrationInstallations),
 	}),
 );
 
@@ -938,6 +1307,20 @@ export const organizationMembersRelations = relations(
 		organization: one(organizations, {
 			fields: [organizationMembers.organizationId],
 			references: [organizations.id],
+		}),
+	}),
+);
+
+export const integrationInstallationsRelations = relations(
+	integrationInstallations,
+	({ one }) => ({
+		organization: one(organizations, {
+			fields: [integrationInstallations.organizationId],
+			references: [organizations.id],
+		}),
+		installedByUser: one(users, {
+			fields: [integrationInstallations.installedByUserId],
+			references: [users.id],
 		}),
 	}),
 );
@@ -1187,6 +1570,72 @@ export const videoUploads = mysqlTable(
 	],
 );
 
+export const videoProcessingJobs = mysqlTable(
+	"video_processing_jobs",
+	{
+		videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
+		ownerId: nanoId("owner_id").notNull().$type<User.UserId>(),
+		generation: varchar("generation", { length: 64 }).notNull(),
+		manifestSha256: varchar("manifest_sha256", { length: 64 }),
+		state: varchar("state", { length: 32 })
+			.$type<
+				| "committing"
+				| "queued"
+				| "processing"
+				| "retry"
+				| "verified"
+				| "source-blocked"
+			>()
+			.notNull()
+			.default("committing"),
+		attemptId: varchar("attempt_id", { length: 64 }),
+		attemptCount: int("attempt_count").notNull().default(0),
+		leaseExpiresAt: datetime("lease_expires_at", { fsp: 3 }),
+		nextRetryAt: datetime("next_retry_at", { fsp: 3 }).notNull(),
+		workflowRunId: varchar("workflow_run_id", { length: 255 }),
+		remoteJobId: varchar("remote_job_id", { length: 255 }),
+		source: json("source").$type<unknown>(),
+		verification: json("verification").$type<unknown>(),
+		output: json("output").$type<unknown>(),
+		errorCode: varchar("error_code", { length: 64 }),
+		errorMessage: text("error_message"),
+		createdAt: datetime("created_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: datetime("updated_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		index("processing_state_retry_video_idx").on(
+			table.state,
+			table.nextRetryAt,
+			table.videoId,
+		),
+		index("processing_state_lease_video_idx").on(
+			table.state,
+			table.leaseExpiresAt,
+			table.videoId,
+		),
+	],
+);
+
+export const mediaProcessingBudgets = mysqlTable(
+	"media_processing_budgets",
+	{
+		id: varchar("id", { length: 64 }).primaryKey().notNull(),
+		reservedBytes: bigint("reserved_bytes", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		limitBytes: bigint("limit_bytes", {
+			mode: "number",
+			unsigned: true,
+		}).notNull(),
+		expiresAt: datetime("expires_at", { fsp: 3 }).notNull(),
+	},
+	(table) => [index("media_budget_expiry_idx").on(table.expiresAt)],
+);
+
 export const importedVideos = mysqlTable(
 	"imported_videos",
 	{
@@ -1199,6 +1648,7 @@ export const importedVideos = mysqlTable(
 	},
 	(table) => [
 		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
+		index("id_idx").on(table.id),
 	],
 );
 

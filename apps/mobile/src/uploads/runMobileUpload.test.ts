@@ -1,4 +1,4 @@
-import { Folder, Organisation, Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { describe, expect, it, vi } from "vitest";
 import type { MobileApiClient, UploadFile } from "@/api/mobile";
 import { runMobileUpload } from "./runMobileUpload";
@@ -32,23 +32,6 @@ describe("runMobileUpload", () => {
 					"Content-Type": "video/quicktime",
 				},
 			},
-			cap: {
-				id: Video.VideoId.make("video_123"),
-				shareUrl: "https://cap.so/s/video_123",
-				title: "video",
-				createdAt: "2026-05-18T10:00:00.000Z",
-				updatedAt: "2026-05-18T10:00:00.000Z",
-				ownerName: "Richie",
-				durationSeconds: 12.5,
-				thumbnailUrl: null,
-				folderId: null,
-				public: true,
-				protected: false,
-				viewCount: 0,
-				commentCount: 0,
-				reactionCount: 0,
-				upload: null,
-			},
 		}));
 		const updateUploadProgress = vi.fn(async () => ({
 			success: true as const,
@@ -73,8 +56,8 @@ describe("runMobileUpload", () => {
 		await runMobileUpload({
 			client,
 			file,
-			organizationId: Organisation.OrganisationId.make("org_123"),
-			folderId: Folder.FolderId.make("folder_123"),
+			organizationId: "org_123",
+			folderId: "folder_123",
 			onProgress,
 		});
 
@@ -120,23 +103,6 @@ describe("runMobileUpload", () => {
 					"Content-Type": "video/quicktime",
 				},
 			},
-			cap: {
-				id: Video.VideoId.make("video_123"),
-				shareUrl: "https://cap.so/s/video_123",
-				title: "video",
-				createdAt: "2026-05-18T10:00:00.000Z",
-				updatedAt: "2026-05-18T10:00:00.000Z",
-				ownerName: "Richie",
-				durationSeconds: 12.5,
-				thumbnailUrl: null,
-				folderId: null,
-				public: true,
-				protected: false,
-				viewCount: 0,
-				commentCount: 0,
-				reactionCount: 0,
-				upload: null,
-			},
 		}));
 		const updateUploadProgress = vi.fn(async () => ({
 			success: true as const,
@@ -171,7 +137,7 @@ describe("runMobileUpload", () => {
 		expect(onProgress).toHaveBeenCalledWith(0);
 	});
 
-	it("throttles server upload progress updates without throttling UI progress", async () => {
+	it("throttles UI progress and coalesces server updates", async () => {
 		uploadMock.uploadToTarget.mockImplementationOnce(
 			async (
 				_target: unknown,
@@ -195,23 +161,6 @@ describe("runMobileUpload", () => {
 				headers: {
 					"Content-Type": "video/quicktime",
 				},
-			},
-			cap: {
-				id: Video.VideoId.make("video_123"),
-				shareUrl: "https://cap.so/s/video_123",
-				title: "video",
-				createdAt: "2026-05-18T10:00:00.000Z",
-				updatedAt: "2026-05-18T10:00:00.000Z",
-				ownerName: "Richie",
-				durationSeconds: 12.5,
-				thumbnailUrl: null,
-				folderId: null,
-				public: true,
-				protected: false,
-				viewCount: 0,
-				commentCount: 0,
-				reactionCount: 0,
-				upload: null,
 			},
 		}));
 		const updateUploadProgress = vi.fn(async () => ({
@@ -240,17 +189,13 @@ describe("runMobileUpload", () => {
 			onProgress,
 		});
 
-		expect(onProgress).toHaveBeenCalledTimes(5);
-		expect(updateUploadProgress).toHaveBeenCalledTimes(3);
+		expect(onProgress).toHaveBeenCalledTimes(4);
+		expect(updateUploadProgress).toHaveBeenCalledTimes(2);
 		expect(updateUploadProgress).toHaveBeenNthCalledWith(1, "video_123", {
 			uploaded: 1,
 			total: 100,
 		});
 		expect(updateUploadProgress).toHaveBeenNthCalledWith(2, "video_123", {
-			uploaded: 7,
-			total: 100,
-		});
-		expect(updateUploadProgress).toHaveBeenNthCalledWith(3, "video_123", {
 			uploaded: 100,
 			total: 100,
 		});

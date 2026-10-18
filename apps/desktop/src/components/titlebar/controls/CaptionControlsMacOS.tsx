@@ -10,12 +10,17 @@ import {
 } from "solid-js";
 
 export default function CaptionControlsMacOS(
-	props: ComponentProps<"div"> & { showMinimize?: boolean; showZoom?: boolean },
+	props: ComponentProps<"div"> & {
+		showMinimize?: boolean;
+		showZoom?: boolean;
+		onZoom?: () => void;
+	},
 ) {
 	const [local, otherProps] = splitProps(props, [
 		"class",
 		"showMinimize",
 		"showZoom",
+		"onZoom",
 	]);
 	const currentWindow = getCurrentWindow();
 	const [focused, setFocus] = createSignal(true);
@@ -39,7 +44,7 @@ export default function CaptionControlsMacOS(
 	return (
 		<div
 			class={cx(
-				"flex flex-row items-center gap-2 h-full cursor-default select-none",
+				"flex flex-row items-center gap-2.5 h-full cursor-default select-none",
 				local.class,
 			)}
 			onMouseEnter={() => setHovered(true)}
@@ -65,7 +70,10 @@ export default function CaptionControlsMacOS(
 					type="zoom"
 					focused={focused()}
 					hovered={hovered()}
-					onClick={() => currentWindow.toggleMaximize()}
+					onClick={() => {
+						if (local.onZoom) local.onZoom();
+						else void currentWindow.toggleMaximize();
+					}}
 				/>
 			</Show>
 		</div>
@@ -84,17 +92,17 @@ function TrafficLightButton(props: TrafficLightButtonProps) {
 		close: {
 			bg: "#FF5F57",
 			bgHover: "#FF5F57",
-			iconColor: "#4D0000",
+			iconColor: "rgba(0, 0, 0, 0.5)",
 		},
 		minimize: {
 			bg: "#FEBC2E",
 			bgHover: "#FEBC2E",
-			iconColor: "#995700",
+			iconColor: "rgba(0, 0, 0, 0.5)",
 		},
 		zoom: {
 			bg: "#28C840",
 			bgHover: "#28C840",
-			iconColor: "#006500",
+			iconColor: "rgba(0, 0, 0, 0.5)",
 		},
 	};
 
@@ -103,8 +111,15 @@ function TrafficLightButton(props: TrafficLightButtonProps) {
 	return (
 		<button
 			type="button"
+			aria-label={
+				props.type === "close"
+					? "Close window"
+					: props.type === "minimize"
+						? "Minimize window"
+						: "Expand or collapse window"
+			}
 			class={cx(
-				"w-3 h-3 rounded-full flex items-center justify-center transition-colors duration-100",
+				"size-3.5 rounded-full flex items-center justify-center transition-colors duration-100",
 				"hover:brightness-95 active:brightness-90",
 			)}
 			style={{
@@ -130,8 +145,8 @@ interface TrafficLightIconProps {
 function TrafficLightIcon(props: TrafficLightIconProps) {
 	return (
 		<svg
-			width="8"
-			height="8"
+			width={props.type === "zoom" ? "8" : "10"}
+			height={props.type === "zoom" ? "8" : "10"}
 			viewBox="0 0 8 8"
 			fill="none"
 			xmlns="http://www.w3.org/2000/svg"
@@ -150,7 +165,7 @@ function TrafficLightIcon(props: TrafficLightIconProps) {
 			)}
 			{props.type === "zoom" && (
 				<path
-					d="M1.5 1.5a.5.5 0 0 1 .5-.5h4.5a.5.5 0 0 1 .5.5V6a.5.5 0 0 1-.5.5H2a.5.5 0 0 1-.5-.5V1.5Zm1 .5v3.5h3.5V2H2.5Z"
+					d="M.75.75H6.5L.75 6.5V.75ZM7.25 7.25H1.5l5.75-5.75v5.75Z"
 					fill={props.color}
 				/>
 			)}

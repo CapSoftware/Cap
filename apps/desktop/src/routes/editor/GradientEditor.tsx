@@ -4,7 +4,7 @@ import { BrandColorsDropdown } from "./BrandColorsDropdown";
 import { hexToRgb, RgbInput } from "./color-utils";
 import { useEditorContext } from "./context";
 import type { RGBColor } from "./projectConfig";
-import { Slider, Subfield } from "./ui";
+import { EditorButton, Field, Section, Slider } from "./ui";
 
 type GradientSourceFields = {
 	type: "gradient";
@@ -93,8 +93,8 @@ export function GradientEditor(props: {
 	return (
 		<Show when={source()}>
 			{(src) => (
-				<div class="flex flex-col gap-3">
-					<div class="relative overflow-hidden rounded-xl h-28 border border-gray-5">
+				<div class="flex flex-col gap-3.5">
+					<div class="relative overflow-hidden rounded-xl h-28 border border-ed-line">
 						<div
 							class="absolute inset-0"
 							style={{
@@ -130,7 +130,7 @@ export function GradientEditor(props: {
 
 					<div class="flex gap-3 items-end">
 						<div class="flex-1 min-w-0">
-							<span class="text-[11px] text-gray-10 mb-1 block">From</span>
+							<span class="text-[11px] text-ed-text-3 mb-1 block">From</span>
 							<div class="flex flex-col gap-2">
 								<RgbInput
 									value={src().from}
@@ -145,7 +145,7 @@ export function GradientEditor(props: {
 							</div>
 						</div>
 						<div class="flex-1 min-w-0">
-							<span class="text-[11px] text-gray-10 mb-1 block">To</span>
+							<span class="text-[11px] text-ed-text-3 mb-1 block">To</span>
 							<div class="flex flex-col gap-2">
 								<RgbInput
 									value={src().to}
@@ -161,12 +161,11 @@ export function GradientEditor(props: {
 						</div>
 					</div>
 
-					<div class="w-full border-t border-dashed border-gray-5 my-1" />
+					<div class="w-full border-t border-ed-line" />
 
-					<Subfield name="Angle" class="gap-4 items-center">
-						<div class="flex flex-1 gap-3 items-center">
+					<div class="flex flex-col">
+						<Field inline name="Angle" value={`${Math.round(angle())}°`}>
 							<Slider
-								class="flex-1"
 								value={[angle()]}
 								onChange={(v) => {
 									updateGradient({ angle: v[0] });
@@ -176,16 +175,13 @@ export function GradientEditor(props: {
 								step={1}
 								formatTooltip={(value) => `${Math.round(value)}°`}
 							/>
-							<span class="w-12 text-xs text-right text-gray-11 tabular-nums">
-								{Math.round(angle())}°
-							</span>
-						</div>
-					</Subfield>
+						</Field>
 
-					<div class="w-full border-t border-dashed border-gray-5 my-1" />
-
-					<Subfield name="Noise">
-						<div class="w-[120px]">
+						<Field
+							inline
+							name="Noise"
+							value={`${noiseIntensity().toFixed(1)}%`}
+						>
 							<Slider
 								value={[noiseIntensity()]}
 								onChange={(v) => {
@@ -198,12 +194,14 @@ export function GradientEditor(props: {
 								step={1}
 								formatTooltip="%"
 							/>
-						</div>
-					</Subfield>
+						</Field>
 
-					<Show when={noiseIntensity() > 0}>
-						<Subfield name="Grain Scale">
-							<div class="w-[120px]">
+						<Show when={noiseIntensity() > 0}>
+							<Field
+								inline
+								name="Grain Scale"
+								value={`${noiseScale().toFixed(1)}%`}
+							>
 								<Slider
 									value={[noiseScale()]}
 									onChange={(v) => {
@@ -216,71 +214,79 @@ export function GradientEditor(props: {
 									step={1}
 									formatTooltip="%"
 								/>
-							</div>
-						</Subfield>
-					</Show>
-
-					<div class="w-full border-t border-dashed border-gray-5 my-1" />
-
-					<div class="flex flex-wrap gap-2">
-						<button
-							type="button"
-							class="flex items-center justify-center rounded-lg transition-all duration-200 size-8 hover:opacity-80 hover:scale-105 border border-dashed border-gray-8 bg-gray-2 text-gray-10"
-							onClick={() => {
-								updateGradient({
-									from: randomColor(),
-									to: randomColor(),
-								});
-							}}
-							title="Randomize"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="14"
-								height="14"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							>
-								<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22" />
-								<path d="m18 2 4 4-4 4" />
-								<path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2" />
-								<path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8" />
-								<path d="m18 14 4 4-4 4" />
-							</svg>
-						</button>
-						<For each={GRADIENT_PRESETS}>
-							{(gradient) => (
-								<button
-									type="button"
-									class="rounded-lg transition-all duration-200 size-8 hover:opacity-80 hover:scale-105 ring-offset-2 ring-offset-gray-200"
-									classList={{
-										"ring-2 ring-gray-500":
-											src().from[0] === gradient.from[0] &&
-											src().from[1] === gradient.from[1] &&
-											src().from[2] === gradient.from[2] &&
-											src().to[0] === gradient.to[0] &&
-											src().to[1] === gradient.to[1] &&
-											src().to[2] === gradient.to[2],
-									}}
-									style={{
-										background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
-											",",
-										)}), rgb(${gradient.to.join(",")}))`,
-									}}
-									onClick={() => {
-										updateGradient({
-											from: gradient.from as RGBColor,
-											to: gradient.to as RGBColor,
-										});
-									}}
-								/>
-							)}
-						</For>
+							</Field>
+						</Show>
 					</div>
+
+					<div class="w-full border-t border-ed-line" />
+
+					<Section
+						name="Presets"
+						action={
+							<EditorButton
+								size="sm"
+								title="Randomize"
+								leftIcon={
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										width="14"
+										height="14"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22" />
+										<path d="m18 2 4 4-4 4" />
+										<path d="M2 6h1.9c1.5 0 2.9.9 3.6 2.2" />
+										<path d="M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8" />
+										<path d="m18 14 4 4-4 4" />
+									</svg>
+								}
+								onClick={() => {
+									updateGradient({
+										from: randomColor(),
+										to: randomColor(),
+									});
+								}}
+							>
+								Randomize
+							</EditorButton>
+						}
+					>
+						<div class="flex flex-wrap gap-2">
+							<For each={GRADIENT_PRESETS}>
+								{(gradient) => (
+									<button
+										type="button"
+										class="rounded-lg transition-all duration-200 size-8 hover:opacity-80 hover:scale-105 ring-offset-2 ring-offset-ed-card"
+										classList={{
+											"ring-2 ring-ed-accent":
+												src().from[0] === gradient.from[0] &&
+												src().from[1] === gradient.from[1] &&
+												src().from[2] === gradient.from[2] &&
+												src().to[0] === gradient.to[0] &&
+												src().to[1] === gradient.to[1] &&
+												src().to[2] === gradient.to[2],
+										}}
+										style={{
+											background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
+												",",
+											)}), rgb(${gradient.to.join(",")}))`,
+										}}
+										onClick={() => {
+											updateGradient({
+												from: gradient.from as RGBColor,
+												to: gradient.to as RGBColor,
+											});
+										}}
+									/>
+								)}
+							</For>
+						</div>
+					</Section>
 				</div>
 			)}
 		</Show>

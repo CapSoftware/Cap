@@ -38,6 +38,7 @@ export const createWebSiteSchema = () => ({
 	},
 });
 
+import { PRICING } from "@/data/pricing";
 import type { Testimonial } from "@/data/testimonials";
 import { testimonials as allTestimonials } from "@/data/testimonials";
 
@@ -113,10 +114,10 @@ export const createSoftwareApplicationSchema = (
 			},
 			{
 				"@type": "Offer",
-				price: "8.16",
+				price: `${PRICING.pro.annualPerMonth}`,
 				priceCurrency: "USD",
 				name: "Pro Plan",
-				priceValidUntil: "2025-12-31",
+				priceValidUntil: "2026-12-31",
 				description: "Full features for professional use",
 				eligibleQuantity: {
 					"@type": "QuantitativeValue",
@@ -201,7 +202,7 @@ export const createProductSchema = () => ({
 		"@type": "AggregateOffer",
 		priceCurrency: "USD",
 		lowPrice: "0",
-		highPrice: "8.16",
+		highPrice: `${PRICING.pro.annualPerMonth}`,
 		offerCount: "2",
 	},
 	aggregateRating: {
@@ -235,7 +236,7 @@ export const createComparisonTableSchema = () => ({
 				item: {
 					"@type": "PropertyValue",
 					name: "Cap",
-					value: "$8.16/month per user",
+					value: `$${PRICING.pro.annualPerMonth}/month per user`,
 				},
 			},
 			{
@@ -278,7 +279,7 @@ export const createLocalBusinessSchema = () => ({
 	image: "https://cap.so/og.png",
 	"@id": "https://cap.so",
 	url: "https://cap.so",
-	priceRange: "$0-$8.16",
+	priceRange: `$0-$${PRICING.pro.annualPerMonth}`,
 	address: {
 		"@type": "PostalAddress",
 		addressCountry: "US",

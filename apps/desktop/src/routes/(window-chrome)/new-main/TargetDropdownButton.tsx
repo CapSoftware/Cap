@@ -27,8 +27,8 @@ export default function TargetDropdownButton<
 			aria-expanded={local.expanded ? "true" : "false"}
 			data-expanded={local.expanded ? "true" : "false"}
 			class={cx(
-				"flex w-5 shrink-0 items-center justify-center rounded-lg bg-gray-4 text-gray-12 transition-colors duration-150 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 hover:bg-gray-5",
-				local.expanded && "bg-gray-5",
+				"flex w-7 shrink-0 items-center justify-center rounded-lg bg-gray-4 text-gray-12 transition-colors duration-150 hover:bg-gray-6 active:bg-gray-7 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1",
+				local.expanded && "bg-blue-4 text-blue-11",
 				local.disabled && "pointer-events-none opacity-60",
 				local.class,
 			)}

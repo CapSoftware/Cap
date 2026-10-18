@@ -16,13 +16,19 @@ type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 
 const authFns = vi.hoisted(() => ({
 	authConfig: {
+		appleAuthAvailable: true,
 		googleAuthAvailable: true,
 		workosAuthAvailable: true,
 	},
 	requestEmailCode: vi.fn(() => Promise.resolve()),
+	signInWithApple: vi.fn(),
 	signInWithGoogle: vi.fn(),
 	signInWithSso: vi.fn(),
 	verifyEmailCode: vi.fn(),
+}));
+
+const appleAuthenticationFns = vi.hoisted(() => ({
+	isAvailableAsync: vi.fn(() => Promise.resolve(true)),
 }));
 
 (
@@ -119,6 +125,25 @@ vi.mock("expo-symbols", () => ({
 	SymbolView: () => null,
 }));
 
+vi.mock("expo-apple-authentication", async () => {
+	const React = await import("react");
+	return {
+		AppleAuthenticationButton: (props: HostProps) =>
+			React.createElement(
+				"AppleAuthenticationButton",
+				props,
+				"Sign in with Apple",
+			),
+		AppleAuthenticationButtonStyle: {
+			BLACK: 0,
+		},
+		AppleAuthenticationButtonType: {
+			SIGN_IN: 0,
+		},
+		isAvailableAsync: appleAuthenticationFns.isAvailableAsync,
+	};
+});
+
 vi.mock("expo-web-browser", () => ({
 	openBrowserAsync: vi.fn(),
 }));
@@ -148,6 +173,7 @@ vi.mock("@/auth/AuthContext", () => ({
 	useAuth: () => ({
 		authConfig: authFns.authConfig,
 		requestEmailCode: authFns.requestEmailCode,
+		signInWithApple: authFns.signInWithApple,
 		signInWithGoogle: authFns.signInWithGoogle,
 		signInWithSso: authFns.signInWithSso,
 		verifyEmailCode: authFns.verifyEmailCode,
@@ -169,12 +195,17 @@ vi.mock("@/api/mobile", () => ({
 
 describe("SignInPanel", () => {
 	beforeEach(() => {
+		appleAuthenticationFns.isAvailableAsync.mockReset();
+		appleAuthenticationFns.isAvailableAsync.mockResolvedValue(true);
+		authFns.authConfig.appleAuthAvailable = true;
 		authFns.authConfig.googleAuthAvailable = true;
 		authFns.authConfig.workosAuthAvailable = true;
 		authFns.requestEmailCode.mockReset();
 		authFns.requestEmailCode.mockResolvedValue(undefined);
 		authFns.verifyEmailCode.mockReset();
 		authFns.verifyEmailCode.mockResolvedValue(undefined);
+		authFns.signInWithApple.mockReset();
+		authFns.signInWithApple.mockResolvedValue(undefined);
 		authFns.signInWithGoogle.mockReset();
 		authFns.signInWithGoogle.mockResolvedValue(undefined);
 		authFns.signInWithSso.mockReset();
@@ -215,6 +246,7 @@ describe("SignInPanel", () => {
 		).toBe(true);
 		expect(hasProp(tree, "accessibilityRole", "link")).toBe(true);
 		expect(text).toContain("OR");
+		expect(text).toContain("Sign in with Apple");
 		expect(text).toContain("Login with Google");
 		expect(text).toContain("Login with SAML SSO");
 		expect(text).toContain("Terms of Service");
@@ -236,6 +268,7 @@ describe("SignInPanel", () => {
 	});
 
 	it("hides unavailable provider options", async () => {
+		authFns.authConfig.appleAuthAvailable = false;
 		authFns.authConfig.googleAuthAvailable = false;
 		authFns.authConfig.workosAuthAvailable = false;
 
@@ -244,8 +277,20 @@ describe("SignInPanel", () => {
 
 		expect(text).toContain("Login with email");
 		expect(text).not.toContain("OR");
+		expect(text).not.toContain("Sign in with Apple");
 		expect(text).not.toContain("Login with Google");
 		expect(text).not.toContain("Login with SAML SSO");
+	});
+
+	it("hides Apple sign in when native authentication is unavailable", async () => {
+		appleAuthenticationFns.isAvailableAsync.mockResolvedValueOnce(false);
+
+		const tree = await renderTree(React.createElement(SignInPanel));
+		const text = getTextNodes(tree);
+
+		expect(text).not.toContain("Sign in with Apple");
+		expect(text).toContain("Login with Google");
+		expect(text).toContain("Login with SAML SSO");
 	});
 
 	it("shows the native SSO organization step", async () => {
@@ -577,6 +622,9 @@ describe("SignInPanel", () => {
 		const [emailButton] = renderer.root.findAllByProps({
 			accessibilityLabel: "Login with email",
 		});
+		const [appleButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Sign in with Apple",
+		});
 		const [googleButton] = renderer.root.findAllByProps({
 			accessibilityLabel: "Login with Google",
 		});
@@ -594,6 +642,7 @@ describe("SignInPanel", () => {
 		});
 		if (
 			!emailButton ||
+			!appleButton ||
 			!googleButton ||
 			!ssoButton ||
 			!signupLink ||
@@ -618,6 +667,16 @@ describe("SignInPanel", () => {
 		);
 		const [loadingSsoButton] = renderer.root.findAllByProps({
 			accessibilityLabel: "Login with SAML SSO",
+		});
+		const [loadingAppleButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Sign in with Apple",
+		});
+		expect(loadingAppleButton?.props.accessibilityState).toEqual({
+			busy: false,
+			disabled: true,
+		});
+		expect(loadingAppleButton?.props.accessibilityValue).toEqual({
+			text: "Starting Google sign in",
 		});
 		expect(loadingEmailButton?.props.disabled).toBe(true);
 		expect(loadingEmailButton?.props.accessibilityHint).toBe(
@@ -651,6 +710,7 @@ describe("SignInPanel", () => {
 		openBrowserAsync.mockClear();
 
 		await act(async () => {
+			appleButton.props.onPress();
 			googleButton.props.onPress();
 			emailButton.props.onPress();
 			ssoButton.props.onPress();
@@ -660,6 +720,7 @@ describe("SignInPanel", () => {
 			await Promise.resolve();
 		});
 
+		expect(authFns.signInWithApple).not.toHaveBeenCalled();
 		expect(authFns.signInWithGoogle).toHaveBeenCalledTimes(1);
 		expect(authFns.requestEmailCode).not.toHaveBeenCalled();
 		expect(openBrowserAsync).not.toHaveBeenCalled();
@@ -713,6 +774,37 @@ describe("SignInPanel", () => {
 				accessibilityLabel: "Retry Google sign in",
 			}),
 		).toHaveLength(0);
+	});
+
+	it("keeps a failed Apple sign-in retryable on the system button", async () => {
+		authFns.signInWithApple.mockRejectedValueOnce(
+			new Error("Apple unavailable"),
+		);
+		const renderer = await renderPanel();
+		const [appleButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Sign in with Apple",
+		});
+		if (!appleButton) throw new Error("Apple button was not rendered");
+
+		await act(async () => {
+			await appleButton.props.onPress();
+		});
+
+		expect(getTextNodes(renderer.toJSON())).toContain("Apple unavailable");
+		const [retryAppleButton] = renderer.root.findAllByProps({
+			accessibilityLabel: "Sign in with Apple",
+		});
+		expect(retryAppleButton?.props.accessibilityHint).toBe("Apple unavailable");
+		expect(retryAppleButton?.props.accessibilityValue).toEqual({
+			text: "Apple unavailable",
+		});
+
+		await act(async () => {
+			await retryAppleButton?.props.onPress();
+		});
+
+		expect(authFns.signInWithApple).toHaveBeenCalledTimes(2);
+		expect(getTextNodes(renderer.toJSON())).not.toContain("Apple unavailable");
 	});
 
 	it("marks a failed SSO sign-in on the organization step", async () => {
@@ -934,6 +1026,7 @@ describe("SignInPanel", () => {
 				shadowOpacity: 0.12,
 			}),
 		).toBe(false);
+		expect(text).not.toContain("Sign in with Apple");
 		expect(text).not.toContain("Login with Google");
 	});
 

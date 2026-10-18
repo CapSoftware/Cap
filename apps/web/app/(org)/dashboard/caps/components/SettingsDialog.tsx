@@ -15,6 +15,7 @@ import clsx from "clsx";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
+import type { CurrentUser } from "@/app/Layout/AuthContext";
 import { DEFAULT_PLAYBACK_SPEED, PLAYBACK_SPEEDS } from "@/lib/playback-speed";
 import { useDashboardContext } from "../../Contexts";
 import type { OrganizationSettings } from "../../dashboard-data";
@@ -25,6 +26,9 @@ interface SettingsDialogProps {
 	capId: Video.VideoId;
 	settingsData?: OrganizationSettings;
 	inheritedSpaceSettings?: Partial<Record<ViewerSettingKey, SpaceRuleSource[]>>;
+	user?: CurrentUser | null;
+	organizationSettings?: OrganizationSettings | null;
+	onSaved?: () => void;
 }
 
 const options: {
@@ -74,8 +78,14 @@ export const SettingsDialog = ({
 	capId,
 	settingsData,
 	inheritedSpaceSettings,
+	user: propUser,
+	organizationSettings: propOrganizationSettings,
+	onSaved,
 }: SettingsDialogProps) => {
-	const { user, organizationSettings } = useDashboardContext();
+	const contextData = useDashboardContext();
+	const user = propUser ?? contextData.user;
+	const organizationSettings =
+		propOrganizationSettings ?? contextData.organizationSettings;
 	const [saveLoading, setSaveLoading] = useState(false);
 	const buildSettings = useCallback(
 		(data?: OrganizationSettings): OrganizationSettings => ({
@@ -110,6 +120,7 @@ export const SettingsDialog = ({
 			await updateVideoSettings(capId, payload);
 			toast.success("Settings updated successfully");
 			onClose();
+			onSaved?.();
 		} catch (error) {
 			console.error("Error updating video settings:", error);
 			toast.error("Failed to update settings");
@@ -215,7 +226,7 @@ export const SettingsDialog = ({
 								<Switch
 									disabled={
 										Boolean(inheritedLabel) ||
-										(option.pro && !user.isPro) ||
+										(option.pro && !user?.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue("disableTranscript"))
 									}

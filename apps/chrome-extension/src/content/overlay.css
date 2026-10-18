@@ -91,6 +91,7 @@
 }
 
 .cap-extension-camera-window:hover .cap-extension-camera-controls,
+.cap-extension-camera-window.is-preview-hovered .cap-extension-camera-controls,
 .cap-extension-camera-controls:focus-within {
 	opacity: 1;
 	transform: translateY(0);
@@ -153,6 +154,147 @@
 	background: #000;
 	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
 	color: #fff;
+}
+
+.cap-extension-camera-resize-layer {
+	position: absolute;
+	top: 52px;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	z-index: 4;
+	pointer-events: none;
+}
+
+.cap-extension-camera-resize-handle {
+	all: unset;
+	position: absolute;
+	z-index: 1;
+	display: block;
+	width: 30px;
+	height: 30px;
+	box-sizing: border-box;
+	opacity: 0;
+	pointer-events: none;
+	touch-action: none;
+	user-select: none;
+	transition: opacity 140ms ease;
+}
+
+.cap-extension-camera-window:hover .cap-extension-camera-resize-handle,
+.cap-extension-camera-window.is-preview-hovered
+	.cap-extension-camera-resize-handle,
+.cap-extension-camera-window:focus-within .cap-extension-camera-resize-handle,
+.cap-extension-camera-window.is-resizing .cap-extension-camera-resize-handle {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.cap-extension-camera-resize-handle::after {
+	position: absolute;
+	width: 14px;
+	height: 14px;
+	border-color: rgba(255, 255, 255, 0.86);
+	content: "";
+	filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+	pointer-events: none;
+	transform: scale(0.9);
+	transition:
+		border-color 140ms ease,
+		transform 140ms ease;
+}
+
+.cap-extension-camera-resize-handle:hover::after,
+.cap-extension-camera-resize-handle.is-active::after {
+	border-color: #fff;
+	transform: scale(1.08);
+}
+
+.cap-extension-camera-resize-handle.is-nw {
+	top: 0;
+	left: 0;
+	cursor: nwse-resize;
+}
+
+.cap-extension-camera-resize-handle.is-ne {
+	top: 0;
+	right: 0;
+	cursor: nesw-resize;
+}
+
+.cap-extension-camera-resize-handle.is-sw {
+	bottom: 0;
+	left: 0;
+	cursor: nesw-resize;
+}
+
+.cap-extension-camera-resize-handle.is-se {
+	right: 0;
+	bottom: 0;
+	cursor: nwse-resize;
+}
+
+.cap-extension-camera-resize-handle.is-nw::after {
+	top: 6px;
+	left: 6px;
+	border-top: 2px solid;
+	border-left: 2px solid;
+	border-radius: 6px 0 0;
+}
+
+.cap-extension-camera-resize-handle.is-ne::after {
+	top: 6px;
+	right: 6px;
+	border-top: 2px solid;
+	border-right: 2px solid;
+	border-radius: 0 6px 0 0;
+}
+
+.cap-extension-camera-resize-handle.is-sw::after {
+	bottom: 6px;
+	left: 6px;
+	border-bottom: 2px solid;
+	border-left: 2px solid;
+	border-radius: 0 0 0 6px;
+}
+
+.cap-extension-camera-resize-handle.is-se::after {
+	right: 6px;
+	bottom: 6px;
+	border-right: 2px solid;
+	border-bottom: 2px solid;
+	border-radius: 0 0 6px;
+}
+
+.cap-extension-camera-dismiss-btn {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	z-index: 12;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(18, 18, 23, 0.65);
+	color: #ffffff;
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+	transition: all 140ms ease;
+	backdrop-filter: blur(8px);
+}
+
+.cap-extension-camera-window:hover .cap-extension-camera-dismiss-btn {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.cap-extension-camera-dismiss-btn:hover {
+	background: rgba(239, 68, 68, 0.9);
+	transform: scale(1.1);
 }
 
 .cap-extension-camera-iframe {
@@ -427,12 +569,6 @@
 	animation: cap-extension-pulse 1.6s ease-in-out infinite;
 }
 
-.cap-extension-control-bar-dot.is-creating {
-	background: #f59f00;
-	box-shadow: 0 0 0 3px rgba(245, 159, 0, 0.18);
-	animation: cap-extension-pulse 1.6s ease-in-out infinite;
-}
-
 .cap-extension-control-bar-dot.is-paused {
 	background: #b4b4b4;
 }
@@ -490,6 +626,12 @@
 .cap-extension-control-bar-icon-button:disabled {
 	opacity: 0.45;
 	cursor: not-allowed;
+}
+
+.cap-extension-control-bar-icon-button.is-compact {
+	width: 32px;
+	height: 32px;
+	border-radius: 9px;
 }
 
 .cap-extension-control-bar-icon-button.is-quiet {
@@ -556,6 +698,14 @@
 	background: #d93036;
 }
 
+.cap-extension-control-bar-pill.is-stop.is-compact {
+	width: 34px;
+	height: 32px;
+	justify-content: center;
+	padding: 0;
+	border-radius: 9px;
+}
+
 .cap-extension-control-bar-pill.is-start {
 	background: #2563eb;
 	border-color: #1d4ed8;
@@ -568,22 +718,21 @@
 
 .cap-extension-recording-rail {
 	position: fixed;
-	left: 16px;
-	top: 50%;
 	z-index: 2147483647;
 	display: flex;
-	flex-direction: column;
 	align-items: center;
-	gap: 8px;
-	padding: 10px 8px 8px;
+	gap: 2px;
+	padding: 4px;
 	border: 1px solid rgba(18, 18, 23, 0.08);
-	border-radius: 18px;
+	border-radius: 14px;
 	background: rgba(252, 252, 252, 0.97);
 	box-shadow:
-		0 24px 64px rgba(0, 0, 0, 0.28),
-		0 4px 16px rgba(0, 0, 0, 0.12);
+		0 16px 40px rgba(0, 0, 0, 0.22),
+		0 3px 10px rgba(0, 0, 0, 0.1);
 	color: #202020;
+	cursor: grab;
 	pointer-events: auto;
+	touch-action: none;
 	user-select: none;
 	backdrop-filter: blur(20px);
 	font-family:
@@ -592,27 +741,103 @@
 	font-size: 13px;
 	letter-spacing: 0;
 	line-height: 1;
-	transform: translateY(-50%);
+	isolation: isolate;
 	animation: cap-extension-rail-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.cap-extension-recording-rail.is-dragging {
+	cursor: grabbing;
+}
+
 .cap-extension-recording-rail-timer {
+	position: relative;
+	z-index: 1;
 	display: flex;
-	flex-direction: column;
 	align-items: center;
-	gap: 7px;
-	padding: 4px 6px 2px;
+	gap: 6px;
+	min-width: 70px;
+	height: 32px;
+	padding: 0 4px 0 0;
+}
+
+.cap-extension-recording-rail-grip {
+	flex: 0 0 auto;
+	color: #a1a1aa;
 }
 
 .cap-extension-recording-rail-time {
-	min-width: 40px;
-	font-size: 15px;
+	min-width: 38px;
+	font-size: 13px;
 	font-weight: 600;
 	line-height: 1;
 	color: #18181b;
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
+}
+
+.cap-extension-recording-rail-actions {
+	position: absolute;
+	top: 1px;
+	left: calc(100% + 6px);
+	z-index: 2;
+	display: flex;
+	height: 40px;
+	align-items: center;
+	gap: 2px;
+	padding: 3px 4px;
+	border: 1px solid rgba(18, 18, 23, 0.08);
+	border-radius: 14px;
+	background: rgba(252, 252, 252, 0.97);
+	box-shadow:
+		0 12px 30px rgba(0, 0, 0, 0.16),
+		0 2px 8px rgba(0, 0, 0, 0.08);
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+	transform: translateX(-4px) scale(0.98);
+	transform-origin: left center;
+	transition:
+		opacity 120ms ease,
+		transform 160ms ease,
+		visibility 0s linear 160ms;
+}
+
+.cap-extension-recording-rail-actions::before {
+	position: absolute;
+	top: 0;
+	right: 100%;
+	width: 8px;
+	height: 100%;
+	content: "";
+}
+
+.cap-extension-recording-rail > .cap-extension-control-bar-pill {
+	position: relative;
+	z-index: 1;
+}
+
+.cap-extension-recording-rail.opens-left .cap-extension-recording-rail-actions {
+	right: calc(100% + 6px);
+	left: auto;
+	transform: translateX(4px) scale(0.98);
+	transform-origin: right center;
+}
+
+.cap-extension-recording-rail.opens-left
+	.cap-extension-recording-rail-actions::before {
+	right: auto;
+	left: 100%;
+}
+
+.cap-extension-recording-rail:hover .cap-extension-recording-rail-actions,
+.cap-extension-recording-rail:focus-within
+	.cap-extension-recording-rail-actions {
+	opacity: 1;
+	visibility: visible;
+	pointer-events: auto;
+	transform: translateX(0) scale(1);
+	transition-delay: 0s;
 }
 
 .cap-extension-recording-rail-timer.is-warning
@@ -623,11 +848,11 @@
 @keyframes cap-extension-rail-in {
 	from {
 		opacity: 0;
-		transform: translateY(-50%) translateX(-14px) scale(0.97);
+		transform: translateY(6px) scale(0.97);
 	}
 	to {
 		opacity: 1;
-		transform: translateY(-50%) translateX(0) scale(1);
+		transform: translateY(0) scale(1);
 	}
 }
 
@@ -649,6 +874,377 @@
 	to {
 		opacity: 1;
 		transform: translateY(0) scale(1);
+	}
+}
+
+.cap-extension-active-recording-container {
+	position: fixed;
+	z-index: 2147483647;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	pointer-events: auto;
+	touch-action: none;
+	user-select: none;
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 13px;
+	line-height: 1;
+	isolation: isolate;
+	animation: cap-extension-badge-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-active-recording-container.is-dragging {
+	cursor: grabbing;
+}
+
+.cap-extension-recording-badge {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 48px;
+	padding: 4px 12px 4px 6px;
+	border: 1.5px solid rgba(18, 18, 23, 0.12);
+	border-radius: 9999px;
+	background: rgba(255, 255, 255, 0.98);
+	box-shadow:
+		0 14px 34px rgba(0, 0, 0, 0.18),
+		0 3px 10px rgba(0, 0, 0, 0.1);
+	color: #18181b;
+	cursor: grab;
+	backdrop-filter: blur(24px);
+	transition:
+		transform 140ms ease,
+		box-shadow 140ms ease,
+		border-color 140ms ease;
+}
+
+.cap-extension-recording-badge.is-counting {
+	width: 48px;
+	height: 48px;
+	padding: 0;
+	justify-content: center;
+	border-color: #ef4444;
+	box-shadow:
+		0 0 0 4px rgba(239, 68, 68, 0.2),
+		0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.cap-extension-badge-countdown-ring {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+}
+
+.cap-extension-badge-countdown-number {
+	font-size: 22px;
+	font-weight: 800;
+	color: #ef4444;
+	line-height: 1;
+	animation: cap-extension-countdown-pop 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cap-extension-countdown-pop {
+	0% {
+		transform: scale(0.6);
+		opacity: 0.5;
+	}
+	50% {
+		transform: scale(1.15);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+}
+
+.cap-extension-recording-badge:hover {
+	transform: scale(1.05);
+	border-color: rgba(18, 18, 23, 0.25);
+	box-shadow:
+		0 18px 42px rgba(0, 0, 0, 0.22),
+		0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.cap-extension-recording-badge.is-active {
+	border-color: #3b82f6;
+	box-shadow:
+		0 0 0 3px rgba(59, 130, 246, 0.25),
+		0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.cap-extension-recording-badge-icon-wrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+}
+
+.cap-extension-recording-badge-logo {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	object-fit: contain;
+}
+
+.cap-extension-recording-badge-icon-wrap .cap-extension-control-bar-dot {
+	position: absolute;
+	right: -1px;
+	bottom: -1px;
+	width: 10px;
+	height: 10px;
+	border: 2px solid #fff;
+	box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+}
+
+.cap-extension-recording-badge-time {
+	font-size: 13px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: #18181b;
+	white-space: nowrap;
+}
+
+.cap-extension-recording-badge-time.is-warning {
+	color: #e5484d;
+}
+
+.cap-extension-recording-badge::before {
+	content: "";
+	position: absolute;
+	top: -8px;
+	bottom: -8px;
+	left: -8px;
+	right: -8px;
+	z-index: -1;
+	pointer-events: auto;
+}
+
+.cap-extension-vertical-dock {
+	position: absolute;
+	left: 0;
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	width: 48px;
+	padding: 6px;
+	border: 1px solid rgba(18, 18, 23, 0.12);
+	border-radius: 28px;
+	background: rgba(255, 255, 255, 0.96);
+	box-shadow:
+		0 20px 48px rgba(0, 0, 0, 0.22),
+		0 6px 14px rgba(0, 0, 0, 0.08);
+	backdrop-filter: blur(28px);
+	animation: cap-extension-dock-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-vertical-dock::before {
+	content: "";
+	position: absolute;
+	top: -12px;
+	bottom: -12px;
+	left: -12px;
+	right: -12px;
+	z-index: -1;
+	pointer-events: auto;
+}
+
+.cap-extension-active-recording-container.opens-up
+	.cap-extension-vertical-dock {
+	bottom: calc(100% + 8px);
+	transform-origin: bottom center;
+}
+
+.cap-extension-active-recording-container.opens-down
+	.cap-extension-vertical-dock {
+	top: calc(100% + 8px);
+	transform-origin: top center;
+}
+
+.cap-extension-dock-btn {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(18, 18, 23, 0.05);
+	color: #27272a;
+	cursor: pointer;
+	transition: all 140ms ease;
+}
+
+.cap-extension-dock-btn:hover {
+	background: rgba(18, 18, 23, 0.1);
+	transform: scale(1.08);
+}
+
+.cap-extension-dock-btn:active {
+	transform: scale(0.96);
+}
+
+.cap-extension-dock-btn.is-stop {
+	background: #ef4444;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+}
+
+.cap-extension-dock-btn.is-stop:hover {
+	background: #dc2626;
+	box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+}
+
+.cap-extension-dock-btn.is-pause {
+	background: rgba(18, 18, 23, 0.07);
+	color: #18181b;
+}
+
+.cap-extension-dock-btn.is-pause.is-paused {
+	background: #eab308;
+	color: #ffffff;
+}
+
+.cap-extension-dock-btn.is-blur.is-active {
+	background: #3b82f6;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.cap-extension-dock-btn.is-pen.is-active {
+	background: #8b5cf6;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+.cap-extension-dock-btn.is-camera.is-active {
+	background: rgba(34, 197, 94, 0.14);
+	color: #16a34a;
+}
+
+.cap-extension-dock-btn.is-mic.is-muted {
+	background: rgba(239, 68, 68, 0.14);
+	color: #dc2626;
+}
+
+.cap-extension-dock-btn.is-collapse {
+	background: transparent;
+	color: #a1a1aa;
+}
+
+.cap-extension-dock-btn.is-collapse:hover {
+	background: rgba(18, 18, 23, 0.06);
+	color: #18181b;
+}
+
+.cap-extension-dock-btn::after {
+	content: attr(data-tooltip);
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%) scale(0.9);
+	padding: 4px 10px;
+	border-radius: 8px;
+	background: #18181b;
+	color: #ffffff;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	pointer-events: none;
+	opacity: 0;
+	transition: all 140ms cubic-bezier(0.16, 1, 0.3, 1);
+	z-index: 20;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.cap-extension-active-recording-container.tooltip-left
+	.cap-extension-dock-btn::after {
+	right: calc(100% + 10px);
+}
+
+.cap-extension-active-recording-container.tooltip-right
+	.cap-extension-dock-btn::after {
+	left: calc(100% + 10px);
+}
+
+.cap-extension-dock-btn:hover::after {
+	opacity: 1;
+	transform: translateY(-50%) scale(1);
+}
+
+@keyframes cap-extension-dock-slide-up {
+	from {
+		opacity: 0;
+		transform: translateY(12px) scale(0.92);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+.cap-extension-blur-highlight {
+	position: fixed;
+	z-index: 2147483646;
+	box-sizing: border-box;
+	border: 2px dashed #3b82f6;
+	border-radius: 6px;
+	background: rgba(59, 130, 246, 0.12);
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+	pointer-events: none;
+	animation: cap-extension-fade-in 140ms ease;
+}
+
+.cap-extension-blur-tooltip {
+	position: absolute;
+	top: -24px;
+	left: 0;
+	padding: 2px 8px;
+	border-radius: 6px;
+	background: #18181b;
+	color: #ffffff;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+@keyframes cap-extension-badge-in {
+	from {
+		opacity: 0;
+		transform: scale(0.9);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes cap-extension-popover-in {
+	from {
+		opacity: 0;
+		transform: translateY(-6px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+@keyframes cap-extension-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
 	}
 }
 

@@ -1,4 +1,5 @@
 import * as Db from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Data, Effect, Option } from "effect";
@@ -24,9 +25,6 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 					.select({
 						id: Db.organizations.id,
 						name: Db.organizations.name,
-						stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
-						thirdPartyStripeSubscriptionId:
-							Db.users.thirdPartyStripeSubscriptionId,
 					})
 					.from(Db.organizations)
 					.innerJoin(Db.users, Dz.eq(Db.organizations.ownerId, Db.users.id))
@@ -39,6 +37,24 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 			);
 
 		return {
+			isUserPro: Effect.fn("Extensions.isUserPro")(function* (
+				userId: User.UserId,
+			) {
+				const [user] = yield* db.use((db) =>
+					db
+						.select({
+							stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+							thirdPartyStripeSubscriptionId:
+								Db.users.thirdPartyStripeSubscriptionId,
+						})
+						.from(Db.users)
+						.where(Dz.eq(Db.users.id, userId))
+						.limit(1),
+				);
+
+				return userIsPro(user ?? null);
+			}),
+
 			mintAuthKey: Effect.fn("Extensions.mintAuthKey")(function* (
 				userId: User.UserId,
 			) {
@@ -124,9 +140,6 @@ export class Extensions extends Effect.Service<Extensions>()("Extensions", {
 							.select({
 								id: Db.organizations.id,
 								name: Db.organizations.name,
-								stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
-								thirdPartyStripeSubscriptionId:
-									Db.users.thirdPartyStripeSubscriptionId,
 							})
 							.from(Db.organizationMembers)
 							.innerJoin(

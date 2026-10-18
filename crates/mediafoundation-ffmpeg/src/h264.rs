@@ -32,6 +32,8 @@ pub struct H264StreamMuxer {
     time_base: ffmpeg::Rational,
     is_finished: bool,
     frame_count: u64,
+    last_written_pts: Option<i64>,
+    consecutive_pts_bumps: u64,
 }
 
 impl H264StreamMuxer {
@@ -83,6 +85,8 @@ impl H264StreamMuxer {
             time_base,
             is_finished: false,
             frame_count: 0,
+            last_written_pts: None,
+            consecutive_pts_bumps: 0,
         })
     }
 
@@ -101,6 +105,43 @@ impl H264StreamMuxer {
             self.time_base,
             output.stream(self.stream_index).unwrap().time_base(),
         );
+
+        // MediaFoundation stamps samples in 100ns ticks, but this stream's
+        // time base is ~333x coarser (1/(fps*1000)): two strictly increasing
+        // sample times can land on the same output tick, and the mov muxer
+        // rejects the duplicate pts/dts — the same unit-mismatch class as the
+        // AVFoundation -16364 failures. A tie carries no time: advance one
+        // tick in the writer-visible unit and let real timestamps take over,
+        // like normalize_input_pts in cap-enc-ffmpeg. pts==dts here (MF
+        // encoders are configured without B-frames).
+        if let Some(pts) = packet.pts() {
+            let pts = match self.last_written_pts {
+                Some(last) if pts <= last => {
+                    // Bumps are expected in short runs (re-quantization
+                    // ties); a long run means the source clock is stuck and
+                    // the muxed timeline is compressing, which must be
+                    // visible in logs rather than silent.
+                    self.consecutive_pts_bumps += 1;
+                    if self.consecutive_pts_bumps == 30
+                        || self.consecutive_pts_bumps.is_multiple_of(300)
+                    {
+                        warn!(
+                            consecutive_bumps = self.consecutive_pts_bumps,
+                            "MF sample times are not advancing; muxer is tie-bumping \
+                             every frame (stuck source clock?)"
+                        );
+                    }
+                    last + 1
+                }
+                _ => {
+                    self.consecutive_pts_bumps = 0;
+                    pts
+                }
+            };
+            self.last_written_pts = Some(pts);
+            packet.set_pts(Some(pts));
+            packet.set_dts(Some(pts));
+        }
 
         packet.write_interleaved(output)?;
 

@@ -1,5 +1,4 @@
 import { serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
 import {
 	CurrentUser,
 	Extension,
@@ -336,7 +335,7 @@ export const ExtensionHttpLive = HttpApiBuilder.group(
 							return yield* new Http.InternalServerError({ cause: "database" });
 						}
 
-						const isPro = userIsPro(organization.value);
+						const isPro = yield* extensions.isUserPro(user.id);
 
 						return {
 							user: {

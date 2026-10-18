@@ -3,7 +3,13 @@ import {
 	MacScreenRecordingWithAudioPage,
 	macScreenRecordingWithAudioContent,
 } from "@/components/pages/seo/MacScreenRecordingWithAudioPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Mac screen recording with system audio",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -22,7 +28,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Mac screen recorder with internal audio",
@@ -37,7 +43,7 @@ export const metadata: Metadata = {
 			"Mac Screen Recording With Audio — Capture Internal System Sound + Mic | Cap",
 		description:
 			"Record your Mac screen with system audio and microphone using Cap. Native internal audio capture — no BlackHole, no plugins. Free and open-source for macOS.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 

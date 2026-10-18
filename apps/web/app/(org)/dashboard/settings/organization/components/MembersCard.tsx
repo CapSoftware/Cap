@@ -325,24 +325,34 @@ export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 									{buildEnv.NEXT_PUBLIC_IS_CAP && (
 										<TableCell>
 											{memberIsOwner ? (
-												<span className="text-xs text-gray-10">-</span>
+												<span className="text-xs text-gray-10">
+													{activeOrganization.ownerIsPro ? "Included" : "Free"}
+												</span>
 											) : (
-												<Switch
-													checked={member.hasProSeat}
-													onCheckedChange={(checked) =>
-														toggleProSeatMutation.mutate({
-															memberId: member.id,
-															enable: checked,
-														})
-													}
-													disabled={
-														!canManageProSeats ||
-														(toggleProSeatMutation.isPending &&
-															toggleProSeatMutation.variables?.memberId ===
-																member.id) ||
-														(!member.hasProSeat && proSeatsRemaining <= 0)
-													}
-												/>
+												<div className="flex items-center gap-2">
+													<Switch
+														checked={member.hasProSeat}
+														onCheckedChange={(checked) =>
+															toggleProSeatMutation.mutate({
+																memberId: member.id,
+																enable: checked,
+															})
+														}
+														disabled={
+															!canManageProSeats ||
+															(toggleProSeatMutation.isPending &&
+																toggleProSeatMutation.variables?.memberId ===
+																	member.id) ||
+															(!member.hasProSeat && proSeatsRemaining <= 0)
+														}
+													/>
+													{member.hasProSeat &&
+														!activeOrganization.hasActiveProSeatProvider && (
+															<span className="text-xs text-amber-600">
+																Inactive
+															</span>
+														)}
+												</div>
 											)}
 										</TableCell>
 									)}

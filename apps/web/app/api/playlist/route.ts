@@ -1,4 +1,5 @@
 import * as Db from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import {
 	Database,
 	provideOptionalAuth,
@@ -16,6 +17,11 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
+import {
+	resolveMobileRequestOrigin,
+	resolveMobileWebResourceUrl,
+} from "@/lib/mobile-request-origin";
+import { getSegmentPlaybackState } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
@@ -36,6 +42,7 @@ const GetPlaylistParams = Schema.Struct({
 		"segments-master",
 		"segments-video",
 		"segments-audio",
+		"segments-status",
 	),
 	requireComplete: Schema.OptionFromUndefinedOr(Schema.String),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
@@ -61,8 +68,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				const storage = yield* Storage;
 				const videos = yield* Videos;
 
-				return handlers.handle("getVideoSrc", ({ urlParams }) =>
+				return handlers.handle("getVideoSrc", ({ request, urlParams }) =>
 					Effect.gen(function* () {
+						const requestHost =
+							request.headers["x-forwarded-host"] ?? request.headers.host;
+						let requestUrl = request.originalUrl;
+						if (requestHost) {
+							try {
+								const url = new URL(requestUrl);
+								url.host = requestHost.split(",")[0]?.trim() ?? url.host;
+								requestUrl = url.toString();
+							} catch {
+								requestUrl = request.originalUrl;
+							}
+						}
 						const [video] = yield* videos
 							.getByIdForViewing(urlParams.videoId)
 							.pipe(
@@ -72,7 +91,15 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								),
 							);
 
-						return yield* getPlaylistResponse(video, urlParams);
+						return yield* getPlaylistResponse(
+							video,
+							urlParams,
+							resolveMobileRequestOrigin(
+								serverEnv().WEB_URL,
+								requestUrl,
+								requestHost,
+							),
+						);
 					}).pipe(
 						provideOptionalAuth,
 						Effect.tapErrorCause(Effect.logError),
@@ -139,6 +166,7 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
+	publicOrigin: string,
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
@@ -155,7 +183,8 @@ const getPlaylistResponse = (
 		if (
 			urlParams.videoType === "segments-master" ||
 			urlParams.videoType === "segments-video" ||
-			urlParams.videoType === "segments-audio"
+			urlParams.videoType === "segments-audio" ||
+			urlParams.videoType === "segments-status"
 		) {
 			const segSource = new Video.SegmentsSource({
 				videoId: video.id,
@@ -179,18 +208,56 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.InternalServerError());
 			}
 
-			const manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
+			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			if (
+				manifest.version === 1 &&
+				manifest.is_complete &&
+				!manifest.audio_init_uploaded &&
+				manifest.audio_segments.length > 0
+			) {
+				const audioInitKey = segSource.getAudioInitKey();
+				const objects = yield* bucket.listObjects({
+					prefix: audioInitKey,
+					maxKeys: 1,
+				});
+				if (
+					objects.Contents?.some(
+						(object) => object.Key === audioInitKey && (object.Size ?? 0) > 0,
+					)
+				) {
+					manifest = { ...manifest, audio_init_uploaded: true };
+				}
+			}
+			const playbackState = getSegmentPlaybackState(manifest);
+			if (playbackState === "incomplete") {
+				return HttpServerResponse.empty({
+					status: 409,
+					headers: CACHE_CONTROL_HEADERS,
+				});
+			}
 			const requireComplete = Option.match(urlParams.requireComplete, {
 				onNone: () => false,
 				onSome: (value) => value === "1" || value === "true",
 			});
+			const hasVideoSegments =
+				manifest.video_init_uploaded && manifest.video_segments.length > 0;
+			if (urlParams.videoType === "segments-status") {
+				return HttpServerResponse.empty({
+					status:
+						hasVideoSegments && (!requireComplete || playbackState === "ready")
+							? 204
+							: 202,
+					headers: {
+						...CACHE_CONTROL_HEADERS,
+						"X-Cap-Recording-Complete": playbackState === "ready" ? "1" : "0",
+					},
+				});
+			}
 			if (requireComplete && !manifest.is_complete) {
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
-			const hasVideoSegments =
-				manifest.video_init_uploaded && manifest.video_segments.length > 0;
 
 			if (urlParams.videoType === "segments-master") {
 				if (!hasVideoSegments) {
@@ -240,13 +307,28 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
 
-			const initUrl = yield* bucket.getSignedObjectUrl(initKey);
+			const signedInitUrl = yield* bucket.getSignedObjectUrl(initKey);
+			const initUrl = resolveMobileWebResourceUrl(
+				signedInitUrl,
+				serverEnv().WEB_URL,
+				publicOrigin,
+			);
 			const segmentUrls = yield* Effect.all(
 				segments.map((seg) => {
 					const key = isVideo
 						? segSource.getVideoSegmentKey(seg.index)
 						: segSource.getAudioSegmentKey(seg.index);
-					return bucket.getSignedObjectUrl(key);
+					return bucket
+						.getSignedObjectUrl(key)
+						.pipe(
+							Effect.map((url) =>
+								resolveMobileWebResourceUrl(
+									url,
+									serverEnv().WEB_URL,
+									publicOrigin,
+								),
+							),
+						);
 				}),
 				{ concurrency: "unbounded" },
 			);

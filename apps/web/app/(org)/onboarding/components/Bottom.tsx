@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { startTransition } from "react";
 import { toast } from "sonner";
+import { resetUser } from "@/app/utils/analytics";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { consumeOnboardingNextPath } from "../../onboarding-next";
 
 export const Bottom = () => {
 	const router = useRouter();
@@ -20,7 +22,7 @@ export const Bottom = () => {
 			}),
 		onSuccess: () => {
 			startTransition(() => {
-				router.push("/dashboard/caps");
+				router.push(consumeOnboardingNextPath("/dashboard/caps"));
 				router.refresh();
 			});
 		},
@@ -35,7 +37,10 @@ export const Bottom = () => {
 				className="w-fit"
 				variant="outline"
 				size="sm"
-				onClick={() => signOut()}
+				onClick={() => {
+					resetUser();
+					signOut();
+				}}
 			>
 				Sign out
 			</Button>

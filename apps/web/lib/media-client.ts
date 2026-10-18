@@ -189,16 +189,25 @@ export interface MediaServerProbeResult {
 	fileSize: number;
 }
 
+export interface ProbeVideoViaMediaServerOptions {
+	maxRetries?: number;
+}
+
 export async function probeVideoViaMediaServer(
 	videoUrl: string,
+	options: ProbeVideoViaMediaServerOptions = {},
 ): Promise<MediaServerProbeResult> {
 	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
 
-	const response = await fetchWithRetry(`${mediaServerUrl}/video/probe`, {
-		method: "POST",
-		headers: getMediaServerHeaders(mediaServerSecret),
-		body: JSON.stringify({ videoUrl }),
-	});
+	const response = await fetchWithRetry(
+		`${mediaServerUrl}/video/probe`,
+		{
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({ videoUrl }),
+		},
+		{ maxRetries: options.maxRetries },
+	);
 
 	if (!response.ok) {
 		let errorData: MediaServerError;

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>cap</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>icon.icns</string>
+			<key>CFBundleTypeName</key>
+			<string>Cap Recording</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+			<key>LSTypeIsPackage</key>
+			<true/>
+		</dict>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Cap uses your camera to record you in your Caps</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cap uses your microphone to record you in your Caps</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Cap captures your screen as part of recording your Caps</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
+</dict>
+</plist>

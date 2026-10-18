@@ -1,12 +1,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
+import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
@@ -82,25 +82,11 @@ export async function POST(request: NextRequest) {
 		});
 
 		if (checkoutSession.url) {
-			try {
-				const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
-					host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
-				});
-
-				ph.capture({
-					distinctId: user.id,
-					event: "checkout_started",
-					properties: {
-						price_id: priceId,
-						quantity: quantity,
-						platform: "web",
-					},
-				});
-
-				await ph.shutdown();
-			} catch (e) {
-				console.error("Failed to capture checkout_started in PostHog", e);
-			}
+			trackServerEvent(user.id, "checkout_started", {
+				price_id: priceId,
+				quantity: quantity,
+				platform: "web",
+			});
 
 			return Response.json({ url: checkoutSession.url }, { status: 200 });
 		}

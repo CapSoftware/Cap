@@ -1,8 +1,22 @@
+mod account;
+mod agent_auth;
+mod agent_client;
+mod agents;
+mod analytics;
+mod atomic;
 mod automation;
+mod caps;
+mod confirmation;
 mod credentials;
+mod developers;
 mod doctor;
 mod export;
 mod guide;
+mod jobs;
+mod library;
+mod mcp;
+mod notifications;
+mod organizations;
 mod project;
 mod record;
 mod recordings;
@@ -112,11 +126,11 @@ OUTPUT
 AUTH
   `cap upload` authenticates automatically by reusing the login Cap Desktop already stored — no
   key to copy when you are signed in there. Check with `cap auth status --json`. For headless/CI,
-  set CAP_API_KEY to a Cap auth key (Settings) to override.
+  create a CLI API key in the Cap dashboard under Settings -> Account and set it as CAP_API_KEY.
 
 ENVIRONMENT
-  CAP_API_KEY         Overrides auth for `cap upload` (Cap auth key from Settings); optional when
-                      signed into Cap Desktop.
+  CAP_API_KEY         Overrides auth (CLI API key from the Cap dashboard, Settings -> Account);
+                      optional when signed into Cap Desktop.
   CAP_SERVER_URL      Cap server base URL; defaults to Cap Desktop's server, else https://cap.so.
   CAP_NO_MODIFY_PATH  Set to skip editing shell profiles during `cap desktop install-cli`.
   CAP_DESKTOP_FORCE_INSTALL
@@ -193,6 +207,26 @@ enum Commands {
     Update(FormatArgs),
     /// Show how `cap upload` will authenticate (env key or Cap Desktop login)
     Auth(AuthArgs),
+    /// Read and manage Caps in your personal library
+    Caps(caps::CapsArgs),
+    /// Read or update the authenticated Cap account
+    Account(account::AccountArgs),
+    /// Inspect Cap organizations, members, billing, and storage connections
+    Organizations(organizations::OrganizationsArgs),
+    /// Manage folders, spaces, and space membership
+    Library(library::LibraryArgs),
+    /// Read and manage account notifications
+    Notifications(notifications::NotificationsArgs),
+    /// Read organization, space, or Cap analytics
+    Analytics(analytics::AnalyticsArgs),
+    /// Inspect developer apps, domains, usage, and credits
+    Developers(developers::DevelopersArgs),
+    /// Inspect or wait for asynchronous Cap operations
+    Jobs(jobs::JobsArgs),
+    /// Run Cap's local Model Context Protocol server
+    Mcp(mcp::McpArgs),
+    /// Install Cap integrations for one explicitly selected agent
+    Agents(agents::AgentsArgs),
     /// List available capture targets and devices
     Targets(TargetsArgs),
     /// Report CLI environment and capture-readiness diagnostics
@@ -388,6 +422,10 @@ struct AuthArgs {
 enum AuthCommands {
     /// Report whether a credential is available and where it comes from (never prints the secret)
     Status(FormatArgs),
+    /// Authorize Cap CLI in the browser using PKCE
+    Login(agent_auth::LoginArgs),
+    /// Revoke and remove the Cap CLI credential
+    Logout(agent_auth::LogoutArgs),
 }
 
 #[derive(Args)]
@@ -409,6 +447,21 @@ struct CompletionsArgs {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; configure it before creating the CLI runtime.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+
+        let _ = unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) };
+    }
+
     let cli = Cli::parse();
     let level_filter = cli.log_level.level_filter();
 
@@ -430,6 +483,30 @@ fn main() {
                 .with_writer(stderr),
         )
         .init();
+
+    let _diagnostic_guard = if std::env::var_os("CAP_DIAGNOSTIC_PARENT").is_some() {
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+        let queue_errors = writer.error_counter();
+        cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+            queue_errors.dropped_lines()
+        });
+        cap_utils::operation_diagnostics::install_sink(
+            cap_utils::operation_diagnostics::AppInfo {
+                flavor: "export_worker",
+                version: env!("CARGO_PKG_VERSION"),
+                source_revision: option_env!("CAP_BUILD_REVISION"),
+                debug_build: cfg!(debug_assertions),
+                source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+            },
+            move |bytes| {
+                use std::io::Write;
+                let _ = writer.clone().write_all(bytes);
+            },
+        );
+        Some(guard)
+    } else {
+        None
+    };
 
     let exit_after_success = cli.exit_after_success();
 
@@ -463,7 +540,11 @@ fn main() {
                 .build()
                 .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
 
+            if _diagnostic_guard.is_some() {
+                drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
+            }
             let result = runtime.block_on(run(cli));
+            drop(_diagnostic_guard);
             if exit_after_success && result.is_ok() {
                 // Successful export/preview workers have already written their output by here.
                 // Exiting directly avoids Windows GPU/MediaFoundation teardown crashes in the
@@ -555,9 +636,21 @@ async fn run(cli: Cli) -> Result<(), String> {
         Commands::Auth(args) => match args.command {
             AuthCommands::Status(args) => {
                 let format = resolve_format(json, args.format);
-                finish_json(format, credentials::status(format))
+                finish_json(format, credentials::status(format).await)
             }
+            AuthCommands::Login(args) => args.run(json).await,
+            AuthCommands::Logout(args) => args.run(json).await,
         },
+        Commands::Caps(args) => args.run(json).await,
+        Commands::Account(args) => args.run(json).await,
+        Commands::Organizations(args) => args.run(json).await,
+        Commands::Library(args) => args.run(json).await,
+        Commands::Notifications(args) => args.run(json).await,
+        Commands::Analytics(args) => args.run(json).await,
+        Commands::Developers(args) => args.run(json).await,
+        Commands::Jobs(args) => args.run(json).await,
+        Commands::Mcp(args) => args.run().await,
+        Commands::Agents(args) => args.run(json),
         Commands::Targets(args) => args.run(json),
         Commands::Doctor(args) => doctor::run_doctor(resolve_format(json, args.format)).await,
         Commands::Version(args) => {

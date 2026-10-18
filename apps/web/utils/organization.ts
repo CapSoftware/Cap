@@ -40,8 +40,6 @@ export function selectProSeatProvider<T extends ProSeatProvider>({
 
 	return (
 		candidates.sort((a, b) => (b.inviteQuota ?? 1) - (a.inviteQuota ?? 1))[0] ??
-		owner ??
-		(actorCanManageProSeats ? actor : null) ??
 		null
 	);
 }

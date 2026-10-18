@@ -26,12 +26,27 @@ pub enum RecordingTargetMode {
 pub struct RecordingSettingsStore {
     pub target: Option<ScreenCaptureTarget>,
     pub mic_name: Option<String>,
+    #[serde(deserialize_with = "deserialize_camera_id")]
     pub camera_id: Option<DeviceOrModelID>,
     pub mode: Option<RecordingMode>,
     pub system_audio: bool,
     pub organization_id: Option<String>,
     pub camera_device_settings: HashMap<String, CameraDeviceSettings>,
     pub microphone_device_settings: HashMap<String, MicrophoneDeviceSettings>,
+}
+
+fn deserialize_camera_id<'de, D>(deserializer: D) -> Result<Option<DeviceOrModelID>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+    match serde_json::from_value(value) {
+        Ok(camera_id) => Ok(camera_id),
+        Err(error) => {
+            tracing::warn!(%error, "Ignoring invalid saved camera selection");
+            Ok(None)
+        }
+    }
 }
 
 impl RecordingSettingsStore {
@@ -41,7 +56,9 @@ impl RecordingSettingsStore {
         match app.store("store").map(|s| s.get(Self::KEY)) {
             Ok(Some(store)) => match serde_json::from_value(store) {
                 Ok(settings) => Ok(Some(settings)),
-                Err(e) => Err(format!("Failed to deserialize general settings store: {e}")),
+                Err(e) => Err(format!(
+                    "Failed to deserialize recording settings store: {e}"
+                )),
             },
             _ => Ok(None),
         }
@@ -93,4 +110,59 @@ pub fn set_recording_mode(app: AppHandle, mode: RecordingMode) -> Result<(), Str
     RecordingSettingsStore::set_mode(&app, mode)?;
     tray::update_tray_icon_for_mode(&app, mode);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RecordingSettingsStore;
+    use serde_json::json;
+
+    #[test]
+    fn invalid_camera_selection_preserves_other_recording_preferences() {
+        for camera_id in [
+            json!({"DeviceID": "camera-a", "ModelID": "046d:08e5"}),
+            json!({"ModelID": "missing-separator"}),
+            json!({"DeviceID": 123}),
+            json!({"unknown": "camera-a"}),
+            json!({}),
+            json!("camera-a"),
+        ] {
+            let mut saved = json!({
+                "target": {"variant": "cameraOnly"},
+                "micName": "Saved microphone",
+                "cameraId": camera_id,
+                "mode": "studio",
+                "systemAudio": true,
+                "organizationId": "saved-organization",
+                "cameraDeviceSettings": {
+                    "model:046d:08e5": {"width": 1280, "height": 720, "frameRate": 60.0}
+                },
+                "microphoneDeviceSettings": {
+                    "Saved microphone": {"sampleRate": 48000, "channels": 1}
+                }
+            });
+            let settings: RecordingSettingsStore = serde_json::from_value(saved.clone()).unwrap();
+            assert!(settings.camera_id.is_none());
+            saved["cameraId"] = serde_json::Value::Null;
+            assert_eq!(serde_json::to_value(settings).unwrap(), saved);
+        }
+    }
+
+    #[test]
+    fn valid_camera_variants_and_none_round_trip() {
+        for camera_id in [
+            json!({"DeviceID": "camera-a"}),
+            json!({"ModelID": "046d:08e5"}),
+            serde_json::Value::Null,
+        ] {
+            let settings: RecordingSettingsStore =
+                serde_json::from_value(json!({"cameraId": camera_id})).unwrap();
+            assert_eq!(
+                serde_json::to_value(settings).unwrap()["cameraId"],
+                camera_id
+            );
+        }
+        let settings: RecordingSettingsStore = serde_json::from_value(json!({})).unwrap();
+        assert!(settings.camera_id.is_none());
+    }
 }

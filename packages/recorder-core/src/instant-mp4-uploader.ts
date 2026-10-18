@@ -48,6 +48,14 @@ export type RecorderApiOptions = {
 	 * count).
 	 */
 	requestTimeoutMs?: number;
+	/**
+	 * Base path for the multipart control-plane routes. Defaults to
+	 * "/api/upload/multipart"; comment-media uploads point this at
+	 * "/api/upload/comment-media", whose routes accept the same bodies.
+	 */
+	multipartBasePath?: string;
+	/** Merged into every control-plane JSON body (e.g. a capability token). */
+	extraBody?: Record<string, unknown>;
 };
 
 interface UploadedPartPayload {
@@ -67,12 +75,23 @@ interface MultipartCompletePayload {
 class HttpRequestError extends Error {
 	readonly status: number;
 	readonly url: string;
+	readonly code?: string;
 
 	constructor(url: string, status: number, message: string) {
 		super(`Request to ${url} failed: ${status} ${message}`);
 		this.name = "HttpRequestError";
 		this.status = status;
 		this.url = url;
+		try {
+			const body: unknown = JSON.parse(message);
+			if (
+				body &&
+				typeof body === "object" &&
+				"code" in body &&
+				typeof body.code === "string"
+			)
+				this.code = body.code;
+		} catch {}
 	}
 }
 
@@ -117,7 +136,7 @@ const postJson = async <TResponse>(
 		method: "POST",
 		headers,
 		credentials: api.credentials ?? (api.authToken ? "omit" : "same-origin"),
-		body: JSON.stringify(body),
+		body: JSON.stringify({ ...body, ...api.extraBody }),
 		signal: AbortSignal.timeout(api.requestTimeoutMs ?? defaultTimeoutMs),
 	});
 
@@ -131,6 +150,9 @@ const postJson = async <TResponse>(
 
 const resolveApiUrl = (url: string, api: RecorderApiOptions) =>
 	api.baseUrl ? new URL(url, api.baseUrl).toString() : url;
+
+const multipartPath = (api: RecorderApiOptions | undefined, route: string) =>
+	`${api?.multipartBasePath ?? "/api/upload/multipart"}/${route}`;
 
 const normalizeMultipartContentType = (mimeType: string) => {
 	const normalized = mimeType.split(";")[0]?.trim();
@@ -152,7 +174,7 @@ export const initiateMultipartUpload = async ({
 		uploadId: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/initiate",
+		multipartPath(api, "initiate"),
 		{
 			videoId,
 			contentType: normalizeMultipartContentType(contentType),
@@ -182,7 +204,7 @@ const presignMultipartPart = async (
 		presignedUrl: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/presign-part",
+		multipartPath(api, "presign-part"),
 		{
 			videoId,
 			uploadId,
@@ -223,7 +245,7 @@ const completeMultipartUpload = async (
 				success: boolean;
 				processingStarted?: boolean;
 			}>(
-				"/api/upload/multipart/complete",
+				multipartPath(api, "complete"),
 				{
 					videoId,
 					uploadId,
@@ -237,6 +259,10 @@ const completeMultipartUpload = async (
 				api,
 				COMPLETE_REQUEST_TIMEOUT_MS,
 			);
+
+			if (response.success !== true) {
+				throw new Error("Multipart completion was not confirmed");
+			}
 
 			return {
 				processingStarted: response.processingStarted !== false,
@@ -276,7 +302,7 @@ const abortMultipartUpload = async (
 	api: RecorderApiOptions,
 ) => {
 	await postJson<{ success: boolean }>(
-		"/api/upload/multipart/abort",
+		multipartPath(api, "abort"),
 		{
 			videoId,
 			uploadId,
@@ -325,6 +351,7 @@ export class InstantRecordingUploader {
 	>();
 	private readonly stallTimeouts = new Set<number>();
 	private processingStarted = true;
+	private completionUncertain = false;
 	private queuedBytes = 0;
 	private readonly partOffsets = new Map<number, number>();
 
@@ -456,35 +483,31 @@ export class InstantRecordingUploader {
 		this.bufferedChunks.push(blob);
 		this.bufferedBytes += blob.size;
 
+		if (
+			this.pendingUploadBytes + this.bufferedBytes >
+			MAX_PENDING_UPLOAD_BYTES
+		) {
+			const error = this.markFatalError(
+				new Error("Upload could not keep up with recording"),
+			);
+			this.onOverflow?.(error);
+			throw error;
+		}
+
 		if (this.bufferedBytes >= MIN_PART_SIZE_BYTES) {
 			this.flushBuffer();
 		}
 	}
 
 	private flushBuffer(force = false) {
-		if (this.provider === "googleDrive") {
-			this.flushDriveBuffer(force);
-			return;
-		}
-
-		if (this.bufferedBytes === 0) return;
-		if (!force && this.bufferedBytes < MIN_PART_SIZE_BYTES) return;
-
-		const chunk = new Blob(this.bufferedChunks, { type: this.mimeType });
-		this.bufferedChunks = [];
-		this.bufferedBytes = 0;
-
-		this.enqueueUpload(chunk);
-	}
-
-	private flushDriveBuffer(force = false) {
+		const targetPartSize =
+			this.provider === "googleDrive"
+				? DRIVE_PART_SIZE_BYTES
+				: MIN_PART_SIZE_BYTES;
 		while (this.bufferedBytes > 0) {
-			if (!force && this.bufferedBytes < DRIVE_PART_SIZE_BYTES) return;
+			if (!force && this.bufferedBytes < targetPartSize) return;
 
-			const partSize =
-				force && this.bufferedBytes <= DRIVE_PART_SIZE_BYTES
-					? this.bufferedBytes
-					: DRIVE_PART_SIZE_BYTES;
+			const partSize = Math.min(this.bufferedBytes, targetPartSize);
 			const { part, remainingChunks, remainingBytes } =
 				this.takeBufferedPart(partSize);
 
@@ -492,7 +515,7 @@ export class InstantRecordingUploader {
 			this.bufferedBytes = remainingBytes;
 			this.enqueueUpload(part);
 
-			if (partSize < DRIVE_PART_SIZE_BYTES) return;
+			if (partSize < targetPartSize) return;
 		}
 	}
 
@@ -655,7 +678,12 @@ export class InstantRecordingUploader {
 					throw new CancelledUploadError();
 				}
 
-				if (attempt >= MAX_PART_UPLOAD_ATTEMPTS) {
+				if (
+					attempt >= MAX_PART_UPLOAD_ATTEMPTS ||
+					(error instanceof HttpRequestError &&
+						error.status === 404 &&
+						error.code === "VIDEO_NOT_FOUND")
+				) {
 					this.updateChunkState(partNumber, { status: "error" });
 					this.pendingUploadBytes = Math.max(
 						0,
@@ -945,6 +973,7 @@ export class InstantRecordingUploader {
 	}
 
 	async finalize(options: FinalizeOptions) {
+		if (this.cancelled) throw new CancelledUploadError();
 		if (this.finished) return;
 		if (this.fatalError) {
 			throw this.fatalError;
@@ -984,11 +1013,26 @@ export class InstantRecordingUploader {
 		if (this.parts.length === 0) {
 			throw new Error("No uploaded parts available for completion");
 		}
+		const sortedParts = [...this.parts].sort(
+			(left, right) => left.partNumber - right.partNumber,
+		);
+		const uploadedSize = sortedParts.reduce(
+			(total, part) => total + part.size,
+			0,
+		);
+		if (
+			uploadedSize !== finalTotalBytes ||
+			!sortedParts.every((part, index) => part.partNumber === index + 1)
+		) {
+			throw new Error(
+				"The uploaded recording is incomplete. Save the local recording and retry the upload.",
+			);
+		}
 
 		const completionResult = await completeMultipartUpload(
 			this.videoId,
 			this.uploadId,
-			[...this.parts].sort((left, right) => left.partNumber - right.partNumber),
+			sortedParts,
 			{
 				durationSeconds: options.durationSeconds,
 				width: options.width,
@@ -998,7 +1042,16 @@ export class InstantRecordingUploader {
 			},
 			this.api,
 			() => this.cancelled,
-		);
+		).catch((error: unknown) => {
+			if (
+				this.completionUncertain ||
+				error instanceof MultipartCompletionUncertainError
+			) {
+				this.completionUncertain = true;
+				throw new MultipartCompletionUncertainError(error);
+			}
+			throw error;
+		});
 		this.processingStarted = completionResult.processingStarted;
 
 		this.finished = true;
@@ -1009,14 +1062,13 @@ export class InstantRecordingUploader {
 			progress: 100,
 			thumbnailUrl: undefined,
 		});
-		await this.sendProgressUpdate(this.uploadedBytes, this.uploadedBytes);
 	}
 
 	getProcessingStarted() {
 		return this.processingStarted;
 	}
 
-	async cancel() {
+	suspend() {
 		if (this.finished) return;
 		this.cancelled = true;
 		this.finished = true;
@@ -1027,6 +1079,11 @@ export class InstantRecordingUploader {
 		this.clearStallTimeouts();
 		this.abortActiveRequests();
 		this.clearChunkStates();
+	}
+
+	async cancel() {
+		if (this.finished) return;
+		this.suspend();
 		const pendingUpload = this.waitForPendingUploads().catch(() => {});
 		try {
 			await abortMultipartUpload(

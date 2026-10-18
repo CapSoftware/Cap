@@ -169,27 +169,29 @@ module.exports = (__app, _options) => {
 							opacity: "0",
 						},
 					},
-					fadeIn: {
+					// Prefixed on purpose. goober (the CSS-in-JS runtime behind
+					// react-hot-toast) injects its own `@keyframes fadeIn` with a
+					// 10px translateY in it, from a <style> tag appended to head
+					// after our stylesheets — so the bare name resolved to its
+					// version and every `animate-fadeIn` in the app quietly
+					// travelled 10px. Worse, animating `transform` overrides an
+					// element's inline transform for the duration, which is what
+					// made centred dialogs render off-centre and then snap into
+					// place when the animation ended. The class names below are
+					// unchanged; only the keyframes they point at are now ours.
+					capFadeIn: {
 						from: { opacity: 0 },
 						to: { opacity: 1 },
 					},
-					fadeOut: {
+					capFadeOut: {
 						from: { opacity: 1 },
 						to: { opacity: 0 },
-					},
-					contentShow: {
-						from: {
-							opacity: 0,
-							transform: "translate(-50%, -48%) scale(0.96)",
-						},
-						to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
 					},
 				},
 				animation: {
 					flyEmoji: "flyEmoji 1.5s forwards",
-					fadeIn: "fadeIn 200ms ease-out",
-					fadeOut: "fadeOut 150ms ease-in",
-					contentShow: "contentShow 200ms ease-out",
+					fadeIn: "capFadeIn 200ms ease-out",
+					fadeOut: "capFadeOut 150ms ease-in",
 				},
 			},
 		},

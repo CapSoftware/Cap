@@ -4,6 +4,7 @@ import {
 	extractAudioViaMediaServer,
 	fetchConvertedVideoViaMediaServer,
 	isMediaServerConfigured,
+	probeVideoViaMediaServer,
 } from "@/lib/media-client";
 
 vi.mock("@cap/env", () => ({
@@ -221,6 +222,56 @@ describe("media-client", () => {
 			await expect(
 				extractAudioViaMediaServer("https://example.com/video.mp4"),
 			).rejects.toThrow("FFmpeg process exited with code 1");
+		});
+	});
+
+	describe("probeVideoViaMediaServer", () => {
+		beforeEach(async () => {
+			const { serverEnv } = await import("@cap/env");
+			vi.mocked(serverEnv).mockReturnValue(
+				mediaServerEnv as ReturnType<typeof serverEnv>,
+			);
+		});
+
+		it("returns authoritative media metadata", async () => {
+			const metadata = {
+				duration: 42,
+				width: 1920,
+				height: 1080,
+				fps: 30,
+				videoCodec: "h264",
+				audioCodec: "aac",
+				audioChannels: 2,
+				sampleRate: 48_000,
+				bitrate: 1_000_000,
+				fileSize: 5_000_000,
+			};
+			mockFetch.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ metadata }),
+			});
+
+			await expect(
+				probeVideoViaMediaServer("https://example.com/video.mp4"),
+			).resolves.toEqual(metadata);
+		});
+
+		it("can disable request retries for synchronous entitlement checks", async () => {
+			mockFetch.mockResolvedValue({
+				ok: false,
+				status: 503,
+				json: async () => ({
+					error: "Server is busy",
+					code: "SERVER_BUSY",
+				}),
+			});
+
+			await expect(
+				probeVideoViaMediaServer("https://example.com/video.mp4", {
+					maxRetries: 0,
+				}),
+			).rejects.toThrow("Server is busy");
+			expect(mockFetch).toHaveBeenCalledTimes(1);
 		});
 	});
 

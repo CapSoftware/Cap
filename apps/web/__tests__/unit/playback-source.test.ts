@@ -101,6 +101,195 @@ describe("canPlayRawContentType", () => {
 });
 
 describe("resolvePlaybackSource", () => {
+	it("uses the page's signed URL without a playlist request or changing its signature", async () => {
+		const initialUrl =
+			"https://bucket.s3.amazonaws.com/result.mp4?signature=abc";
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+			createResponse(initialUrl, {
+				status: 206,
+				redirected: false,
+			}),
+		);
+		expect(
+			await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				initialUrl,
+				enableCrossOrigin: true,
+				fetchImpl,
+				now: () => 123,
+			}),
+		).toEqual({ url: initialUrl, type: "mp4", supportsCrossOrigin: true });
+		expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(initialUrl, {
+			headers: { range: "bytes=0-0" },
+		});
+	});
+
+	it.each([401, 403, 404, 500])(
+		"refreshes a failed initial URL through the authorized playlist route (HTTP %s)",
+		async (status) => {
+			const fetchImpl = vi
+				.fn<typeof fetch>()
+				.mockResolvedValueOnce(new Response(null, { status }))
+				.mockResolvedValueOnce(
+					createResponse("https://media.example.com/fresh.mp4", {
+						status: 206,
+						redirected: true,
+					}),
+				);
+			expect(
+				await resolvePlaybackSource({
+					videoSrc: "/api/playlist?videoType=mp4",
+					initialUrl: "https://media.example.com/expired.mp4",
+					fetchImpl,
+					now: () => 123,
+				}),
+			).toMatchObject({
+				url: "https://media.example.com/fresh.mp4",
+				type: "mp4",
+			});
+			expect(fetchImpl).toHaveBeenCalledTimes(2);
+			expect(fetchImpl).toHaveBeenLastCalledWith(
+				"/api/playlist?videoType=mp4&_t=123",
+				{ headers: { range: "bytes=0-0" } },
+			);
+		},
+	);
+
+	it("uses native playback without repeating a CORS-blocked signed probe", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockRejectedValue(new TypeError("CORS"));
+		expect(
+			await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				initialUrl: "https://media.example.com/result.mp4",
+				fetchImpl,
+				enableCrossOrigin: true,
+				now: () => 123,
+			}),
+		).toEqual({
+			url: "/api/playlist?videoType=mp4&_t=123",
+			type: "mp4",
+			supportsCrossOrigin: false,
+		});
+		expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
+			"https://media.example.com/result.mp4",
+			{ headers: { range: "bytes=0-0" } },
+		);
+	});
+
+	it("preserves the raw fallback after the initial and refreshed MP4 are missing", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(new Response(null, { status: 404 }))
+			.mockResolvedValueOnce(new Response(null, { status: 404 }))
+			.mockResolvedValueOnce(
+				createResponse("https://media.example.com/raw.webm", {
+					status: 206,
+					headers: { "content-type": "video/webm" },
+					redirected: true,
+				}),
+			);
+		expect(
+			await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				initialUrl: "https://media.example.com/result.mp4",
+				rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+				fetchImpl,
+				createVideoElement: () => ({ canPlayType: () => "probably" }),
+			}),
+		).toMatchObject({ type: "raw", url: "https://media.example.com/raw.webm" });
+	});
+
+	it("does not retry the initial MP4 when switching to raw playback", async () => {
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				createResponse("https://media.example.com/raw.mp4", { status: 206 }),
+			);
+		expect(
+			await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				initialUrl: "https://media.example.com/result.mp4",
+				rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+				preferredSource: "raw",
+				fetchImpl,
+				now: () => 123,
+			}),
+		).toMatchObject({ type: "raw" });
+		expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
+			"/api/playlist?videoType=raw-preview&_t=123",
+			{ headers: { range: "bytes=0-0" } },
+		);
+	});
+
+	it.each([200, 206, 404])(
+		"closes the probe body after reading HTTP %s headers",
+		async (status) => {
+			const cancel = vi.fn();
+			const fetchImpl = vi
+				.fn<typeof fetch>()
+				.mockResolvedValue(
+					new Response(new ReadableStream({ cancel }), { status }),
+				);
+			const result = await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				fetchImpl,
+			});
+			expect(cancel).toHaveBeenCalledTimes(1);
+			expect(fetchImpl).toHaveBeenCalledTimes(1);
+			if (status === 404) expect(result).toBeNull();
+			else expect(result?.type).toBe("mp4");
+		},
+	);
+
+	it("keeps a playable source when closing its probe body fails", async () => {
+		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+			new Response(
+				new ReadableStream({
+					cancel: () => Promise.reject(new Error("Connection closed")),
+				}),
+				{ status: 206 },
+			),
+		);
+		const result = await resolvePlaybackSource({
+			videoSrc: "https://v.cap.so/result.mp4",
+			fetchImpl,
+		});
+		expect(result?.type).toBe("mp4");
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+	});
+
+	it("closes both probes while retaining the raw preview content type", async () => {
+		const cancelMp4 = vi.fn();
+		const cancelRaw = vi.fn();
+		const canPlayType = vi.fn().mockReturnValue("probably");
+		const fetchImpl = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				new Response(new ReadableStream({ cancel: cancelMp4 }), {
+					status: 404,
+				}),
+			)
+			.mockResolvedValueOnce(
+				new Response(new ReadableStream({ cancel: cancelRaw }), {
+					status: 206,
+					headers: { "Content-Type": "video/webm;codecs=vp9,opus" },
+				}),
+			);
+		const result = await resolvePlaybackSource({
+			videoSrc: "/api/playlist?videoType=mp4",
+			rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+			fetchImpl,
+			createVideoElement: () => ({ canPlayType }),
+		});
+		expect(result?.type).toBe("raw");
+		expect(cancelMp4).toHaveBeenCalledTimes(1);
+		expect(cancelRaw).toHaveBeenCalledTimes(1);
+		expect(canPlayType).toHaveBeenCalledWith("video/webm;codecs=vp9,opus");
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+	});
+
 	it("returns the MP4 source immediately when it is available", async () => {
 		const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
 			createResponse("https://bucket.s3.amazonaws.com/result.mp4", {
@@ -207,6 +396,38 @@ describe("resolvePlaybackSource", () => {
 			supportsCrossOrigin: false,
 		});
 	});
+
+	it.each([206, 404])(
+		"rechecks the processed MP4 once when a preferred raw upload is gone (HTTP %s)",
+		async (status) => {
+			const fetchImpl = vi
+				.fn<typeof fetch>()
+				.mockResolvedValueOnce(
+					createResponse("/raw-upload.webm", { status: 404 }),
+				)
+				.mockResolvedValueOnce(
+					createResponse("https://v.cap.so/result.mp4", {
+						status,
+						redirected: true,
+					}),
+				);
+			const result = await resolvePlaybackSource({
+				videoSrc: "/api/playlist?videoType=mp4",
+				rawFallbackSrc: "/api/playlist?videoType=raw-preview",
+				preferredSource: "raw",
+				fetchImpl,
+				now: () => 275,
+			});
+			expect(fetchImpl).toHaveBeenCalledTimes(2);
+			expect(fetchImpl).toHaveBeenNthCalledWith(
+				2,
+				"/api/playlist?videoType=mp4&_t=275",
+				{ headers: { range: "bytes=0-0" } },
+			);
+			if (status === 206) expect(result?.type).toBe("mp4");
+			else expect(result).toBeNull();
+		},
+	);
 
 	it("rejects raw webm previews when the browser cannot play them", async () => {
 		const fetchImpl = vi

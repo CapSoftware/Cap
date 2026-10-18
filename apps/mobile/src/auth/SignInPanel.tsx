@@ -1,3 +1,4 @@
+import * as AppleAuthentication from "expo-apple-authentication";
 import { SymbolView } from "expo-symbols";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect, useRef, useState } from "react";
@@ -20,7 +21,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const emailCodeCooldownMs = 30_000;
 const codeSlots = ["code-0", "code-1", "code-2", "code-3", "code-4", "code-5"];
 type FocusedInput = "code" | "email" | "sso" | null;
-type LoadingKind = "email" | "code" | "google" | "sso";
+type LoadingKind = "apple" | "email" | "code" | "google" | "sso";
 type SignInError = {
 	message: string;
 	source: LoadingKind | "resend";
@@ -99,6 +100,8 @@ export function SignInPanel({
 	const [focusedInput, setFocusedInput] = useState<FocusedInput>(null);
 	const [loading, setLoading] = useState<LoadingKind | null>(null);
 	const [error, setError] = useState<SignInError | null>(null);
+	const [appleAuthenticationAvailable, setAppleAuthenticationAvailable] =
+		useState(false);
 
 	const normalizedEmail = email.trim().toLowerCase();
 	const normalizedOrganizationId = organizationId.trim();
@@ -119,14 +122,18 @@ export function SignInPanel({
 	const canStartSso = isSsoReady && loading === null;
 	const isCodeStep = codeSent && !showSso;
 	const showBackButton = showSso || isCodeStep;
+	const showApple =
+		auth.authConfig.appleAuthAvailable && appleAuthenticationAvailable;
 	const showGoogle = auth.authConfig.googleAuthAvailable;
 	const showSaml = auth.authConfig.workosAuthAvailable;
-	const showProviderOptions = showGoogle || showSaml;
+	const showProviderOptions = showApple || showGoogle || showSaml;
 	const errorMessage = error?.message ?? null;
 	const emailInputHasError =
 		error?.source === "email" && !showSso && !isCodeStep;
 	const ssoInputHasError = error?.source === "sso" && showSso;
 	const codeEntryHasError = error?.source === "code" && isCodeStep;
+	const appleActionHasError =
+		error?.source === "apple" && !showSso && !isCodeStep;
 	const googleActionHasError =
 		error?.source === "google" && !showSso && !isCodeStep;
 	const ssoActionHasError = error?.source === "sso" && showSso;
@@ -161,11 +168,13 @@ export function SignInPanel({
 			? "Sending verification code"
 			: loading === "code"
 				? "Verifying code"
-				: loading === "google"
-					? "Starting Google sign in"
-					: loading === "sso"
-						? "Starting SAML SSO sign in"
-						: null;
+				: loading === "apple"
+					? "Starting Apple sign in"
+					: loading === "google"
+						? "Starting Google sign in"
+						: loading === "sso"
+							? "Starting SAML SSO sign in"
+							: null;
 	const activeSignInAccessibilityValue = activeSignInAccessibilityText
 		? { text: activeSignInAccessibilityText }
 		: undefined;
@@ -185,6 +194,14 @@ export function SignInPanel({
 			: isCodeStep
 				? { text: `${code.length} of 6 digits entered` }
 				: undefined;
+	const appleButtonAccessibilityValue =
+		loading === "apple"
+			? activeSignInAccessibilityValue
+			: appleActionHasError && errorMessage
+				? { text: errorMessage }
+				: loading !== null
+					? activeSignInAccessibilityValue
+					: undefined;
 	const googleButtonAccessibilityValue =
 		loading === "google"
 			? activeSignInAccessibilityValue
@@ -251,6 +268,14 @@ export function SignInPanel({
 				: !isCodeReady
 					? "Enter the 6-digit code to continue"
 					: "Verifies the 6-digit code";
+	const appleButtonHint =
+		loading === "apple"
+			? "Apple sign in is starting"
+			: loading !== null
+				? "Sign in is in progress"
+				: appleActionHasError && errorMessage
+					? errorMessage
+					: "Starts Apple sign in";
 	const googleButtonHint =
 		loading === "google"
 			? "Google sign in is starting"
@@ -327,6 +352,27 @@ export function SignInPanel({
 		const interval = setInterval(() => setNowMs(Date.now()), 1000);
 		return () => clearInterval(interval);
 	}, [isCodeRequestCoolingDown]);
+
+	useEffect(() => {
+		let active = true;
+		if (!auth.authConfig.appleAuthAvailable) {
+			setAppleAuthenticationAvailable(false);
+			return () => {
+				active = false;
+			};
+		}
+		void AppleAuthentication.isAvailableAsync().then(
+			(available) => {
+				if (active) setAppleAuthenticationAvailable(available);
+			},
+			() => {
+				if (active) setAppleAuthenticationAvailable(false);
+			},
+		);
+		return () => {
+			active = false;
+		};
+	}, [auth.authConfig.appleAuthAvailable]);
 
 	const goBack = () => {
 		if (isAuthBusy()) return;
@@ -421,6 +467,24 @@ export function SignInPanel({
 	const openWebPathIfIdle = (path: string) => {
 		if (isAuthBusy()) return;
 		openWebPath(path);
+	};
+
+	const signInWithApple = async () => {
+		if (!beginLoading("apple")) return;
+		setError(null);
+		try {
+			await auth.signInWithApple();
+		} catch (appleError) {
+			setError({
+				message: getProviderErrorMessage(
+					appleError,
+					"Unable to start Apple sign in.",
+				),
+				source: "apple",
+			});
+		} finally {
+			endLoading();
+		}
 	};
 
 	const signInWithGoogle = async () => {
@@ -740,6 +804,36 @@ export function SignInPanel({
 										<Text style={styles.dividerText}>OR</Text>
 										<View style={styles.divider} />
 									</View>
+									{showApple ? (
+										<View
+											pointerEvents={loading === null ? "auto" : "none"}
+											style={[
+												styles.appleButtonContainer,
+												loading !== null && styles.appleButtonDisabled,
+											]}
+										>
+											<AppleAuthentication.AppleAuthenticationButton
+												accessibilityLabel="Sign in with Apple"
+												accessibilityHint={appleButtonHint}
+												accessibilityState={{
+													busy: loading === "apple",
+													disabled: loading !== null,
+												}}
+												accessibilityValue={appleButtonAccessibilityValue}
+												buttonType={
+													AppleAuthentication.AppleAuthenticationButtonType
+														.SIGN_IN
+												}
+												buttonStyle={
+													AppleAuthentication.AppleAuthenticationButtonStyle
+														.BLACK
+												}
+												cornerRadius={radius.md}
+												onPress={signInWithApple}
+												style={styles.appleButton}
+											/>
+										</View>
+									) : null}
 									{showGoogle ? (
 										<ActionButton
 											label={googleButtonLabel}
@@ -886,6 +980,16 @@ const styles = StyleSheet.create({
 	},
 	formStack: {
 		gap: 12,
+	},
+	appleButtonContainer: {
+		width: "100%",
+	},
+	appleButtonDisabled: {
+		opacity: 0.6,
+	},
+	appleButton: {
+		width: "100%",
+		height: 44,
 	},
 	input: {
 		minHeight: 44,

@@ -4,7 +4,7 @@
 	"short_name": "__MSG_extensionShortName__",
 	"description": "__MSG_extensionDescription__",
 	"default_locale": "en",
-	"version": "1.0.2",
+	"version": "1.0.4",
 	"homepage_url": "https://cap.so",
 	"minimum_chrome_version": "116",
 	"icons": {

@@ -296,7 +296,12 @@ export type OffscreenRequest =
 	| AcknowledgeErrorRequest
 	| RetryUploadRequest
 	| EnumerateDevicesRequest
-	| ProbeMicrophoneRequest;
+	| ProbeMicrophoneRequest
+	| {
+			target: "offscreen";
+			type: "toggle-microphone-mute";
+			muted: boolean;
+	  };
 
 export type OffscreenResponse =
 	| {
@@ -396,6 +401,11 @@ export type ServiceWorkerRequest =
 	  }
 	| {
 			target: "service-worker";
+			type: "toggle-microphone-mute";
+			muted: boolean;
+	  }
+	| {
+			target: "service-worker";
 			type: "connect-camera-preview";
 			sessionId: string;
 			settings: WebcamSettings;
@@ -459,6 +469,10 @@ export type ServiceWorkerRequest =
 			tabId?: number;
 			seconds: number;
 			durationMs: number;
+	  }
+	| {
+			target: "service-worker";
+			type: "hide-recording-start-overlays";
 	  }
 	| {
 			// The recorded tab's confirm overlay reports the user's decision back to
@@ -572,6 +586,7 @@ export type CameraPreviewEvent =
 	| { type: "frame"; frame: WebcamPreviewFrame }
 	| { type: "error"; reason: CameraPreviewErrorReason; message: string }
 	| { type: "pip-state"; active: boolean; supported: boolean }
+	| { type: "pointer-presence"; inside: boolean }
 	| { type: "drag-start"; clientX: number; clientY: number }
 	| { type: "drag-move"; clientX: number; clientY: number }
 	| { type: "drag-end" };

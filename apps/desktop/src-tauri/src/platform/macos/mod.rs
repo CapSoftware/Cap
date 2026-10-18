@@ -15,6 +15,122 @@ mod sc_shareable_content;
 
 pub use sc_shareable_content::*;
 
+fn constrain_position_to_visible_top(
+    position: tauri::PhysicalPosition<i32>,
+    monitor_top: i32,
+    scale_factor: f64,
+    visible_frame_top_inset: f64,
+    safe_area_top_inset: f64,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    let top_inset = visible_frame_top_inset.max(safe_area_top_inset).max(0.0);
+    let minimum_y = monitor_top.saturating_add((top_inset * scale_factor).round() as i32);
+
+    (position.y < minimum_y).then(|| tauri::PhysicalPosition::new(position.x, minimum_y))
+}
+
+pub fn constrain_main_window_to_visible_top(
+    window: &tauri::Window,
+    position: tauri::PhysicalPosition<i32>,
+) -> Option<tauri::PhysicalPosition<i32>> {
+    use objc2::{runtime::NSObjectProtocol, sel};
+    use objc2_app_kit::NSWindow;
+
+    let monitor = window.current_monitor().ok().flatten()?;
+    let ns_window = window.ns_window().ok()? as *const NSWindow;
+    let screen = unsafe { (*ns_window).screen() }?;
+    let frame = screen.frame();
+    let visible_frame = screen.visibleFrame();
+    let safe_area_top_inset = if screen.respondsToSelector(sel!(safeAreaInsets)) {
+        unsafe { screen.safeAreaInsets().top }
+    } else {
+        0.0
+    };
+    // Tauri runtime 2.8 omits this macOS top offset from Monitor::work_area().position.
+    let visible_frame_top_inset =
+        frame.origin.y + frame.size.height - visible_frame.origin.y - visible_frame.size.height;
+
+    constrain_position_to_visible_top(
+        position,
+        monitor.position().y,
+        monitor.scale_factor(),
+        visible_frame_top_inset,
+        safe_area_top_inset,
+    )
+}
+
+fn constrain_frame_to_visible_area(
+    frame: objc2_foundation::NSRect,
+    screen_frame: objc2_foundation::NSRect,
+    visible_frame: objc2_foundation::NSRect,
+    safe_area_top_inset: f64,
+) -> Option<objc2_foundation::NSRect> {
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let minimum_x = visible_frame.origin.x;
+    let minimum_y = visible_frame.origin.y;
+    let maximum_x = minimum_x + visible_frame.size.width;
+    let maximum_y = (minimum_y + visible_frame.size.height)
+        .min(screen_frame.origin.y + screen_frame.size.height - safe_area_top_inset.max(0.0));
+    if ![
+        frame.origin.x,
+        frame.origin.y,
+        frame.size.width,
+        frame.size.height,
+        minimum_x,
+        minimum_y,
+        maximum_x,
+        maximum_y,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || frame.size.width <= 0.0
+        || frame.size.height <= 0.0
+        || maximum_x <= minimum_x
+        || maximum_y <= minimum_y
+    {
+        return None;
+    }
+
+    let width = frame.size.width.min(maximum_x - minimum_x);
+    let height = frame.size.height.min(maximum_y - minimum_y);
+    let constrained = NSRect::new(
+        NSPoint::new(
+            frame.origin.x.clamp(minimum_x, maximum_x - width),
+            frame.origin.y.clamp(minimum_y, maximum_y - height),
+        ),
+        NSSize::new(width, height),
+    );
+    (constrained != frame).then_some(constrained)
+}
+
+pub fn constrain_main_window_to_visible_frame(window: &tauri::Window) -> Result<(), String> {
+    use objc2::{MainThreadMarker, runtime::NSObjectProtocol, sel};
+    use objc2_app_kit::{NSScreen, NSWindow};
+
+    let main_thread =
+        MainThreadMarker::new().ok_or("Main window bounds must be checked on the main thread")?;
+    let ns_window = window.ns_window().map_err(|error| error.to_string())? as *const NSWindow;
+    let ns_window = unsafe { ns_window.as_ref() }.ok_or("Main window is unavailable")?;
+    let screen = ns_window
+        .screen()
+        .or_else(|| NSScreen::mainScreen(main_thread))
+        .ok_or("Main window screen is unavailable")?;
+    let safe_area_top_inset = if screen.respondsToSelector(sel!(safeAreaInsets)) {
+        unsafe { screen.safeAreaInsets().top }
+    } else {
+        0.0
+    };
+    if let Some(frame) = constrain_frame_to_visible_area(
+        ns_window.frame(),
+        screen.frame(),
+        screen.visibleFrame(),
+        safe_area_top_inset,
+    ) {
+        ns_window.setFrame_display(frame, true);
+    }
+    Ok(())
+}
+
 pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLevel) {
     let c_window = window.clone();
     _ = window.run_on_main_thread(move || unsafe {
@@ -71,6 +187,21 @@ pub fn apply_squircle_corners(window: &tauri::WebviewWindow, radius: f64) {
 
 const TAURI_VIBRANCY_VIEW_TAG: isize = 91376254;
 const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
+const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LiquidGlassActivity {
+    SystemManaged,
+    AlwaysActive,
+}
+
+pub fn apply_main_window_liquid_glass_background(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::SystemManaged)
+}
 
 unsafe fn remove_tagged_subview(container: cocoa::base::id, tag: isize) {
     use objc::{msg_send, sel, sel_impl};
@@ -146,6 +277,15 @@ pub fn apply_liquid_glass_background(
     enabled: bool,
     radius: f64,
 ) -> Result<bool, String> {
+    apply_liquid_glass_background_inner(window, enabled, radius, LiquidGlassActivity::AlwaysActive)
+}
+
+fn apply_liquid_glass_background_inner(
+    window: &tauri::Window,
+    enabled: bool,
+    radius: f64,
+    activity: LiquidGlassActivity,
+) -> Result<bool, String> {
     use cocoa::{
         base::{id, nil},
         foundation::{NSRect, NSString},
@@ -218,21 +358,27 @@ pub fn apply_liquid_glass_background(
             let _: () = msg_send![glass_view, setCornerRadius: radius];
         }
 
+        if activity == LiquidGlassActivity::SystemManaged {
+            let _: () = msg_send![glass_view, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
+        }
+
         // Pin the glass to its "always-active" representation so it keeps re-rendering
         // the live backdrop regardless of which window currently has key state. The
         // default for an NSVisualEffectView-derived view is FollowsWindowActiveState,
         // which dims the material whenever another Cap window (camera, settings, etc.)
         // becomes key and masks the backdrop reactivity that's the whole point of
-        // Liquid Glass. NSGlassEffectView is private SPI introduced in macOS 26, so we
-        // probe multiple state knobs (`setState:`, `setActive:`) instead of assuming a
-        // single inheritance path.
+        // Liquid Glass. The always-active state is private SPI, so we probe multiple
+        // state knobs (`setState:`, `setActive:`) instead of assuming one inheritance
+        // path. The main window does not enter this branch and remains system-managed.
         //
         // macOS 26.3 shipped an NSGlassEffectView that responds to neither selector,
         // so the pin silently fails. In that state the material can't be relied on
         // (it dims whenever another window becomes key), so abandon the private SPI
         // entirely and let the caller fall back to NSVisualEffectView vibrancy
         // (Ok(false)).
-        if !force_glass_view_always_active(glass_view) {
+        if activity == LiquidGlassActivity::AlwaysActive
+            && !force_glass_view_always_active(glass_view)
+        {
             // Never entered the view hierarchy; balance the alloc and bail. The
             // content-layer squircle clip applied above is kept (plain Core Animation,
             // not a WindowServer/occlusion mutation) so the vibrancy fallback still gets
@@ -270,10 +416,12 @@ pub fn apply_liquid_glass_background(
             relativeTo: nil
         ];
 
-        // Re-apply after the view enters the hierarchy: some private AppKit views
-        // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
-        // is what actually sticks.
-        force_glass_view_always_active(glass_view);
+        if activity == LiquidGlassActivity::AlwaysActive {
+            // Re-apply after the view enters the hierarchy: some private AppKit views
+            // reset state machine fields on `viewDidMoveToWindow:`, so the post-add pass
+            // is what actually sticks.
+            force_glass_view_always_active(glass_view);
+        }
 
         crate::crash_sentinel::set_liquid_glass_outcome("applied");
         Ok(true)
@@ -435,9 +583,8 @@ unsafe fn enable_webview_occlusion_detection(content_view: cocoa::base::id) {
 }
 
 /// Reverse every WindowServer-visible mutation `apply_liquid_glass_background` makes:
-/// remove the private NSGlassEffectView (the load-bearing step — it synchronously
-/// detaches the private compositor relationship), then restore window/WKWebView
-/// occlusion detection and window opacity. MUST run on the AppKit main thread.
+/// remove the NSGlassEffectView, then restore window/WKWebView occlusion detection and
+/// window opacity. MUST run on the AppKit main thread.
 unsafe fn teardown_liquid_glass_ns(ns_window: cocoa::base::id) {
     use cocoa::{
         base::{id, nil},
@@ -533,3 +680,109 @@ pub async fn teardown_all_liquid_glass(app: &tauri::AppHandle) -> Result<(), Str
 //         let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
 //     })
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::{constrain_frame_to_visible_area, constrain_position_to_visible_top};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use tauri::PhysicalPosition;
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
+    }
+
+    #[test]
+    fn fits_the_actual_resized_frame_inside_the_work_area() {
+        let screen = rect(0.0, 0.0, 1440.0, 900.0);
+        let visible = rect(0.0, 24.0, 1440.0, 851.0);
+        let constrained = constrain_frame_to_visible_area(
+            rect(1300.0, 800.0, 330.0, 395.0),
+            screen,
+            visible,
+            0.0,
+        )
+        .unwrap();
+
+        assert_eq!(constrained, rect(1110.0, 480.0, 330.0, 395.0));
+        assert_eq!(
+            constrain_frame_to_visible_area(constrained, screen, visible, 0.0),
+            None
+        );
+    }
+
+    #[test]
+    fn fits_expanded_frames_below_a_notch_with_a_hidden_menu_bar() {
+        let screen = rect(0.0, 0.0, 1440.0, 900.0);
+        assert_eq!(
+            constrain_frame_to_visible_area(rect(100.0, 650.0, 480.0, 700.0), screen, screen, 37.0,),
+            Some(rect(100.0, 163.0, 480.0, 700.0))
+        );
+    }
+
+    #[test]
+    fn keeps_native_coordinates_on_a_display_above_and_left_of_primary() {
+        assert_eq!(
+            constrain_frame_to_visible_area(
+                rect(-2000.0, 1800.0, 480.0, 700.0),
+                rect(-1920.0, 900.0, 1920.0, 1080.0),
+                rect(-1880.0, 900.0, 1880.0, 1050.0),
+                37.0,
+            ),
+            Some(rect(-1880.0, 1243.0, 480.0, 700.0))
+        );
+    }
+
+    #[test]
+    fn fits_an_oversized_restored_frame_without_negative_clamp_ranges() {
+        let visible = rect(40.0, 24.0, 1400.0, 851.0);
+        assert_eq!(
+            constrain_frame_to_visible_area(
+                rect(-100.0, -100.0, 2000.0, 1200.0),
+                rect(0.0, 0.0, 1440.0, 900.0),
+                visible,
+                0.0,
+            ),
+            Some(visible)
+        );
+    }
+
+    #[test]
+    fn moves_a_window_below_a_notched_visible_frame() {
+        let position = PhysicalPosition::new(640, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            Some(PhysicalPosition::new(640, 38))
+        );
+    }
+
+    #[test]
+    fn uses_the_safe_area_when_the_menu_bar_is_hidden() {
+        let position = PhysicalPosition::new(200, 0);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 0.0, 37.0),
+            Some(PhysicalPosition::new(200, 74))
+        );
+    }
+
+    #[test]
+    fn preserves_negative_coordinates_on_a_monitor_above_the_primary() {
+        let position = PhysicalPosition::new(-600, -1800);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, -1800, 1.5, 25.0, 0.0),
+            Some(PhysicalPosition::new(-600, -1762))
+        );
+    }
+
+    #[test]
+    fn leaves_an_accessible_position_unchanged() {
+        let position = PhysicalPosition::new(300, 100);
+
+        assert_eq!(
+            constrain_position_to_visible_top(position, 0, 2.0, 19.0, 18.0),
+            None
+        );
+    }
+}

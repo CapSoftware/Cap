@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
+import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
 	organizationInvites,
 	organizationMembers,
@@ -10,7 +11,10 @@ import {
 } from "@cap/database/schema";
 import { type Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { calculateProSeats } from "@/utils/organization";
+import {
+	calculateProSeats,
+	hasActiveDirectSubscription,
+} from "@/utils/organization";
 
 type ProvisionOrganizationRole = "admin" | "member";
 
@@ -46,7 +50,9 @@ export async function provisionOrganizationInvitee({
 		const userId = existingUser?.id ?? User.UserId.make(nanoId());
 
 		if (existingUser) {
-			const userUpdate: Partial<typeof users.$inferInsert> = {};
+			const userUpdate: Partial<typeof users.$inferInsert> = {
+				marketingOrigin: "teammate",
+			};
 
 			if (!existingUser.name) {
 				userUpdate.name = getProvisionedUserName(normalizedEmail);
@@ -65,12 +71,14 @@ export async function provisionOrganizationInvitee({
 			await tx.insert(users).values({
 				id: userId,
 				email: normalizedEmail,
+				marketingOrigin: "teammate",
 				name: getProvisionedUserName(normalizedEmail),
 				activeOrganizationId: organizationId,
 				defaultOrgId: organizationId,
 			});
 		}
 
+		await enqueueLoopsSync(tx, userId);
 		const [existingMember] = await tx
 			.select({
 				id: organizationMembers.id,
@@ -136,14 +144,16 @@ export async function provisionOrganizationInvitee({
 			if (organization) {
 				const [owner] = await tx
 					.select({
+						id: users.id,
 						inviteQuota: users.inviteQuota,
 						stripeSubscriptionId: users.stripeSubscriptionId,
+						stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 					})
 					.from(users)
 					.where(eq(users.id, organization.ownerId))
 					.limit(1);
 
-				if (owner?.stripeSubscriptionId) {
+				if (owner?.stripeSubscriptionId && hasActiveDirectSubscription(owner)) {
 					const allMembers = await tx
 						.select({
 							id: organizationMembers.id,
@@ -154,6 +164,8 @@ export async function provisionOrganizationInvitee({
 
 					const { proSeatsRemaining } = calculateProSeats({
 						inviteQuota: owner.inviteQuota ?? 1,
+						ownerId: organization.ownerId,
+						ownerIsPro: true,
 						members: allMembers,
 					});
 

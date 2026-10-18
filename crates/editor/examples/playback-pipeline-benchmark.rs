@@ -275,6 +275,9 @@ async fn load_recording(
                     end: duration,
                     timescale: 1.0,
                     name: None,
+                    speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -296,6 +299,9 @@ async fn load_recording(
                         end: duration,
                         timescale: 1.0,
                         name: None,
+                        speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     })
                 })
                 .collect(),
@@ -304,13 +310,17 @@ async fn load_recording(
         if !timeline_segments.is_empty() {
             project.timeline = Some(TimelineConfiguration {
                 segments: timeline_segments,
+                transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             });
         }
     }

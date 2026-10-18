@@ -10,15 +10,30 @@ import UploadScreen from "../../app/(tabs)/upload";
 
 type AuthStub = {
 	status: "signedIn";
+	apiKey: string;
 	bootstrap: {
 		activeOrganizationId: string;
+		spaces?: Array<{
+			id: string;
+			name: string;
+			iconUrl: null;
+			kind: "organization" | "space";
+			privacy: "Public" | "Private";
+			role: "owner" | "admin" | "member" | null;
+			canManage: boolean;
+			hasPassword: boolean;
+		}>;
 		user: {
 			email: string;
 			name: string | null;
 		};
 	};
 	client: {
-		createFolder: (input: { color?: string; name: string }) => Promise<{
+		createFolder: (input: {
+			color?: string;
+			name: string;
+			spaceId?: string;
+		}) => Promise<{
 			color: string;
 			id: string;
 			name: string;
@@ -30,15 +45,30 @@ type AuthStub = {
 				upload: null;
 			};
 		}>;
-		listCaps: () => Promise<{
+		getCapStatuses: (ids: readonly string[]) => Promise<{
+			caps: Array<{
+				id: string;
+				upload: Record<string, unknown> | null;
+			}>;
+		}>;
+		listCaps: (input?: {
+			limit?: number;
+			page?: number;
+			spaceId?: string | null;
+		}) => Promise<{
 			caps: unknown[];
+			collectionTotal?: number;
 			folders: unknown[];
+			hasMore?: boolean;
+			limit?: number;
+			page?: number;
 			pagination: {
 				hasNextPage: boolean;
 				page: number;
 				totalPages: number;
 			};
 			rootFolders: unknown[];
+			total?: number;
 		}>;
 		updateCapSharing: (
 			id: string,
@@ -57,6 +87,7 @@ type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 
 const createAuth = (): AuthStub => ({
 	status: "signedIn",
+	apiKey: "api-key",
 	bootstrap: {
 		activeOrganizationId: "org_123",
 		user: {
@@ -65,14 +96,15 @@ const createAuth = (): AuthStub => ({
 		},
 	},
 	client: {
-		createFolder: vi.fn((input: { color?: string; name: string }) =>
-			Promise.resolve({
-				id: "folder_123",
-				name: input.name,
-				color: input.color ?? "normal",
-				parentId: null,
-				videoCount: 0,
-			}),
+		createFolder: vi.fn(
+			(input: { color?: string; name: string; spaceId?: string }) =>
+				Promise.resolve({
+					id: "folder_123",
+					name: input.name,
+					color: input.color ?? "normal",
+					parentId: null,
+					videoCount: 0,
+				}),
 		),
 		getCap: () =>
 			Promise.resolve({
@@ -80,9 +112,11 @@ const createAuth = (): AuthStub => ({
 					upload: null,
 				},
 			}),
+		getCapStatuses: () => Promise.resolve({ caps: [] }),
 		listCaps: () =>
 			Promise.resolve({
 				caps: [],
+				collectionTotal: 45,
 				folders: [],
 				pagination: {
 					hasNextPage: false,
@@ -90,6 +124,7 @@ const createAuth = (): AuthStub => ({
 					totalPages: 1,
 				},
 				rootFolders: [],
+				total: 0,
 			}),
 		updateCapSharing: vi.fn((id: string, input: { public: boolean }) =>
 			Promise.resolve({
@@ -144,6 +179,10 @@ const uploadQueueState = vi.hoisted(
 
 const uploadQueueActionsState = vi.hoisted((): { value: unknown[] } => ({
 	value: [],
+}));
+
+const recordingUploadState = vi.hoisted(() => ({
+	libraryRevision: 0,
 }));
 
 (
@@ -279,6 +318,7 @@ vi.mock("react-native", async () => {
 		},
 		Pressable: createHost("Pressable"),
 		RefreshControl: createHost("RefreshControl"),
+		ScrollView: createHost("ScrollView"),
 		Share: {
 			share: vi.fn(),
 		},
@@ -306,15 +346,24 @@ vi.mock("@shopify/flash-list", async () => {
 		FlashList: ({
 			data,
 			ListEmptyComponent,
+			ListFooterComponent,
+			ListHeaderComponent,
+			onEndReached,
 			renderItem,
+			stickyHeaderIndices,
 		}: {
 			data?: unknown[];
 			ListEmptyComponent?: ReactNode;
+			ListFooterComponent?: ReactNode;
+			ListHeaderComponent?: ReactNode;
+			onEndReached?: () => void;
 			renderItem?: (info: { index: number; item: unknown }) => ReactNode;
+			stickyHeaderIndices?: number[];
 		}) =>
 			React.createElement(
 				"FlashList",
-				null,
+				{ data, onEndReached, stickyHeaderIndices },
+				ListHeaderComponent,
 				data && data.length > 0
 					? data.map((item, index) =>
 							React.createElement(
@@ -324,6 +373,7 @@ vi.mock("@shopify/flash-list", async () => {
 							),
 						)
 					: ListEmptyComponent,
+				ListFooterComponent,
 			),
 	};
 });
@@ -332,11 +382,16 @@ vi.mock("expo-clipboard", () => ({
 	setStringAsync: vi.fn(),
 }));
 
-vi.mock("expo-router", () => ({
-	router: {
-		push: vi.fn(),
-	},
-}));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	return {
+		router: {
+			push: vi.fn(),
+		},
+		useFocusEffect: (callback: Parameters<typeof React.useEffect>[0]) =>
+			React.useEffect(callback, [callback]),
+	};
+});
 
 vi.mock("expo-web-browser", () => ({
 	openBrowserAsync: vi.fn(),
@@ -345,6 +400,10 @@ vi.mock("expo-web-browser", () => ({
 vi.mock("@/auth/AuthContext", () => ({
 	apiBaseUrl: "https://cap.so",
 	useAuth: () => authState.value,
+}));
+
+vi.mock("@/uploads/recording-upload-provider", () => ({
+	useRecordingUploadLibraryRevision: () => recordingUploadState.libraryRevision,
 }));
 
 vi.mock("@/auth/SignInPanel", async () => {
@@ -376,6 +435,16 @@ vi.mock("@/components/ActionButton", async () => {
 	};
 });
 
+vi.mock("@/components/CapRefreshControl", async () => {
+	const React = await import("react");
+	return {
+		CapRefreshControl: (props: { [key: string]: unknown }) =>
+			React.createElement("CapRefreshControl", props),
+		CapRefreshOverlay: (props: { [key: string]: unknown }) =>
+			React.createElement("CapRefreshOverlay", props),
+	};
+});
+
 vi.mock("@/components/Screen", async () => {
 	const React = await import("react");
 
@@ -393,7 +462,7 @@ vi.mock("@/components/Screen", async () => {
 		}) =>
 			React.createElement(
 				"Screen",
-				null,
+				{ title },
 				title ? React.createElement("Text", null, title) : null,
 				subtitle ? React.createElement("Text", null, subtitle) : null,
 				loading ? React.createElement("Text", null, "Loading") : children,
@@ -547,7 +616,9 @@ vi.mock("@/uploads/uploadQueue", async (importOriginal) => {
 
 describe("upload and dashboard visibility", () => {
 	beforeEach(() => {
+		vi.useRealTimers();
 		authState.value = createAuth();
+		recordingUploadState.libraryRevision = 0;
 		uploadQueueState.value.items = [];
 		uploadQueueActionsState.value = [];
 	});
@@ -576,7 +647,7 @@ describe("upload and dashboard visibility", () => {
 		).toBe(true);
 		expect(
 			hasProps(tree, {
-				accessibilityHint: "Opens Loom import in a browser sheet",
+				accessibilityHint: "Opens native Loom import",
 				accessibilityLabel: "Open Loom import",
 			}),
 		).toBe(true);
@@ -624,20 +695,17 @@ describe("upload and dashboard visibility", () => {
 
 		const [, callback] = showActionSheetWithOptions.mock.calls[0] ?? [];
 		if (!callback) throw new Error("Upload source callback was not set");
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		openBrowserAsync.mockClear();
+		const { router } = await import("expo-router");
+		vi.mocked(router.push).mockClear();
 
 		await act(async () => {
 			callback(2);
 		});
 
-		expect(openBrowserAsync).toHaveBeenCalledWith(
-			"https://cap.so/dashboard/import/loom",
-		);
+		expect(router.push).toHaveBeenCalledWith("/loom-import");
 	});
 
-	it("opens Loom import in the native browser sheet", async () => {
+	it("opens native Loom import", async () => {
 		const renderer = await renderComponent(React.createElement(UploadScreen));
 		const [loomAction] = renderer.root.findAllByProps({
 			accessibilityLabel: "Import from Loom",
@@ -648,200 +716,23 @@ describe("upload and dashboard visibility", () => {
 		if (!loomAction) throw new Error("Loom upload action was not rendered");
 		if (!loomImport) throw new Error("Loom import card was not rendered");
 
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		openBrowserAsync.mockClear();
+		const { router } = await import("expo-router");
+		vi.mocked(router.push).mockClear();
 
-		expect(loomAction.props.accessibilityHint).toBe(
-			"Opens Loom import in a browser sheet",
-		);
+		expect(loomAction.props.accessibilityHint).toBe("Opens native Loom import");
 
 		await act(async () => {
 			loomAction.props.onPress();
 		});
 
-		expect(openBrowserAsync).toHaveBeenCalledWith(
-			"https://cap.so/dashboard/import/loom",
-		);
-		openBrowserAsync.mockClear();
+		expect(router.push).toHaveBeenCalledWith("/loom-import");
+		vi.mocked(router.push).mockClear();
 
 		await act(async () => {
 			loomImport.props.onPress();
 		});
 
-		expect(openBrowserAsync).toHaveBeenCalledWith(
-			"https://cap.so/dashboard/import/loom",
-		);
-	});
-
-	it("shows Loom import failures on the Loom card", async () => {
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		openBrowserAsync.mockClear();
-		openBrowserAsync.mockRejectedValueOnce(new Error("Loom unavailable"));
-
-		const renderer = await renderComponent(React.createElement(UploadScreen));
-		const [loomImport] = renderer.root.findAllByProps({
-			accessibilityLabel: "Open Loom import",
-		});
-		if (!loomImport) throw new Error("Loom import card was not rendered");
-
-		await act(async () => {
-			loomImport.props.onPress();
-			await Promise.resolve();
-			await Promise.resolve();
-		});
-
-		expect(getTextNodes(renderer.toJSON())).toContain(
-			"Loom import unavailable",
-		);
-		expect(getTextNodes(renderer.toJSON())).toContain("Loom unavailable");
-		const [failedLoomImport] = renderer.root.findAllByProps({
-			accessibilityLabel: "Loom import unavailable",
-		});
-		if (!failedLoomImport) throw new Error("Loom error card was not rendered");
-		expect(failedLoomImport.props.accessibilityHint).toBe(
-			"Retries Loom import",
-		);
-		expect(failedLoomImport.props.accessibilityValue).toEqual({
-			text: "Loom unavailable",
-		});
-		expect(failedLoomImport.props.accessibilityState).toEqual({
-			busy: false,
-			disabled: false,
-		});
-		const [retryLoomAction] = renderer.root.findAllByProps({
-			accessibilityLabel: "Retry Loom",
-		});
-		if (!retryLoomAction) throw new Error("Retry Loom action was not rendered");
-		expect(retryLoomAction.props.accessibilityHint).toBe("Loom unavailable");
-		expect(retryLoomAction.props.accessibilityValue).toEqual({
-			text: "Loom unavailable",
-		});
-		expect(retryLoomAction.props.disabled).toBe(false);
-		const [uploadSource] = renderer.root.findAllByProps({
-			accessibilityLabel: "Choose upload source",
-		});
-		if (!uploadSource) throw new Error("Upload source card was not rendered");
-		expect(uploadSource.props.accessibilityValue).toEqual({
-			text: "MP4, MOV, AVI, MKV, WebM, or M4V",
-		});
-		expect(hasStyle(renderer.toJSON(), { color: "#e5484d" })).toBe(true);
-		expect(
-			hasProps(renderer.toJSON(), {
-				accessibilityLiveRegion: "polite",
-				accessibilityRole: "alert",
-			}),
-		).toBe(true);
-	});
-
-	it("locks stale Loom import actions while the browser sheet is opening", async () => {
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		let resolveBrowser:
-			| ((
-					value: Awaited<ReturnType<typeof WebBrowser.openBrowserAsync>>,
-			  ) => void)
-			| null = null;
-		openBrowserAsync.mockClear();
-		openBrowserAsync.mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveBrowser = resolve;
-				}),
-		);
-
-		const renderer = await renderComponent(React.createElement(UploadScreen));
-		const [loomAction] = renderer.root.findAllByProps({
-			accessibilityLabel: "Import from Loom",
-		});
-		const [loomImport] = renderer.root.findAllByProps({
-			accessibilityLabel: "Open Loom import",
-		});
-		if (!loomAction) throw new Error("Loom upload action was not rendered");
-		if (!loomImport) throw new Error("Loom import card was not rendered");
-
-		await act(async () => {
-			void loomAction.props.onPress();
-			await Promise.resolve();
-		});
-
-		const [uploadSource] = renderer.root.findAllByProps({
-			accessibilityLabel: "Choose upload source",
-		});
-		const [loadingLoomImport] = renderer.root.findAllByProps({
-			accessibilityLabel: "Opening Loom",
-		});
-		const [browseButton] = renderer.root.findAllByProps({
-			accessibilityLabel: "Browse Files",
-		});
-		const [loadingLoomAction] = renderer.root.findAllByProps({
-			accessibilityLabel: "Import from Loom",
-		});
-		if (!uploadSource) throw new Error("Upload source button was not rendered");
-		if (!browseButton) throw new Error("Browse Files button was not rendered");
-		if (!loadingLoomAction)
-			throw new Error("Loom upload action was not rendered");
-		if (!loadingLoomImport)
-			throw new Error("Loom import card was not rendered");
-
-		const loadingText = getTextNodes(renderer.toJSON());
-		expect(loadingText.filter((item) => item === "Opening Loom")).toHaveLength(
-			1,
-		);
-		expect(getTextNodes(renderer.toJSON())).not.toContain("Opening Loom...");
-		expect(
-			loadingText.filter(
-				(item) => item === "Continue in the browser sheet to import from Loom.",
-			),
-		).toHaveLength(1);
-		expect(uploadSource.props.accessibilityHint).toBe("Loom import is opening");
-		expect(uploadSource.props.accessibilityValue).toEqual({
-			text: "Opening Loom import",
-		});
-		expect(uploadSource.props.accessibilityState).toEqual({
-			busy: true,
-			disabled: true,
-		});
-		expect(browseButton.props.disabled).toBe(true);
-		expect(browseButton.props.accessibilityHint).toBe("Loom import is opening");
-		expect(browseButton.props.accessibilityValue).toEqual({
-			text: "Opening Loom import",
-		});
-		expect(loadingLoomAction.props.accessibilityHint).toBe(
-			"Loom import is opening",
-		);
-		expect(loadingLoomAction.props.accessibilityValue).toEqual({
-			text: "Opening Loom import",
-		});
-		expect(loadingLoomAction.props.loading).toBe(true);
-		expect(loadingLoomAction.props.disabled).toBe(false);
-		expect(loadingLoomImport.props.accessibilityHint).toBe(
-			"Loom import is opening",
-		);
-		expect(loadingLoomImport.props.accessibilityValue).toEqual({
-			text: "Opening Loom import",
-		});
-		expect(loadingLoomImport.props.disabled).toBe(true);
-		expect(openBrowserAsync).toHaveBeenCalledTimes(1);
-
-		openBrowserAsync.mockClear();
-
-		await act(async () => {
-			loomAction.props.onPress();
-			loomImport.props.onPress();
-			uploadSource.props.onPress();
-			await Promise.resolve();
-		});
-
-		expect(openBrowserAsync).not.toHaveBeenCalled();
-
-		await act(async () => {
-			resolveBrowser?.({
-				type: "dismiss",
-			} as Awaited<ReturnType<typeof WebBrowser.openBrowserAsync>>);
-			await Promise.resolve();
-		});
+		expect(router.push).toHaveBeenCalledWith("/loom-import");
 	});
 
 	it("locks upload sources while the file picker is opening", async () => {
@@ -2014,27 +1905,175 @@ describe("upload and dashboard visibility", () => {
 		).toBe(true);
 	});
 
-	it("shows dashboard import actions", async () => {
-		const tree = await renderTree(React.createElement(CapsScreen));
+	it("shows dashboard record and import actions", async () => {
+		const renderer = await renderComponent(React.createElement(CapsScreen));
+		const tree = renderer.toJSON();
 		const text = getTextNodes(tree);
 
 		expect(text).toContain("My Caps");
+		expect(text).toContain("45 caps");
+		const [screen] = renderer.root.findAll(
+			(node) => String(node.type) === "Screen",
+		);
+		if (!screen) throw new Error("Dashboard screen was not rendered");
+		expect(screen.props.title).toBeUndefined();
 		expect(text.filter((item) => item === "New Folder").length).toBeGreaterThan(
 			0,
 		);
-		expect(text).not.toContain("Record");
+		expect(text).not.toContain("Record Video");
+		expect(text).not.toContain("Import Video");
+		expect(text.filter((item) => item === "Record")).toHaveLength(1);
+		expect(text.filter((item) => item === "Import Media")).toHaveLength(1);
+		const [recordAction] = renderer.root.findAll(
+			(node) =>
+				String(node.type) === "ActionButton" &&
+				node.props.accessibilityLabel === "Record",
+		);
+		if (!recordAction)
+			throw new Error("Dashboard record action was not rendered");
+		const [importAction] = renderer.root.findAllByProps({
+			accessibilityLabel: "Import Media",
+		});
+		if (!importAction)
+			throw new Error("Dashboard import action was not rendered");
+		expect(recordAction.props).toMatchObject({
+			accessibilityHint: "Opens the camera recorder",
+			symbol: "video.fill",
+			variant: "dark",
+		});
+		expect(importAction.props.variant).toBe("secondary");
 		expect(
-			text.filter((item) => item === "Import Video").length,
+			renderer.root.findAllByProps({ accessibilityLabel: "Import Media" }),
+		).toHaveLength(1);
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Import" }),
+		).toHaveLength(0);
+		const [list] = renderer.root.findAll(
+			(node) => String(node.type) === "FlashList",
+		);
+		if (!list) throw new Error("Dashboard list was not rendered");
+		expect(list.props.stickyHeaderIndices).toEqual([0]);
+		expect(
+			(list.props.data as Array<{ type: string }>).map((item) => item.type),
+		).toEqual(["space-switcher", "empty"]);
+		expect(
+			list.findAll((node) => String(node.type) === "OrgSwitcher").length,
+		).toBeGreaterThan(0);
+		expect(
+			list.findAllByProps({ accessibilityLabel: "New Folder" }).length,
+		).toBeGreaterThan(0);
+		expect(
+			list.findAllByProps({ accessibilityLabel: "Switch space" }).length,
 		).toBeGreaterThan(0);
 		expect(hasStyle(tree, { marginBottom: 40 })).toBe(true);
-		expect(text.join("")).toContain("Hey Richie! Import your first Cap");
+		expect(text).toContain("Welcome! Record or Import your first Cap");
 		expect(hasProp(tree, "accessibilityLabel", "Cap logo")).toBe(true);
 		expect(
 			hasProps(tree, {
 				accessibilityHint: "Opens import options",
-				accessibilityLabel: "Import Video",
+				accessibilityLabel: "Import Media",
 			}),
 		).toBe(true);
+
+		const { router } = await import("expo-router");
+		const push = vi.mocked(router.push);
+		push.mockClear();
+		await act(async () => {
+			recordAction.props.onPress();
+		});
+		expect(push).toHaveBeenCalledWith("/record");
+
+		push.mockClear();
+		await act(async () => {
+			importAction.props.onPress();
+		});
+		expect(push).toHaveBeenCalledWith("/upload");
+	});
+
+	it("switches from My Caps into an available space", async () => {
+		const auth = createAuth();
+		auth.bootstrap.spaces = [
+			{
+				id: "org_123",
+				name: "All Cap",
+				iconUrl: null,
+				kind: "organization",
+				privacy: "Public",
+				role: "owner",
+				canManage: true,
+				hasPassword: false,
+			},
+			{
+				id: "space_123",
+				name: "Product",
+				iconUrl: null,
+				kind: "space",
+				privacy: "Private",
+				role: "member",
+				canManage: false,
+				hasPassword: false,
+			},
+		];
+		auth.client.listCaps = vi.fn(() =>
+			Promise.resolve({
+				caps: [],
+				folders: [],
+				pagination: {
+					hasNextPage: false,
+					page: 1,
+					totalPages: 1,
+				},
+				rootFolders: [],
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(React.createElement(CapsScreen));
+		const [switcher] = renderer.root.findAllByProps({
+			accessibilityLabel: "Switch space",
+		});
+		if (!switcher) throw new Error("Space switcher was not rendered");
+		const { ActionSheetIOS } = await import("react-native");
+		const showActionSheetWithOptions = vi.mocked(
+			ActionSheetIOS.showActionSheetWithOptions,
+		);
+		showActionSheetWithOptions.mockClear();
+
+		await act(async () => {
+			switcher.props.onPress();
+		});
+
+		const [options, select] = showActionSheetWithOptions.mock.calls[0] ?? [];
+		expect(options).toMatchObject({
+			disabledButtonIndices: [0],
+			options: ["My Caps", "All Cap · Owner", "Product · Member", "Cancel"],
+			title: "Space",
+		});
+		if (!select) throw new Error("Space action callback was not registered");
+
+		await act(async () => {
+			select(2);
+			await Promise.resolve();
+		});
+
+		expect(auth.client.listCaps).toHaveBeenLastCalledWith(
+			expect.objectContaining({ spaceId: "space_123" }),
+		);
+		const text = getTextNodes(renderer.toJSON());
+		expect(text).toContain("Product");
+		expect(text).toContain("No Caps in Product");
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "New Folder" }),
+		).toHaveLength(0);
+		expect(
+			renderer.root.findAll(
+				(node) =>
+					String(node.type) === "ActionButton" &&
+					node.props.accessibilityLabel === "Record",
+			),
+		).toHaveLength(0);
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Import Media" }),
+		).toHaveLength(0);
 	});
 
 	it("announces dashboard load errors with a retry action", async () => {
@@ -2079,6 +2118,140 @@ describe("upload and dashboard visibility", () => {
 		expect(auth.client.listCaps).toHaveBeenCalledTimes(2);
 	});
 
+	it("loads the next dashboard page without replacing visible Caps", async () => {
+		const auth = createAuth();
+		auth.client.listCaps = vi.fn((input?: { page?: number }) =>
+			Promise.resolve({
+				caps: [
+					{
+						id: input?.page === 2 ? "cap_2" : "cap_1",
+						title: input?.page === 2 ? "Second Cap" : "First Cap",
+						upload: null,
+					},
+				],
+				folders: [],
+				hasMore: input?.page !== 2,
+				limit: 30,
+				page: input?.page ?? 1,
+				pagination: {
+					hasNextPage: input?.page !== 2,
+					page: input?.page ?? 1,
+					totalPages: 2,
+				},
+				rootFolders: [],
+				total: 2,
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(React.createElement(CapsScreen));
+		const [list] = renderer.root.findAll(
+			(node) => String(node.type) === "FlashList",
+		);
+		if (!list) throw new Error("Dashboard list was not rendered");
+
+		await act(async () => {
+			await list.props.onEndReached();
+		});
+
+		expect(auth.client.listCaps).toHaveBeenLastCalledWith(
+			expect.objectContaining({ limit: 30, page: 2 }),
+		);
+		const capCards = renderer.root.findAll((node) => {
+			const cap = node.props.cap as { id?: string } | undefined;
+			return (
+				String(node.type) === "CapCard" &&
+				(cap?.id === "cap_1" || cap?.id === "cap_2")
+			);
+		});
+		expect(capCards.map((card) => card.props.cap.id)).toEqual([
+			"cap_1",
+			"cap_2",
+		]);
+		expect(capCards[0]?.props.thumbnailAuthorization).toBe("Bearer api-key");
+	});
+
+	it("refreshes a new recording until server processing finishes", async () => {
+		vi.useFakeTimers();
+		const auth = createAuth();
+		const response = (upload: Record<string, unknown> | null) => ({
+			caps: [
+				{
+					id: "cap_123",
+					title: "Cap Recording",
+					upload,
+				},
+			],
+			folders: [],
+			pagination: {
+				hasNextPage: false,
+				page: 1,
+				totalPages: 1,
+			},
+			rootFolders: [],
+		});
+		auth.client.listCaps = vi
+			.fn()
+			.mockResolvedValueOnce({ ...response(null), caps: [] })
+			.mockResolvedValueOnce(
+				response({
+					phase: "processing",
+					processingError: null,
+					processingMessage: "Muxing segments into MP4...",
+					processingProgress: 25,
+					total: 100,
+					uploaded: 100,
+				}),
+			)
+			.mockResolvedValue(response(null));
+		auth.client.getCapStatuses = vi
+			.fn()
+			.mockResolvedValueOnce({
+				caps: [
+					{
+						id: "cap_123",
+						upload: {
+							phase: "processing",
+							processingError: null,
+							processingMessage: "Generating thumbnail...",
+							processingProgress: 70,
+							total: 100,
+							uploaded: 100,
+						},
+					},
+				],
+			})
+			.mockResolvedValue({ caps: [{ id: "cap_123", upload: null }] });
+		authState.value = auth;
+
+		const renderer = await renderComponent(React.createElement(CapsScreen));
+		expect(auth.client.listCaps).toHaveBeenCalledTimes(1);
+
+		recordingUploadState.libraryRevision = 1;
+		await act(async () => {
+			renderer.update(React.createElement(CapsScreen));
+			await Promise.resolve();
+		});
+		expect(auth.client.listCaps).toHaveBeenCalledTimes(2);
+		expect(auth.client.getCapStatuses).toHaveBeenCalledTimes(1);
+		expect(auth.client.getCapStatuses).toHaveBeenCalledWith(["cap_123"]);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(3000);
+		});
+		expect(auth.client.getCapStatuses).toHaveBeenCalledTimes(2);
+		expect(auth.client.listCaps).toHaveBeenCalledTimes(3);
+		const [capCard] = renderer.root.findAll((node) => {
+			const cap = node.props.cap as { id?: string } | undefined;
+			return cap?.id === "cap_123";
+		});
+		expect(capCard?.props.cap.upload).toBeNull();
+
+		await act(async () => {
+			renderer.unmount();
+		});
+		vi.useRealTimers();
+	});
+
 	it("renders dashboard folders with native folder rows", async () => {
 		const auth = createAuth();
 		auth.client.listCaps = () =>
@@ -2112,10 +2285,19 @@ describe("upload and dashboard visibility", () => {
 		expect(text).toContain("Folders");
 		expect(text).toContain("Product");
 		expect(text.join("")).toContain("2 videos");
+		expect(text).not.toContain("Welcome! Record or Import your first Cap");
+		expect(text).toContain("No Caps in My Caps");
+		expect(text).toContain("Caps added to this space will appear here.");
 		expect(hasStyle(tree, { paddingBottom: 24 })).toBe(true);
 		expect(hasProp(tree, "accessibilityLabel", "Open folder Product")).toBe(
 			true,
 		);
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Record" }),
+		).toHaveLength(0);
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Import Media" }),
+		).toHaveLength(1);
 
 		const [folderRow] = renderer.root.findAllByProps({
 			accessibilityLabel: "Open folder Product",
@@ -2189,7 +2371,7 @@ describe("upload and dashboard visibility", () => {
 		showActionSheetWithOptions.mockClear();
 
 		await act(async () => {
-			capCard.props.onVisibilityPress();
+			capCard.props.onVisibilityPress(cap);
 		});
 
 		const [, sharingCallback] = showActionSheetWithOptions.mock.calls[0] ?? [];
@@ -2221,6 +2403,50 @@ describe("upload and dashboard visibility", () => {
 			await sharingDeferred.promise;
 			await Promise.resolve();
 		});
+	});
+
+	it("keeps Caps owned by another space member read-only", async () => {
+		const auth = createAuth();
+		const cap = {
+			commentCount: 2,
+			createdAt: "2026-05-18T10:00:00.000Z",
+			durationSeconds: 125,
+			folderId: null,
+			id: "video_123",
+			ownedByCurrentUser: false,
+			ownerName: "Morgan",
+			protected: false,
+			public: false,
+			reactionCount: 3,
+			shareUrl: "https://cap.so/s/video_123",
+			thumbnailUrl: null,
+			title: "Product review",
+			updatedAt: "2026-05-18T10:30:00.000Z",
+			upload: null,
+			viewCount: 0,
+		};
+		auth.client.listCaps = vi.fn(() =>
+			Promise.resolve({
+				caps: [cap],
+				folders: [],
+				pagination: {
+					hasNextPage: false,
+					page: 1,
+					totalPages: 1,
+				},
+				rootFolders: [],
+			}),
+		);
+		authState.value = auth;
+		const renderer = await renderComponent(React.createElement(CapsScreen));
+		const [capCard] = renderer.root.findAllByProps({ cap });
+		if (!capCard) throw new Error("Cap card was not rendered");
+
+		expect(capCard.props.onCopyPress).toEqual(expect.any(Function));
+		expect(capCard.props.onSharePress).toEqual(expect.any(Function));
+		expect(capCard.props.onAnalyticsPress).toBeUndefined();
+		expect(capCard.props.onVisibilityPress).toBeUndefined();
+		expect(capCard.props.onMenuPress).toBeUndefined();
 	});
 
 	it("opens the native iOS folder creation prompt and color sheet", async () => {
@@ -2351,7 +2577,7 @@ describe("upload and dashboard visibility", () => {
 			text: "Creating folder Product",
 		});
 		for (const action of renderer.root.findAllByProps({
-			accessibilityLabel: "Import Video",
+			accessibilityLabel: "Import Media",
 		})) {
 			expect(action.props.disabled).toBe(true);
 			expect(action.props.accessibilityHint).toBe(

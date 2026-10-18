@@ -250,6 +250,9 @@ export class Organisations extends Effect.Service<Organisations>()(
 							.delete(Db.organizationInvites)
 							.where(Dz.eq(Db.organizationInvites.organizationId, id));
 						await tx
+							.delete(Db.integrationInstallations)
+							.where(Dz.eq(Db.integrationInstallations.organizationId, id));
+						await tx
 							.delete(Db.organizationMembers)
 							.where(Dz.eq(Db.organizationMembers.organizationId, id));
 						await tx

@@ -12,11 +12,13 @@ export const msg = (key: MessageKey, substitutions?: string | string[]) => {
 	if (localizedMessage) return localizedMessage;
 
 	const fallback = englishMessages[key]?.message || key;
-	if (!substitutions) return fallback;
-
-	const values = Array.isArray(substitutions) ? substitutions : [substitutions];
-	return fallback.replace(
-		/\$(\d+)/g,
-		(_match, index: string) => values[Number(index) - 1] ?? "",
+	const values =
+		substitutions === undefined
+			? []
+			: Array.isArray(substitutions)
+				? substitutions
+				: [substitutions];
+	return fallback.replace(/\$(\$|\d)/g, (_match, index: string) =>
+		index === "$" ? "$" : (values[Number(index) - 1] ?? ""),
 	);
 };

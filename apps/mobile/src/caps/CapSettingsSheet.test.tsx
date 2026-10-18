@@ -306,9 +306,7 @@ describe("CapSettingsSheet", () => {
 			.findAllByProps({ accessibilityRole: "button" })
 			.find((node) => getInstanceText(node).includes("View analytics"));
 		if (!analyticsRow) throw new Error("Analytics row was not rendered");
-		expect(analyticsRow.props.accessibilityHint).toBe(
-			"Opens analytics in a browser sheet",
-		);
+		expect(analyticsRow.props.accessibilityHint).toBe("Opens native analytics");
 
 		await act(async () => {
 			analyticsRow.props.onPress();

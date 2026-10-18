@@ -43,6 +43,10 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import {
+	loomImportDestinationFromPathname,
+	loomImportPageHref,
+} from "@/lib/loom-import-destination";
+import {
 	canViewOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
@@ -98,7 +102,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		},
 		{
 			name: "Import Media",
-			href: `/dashboard/import`,
+			href: loomImportPageHref(loomImportDestinationFromPathname(pathname)),
 			matchChildren: true,
 			icon: <ImportIcon />,
 			subNav: [],
@@ -174,11 +178,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	}, [canScrollUp, canScrollDown]);
 
 	const isPathActive = (path: string, matchChildren: boolean = false) => {
+		const basePath = path.split("?")[0] ?? path;
 		if (matchChildren) {
-			return pathname === path || pathname.startsWith(`${path}/`);
+			return pathname === basePath || pathname.startsWith(`${basePath}/`);
 		}
 
-		return pathname === path;
+		return pathname === basePath;
 	};
 
 	const isDomainSetupVerified =

@@ -1,4 +1,3 @@
-import { Folder, Organisation } from "@cap/web-domain";
 import type { MobileApiClient, UploadFile } from "@/api/mobile";
 import { uploadToTarget } from "@/api/mobile";
 
@@ -13,6 +12,8 @@ type RunMobileUploadInput = {
 
 const uploadProgressSyncIntervalMs = 1000;
 const uploadProgressSyncMinDelta = 0.05;
+const uploadProgressUiIntervalMs = 100;
+const uploadProgressUiMinPercentDelta = 2;
 
 const nonNegativeFiniteNumber = (value: number | null | undefined) =>
 	typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -47,10 +48,8 @@ export const runMobileUpload = async ({
 	onProgress,
 }: RunMobileUploadInput) => {
 	const created = await client.createUpload({
-		organizationId: organizationId
-			? Organisation.OrganisationId.make(organizationId)
-			: undefined,
-		folderId: folderId ? Folder.FolderId.make(folderId) : undefined,
+		organizationId: organizationId ?? undefined,
+		folderId: folderId ?? undefined,
 		fileName: file.name,
 		contentType: file.type,
 		contentLength: file.size,
@@ -62,6 +61,31 @@ export const runMobileUpload = async ({
 
 	let lastSyncedProgress: number | null = null;
 	let lastSyncedAt = 0;
+	let lastUiPercent = -1;
+	let lastUiAt = 0;
+	let pendingProgress: { uploaded: number; total: number } | null = null;
+	let progressSync: Promise<void> | null = null;
+	const syncProgress = async (initial: { uploaded: number; total: number }) => {
+		let next: { uploaded: number; total: number } | null = initial;
+		while (next) {
+			try {
+				await client.updateUploadProgress(created.id, next);
+			} catch {}
+			next = pendingProgress;
+			pendingProgress = null;
+		}
+		progressSync = null;
+	};
+	const enqueueProgressSync = (progress: {
+		uploaded: number;
+		total: number;
+	}) => {
+		if (progressSync) {
+			pendingProgress = progress;
+			return;
+		}
+		progressSync = syncProgress(progress);
+	};
 
 	await uploadToTarget(created.upload, file, ({ loaded, total }) => {
 		const safeLoaded = nonNegativeFiniteNumber(loaded);
@@ -71,8 +95,18 @@ export const runMobileUpload = async ({
 			safeLoaded;
 		const progress = safeTotal > 0 ? safeLoaded / safeTotal : 0;
 		const clampedProgress = clampProgress(progress);
-		onProgress?.(clampedProgress);
 		const now = Date.now();
+		const uiPercent = Math.floor(clampedProgress * 100);
+		if (
+			lastUiPercent < 0 ||
+			uiPercent >= 100 ||
+			uiPercent - lastUiPercent >= uploadProgressUiMinPercentDelta ||
+			now - lastUiAt >= uploadProgressUiIntervalMs
+		) {
+			lastUiPercent = uiPercent;
+			lastUiAt = now;
+			onProgress?.(clampedProgress);
+		}
 		if (
 			shouldSyncUploadProgress(
 				clampedProgress,
@@ -83,14 +117,10 @@ export const runMobileUpload = async ({
 		) {
 			lastSyncedProgress = clampedProgress;
 			lastSyncedAt = now;
-			client
-				.updateUploadProgress(created.id, {
-					uploaded: safeLoaded,
-					total: safeTotal,
-				})
-				.catch(() => {});
+			enqueueProgressSync({ uploaded: safeLoaded, total: safeTotal });
 		}
 	});
+	await progressSync;
 
 	await client.completeUpload(created.id, {
 		rawFileKey: created.rawFileKey,

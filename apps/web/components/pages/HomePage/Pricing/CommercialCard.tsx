@@ -5,6 +5,7 @@ import { faCircleInfo } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { useCurrency } from "hooks/useCurrency";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "@/components/Tooltip";
@@ -18,6 +19,7 @@ import { Stepper } from "./Stepper";
 const copy = homepageCopy.pricing.commercial;
 
 export const CommercialCard = () => {
+	const { symbol } = useCurrency();
 	const [licenses, setLicenses] = useState(1);
 	const [isYearly, setIsYearly] = useState(true);
 	const [commercialLoading, setCommercialLoading] = useState(false);
@@ -94,7 +96,8 @@ export const CommercialCard = () => {
 
 			<div className="flex gap-1.5 items-baseline mt-6">
 				<span className="text-4xl font-semibold tracking-tight tabular-nums text-gray-12">
-					$<NumberFlow value={perLicense} />
+					{symbol}
+					<NumberFlow value={perLicense} />
 				</span>
 				<span className="text-sm text-gray-10">/ license</span>
 			</div>
@@ -122,7 +125,8 @@ export const CommercialCard = () => {
 				/>
 				<p className="text-sm text-gray-10">
 					<span className="font-medium text-gray-12">
-						$<NumberFlow value={total} />
+						{symbol}
+						<NumberFlow value={total} />
 					</span>{" "}
 					{isYearly ? "billed yearly" : "one-time"}
 				</p>

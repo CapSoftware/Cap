@@ -4,14 +4,25 @@ use ffmpeg::{
     frame::Audio as FFAudio,
     software::resampling,
 };
-use std::path::Path;
+use std::{ops::Range, path::Path};
 
 use crate::cast_bytes_to_f32_slice;
+
+pub fn high_quality_resampler_options() -> ffmpeg::Dictionary<'static> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("filter_size", "128");
+    // FFmpeg parses option values with strtod, which honours LC_NUMERIC. GTK applies the
+    // user's locale on Linux, so "0.97" fails with EINVAL under comma-decimal locales (#2359).
+    options.set("cutoff", "97/100");
+    options
+}
 
 // F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
     channels: u16,
+    source_start_sample: usize,
+    covered_source_end_sample: usize,
 }
 
 impl AudioData {
@@ -20,78 +31,206 @@ impl AudioData {
     pub const SAMPLE_RATE: u32 = 48_000;
 
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, String> {
-        fn inner(path: &Path) -> Result<AudioData, String> {
-            let mut input_ctx =
-                ffmpeg::format::input(&path).map_err(|e| format!("Input Open / {e}"))?;
-            let input_stream = input_ctx
-                .streams()
-                .best(ffmpeg::media::Type::Audio)
-                .ok_or_else(|| "No Stream".to_string())?;
+        Self::decode(path.as_ref(), None, true)
+    }
 
-            let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
-                .map_err(|e| format!("AudioData Parameters / {e}"))?;
-            let mut decoder = decoder_ctx
-                .decoder()
-                .audio()
-                .map_err(|e| format!("Set Parameters / {e}"))?;
+    pub fn from_file_range(
+        path: impl AsRef<Path>,
+        source_start_sample: usize,
+        source_end_sample: usize,
+    ) -> Result<Self, String> {
+        Self::decode(
+            path.as_ref(),
+            Some(source_start_sample..source_end_sample.max(source_start_sample)),
+            true,
+        )
+    }
 
-            let source_channels = decoder.channels().max(1);
-            if decoder.channel_layout().is_empty() {
-                decoder.set_channel_layout(ChannelLayout::default(source_channels as i32));
+    fn decode(path: &Path, range: Option<Range<usize>>, allow_seek: bool) -> Result<Self, String> {
+        let mut input_ctx =
+            ffmpeg::format::input(&path).map_err(|e| format!("Input Open / {e}"))?;
+        let input_stream = input_ctx
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .ok_or_else(|| "No Stream".to_string())?;
+
+        let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
+            .map_err(|e| format!("AudioData Parameters / {e}"))?;
+        let mut decoder = decoder_ctx
+            .decoder()
+            .audio()
+            .map_err(|e| format!("Set Parameters / {e}"))?;
+
+        let source_channels = decoder.channels().max(1);
+        if decoder.channel_layout().is_empty() {
+            decoder.set_channel_layout(ChannelLayout::default(source_channels as i32));
+        }
+        let stream_time_base = input_stream.time_base();
+        decoder.set_packet_time_base(stream_time_base);
+
+        let target_channels = target_channels_for_source(source_channels);
+        let target_channel_layout = ChannelLayout::default(target_channels as i32);
+        let mut resampler = resampling::Context::get_with(
+            decoder.format(),
+            decoder.channel_layout(),
+            decoder.rate(),
+            AudioData::SAMPLE_FORMAT,
+            target_channel_layout,
+            AudioData::SAMPLE_RATE,
+            high_quality_resampler_options(),
+        )
+        .map_err(|e| format!("Resampler / {e}"))?;
+
+        let index = input_stream.index();
+        let stream_start_time = input_stream.start_time();
+        let stream_start_time = if stream_start_time == i64::MIN {
+            0
+        } else {
+            stream_start_time
+        };
+        let stream_time_base = f64::from(stream_time_base);
+        let source_start_sample = range.as_ref().map_or(0, |window| window.start);
+        let covered_source_end_sample = range.as_ref().map_or(usize::MAX, |window| window.end);
+        let mut sought = false;
+
+        if allow_seek && source_start_sample > AudioData::SAMPLE_RATE as usize * 2 {
+            let seek_sample =
+                source_start_sample.saturating_sub(AudioData::SAMPLE_RATE as usize * 2);
+            let seek_seconds = seek_sample as f64 / AudioData::SAMPLE_RATE as f64
+                + stream_start_time as f64 * stream_time_base;
+            let seek_timestamp = (seek_seconds * 1_000_000.0).round() as i64;
+            sought = input_ctx.seek(seek_timestamp, ..seek_timestamp).is_ok();
+        }
+
+        let mut decoded_frame = ffmpeg::frame::Audio::empty();
+        let mut resampler_output = ResamplerOutput::new();
+        let mut samples = Vec::new();
+        let mut resampled_samples = Vec::new();
+        let mut next_source_sample = if sought { None } else { Some(0usize) };
+        let mut complete = source_start_sample == covered_source_end_sample;
+
+        'packets: for (stream, packet) in input_ctx.packets() {
+            if complete {
+                break;
             }
-            decoder.set_packet_time_base(input_stream.time_base());
+            if stream.index() != index {
+                continue;
+            }
 
-            let target_channels = target_channels_for_source(source_channels);
-            let target_channel_layout = ChannelLayout::default(target_channels as i32);
-            let mut options = ffmpeg::Dictionary::new();
-            options.set("filter_size", "128");
-            options.set("cutoff", "0.97");
+            decoder
+                .send_packet(&packet)
+                .map_err(|e| format!("Send Packet / {e}"))?;
 
-            let mut resampler = resampling::Context::get_with(
-                decoder.format(),
-                decoder.channel_layout(),
-                decoder.rate(),
-                AudioData::SAMPLE_FORMAT,
-                target_channel_layout,
-                AudioData::SAMPLE_RATE,
-                options,
-            )
-            .map_err(|e| format!("Resampler / {e}"))?;
-
-            let index = input_stream.index();
-
-            let mut decoded_frame = ffmpeg::frame::Audio::empty();
-            let mut samples: Vec<f32> = vec![];
-
-            for (stream, packet) in input_ctx.packets() {
-                if stream.index() != index {
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                if range.is_none() {
+                    run_resampler(
+                        &mut resampler,
+                        &decoded_frame,
+                        &mut resampler_output,
+                        &mut samples,
+                    )?;
                     continue;
                 }
 
-                decoder
-                    .send_packet(&packet)
-                    .map_err(|e| format!("Send Packet / {e}"))?;
+                if next_source_sample.is_none() {
+                    let Some(timestamp) = decoded_frame.timestamp().or_else(|| decoded_frame.pts())
+                    else {
+                        return Self::decode(path, range, false);
+                    };
+                    let position = ((timestamp.saturating_sub(stream_start_time)) as f64
+                        * stream_time_base
+                        * AudioData::SAMPLE_RATE as f64)
+                        .round()
+                        .max(0.0) as usize;
+                    if position > source_start_sample {
+                        return Self::decode(path, range, false);
+                    }
+                    next_source_sample = Some(position);
+                }
 
-                while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                    run_resampler(&mut resampler, &decoded_frame, &mut samples)?;
+                resampled_samples.clear();
+                run_resampler(
+                    &mut resampler,
+                    &decoded_frame,
+                    &mut resampler_output,
+                    &mut resampled_samples,
+                )?;
+                complete = append_sample_window(
+                    &mut samples,
+                    &resampled_samples,
+                    &mut next_source_sample,
+                    target_channels,
+                    source_start_sample,
+                    covered_source_end_sample,
+                );
+                if complete {
+                    break 'packets;
                 }
             }
+        }
 
+        if !complete {
             decoder.send_eof().map_err(|e| format!("Send EOF / {e}"))?;
 
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                run_resampler(&mut resampler, &decoded_frame, &mut samples)?;
+                if range.is_none() {
+                    run_resampler(
+                        &mut resampler,
+                        &decoded_frame,
+                        &mut resampler_output,
+                        &mut samples,
+                    )?;
+                    continue;
+                }
+
+                resampled_samples.clear();
+                run_resampler(
+                    &mut resampler,
+                    &decoded_frame,
+                    &mut resampler_output,
+                    &mut resampled_samples,
+                )?;
+                complete = append_sample_window(
+                    &mut samples,
+                    &resampled_samples,
+                    &mut next_source_sample,
+                    target_channels,
+                    source_start_sample,
+                    covered_source_end_sample,
+                );
+                if complete {
+                    break;
+                }
             }
 
-            flush_resampler(&mut resampler, &mut samples)?;
-
-            Ok(AudioData {
-                samples,
-                channels: target_channels,
-            })
+            if !complete {
+                if range.is_some() {
+                    resampled_samples.clear();
+                    flush_resampler(
+                        &mut resampler,
+                        &mut resampler_output,
+                        &mut resampled_samples,
+                    )?;
+                    append_sample_window(
+                        &mut samples,
+                        &resampled_samples,
+                        &mut next_source_sample,
+                        target_channels,
+                        source_start_sample,
+                        covered_source_end_sample,
+                    );
+                } else {
+                    flush_resampler(&mut resampler, &mut resampler_output, &mut samples)?;
+                }
+            }
         }
 
-        inner(path.as_ref())
+        Ok(AudioData {
+            samples,
+            channels: target_channels,
+            source_start_sample,
+            covered_source_end_sample,
+        })
     }
 
     pub fn channels(&self) -> u16 {
@@ -106,53 +245,159 @@ impl AudioData {
         self.samples.len() / self.channels as usize
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
-        Self { samples, channels }
+    pub fn source_start_sample(&self) -> usize {
+        self.source_start_sample
     }
+
+    pub fn covers_source_range(
+        &self,
+        source_start_sample: usize,
+        source_end_sample: usize,
+    ) -> bool {
+        source_start_sample >= self.source_start_sample
+            && source_end_sample <= self.covered_source_end_sample
+    }
+
+    /// Interleaved 48 kHz samples starting at source sample 0. Used to
+    /// assemble a track from decoded windows (zero elsewhere) when only parts
+    /// of a long recording are needed.
+    pub fn from_samples(samples: Vec<f32>, channels: u16) -> Self {
+        Self {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
+        Self {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
+        }
+    }
+}
+
+fn append_sample_window(
+    samples: &mut Vec<f32>,
+    resampled: &[f32],
+    next_source_sample: &mut Option<usize>,
+    channels: u16,
+    source_start_sample: usize,
+    covered_source_end_sample: usize,
+) -> bool {
+    let channels = channels as usize;
+    let frame_start = next_source_sample.unwrap_or(0);
+    let frame_end = frame_start.saturating_add(resampled.len() / channels);
+    let overlap_start = frame_start.max(source_start_sample);
+    let overlap_end = frame_end.min(covered_source_end_sample);
+
+    if overlap_start < overlap_end {
+        let start = (overlap_start - frame_start) * channels;
+        let end = (overlap_end - frame_start) * channels;
+        samples.extend_from_slice(&resampled[start..end]);
+    }
+
+    *next_source_sample = Some(frame_end);
+    frame_end >= covered_source_end_sample
 }
 
 fn target_channels_for_source(channels: u16) -> u16 {
     if channels <= 1 { 1 } else { 2 }
 }
 
+pub(crate) struct ResamplerOutput {
+    frame: FFAudio,
+    capacity: usize,
+}
+
+impl ResamplerOutput {
+    pub(crate) fn new() -> Self {
+        Self {
+            frame: FFAudio::empty(),
+            capacity: 0,
+        }
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        resampler: &resampling::Context,
+        capacity: usize,
+    ) -> &mut FFAudio {
+        if capacity > self.capacity {
+            let target = resampler.output();
+            self.frame = FFAudio::new(target.format, capacity, target.channel_layout);
+            self.capacity = capacity;
+        }
+        self.frame.set_samples(capacity);
+        &mut self.frame
+    }
+
+    pub(crate) fn run(
+        &mut self,
+        resampler: &mut resampling::Context,
+        decoded_frame: &FFAudio,
+    ) -> Result<(), String> {
+        let capacity = resample_capacity(resampler, decoded_frame.samples());
+        let frame = self.prepare(resampler, capacity);
+        resampler
+            .run(decoded_frame, frame)
+            .map_err(|error| format!("Run Resampler / {error}"))
+            .map(|_| ())
+    }
+
+    pub(crate) fn samples(&self) -> Result<&[f32], String> {
+        if self.frame.samples() == 0 {
+            return Ok(&[]);
+        }
+        let byte_len = self
+            .frame
+            .samples()
+            .saturating_mul(self.frame.channels() as usize)
+            .saturating_mul(std::mem::size_of::<f32>());
+        self.frame
+            .data(0)
+            .get(..byte_len)
+            .map(|bytes| unsafe { cast_bytes_to_f32_slice(bytes) })
+            .ok_or_else(|| "Resampled frame data shorter than expected".to_string())
+    }
+}
+
 fn run_resampler(
     resampler: &mut resampling::Context,
     decoded_frame: &FFAudio,
+    output: &mut ResamplerOutput,
     samples: &mut Vec<f32>,
 ) -> Result<(), String> {
-    let target = *resampler.output();
-    let capacity = resample_capacity(resampler, decoded_frame.samples());
-    let mut resampled_frame = FFAudio::new(target.format, capacity, target.channel_layout);
-
-    resampler
-        .run(decoded_frame, &mut resampled_frame)
-        .map_err(|e| format!("Run Resampler / {e}"))?;
-
-    append_resampled_frame(samples, &resampled_frame)
+    output.run(resampler, decoded_frame)?;
+    samples.extend(output.samples()?);
+    Ok(())
 }
 
 fn flush_resampler(
     resampler: &mut resampling::Context,
+    output: &mut ResamplerOutput,
     samples: &mut Vec<f32>,
 ) -> Result<(), String> {
     for _ in 0..64 {
         let Some(delay) = resampler.delay() else {
             break;
         };
-        let target = *resampler.output();
         let capacity = delay
             .output
             .max(1)
             .saturating_add(16)
             .min(i64::from(i32::MAX)) as usize;
-        let mut resampled_frame = FFAudio::new(target.format, capacity, target.channel_layout);
+        let resampled_frame = output.prepare(resampler, capacity);
         let remaining = resampler
-            .flush(&mut resampled_frame)
+            .flush(resampled_frame)
             .map_err(|e| format!("Flush Resampler / {e}"))?;
 
         let output_samples = resampled_frame.samples();
-        append_resampled_frame(samples, &resampled_frame)?;
+        append_resampled_frame(samples, resampled_frame)?;
 
         if remaining.is_none() || output_samples == 0 {
             break;
@@ -201,6 +446,162 @@ fn append_resampled_frame(samples: &mut Vec<f32>, frame: &FFAudio) -> Result<(),
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[cfg(unix)]
+    struct CommaDecimalThreadLocale {
+        locale: libc::locale_t,
+        previous: libc::locale_t,
+    }
+
+    #[cfg(unix)]
+    impl CommaDecimalThreadLocale {
+        fn activate() -> Option<Self> {
+            for name in [
+                c"pt_BR.UTF-8",
+                c"pt_BR.utf8",
+                c"de_DE.UTF-8",
+                c"de_DE.utf8",
+                c"fr_FR.UTF-8",
+                c"fr_FR.utf8",
+            ] {
+                let locale = unsafe {
+                    libc::newlocale(libc::LC_NUMERIC_MASK, name.as_ptr(), std::ptr::null_mut())
+                };
+                if locale.is_null() {
+                    continue;
+                }
+                let previous = unsafe { libc::uselocale(locale) };
+                let parsed = unsafe { libc::strtod(c"0,5".as_ptr(), std::ptr::null_mut()) };
+                if (parsed - 0.5).abs() < f64::EPSILON {
+                    return Some(Self { locale, previous });
+                }
+                unsafe {
+                    libc::uselocale(previous);
+                    libc::freelocale(locale);
+                }
+            }
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for CommaDecimalThreadLocale {
+        fn drop(&mut self) {
+            unsafe {
+                libc::uselocale(self.previous);
+                libc::freelocale(self.locale);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn high_quality_resampler_options_parse_under_comma_decimal_locale() {
+        let Some(_locale) = CommaDecimalThreadLocale::activate() else {
+            eprintln!("skipping: no comma-decimal locale is installed");
+            return;
+        };
+
+        let resampler = resampling::Context::get_with(
+            avformat::Sample::F32(avformat::sample::Type::Planar),
+            ChannelLayout::STEREO,
+            44_100,
+            AudioData::SAMPLE_FORMAT,
+            ChannelLayout::STEREO,
+            AudioData::SAMPLE_RATE,
+            high_quality_resampler_options(),
+        )
+        .expect("resampler options must parse under a comma-decimal LC_NUMERIC");
+
+        let mut cutoff = 0.0;
+        let result = unsafe {
+            ffmpeg::ffi::av_opt_get_double(
+                resampler.as_ptr() as *mut std::ffi::c_void,
+                c"cutoff".as_ptr(),
+                0,
+                &mut cutoff,
+            )
+        };
+        assert_eq!(result, 0);
+        assert!((cutoff - 0.97).abs() < 1e-9, "cutoff was {cutoff}");
+    }
+
+    #[test]
+    fn reused_resampler_output_matches_fresh_buffers_for_variable_frames() {
+        for source_rate in [16_000, 44_100, 48_000, 96_000] {
+            for channels in [1, 2, 6] {
+                let source_format = avformat::Sample::F32(avformat::sample::Type::Planar);
+                let source_layout = ChannelLayout::default(channels);
+                let output_layout =
+                    ChannelLayout::default(i32::from(target_channels_for_source(channels as u16)));
+                let create_resampler = || {
+                    resampling::Context::get_with(
+                        source_format,
+                        source_layout,
+                        source_rate,
+                        AudioData::SAMPLE_FORMAT,
+                        output_layout,
+                        AudioData::SAMPLE_RATE,
+                        high_quality_resampler_options(),
+                    )
+                    .unwrap()
+                };
+                let mut reference_resampler = create_resampler();
+                let mut candidate_resampler = create_resampler();
+                let mut reference = Vec::new();
+                let mut candidate = Vec::new();
+                let mut output = ResamplerOutput::new();
+                for (index, count) in [1, 511, 1024, 2048, 37, 960, 3].into_iter().enumerate() {
+                    let mut input = FFAudio::new(source_format, count, source_layout);
+                    input.set_rate(source_rate);
+                    for channel in 0..channels as usize {
+                        for (sample_index, sample) in
+                            input.plane_mut::<f32>(channel).iter_mut().enumerate()
+                        {
+                            *sample = ((sample_index * 13 + index * 71 + channel * 3) % 101) as f32
+                                / 101.0
+                                - 0.5;
+                        }
+                    }
+                    let capacity = resample_capacity(&reference_resampler, count);
+                    let mut frame = FFAudio::new(AudioData::SAMPLE_FORMAT, capacity, output_layout);
+                    reference_resampler.run(&input, &mut frame).unwrap();
+                    append_resampled_frame(&mut reference, &frame).unwrap();
+                    run_resampler(
+                        &mut candidate_resampler,
+                        &input,
+                        &mut output,
+                        &mut candidate,
+                    )
+                    .unwrap();
+                }
+                for _ in 0..64 {
+                    let Some(delay) = reference_resampler.delay() else {
+                        break;
+                    };
+                    let mut frame = FFAudio::new(
+                        AudioData::SAMPLE_FORMAT,
+                        delay.output.max(1).saturating_add(16) as usize,
+                        output_layout,
+                    );
+                    let remaining = reference_resampler.flush(&mut frame).unwrap();
+                    append_resampled_frame(&mut reference, &frame).unwrap();
+                    if remaining.is_none() || frame.samples() == 0 {
+                        break;
+                    }
+                }
+                flush_resampler(&mut candidate_resampler, &mut output, &mut candidate).unwrap();
+                assert_eq!(candidate.len(), reference.len());
+                assert!(
+                    candidate
+                        .iter()
+                        .zip(&reference)
+                        .all(|(actual, expected)| actual.to_bits() == expected.to_bits()),
+                    "Resampler samples differ at {source_rate} Hz with {channels} channels"
+                );
+            }
+        }
+    }
 
     /// Writes an s16le PCM WAV where channel `c` of every frame carries the constant
     /// `amplitudes[c]` (DC). DC survives both resampling and downmix unchanged, so the
@@ -305,5 +706,79 @@ mod tests {
             rms(data.samples()) > 0.01,
             "centre/rear-only surround downmix collapsed to silence (channel truncation?)"
         );
+    }
+
+    #[test]
+    fn from_file_range_seeks_to_requested_stereo_samples() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stereo_steps.wav");
+        let frames = AudioData::SAMPLE_RATE as usize * 8;
+        write_pcm_wav(&path, AudioData::SAMPLE_RATE, frames, &[0, 0]);
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        for (index, frame) in bytes[44..].chunks_exact_mut(4).enumerate() {
+            let sample = ((index / AudioData::SAMPLE_RATE as usize + 1) * 2_000) as i16;
+            frame[..2].copy_from_slice(&sample.to_le_bytes());
+            frame[2..].copy_from_slice(&(-sample).to_le_bytes());
+        }
+        std::fs::write(&path, bytes).unwrap();
+
+        let full = AudioData::from_file(&path).unwrap();
+        let start = AudioData::SAMPLE_RATE as usize * 5 + 137;
+        let end = start + AudioData::SAMPLE_RATE as usize * 2 + 219;
+        let range = AudioData::from_file_range(&path, start, end).unwrap();
+
+        assert_eq!(range.channels(), 2);
+        assert_eq!(range.source_start_sample(), start);
+        assert_eq!(range.sample_count(), end - start);
+        assert_eq!(range.samples(), &full.samples()[start * 2..end * 2]);
+        assert!(range.covers_source_range(start, end));
+        assert!(!range.covers_source_range(start.saturating_sub(1), end));
+        assert!(!range.covers_source_range(start, end.saturating_add(1)));
+    }
+
+    #[test]
+    fn from_file_range_resamples_and_clamps_at_end_of_file() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+
+        for (sample_rate, channels) in [(16_000u32, 1usize), (44_100, 2), (96_000, 1)] {
+            let path = dir
+                .path()
+                .join(format!("range_{sample_rate}_{channels}.wav"));
+            write_pcm_wav(
+                &path,
+                sample_rate,
+                sample_rate as usize * 6,
+                &vec![7_000; channels],
+            );
+
+            let start = AudioData::SAMPLE_RATE as usize * 4 + 333;
+            let end = AudioData::SAMPLE_RATE as usize * 8;
+            let full = AudioData::from_file(&path).unwrap();
+            let range = AudioData::from_file_range(&path, start, end).unwrap();
+
+            assert_eq!(range.channels(), channels as u16);
+            assert_eq!(range.source_start_sample(), start);
+            assert!(range.sample_count().abs_diff(full.sample_count() - start) <= 4);
+            assert!(range.covers_source_range(start, end));
+            assert!(rms(range.samples()) > 0.01);
+        }
+    }
+
+    #[test]
+    fn from_file_range_supports_empty_windows() {
+        let _ = ffmpeg::init();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty_range.wav");
+        write_pcm_wav(&path, AudioData::SAMPLE_RATE, 4_800, &[2_000]);
+
+        let data = AudioData::from_file_range(&path, 1_000, 1_000).unwrap();
+
+        assert_eq!(data.channels(), 1);
+        assert_eq!(data.source_start_sample(), 1_000);
+        assert_eq!(data.sample_count(), 0);
+        assert!(data.covers_source_range(1_000, 1_000));
     }
 }

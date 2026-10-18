@@ -24,6 +24,9 @@ WebBrowser.maybeCompleteAuthSession();
 
 const sessionKey = "cap.mobile.apiKey";
 const userIdKey = "cap.mobile.userId";
+const secureStoreOptions: SecureStore.SecureStoreOptions = {
+	keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
 
 type AuthState = {
 	status: "loading" | "signedOut" | "signedIn";
@@ -34,6 +37,7 @@ type AuthState = {
 	client: MobileApiClient;
 	requestEmailCode: (email: string) => Promise<void>;
 	verifyEmailCode: (email: string, code: string) => Promise<void>;
+	signInWithApple: () => Promise<void>;
 	signInWithGoogle: () => Promise<void>;
 	signInWithSso: (organizationId: string) => Promise<void>;
 	signOut: () => Promise<void>;
@@ -43,6 +47,7 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 const fallbackAuthConfig: MobileAuthConfigResponse = {
+	appleAuthAvailable: false,
 	googleAuthAvailable: true,
 	workosAuthAvailable: true,
 };
@@ -132,9 +137,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	const storeSession = useCallback(
 		async (session: { apiKey: string; userId: string | null }) => {
-			await SecureStore.setItemAsync(sessionKey, session.apiKey);
+			await SecureStore.setItemAsync(
+				sessionKey,
+				session.apiKey,
+				secureStoreOptions,
+			);
 			if (session.userId) {
-				await SecureStore.setItemAsync(userIdKey, session.userId);
+				await SecureStore.setItemAsync(
+					userIdKey,
+					session.userId,
+					secureStoreOptions,
+				);
 			} else {
 				await SecureStore.deleteItemAsync(userIdKey);
 			}
@@ -162,16 +175,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		[client, storeSession],
 	);
 
-	const signInWithGoogle = useCallback(async () => {
-		const redirectUri = Linking.createURL("auth");
-		const result = await WebBrowser.openAuthSessionAsync(
-			createSessionRequestUrl(apiBaseUrl, redirectUri, "google"),
-			redirectUri,
-		);
-		if (result.type !== "success") return;
+	const signInWithProvider = useCallback(
+		async (provider: "apple" | "google") => {
+			const redirectUri = Linking.createURL("auth");
+			const result = await WebBrowser.openAuthSessionAsync(
+				createSessionRequestUrl(apiBaseUrl, redirectUri, provider),
+				redirectUri,
+			);
+			if (result.type !== "success") return;
 
-		await storeSession(requireAuthRedirectSession(result.url));
-	}, [storeSession]);
+			await storeSession(requireAuthRedirectSession(result.url));
+		},
+		[storeSession],
+	);
+
+	const signInWithApple = useCallback(
+		() => signInWithProvider("apple"),
+		[signInWithProvider],
+	);
+
+	const signInWithGoogle = useCallback(
+		() => signInWithProvider("google"),
+		[signInWithProvider],
+	);
 
 	const signInWithSso = useCallback(
 		async (organizationId: string) => {
@@ -223,6 +249,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			client,
 			requestEmailCode,
 			verifyEmailCode,
+			signInWithApple,
 			signInWithGoogle,
 			signInWithSso,
 			signOut,
@@ -238,6 +265,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			client,
 			requestEmailCode,
 			verifyEmailCode,
+			signInWithApple,
 			signInWithGoogle,
 			signInWithSso,
 			signOut,

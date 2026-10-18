@@ -71,7 +71,7 @@ export default defineConfig({
 				"@tauri-apps/api/webviewWindow",
 				"@tauri-apps/plugin-dialog",
 				"@tauri-apps/plugin-store",
-				"posthog-js",
+				"@openpanel/web",
 				"uuid",
 				"@tauri-apps/plugin-clipboard-manager",
 				"@tauri-apps/api/window",

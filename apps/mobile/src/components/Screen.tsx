@@ -1,14 +1,9 @@
 import type { ReactNode } from "react";
-import {
-	ActivityIndicator,
-	ScrollView,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { type Edge, SafeAreaView } from "react-native-safe-area-context";
 import { colors, fonts } from "@/theme";
-import { CapRefreshControl } from "./CapRefreshControl";
+import { CapLoadingIndicator } from "./CapLoadingIndicator";
+import { CapRefreshControl, CapRefreshOverlay } from "./CapRefreshControl";
 
 type ScreenProps = {
 	children?: ReactNode;
@@ -20,6 +15,9 @@ type ScreenProps = {
 	loading?: boolean;
 	footer?: ReactNode;
 	safeEdges?: Edge[];
+	automaticallyAdjustKeyboardInsets?: boolean;
+	contentInsetBottom?: number;
+	headerLeft?: ReactNode;
 };
 
 const defaultSafeEdges: Edge[] = ["top", "left", "right"];
@@ -34,18 +32,24 @@ export function Screen({
 	loading = false,
 	footer,
 	safeEdges = defaultSafeEdges,
+	automaticallyAdjustKeyboardInsets = false,
+	contentInsetBottom,
+	headerLeft,
 }: ScreenProps) {
 	const content = (
 		<>
 			{title ? (
 				<View style={[styles.header, subtitle && styles.headerWithSubtitle]}>
+					{headerLeft ? (
+						<View style={styles.headerLeft}>{headerLeft}</View>
+					) : null}
 					<Text style={styles.title}>{title}</Text>
 					{subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
 				</View>
 			) : null}
 			{loading ? (
 				<View style={styles.loading}>
-					<ActivityIndicator color={colors.blue9} />
+					<CapLoadingIndicator />
 				</View>
 			) : (
 				children
@@ -57,24 +61,44 @@ export function Screen({
 	return (
 		<SafeAreaView style={styles.safeArea} edges={safeEdges}>
 			{scroll ? (
-				<ScrollView
-					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={styles.scrollContent}
-					keyboardDismissMode="interactive"
-					keyboardShouldPersistTaps="handled"
-					refreshControl={
-						onRefresh ? (
-							<CapRefreshControl
-								refreshing={refreshing}
-								onRefresh={onRefresh}
-							/>
-						) : undefined
-					}
+				<>
+					<ScrollView
+						automaticallyAdjustKeyboardInsets={
+							automaticallyAdjustKeyboardInsets
+						}
+						contentInsetAdjustmentBehavior="automatic"
+						contentContainerStyle={[
+							styles.scrollContent,
+							contentInsetBottom != null
+								? { paddingBottom: contentInsetBottom }
+								: null,
+						]}
+						keyboardDismissMode="interactive"
+						keyboardShouldPersistTaps="handled"
+						refreshControl={
+							onRefresh ? (
+								<CapRefreshControl
+									refreshing={refreshing}
+									onRefresh={onRefresh}
+								/>
+							) : undefined
+						}
+					>
+						{content}
+					</ScrollView>
+					{onRefresh ? <CapRefreshOverlay refreshing={refreshing} /> : null}
+				</>
+			) : (
+				<View
+					style={[
+						styles.content,
+						contentInsetBottom != null
+							? { paddingBottom: contentInsetBottom }
+							: null,
+					]}
 				>
 					{content}
-				</ScrollView>
-			) : (
-				<View style={styles.content}>{content}</View>
+				</View>
 			)}
 		</SafeAreaView>
 	);
@@ -102,6 +126,9 @@ const styles = StyleSheet.create({
 	},
 	headerWithSubtitle: {
 		paddingBottom: 32,
+	},
+	headerLeft: {
+		marginBottom: 4,
 	},
 	title: {
 		fontFamily: fonts.medium,

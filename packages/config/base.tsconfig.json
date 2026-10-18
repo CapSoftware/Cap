@@ -14,7 +14,12 @@
 		"strict": true,
 		"noFallthroughCasesInSwitch": true,
 		"declaration": true,
-		"plugins": [{ "name": "@effect/language-service" }],
+		"plugins": [
+			{
+				"name": "@effect/language-service",
+				"ignoreEffectWarningsInTscExitCode": true
+			}
+		],
 		"incremental": true
 	},
 	"references": [{ "path": "./tsconfig.node.json" }]

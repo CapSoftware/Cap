@@ -1,5 +1,4 @@
 import { type RouteSectionProps, useLocation } from "@solidjs/router";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -15,22 +14,13 @@ import { AbsoluteInsetLoader } from "~/components/Loader";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
-import { initializeTitlebar } from "~/utils/titlebar-state";
 import {
 	useWindowChromeContext,
 	WindowChromeContext,
 } from "./(window-chrome)/Context";
 
 export default function (props: RouteSectionProps) {
-	let unlistenResize: UnlistenFn | undefined;
 	const location = useLocation();
-
-	onMount(async () => {
-		console.log("window chrome mounted");
-		void initializeTitlebar().then((unlisten) => {
-			unlistenResize = unlisten;
-		});
-	});
 
 	const handleKeyDown = (e: KeyboardEvent) => {
 		const isMac = ostype() === "macos";
@@ -49,7 +39,6 @@ export default function (props: RouteSectionProps) {
 	});
 
 	onCleanup(() => {
-		unlistenResize?.();
 		window.removeEventListener("keydown", handleKeyDown);
 	});
 
@@ -116,12 +105,20 @@ function Header() {
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
-			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
+			{isWindows && (
+				<CaptionControlsWindows11
+					class="ml-auto!"
+					maximizable={ctx.state()?.onMaximize ? true : undefined}
+					maximized={ctx.state()?.maximized}
+					onMaximize={ctx.state()?.onMaximize}
+				/>
+			)}
 			{((isMacOS && !isSettings()) || isLinux) && (
 				<CaptionControlsMacOS
 					class="mr-auto! ml-3"
 					showMinimize={false}
-					showZoom={false}
+					showZoom={ctx.state()?.onMaximize !== undefined}
+					onZoom={ctx.state()?.onMaximize}
 				/>
 			)}
 		</header>
@@ -129,15 +126,10 @@ function Header() {
 }
 
 function Inner(props: ParentProps) {
-	onMount(() => {
-		const initialTargetMode = (
-			window as typeof window & {
-				__CAP__?: { initialTargetMode?: unknown };
-			}
-		).__CAP__?.initialTargetMode;
+	const location = useLocation();
 
-		if (location.pathname !== "/" || !initialTargetMode)
-			void getCurrentWindow().show();
+	onMount(() => {
+		if (location.pathname !== "/") void getCurrentWindow().show();
 	});
 
 	return (

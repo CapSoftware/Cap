@@ -1,11 +1,8 @@
+import { OpenPanel } from "@openpanel/web";
 import { Store } from "@tauri-apps/plugin-store";
-import posthog from "posthog-js";
-import { v4 as uuid } from "uuid";
 
-const key = import.meta.env.VITE_POSTHOG_KEY as string;
-const host = import.meta.env.VITE_POSTHOG_HOST as string;
-
-let isPostHogInitialized = false;
+const clientId = import.meta.env.VITE_OPENPANEL_CLIENT_ID as string | undefined;
+const apiUrl = import.meta.env.VITE_OPENPANEL_API_URL as string | undefined;
 
 let telemetryEnabledCache = true;
 
@@ -22,78 +19,94 @@ async function isTelemetryEnabled(): Promise<boolean> {
 	return telemetryEnabledCache;
 }
 
-if (key && host) {
+// The SDK appends "/track" to `apiUrl`, so it must be a bare origin.
+function normalizeApiUrl(url: string | undefined): string | undefined {
+	const trimmed = url?.trim().replace(/\/+$/, "");
+	return trimmed || undefined;
+}
+
+let openpanel: OpenPanel | undefined;
+
+if (clientId && apiUrl) {
 	try {
-		posthog.init(key, {
-			api_host: host,
-			capture_pageview: false,
-			loaded: (_posthogInstance) => {
-				isPostHogInitialized = true;
-			},
+		openpanel = new OpenPanel({
+			clientId,
+			apiUrl: normalizeApiUrl(apiUrl),
+			// This is a desktop webview, not a website: routes are internal
+			// implementation detail and there are no outgoing links, so every
+			// event is sent explicitly via `trackEvent`.
+			trackScreenViews: false,
+			trackOutgoingLinks: false,
+			trackAttributes: false,
+			// Backstop for the telemetry toggle. `trackEvent` checks it too, but
+			// this also covers anything the SDK sends on its own.
+			filter: () => telemetryEnabledCache,
 		});
-		console.log("PostHog initialization started");
+		console.log("OpenPanel initialized");
 	} catch (error) {
-		console.error("Failed to initialize PostHog:", error);
+		console.error("Failed to initialize OpenPanel:", error);
 	}
 }
 
 export function initAnonymousUser() {
-	if (!key || !host) {
-		console.warn("Cannot initialize anonymous user - missing key or host");
+	if (!openpanel) {
+		console.warn("Cannot initialize anonymous user - analytics not configured");
 		return;
 	}
 
+	// OpenPanel assigns anonymous device profiles server-side, so there is no
+	// client-generated anonymous id to manage. Drop the id PostHog used to
+	// persist and warm the telemetry cache before the first event fires.
 	try {
-		const anonymousId = localStorage.getItem("anonymous_id") ?? uuid();
-		localStorage.setItem("anonymous_id", anonymousId);
-		posthog.identify(anonymousId);
-		console.log("Anonymous user identified:", anonymousId);
-	} catch (error) {
-		console.error("Error initializing anonymous user:", error);
+		localStorage.removeItem("anonymous_id");
+	} catch {
+		// localStorage is unavailable in some webview contexts; nothing to clean
 	}
+	void isTelemetryEnabled();
 }
 
 export function identifyUser(
 	userId: string,
 	properties?: Record<string, unknown>,
 ) {
-	if (!key || !host) {
-		console.warn("Cannot identify user - missing key or host");
+	const op = openpanel;
+	if (!op) {
+		console.warn("Cannot identify user - analytics not configured");
 		return;
 	}
 
-	try {
-		const currentId = posthog.get_distinct_id();
-		const anonymousId = localStorage.getItem("anonymous_id");
+	if (!telemetryEnabledCache) return;
 
-		if (currentId !== userId) {
-			if (anonymousId && currentId === anonymousId) {
-				console.log(`Aliasing user ${userId} from anonymous ID ${anonymousId}`);
-				posthog.alias(userId, anonymousId);
-			}
-			posthog.identify(userId);
-			if (properties) {
-				posthog.people.set(properties);
-			}
-			localStorage.removeItem("anonymous_id");
+	void isTelemetryEnabled().then((enabled) => {
+		if (!enabled) return;
+
+		try {
+			// Identifying merges the anonymous device profile into `profileId`,
+			// so no aliasing step is needed.
+			void Promise.resolve(
+				op.identify({
+					profileId: userId,
+					...(properties ? { properties } : {}),
+				}),
+			).catch((error) => console.error("Error identifying user:", error));
 			console.log(`User identified: ${userId}`);
-		} else {
-			console.log(`User already identified as ${userId}`);
+		} catch (error) {
+			console.error("Error identifying user:", error);
 		}
-	} catch (error) {
-		console.error("Error identifying user:", error);
-	}
+	});
+}
+
+export function resetUser() {
+	openpanel?.clear();
 }
 
 export function trackEvent(
 	eventName: string,
 	properties?: Record<string, unknown>,
 ) {
-	if (!key || !host) {
-		console.warn(
-			"PostHog event not captured - missing key or host:",
-			eventName,
-		);
+	const op = openpanel;
+	if (!op) {
+		console.warn("Event not captured - analytics not configured:", eventName);
 		return;
 	}
 
@@ -105,20 +118,13 @@ export function trackEvent(
 		if (!enabled) return;
 
 		try {
-			if (!isPostHogInitialized) {
-				console.warn(
-					`PostHog not initialized yet, queuing event: ${eventName}`,
-				);
-				setTimeout(() => {
-					console.log(`Retrying event ${eventName} after delay`);
-					trackEvent(eventName, properties);
-				}, 1000);
-				return;
-			}
-
 			const eventProperties = { ...properties, platform: "desktop" };
 			console.log(`Capturing event ${eventName}:`, eventProperties);
-			posthog.capture(eventName, eventProperties);
+			void op
+				.track(eventName, eventProperties)
+				.catch((error) =>
+					console.error(`Error capturing event ${eventName}:`, error),
+				);
 		} catch (error) {
 			console.error(`Error capturing event ${eventName}:`, error);
 		}

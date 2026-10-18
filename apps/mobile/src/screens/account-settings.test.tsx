@@ -17,11 +17,13 @@ type JsonNode = ReactTestRendererJSON | ReactTestRendererJSON[] | string | null;
 const auth = vi.hoisted(() => ({
 	value: {
 		status: "signedIn" as const,
+		apiKey: "mobile-key",
 		bootstrap: {
 			activeOrganizationId: "org_123",
 			user: {
 				email: "richie@cap.so",
 				imageUrl: null,
+				lastName: "McIlroy",
 				name: "Richie",
 			},
 			organizations: [
@@ -38,6 +40,32 @@ const auth = vi.hoisted(() => ({
 		setActiveOrganization: vi.fn(() => Promise.resolve()),
 		signOut: vi.fn(() => Promise.resolve()),
 	},
+}));
+
+const billing = vi.hoisted(() => ({
+	getProPlan: vi.fn(
+		(): Promise<{
+			upgraded: boolean;
+			stripeSubscriptionStatus: string | null;
+		}> =>
+			Promise.resolve({
+				upgraded: false,
+				stripeSubscriptionStatus: null,
+			}),
+	),
+}));
+
+const actionSheet = vi.hoisted(() => ({
+	showActionSheetWithOptions: vi.fn(),
+}));
+
+const linking = vi.hoisted(() => ({
+	openSettings: vi.fn(() => Promise.resolve()),
+	openURL: vi.fn(() => Promise.resolve()),
+}));
+
+const router = vi.hoisted(() => ({
+	push: vi.fn(),
 }));
 
 (
@@ -77,19 +105,11 @@ vi.mock("react-native", async () => {
 			React.createElement(name, props, children);
 
 	return {
-		ActionSheetIOS: {
-			showActionSheetWithOptions: vi.fn(),
-		},
+		ActionSheetIOS: actionSheet,
 		ActivityIndicator: createHost("ActivityIndicator"),
-		Alert: {
-			alert: vi.fn(),
-		},
-		Linking: {
-			openSettings: vi.fn(),
-		},
-		Platform: {
-			OS: "ios",
-		},
+		Alert: { alert: vi.fn() },
+		Linking: linking,
+		Platform: { OS: "ios" },
 		Pressable: createHost("Pressable"),
 		StyleSheet: {
 			create: <T extends Record<string, unknown>>(styles: T) => styles,
@@ -103,7 +123,7 @@ vi.mock("react-native", async () => {
 vi.mock("expo-constants", () => ({
 	default: {
 		expoConfig: {
-			version: "0.1.0",
+			version: "1.0.0",
 		},
 	},
 }));
@@ -124,14 +144,14 @@ vi.mock("expo-symbols", async () => {
 	};
 });
 
-vi.mock("expo-web-browser", () => ({
-	openBrowserAsync: vi.fn(),
-}));
+vi.mock("expo-router", () => ({ router }));
 
 vi.mock("@/auth/AuthContext", () => ({
 	apiBaseUrl: "https://cap.so",
 	useAuth: () => auth.value,
 }));
+
+vi.mock("@/billing/pro", () => billing);
 
 vi.mock("@/auth/SignInPanel", async () => {
 	const React = await import("react");
@@ -179,61 +199,108 @@ vi.mock("@/components/Screen", async () => {
 
 describe("AccountScreen", () => {
 	beforeEach(() => {
-		auth.value.refresh.mockReset();
+		vi.clearAllMocks();
+		billing.getProPlan.mockResolvedValue({
+			upgraded: false,
+			stripeSubscriptionStatus: null,
+		});
 		auth.value.refresh.mockResolvedValue(undefined);
-		auth.value.setActiveOrganization.mockReset();
 		auth.value.setActiveOrganization.mockResolvedValue(undefined);
-		auth.value.signOut.mockReset();
 		auth.value.signOut.mockResolvedValue(undefined);
 	});
 
-	it("opens organization settings in the native browser sheet", async () => {
+	it("shows the Free plan limit without an external purchase action", async () => {
 		const renderer = await renderComponent(React.createElement(AccountScreen));
 		const text = getTextNodes(renderer.toJSON());
-		const [organizationSettings] = renderer.root.findAllByProps({
-			accessibilityLabel: "Organization Settings",
-		});
-		if (!organizationSettings) {
-			throw new Error("Organization Settings row was not rendered");
-		}
-
-		expect(text).toContain("Account");
-		expect(text).toContain("Organization Settings");
-		expect(organizationSettings.props.accessibilityHint).toBe(
-			"Opens organization settings in a browser sheet",
-		);
-
-		const WebBrowser = await import("expo-web-browser");
-		const openBrowserAsync = vi.mocked(WebBrowser.openBrowserAsync);
-		const openDeferred =
-			createDeferred<Awaited<ReturnType<typeof WebBrowser.openBrowserAsync>>>();
-		openBrowserAsync.mockClear();
-		openBrowserAsync.mockReturnValueOnce(openDeferred.promise);
-
-		await act(async () => {
-			organizationSettings.props.onPress();
-			await Promise.resolve();
+		const [freePlan] = renderer.root.findAllByProps({
+			accessibilityLabel: "Cap plan: Free",
 		});
 
-		expect(openBrowserAsync).toHaveBeenCalledWith(
-			"https://cap.so/dashboard/settings/organization",
-		);
-		const [openingOrganizationSettings] = renderer.root.findAllByProps({
-			accessibilityLabel: "Organization Settings",
-		});
-		expect(openingOrganizationSettings?.props.accessibilityValue).toEqual({
-			text: "Opening organization settings",
-		});
-
-		await act(async () => {
-			openDeferred.resolve({
-				type: "dismiss",
-			} as Awaited<ReturnType<typeof WebBrowser.openBrowserAsync>>);
-			await openDeferred.promise;
+		expect(freePlan).toBeDefined();
+		expect(text).toContain("Free plan");
+		expect(text).toContain("Free plan · Recordings are limited to 5 minutes");
+		expect(
+			renderer.root.findAllByProps({
+				accessibilityLabel: "Upgrade to Cap Pro",
+			}),
+		).toHaveLength(0);
+		expect(billing.getProPlan).toHaveBeenCalledWith({
+			apiKey: "mobile-key",
+			baseUrl: "https://cap.so",
 		});
 	});
 
-	it("marks app settings as opening with a native value", async () => {
+	it("shows existing Cap Pro access without a purchase action", async () => {
+		billing.getProPlan.mockResolvedValueOnce({
+			upgraded: true,
+			stripeSubscriptionStatus: "active",
+		});
+		const renderer = await renderComponent(React.createElement(AccountScreen));
+		const text = getTextNodes(renderer.toJSON());
+
+		expect(
+			renderer.root.findAllByProps({ accessibilityLabel: "Cap plan: Cap Pro" }),
+		).not.toHaveLength(0);
+		expect(text).toContain("Cap Pro");
+		expect(text).toContain("Unlimited recording time");
+	});
+
+	it("offers plan retry without guessing a Free or Pro state", async () => {
+		billing.getProPlan.mockRejectedValueOnce(new Error("offline"));
+		const renderer = await renderComponent(React.createElement(AccountScreen));
+		const [unavailable] = renderer.root.findAllByProps({
+			accessibilityLabel: "Cap plan unavailable",
+		});
+
+		expect(unavailable).toBeDefined();
+		expect(getTextNodes(renderer.toJSON())).toContain("Tap to try again");
+		await act(async () => {
+			unavailable?.props.onPress();
+		});
+		expect(billing.getProPlan).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens native profile, organization, and account deletion screens", async () => {
+		const renderer = await renderComponent(React.createElement(AccountScreen));
+		const routes = [
+			["Name and Profile Image", "/profile-settings"],
+			["Organization Settings", "/organization-settings"],
+			["Delete account", "/delete-account"],
+		] as const;
+
+		for (const [label, route] of routes) {
+			const [row] = renderer.root.findAllByProps({
+				accessibilityLabel: label,
+			});
+			if (!row) throw new Error(`${label} row was not rendered`);
+			await act(async () => {
+				row.props.onPress();
+			});
+			expect(router.push).toHaveBeenLastCalledWith(route);
+		}
+	});
+
+	it("opens help, privacy, and terms from the signed-in account", async () => {
+		const renderer = await renderComponent(React.createElement(AccountScreen));
+		const pages = [
+			["Help & Support", "https://cap.so/docs"],
+			["Privacy Policy", "https://cap.so/privacy"],
+			["Terms of Service", "https://cap.so/terms"],
+		] as const;
+
+		for (const [label, url] of pages) {
+			const [row] = renderer.root.findAllByProps({
+				accessibilityLabel: label,
+			});
+			if (!row) throw new Error(`${label} row was not rendered`);
+			await act(async () => {
+				row.props.onPress();
+			});
+			expect(linking.openURL).toHaveBeenLastCalledWith(url);
+		}
+	});
+
+	it("marks app settings as busy while the native view opens", async () => {
 		const renderer = await renderComponent(React.createElement(AccountScreen));
 		const [appSettings] = renderer.root.findAllByProps({
 			accessibilityLabel: "App Settings",
@@ -243,7 +310,6 @@ describe("AccountScreen", () => {
 		const { Linking } = await import("react-native");
 		const openSettings = vi.mocked(Linking.openSettings);
 		const openDeferred = createDeferred<void>();
-		openSettings.mockClear();
 		openSettings.mockReturnValueOnce(openDeferred.promise);
 
 		await act(async () => {
@@ -264,7 +330,7 @@ describe("AccountScreen", () => {
 		});
 	});
 
-	it("locks account settings rows while refresh is in progress", async () => {
+	it("locks account actions while refresh is in progress", async () => {
 		const refreshDeferred = createDeferred<void>();
 		auth.value.refresh.mockReturnValueOnce(refreshDeferred.promise);
 		const renderer = await renderComponent(React.createElement(AccountScreen));
@@ -278,45 +344,16 @@ describe("AccountScreen", () => {
 			await Promise.resolve();
 		});
 
-		const [loadingRefreshRow] = renderer.root.findAllByProps({
-			accessibilityLabel: "Refresh",
-		});
-		const [organizationSettings] = renderer.root.findAllByProps({
-			accessibilityLabel: "Organization Settings",
-		});
-		const [appSettings] = renderer.root.findAllByProps({
-			accessibilityLabel: "App Settings",
-		});
-		const [signOut] = renderer.root.findAllByProps({
-			accessibilityLabel: "Sign out",
-		});
-		if (
-			!loadingRefreshRow ||
-			!organizationSettings ||
-			!appSettings ||
-			!signOut
-		) {
-			throw new Error("Account action rows were not rendered");
-		}
-
-		expect(loadingRefreshRow.props.accessibilityState).toEqual({
-			busy: true,
-			disabled: true,
-		});
-		expect(loadingRefreshRow.props.accessibilityHint).toBe(
-			"Refresh is in progress",
-		);
-		expect(loadingRefreshRow.props.accessibilityValue).toEqual({
-			text: "Refreshing account data",
-		});
-		expect(getTextNodes(renderer.toJSON())).toContain("Refreshing...");
-		for (const row of [organizationSettings, appSettings, signOut]) {
-			expect(row.props.disabled).toBe(true);
-			expect(row.props.accessibilityState).toEqual({
-				busy: false,
-				disabled: true,
+		for (const label of [
+			"Organization Settings",
+			"App Settings",
+			"Sign out",
+			"Delete account",
+		]) {
+			const [row] = renderer.root.findAllByProps({
+				accessibilityLabel: label,
 			});
-			expect(row.props.accessibilityHint).toBe("Refresh is in progress");
+			expect(row?.props.disabled).toBe(true);
 		}
 
 		await act(async () => {
@@ -334,17 +371,11 @@ describe("AccountScreen", () => {
 		});
 		if (!signOut) throw new Error("Sign out row was not rendered");
 
-		const { ActionSheetIOS } = await import("react-native");
-		const showActionSheetWithOptions = vi.mocked(
-			ActionSheetIOS.showActionSheetWithOptions,
-		);
-		showActionSheetWithOptions.mockClear();
-
 		await act(async () => {
 			signOut.props.onPress();
 		});
-
-		const [, callback] = showActionSheetWithOptions.mock.calls[0] ?? [];
+		const callback = actionSheet.showActionSheetWithOptions.mock
+			.calls[0]?.[1] as ((index: number) => void) | undefined;
 		if (!callback)
 			throw new Error("Sign-out confirmation callback was not set");
 
@@ -352,20 +383,12 @@ describe("AccountScreen", () => {
 			callback(0);
 			await Promise.resolve();
 		});
-
 		const [loadingSignOut] = renderer.root.findAllByProps({
 			accessibilityLabel: "Sign out",
 		});
-		if (!loadingSignOut) throw new Error("Sign out row was not rendered");
-		expect(loadingSignOut.props.accessibilityState).toEqual({
+		expect(loadingSignOut?.props.accessibilityState).toEqual({
 			busy: true,
 			disabled: true,
-		});
-		expect(loadingSignOut.props.accessibilityHint).toBe(
-			"Sign out is in progress",
-		);
-		expect(loadingSignOut.props.accessibilityValue).toEqual({
-			text: "Signing out of Cap",
 		});
 		expect(getTextNodes(renderer.toJSON())).toContain("Signing out...");
 

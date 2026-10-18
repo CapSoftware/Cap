@@ -90,7 +90,6 @@ export async function getVideoDownloadInfo(
 		userId: user.id,
 		ownerId: video.ownerId,
 		videoId,
-		orgId: video.orgId,
 	});
 
 	if (!allowed) {
