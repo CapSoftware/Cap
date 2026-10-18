@@ -147,6 +147,7 @@ tracing-appender = "0.2"
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
 # `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
+bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "multipart",
@@ -168,7 +169,11 @@ tauri-winres = "0.3.5"
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
+# Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
+# audio markers for the fake transcriber.
+cap-verify = { path = "../../crates/verify" }
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

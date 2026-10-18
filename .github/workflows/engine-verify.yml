@@ -1,0 +1,313 @@
+name: Engine verify
+
+# Oracle-based regression suite for the playback, export, recording, editing
+# and captions engines (crates/verify, crates/verify-expect, the decoder model
+# fuzzer in cap-rendering). See crates/verify/README.md.
+#
+# Tiers: FULL for every ready (non-draft) pull request that changes an engine
+# crate (scripts/verify/plan.py ENGINE_CRATES) or a high-risk region, with the
+# `verify-full` label (engine-verify-label.yml), in the merge queue and
+# nightly; FAST for drafts and other pull requests. Marking a draft ready
+# runs the FULL tier on the head that will merge. Only suites whose
+# code a change can reach run (scripts/verify/plan.py maps changed paths to
+# suites through the workspace dependency graph), and only on the platforms
+# where they test platform code. The "Engine verify" job is the one to require.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  schedule:
+    - cron: "23 3 * * *"
+  push:
+    branches:
+      - main
+      - ci/engine-verify
+      - ci/verify-ci
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Tier
+        type: choice
+        options: [fast, full]
+        default: full
+      suites:
+        description: "Comma-separated suites (default all, see scripts/verify/suites.json)"
+        type: string
+        default: ""
+      cargo-config:
+        description: "Extra cargo --config overrides, separated by ; (profile experiments)"
+        type: string
+        default: ""
+      cargo-log:
+        description: "CARGO_LOG for the build (for example cargo::core::compiler::fingerprint=info)"
+        type: string
+        default: ""
+      base:
+        description: "Plan from the diff against this ref, like a pull request (scope, risk escalation)"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      tier:
+        type: string
+        default: full
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # Manual dispatches each get their own group, so repeats of the same ref
+  # run side by side instead of cancelling each other.
+  group: engine-verify-${{ github.event.pull_request.number || github.ref }}-${{ inputs.tier || 'auto' }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
+  # Superseded PR pushes are cancelled; main and nightly runs finish so their
+  # caches are saved.
+  cancel-in-progress: ${{ github.event_name != 'schedule' && github.ref != 'refs/heads/main' }}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      tier: ${{ steps.escalated.outputs.tier }}
+      escalate: ${{ steps.risk.outputs.escalate }}
+      engine: ${{ steps.risk.outputs.engine }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      save-cache: ${{ steps.tier.outputs.save-cache }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the planner and expectations files
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          python3 scripts/verify/plan.py test > /dev/null
+          python3 scripts/verify/test_diff.py
+          python3 scripts/verify/test_perf_build.py
+          if grep -rn --include='expectations*.toml' '^reason = "TODO' crates; then
+            echo "::error::blessed expectations still have TODO reasons: describe each failure (and link its fix) before merging"
+            exit 1
+          fi
+
+      - name: Tier
+        id: tier
+        env:
+          INPUT_TIER: ${{ inputs.tier }}
+          EVENT: ${{ github.event_name }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'verify-full') }}
+        run: |
+          tier=fast
+          if [[ -n "$INPUT_TIER" ]]; then
+            tier="$INPUT_TIER"
+          elif [[ "$EVENT" == schedule || "$EVENT" == merge_group || "$FULL_LABEL" == true ]]; then
+            tier=full
+          fi
+          save=false
+          # Pushes and manual runs on the suite branches save caches too, so a
+          # proof batch never runs cold twice (pull requests only restore).
+          if [[ "$EVENT" == schedule || ( ( "$EVENT" == push || "$EVENT" == workflow_dispatch ) && "$GITHUB_REF" =~ ^refs/heads/(main|ci/engine-verify|ci/verify-ci)$ ) ]]; then
+            save=true
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "save-cache=$save" >> "$GITHUB_OUTPUT"
+
+      - name: Changed files
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          MQ_BASE: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD: ${{ github.event.merge_group.head_sha }}
+          BASE: ${{ inputs.base }}
+          SUITES: ${{ inputs.suites }}
+        run: |
+          set -euo pipefail
+          files="$RUNNER_TEMP/changed.txt"
+          scope=files
+          max=300
+          case "$EVENT" in
+            pull_request)
+              gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$files"
+              max=3000 ;;
+            merge_group)
+              gh api "repos/$GITHUB_REPOSITORY/compare/$MQ_BASE...$MQ_HEAD" --jq '.files[].filename' > "$files" ;;
+            push)
+              if [[ "$BEFORE" =~ ^0+$ ]]; then
+                scope=all
+              else
+                gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' > "$files"
+              fi ;;
+            *)
+              if [[ -n "${BASE:-}" ]]; then
+                gh api "repos/$GITHUB_REPOSITORY/compare/$BASE...$GITHUB_SHA" --jq '.files[].filename' > "$files"
+                max=3000
+              else
+                scope=all
+              fi ;;
+          esac
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "max=$max" >> "$GITHUB_OUTPUT"
+          [[ -f "$files" ]] && { echo "$(wc -l < "$files") changed files"; head -50 "$files"; } || true
+
+      # High-risk code (scripts/verify/guards.toml): warn, and run a pull
+      # request that touches it at the FULL tier.
+      - name: Risk
+        id: risk
+        if: steps.files.outputs.scope == 'files'
+        run: python3 scripts/verify/plan.py risk --files "$RUNNER_TEMP/changed.txt" --summary "$GITHUB_STEP_SUMMARY" --output "$GITHUB_OUTPUT"
+
+      - name: Escalate tier
+        id: escalated
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          ESCALATE: ${{ steps.risk.outputs.escalate }}
+          ENGINE: ${{ steps.risk.outputs.engine }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ inputs.base }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          tier="$TIER"
+          if [[ ( "$ESCALATE" == true || "$ENGINE" == true ) && ( "$EVENT" == pull_request || -n "$BASE" ) && "$tier" == fast ]]; then
+            if [[ "$DRAFT" == true ]]; then
+              echo "Engine or high-risk code changed in a draft: FAST tier; marking the pull request ready runs the FULL tier." | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              tier=full
+              echo "Engine or high-risk code changed: running the FULL tier." | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
+      - name: Plan
+        id: plan
+        env:
+          TIER: ${{ steps.escalated.outputs.tier }}
+          SCOPE: ${{ steps.files.outputs.scope }}
+          MAX: ${{ steps.files.outputs.max }}
+          SUITES: ${{ inputs.suites }}
+          RUSTUP_TOOLCHAIN: stable
+          # Runner labels live in scripts/verify/suites.json (macOS:
+          # Blacksmith). A repository variable overrides one without a code
+          # change, e.g. ENGINE_VERIFY_MACOS_RUNNER=macos-15 for GitHub-hosted.
+          ENGINE_VERIFY_MACOS_RUNNER: ${{ vars.ENGINE_VERIFY_MACOS_RUNNER }}
+          ENGINE_VERIFY_LINUX_RUNNER: ${{ vars.ENGINE_VERIFY_LINUX_RUNNER }}
+          ENGINE_VERIFY_WINDOWS_RUNNER: ${{ vars.ENGINE_VERIFY_WINDOWS_RUNNER }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCOPE" == all ]]; then
+            python3 scripts/verify/plan.py changes --tier "$TIER" --all ${SUITES:+--suites "$SUITES"} > "$RUNNER_TEMP/plan.txt"
+          else
+            python3 scripts/verify/plan.py changes --tier "$TIER" --files "$RUNNER_TEMP/changed.txt" --max-files "$MAX" ${SUITES:+--suites "$SUITES"} > "$RUNNER_TEMP/plan.txt"
+          fi
+          cat "$RUNNER_TEMP/plan.txt"
+          cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Engine verify plan ($TIER tier)"
+            grep -E '^(reason|suites)=' "$RUNNER_TEMP/plan.txt" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Labels a risky pull request needs-deep-review. Kept apart from the plan
+  # job so no step that runs repository code holds a write token; fork pull
+  # requests get a read-only token and only keep the summary and annotations.
+  deep-review-label:
+    name: Deep review label
+    needs: plan
+    if: github.event_name == 'pull_request' && needs.plan.outputs.escalate == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" -f "labels[]=needs-deep-review" > /dev/null \
+            || echo "::notice::could not add the needs-deep-review label with this token; the summary and annotations still flag the change"
+
+  verify:
+    name: ${{ matrix.platform }}
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/engine-verify-os.yml
+    with:
+      platform: ${{ matrix.platform }}
+      runner: ${{ matrix.runner }}
+      target: ${{ matrix.target }}
+      tier: ${{ needs.plan.outputs.tier }}
+      suites: ${{ matrix.suites }}
+      shards: ${{ matrix.shards }}
+      shard-list: ${{ matrix.shard_list }}
+      archive: ${{ matrix.archive }}
+      save-cache: ${{ needs.plan.outputs.save-cache == 'true' }}
+      cargo-config: ${{ inputs.cargo-config || '' }}
+      cargo-log: ${{ inputs.cargo-log || '' }}
+
+  gate:
+    name: Engine verify
+    needs: [plan, verify]
+    if: always()
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/verify
+
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.run == 'true'
+        with:
+          pattern: verify-report-*
+          path: ${{ runner.temp }}/reports
+
+      - name: Verdict
+        env:
+          PLAN: ${{ needs.plan.result }}
+          RUN: ${{ needs.plan.outputs.run }}
+          VERIFY: ${{ needs.verify.result }}
+          TIER: ${{ needs.plan.outputs.tier }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          if [[ "$PLAN" != success ]]; then
+            echo "planning failed" >&2
+            exit 1
+          fi
+          if [[ "$RUN" != true ]]; then
+            echo "No engine code changed: nothing to verify." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ -d "$RUNNER_TEMP/reports" ]]; then
+            for dir in "$RUNNER_TEMP"/reports/*/; do
+              name="$(basename "$dir")"
+              flaky=()
+              [[ -f "$dir/flaky.txt" ]] && flaky=(--flaky "$dir/flaky.txt")
+              python3 scripts/verify/summary.py --title "${name#verify-report-}" --junit "$dir/junit.xml" "${flaky[@]}" "$dir" >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+            done
+          fi
+          if [[ "$VERIFY" != success ]]; then
+            echo "engine verification $VERIFY ($TIER tier): see the platform jobs" >&2
+            exit 1
+          fi
+          # Executed-case floor: every planned suite ran at least its known
+          # number of cases on every platform, and every named test ran.
+          floor=0
+          python3 scripts/verify/floor.py --matrix "$MATRIX" --tier "$TIER" "$RUNNER_TEMP/reports" > "$RUNNER_TEMP/floor.txt" || floor=$?
+          cat "$RUNNER_TEMP/floor.txt"
+          { echo "### Executed cases"; echo '```text'; cat "$RUNNER_TEMP/floor.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [[ $floor != 0 ]]; then
+            echo "::error::fewer cases or tests ran than planned (see Executed cases)"
+            exit 1
+          fi
+          echo "engine verification passed ($TIER tier)"
