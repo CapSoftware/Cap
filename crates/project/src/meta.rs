@@ -751,13 +751,6 @@ impl MultipleSegment {
 
         let cal_offset = calibration_offset.unwrap_or(0.0);
 
-        let camera_offset = self
-            .camera
-            .as_ref()
-            .and_then(|c| c.start_time)
-            .map(|t| (latest - t) as f32)
-            .unwrap_or(0.0);
-
         let mic_offset = self
             .mic
             .as_ref()
@@ -772,8 +765,11 @@ impl MultipleSegment {
             .map(|t| (latest - t) as f32 + cal_offset)
             .unwrap_or(0.0);
 
+        // The camera needs no clip offset: its decoder is already aligned to
+        // the latest start time (rendering's `segment_video_timing`). Adding
+        // `latest - camera.start` here as well plays the camera that far ahead.
         crate::ClipOffsets {
-            camera: camera_offset,
+            camera: 0.0,
             mic: mic_offset,
             system_audio: system_audio_offset,
         }
@@ -1188,6 +1184,18 @@ mod test {
             let offsets = legacy.calculate_audio_offsets();
             assert!((offsets.mic - (0.6586015 - 0.5559852) as f32).abs() < 1e-6);
             assert_eq!(offsets.system_audio, 0.0);
+        }
+
+        // The camera decoder is aligned to the latest start time, so an early
+        // camera must not get a clip offset on top of that alignment.
+        #[test]
+        fn early_camera_gets_no_clip_offset() {
+            let mut early = segment(0.2, Some(1.0), None);
+            early.camera = Some(video(Some(0.0)));
+            assert_eq!(early.latest_start_time(), Some(1.0));
+            let offsets = early.calculate_audio_offsets_with_calibration(Some(0.05));
+            assert_eq!(offsets.camera, 0.0);
+            assert!((offsets.mic - 0.05).abs() < 1e-6);
         }
     }
 }

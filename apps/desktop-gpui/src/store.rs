@@ -338,6 +338,11 @@ thread_local! {
     };
 }
 
+#[cfg(test)]
+pub(crate) fn set_test_tauri_store_path(path: Option<PathBuf>) {
+    TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = path);
+}
+
 /// The tauri-plugin-store file, shared with the shipping app.
 ///
 /// `CAP_GPUI_TAURI_STORE` redirects it at a copy, which is how the tests --
