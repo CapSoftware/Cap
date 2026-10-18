@@ -3739,6 +3739,19 @@ fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, 
     Ok((first, unreadable))
 }
 
+fn display_fps(project: &Path) -> anyhow::Result<u32> {
+    let meta = RecordingMeta::load_for_project(project).map_err(|e| anyhow::anyhow!("{e}"))?;
+    match meta.studio_meta() {
+        Some(StudioRecordingMeta::MultipleSegments { inner }) => inner
+            .segments
+            .first()
+            .map(|segment| segment.display.fps)
+            .ok_or_else(|| anyhow::anyhow!("recording has no segments")),
+        Some(StudioRecordingMeta::SingleSegment { segment }) => Ok(segment.display.fps),
+        None => anyhow::bail!("not a studio recording"),
+    }
+}
+
 /// Microphone marker index to its start on the recording's timeline, and
 /// where the track ends.
 fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, f64)> {
@@ -3869,30 +3882,55 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
         required.len(),
         worst_delay.unwrap_or(f64::NAN) * 1e3
     ));
-    let late: Vec<String> = delays
+    // Where the decoder contract puts each picture: the display track is
+    // read `screen_offset` into its own time, a request for time t asks for
+    // grid frame floor(t * source_fps), and a picture is labelled
+    // round(pts * source_fps), so it first shows on the first export frame
+    // whose request reaches its label. A label that falls on an export frame
+    // (within a thousandth of one, the f64 error of the times) shows on that
+    // frame.
+    let source_fps = f64::from(display_fps(&rec.project)?);
+    let screen_offset = timeline_start - layout.display.start;
+    let first_frame = |label: f64| {
+        let frame = (label / source_fps - screen_offset) * f64::from(fps);
+        if (frame - frame.round()).abs() < 1e-3 {
+            frame.round()
+        } else {
+            frame.ceil()
+        }
+    };
+    let off_contract: Vec<String> = required
         .iter()
-        .filter(|(_, d)| d.abs() > interval + SLACK_SECS)
-        .map(|(i, d)| {
-            format!(
-                "{i} {:+.1} ms (display pts {:.3} s)",
-                d * 1e3,
-                raw[i] - layout.display.start
-            )
+        .filter_map(|(i, t)| {
+            let shown_at = shown.get(i)?;
+            // A pts exactly between two grid frames (a 60 Hz picture on a
+            // 30 fps grid) rounds either way depending on the last bit of
+            // the arithmetic; both labels are the contract.
+            let slot = (t - layout.display.start) * source_fps;
+            let labels = if (slot - slot.floor() - 0.5).abs() < 1e-6 {
+                vec![slot.floor(), slot.ceil()]
+            } else {
+                vec![slot.round()]
+            };
+            let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
+            let expected = first_frame(labels[0]);
+            (!labels.iter().any(|label| first_frame(*label) == frame)).then(|| {
+                format!(
+                    "{i} at frame {frame} instead of {expected} (display pts {:.3} s)",
+                    t - layout.display.start
+                )
+            })
         })
         .collect();
-    if !late.is_empty() {
-        case.measure("export-timing", "late-pct", pct(late.len()));
-        case.measure(
-            "export-timing",
-            "delay-frames",
-            (worst_delay.unwrap_or_default().abs() / interval * 100.0).round() / 100.0,
-        );
+    if !off_contract.is_empty() {
+        case.measure("export-timing", "late-pct", pct(off_contract.len()));
         case.problem(
             "export-timing",
             format!(
-                "export: {} screen pictures shown more than one {fps} fps frame from their recorded time, first {}",
-                late.len(),
-                late[..late.len().min(5)].join(", ")
+                "export: {} screen pictures not on the export frame the decoder contract puts them on ({source_fps} fps source read {:.1} ms in), first {}",
+                off_contract.len(),
+                screen_offset * 1e3,
+                off_contract[..off_contract.len().min(5)].join(", ")
             ),
         );
     }
