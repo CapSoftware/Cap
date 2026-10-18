@@ -385,6 +385,8 @@ struct DecoderInstance {
     /// Lives on the instance because the reader vends in pts order between
     /// resets, but request batches may be served by different pool decoders.
     prev_vended: Option<u32>,
+    /// First frame of the uninterrupted vend run that ends at `prev_vended`.
+    run_start: Option<u32>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -410,6 +412,7 @@ impl DecoderInstance {
             tokio_handle,
             keyframe_index,
             prev_vended: None,
+            run_start: None,
             _permit: permit,
         })
     }
@@ -421,6 +424,7 @@ impl DecoderInstance {
                 self.frames_iter_valid = true;
                 self.health.reset_counters();
                 self.prev_vended = None;
+                self.run_start = None;
             }
             Err(e) => {
                 tracing::error!(
@@ -453,11 +457,20 @@ impl DecoderInstance {
         self.frames_iter_valid = true;
         self.health = DecoderHealth::new();
         self.prev_vended = None;
+        self.run_start = None;
         Ok(())
     }
 
     fn current_position(&self) -> f32 {
         self.inner.current_position_secs()
+    }
+
+    fn would_serve_stale_frame(&self, frame: u32, cache: &BTreeMap<u32, CachedFrame>) -> bool {
+        reuse_would_serve_stale_frame(
+            self.run_start,
+            self.prev_vended,
+            cache.range(..=frame).next_back().map(|(&cached, _)| cached),
+        )
     }
 }
 
@@ -542,7 +555,12 @@ impl AVAssetReaderDecoder {
         })
     }
 
-    fn select_best_decoder(&mut self, requested_time: f32, is_scrubbing: bool) -> (usize, bool) {
+    fn select_best_decoder(
+        &mut self,
+        requested_time: f32,
+        is_scrubbing: bool,
+        must_reset: impl Fn(&DecoderInstance) -> bool,
+    ) -> (usize, bool) {
         let decoder_count = self.decoders.len();
         let (best_id, _distance, needs_reset) = if is_scrubbing {
             self.pool_manager
@@ -557,6 +575,7 @@ impl AVAssetReaderDecoder {
         };
 
         let decoder_idx = best_id.min(decoder_count.saturating_sub(1));
+        let needs_reset = needs_reset || self.decoders.get(decoder_idx).is_some_and(must_reset);
 
         let max_decoder_count = self
             .pool_manager
@@ -644,6 +663,10 @@ impl AVAssetReaderDecoder {
         sequential_access: Arc<AtomicBool>,
     ) {
         let dimensions = (|| {
+            #[cfg(test)]
+            if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
+                return Ok((width, height, YuvMatrix::default()));
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
@@ -669,7 +692,7 @@ impl AVAssetReaderDecoder {
             }
         };
         let mut this = None::<Self>;
-        let mut keyframe_index = None;
+        let mut keyframe_index: Option<Arc<cap_video_decode::avassetreader::KeyframeIndex>> = None;
 
         let init_result = DecoderInitResult {
             width,
@@ -703,6 +726,7 @@ impl AVAssetReaderDecoder {
             frame: u32,
             max_fallback_distance: u32,
             sender: oneshot::Sender<DecodedFrame>,
+            retried: bool,
         }
 
         let mut deferred_requests = VecDeque::<PendingRequest>::new();
@@ -754,12 +778,13 @@ impl AVAssetReaderDecoder {
                         max_fallback_distance,
                         sender,
                     ) => {
-                        let frame = (requested_time * fps as f32).floor() as u32;
+                        let frame = super::request_frame(requested_time, fps);
                         if !sender.is_closed() {
                             pending_requests.push(PendingRequest {
                                 frame,
                                 max_fallback_distance,
                                 sender,
+                                retried: false,
                             });
                         }
                     }
@@ -772,12 +797,13 @@ impl AVAssetReaderDecoder {
                             max_fallback_distance,
                             sender,
                         ) => {
-                            let frame = (requested_time * fps as f32).floor() as u32;
+                            let frame = super::request_frame(requested_time, fps);
                             if !sender.is_closed() {
                                 pending_requests.push(PendingRequest {
                                     frame,
                                     max_fallback_distance,
                                     sender,
+                                    retried: false,
                                 });
                             }
                         }
@@ -860,6 +886,28 @@ impl AVAssetReaderDecoder {
             }
             pending_requests = still_unfulfilled;
 
+            // A track can start after the recording does. Before its first
+            // frame, that frame is the answer; serving it from the cache keeps
+            // the reader from stepping ahead on every such request.
+            let stream_start_frame = keyframe_index
+                .as_ref()
+                .and_then(|index| index.keyframes().first())
+                .map(|&(_, secs)| (secs * f64::from(fps)).round() as u32);
+            if let Some(start) = stream_start_frame
+                && let Some(first) = cache.get(&start).map(|cached| cached.data().clone())
+            {
+                let mut after_start = Vec::with_capacity(pending_requests.len());
+                for req in pending_requests.drain(..) {
+                    if req.frame < start {
+                        *last_sent_frame.borrow_mut() = Some(first.clone());
+                        let _ = req.sender.send(first.to_decoded_frame());
+                    } else {
+                        after_start.push(req);
+                    }
+                }
+                pending_requests = after_start;
+            }
+
             if pending_requests.is_empty() {
                 continue;
             }
@@ -899,7 +947,21 @@ impl AVAssetReaderDecoder {
             }
             let this = this.as_mut().expect("Video reader initialized above");
 
-            let (decoder_idx, was_reset) = this.select_best_decoder(requested_time, is_scrubbing);
+            // Pool positions are capped to the newest request, so a reader that
+            // decoded ahead can look usable for a request it has already passed.
+            // It can never vend that frame again, and reading on would answer
+            // with a stale or later frame, so it has to seek back first. Before
+            // the stream's first frame nothing better exists, so a seek is wasted.
+            let retrying = pending_requests.iter().any(|request| request.retried);
+            let before_stream_start =
+                stream_start_frame.is_some_and(|start| requested_frame < start);
+            let (decoder_idx, was_reset) =
+                this.select_best_decoder(requested_time, is_scrubbing, |decoder| {
+                    retrying
+                        || decoder.would_serve_stale_frame(requested_frame, &cache)
+                        || (!before_stream_start
+                            && reader_passed_request(decoder.prev_vended, requested_frame))
+                });
 
             let cache_min = if was_reset {
                 min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 * 2)
@@ -912,9 +974,23 @@ impl AVAssetReaderDecoder {
                 max_requested_frame + FRAME_CACHE_SIZE as u32
             };
 
+            // The last frame each other pooled reader vended is the answer for a
+            // request that lands in the gap after it, and the reader can never
+            // vend it again; keep it cached while requests alternate between
+            // readers.
+            let pinned_frames: Vec<u32> = this
+                .decoders
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| index != decoder_idx)
+                .filter_map(|(_, decoder)| decoder.prev_vended)
+                .collect();
+
             if was_reset {
                 *last_sent_frame.borrow_mut() = None;
-                cache.retain(|&f, _| f >= cache_min && f <= cache_max);
+                cache.retain(|f, _| {
+                    (*f >= cache_min && *f <= cache_max) || pinned_frames.contains(f)
+                });
                 cache_bytes = cache
                     .values()
                     .map(CachedFrame::byte_len)
@@ -932,6 +1008,7 @@ impl AVAssetReaderDecoder {
             // reader re-vends from the keyframe at-or-before the request, and
             // that frame is the true VFR hold for requests inside a pts hole.
             let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
+            let mut retry_requests = Vec::new();
 
             {
                 let decoder = &mut this.decoders[decoder_idx];
@@ -959,10 +1036,14 @@ impl AVAssetReaderDecoder {
                     let current_frame =
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
 
-                    if let Some(prev) = decoder.prev_vended
+                    let vended_before = decoder.prev_vended;
+                    if let Some(prev) = vended_before
                         && current_frame > prev + 1
                     {
                         record_pts_hole(&mut pts_holes, prev, current_frame);
+                    }
+                    if decoder.prev_vended.is_none() {
+                        decoder.run_start = Some(current_frame);
                     }
                     decoder.prev_vended = Some(current_frame);
 
@@ -1011,16 +1092,18 @@ impl AVAssetReaderDecoder {
                             )
                         {
                             if let Some(last_active) = &last_active_frame {
-                                let frame_to_remove = if requested_frame > *last_active {
-                                    *cache.keys().next().unwrap()
+                                let from_oldest = if requested_frame > *last_active {
+                                    true
                                 } else if requested_frame < *last_active {
-                                    *cache.keys().next_back().unwrap()
+                                    false
                                 } else {
-                                    let min = *cache.keys().min().unwrap();
-                                    let max = *cache.keys().max().unwrap();
-                                    if current_frame > max { min } else { max }
+                                    current_frame > *cache.keys().next_back().unwrap()
                                 };
-                                if let Some(removed) = cache.remove(&frame_to_remove) {
+                                let victim = cache_eviction_victim(&cache, from_oldest, |frame| {
+                                    Some(frame) == vended_before || pinned_frames.contains(&frame)
+                                });
+                                if let Some(removed) = victim.and_then(|frame| cache.remove(&frame))
+                                {
                                     cache_bytes = cache_bytes.saturating_sub(removed.byte_len());
                                 }
                             } else {
@@ -1074,6 +1157,26 @@ impl AVAssetReaderDecoder {
                                             .flatten()
                                             .max_by_key(|d| d.number);
 
+                                    // The reader vends every sample in pts order, so the
+                                    // frame it vended just before this one is the newest
+                                    // at or before the request. When that frame is no
+                                    // longer held anywhere, any other answer is stale or
+                                    // from the future: retry once from a fresh seek, which
+                                    // re-vends and keeps it.
+                                    if !req.retried
+                                        && answer_misses_previous_vend(
+                                            vended_before,
+                                            req.frame,
+                                            best_before.as_ref().map(|d| d.number),
+                                        )
+                                    {
+                                        retry_requests.push(PendingRequest {
+                                            retried: true,
+                                            ..req
+                                        });
+                                        continue;
+                                    }
+
                                     if let Some(data) = best_before {
                                         gap_hold = Some(data.clone());
                                         *last_sent_frame.borrow_mut() = Some(data.clone());
@@ -1112,6 +1215,10 @@ impl AVAssetReaderDecoder {
                 }
 
                 decoder.is_done = true;
+            }
+
+            for request in retry_requests.into_iter().rev() {
+                deferred_requests.push_front(request);
             }
 
             let last_frame_in_cache = cache.keys().max().copied().unwrap_or(0);
@@ -1287,6 +1394,63 @@ impl AVAssetReaderDecoder {
     }
 }
 
+fn reader_passed_request(prev_vended: Option<u32>, requested_frame: u32) -> bool {
+    prev_vended.is_some_and(|prev| prev >= requested_frame)
+}
+
+// A request the reader steps over is answered by the frame it vended just
+// before, the newest one at or before the request. Any other answer is stale.
+fn answer_misses_previous_vend(
+    vended_before: Option<u32>,
+    requested_frame: u32,
+    answer: Option<u32>,
+) -> bool {
+    vended_before
+        .filter(|&number| number <= requested_frame)
+        .is_some_and(|expected| answer != Some(expected))
+}
+
+// Drops from the end the cache is trimmed from, skipping pinned frames unless
+// every frame is pinned.
+fn cache_eviction_victim<V>(
+    cache: &BTreeMap<u32, V>,
+    from_oldest: bool,
+    is_pinned: impl Fn(u32) -> bool,
+) -> Option<u32> {
+    if from_oldest {
+        cache
+            .keys()
+            .copied()
+            .find(|&frame| !is_pinned(frame))
+            .or_else(|| cache.keys().next().copied())
+    } else {
+        cache
+            .keys()
+            .rev()
+            .copied()
+            .find(|&frame| !is_pinned(frame))
+            .or_else(|| cache.keys().next_back().copied())
+    }
+}
+
+// Requests the reader has already passed, or that fall in a gap before its
+// next frame, are answered with the newest cached frame at or before them.
+// That frame is only trustworthy when this reader vended it in its current
+// run; an older one comes from an unrelated seek and shows stale content.
+// With nothing cached at or before the request, whether the reader has
+// passed it or a gap follows its evicted last frame, the only answer left is
+// a later frame instead of the one on screen.
+fn reuse_would_serve_stale_frame(
+    run_start: Option<u32>,
+    prev_vended: Option<u32>,
+    newest_cached_at_or_before: Option<u32>,
+) -> bool {
+    let (Some(run_start), Some(_)) = (run_start, prev_vended) else {
+        return false;
+    };
+    newest_cached_at_or_before.is_none_or(|cached| cached < run_start)
+}
+
 fn should_grow_decoder_pool(
     is_scrubbing: bool,
     needs_reset: bool,
@@ -1363,6 +1527,69 @@ mod tests {
             MAX_FRAME_CACHE_BYTES,
             1,
             limit
+        ));
+    }
+
+    #[test]
+    fn a_reader_that_vended_the_request_cannot_serve_it_again() {
+        assert!(!reader_passed_request(None, 10));
+        assert!(!reader_passed_request(Some(9), 10));
+        assert!(reader_passed_request(Some(10), 10));
+        assert!(reader_passed_request(Some(57), 54));
+    }
+
+    #[test]
+    fn only_the_frame_vended_before_a_gap_answers_requests_inside_it() {
+        assert!(!answer_misses_previous_vend(Some(1054), 1055, Some(1054)));
+        assert!(answer_misses_previous_vend(Some(1054), 1055, Some(1052)));
+        assert!(answer_misses_previous_vend(Some(751), 752, Some(421)));
+        assert!(answer_misses_previous_vend(Some(751), 752, None));
+        assert!(!answer_misses_previous_vend(None, 752, Some(421)));
+        assert!(!answer_misses_previous_vend(Some(760), 752, Some(751)));
+    }
+
+    #[test]
+    fn cache_eviction_skips_pinned_frames() {
+        let cache: BTreeMap<u32, ()> = [415, 419, 421, 749, 751]
+            .into_iter()
+            .map(|f| (f, ()))
+            .collect();
+        assert_eq!(cache_eviction_victim(&cache, true, |_| false), Some(415));
+        assert_eq!(cache_eviction_victim(&cache, false, |_| false), Some(751));
+        assert_eq!(
+            cache_eviction_victim(&cache, false, |f| f == 751),
+            Some(749)
+        );
+        assert_eq!(cache_eviction_victim(&cache, true, |f| f < 420), Some(421));
+        assert_eq!(cache_eviction_victim(&cache, true, |_| true), Some(415));
+        assert_eq!(
+            cache_eviction_victim(&BTreeMap::<u32, ()>::new(), true, |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn reused_readers_never_answer_with_frames_from_an_unrelated_seek() {
+        assert!(!reuse_would_serve_stale_frame(None, None, Some(10)));
+        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), Some(48)));
+        assert!(!reuse_would_serve_stale_frame(Some(40), Some(55), Some(40)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(55), Some(39)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(55), Some(10)));
+        assert!(reuse_would_serve_stale_frame(Some(40), Some(48), None));
+    }
+
+    #[test]
+    fn returning_to_a_passed_hold_after_its_frame_is_evicted_resets_the_reader() {
+        let (run_start, held, vended) = (40, 48, 55);
+        assert!(!reuse_would_serve_stale_frame(
+            Some(run_start),
+            Some(vended),
+            Some(held)
+        ));
+        assert!(reuse_would_serve_stale_frame(
+            Some(run_start),
+            Some(vended),
+            None
         ));
     }
 
