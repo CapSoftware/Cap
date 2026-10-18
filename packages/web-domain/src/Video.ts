@@ -7,10 +7,21 @@ import { FolderId } from "./Folder.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
+import { StorageIntegrationId, UploadTarget } from "./Storage.ts";
 import { UserId } from "./User.ts";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
+
+export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
+
+export const FREE_PLAN_SHAREABLE_LINKS_PER_MONTH = 25;
+
+// Quota is not retroactive: videos created before this date never count
+// toward, nor get gated by, the monthly shareable-link limit.
+export const SHAREABLE_LINK_LIMIT_ENFORCED_FROM = new Date(
+	"2026-08-19T00:00:00.000Z",
+);
 
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
@@ -20,6 +31,11 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
+		outputKey: Schema.optional(Schema.String),
+		audioLevelOutputKey: Schema.optional(Schema.String),
+		audioLevelSourceKey: Schema.optional(Schema.String),
+		thumbnailKey: Schema.optional(Schema.String),
+		previewKey: Schema.optional(Schema.String),
 		type: Schema.Literal(
 			"MediaConvert",
 			"local",
@@ -32,6 +48,7 @@ export class Video extends Schema.Class<Video>("Video")({
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
 	),
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
+	storageIntegrationId: Schema.OptionFromNullOr(StorageIntegrationId),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
 		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"),
@@ -63,7 +80,11 @@ export class Video extends Schema.Class<Video>("Video")({
 			return new SegmentsSource({ videoId: self.id, ownerId: self.ownerId });
 
 		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
-			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
+			return new Mp4Source({
+				videoId: self.id,
+				ownerId: self.ownerId,
+				outputKey: getAudioLevelOutputKey(self) ?? self.source.outputKey,
+			});
 	}
 }
 
@@ -88,6 +109,7 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	processingMessage: Schema.OptionFromNullOr(Schema.String),
 	processingError: Schema.OptionFromNullOr(Schema.String),
 	hasRawFallback: Schema.Boolean,
+	automaticRetry: Schema.optional(Schema.Boolean),
 }) {}
 
 export const UploadProgressUpdateInput = Schema.Struct({
@@ -117,7 +139,7 @@ export const InstantRecordingCreateInput = Schema.Struct({
 export const InstantRecordingCreateSuccess = Schema.Struct({
 	id: VideoId,
 	shareUrl: Schema.String,
-	upload: PresignedPost,
+	upload: UploadTarget,
 });
 
 export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
@@ -125,12 +147,68 @@ export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	id: Schema.String,
 }) {}
 
+export function getRetainedRecordingOutputKey(
+	ownerId: string,
+	videoId: string,
+	key: string | undefined,
+) {
+	if (
+		!key?.startsWith(`${ownerId}/${videoId}/.recording/`) ||
+		!key.endsWith(".mp4") ||
+		key.includes("..") ||
+		!/^[a-zA-Z0-9_./-]+$/.test(key)
+	) {
+		return undefined;
+	}
+	return key;
+}
+
+export function getAudioLevelOutputKey(video: {
+	id: string;
+	ownerId: string;
+	source: {
+		type: string;
+		outputKey?: string;
+		audioLevelSourceKey?: string;
+		audioLevelOutputKey?: string;
+	};
+}) {
+	const { source } = video;
+	const originalKey =
+		getRetainedRecordingOutputKey(video.ownerId, video.id, source.outputKey) ??
+		(source.type === "webMP4"
+			? `${video.ownerId}/${video.id}/result.mp4`
+			: undefined);
+	const key = getRetainedRecordingOutputKey(
+		video.ownerId,
+		video.id,
+		source.audioLevelOutputKey,
+	);
+	if (
+		!["desktopMP4", "webMP4"].includes(source.type) ||
+		!originalKey ||
+		source.audioLevelSourceKey !== originalKey ||
+		!key?.startsWith(
+			`${video.ownerId}/${video.id}/.recording/outputs/audio-quality-v3/`,
+		)
+	)
+		return undefined;
+	return key;
+}
+
 export class Mp4Source extends Schema.TaggedClass<Mp4Source>()("Mp4Source", {
 	videoId: Schema.String,
 	ownerId: Schema.String,
+	outputKey: Schema.optional(Schema.String),
 }) {
 	getFileKey() {
-		return `${this.ownerId}/${this.videoId}/result.mp4`;
+		return (
+			getRetainedRecordingOutputKey(
+				this.ownerId,
+				this.videoId,
+				this.outputKey,
+			) ?? `${this.ownerId}/${this.videoId}/result.mp4`
+		);
 	}
 }
 
@@ -198,13 +276,15 @@ export function normalizeSegmentEntry(
 }
 
 /*
- * Used to specify a video password provided by a user,
+ * Used to specify video passwords provided by a user,
  * whether via cookies in the case of the website,
- * or via query params for the API.
+ * or via query params for the API. Holds every hash the user has verified
+ * (the cookie remembers one per unlocked resource), so unlocking one share
+ * never invalidates another.
  */
 export class VideoPasswordAttachment extends Context.Tag(
 	"VideoPasswordAttachment",
-)<VideoPasswordAttachment, { password: Option.Option<string> }>() {}
+)<VideoPasswordAttachment, { passwords: ReadonlyArray<string> }>() {}
 
 export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPasswordError>()(
 	"VerifyVideoPasswordError",
@@ -215,23 +295,36 @@ export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPass
 ) {}
 
 export const verifyPassword = (video: Video, password: Option.Option<string>) =>
+	verifyPasswordCandidates(
+		video,
+		Option.match(password, {
+			onNone: () => [],
+			onSome: (value) => [value],
+		}),
+	);
+
+export const verifyPasswordCandidates = (
+	video: Pick<Video, "id">,
+	passwords: ReadonlyArray<string>,
+) =>
 	Effect.gen(function* () {
 		const passwordAttachment = yield* Effect.serviceOption(
 			VideoPasswordAttachment,
 		);
 
-		if (Option.isNone(password)) return;
+		if (passwords.length === 0) return;
 
-		if (
-			Option.isNone(passwordAttachment) ||
-			Option.isNone(passwordAttachment.value.password)
-		)
+		const verified = Option.isSome(passwordAttachment)
+			? passwordAttachment.value.passwords
+			: [];
+
+		if (verified.length === 0)
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "not-provided",
 			});
 
-		if (passwordAttachment.value.password.value !== password.value)
+		if (!verified.some((hash) => passwords.includes(hash)))
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "wrong-password",

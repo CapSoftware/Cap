@@ -2,6 +2,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = vi.fn();
 
+type DbRow = Record<string, unknown>;
+type JsonBody = Record<string, unknown>;
+type TransactionValues = {
+	type: string;
+	amountMicroCredits: number;
+};
+type MockDbChain = {
+	select: ReturnType<typeof vi.fn>;
+	from: ReturnType<typeof vi.fn>;
+	where: ReturnType<typeof vi.fn>;
+	groupBy?: ReturnType<typeof vi.fn>;
+	limit: ReturnType<typeof vi.fn>;
+	insert: ReturnType<typeof vi.fn>;
+	values: ReturnType<typeof vi.fn>;
+	update: ReturnType<typeof vi.fn>;
+	set: ReturnType<typeof vi.fn>;
+	transaction?: ReturnType<typeof vi.fn>;
+};
+
 vi.mock("@cap/database", () => ({
 	db: mockDb,
 }));
@@ -32,19 +51,19 @@ vi.mock("@cap/database/schema", () => ({
 }));
 
 vi.mock("drizzle-orm", () => ({
-	and: vi.fn((...args: any[]) => args),
-	eq: vi.fn((a: any, b: any) => ({ eq: [a, b] })),
-	inArray: vi.fn((a: any, b: any) => ({ inArray: [a, b] })),
-	isNull: vi.fn((a: any) => ({ isNull: a })),
+	and: vi.fn((...args: unknown[]) => args),
+	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+	inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
+	isNull: vi.fn((a: unknown) => ({ isNull: a })),
 	sql: vi.fn(),
 }));
 
-let capturedJsonBody: any = null;
+let capturedJsonBody: JsonBody | null = null;
 let capturedStatus: number | undefined;
 
 vi.mock("next/server", () => ({
 	NextResponse: {
-		json: vi.fn((body: any, init?: any) => {
+		json: vi.fn((body: JsonBody, init?: ResponseInit) => {
 			capturedJsonBody = body;
 			capturedStatus = init?.status;
 			return { body, status: init?.status ?? 200 };
@@ -55,10 +74,11 @@ vi.mock("next/server", () => ({
 const CRON_SECRET = "test-cron-secret";
 
 function makeChain(
-	result: any[],
-	options?: { onTransaction?: (tx: any) => void },
+	result: DbRow[],
+	options?: { onTransaction?: (tx: MockDbChain) => void },
 ) {
-	const chain: any = {
+	const chain = Promise.resolve(result) as Promise<DbRow[]> & MockDbChain;
+	Object.assign(chain, {
 		select: vi.fn(() => chain),
 		from: vi.fn(() => chain),
 		where: vi.fn(() => chain),
@@ -68,9 +88,9 @@ function makeChain(
 		values: vi.fn(() => Promise.resolve()),
 		update: vi.fn(() => chain),
 		set: vi.fn(() => chain),
-		transaction: vi.fn(async (cb: any) => {
+		transaction: vi.fn(async (cb: (tx: MockDbChain) => Promise<unknown>) => {
 			let currentOperation: "select" | "update" | "insert" | null = null;
-			const txChain: any = {
+			const txChain = {
 				select: vi.fn(() => {
 					currentOperation = "select";
 					return txChain;
@@ -99,21 +119,36 @@ function makeChain(
 			}
 			await cb(txChain);
 		}),
-	};
-	chain.then = (resolve: any) => resolve(result);
+	});
 	return chain;
 }
 
 function setupDbSequence(
-	responses: any[][],
-	txOptions?: { onTransaction?: (tx: any) => void },
+	responses: DbRow[][],
+	txOptions?: { onTransaction?: (tx: MockDbChain) => void },
 ) {
 	let callIndex = 0;
 	mockDb.mockImplementation(() => {
 		const idx = callIndex++;
-		const result = idx < responses.length ? responses[idx]! : [];
+		const result = responses[idx] ?? [];
 		return makeChain(result, txOptions);
 	});
+}
+
+function isTransactionValues(value: unknown): value is TransactionValues {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"type" in value &&
+		typeof value.type === "string" &&
+		"amountMicroCredits" in value &&
+		typeof value.amountMicroCredits === "number"
+	);
+}
+
+function getCapturedJsonBody() {
+	if (capturedJsonBody === null) throw new Error("Expected JSON response body");
+	return capturedJsonBody;
 }
 
 beforeEach(() => {
@@ -176,7 +211,7 @@ describe("developer-storage cron job", () => {
 				success: true,
 				appsProcessed: 1,
 			});
-			expect(capturedJsonBody.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+			expect(getCapturedJsonBody().date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		});
 
 		it("skips already-processed apps", async () => {
@@ -234,7 +269,7 @@ describe("developer-storage cron job", () => {
 	describe("transaction behavior", () => {
 		it("creates negative transaction for storage_daily", async () => {
 			const GET = await importGET();
-			let insertValues: any = null;
+			let insertValues: unknown = null;
 
 			setupDbSequence(
 				[
@@ -246,8 +281,8 @@ describe("developer-storage cron job", () => {
 				],
 				{
 					onTransaction: (tx) => {
-						tx.values.mockImplementation((vals: any) => {
-							if (vals?.type === "storage_daily") {
+						tx.values.mockImplementation((vals: unknown) => {
+							if (isTransactionValues(vals) && vals.type === "storage_daily") {
 								insertValues = vals;
 							}
 							return Promise.resolve();
@@ -258,7 +293,8 @@ describe("developer-storage cron job", () => {
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
 
-			expect(insertValues).not.toBeNull();
+			if (!isTransactionValues(insertValues))
+				throw new Error("Expected storage transaction");
 			expect(insertValues.type).toBe("storage_daily");
 			expect(insertValues.amountMicroCredits).toBe(-33);
 		});
@@ -277,8 +313,8 @@ describe("developer-storage cron job", () => {
 				],
 				{
 					onTransaction: (tx) => {
-						tx.values.mockImplementation((vals: any) => {
-							if (vals?.type === "storage_daily") {
+						tx.values.mockImplementation((vals: unknown) => {
+							if (isTransactionValues(vals) && vals.type === "storage_daily") {
 								capturedAmount = vals.amountMicroCredits;
 							}
 							return Promise.resolve();
@@ -301,11 +337,12 @@ describe("developer-storage cron job", () => {
 
 			await GET(makeRequest(`Bearer ${CRON_SECRET}`));
 
-			expect(capturedJsonBody).toHaveProperty("success", true);
-			expect(capturedJsonBody).toHaveProperty("date");
-			expect(capturedJsonBody).toHaveProperty("appsProcessed");
-			expect(capturedJsonBody.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-			expect(typeof capturedJsonBody.appsProcessed).toBe("number");
+			const body = getCapturedJsonBody();
+			expect(body).toHaveProperty("success", true);
+			expect(body).toHaveProperty("date");
+			expect(body).toHaveProperty("appsProcessed");
+			expect(body.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+			expect(typeof body.appsProcessed).toBe("number");
 		});
 	});
 

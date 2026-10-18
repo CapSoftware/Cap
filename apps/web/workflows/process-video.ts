@@ -1,12 +1,23 @@
 import { db } from "@cap/database";
-import { videos, videoUploads } from "@cap/database/schema";
+import { users, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { S3Bucket, Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend/src/Storage/index";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Option } from "effect";
-import { FatalError } from "workflow";
-import { runPromise } from "@/lib/server";
+import { FatalError, sleep } from "workflow";
+import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
+import { transcribeVideo } from "@/lib/transcribe";
+import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
+import {
+	type ProcessedVideoMetadata,
+	VideoProcessingFailedError,
+	waitForVideoProcessing,
+} from "./video-processing-status";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -40,20 +51,53 @@ export async function processVideoWorkflow(
 	try {
 		await validateProcessingRequest(videoId, rawFileKey);
 
-		const result = await processVideoOnMediaServer(
-			videoId,
-			userId,
-			rawFileKey,
-			bucketId,
-		);
+		let metadata: ProcessedVideoMetadata;
+		for (let processingAttempt = 0; ; processingAttempt++) {
+			let capacityRetryCount = 0;
+			while (true) {
+				try {
+					await processVideoOnMediaServer(
+						videoId,
+						userId,
+						rawFileKey,
+						bucketId,
+					);
+					break;
+				} catch (error) {
+					if (!isMediaServerCapacityError(error)) throw error;
+					await markVideoWaitingForCapacity(videoId);
+					await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+					capacityRetryCount++;
+				}
+			}
+			try {
+				metadata = await waitForVideoProcessing(videoId);
+				break;
+			} catch (error) {
+				if (
+					!(error instanceof VideoProcessingFailedError) ||
+					processingAttempt >= 2
+				) {
+					throw error;
+				}
+				await markVideoWaitingForCapacity(videoId);
+				await sleep(15_000 * (processingAttempt + 1));
+			}
+		}
 
-		await saveMetadataAndComplete(videoId, result.metadata);
-		await cleanupRawUpload(rawFileKey, bucketId);
+		await saveMetadataAndComplete(videoId, metadata);
+
+		const outputKey = `${userId}/${videoId}/result.mp4`;
+		if (rawFileKey !== outputKey) {
+			await cleanupRawUpload(videoId, rawFileKey);
+		}
+
+		await queueProcessedVideoTranscription(videoId);
 
 		return {
 			success: true,
 			message: "Video processing completed",
-			metadata: result.metadata,
+			metadata,
 		};
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -100,17 +144,10 @@ async function validateProcessingRequest(
 	}
 }
 
-interface MediaServerProcessResult {
-	metadata: {
-		duration: number;
-		width: number;
-		height: number;
-		fps: number;
-	};
-}
-
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
 
 function getInputExtension(rawFileKey: string): string {
 	const parts = rawFileKey.split(".");
@@ -135,9 +172,11 @@ async function startMediaServerProcessJob(
 		videoUrl: string;
 		outputPresignedUrl: string;
 		thumbnailPresignedUrl: string;
+		previewGifPresignedUrl: string;
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension: string;
+		audioLevels?: boolean;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -202,6 +241,14 @@ async function startMediaServerProcessJob(
 			continue;
 		}
 
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
+		}
+
 		throw new Error(errorMessage);
 	}
 
@@ -212,8 +259,8 @@ async function processVideoOnMediaServer(
 	videoId: string,
 	userId: string,
 	rawFileKey: string,
-	bucketId: string | null,
-): Promise<MediaServerProcessResult> {
+	_bucketId: string | null,
+): Promise<void> {
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
@@ -223,102 +270,87 @@ async function processVideoOnMediaServer(
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
 
-	const [bucket] = await S3Buckets.getBucketAccess(
-		Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
-	).pipe(runPromise);
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+	if (!video) {
+		throw new FatalError("Video does not exist");
+	}
+
+	const videoDomain = decodeStorageVideo(video);
+
+	const [bucket] =
+		await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
 
 	const rawVideoUrl = await bucket
-		.getInternalSignedObjectUrl(rawFileKey)
-		.pipe(runPromise);
+		.getInternalSignedObjectUrl(rawFileKey, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		})
+		.pipe(runWorkflowPromise);
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
+	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
 
 	const outputPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(outputKey, {
-			ContentType: "video/mp4",
-		})
-		.pipe(runPromise);
+		.getInternalPresignedPutUrl(
+			outputKey,
+			{
+				ContentType: "video/mp4",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runWorkflowPromise);
 
 	const thumbnailPresignedUrl = await bucket
-		.getInternalPresignedPutUrl(thumbnailKey, {
-			ContentType: "image/jpeg",
-		})
-		.pipe(runPromise);
+		.getInternalPresignedPutUrl(
+			thumbnailKey,
+			{
+				ContentType: "image/jpeg",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runWorkflowPromise);
 
-	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress`;
+	const previewGifPresignedUrl = await bucket
+		.getInternalPresignedPutUrl(
+			previewGifKey,
+			{
+				ContentType: "image/gif",
+				CacheControl: "public, max-age=31536000, immutable",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		)
+		.pipe(runWorkflowPromise);
+
+	const webhookUrl = `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`;
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 
-	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "processing",
+			processingProgress: 0,
+			processingMessage: "Starting video processing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+	await startMediaServerProcessJob(mediaServerUrl, {
+		audioLevels: video.source.type === "webMP4",
 		videoId,
 		userId,
 		videoUrl: rawVideoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
 	});
-
-	const result = await pollForCompletion(mediaServerUrl, jobId);
-
-	return result;
-}
-
-async function pollForCompletion(
-	mediaServerUrl: string,
-	jobId: string,
-): Promise<MediaServerProcessResult> {
-	const maxAttempts = 360;
-	const pollIntervalMs = 5000;
-
-	for (let attempt = 0; attempt < maxAttempts; attempt++) {
-		await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-
-		const response = await fetch(
-			`${mediaServerUrl}/video/process/${jobId}/status`,
-			{
-				method: "GET",
-				headers: { Accept: "application/json" },
-			},
-		);
-
-		if (!response.ok) {
-			console.warn(
-				`[process-video] Failed to get job status: ${response.status}`,
-			);
-			continue;
-		}
-
-		const status = (await response.json()) as {
-			phase: string;
-			progress: number;
-			error?: string;
-			metadata?: {
-				duration: number;
-				width: number;
-				height: number;
-				fps: number;
-			};
-		};
-
-		if (status.phase === "complete") {
-			if (!status.metadata) {
-				throw new Error("Processing completed but no metadata returned");
-			}
-			return { metadata: status.metadata };
-		}
-
-		if (status.phase === "error") {
-			throw new Error(status.error || "Video processing failed");
-		}
-
-		if (status.phase === "cancelled") {
-			throw new Error("Video processing was cancelled");
-		}
-	}
-
-	throw new Error("Video processing timed out");
 }
 
 async function saveMetadataAndComplete(
@@ -345,19 +377,65 @@ async function saveMetadataAndComplete(
 }
 
 async function cleanupRawUpload(
+	videoId: string,
 	rawFileKey: string,
-	bucketId: string | null,
 ): Promise<void> {
 	"use step";
 
 	try {
-		const [bucket] = await S3Buckets.getBucketAccess(
-			Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
-		).pipe(runPromise);
+		const [video] = await db()
+			.select()
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-		await bucket.deleteObject(rawFileKey).pipe(runPromise);
+		if (!video) return;
+
+		const videoDomain = decodeStorageVideo(video);
+
+		const [bucket] =
+			await Storage.getAccessForVideo(videoDomain).pipe(runWorkflowPromise);
+
+		await bucket.deleteObject(rawFileKey).pipe(runWorkflowPromise);
 	} catch (error) {
 		console.error("[process-video] Failed to delete raw upload", error);
+	}
+}
+
+async function queueProcessedVideoTranscription(
+	videoId: string,
+): Promise<void> {
+	"use step";
+
+	try {
+		const [owner] = await db()
+			.select({
+				id: videos.ownerId,
+				stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+				thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+			})
+			.from(videos)
+			.innerJoin(users, eq(videos.ownerId, users.id))
+			.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+		if (!owner) return;
+
+		const result = await transcribeVideo(
+			Video.VideoId.make(videoId),
+			owner.id,
+			isAiGenerationEnabledForUser(owner),
+		);
+
+		if (!result.success) {
+			console.warn("[process-video] Failed to queue transcription", {
+				videoId,
+				message: result.message,
+			});
+		}
+	} catch (error) {
+		console.warn("[process-video] Failed to queue transcription", {
+			videoId,
+			error,
+		});
 	}
 }
 
@@ -374,6 +452,19 @@ async function setProcessingError(
 			processingProgress: 0,
 			processingMessage: "Video processing failed",
 			processingError: errorMessage,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+}
+
+async function markVideoWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video processing...",
+			processingError: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));

@@ -1,5 +1,7 @@
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
+export { metadata } from "./metadata";
+
 const breadcrumbSchema = createBreadcrumbSchema([
 	{ name: "Home", url: "https://cap.so" },
 	{ name: "Tools", url: "https://cap.so/tools" },

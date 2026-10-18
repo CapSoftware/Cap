@@ -2,13 +2,15 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
+import { videos } from "@cap/database/schema";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { updateVttEntryText } from "@/lib/transcript-vtt";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function editTranscriptEntry(
 	videoId: Video.VideoId,
@@ -26,12 +28,8 @@ export async function editTranscriptEntry(
 
 	const userId = user.id;
 	const query = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
@@ -52,8 +50,8 @@ export async function editTranscriptEntry(
 		};
 	}
 
-	const [bucket] = await S3Buckets.getBucketAccess(
-		Option.fromNullable(result.bucket?.id),
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
 	).pipe(runPromise);
 
 	try {
@@ -63,11 +61,14 @@ export async function editTranscriptEntry(
 		if (Option.isNone(vttContent))
 			return { success: false, message: "Transcript file not found" };
 
-		const updatedVttContent = updateVttEntry(
+		const { content: updatedVttContent, updated } = updateVttEntryText(
 			vttContent.value,
 			entryId,
 			newText,
 		);
+		if (!updated) {
+			return { success: false, message: "Transcript entry not found" };
+		}
 
 		await bucket
 			.putObject(transcriptKey, updatedVttContent, {
@@ -93,67 +94,4 @@ export async function editTranscriptEntry(
 			message: "Failed to update transcript entry",
 		};
 	}
-}
-
-function updateVttEntry(
-	vttContent: string,
-	entryId: number,
-	newText: string,
-): string {
-	const lines = vttContent.split("\n");
-	const updatedLines: string[] = [];
-	let currentEntryId: number | null = null;
-	let foundEntry = false;
-	let isNextLineText = false;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i] || "";
-		const trimmedLine = line.trim();
-
-		if (!trimmedLine) {
-			updatedLines.push(line);
-			isNextLineText = false;
-			continue;
-		}
-
-		if (trimmedLine === "WEBVTT") {
-			updatedLines.push(line);
-			continue;
-		}
-
-		if (/^\d+$/.test(trimmedLine)) {
-			currentEntryId = parseInt(trimmedLine, 10);
-			updatedLines.push(line);
-			isNextLineText = false;
-			continue;
-		}
-
-		if (trimmedLine.includes("-->")) {
-			updatedLines.push(line);
-			isNextLineText = true;
-			continue;
-		}
-
-		if (currentEntryId === entryId && isNextLineText && !foundEntry) {
-			updatedLines.push(newText.trim());
-			foundEntry = true;
-			isNextLineText = false;
-		} else {
-			updatedLines.push(line);
-			if (isNextLineText) {
-				isNextLineText = false;
-			}
-		}
-	}
-
-	if (!foundEntry) {
-		console.warn("Target entry not found in VTT content", {
-			entryId,
-			totalEntries: lines.filter((line) => /^\d+$/.test(line.trim())).length,
-		});
-	}
-
-	const result = updatedLines.join("\n");
-
-	return result;
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `storage_integrations` ADD `googleDriveStorageQuotaCache` json;

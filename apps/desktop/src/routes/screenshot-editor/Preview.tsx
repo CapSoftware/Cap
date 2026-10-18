@@ -13,6 +13,13 @@ import { EditorButton, Slider } from "../editor/ui";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
 import { getImageRect } from "./layout";
+import { OcrSelectionOverlay } from "./OcrSelectionOverlay";
+
+type WebKitGestureEvent = Event & {
+	scale?: number;
+	clientX?: number;
+	clientY?: number;
+};
 
 // CSS for checkerboard grid
 const gridStyle = {
@@ -65,6 +72,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			originalImageSize(),
 			project.background.padding,
 			project.background.crop,
+			project.aspectRatio,
 		);
 	});
 
@@ -143,6 +151,13 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		null,
 	);
 
+	// Tracks whether the preview canvas has painted its first frame. The image
+	// wrapper has rounded corners + a drop shadow; rendering it before the canvas
+	// is painted briefly exposes the empty (transparent) canvas/shadow, which on a
+	// window screenshot reads as a "transparent border" flash around the corners.
+	// Gate the wrapper's visibility on the first paint to remove the transient.
+	const [canvasHasContent, setCanvasHasContent] = createSignal(false);
+
 	createEffect(() => {
 		const frame = latestFrame();
 		const currentBitmap = frame?.bitmap ?? null;
@@ -175,6 +190,8 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		setPan({ x: 0, y: 0 });
 	};
 
+	const clampZoom = (zoom: number) => Math.max(0.1, Math.min(3, zoom));
+
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement;
@@ -201,54 +218,101 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
 	});
 
+	const zoomAtPoint = (clientX: number, clientY: number, newZoom: number) => {
+		const rect = viewportRef?.getBoundingClientRect();
+		const currentScale = fitScale() * props.zoom;
+		const nextScale = fitScale() * newZoom;
+		const sizeData = size();
+		const boundsData = bounds();
+
+		if (
+			rect &&
+			currentScale > 0 &&
+			nextScale > 0 &&
+			sizeData.width > 0 &&
+			sizeData.height > 0
+		) {
+			const pointerX = clientX - rect.left;
+			const pointerY = clientY - rect.top;
+			const currentPan = pan();
+			const contentX =
+				boundsData.x +
+				(pointerX -
+					(sizeData.width - sizeData.width * props.zoom) / 2 -
+					currentPan.x) /
+					currentScale;
+			const contentY =
+				boundsData.y +
+				(pointerY -
+					(sizeData.height - sizeData.height * props.zoom) / 2 -
+					currentPan.y) /
+					currentScale;
+
+			setPan({
+				x:
+					pointerX -
+					(sizeData.width - sizeData.width * newZoom) / 2 -
+					(contentX - boundsData.x) * nextScale,
+				y:
+					pointerY -
+					(sizeData.height - sizeData.height * newZoom) / 2 -
+					(contentY - boundsData.y) * nextScale,
+			});
+		}
+
+		props.setZoom(newZoom);
+	};
+
+	// Coalesce rapid zoom input (trackpad pinch fires 60-120x/sec) into one
+	// update per animation frame. Without this, every wheel/gesture tick triggers
+	// a full reactive + layout pass on the scaled canvas, which is the source of
+	// the zoom lag. Coordinate semantics are unchanged — we just apply at most
+	// once per frame.
+	let zoomRaf: number | null = null;
+	let pendingZoom: { x: number; y: number; zoom: number } | null = null;
+	const flushZoom = () => {
+		zoomRaf = null;
+		const p = pendingZoom;
+		pendingZoom = null;
+		if (p) zoomAtPoint(p.x, p.y, p.zoom);
+	};
+	const scheduleZoomAtPoint = (
+		clientX: number,
+		clientY: number,
+		newZoom: number,
+	) => {
+		pendingZoom = { x: clientX, y: clientY, zoom: newZoom };
+		if (zoomRaf == null) zoomRaf = requestAnimationFrame(flushZoom);
+	};
+	onCleanup(() => {
+		if (zoomRaf != null) cancelAnimationFrame(zoomRaf);
+	});
+
+	const normalizeWheelDeltaY = (e: WheelEvent) => {
+		if (e.deltaMode === 1) return e.deltaY * 16;
+		if (e.deltaMode === 2) return e.deltaY * window.innerHeight;
+		return e.deltaY;
+	};
+
+	let lastGestureScale = 1;
+	let pinchZoom = 1;
+
 	const handleWheel = (e: WheelEvent) => {
 		e.preventDefault();
 		if (e.ctrlKey) {
-			const delta = -e.deltaY;
+			const normalizedDelta = normalizeWheelDeltaY(e);
+			if (normalizedDelta === 0) return;
+			const delta =
+				-Math.sign(normalizedDelta) * Math.max(Math.abs(normalizedDelta), 8);
 			const zoomStep = 0.005;
-			const newZoom = Math.max(0.1, Math.min(3, props.zoom + delta * zoomStep));
-			const rect = viewportRef?.getBoundingClientRect();
-			const currentScale = fitScale() * props.zoom;
-			const nextScale = fitScale() * newZoom;
-			const sizeData = size();
-			const boundsData = bounds();
-
-			if (
-				rect &&
-				currentScale > 0 &&
-				nextScale > 0 &&
-				sizeData.width > 0 &&
-				sizeData.height > 0
-			) {
-				const pointerX = e.clientX - rect.left;
-				const pointerY = e.clientY - rect.top;
-				const currentPan = pan();
-				const contentX =
-					boundsData.x +
-					(pointerX -
-						(sizeData.width - sizeData.width * props.zoom) / 2 -
-						currentPan.x) /
-						currentScale;
-				const contentY =
-					boundsData.y +
-					(pointerY -
-						(sizeData.height - sizeData.height * props.zoom) / 2 -
-						currentPan.y) /
-						currentScale;
-
-				setPan({
-					x:
-						pointerX -
-						(sizeData.width - sizeData.width * newZoom) / 2 -
-						(contentX - boundsData.x) * nextScale,
-					y:
-						pointerY -
-						(sizeData.height - sizeData.height * newZoom) / 2 -
-						(contentY - boundsData.y) * nextScale,
-				});
-			}
-
-			props.setZoom(newZoom);
+			// Accumulate against any zoom already queued this frame so coalesced
+			// ticks compose instead of overwriting each other.
+			const base = pendingZoom ? pendingZoom.zoom : props.zoom;
+			scheduleZoomAtPoint(
+				e.clientX,
+				e.clientY,
+				clampZoom(base + delta * zoomStep),
+			);
 		} else {
 			setPan((p) => ({
 				x: p.x - e.deltaX,
@@ -256,6 +320,84 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			}));
 		}
 	};
+
+	const getGesturePoint = (e: WebKitGestureEvent) => {
+		const rect = viewportRef?.getBoundingClientRect();
+		return {
+			clientX: e.clientX ?? (rect ? rect.left + rect.width / 2 : 0),
+			clientY: e.clientY ?? (rect ? rect.top + rect.height / 2 : 0),
+		};
+	};
+
+	const handleGestureStart = (event: Event) => {
+		const e = event as WebKitGestureEvent;
+		e.preventDefault();
+		lastGestureScale = e.scale ?? 1;
+		// Seed the running pinch target from the currently-applied zoom so the
+		// rAF-coalesced deltas compose correctly across skipped frames.
+		pinchZoom = props.zoom;
+	};
+
+	const handleGestureChange = (event: Event) => {
+		const e = event as WebKitGestureEvent;
+		e.preventDefault();
+		const scale = e.scale ?? 1;
+		const scaleDelta = scale / Math.max(lastGestureScale, 0.001);
+		lastGestureScale = scale;
+		pinchZoom = clampZoom(pinchZoom * scaleDelta);
+		const point = getGesturePoint(e);
+		scheduleZoomAtPoint(point.clientX, point.clientY, pinchZoom);
+	};
+
+	const handleGestureEnd = (event: Event) => {
+		event.preventDefault();
+		lastGestureScale = 1;
+		// Apply any zoom queued by the final gesturechange immediately so the last
+		// pinch frame isn't dropped when the gesture ends mid-frame.
+		if (zoomRaf != null) {
+			cancelAnimationFrame(zoomRaf);
+			flushZoom();
+		}
+	};
+
+	createEffect(() => {
+		const element = canvasContainerRef();
+		if (!element) return;
+		const listenerOptions = { capture: true, passive: false };
+		const cleanupOptions = { capture: true };
+
+		element.addEventListener("wheel", handleWheel, listenerOptions);
+		element.addEventListener(
+			"gesturestart",
+			handleGestureStart,
+			listenerOptions,
+		);
+		element.addEventListener(
+			"gesturechange",
+			handleGestureChange,
+			listenerOptions,
+		);
+		element.addEventListener("gestureend", handleGestureEnd, listenerOptions);
+
+		onCleanup(() => {
+			element.removeEventListener("wheel", handleWheel, cleanupOptions);
+			element.removeEventListener(
+				"gesturestart",
+				handleGestureStart,
+				cleanupOptions,
+			);
+			element.removeEventListener(
+				"gesturechange",
+				handleGestureChange,
+				cleanupOptions,
+			);
+			element.removeEventListener(
+				"gestureend",
+				handleGestureEnd,
+				cleanupOptions,
+			);
+		});
+	});
 
 	const startPanDrag = (clientX: number, clientY: number) => {
 		setIsDragging(true);
@@ -315,7 +457,9 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
+				ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
 				ctx.drawImage(frame.bitmap, 0, 0);
+				setCanvasHasContent(true);
 			}
 		}
 	});
@@ -325,12 +469,11 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			{/* Preview Area */}
 			<div
 				ref={setCanvasContainerRef}
-				class="flex-1 relative flex items-center justify-center overflow-hidden outline-none"
+				class="flex-1 relative flex items-center justify-center overflow-hidden outline-hidden"
 				style={gridStyle}
-				onWheel={handleWheel}
 				onMouseDown={handleMiddleMouseDown}
 			>
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
+				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
 					<EditorButton
 						tooltipText="Zoom Out"
 						kbd={["meta", "-"]}
@@ -578,6 +721,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 											overflow: "hidden",
 											"border-radius": "4px",
 											"box-shadow": imageShadow(),
+											visibility: canvasHasContent() ? "visible" : "hidden",
 										}}
 									>
 										<canvas
@@ -611,6 +755,26 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 												height: `${scaledHeight()}px`,
 												"pointer-events": "none",
 											}}
+										/>
+										<div
+											style={{
+												position: "absolute",
+												left: "0px",
+												top: "0px",
+												width: `${scaledWidth()}px`,
+												height: `${scaledHeight()}px`,
+												"z-index": 12,
+												cursor: isDragging() ? "grabbing" : "grab",
+											}}
+											onMouseDown={handleMouseDown}
+										/>
+										<OcrSelectionOverlay
+											bounds={bounds()}
+											cssWidth={scaledWidth()}
+											cssHeight={scaledHeight()}
+											imageRect={imageRect()}
+											originalImageSize={originalImageSize()}
+											crop={project.background.crop}
 										/>
 										<AnnotationLayer
 											bounds={bounds()}

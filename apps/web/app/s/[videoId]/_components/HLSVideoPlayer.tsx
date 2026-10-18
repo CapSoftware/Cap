@@ -7,20 +7,29 @@ import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { AlertTriangleIcon } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
+import { bindCaptionTrackCueText } from "./caption-tracks";
+import { scheduleReadyRefresh } from "./deferred-ready-refresh";
+import { waitForSegmentPlayback } from "./segment-playback-probe";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
+	hasUnplayableRecordingSource,
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
-	useUploadProgress,
-} from "./ProgressCircle";
+	type UploadProgress,
+} from "./upload-progress";
+import { VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -31,6 +40,7 @@ import {
 	MediaPlayerLoading,
 	MediaPlayerPiP,
 	MediaPlayerPlay,
+	MediaPlayerPlaybackSpeedDial,
 	MediaPlayerSeek,
 	MediaPlayerSeekBackward,
 	MediaPlayerSeekForward,
@@ -41,11 +51,17 @@ import {
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
 
+// Mounted only mid-upload; its RPC client drags the Effect runtime along, so
+// keeping it behind a dynamic import keeps that chunk off finished videos.
+const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
+	ssr: false,
+});
+
 const { circumference } = getProgressCircleConfig();
 
-const PROBE_MAX_RETRIES = 60;
-const PROBE_INITIAL_DELAY_MS = 1000;
-const PROBE_MAX_DELAY_MS = 8000;
+// Stable default: `= []` in the destructuring would mint a new array identity
+// every render and re-run everything that depends on the prop.
+const NO_CAPTIONS: CaptionOption[] = [];
 
 function getProgressStatusText(
 	status: "uploading" | "processing" | "generating_thumbnail",
@@ -66,7 +82,7 @@ function getLiveProbeSrc(playbackSrc: string) {
 	const url = new URL(playbackSrc, window.location.origin);
 	if (url.searchParams.get("videoType") !== "segments-master") return null;
 
-	url.searchParams.set("videoType", "segments-video");
+	url.searchParams.set("videoType", "segments-status");
 	return `${url.pathname}${url.search}`;
 }
 
@@ -85,9 +101,12 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
+	allowSegmentProbeDuringUpload?: boolean;
+	onSourceComplete?: () => void;
 	enhancedAudioUrl?: string | null;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	captionLanguage?: string;
@@ -97,6 +116,17 @@ interface Props {
 	hasCaptions?: boolean;
 	canRetryProcessing?: boolean;
 	duration?: number | null;
+	defaultPlaybackSpeed?: number;
+	previewMode?: "background";
+	/** The share page's timeline deck owns scrubbing while visible. */
+	externalTimeline?: boolean;
+	/**
+	 * With `externalTimeline`, the deck row the control bar renders into via a
+	 * portal. Context crosses portals, so the bar keeps its player store; the
+	 * timeline strip replaces the seek slider, everything else comes along.
+	 */
+	controlsPortalEl?: HTMLElement | null;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function HLSVideoPlayer({
@@ -109,27 +139,40 @@ export function HLSVideoPlayer({
 	autoplay = false,
 	hasActiveUpload,
 	isLiveSegments = false,
+	allowSegmentProbeDuringUpload = false,
+	onSourceComplete,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	enhancedAudioUrl: _enhancedAudioUrl,
 	enhancedAudioStatus: _enhancedAudioStatus,
 	captionLanguage,
 	onCaptionLanguageChange,
-	availableCaptions = [],
+	availableCaptions = NO_CAPTIONS,
 	isCaptionLoading = false,
 	hasCaptions = false,
 	canRetryProcessing = false,
 	duration: fallbackDuration,
+	defaultPlaybackSpeed,
+	previewMode,
+	externalTimeline = false,
+	controlsPortalEl = null,
+	callToAction = null,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hlsInitFailed, setHlsInitFailed] = useState(false);
+	const [sourceFailure, setSourceFailure] = useState<
+		"incomplete" | "unavailable" | null
+	>(null);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const hasPlayedOnceRef = useRef(false);
 	const videoLoadedRef = useRef(false);
+	const playbackStartedAtRef = useRef<number | null>(null);
+	const reportedReadyRef = useRef(false);
 	const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
 	const [sourceVersion, setSourceVersion] = useState(0);
 	const [isPlaybackSourceReady, setIsPlaybackSourceReady] = useState(
@@ -140,6 +183,7 @@ export function HLSVideoPlayer({
 	const router = useRouter();
 	const segmentRetryCountRef = useRef(0);
 	const hasTriedRouterRefreshRef = useRef(false);
+	const isBackgroundPreview = previewMode === "background";
 	const playbackSrc =
 		sourceVersion === 0
 			? videoSrc
@@ -148,6 +192,8 @@ export function HLSVideoPlayer({
 				: `${videoSrc}?_t=${sourceVersion}`;
 	const reloadPlayback = useCallback(() => {
 		setVideoLoaded(false);
+		setHlsInitFailed(false);
+		setSourceFailure(null);
 		setSourceVersion((current) => current + 1);
 	}, []);
 
@@ -159,11 +205,22 @@ export function HLSVideoPlayer({
 		videoLoadedRef.current = videoLoaded;
 	}, [videoLoaded]);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
+	// Mirrors what `useUploadProgress(id, enabled)` returned inline: null when
+	// idle, "fetching" from the first enabled render. The hook itself now lives
+	// in the lazily-mounted tracker so finished videos skip its Effect chunk.
+	const trackUploadProgress = hasActiveUpload || false;
+	const [uploadProgressRaw, setUploadProgressRaw] =
+		useState<UploadProgress | null>(
+			trackUploadProgress ? { status: "fetching" } : null,
+		);
+	useEffect(() => {
+		// Both directions of an enable/disable flip mirror the old inline hook:
+		// tracking starting mid-session reads "fetching" immediately (the lazy
+		// tracker hasn't mounted yet), and stopping reads null.
+		setUploadProgressRaw(trackUploadProgress ? { status: "fetching" } : null);
+	}, [trackUploadProgress]);
 	const shouldDelayPlaybackSource =
+		!allowSegmentProbeDuringUpload &&
 		shouldDeferPlaybackSource(uploadProgressRaw);
 	const liveProbeSrc = isLiveSegments ? getLiveProbeSrc(playbackSrc) : null;
 
@@ -178,69 +235,55 @@ export function HLSVideoPlayer({
 			return;
 		}
 
-		let cancelled = false;
-		let retryTimer: ReturnType<typeof setTimeout> | null = null;
-		let attempt = 0;
-
+		const controller = new AbortController();
 		setIsPlaybackSourceReady(false);
+		setSourceFailure(null);
+		void waitForSegmentPlayback({
+			url: liveProbeSrc,
+			signal: controller.signal,
+			onComplete: () => {
+				if (!controller.signal.aborted) onSourceComplete?.();
+			},
+		}).then((result) => {
+			if (controller.signal.aborted) return;
+			if (result === "ready") setIsPlaybackSourceReady(true);
+			else setSourceFailure(result);
+		});
 
-		const probe = async () => {
-			try {
-				const response = await fetch(liveProbeSrc, {
-					cache: "no-store",
-					credentials: "same-origin",
-				});
-				if (!response.ok) {
-					throw new Error(`Playback source not ready: ${response.status}`);
-				}
-				if (!cancelled) {
-					setIsPlaybackSourceReady(true);
-				}
-			} catch {
-				if (cancelled) return;
-				attempt++;
-				if (attempt >= PROBE_MAX_RETRIES) {
-					setHlsInitFailed(true);
-					return;
-				}
-				const delay = Math.min(
-					PROBE_INITIAL_DELAY_MS * 2 ** Math.min(attempt - 1, 4),
-					PROBE_MAX_DELAY_MS,
-				);
-				retryTimer = setTimeout(() => {
-					void probe();
-				}, delay);
-			}
-		};
-
-		void probe();
-
-		return () => {
-			cancelled = true;
-			if (retryTimer) clearTimeout(retryTimer);
-		};
-	}, [isLiveSegments, liveProbeSrc, shouldDelayPlaybackSource]);
+		return () => controller.abort();
+	}, [
+		isLiveSegments,
+		liveProbeSrc,
+		shouldDelayPlaybackSource,
+		onSourceComplete,
+	]);
 
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video) return;
+		playbackStartedAtRef.current ??= performance.now();
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
-			if (!hasPlayedOnceRef.current) {
-				setShowPlayButton(true);
+			if (isLiveSegments && !isBackgroundPreview && !reportedReadyRef.current) {
+				reportedReadyRef.current = true;
+				const elapsedMs = Math.round(
+					performance.now() -
+						(playbackStartedAtRef.current ?? performance.now()),
+				);
+				const fromRecordingStop =
+					new URLSearchParams(window.location.search).get(
+						"recordingStopped",
+					) === "1";
+				void import("@/app/utils/analytics")
+					.then(({ trackEvent }) =>
+						trackEvent("instant_playback_ready", {
+							elapsedMs,
+							fromRecordingStop,
+						}),
+					)
+					.catch(() => {});
 			}
-		};
-
-		const handleCanPlay = () => {
-			setVideoLoaded(true);
-			if (!hasPlayedOnceRef.current) {
-				setShowPlayButton(true);
-			}
-		};
-
-		const handleLoad = () => {
-			setVideoLoaded(true);
 			if (!hasPlayedOnceRef.current) {
 				setShowPlayButton(true);
 			}
@@ -260,6 +303,7 @@ export function HLSVideoPlayer({
 
 		const handleError = (e: Event) => {
 			const error = (e.target as HTMLVideoElement).error;
+			if (error) setHlsInitFailed(true);
 			console.error("HLSVideoPlayer: Video error detected:", {
 				error,
 				code: error?.code,
@@ -270,8 +314,7 @@ export function HLSVideoPlayer({
 
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-		video.addEventListener("canplay", handleCanPlay);
-		video.addEventListener("load", handleLoad);
+		video.addEventListener("canplay", handleLoadedData);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError);
 
@@ -280,21 +323,17 @@ export function HLSVideoPlayer({
 		}
 
 		if (video.readyState >= 2) {
-			setVideoLoaded(true);
-			if (!hasPlayedOnceRef.current) {
-				setShowPlayButton(true);
-			}
+			handleLoadedData();
 		}
 
 		return () => {
 			video.removeEventListener("loadeddata", handleLoadedData);
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			video.removeEventListener("canplay", handleCanPlay);
-			video.removeEventListener("load", handleLoad);
+			video.removeEventListener("canplay", handleLoadedData);
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError);
 		};
-	}, [playbackSrc, videoRef.current]);
+	}, [playbackSrc, videoRef.current, isLiveSegments, isBackgroundPreview]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -307,6 +346,7 @@ export function HLSVideoPlayer({
 				enableWorker: true,
 				lowLatencyMode: false,
 				backBufferLength: 90,
+				startFragPrefetch: true,
 				...(isLiveSegments
 					? {
 							liveSyncDurationCount: 3,
@@ -315,6 +355,8 @@ export function HLSVideoPlayer({
 							manifestLoadingMaxRetry: 30,
 							levelLoadingRetryDelay: 2000,
 							levelLoadingMaxRetry: 30,
+							fragLoadingRetryDelay: 2000,
+							fragLoadingMaxRetry: 30,
 						}
 					: {}),
 			});
@@ -323,33 +365,24 @@ export function HLSVideoPlayer({
 
 			hls.loadSource(playbackSrc);
 			hls.attachMedia(video);
-
-			hls.on(Hls.Events.MANIFEST_PARSED, () => {
-				console.log("HLSVideoPlayer: HLS manifest parsed successfully");
-				if (!isLiveSegments) {
-					setVideoLoaded(true);
-					if (!hasPlayedOnceRef.current) {
-						setShowPlayButton(true);
-					}
-				}
-			});
-
-			hls.on(Hls.Events.FRAG_LOADED, () => {
-				if (isLiveSegments && !videoLoadedRef.current) {
-					setVideoLoaded(true);
-					if (!hasPlayedOnceRef.current) {
-						setShowPlayButton(true);
-					}
-				}
-			});
+			if (isLiveSegments) {
+				hls.startLoad(0);
+			}
 
 			let networkRetryCount = 0;
+			let mediaRetryCount = 0;
 			const maxNetworkRetries = isLiveSegments ? 30 : 6;
 			let hasTriedPlaylistReload = false;
 			let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
+				if (isLiveSegments && data.response?.code === 409) {
+					setSourceFailure("incomplete");
+					hls.stopLoad();
+					video.pause();
+					return;
+				}
 
 				const isExpiredUrl =
 					data.response?.code === 403 || data.response?.code === 410;
@@ -392,7 +425,7 @@ export function HLSVideoPlayer({
 									console.log(
 										`HLSVideoPlayer: Fatal network error, retrying in ${delay}ms (attempt ${networkRetryCount}/${maxNetworkRetries})`,
 									);
-									setTimeout(() => hls.startLoad(), delay);
+									retryTimer = setTimeout(() => hls.startLoad(), delay);
 								} else {
 									console.log("HLSVideoPlayer: Network retries exhausted");
 									setHlsInitFailed(true);
@@ -401,10 +434,11 @@ export function HLSVideoPlayer({
 							}
 							break;
 						case Hls.ErrorTypes.MEDIA_ERROR:
-							console.log(
-								"HLSVideoPlayer: Fatal media error encountered, trying to recover",
-							);
-							hls.recoverMediaError();
+							if (mediaRetryCount++ < 3) hls.recoverMediaError();
+							else {
+								setHlsInitFailed(true);
+								hls.destroy();
+							}
 							break;
 						default:
 							console.log("HLSVideoPlayer: Fatal error, cannot recover");
@@ -444,109 +478,56 @@ export function HLSVideoPlayer({
 		videoRef.current,
 	]);
 
-	// Caption handling
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !captionsSrc) return;
-
-		let captionTrack: TextTrack | null = null;
-
-		const handleCueChange = (): void => {
-			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
-				const activeCue = captionTrack.activeCues[0] as VTTCue;
-				setCurrentCue(activeCue.text);
-			} else {
-				setCurrentCue("");
-			}
-		};
-
-		const setupTracks = (): void => {
-			const tracks = video.textTracks;
-			for (let i = 0; i < tracks.length; i++) {
-				const track = tracks[i];
-				if (
-					track &&
-					(track.kind === "captions" || track.kind === "subtitles")
-				) {
-					captionTrack = track;
-					track.mode = "hidden";
-					track.addEventListener("cuechange", handleCueChange);
-					break;
-				}
-			}
-		};
-
-		// Ensure all caption tracks remain hidden
-		const ensureTracksHidden = (): void => {
-			const tracks = video.textTracks;
-			for (let i = 0; i < tracks.length; i++) {
-				const track = tracks[i];
-				if (
-					track &&
-					(track.kind === "captions" || track.kind === "subtitles")
-				) {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
-
-		const handleLoadedMetadata = (): void => {
-			setupTracks();
-		};
-
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-			setupTracks();
-		};
-
-		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-
-		// Add event listeners to monitor track changes
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
-
-		if (video.readyState >= 1) {
-			setupTracks();
+		if (!video || !captionsSrc) {
+			setCurrentCue("");
+			return;
 		}
 
-		return () => {
-			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
-			if (captionTrack) {
-				captionTrack.removeEventListener("cuechange", handleCueChange);
-			}
-		};
+		return bindCaptionTrackCueText(video, setCurrentCue);
 	}, [captionsSrc, videoRef.current]);
 
+	const sourceIsIncomplete =
+		sourceFailure === "incomplete" ||
+		(isLiveSegments && hasUnplayableRecordingSource(uploadProgressRaw));
 	const isErrorWhileHlsLoading =
 		!videoLoaded &&
 		!hlsInitFailed &&
+		!sourceIsIncomplete &&
 		(uploadProgressRaw?.status === "error" ||
 			uploadProgressRaw?.status === "failed");
 	const uploadProgress =
-		videoLoaded || isErrorWhileHlsLoading ? null : uploadProgressRaw;
+		(isBackgroundPreview || videoLoaded || isErrorWhileHlsLoading) &&
+		!sourceIsIncomplete
+			? null
+			: uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isProcessing = uploadProgress?.status === "processing";
 	const isGeneratingThumbnail =
 		uploadProgress?.status === "generating_thumbnail";
 	const isUploadFailed = uploadProgress?.status === "failed";
 	const isUploadError = uploadProgress?.status === "error";
-	const hasFailedOrError = isUploadFailed || isUploadError;
+	const hasFailedOrError =
+		isUploadFailed || isUploadError || sourceFailure !== null || hlsInitFailed;
 	const hasActiveProgress =
 		isUploading || isProcessing || isGeneratingThumbnail;
-	const canRetryUploadProcessing = canRetryFailedProcessing(
-		uploadProgress,
-		canRetryProcessing,
-	);
-	const uploadFailureMessage = getUploadFailureMessage(
-		uploadProgress,
-		canRetryProcessing,
-	);
+	const canRetryUploadProcessing =
+		!sourceIsIncomplete &&
+		sourceFailure === null &&
+		canRetryFailedProcessing(uploadProgress, canRetryProcessing);
+	const uploadFailureMessage = sourceIsIncomplete
+		? canRetryProcessing
+			? "This recording is missing some video or audio. Reopen Cap on the recording computer to resume the upload."
+			: "This recording is missing some video or audio. Ask the owner to reopen Cap and finish the upload."
+		: sourceFailure === "unavailable" || hlsInitFailed
+			? "This video could not load. Check your connection and try again."
+			: getUploadFailureMessage(uploadProgress, canRetryProcessing);
+	useEffect(() => {
+		if (!sourceIsIncomplete) return;
+		videoRef.current?.pause();
+		hlsInstance.current?.stopLoad();
+	}, [sourceIsIncomplete, videoRef]);
 
 	const retryProcessing = async () => {
 		if (!canRetryUploadProcessing || isRetryingProcessing) {
@@ -573,20 +554,59 @@ export function HLSVideoPlayer({
 		}
 	};
 
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	const prevUploadProgress =
+		useRef<typeof uploadProgressRaw>(uploadProgressRaw);
+	const pendingReadyRefreshRef = useRef(false);
+	const cancelReadyRefreshRef = useRef<(() => void) | null>(null);
+	// The belt-and-braces second reload below must survive effect re-runs (its
+	// whole point is firing after progress events settle), so it is only ever
+	// cancelled on unmount.
+	const delayedReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
+	useEffect(
+		() => () => {
+			cancelReadyRefreshRef.current?.();
+			if (delayedReloadTimerRef.current) {
+				clearTimeout(delayedReloadTimerRef.current);
+			}
+		},
+		[],
+	);
 	useEffect(() => {
 		if (
 			shouldReloadPlaybackAfterUploadCompletes(
 				prevUploadProgress.current,
-				uploadProgress,
-				videoLoaded,
+				uploadProgressRaw,
+				{ includeFetching: isLiveSegments },
 			)
 		) {
-			reloadPlayback();
-			setTimeout(reloadPlayback, 1000);
+			if (isLiveSegments && !pendingReadyRefreshRef.current) {
+				pendingReadyRefreshRef.current = true;
+				cancelReadyRefreshRef.current = scheduleReadyRefresh({
+					video: videoRef.current,
+					videoId,
+					refresh: () => router.refresh(),
+				});
+			}
+
+			if (!isLiveSegments || !videoLoadedRef.current) {
+				reloadPlayback();
+				if (delayedReloadTimerRef.current) {
+					clearTimeout(delayedReloadTimerRef.current);
+				}
+				delayedReloadTimerRef.current = setTimeout(reloadPlayback, 1000);
+			}
 		}
-		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, videoLoaded, reloadPlayback]);
+		prevUploadProgress.current = uploadProgressRaw;
+	}, [
+		isLiveSegments,
+		router,
+		uploadProgressRaw,
+		reloadPlayback,
+		videoRef,
+		videoId,
+	]);
 
 	return (
 		<MediaPlayer
@@ -597,15 +617,32 @@ export function HLSVideoPlayer({
 			className={clsx(
 				mediaPlayerClassName,
 				"[&::-webkit-media-text-track-display]:!hidden",
+				isBackgroundPreview && "pointer-events-none [&_video]:opacity-70",
 			)}
 			autoHide
 		>
+			{trackUploadProgress && (
+				<UploadProgressTracker
+					videoId={videoId}
+					onChange={setUploadProgressRaw}
+				/>
+			)}
 			{hasFailedOrError && (
 				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
 					<AlertTriangleIcon className="text-red-500 size-12" />
 					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
 						{uploadFailureMessage}
 					</p>
+					{(sourceFailure === "unavailable" || hlsInitFailed) &&
+						!sourceIsIncomplete && (
+							<button
+								type="button"
+								onClick={reloadPlayback}
+								className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-full"
+							>
+								Try again
+							</button>
+						)}
 					{canRetryUploadProcessing && (
 						<button
 							type="button"
@@ -691,7 +728,8 @@ export function HLSVideoPlayer({
 				{showPlayButton &&
 					videoLoaded &&
 					!hasPlayedOnce &&
-					!hasActiveProgress && (
+					!hasActiveProgress &&
+					!isBackgroundPreview && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -709,6 +747,24 @@ export function HLSVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
+			<VideoPreviewGif
+				videoId={videoId}
+				preload={
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!hasFailedOrError &&
+					!isLiveSegments &&
+					!isBackgroundPreview
+				}
+				visible={
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!hasFailedOrError &&
+					!hlsInitFailed &&
+					!isLiveSegments &&
+					!isBackgroundPreview
+				}
+			/>
 			<MediaPlayerVideo
 				src={undefined} // HLS source is handled by HLS.js
 				ref={videoRef}
@@ -719,17 +775,42 @@ export function HLSVideoPlayer({
 				}}
 				playsInline
 				autoPlay={autoplay}
+				muted={isBackgroundPreview}
+				loop={isBackgroundPreview}
+				preload="auto"
 			>
 				{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
 				{captionsSrc && (
 					<track
-						label="English"
+						key={captionsSrc}
+						label={
+							availableCaptions.find(
+								(caption) => caption.code === captionLanguage,
+							)?.name ?? "Original"
+						}
 						kind="captions"
-						srcLang="en"
+						srcLang={
+							captionLanguage &&
+							captionLanguage !== "original" &&
+							captionLanguage !== "off"
+								? captionLanguage
+								: "en"
+						}
 						src={captionsSrc}
 					/>
 				)}
 			</MediaPlayerVideo>
+			{videoLoaded &&
+				!hasActiveProgress &&
+				!hasFailedOrError &&
+				!hlsInitFailed &&
+				!isBackgroundPreview && (
+					<MediaPlayerPlaybackSpeedDial
+						defaultSpeed={defaultPlaybackSpeed}
+						fallbackDuration={playerDuration}
+						show={showPlayButton && !hasPlayedOnce}
+					/>
+				)}
 			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
@@ -746,52 +827,98 @@ export function HLSVideoPlayer({
 			<MediaPlayerLoading />
 			<MediaPlayerError />
 			<MediaPlayerVolumeIndicator />
-			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
-				isUploadingOrFailed={hasActiveProgress || hasFailedOrError}
-			>
-				<MediaPlayerControlsOverlay />
-				<MediaPlayerSeek fallbackDuration={playerDuration} />
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
-						<MediaPlayerVolume
-							expandable
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// enhancedAudioMuted={enhancedAudioMuted}
-							// setEnhancedAudioMuted={setEnhancedAudioMuted}
-						/>
-						<MediaPlayerTime fallbackDuration={playerDuration} />
-					</div>
-					<div className="flex gap-2 items-center">
-						{!disableCaptions && (
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
-							/>
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!hasFailedOrError &&
+				!hlsInitFailed &&
+				!isBackgroundPreview && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
+			{(() => {
+				// Docked: the bar renders into the timeline deck's slot through a
+				// portal. Same tree, same store; only where it paints changes. The
+				// overrides pin it visible and static (twMerge drops the base
+				// absolute/opacity-0/auto-hide classes).
+				const docked = externalTimeline && controlsPortalEl !== null;
+				const controls = (
+					<MediaPlayerControls
+						// Docked, the bar sits on the timeline card's white row instead
+						// of on the video, so it drops its `dark` scope and the controls
+						// resolve to dark-on-light off the same gray scale.
+						tone={docked ? "light" : "dark"}
+						className={clsx(
+							docked
+								? "relative h-full flex-row items-center gap-2 opacity-100 pointer-events-auto"
+								: "flex-col items-start gap-2.5",
+							!docked && showPlayButton && !hasPlayedOnce && "max-sm:hidden",
 						)}
-						{/* <MediaPlayerEnhancedAudio
-							enhancedAudioStatus={enhancedAudioStatus}
-							enhancedAudioEnabled={enhancedAudioEnabled}
-							setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-						/> */}
-						<MediaPlayerSettings
-							// enhancedAudioStatus={enhancedAudioStatus}
-							// enhancedAudioEnabled={enhancedAudioEnabled}
-							// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
-							captionLanguage={captionLanguage}
-							onCaptionLanguageChange={onCaptionLanguageChange}
-							availableCaptions={availableCaptions}
-							isCaptionLoading={isCaptionLoading}
-							hasCaptions={hasCaptions}
-						/>
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
-					</div>
-				</div>
-			</MediaPlayerControls>
+						isUploadingOrFailed={
+							isBackgroundPreview || hasActiveProgress || hasFailedOrError
+						}
+					>
+						{!docked && <MediaPlayerControlsOverlay />}
+						{!externalTimeline && (
+							<MediaPlayerSeek fallbackDuration={playerDuration} />
+						)}
+						<div className="flex gap-2 items-center w-full">
+							<div className="flex flex-1 gap-2 items-center">
+								<MediaPlayerPlay />
+								<MediaPlayerSeekBackward className="hidden sm:inline-flex" />
+								<MediaPlayerSeekForward className="hidden sm:inline-flex" />
+								<MediaPlayerVolume
+									expandable
+									// Docked, the bar shares a phone-width row with the deck's
+									// zoom cluster; volume and PiP are the two controls a phone
+									// can live without (hardware rocker, and PiP is barely
+									// supported in mobile browsers).
+									className={docked ? "max-sm:hidden" : undefined}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// enhancedAudioMuted={enhancedAudioMuted}
+									// setEnhancedAudioMuted={setEnhancedAudioMuted}
+								/>
+								{(!externalTimeline || docked) && (
+									<MediaPlayerTime fallbackDuration={playerDuration} />
+								)}
+							</div>
+							<div className="flex gap-2 items-center">
+								{!disableCaptions && (
+									<MediaPlayerCaptions
+										setToggleCaptions={setToggleCaptions}
+										toggleCaptions={toggleCaptions}
+									/>
+								)}
+								{/* <MediaPlayerEnhancedAudio
+									enhancedAudioStatus={enhancedAudioStatus}
+									enhancedAudioEnabled={enhancedAudioEnabled}
+									setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+								/> */}
+								<MediaPlayerSettings
+									// enhancedAudioStatus={enhancedAudioStatus}
+									// enhancedAudioEnabled={enhancedAudioEnabled}
+									// setEnhancedAudioEnabled={setEnhancedAudioEnabled}
+									captionLanguage={captionLanguage}
+									onCaptionLanguageChange={onCaptionLanguageChange}
+									availableCaptions={availableCaptions}
+									isCaptionLoading={isCaptionLoading}
+									hasCaptions={hasCaptions}
+								/>
+								<MediaPlayerPiP
+									className={docked ? "max-sm:hidden" : undefined}
+								/>
+								<MediaPlayerFullscreen />
+							</div>
+						</div>
+					</MediaPlayerControls>
+				);
+				return docked && controlsPortalEl
+					? createPortal(controls, controlsPortalEl)
+					: controls;
+			})()}
 			{/* {enhancedAudioUrl && (
 				<>
 					<audio

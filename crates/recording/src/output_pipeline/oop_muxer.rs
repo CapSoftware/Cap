@@ -2,8 +2,10 @@ use crate::output_pipeline::core::{HealthSender, PipelineHealthEvent, emit_healt
 use anyhow::{Context, Result, anyhow};
 use cap_muxer_protocol::{
     Frame, InitAudio, InitVideo, PACKET_FLAG_KEYFRAME, Packet, STREAM_INDEX_AUDIO,
-    STREAM_INDEX_VIDEO, StartParams, write_frame,
+    STREAM_INDEX_VIDEO, StartParams, write_frame, write_packet as write_packet_frame,
 };
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::VecDeque,
     io::{BufWriter, Write},
@@ -23,6 +25,9 @@ const STDERR_RING_LIMIT: usize = 128;
 const RESPAWN_COOLDOWN: Duration = Duration::from_millis(500);
 const RESPAWN_STABILITY_WINDOW: Duration = Duration::from_secs(5);
 pub const EXIT_DISK_FULL: u8 = 60;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static MUXER_BINARY_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -161,24 +166,40 @@ pub enum MuxerSubprocessError {
     DiskFull(String),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MuxerSubprocessFinishError {
+    #[error("subprocess was reaped with unusable output: {0}")]
+    Reaped(#[source] MuxerSubprocessError),
+    #[error("subprocess exit is unconfirmed: {0:#}")]
+    Unconfirmed(#[source] anyhow::Error),
+}
+
+impl MuxerSubprocessFinishError {
+    pub fn child_reaped(&self) -> bool {
+        matches!(self, Self::Reaped(_))
+    }
+}
+
 impl MuxerSubprocess {
     pub fn spawn(
         bin_path: PathBuf,
         config: MuxerSubprocessConfig,
         health_tx: Option<HealthSender>,
     ) -> Result<Self, MuxerSubprocessError> {
-        let mut child = Command::new(&bin_path)
+        let mut command = Command::new(&bin_path);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .env(
                 "CAP_MUXER_LOG",
                 std::env::var("CAP_MUXER_LOG").unwrap_or_else(|_| "info".to_string()),
-            )
-            .spawn()
-            .map_err(|e| {
-                MuxerSubprocessError::Spawn(anyhow!("failed to spawn {}: {e}", bin_path.display()))
-            })?;
+            );
+        configure_muxer_command(&mut command);
+
+        let mut child = command.spawn().map_err(|e| {
+            MuxerSubprocessError::Spawn(anyhow!("failed to spawn {}: {e}", bin_path.display()))
+        })?;
 
         let stdin = child
             .stdin
@@ -335,16 +356,16 @@ impl MuxerSubprocess {
             .as_mut()
             .ok_or_else(|| MuxerSubprocessError::Write(anyhow!("stdin closed")))?;
 
-        let frame = Frame::Packet(Packet {
+        let packet = Packet {
             stream_index,
             pts,
             dts,
             duration,
             flags,
-            data: data.to_vec(),
-        });
+            data,
+        };
 
-        match write_frame(stdin, &frame) {
+        match write_packet_frame(stdin, &packet) {
             Ok(()) => {
                 self.packets_written.fetch_add(1, Ordering::Relaxed);
                 Ok(())
@@ -471,7 +492,7 @@ impl MuxerSubprocess {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<MuxerSubprocessReport, MuxerSubprocessError> {
+    pub fn finish(mut self) -> Result<MuxerSubprocessReport, MuxerSubprocessFinishError> {
         if let Some(mut stdin) = self.stdin.take() {
             let _ = write_frame(&mut stdin, &Frame::Finish);
             let _ = stdin.flush();
@@ -479,15 +500,26 @@ impl MuxerSubprocess {
         }
 
         let packets = self.packets_written.load(Ordering::Acquire);
-        let mut status = None;
-        if let Some(mut child) = self.child.take() {
-            match child.wait() {
-                Ok(s) => status = Some(s),
-                Err(e) => {
-                    warn!("cap-muxer wait failed: {e}");
+        let status = match self.child.as_mut() {
+            Some(child) => match child.wait() {
+                Ok(status) => {
+                    drop(self.child.take());
+                    status
                 }
+                Err(error) => {
+                    let stderr_tail = self.snapshot_stderr();
+                    return Err(MuxerSubprocessFinishError::Unconfirmed(anyhow!(
+                        "cap-muxer wait failed: {error}; stderr tail: {:?}",
+                        stderr_tail.iter().rev().take(3).collect::<Vec<_>>()
+                    )));
+                }
+            },
+            None => {
+                return Err(MuxerSubprocessFinishError::Unconfirmed(anyhow!(
+                    "cap-muxer child missing during finish"
+                )));
             }
-        }
+        };
 
         let stderr_tail = if let Some(handle) = self.stderr_thread.take() {
             handle.join().unwrap_or_default()
@@ -495,7 +527,7 @@ impl MuxerSubprocess {
             self.snapshot_stderr()
         };
 
-        let exit_code = status.as_ref().and_then(|s| s.code());
+        let exit_code = status.code();
         let success = matches!(exit_code, Some(0));
         if !success {
             let reason = format!(
@@ -509,11 +541,12 @@ impl MuxerSubprocess {
             } else {
                 self.report_crashed(&reason);
             }
-            return Err(if is_disk_full {
+            let error = if is_disk_full {
                 MuxerSubprocessError::DiskFull(reason)
             } else {
                 MuxerSubprocessError::Crashed(reason)
-            });
+            };
+            return Err(MuxerSubprocessFinishError::Reaped(error));
         }
 
         info!(
@@ -533,15 +566,31 @@ impl MuxerSubprocess {
 
 impl Drop for MuxerSubprocess {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take()
-            && let Ok(None) = child.try_wait()
-        {
-            warn!("cap-muxer subprocess being dropped while still running; killing");
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(mut child) = self.child.take() {
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!("cap-muxer subprocess being dropped while still running; killing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(error) => {
+                    warn!(%error, "cap-muxer subprocess status is unknown during drop; killing");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
         }
     }
 }
+
+#[cfg(windows)]
+fn configure_muxer_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_muxer_command(_command: &mut Command) {}
 
 #[derive(Debug)]
 pub struct MuxerSubprocessReport {
@@ -591,6 +640,7 @@ fn spawn_stderr_reader(
 
 pub struct RespawningMuxerSubprocess {
     current: Option<MuxerSubprocess>,
+    disk_full_reason: Option<String>,
     bin_path: PathBuf,
     config: MuxerSubprocessConfig,
     health_tx: Option<HealthSender>,
@@ -615,6 +665,7 @@ impl RespawningMuxerSubprocess {
         )?);
         Ok(Self {
             current,
+            disk_full_reason: None,
             bin_path,
             config,
             health_tx,
@@ -653,6 +704,10 @@ impl RespawningMuxerSubprocess {
     where
         F: FnMut(&mut MuxerSubprocess) -> Result<(), MuxerSubprocessError>,
     {
+        if let Some(reason) = &self.disk_full_reason {
+            return Err(MuxerSubprocessError::DiskFull(reason.clone()));
+        }
+
         loop {
             let Some(current) = self.current.as_mut() else {
                 if self.consecutive_fast_failures > self.max_consecutive_fast_failures {
@@ -667,7 +722,7 @@ impl RespawningMuxerSubprocess {
             match op(current) {
                 Ok(()) => return Ok(()),
                 Err(MuxerSubprocessError::DiskFull(reason)) => {
-                    self.current = None;
+                    self.disk_full_reason = Some(reason.clone());
                     return Err(MuxerSubprocessError::DiskFull(reason));
                 }
                 Err(MuxerSubprocessError::Crashed(reason)) => {
@@ -732,13 +787,13 @@ impl RespawningMuxerSubprocess {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<MuxerSubprocessReport, MuxerSubprocessError> {
+    pub fn finish(mut self) -> Result<MuxerSubprocessReport, MuxerSubprocessFinishError> {
         if let Some(current) = self.current.take() {
             current.finish()
         } else {
-            Err(MuxerSubprocessError::Crashed(
-                "no active subprocess at finish".to_string(),
-            ))
+            Err(MuxerSubprocessFinishError::Unconfirmed(anyhow!(
+                "no active subprocess at finish"
+            )))
         }
     }
 
@@ -772,4 +827,84 @@ pub fn feature_enabled() -> bool {
 
 pub fn output_path_from_dir(dir: &Path) -> PathBuf {
     dir.to_path_buf()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn exited_subprocess(
+        exit_code: u8,
+        max_failures: u32,
+    ) -> (tempfile::TempDir, RespawningMuxerSubprocess) {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("muxer");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nwhile [ ! -f \"$0.exit\" ]; do sleep 0.01; done\nexit {exit_code}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = MuxerSubprocessConfig {
+            output_directory: directory.path().join("video"),
+            init_segment_name: "init.mp4".into(),
+            media_segment_pattern: "segment_$Number%03d$.m4s".into(),
+            video_init: None,
+            audio_init: None,
+        };
+        let mut subprocess =
+            RespawningMuxerSubprocess::new(binary, config, None, max_failures).unwrap();
+        std::fs::write(directory.path().join("muxer.exit"), b"").unwrap();
+        let status = subprocess
+            .current
+            .as_mut()
+            .unwrap()
+            .child
+            .as_mut()
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(status.code(), Some(i32::from(exit_code)));
+        (directory, subprocess)
+    }
+
+    #[test]
+    fn disk_full_stays_terminal_and_finish_confirms_shutdown() {
+        let (_directory, mut subprocess) = exited_subprocess(EXIT_DISK_FULL, 2);
+        let error = subprocess
+            .write_video_packet(0, 0, 1, true, &vec![0; 2 * 1024 * 1024])
+            .unwrap_err();
+        assert!(matches!(error, MuxerSubprocessError::DiskFull(_)));
+
+        for _ in 0..3 {
+            assert!(matches!(
+                subprocess.write_video_packet(1, 1, 1, false, &[0]),
+                Err(MuxerSubprocessError::DiskFull(_))
+            ));
+            assert!(matches!(
+                subprocess.write_audio_packet(1, 1, 1, &[0]),
+                Err(MuxerSubprocessError::DiskFull(_))
+            ));
+        }
+        assert_eq!(subprocess.respawn_attempts(), 0);
+
+        let error = subprocess.finish().unwrap_err();
+        assert!(error.child_reaped());
+        assert!(matches!(
+            error,
+            MuxerSubprocessFinishError::Reaped(MuxerSubprocessError::DiskFull(_))
+        ));
+    }
+
+    #[test]
+    fn missing_child_does_not_claim_confirmed_shutdown() {
+        let (_directory, mut subprocess) = exited_subprocess(EXIT_DISK_FULL, 2);
+        drop(subprocess.current.take());
+        let error = subprocess.finish().unwrap_err();
+        assert!(!error.child_reaped());
+        assert!(matches!(error, MuxerSubprocessFinishError::Unconfirmed(_)));
+    }
 }

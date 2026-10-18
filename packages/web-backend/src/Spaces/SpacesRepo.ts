@@ -29,6 +29,19 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 					)
 					.pipe(Effect.map(Array.get(0))),
 
+			passwordsForVideo: (videoId: Video.VideoId) =>
+				db.use((db) =>
+					db
+						.select({
+							id: Db.spaces.id,
+							name: Db.spaces.name,
+							password: Db.spaces.password,
+						})
+						.from(Db.spaceVideos)
+						.innerJoin(Db.spaces, Dz.eq(Db.spaceVideos.spaceId, Db.spaces.id))
+						.where(Dz.eq(Db.spaceVideos.videoId, videoId)),
+				),
+
 			membership: (
 				userId: User.UserId,
 				spaceId: Space.SpaceIdOrOrganisationId,

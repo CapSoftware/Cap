@@ -10,8 +10,7 @@ use windows::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
             Direct3D::{
-                D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
-                D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
+                D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL, D3D_SRV_DIMENSION_TEXTURE2D, ID3DBlob,
             },
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_SHADER_RESOURCE,
@@ -145,7 +144,7 @@ pub struct MFDecodedFrame {
 }
 
 pub struct NV12Data {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub y_stride: u32,
     pub uv_stride: u32,
 }
@@ -552,14 +551,20 @@ pub struct MediaFoundationDecoder {
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
+    // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
+    _init_guard: MFInitGuard,
 }
 
-struct MFInitGuard;
+struct MFInitGuard {
+    media_foundation_started: bool,
+}
 
 impl Drop for MFInitGuard {
     fn drop(&mut self) {
         unsafe {
-            let _ = MFShutdown();
+            if self.media_foundation_started {
+                let _ = MFShutdown();
+            }
             CoUninitialize();
         }
     }
@@ -575,12 +580,15 @@ impl MediaFoundationDecoder {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
                 .map_err(|e| format!("Failed to initialize COM: {e:?}"))?;
-
+        }
+        let mut guard = MFInitGuard {
+            media_foundation_started: false,
+        };
+        unsafe {
             MFStartup(MF_API_VERSION, MFSTARTUP_NOSOCKET)
                 .map_err(|e| format!("Failed to start Media Foundation: {e:?}"))?;
         }
-
-        let guard = MFInitGuard;
+        guard.media_foundation_started = true;
 
         let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
@@ -616,8 +624,6 @@ impl MediaFoundationDecoder {
             "MediaFoundation decoder initialized"
         );
 
-        std::mem::forget(guard);
-
         Ok(Self {
             source_reader,
             d3d11_device,
@@ -633,6 +639,7 @@ impl MediaFoundationDecoder {
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
+            _init_guard: guard,
         })
     }
 
@@ -732,7 +739,7 @@ impl MediaFoundationDecoder {
         }
 
         Ok(NV12Data {
-            data,
+            data: Arc::new(data),
             y_stride,
             uv_stride: y_stride,
         })
@@ -826,12 +833,14 @@ impl MediaFoundationDecoder {
                 None,
             );
 
-            self.plane_converter.convert(
-                &frame_textures.nv12.texture,
-                &frame_textures,
-                self.width,
-                self.height,
-            )?;
+            if !frame_textures.y.handle.0.is_null() && !frame_textures.uv.handle.0.is_null() {
+                self.plane_converter.convert(
+                    &frame_textures.nv12.texture,
+                    &frame_textures,
+                    self.width,
+                    self.height,
+                )?;
+            }
         }
 
         let plane_time = plane_start.elapsed();
@@ -867,16 +876,9 @@ impl MediaFoundationDecoder {
     }
 }
 
-impl Drop for MediaFoundationDecoder {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = MFShutdown();
-            CoUninitialize();
-        }
-    }
-}
-
 unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
     let flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 
     let feature_levels = [
@@ -886,21 +888,16 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_0,
     ];
 
-    let driver_types = [
-        (D3D_DRIVER_TYPE_HARDWARE, "hardware"),
-        (D3D_DRIVER_TYPE_WARP, "WARP (software)"),
-    ];
-
     let mut last_error = String::new();
 
-    for (driver_type, driver_name) in driver_types {
+    if let Ok(selected) = cap_d3d_adapter::select_capture_adapter(None) {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
 
         let result = unsafe {
             D3D11CreateDevice(
-                None,
-                driver_type,
+                Some(&selected.adapter),
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 flags,
                 Some(&feature_levels),
@@ -914,13 +911,10 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
         match result {
             Ok(()) => {
                 if let (Some(device), Some(context)) = (device, context) {
-                    if driver_type == D3D_DRIVER_TYPE_WARP {
-                        warn!(
-                            "Using WARP software rasterizer for D3D11 - hardware GPU unavailable"
-                        );
-                    } else {
-                        info!("D3D11 device created using {} adapter", driver_name);
-                    }
+                    info!(
+                        adapter = %selected.description,
+                        "D3D11 device created on pinned hardware adapter"
+                    );
 
                     let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread =
                         device
@@ -932,19 +926,62 @@ unsafe fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), S
 
                     return Ok((device, context));
                 }
-                last_error =
-                    format!("D3D11CreateDevice ({driver_name}) returned null device/context");
+                last_error = format!(
+                    "D3D11CreateDevice (pinned adapter '{}') returned null device/context",
+                    selected.description
+                );
             }
             Err(e) => {
-                last_error = format!("D3D11CreateDevice ({driver_name}) failed: {e:?}");
-                if driver_type == D3D_DRIVER_TYPE_HARDWARE {
-                    warn!("{}, trying WARP fallback", last_error);
-                }
+                last_error = format!(
+                    "D3D11CreateDevice (pinned adapter '{}') failed: {e:?}",
+                    selected.description
+                );
+                warn!("{}, trying WARP fallback", last_error);
             }
         }
+    } else {
+        warn!("No physical hardware DXGI adapter available, falling back to WARP");
     }
 
-    Err(last_error)
+    let mut device: Option<ID3D11Device> = None;
+    let mut context: Option<ID3D11DeviceContext> = None;
+
+    let result = unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_WARP,
+            HMODULE::default(),
+            flags,
+            Some(&feature_levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+    };
+
+    match result {
+        Ok(()) => {
+            if let (Some(device), Some(context)) = (device, context) {
+                warn!("Using WARP software rasterizer for D3D11 - hardware GPU unavailable");
+
+                let multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread = device
+                    .cast()
+                    .map_err(|e| format!("Failed to get ID3D11Multithread: {e:?}"))?;
+                unsafe {
+                    let _ = multithread.SetMultithreadProtected(true);
+                }
+
+                return Ok((device, context));
+            }
+            Err(format!(
+                "{last_error}; D3D11CreateDevice (WARP) returned null device/context"
+            ))
+        }
+        Err(e) => Err(format!(
+            "{last_error}; D3D11CreateDevice (WARP) failed: {e:?}"
+        )),
+    }
 }
 
 unsafe fn create_dxgi_device_manager(
@@ -995,11 +1032,7 @@ unsafe fn create_source_reader(
             .map_err(|e| format!("SetUINT32 ENABLE_ADVANCED_VIDEO_PROCESSING failed: {e:?}"))?;
     }
 
-    let path_wide: Vec<u16> = path
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let path_wide = media_foundation_path(path);
 
     let source_reader = unsafe {
         MFCreateSourceReaderFromURL(PCWSTR(path_wide.as_ptr()), &attributes)
@@ -1007,6 +1040,23 @@ unsafe fn create_source_reader(
     };
 
     Ok(source_reader)
+}
+
+fn media_foundation_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let extended_unc = [92, 92, 63, 92, 85, 78, 67, 92];
+    let extended_drive = [92, 92, 63, 92];
+
+    if path.starts_with(&extended_unc) {
+        path.splice(..extended_unc.len(), [92, 92]);
+    } else if path.starts_with(&extended_drive) {
+        path.drain(..extended_drive.len());
+    }
+
+    path.push(0);
+    path
 }
 
 unsafe fn configure_output_type(source_reader: &IMFSourceReader) -> Result<(), String> {
@@ -1063,3 +1113,49 @@ unsafe fn get_video_info(source_reader: &IMFSourceReader) -> Result<(u32, u32, u
 }
 
 unsafe impl Send for MediaFoundationDecoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn repeatedly_releases_decoder_objects_before_com_shutdown() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        for _ in 0..20 {
+            let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+            for _ in 0..5 {
+                assert!(decoder.read_sample().unwrap().is_some());
+            }
+            drop(decoder);
+        }
+    }
+
+    fn normalized(path: &str) -> String {
+        let encoded = media_foundation_path(Path::new(path));
+        assert_eq!(encoded.last(), Some(&0));
+        String::from_utf16(&encoded[..encoded.len().saturating_sub(1)]).unwrap()
+    }
+
+    #[test]
+    fn removes_extended_drive_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\C:\Recordings\clip.mp4"),
+            r"C:\Recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn restores_unc_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\UNC\server\recordings\clip.mp4"),
+            r"\\server\recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn preserves_regular_unicode_paths() {
+        assert_eq!(normalized(r"C:\Vidéos\录制.mp4"), r"C:\Vidéos\录制.mp4");
+    }
+}

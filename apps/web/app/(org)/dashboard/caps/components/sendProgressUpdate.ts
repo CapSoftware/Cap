@@ -1,9 +1,9 @@
+import type { Video } from "@cap/web-domain";
 import { EffectRuntime } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
-import type { VideoId } from "./web-recorder-dialog/web-recorder-types";
 
 export const sendProgressUpdate = async (
-	videoId: VideoId,
+	videoId: Video.VideoId,
 	uploaded: number,
 	total: number,
 ) => {

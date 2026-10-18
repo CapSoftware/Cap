@@ -2,7 +2,26 @@ export interface ReleaseDownloads {
 	"macos-arm64"?: string;
 	"macos-x64"?: string;
 	windows?: string;
+	"linux-deb"?: string;
+	"linux-appimage"?: string;
+	"linux-rpm"?: string;
+	"linux-pacman"?: string;
 }
+
+export const releasesRevalidateSeconds = 60;
+
+export type ReleaseDownloadKey = keyof ReleaseDownloads;
+type ReleaseDownloadJsonKey = ReleaseDownloadKey | "linux";
+
+export const releaseDownloadKeys = [
+	"macos-arm64",
+	"macos-x64",
+	"windows",
+	"linux-deb",
+	"linux-appimage",
+	"linux-rpm",
+	"linux-pacman",
+] satisfies ReleaseDownloadKey[];
 
 export interface Release {
 	version: string;
@@ -23,18 +42,32 @@ interface GitHubRelease {
 	prerelease: boolean;
 }
 
-function parseDownloadsFromBody(body: string): ReleaseDownloads {
+export function parseDownloadsFromBody(body: string): ReleaseDownloads {
 	const downloads: ReleaseDownloads = {};
 
 	const jsonMatch = body.match(/<!--\s*DOWNLOADS_JSON\s*(\{[^}]+\})\s*-->/);
 
 	if (jsonMatch?.[1]) {
 		try {
-			const parsed = JSON.parse(jsonMatch[1]);
-			if (parsed["macos-arm64"])
-				downloads["macos-arm64"] = parsed["macos-arm64"];
-			if (parsed["macos-x64"]) downloads["macos-x64"] = parsed["macos-x64"];
-			if (parsed.windows) downloads.windows = parsed.windows;
+			const parsed: unknown = JSON.parse(jsonMatch[1]);
+			if (!parsed || typeof parsed !== "object") return downloads;
+
+			const values = parsed as Partial<Record<ReleaseDownloadJsonKey, unknown>>;
+			for (const key of releaseDownloadKeys) {
+				const value = values[key];
+				if (typeof value === "string" && value.length > 0) {
+					downloads[key] = value;
+				}
+			}
+
+			const linuxValue = values.linux;
+			if (
+				!downloads["linux-deb"] &&
+				typeof linuxValue === "string" &&
+				linuxValue.length > 0
+			) {
+				downloads["linux-deb"] = linuxValue;
+			}
 		} catch {}
 	}
 
@@ -54,7 +87,7 @@ export async function getGitHubReleases(): Promise<Release[]> {
 				"User-Agent": "Cap-Web",
 			},
 			next: {
-				revalidate: 3600,
+				revalidate: releasesRevalidateSeconds,
 			},
 		},
 	);
@@ -79,9 +112,5 @@ export async function getGitHubReleases(): Promise<Release[]> {
 }
 
 export function hasDownloads(downloads: ReleaseDownloads): boolean {
-	return !!(
-		downloads["macos-arm64"] ||
-		downloads["macos-x64"] ||
-		downloads.windows
-	);
+	return releaseDownloadKeys.some((key) => !!downloads[key]);
 }

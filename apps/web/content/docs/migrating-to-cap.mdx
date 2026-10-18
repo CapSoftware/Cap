@@ -1,0 +1,97 @@
+---
+title: "Migrating to Cap"
+summary: "Move a Loom library, team ownership, and organization structure into Cap"
+tags: "Migration, Loom, Teams, Agents"
+---
+
+Cap supports single-video Loom imports, CSV migrations for organizations, and managed migrations for larger or more complex libraries. We have run organization migrations spanning hundreds of users and tens of thousands of recordings.
+
+A successful migration is not just a count of accepted URLs. It preserves ownership and useful organization, waits for every import to finish, and separates source videos that Loom no longer makes available.
+
+## Choose the right path
+
+| Library | Recommended path |
+|---------|------------------|
+| One Loom video | Paste the Loom URL in **Dashboard > Import > Loom** |
+| Up to 500 mapped videos | Use the organization CSV importer |
+| More than 500 videos or a complex hierarchy | Run controlled batches with an agent or contact [hello@cap.so](mailto:hello@cap.so) for a managed migration |
+
+Loom import is a Cap Pro feature. Bulk CSV import is available to organization owners and admins.
+
+## Prepare the source inventory
+
+Export or prepare one row per unique Loom recording. The CSV importer expects:
+
+```csv
+loom_video_url,user_email,space_name
+https://www.loom.com/share/example,owner@example.com,Customer Success
+```
+
+`loom_video_url` and `user_email` are required. `space_name` is optional.
+
+The importer treats `space_name` as one Cap space label. It does not interpret slashes or other separators as a nested folder hierarchy. If your source library has nested folders, agree on an explicit mapping before importing.
+
+Cap can provision a missing organization user during a mapped migration without sending an unexpected invitation email. Still, normalize email addresses and confirm the intended owners before the run.
+
+## Run a self-serve CSV migration
+
+1. Open **Dashboard > Import > Loom**.
+2. Select the CSV option.
+3. Upload a CSV with no more than 500 data rows.
+4. Map the Loom URL, owner email, and optional space-name columns.
+5. Review invalid rows and the preview.
+6. Confirm the import.
+7. Keep the result report. The UI runs imports in controlled batches and reports completed and failed rows.
+
+Private, expired, password-protected, deleted, or otherwise unavailable Loom URLs cannot be imported until the source is accessible. Keep those rows in a separate exception list instead of silently dropping them.
+
+## Run a migration with your agent
+
+The Cap CLI and MCP server expose a durable per-video Loom import operation. Ask the agent to discover the installed contract first because flags and schemas should come from `cap guide --json`, not an old prompt.
+
+```sh
+cap guide --json
+cap caps import loom <loom-url> \
+  --organization <organization-id> \
+  --owner-email <email> \
+  --space <space-name> \
+  --wait \
+  --yes \
+  --json
+```
+
+Without `--wait`, the command returns an operation ID. The agent can wait for the terminal result with `cap jobs wait <operation-id> --json`.
+
+Use this prompt for a controlled migration:
+
+> Run `cap guide --json` and inspect our Cap organization, members, and spaces without changing anything. Parse the migration CSV locally. Report duplicate Loom URLs in the source file, invalid URLs, missing owners, space names that would be created, and any nested source paths that need an explicit mapping. Propose batches and a verification plan. After I approve the exact mapping and batch, import each row with its owner email and single Cap space name, retain every operation ID, wait for every operation to reach a terminal result, and report completed, failed, conflicted, and source-unavailable rows. Do not paste credentials into chat and do not start another batch until the previous batch is reconciled.
+
+The agent should never treat an accepted or queued response as a completed migration. It should also preserve source identifiers so a retry cannot create an unexplained duplicate.
+
+## How managed migrations work
+
+For large teams, we use the same process at a larger scale:
+
+1. **Inventory:** establish the source-of-truth count of unique Loom URLs, owners, and source locations.
+2. **Map:** translate source owners and hierarchy into Cap organization members, spaces, and any follow-up folder organization.
+3. **Validate:** identify duplicates, malformed URLs, missing ownership, and inaccessible source videos before the main run.
+4. **Import in controlled batches:** retain an operation or row result for every source recording.
+5. **Reconcile:** count completed, failed, conflicted, and source-unavailable results. Queued work is not counted as complete.
+6. **Verify:** sample playback, titles, owners, spaces, and stored assets, then compare the final Cap inventory with the source inventory.
+7. **Handle exceptions:** retry transient failures and return a clear list of Loom videos that are no longer downloadable.
+
+This has allowed Cap to move organizations with hundreds of users and libraries containing tens of thousands of recordings while keeping ownership and failures auditable.
+
+## Migration checklist
+
+- Source inventory is deduplicated and preserved
+- Organization owners and admins are identified
+- Every owner email has an intentional mapping
+- Every `space_name` is one Cap space label
+- Nested folders have a separate explicit plan
+- Batches contain no more than 500 rows in the self-serve UI
+- Every accepted import reaches a terminal result
+- Completed totals are reconciled with failures and unavailable sources
+- A playback and permissions sample passes before the source system is retired
+
+After the content is in Cap, use [Working With Your Team](/docs/teams) to finish the organization structure and [Google Drive](/docs/teams/google-drive) if future uploads should use Drive storage.

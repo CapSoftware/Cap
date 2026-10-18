@@ -434,7 +434,7 @@ fn build_reproduction_steps(result: &crate::results::TestResult) -> Vec<String> 
             display.width, display.height, display.fps
         ));
         if let Some(id) = &display.display_id {
-            config_parts.push(format!("display_id={}", id));
+            config_parts.push(format!("display_id={id}"));
         }
     }
     if let Some(camera) = &result.config.camera {
@@ -443,7 +443,7 @@ fn build_reproduction_steps(result: &crate::results::TestResult) -> Vec<String> 
             camera.width, camera.height, camera.fps
         ));
         if let Some(id) = &camera.device_id {
-            config_parts.push(format!("camera_id={}", id));
+            config_parts.push(format!("camera_id={id}"));
         }
     }
     if let Some(audio) = &result.config.audio {
@@ -452,7 +452,7 @@ fn build_reproduction_steps(result: &crate::results::TestResult) -> Vec<String> 
             audio.sample_rate, audio.channels
         ));
         if let Some(id) = &audio.device_id {
-            config_parts.push(format!("audio_device={}", id));
+            config_parts.push(format!("audio_device={id}"));
         }
     }
 
@@ -460,7 +460,7 @@ fn build_reproduction_steps(result: &crate::results::TestResult) -> Vec<String> 
     steps.push(format!("Duration: {}s", result.config.duration_secs));
 
     if let Some(reason) = &result.failure_reason {
-        steps.push(format!("Failure: {}", reason));
+        steps.push(format!("Failure: {reason}"));
     }
 
     for iteration in &result.iterations {

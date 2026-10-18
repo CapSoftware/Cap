@@ -12,7 +12,7 @@ jobs:
       matrix:
         runner:
           - macos-latest
-          - windows-latest
+          - windows-2022
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout Cap
@@ -25,7 +25,7 @@ jobs:
           path: performance-fixtures
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Rust cache
         uses: ./.github/actions/setup-rust-cache

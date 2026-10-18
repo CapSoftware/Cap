@@ -1,29 +1,9 @@
-export const SUPPORTED_LANGUAGES = {
-	en: "English",
-	es: "Spanish",
-	fr: "French",
-	de: "German",
-	pt: "Portuguese",
-	it: "Italian",
-	nl: "Dutch",
-	pl: "Polish",
-	sk: "Slovak",
-	ru: "Russian",
-	tr: "Turkish",
-	ja: "Japanese",
-	ko: "Korean",
-	zh: "Chinese (Simplified)",
-	ar: "Arabic",
-	hi: "Hindi",
-	bn: "Bengali",
-	ta: "Tamil",
-	te: "Telugu",
-	mr: "Marathi",
-	gu: "Gujarati",
-	pa: "Punjabi",
-	ur: "Urdu",
-	fa: "Persian",
-	he: "Hebrew",
-} as const;
-
-export type LanguageCode = keyof typeof SUPPORTED_LANGUAGES;
+// Deep import on purpose: this file is pulled into CLIENT code (the share
+// page's caption context), and the @cap/web-domain barrel would drag the
+// whole effect runtime (~250 KB gz) into that bundle. Language.ts itself is
+// dependency-free.
+export {
+	isLanguageCode,
+	type LanguageCode,
+	SUPPORTED_LANGUAGES,
+} from "@cap/web-domain/src/Language";

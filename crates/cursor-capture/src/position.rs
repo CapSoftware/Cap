@@ -10,13 +10,11 @@ pub struct RawCursorPosition {
 
 impl RawCursorPosition {
     pub fn get() -> Self {
-        let device_state = DeviceState::new();
-        let position = device_state.get_mouse().coords;
+        Self::from_coords(DeviceState::new().get_mouse().coords)
+    }
 
-        Self {
-            x: position.0,
-            y: position.1,
-        }
+    pub fn from_coords((x, y): (i32, i32)) -> Self {
+        Self { x, y }
     }
 
     pub fn relative_to_display(&self, display: Display) -> Option<RelativeCursorPosition> {
@@ -55,6 +53,17 @@ impl RelativeCursorPosition {
                 display,
             })
         }
+
+        #[cfg(target_os = "linux")]
+        {
+            let physical_bounds = display.raw_handle().physical_bounds()?;
+
+            Some(Self {
+                x: raw.x - physical_bounds.position().x() as i32,
+                y: raw.y - physical_bounds.position().y() as i32,
+                display,
+            })
+        }
     }
 
     pub fn display(&self) -> &Display {
@@ -83,6 +92,24 @@ impl RelativeCursorPosition {
         #[cfg(target_os = "macos")]
         {
             let bounds = self.display().raw_handle().logical_bounds()?;
+            let size = bounds.size();
+
+            Some(NormalizedCursorPosition {
+                x: self.x as f64 / size.width(),
+                y: self.y as f64 / size.height(),
+                crop: CursorCropBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size.width(),
+                    height: size.height(),
+                },
+                display: self.display,
+            })
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let bounds = self.display().raw_handle().physical_bounds()?;
             let size = bounds.size();
 
             Some(NormalizedCursorPosition {
@@ -132,6 +159,16 @@ impl CursorCropBounds {
 
     #[cfg(target_os = "windows")]
     pub fn new_windows(bounds: PhysicalBounds) -> Self {
+        Self {
+            x: bounds.position().x(),
+            y: bounds.position().y(),
+            width: bounds.size().width(),
+            height: bounds.size().height(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn new_linux(bounds: PhysicalBounds) -> Self {
         Self {
             x: bounds.position().x(),
             y: bounds.position().y(),

@@ -10,6 +10,13 @@ import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 import { events, type OSPermissionsCheck } from "~/utils/tauri";
+import {
+	DEVICE_ROW_CLASS,
+	DEVICE_ROW_ICON_CLASS,
+	DEVICE_ROW_LABEL_CLASS,
+	DEVICE_ROW_TRAILING_CLASS,
+	DEVICE_SHORTCUT_BUTTON_CLASS,
+} from "./deviceRowStyles";
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
@@ -20,9 +27,11 @@ export default function MicrophoneSelect(props: {
 	disabled?: boolean;
 	options: string[];
 	value: string | null;
+	disconnected?: boolean;
 	onChange: (micName: string | null) => void;
 	permissions?: OSPermissionsCheck;
 	onOpen?: () => void;
+	onOpenSettings?: () => void;
 }) {
 	const DB_SCALE = 40;
 	const currentRecording = createCurrentRecordingQuery();
@@ -31,8 +40,11 @@ export default function MicrophoneSelect(props: {
 	const [dbs, setDbs] = createSignal<number | undefined>();
 
 	const permissionGranted = () =>
-		props.permissions?.microphone === "granted" ||
-		props.permissions?.microphone === "notNeeded";
+		props.permissions === undefined ||
+		props.permissions.microphone === "granted" ||
+		props.permissions.microphone === "notNeeded";
+
+	const notConnected = () => !!props.disconnected && permissionGranted();
 
 	const handleMicrophoneChange = async (name: string | null) => {
 		if (!props.options) return;
@@ -53,12 +65,23 @@ export default function MicrophoneSelect(props: {
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
+	const showLevel = () =>
+		props.value !== null && dbs() !== undefined && !notConnected();
+
+	const showSettingsShortcut = () =>
+		props.value !== null &&
+		permissionGranted() &&
+		!!props.onOpenSettings &&
+		!notConnected();
+
+	const isDisabled = () => !!currentRecording.data || props.disabled;
+
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col items-stretch text-(--text-primary)">
 			<button
 				type="button"
-				disabled={!!currentRecording.data || props.disabled}
-				class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+				disabled={isDisabled()}
+				class={cx(DEVICE_ROW_CLASS, "KSelect")}
 				onClick={() => {
 					if (!permissionGranted()) {
 						requestPermission("microphone", props.permissions?.microphone);
@@ -66,33 +89,58 @@ export default function MicrophoneSelect(props: {
 					}
 					props.onOpen?.();
 				}}
+				aria-haspopup="menu"
 			>
-				<Show when={props.value !== null && dbs()}>
-					{(_) => (
-						<div
-							class="opacity-50 left-0 inset-y-0 absolute transition-[right] duration-100 -z-10 bg-blue-7"
-							style={{ right: `${audioLevel() * 100}%` }}
-						/>
-					)}
+				<Show when={showLevel()}>
+					<div
+						class="absolute inset-y-0 left-0 -z-10 transition-[right] duration-100 pointer-events-none bg-blue-9/10"
+						style={{ right: `${audioLevel() * 100}%` }}
+					/>
+					<div
+						class="absolute bottom-0 left-0 h-[2px] -z-10 transition-[right] duration-100 pointer-events-none bg-blue-9"
+						style={{ right: `${audioLevel() * 100}%` }}
+					/>
 				</Show>
-				<IconCapMicrophone class="text-gray-10 size-4" />
-				<p class="flex-1 text-sm text-left truncate">
+				<IconCapMicrophone class={DEVICE_ROW_ICON_CLASS} />
+				<p
+					class={cx(DEVICE_ROW_LABEL_CLASS, notConnected() && "text-gray-10")}
+					title={notConnected() ? "Not connected" : undefined}
+				>
 					{props.value ?? NO_MICROPHONE}
 				</p>
-				<TargetSelectInfoPill
-					PillComponent={InfoPill}
-					value={props.value}
-					permissionGranted={permissionGranted()}
-					requestPermission={() =>
-						requestPermission("microphone", props.permissions?.microphone)
-					}
-					onClick={(e) => {
-						if (props.value !== null) {
-							e.stopPropagation();
-							void handleMicrophoneChange(null);
+				<div class={DEVICE_ROW_TRAILING_CLASS}>
+					<Show when={showSettingsShortcut()}>
+						<button
+							type="button"
+							onClick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+								props.onOpenSettings?.();
+							}}
+							onPointerDown={(e) => e.stopPropagation()}
+							class={DEVICE_SHORTCUT_BUTTON_CLASS}
+							title="Microphone settings"
+							aria-label="Microphone settings"
+						>
+							<IconLucideSettings class="size-3.5" />
+						</button>
+					</Show>
+					<TargetSelectInfoPill
+						PillComponent={InfoPill}
+						value={props.value}
+						disconnected={notConnected()}
+						permissionGranted={permissionGranted()}
+						requestPermission={() =>
+							requestPermission("microphone", props.permissions?.microphone)
 						}
-					}}
-				/>
+						onClick={(e) => {
+							if (props.value !== null) {
+								e.stopPropagation();
+								void handleMicrophoneChange(null);
+							}
+						}}
+					/>
+				</div>
 			</button>
 		</div>
 	);
@@ -107,7 +155,7 @@ export function MicrophoneSelectBase(props: {
 	levelIndicatorClass: string;
 	iconClass: string;
 	PillComponent: Component<
-		ComponentProps<"button"> & { variant: "blue" | "red" }
+		ComponentProps<"button"> & { variant: "blue" | "red" | "gray" }
 	>;
 	permissions?: OSPermissionsCheck;
 }) {
@@ -120,8 +168,9 @@ export function MicrophoneSelectBase(props: {
 	const requestPermission = useRequestPermission();
 
 	const permissionGranted = () =>
-		props.permissions?.microphone === "granted" ||
-		props.permissions?.microphone === "notNeeded";
+		props.permissions === undefined ||
+		props.permissions.microphone === "granted" ||
+		props.permissions.microphone === "notNeeded";
 
 	type Option = { name: string };
 
@@ -145,7 +194,7 @@ export function MicrophoneSelectBase(props: {
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col gap-1 items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={!!currentRecording.data || props.disabled}

@@ -280,6 +280,19 @@ fn with_state<F: FnOnce(&mut WindowDelegateState) -> T, T>(this: &Object, callba
   callback(state_ptr);
 }
 
+fn suppress_delegate_panic<T, F>(selector: &'static str, fallback: T, operation: F) -> T
+where
+  F: FnOnce() -> T,
+{
+  match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+    Ok(value) => value,
+    Err(_) => {
+      error!("Suppressed panic in `{selector}`");
+      fallback
+    }
+  }
+}
+
 extern "C" fn dealloc(this: &Object, _sel: Sel) {
   with_state(this, |state| unsafe {
     drop(Box::from_raw(state as *mut WindowDelegateState));
@@ -325,23 +338,27 @@ extern "C" fn clear_is_checking_zoomed_in(this: &Object, _sel: Sel) {
 }
 
 extern "C" fn window_should_close(this: &Object, _: Sel, _: id) -> BOOL {
-  trace!("Triggered `windowShouldClose:`");
-  with_state(this, |state| state.emit_event(WindowEvent::CloseRequested));
-  trace!("Completed `windowShouldClose:`");
-  NO
+  suppress_delegate_panic("windowShouldClose:", NO, || {
+    trace!("Triggered `windowShouldClose:`");
+    with_state(this, |state| state.emit_event(WindowEvent::CloseRequested));
+    trace!("Completed `windowShouldClose:`");
+    NO
+  })
 }
 
 extern "C" fn window_will_close(this: &Object, _: Sel, _: id) {
-  trace!("Triggered `windowWillClose:`");
-  with_state(this, |state| unsafe {
-    // `setDelegate:` retains the previous value and then autoreleases it
-    let _pool = NSAutoreleasePool::new();
-    // Since El Capitan, we need to be careful that delegate methods can't
-    // be called after the window closes.
-    let () = msg_send![&state.ns_window, setDelegate: nil];
-    state.emit_event(WindowEvent::Destroyed);
+  suppress_delegate_panic("windowWillClose:", (), || {
+    trace!("Triggered `windowWillClose:`");
+    with_state(this, |state| unsafe {
+      // `setDelegate:` retains the previous value and then autoreleases it
+      let _pool = NSAutoreleasePool::new();
+      // Since El Capitan, we need to be careful that delegate methods can't
+      // be called after the window closes.
+      let () = msg_send![&state.ns_window, setDelegate: nil];
+      state.emit_event(WindowEvent::Destroyed);
+    });
+    trace!("Completed `windowWillClose:`");
   });
-  trace!("Completed `windowWillClose:`");
 }
 
 extern "C" fn window_did_resize(this: &Object, _: Sel, _: id) {
@@ -373,45 +390,49 @@ extern "C" fn window_did_change_backing_properties(this: &Object, _: Sel, _: id)
 }
 
 extern "C" fn window_did_become_key(this: &Object, _: Sel, _: id) {
-  trace!("Triggered `windowDidBecomeKey:`");
-  with_state(this, |state| {
-    // TODO: center the cursor if the window had mouse grab when it
-    // lost focus
-    state.emit_event(WindowEvent::Focused(true));
+  suppress_delegate_panic("windowDidBecomeKey:", (), || {
+    trace!("Triggered `windowDidBecomeKey:`");
+    with_state(this, |state| {
+      // TODO: center the cursor if the window had mouse grab when it
+      // lost focus
+      state.emit_event(WindowEvent::Focused(true));
+    });
+    trace!("Completed `windowDidBecomeKey:`");
   });
-  trace!("Completed `windowDidBecomeKey:`");
 }
 
 extern "C" fn window_did_resign_key(this: &Object, _: Sel, _: id) {
-  trace!("Triggered `windowDidResignKey:`");
-  with_state(this, |state| {
-    // It happens rather often, e.g. when the user is Cmd+Tabbing, that the
-    // NSWindowDelegate will receive a didResignKey event despite no event
-    // being received when the modifiers are released.  This is because
-    // flagsChanged events are received by the NSView instead of the
-    // NSWindowDelegate, and as a result a tracked modifiers state can quite
-    // easily fall out of synchrony with reality.  This requires us to emit
-    // a synthetic ModifiersChanged event when we lose focus.
-    //
-    // Here we (very unsafely) acquire the taoState (a ViewState) from the
-    // Object referenced by state.ns_view (an IdRef, which is dereferenced
-    // to an id)
-    #[allow(deprecated)] // TODO: Use define_class!
-    let view_state: &mut ViewState = unsafe {
-      let ns_view: &Object = &state.ns_view;
-      let state_ptr: *mut c_void = *ns_view.get_ivar("taoState");
-      &mut *(state_ptr as *mut ViewState)
-    };
+  suppress_delegate_panic("windowDidResignKey:", (), || {
+    trace!("Triggered `windowDidResignKey:`");
+    with_state(this, |state| {
+      // It happens rather often, e.g. when the user is Cmd+Tabbing, that the
+      // NSWindowDelegate will receive a didResignKey event despite no event
+      // being received when the modifiers are released.  This is because
+      // flagsChanged events are received by the NSView instead of the
+      // NSWindowDelegate, and as a result a tracked modifiers state can quite
+      // easily fall out of synchrony with reality.  This requires us to emit
+      // a synthetic ModifiersChanged event when we lose focus.
+      //
+      // Here we (very unsafely) acquire the taoState (a ViewState) from the
+      // Object referenced by state.ns_view (an IdRef, which is dereferenced
+      // to an id)
+      #[allow(deprecated)] // TODO: Use define_class!
+      let view_state: &mut ViewState = unsafe {
+        let ns_view: &Object = &state.ns_view;
+        let state_ptr: *mut c_void = *ns_view.get_ivar("taoState");
+        &mut *(state_ptr as *mut ViewState)
+      };
 
-    // Both update the state and emit a ModifiersChanged event.
-    if !view_state.modifiers.is_empty() {
-      view_state.modifiers = ModifiersState::empty();
-      state.emit_event(WindowEvent::ModifiersChanged(view_state.modifiers));
-    }
+      // Both update the state and emit a ModifiersChanged event.
+      if !view_state.modifiers.is_empty() {
+        view_state.modifiers = ModifiersState::empty();
+        state.emit_event(WindowEvent::ModifiersChanged(view_state.modifiers));
+      }
 
-    state.emit_event(WindowEvent::Focused(false));
+      state.emit_event(WindowEvent::Focused(false));
+    });
+    trace!("Completed `windowDidResignKey:`");
   });
-  trace!("Completed `windowDidResignKey:`");
 }
 
 /// Invoked when the dragged image enters destination bounds or frame

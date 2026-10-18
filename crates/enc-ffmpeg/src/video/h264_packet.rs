@@ -21,6 +21,7 @@ pub struct H264PacketEncoder {
     input_height: u32,
     packet: Packet,
     first_pts: Option<i64>,
+    last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
     encoder_time_base: Rational,
     frame_rate: Rational,
@@ -63,6 +64,7 @@ impl H264PacketEncoder {
             input_height: opened.input_height,
             packet: Packet::empty(),
             first_pts: None,
+            last_frame_pts: None,
             last_written_dts: None,
             encoder_time_base,
             frame_rate,
@@ -196,15 +198,23 @@ impl H264PacketEncoder {
     }
 
     fn update_pts(&mut self, frame: &mut frame::Video, timestamp: Duration) {
+        // Use encoder_time_base (the value sent to the muxer subprocess via InitVideo),
+        // NOT self.encoder.time_base() which may be overridden by the codec after open.
+        // Mismatching these causes the muxer to rescale PTS using the wrong time base,
+        // producing wrong playback speed (observed as 4-8x too fast with h264_videotoolbox).
+        let tb = self.encoder_time_base;
         if timestamp != Duration::MAX {
-            let tb = self.encoder.time_base();
             let rate = tb.denominator() as f64 / tb.numerator() as f64;
             let pts = (timestamp.as_secs_f64() * rate).round() as i64;
-            let first_pts = self.first_pts.get_or_insert(pts);
-            frame.set_pts(Some(pts - *first_pts));
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let pts = normalize_input_pts(pts - first_pts, self.last_frame_pts);
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
         } else if let Some(pts) = frame.pts() {
-            let first_pts = self.first_pts.get_or_insert(pts);
-            frame.set_pts(Some(pts - *first_pts));
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let pts = normalize_input_pts(pts - first_pts, self.last_frame_pts);
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
         } else {
             tracing::error!("Frame has no pts");
         }
@@ -215,6 +225,12 @@ impl H264PacketEncoder {
         F: FnMut(EncodedPacket) -> Result<(), EncodePacketError>,
     {
         while self.encoder.receive_packet(&mut self.packet).is_ok() {
+            match (self.packet.pts(), self.packet.dts()) {
+                (Some(pts), None) => self.packet.set_dts(Some(pts)),
+                (None, Some(dts)) => self.packet.set_pts(Some(dts)),
+                _ => {}
+            }
+
             if let (Some(dts), Some(last_dts)) = (self.packet.dts(), self.last_written_dts)
                 && dts <= last_dts
             {
@@ -254,11 +270,44 @@ impl H264PacketEncoder {
     }
 }
 
+fn normalize_input_pts(pts: i64, last_pts: Option<i64>) -> i64 {
+    let Some(last_pts) = last_pts else {
+        return pts;
+    };
+
+    if pts > last_pts {
+        return pts;
+    }
+
+    // A tie or backwards timestamp carries no time — advance a single tick
+    // so pts stay strictly monotonic and the real timestamps immediately
+    // take over again. Any larger bump outruns a source delivering faster
+    // than the nominal rate (each corrected frame pushes the next one into
+    // correction too), re-timing the recording to the bump cadence.
+    last_pts + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::video::h264::{H264EncoderBuilder, H264Preset};
     use cap_media_info::{Pixel, VideoInfo};
+
+    #[test]
+    fn normalize_input_pts_passes_monotonic_input_through() {
+        // Any strictly-forward delta passes untouched, even sub-frame ones
+        // from sources far faster than the nominal rate (1000fps = 1ms).
+        assert_eq!(normalize_input_pts(16_667, Some(0)), 16_667);
+        assert_eq!(normalize_input_pts(1_000, Some(0)), 1_000);
+    }
+
+    #[test]
+    fn normalize_input_pts_bumps_non_monotonic_input_by_one_tick() {
+        // Any larger bump outruns a fast source: each corrected frame pushes
+        // the next into correction too, re-timing the whole recording.
+        assert_eq!(normalize_input_pts(90_000, Some(100_000)), 100_001);
+        assert_eq!(normalize_input_pts(100_000, Some(100_000)), 100_001);
+    }
 
     fn test_video_info() -> VideoInfo {
         VideoInfo {

@@ -1,14 +1,16 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { validateMediaServerSecret } from "../lib/auth";
 import {
-	canAcceptNewProcess,
+	canAcceptNewAudioOperation as canAcceptNewProcess,
 	checkHasAudioTrack,
 	extractAudio,
 	extractAudioStream,
-	getActiveProcessCount,
-} from "../lib/ffmpeg";
+	getActiveAudioOperationCount as getActiveProcessCount,
+} from "../lib/media-audio";
 
 const audio = new Hono();
+const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 
 const videoUrlSchema = z.object({
 	videoUrl: z.string().url(),
@@ -41,6 +43,10 @@ audio.get("/status", (c) => {
 });
 
 audio.post("/check", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = videoUrlSchema.safeParse(body);
 
@@ -86,7 +92,7 @@ audio.post("/check", async (c) => {
 		return c.json(
 			{
 				error: "Failed to check audio track",
-				code: "FFMPEG_ERROR",
+				code: MEDIA_ENGINE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,
@@ -95,6 +101,10 @@ audio.post("/check", async (c) => {
 });
 
 audio.post("/extract", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = extractSchema.safeParse(body);
 
@@ -171,7 +181,7 @@ audio.post("/extract", async (c) => {
 		return c.json(
 			{
 				error: "Failed to extract audio",
-				code: "FFMPEG_ERROR",
+				code: MEDIA_ENGINE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,
@@ -180,6 +190,10 @@ audio.post("/extract", async (c) => {
 });
 
 audio.post("/convert", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
 	const body = await c.req.json();
 	const result = convertSchema.safeParse(body);
 
@@ -240,7 +254,7 @@ audio.post("/convert", async (c) => {
 		return c.json(
 			{
 				error: "Failed to convert audio",
-				code: "FFMPEG_ERROR",
+				code: MEDIA_ENGINE_ERROR_CODE,
 				details: err instanceof Error ? err.message : String(err),
 			},
 			500,

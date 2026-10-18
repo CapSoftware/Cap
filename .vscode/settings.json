@@ -1,0 +1,4 @@
+{
+	"rust-analyzer.cargo.targetDir": "target/rust-analyzer",
+	"rust-analyzer.check.allTargets": false
+}

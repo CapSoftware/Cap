@@ -15,16 +15,24 @@ export const sendEmail = async ({
 	cc,
 	replyTo,
 	fromOverride,
+	idempotencyKey,
+	attachments,
 }: {
 	email: string;
 	subject: string;
-	react: ReactElement<any, string | JSXElementConstructor<any>>;
+	react: ReactElement<unknown, string | JSXElementConstructor<unknown>>;
 	marketing?: boolean;
 	test?: boolean;
 	scheduledAt?: string;
 	cc?: string | string[];
 	replyTo?: string;
 	fromOverride?: string;
+	idempotencyKey?: string;
+	attachments?: {
+		filename: string;
+		content: Buffer | string;
+		contentType?: string;
+	}[];
 }) => {
 	const r = resend();
 	if (!r) {
@@ -32,7 +40,7 @@ export const sendEmail = async ({
 	}
 
 	if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
-	let from;
+	let from: string;
 
 	if (fromOverride) from = fromOverride;
 	else if (marketing) from = "Richie from Cap <richie@send.cap.so>";
@@ -40,13 +48,17 @@ export const sendEmail = async ({
 		from = "Cap Auth <no-reply@auth.cap.so>";
 	else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
 
-	return r.emails.send({
-		from,
-		to: test ? "delivered@resend.dev" : email,
-		subject,
-		react,
-		scheduledAt,
-		cc: test ? undefined : cc,
-		replyTo: replyTo,
-	}) as any;
+	return r.emails.send(
+		{
+			from,
+			to: test ? "delivered@resend.dev" : email,
+			subject,
+			react,
+			scheduledAt,
+			cc: test ? undefined : cc,
+			replyTo: replyTo,
+			attachments,
+		},
+		idempotencyKey ? { idempotencyKey } : undefined,
+	);
 };

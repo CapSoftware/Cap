@@ -42,10 +42,12 @@ impl BufferedResampler {
         };
 
         for buffer in self.buffer.iter().skip(1) {
-            // fill in gap
-            remaining_samples += (buffer.1 - pts) as usize;
+            // Fill in gaps between buffered frames. Non-integer rate ratios
+            // (44.1k -> 48k) can round consecutive pts to overlap by a sample,
+            // making the difference negative; that is an overlap, not a gap.
+            remaining_samples += (buffer.1 - pts).max(0) as usize;
             remaining_samples += buffer.0.samples();
-            pts += buffer.0.samples() as i64;
+            pts = pts.max(buffer.1) + buffer.0.samples() as i64;
         }
 
         remaining_samples
@@ -53,6 +55,10 @@ impl BufferedResampler {
 
     pub fn output(&self) -> resampling::context::Definition {
         *self.resampler.output()
+    }
+
+    pub fn input(&self) -> resampling::context::Definition {
+        *self.resampler.input()
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
@@ -351,10 +357,101 @@ mod test {
             let last = bufferer.buffer.back().unwrap();
             assert_eq!(last.1 + last.0.samples() as i64, 600);
         }
+
+        #[test]
+        fn overlapping_resampled_pts_treated_as_zero_gap() {
+            // Non-integer rate ratios (44.1k -> 48k) round consecutive
+            // resampled pts so a frame can start a sample before the previous
+            // frame ends. The overlap must count as zero gap — the unclamped
+            // subtraction used to wrap to a huge unsigned "gap" and blow up
+            // frame retrieval.
+            let mut bufferer = create_resampler(IN_RATE);
+
+            bufferer.buffer.push_back((make_input_frame(100, 0), 0));
+            bufferer.buffer.push_back((make_input_frame(100, 0), 99));
+
+            assert_eq!(bufferer.remaining_samples(), 200);
+
+            let out_frame = bufferer.get_frame(200).expect("both frames are buffered");
+            assert_eq!(out_frame.samples(), 200);
+            assert_eq!(out_frame.pts(), Some(0));
+        }
+
+        #[test]
+        fn non_integer_ratio_stream_preserves_duration() {
+            // Real-world 44.1k -> 48k with device-sized buffers: pts rounding
+            // must neither panic nor lose samples over a sustained stream.
+            let mut bufferer = BufferedResampler::new(
+                AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), 44_100, 1),
+                AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), 48_000, 1),
+            )
+            .unwrap();
+
+            let mut total = 0usize;
+            for k in 0..64i64 {
+                let mut frame = ffmpeg::frame::Audio::new(
+                    cap_media_info::Sample::U8(cap_media_info::Type::Packed),
+                    1024,
+                    ChannelLayout::MONO,
+                );
+                frame.data_mut(0).fill(69);
+                frame.set_rate(44_100);
+                frame.set_pts(Some(k * 1024));
+                bufferer.add_frame(frame);
+                while let Some(out) = bufferer.get_frame(960) {
+                    total += out.samples();
+                }
+            }
+            while let Some(out) = bufferer.flush(960) {
+                total += out.samples();
+            }
+
+            let expected = (64.0 * 1024.0 * 48_000.0 / 44_100.0) as isize;
+            assert!(
+                ((total as isize) - expected).abs() < 2_000,
+                "drained {total} output samples, expected about {expected}"
+            );
+        }
     }
 
     mod get_frame {
         use super::*;
+
+        #[test]
+        fn gap_is_not_counted_again_for_following_frames() {
+            let mut bufferer = create_resampler(IN_RATE);
+            for pts in [0, 200, 300] {
+                bufferer.add_frame(make_input_frame(100, pts));
+            }
+
+            assert!(bufferer.get_frame(401).is_none());
+
+            let frame = bufferer.get_frame(400).unwrap();
+            assert_eq!(frame.pts(), Some(0));
+            assert_eq!(&frame.data(0)[..100], &[69; 100]);
+            assert_eq!(&frame.data(0)[100..200], &[0; 100]);
+            assert_eq!(&frame.data(0)[200..400], &[69; 200]);
+            assert!(bufferer.flush(400).is_none());
+        }
+
+        #[test]
+        fn flush_counts_multiple_gaps_once_after_partial_read() {
+            let mut bufferer = create_resampler(IN_RATE);
+            for pts in [0, 200, 400] {
+                bufferer.add_frame(make_input_frame(100, pts));
+            }
+            assert_eq!(bufferer.get_frame(25).unwrap().pts(), Some(0));
+
+            let frame = bufferer.flush(1_000).unwrap();
+            assert_eq!(frame.samples(), 475);
+            assert_eq!(frame.pts(), Some(25));
+            assert_eq!(&frame.data(0)[..75], &[69; 75]);
+            assert_eq!(&frame.data(0)[75..175], &[0; 100]);
+            assert_eq!(&frame.data(0)[175..275], &[69; 100]);
+            assert_eq!(&frame.data(0)[275..375], &[0; 100]);
+            assert_eq!(&frame.data(0)[375..475], &[69; 100]);
+            assert!(bufferer.flush(1_000).is_none());
+        }
 
         #[test]
         fn same_format() {

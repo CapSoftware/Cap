@@ -15,7 +15,7 @@ const TranscriptionStatus = Schema.Literal(
 	"SKIPPED",
 	"NO_AUDIO",
 );
-const OSType = Schema.Literal("macos", "windows");
+const OSType = Schema.Literal("macos", "windows", "linux");
 const LicenseType = Schema.Literal("yearly", "lifetime");
 
 const MessageResponse = Schema.Struct({
@@ -35,8 +35,18 @@ const S3Config = Schema.Struct({
 	region: Schema.String,
 });
 
+const ManagedOrganizationStorage = Schema.NullOr(
+	Schema.Struct({
+		id: Schema.String,
+		name: Schema.String,
+		activeProvider: Schema.Literal("s3", "googleDrive"),
+	}),
+);
+
 const S3ConfigResponse = Schema.Struct({
 	config: S3Config,
+	source: Schema.Literal("default", "user", "organization"),
+	managedByOrganization: ManagedOrganizationStorage,
 });
 
 const ChangelogResponse = Schema.Struct({
@@ -135,6 +145,17 @@ export class ApiContract extends HttpApi.make("cap-web-api")
 						Schema.Struct({
 							upgraded: Schema.Boolean,
 							stripeSubscriptionStatus: Schema.NullOr(Schema.String),
+						}),
+					),
+			)
+			.add(
+				HttpApiEndpoint.get("getUserProfile", "/desktop/user/profile")
+					.setHeaders(AuthHeaders)
+					.addSuccess(
+						Schema.Struct({
+							name: Schema.NullOr(Schema.String),
+							email: Schema.NullOr(Schema.String),
+							imageUrl: Schema.NullOr(Schema.String),
 						}),
 					),
 			)

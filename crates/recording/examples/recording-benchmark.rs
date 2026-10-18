@@ -36,6 +36,7 @@ async fn run_recording_benchmark(
             let feed = CameraFeed::spawn(CameraFeed::default());
 
             feed.ask(camera::SetInput {
+                settings: None,
                 id: DeviceOrModelID::from_info(&camera_info),
             })
             .await?

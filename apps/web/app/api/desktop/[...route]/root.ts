@@ -1,168 +1,187 @@
 import { db } from "@cap/database";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
 import {
+	authApiKeys,
 	organizationMembers,
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
+import { serverEnv } from "@cap/env";
+import {
+	isProSubscription,
+	STRIPE_AVAILABLE,
+	stripe,
+	userIsPro,
+} from "@cap/utils";
+import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
+import { ImageUploads } from "@cap/web-backend";
+import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { Hono } from "hono";
-import { PostHog } from "posthog-node";
+import { and, eq, isNull } from "drizzle-orm";
+import { Effect, Option } from "effect";
+import { type Context, Hono } from "hono";
 import type Stripe from "stripe";
 import { z } from "zod";
+import {
+	confirmedDesktopLogWebhookUrl,
+	createDesktopLogUpload,
+} from "@/lib/desktop-log-upload";
+import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
+import { runPromise } from "@/lib/server";
+import { trackServerEvent } from "@/lib/server-analytics";
 import { withAuth, withOptionalAuth } from "../../utils";
+import {
+	canEditOrganizationBranding,
+	type DesktopOrganizationRow,
+	decodeOrganizationLogoUpdate,
+	filterAccessibleOrganizationRows,
+	mergeOrganizationBrandingMetadata,
+	normalizeOrganizationBrandingPatchBody,
+	OrganizationBrandingValidationError,
+	toDesktopOrganization,
+} from "./organization-branding";
 
 export const app = new Hono();
 
-const diagnosticsSchema = z.object({
-	system: z
-		.object({
-			windowsVersion: z
-				.object({
-					displayName: z.string(),
-					meetsRequirements: z.boolean().optional(),
-					isWindows11: z.boolean().optional(),
-				})
-				.optional(),
-			macosVersion: z.object({ displayName: z.string() }).optional(),
-			gpuInfo: z
-				.object({
-					vendor: z.string(),
-					description: z.string(),
-					dedicatedVideoMemoryMb: z.number().optional(),
-					isSoftwareAdapter: z.boolean().optional(),
-					isBasicRenderDriver: z.boolean().optional(),
-					supportsHardwareEncoding: z.boolean().optional(),
-				})
-				.optional(),
-			allGpus: z
-				.object({
-					gpus: z.array(
-						z.object({
-							vendor: z.string(),
-							description: z.string(),
-							dedicatedVideoMemoryMb: z.number().optional(),
+const MAX_DESKTOP_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+
+async function resolveOrganizationIconUrl(iconUrl: string | null) {
+	if (!iconUrl) return null;
+
+	return Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* imageUploads.resolveImageUrl(
+			iconUrl as ImageUpload.ImageUrlOrKey,
+		);
+	}).pipe(runPromise);
+}
+
+async function resolveUserImageUrl(imageUrl: string | null) {
+	if (!imageUrl) return null;
+
+	return Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* imageUploads.resolveImageUrl(
+			imageUrl as ImageUpload.ImageUrlOrKey,
+		);
+	}).pipe(runPromise);
+}
+
+async function fetchDesktopProfileImage(imageUrl: string) {
+	const response = await fetch(imageUrl);
+	if (!response.ok) return null;
+
+	const contentType = response.headers.get("content-type");
+	if (!contentType?.toLowerCase().startsWith("image/")) return null;
+
+	const contentLength = Number(response.headers.get("content-length"));
+	if (contentLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	const bytes = await response.arrayBuffer();
+	if (bytes.byteLength > MAX_DESKTOP_PROFILE_IMAGE_BYTES) return null;
+
+	return { bytes, contentType };
+}
+
+type DesktopProfileUser = {
+	name: string | null;
+	lastName: string | null;
+	email: string | null;
+	image: string | null;
+};
+
+async function getDesktopProfileUser(c: Context) {
+	const authHeader = c.req.header("authorization")?.split(" ")[1];
+
+	if (authHeader?.length === 36) {
+		const [user] = await db()
+			.select({
+				name: users.name,
+				lastName: users.lastName,
+				email: users.email,
+				image: users.image,
+			})
+			.from(users)
+			.innerJoin(authApiKeys, eq(users.id, authApiKeys.userId))
+			.where(eq(authApiKeys.id, authHeader))
+			.limit(1);
+
+		if (!user || isBlockedAccountEmail(user.email)) return null;
+		return user;
+	}
+
+	const user = await getCurrentUser();
+	if (!user) return null;
+
+	return {
+		name: user.name,
+		lastName: user.lastName,
+		email: user.email,
+		image: user.image,
+	} satisfies DesktopProfileUser;
+}
+
+async function toDesktopOrganizations(
+	rows: DesktopOrganizationRow[],
+	userId: string,
+) {
+	return Promise.all(
+		filterAccessibleOrganizationRows(rows, userId).map(async (row) =>
+			toDesktopOrganization(
+				row,
+				userId,
+				await resolveOrganizationIconUrl(row.iconUrl),
+			),
+		),
+	);
+}
+
+function mergeDesktopOrganizationRows(...rowSets: DesktopOrganizationRow[][]) {
+	const rowsById = new Map<string, DesktopOrganizationRow>();
+
+	for (const rows of rowSets) {
+		for (const row of rows) {
+			rowsById.set(row.id, row);
+		}
+	}
+
+	return Array.from(rowsById.values());
+}
+
+async function applyOrganizationLogoUpdate(
+	row: DesktopOrganizationRow,
+	logo: ReturnType<typeof decodeOrganizationLogoUpdate>,
+) {
+	if (logo.action === "keep") return;
+
+	await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		yield* imageUploads.applyUpdate({
+			payload:
+				logo.action === "remove"
+					? Option.none()
+					: Option.some({
+							contentType: logo.contentType,
+							fileName: logo.fileName,
+							data: logo.data,
 						}),
+			existing: Option.fromNullable(
+				row.iconUrl as ImageUpload.ImageUrlOrKey | null,
+			),
+			keyPrefix: `organizations/${row.id}`,
+			update: (db, urlOrKey) =>
+				db
+					.update(organizations)
+					.set({ iconUrl: urlOrKey })
+					.where(
+						eq(organizations.id, Organisation.OrganisationId.make(row.id)),
 					),
-					isMultiGpuSystem: z.boolean().optional(),
-					hasDiscreteGpu: z.boolean().optional(),
-				})
-				.optional(),
-			renderingStatus: z
-				.object({
-					isUsingSoftwareRendering: z.boolean().optional(),
-					isUsingBasicRenderDriver: z.boolean().optional(),
-					hardwareEncodingAvailable: z.boolean().optional(),
-					warningMessage: z.string().optional(),
-				})
-				.optional(),
-			availableEncoders: z.array(z.string()).optional(),
-			graphicsCaptureSupported: z.boolean().optional(),
-			screenCaptureSupported: z.boolean().optional(),
-			d3D11VideoProcessorAvailable: z.boolean().optional(),
-		})
-		.optional(),
-	cameras: z.array(z.string()).optional(),
-	microphones: z.array(z.string()).optional(),
-	permissions: z
-		.object({
-			screenRecording: z.string().optional(),
-			camera: z.string().optional(),
-			microphone: z.string().optional(),
-		})
-		.optional(),
-});
-
-function formatDiagnosticsForDiscord(
-	diagnostics: z.infer<typeof diagnosticsSchema>,
-): string {
-	const lines: string[] = [];
-	const sys = diagnostics.system;
-
-	if (sys?.windowsVersion?.displayName) {
-		lines.push(`**OS:** ${sys.windowsVersion.displayName}`);
-	} else if (sys?.macosVersion?.displayName) {
-		lines.push(`**OS:** ${sys.macosVersion.displayName}`);
-	}
-
-	if (sys?.gpuInfo) {
-		const gpu = sys.gpuInfo;
-		let gpuLine = `**GPU:** ${gpu.description}`;
-		if (gpu.vendor) gpuLine += ` (${gpu.vendor})`;
-		if (gpu.dedicatedVideoMemoryMb)
-			gpuLine += ` - ${gpu.dedicatedVideoMemoryMb}MB VRAM`;
-		lines.push(gpuLine);
-
-		const flags: string[] = [];
-		if (gpu.isSoftwareAdapter) flags.push("⚠️ Software Adapter");
-		if (gpu.isBasicRenderDriver) flags.push("⚠️ Basic Render Driver");
-		if (gpu.supportsHardwareEncoding === false) flags.push("❌ No HW Encoding");
-		if (gpu.supportsHardwareEncoding === true) flags.push("✅ HW Encoding");
-		if (flags.length > 0) lines.push(`**GPU Status:** ${flags.join(", ")}`);
-	}
-
-	if (sys?.allGpus?.gpus && sys.allGpus.gpus.length > 1) {
-		const gpuList = sys.allGpus.gpus
-			.map((g) => `${g.description} (${g.vendor})`)
-			.join(", ");
-		lines.push(`**All GPUs:** ${gpuList}`);
-	}
-
-	if (sys?.renderingStatus?.warningMessage) {
-		lines.push(`**⚠️ Warning:** ${sys.renderingStatus.warningMessage}`);
-	}
-
-	const captureSupported =
-		sys?.graphicsCaptureSupported ?? sys?.screenCaptureSupported;
-	if (captureSupported !== undefined) {
-		lines.push(
-			`**Screen Capture:** ${captureSupported ? "✅ Supported" : "❌ Not Supported"}`,
-		);
-	}
-
-	if (sys?.d3D11VideoProcessorAvailable !== undefined) {
-		lines.push(
-			`**D3D11 Video Processor:** ${sys.d3D11VideoProcessorAvailable ? "✅" : "❌"}`,
-		);
-	}
-
-	if (sys?.availableEncoders && sys.availableEncoders.length > 0) {
-		lines.push(`**Encoders:** ${sys.availableEncoders.join(", ")}`);
-	}
-
-	if (diagnostics.permissions) {
-		const perms = diagnostics.permissions;
-		const permList = [
-			perms.screenRecording && `Screen: ${perms.screenRecording}`,
-			perms.camera && `Camera: ${perms.camera}`,
-			perms.microphone && `Mic: ${perms.microphone}`,
-		]
-			.filter(Boolean)
-			.join(", ");
-		if (permList) lines.push(`**Permissions:** ${permList}`);
-	}
-
-	if (diagnostics.cameras && diagnostics.cameras.length > 0) {
-		lines.push(
-			`**Cameras (${diagnostics.cameras.length}):** ${diagnostics.cameras.join(", ")}`,
-		);
-	} else {
-		lines.push("**Cameras:** None detected");
-	}
-
-	if (diagnostics.microphones && diagnostics.microphones.length > 0) {
-		lines.push(
-			`**Mics (${diagnostics.microphones.length}):** ${diagnostics.microphones.join(", ")}`,
-		);
-	} else {
-		lines.push("**Mics:** None detected");
-	}
-
-	return lines.join("\n");
+		});
+	}).pipe(runPromise);
 }
 
 app.post(
@@ -174,6 +193,8 @@ app.post(
 			os: z.string().optional(),
 			version: z.string().optional(),
 			diagnostics: z.string().optional(),
+			report: z.string().optional(),
+			context: z.string().optional(),
 		}),
 	),
 	withOptionalAuth,
@@ -183,6 +204,8 @@ app.post(
 			os,
 			version,
 			diagnostics: diagnosticsJson,
+			report,
+			context,
 		} = c.req.valid("form");
 		const user = c.get("user");
 
@@ -191,42 +214,23 @@ app.post(
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
 
-			const formData = new FormData();
-			const logBlob = new Blob([log], { type: "text/plain" });
-			const fileName = `cap-desktop-${os || "unknown"}-${version || "unknown"}-${Date.now()}.log`;
-			formData.append("file", logBlob, fileName);
-
-			let diagnosticsContent = "";
-			if (diagnosticsJson) {
-				try {
-					const parsed = JSON.parse(diagnosticsJson);
-					const validated = diagnosticsSchema.safeParse(parsed);
-					if (validated.success) {
-						diagnosticsContent = formatDiagnosticsForDiscord(validated.data);
-					}
-				} catch {
-					diagnosticsContent = "";
-				}
-			}
-
-			const content = [
-				"📋 **New Log File Uploaded**",
-				"",
-				user ? `**User:** ${user.email} (${user.id})` : null,
-				os ? `**Platform:** ${os}` : null,
-				version ? `**App Version:** ${version}` : null,
-				diagnosticsContent ? "" : null,
-				diagnosticsContent || null,
-			]
-				.filter((line): line is string => line !== null)
-				.join("\n");
-
-			formData.append("content", content);
-
-			const response = await fetch(discordWebhookUrl, {
-				method: "POST",
-				body: formData,
+			const formData = createDesktopLogUpload({
+				log,
+				os,
+				version,
+				diagnostics: diagnosticsJson,
+				report,
+				context,
+				user: user ? { email: user.email, id: user.id } : undefined,
 			});
+
+			const response = await fetch(
+				confirmedDesktopLogWebhookUrl(discordWebhookUrl),
+				{
+					method: "POST",
+					body: formData,
+				},
+			);
 
 			if (!response.ok)
 				throw new Error(
@@ -250,7 +254,7 @@ app.post(
 		"form",
 		z.object({
 			feedback: z.string(),
-			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
+			os: z.enum(["macos", "windows", "linux"]).optional(),
 			version: z.string().optional(),
 		}),
 	),
@@ -326,7 +330,7 @@ app.get("/plan", withAuth, async (c) => {
 				customer: user.stripeCustomerId,
 			});
 			const activeSubscription = subscriptions.data.find(
-				(sub) => sub.status === "active",
+				(sub) => sub.status === "active" && isProSubscription(sub),
 			);
 			if (activeSubscription) {
 				isSubscribed = true;
@@ -349,45 +353,225 @@ app.get("/plan", withAuth, async (c) => {
 	});
 });
 
+app.get("/user/profile", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+
+	const name = [user.name, user.lastName].filter(Boolean).join(" ").trim();
+
+	return c.json({
+		name: name || null,
+		email: user.email,
+		imageUrl: await resolveUserImageUrl(user.image ?? null),
+	});
+});
+
+app.get("/user/profile/image", async (c) => {
+	const user = await getDesktopProfileUser(c);
+	if (!user) return c.text("User not authenticated", 401);
+	if (!user.image) return c.body(null, 404);
+
+	const imageUrl = await resolveUserImageUrl(user.image);
+	if (!imageUrl) return c.body(null, 404);
+
+	const image = await fetchDesktopProfileImage(imageUrl);
+	if (!image) return c.body(null, 404);
+
+	return new Response(image.bytes, {
+		headers: {
+			"Cache-Control": "private, max-age=300",
+			"Content-Type": image.contentType,
+		},
+	});
+});
+
 app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
-	const memberOrgIds = db()
-		.select({ id: organizationMembers.organizationId })
-		.from(organizationMembers)
-		.where(eq(organizationMembers.userId, user.id));
-
-	const orgs = await db()
-		.select({
-			id: organizations.id,
-			name: organizations.name,
-			ownerId: organizations.ownerId,
-		})
-		.from(organizations)
-		.where(
-			and(
-				isNull(organizations.tombstoneAt),
-				or(
+	const [ownedRows, memberRows] = await Promise.all([
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.where(
+				and(
+					isNull(organizations.tombstoneAt),
 					eq(organizations.ownerId, user.id),
-					inArray(organizations.id, memberOrgIds),
 				),
 			),
-		);
+		db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizationMembers)
+			.innerJoin(
+				organizations,
+				eq(organizations.id, organizationMembers.organizationId),
+			)
+			.where(
+				and(
+					eq(organizationMembers.userId, user.id),
+					isNull(organizations.tombstoneAt),
+				),
+			),
+	]);
+	const rows = mergeDesktopOrganizationRows(ownedRows, memberRows);
 
-	return c.json(orgs);
+	return c.json(await toDesktopOrganizations(rows, user.id));
 });
+
+app.patch(
+	"/organizations/:organizationId/branding",
+	withAuth,
+	zValidator("json", OrganizationBrandingPatchBody),
+	async (c) => {
+		const user = c.get("user");
+		const organizationId = Organisation.OrganisationId.make(
+			c.req.param("organizationId"),
+		);
+		const body = normalizeOrganizationBrandingPatchBody(c.req.valid("json"));
+		let logoUpdate: ReturnType<typeof decodeOrganizationLogoUpdate>;
+
+		try {
+			logoUpdate = decodeOrganizationLogoUpdate(body.logo);
+		} catch (error) {
+			if (error instanceof OrganizationBrandingValidationError) {
+				return c.json({ error: error.message }, { status: 400 });
+			}
+			throw error;
+		}
+
+		const [row] = await db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.where(eq(organizations.id, organizationId))
+			.limit(1);
+
+		if (!row || row.tombstoneAt !== null) {
+			return c.json({ error: "Organization not found" }, { status: 404 });
+		}
+
+		if (!canEditOrganizationBranding(row, user.id)) {
+			return c.json(
+				{ error: "Only organization admins and owners can edit branding" },
+				{ status: 403 },
+			);
+		}
+
+		await applyOrganizationLogoUpdate(row, logoUpdate);
+
+		await db()
+			.update(organizations)
+			.set({
+				metadata: mergeOrganizationBrandingMetadata(
+					row.metadata,
+					body.brandColors,
+				),
+			})
+			.where(eq(organizations.id, organizationId));
+
+		const [updatedRow] = await db()
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				ownerId: organizations.ownerId,
+				tombstoneAt: organizations.tombstoneAt,
+				iconUrl: organizations.iconUrl,
+				metadata: organizations.metadata,
+				role: organizationMembers.role,
+			})
+			.from(organizations)
+			.leftJoin(
+				organizationMembers,
+				and(
+					eq(organizationMembers.organizationId, organizations.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.where(eq(organizations.id, organizationId))
+			.limit(1);
+
+		if (!updatedRow) {
+			return c.json({ error: "Organization not found" }, { status: 404 });
+		}
+
+		return c.json(
+			toDesktopOrganization(
+				updatedRow,
+				user.id,
+				await resolveOrganizationIconUrl(updatedRow.iconUrl),
+			),
+		);
+	},
+);
 
 app.post(
 	"/subscribe",
 	withAuth,
-	zValidator("json", z.object({ priceId: z.string() })),
+	zValidator(
+		"json",
+		z.object({
+			priceId: z.string(),
+			platform: z.literal("mobile").optional(),
+		}),
+	),
 	async (c) => {
-		const { priceId } = c.req.valid("json");
+		const { priceId, platform } = c.req.valid("json");
 		const user = c.get("user");
+		const checkoutPlatform = platform ?? "desktop";
 
 		if (userIsPro(user)) {
 			console.log("[POST] Error: User already on Pro plan");
 			return c.json({ error: true, subscription: true }, { status: 400 });
+		}
+
+		if (!STRIPE_AVAILABLE()) {
+			console.error(
+				JSON.stringify({
+					level: "error",
+					message: "Stripe checkout is not configured",
+					route: "/api/desktop/subscribe",
+				}),
+			);
+			return c.json(
+				{ code: "billing_unavailable", error: true },
+				{ status: 503 },
+			);
 		}
 
 		let customerId = user.stripeCustomerId;
@@ -433,38 +617,28 @@ app.post(
 		}
 
 		console.log("[POST] Creating checkout session");
+		const redirects = getCheckoutRedirectUrls(
+			checkoutPlatform,
+			serverEnv().WEB_URL,
+		);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: 1 }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: redirects.successUrl,
+			cancel_url: redirects.cancelUrl,
 			allow_promotion_codes: true,
-			metadata: { platform: "desktop", dubCustomerId: user.id },
+			metadata: { platform: checkoutPlatform, dubCustomerId: user.id },
 		});
 
 		if (checkoutSession.url) {
 			console.log("[POST] Checkout session created successfully");
 
-			try {
-				const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
-					host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
-				});
-
-				ph.capture({
-					distinctId: user.id,
-					event: "checkout_started",
-					properties: {
-						price_id: priceId,
-						quantity: 1,
-						platform: "desktop",
-					},
-				});
-
-				await ph.shutdown();
-			} catch (e) {
-				console.error("Failed to capture checkout_started in PostHog", e);
-			}
+			trackServerEvent(user.id, "checkout_started", {
+				price_id: priceId,
+				quantity: 1,
+				platform: checkoutPlatform,
+			});
 
 			return c.json({ url: checkoutSession.url });
 		}

@@ -1888,6 +1888,8 @@ declare global {
 		__CAP__: {
 			cameraWsPort: number;
 			cameraOnlyMode?: boolean;
+			enableNativeCameraPreview?: boolean;
+			windowsWebview2BrowserArgs?: string;
 		};
 	}
 }

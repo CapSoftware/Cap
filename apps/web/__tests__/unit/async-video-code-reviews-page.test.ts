@@ -34,8 +34,9 @@ describe("AsyncVideoCodeReviewsPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets async video code reviews keyword", () => {
@@ -146,7 +147,7 @@ describe("AsyncVideoCodeReviewsPage FAQ schema", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!).toEqual({
+		expect(schema.mainEntity[0]).toEqual({
 			"@type": "Question",
 			name: "What is an async video code review?",
 			acceptedAnswer: {

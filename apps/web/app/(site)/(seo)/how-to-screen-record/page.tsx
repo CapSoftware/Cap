@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	HowToScreenRecordPage,
 	howToScreenRecordContent,
 } from "@/components/pages/seo/HowToScreenRecordPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema, createHowToSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "How to screen record on Mac, Windows & Chrome",
+	tag: "Guide",
+});
 
 export const metadata: Metadata = {
 	title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
@@ -18,7 +23,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "How to Screen Record — Complete 2026 Guide by Cap",
@@ -32,7 +37,7 @@ export const metadata: Metadata = {
 		title: "How to Screen Record on Mac, Windows & Chrome (2026 Guide) | Cap",
 		description:
 			"Learn how to screen record with audio on Mac, Windows, and Chrome. Free step-by-step guide.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/how-to-screen-record",
@@ -61,30 +66,20 @@ const howToSteps = [
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createFAQSchema(howToScreenRecordContent.faqs),
-					),
-				}}
-			/>
-			<Script
-				id="howto-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createHowToSchema({
-							name: "How to Screen Record on Mac, Windows & Chrome",
-							description:
-								"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
-							totalTime: "PT2M",
-							steps: howToSteps,
-						}),
-					),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(howToScreenRecordContent.faqs))}
+			</script>
+			<script type="application/ld+json">
+				{JSON.stringify(
+					createHowToSchema({
+						name: "How to Screen Record on Mac, Windows & Chrome",
+						description:
+							"Learn how to screen record with audio on Mac, Windows, or in your browser using Cap, the free open-source screen recorder.",
+						totalTime: "PT2M",
+						steps: howToSteps,
+					}),
+				)}
+			</script>
 			<HowToScreenRecordPage />
 		</>
 	);

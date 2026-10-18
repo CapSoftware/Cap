@@ -12,9 +12,8 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 				folders
 					.delete(folderId)
 					.pipe(
-						Effect.catchTag(
-							"DatabaseError",
-							() => new InternalError({ type: "database" }),
+						Effect.catchTag("DatabaseError", () =>
+							Effect.fail(new InternalError({ type: "database" })),
 						),
 					),
 
@@ -22,9 +21,8 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 				folders
 					.create(data)
 					.pipe(
-						Effect.catchTag(
-							"DatabaseError",
-							() => new InternalError({ type: "database" }),
+						Effect.catchTag("DatabaseError", () =>
+							Effect.fail(new InternalError({ type: "database" })),
 						),
 					),
 
@@ -32,9 +30,8 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 				folders
 					.update(data)
 					.pipe(
-						Effect.catchTag(
-							"DatabaseError",
-							() => new InternalError({ type: "database" }),
+						Effect.catchTag("DatabaseError", () =>
+							Effect.fail(new InternalError({ type: "database" })),
 						),
 					),
 		};

@@ -1,6 +1,4 @@
-"use client";
-
-import Script from "next/script";
+import { PRICING } from "@/data/pricing";
 import { testimonials } from "@/data/testimonials";
 import {
 	createBreadcrumbSchema,
@@ -19,8 +17,7 @@ const homePageFAQs = [
 	},
 	{
 		question: "How much does Cap cost?",
-		answer:
-			"Cap offers a generous free plan with Studio mode for personal use and 5-minute shareable links. The Pro plan starts at just $8.16/month per user, which is less than half the price of Loom.",
+		answer: `Cap offers a generous free plan with Studio mode for personal use and 5-minute shareable links. The Pro plan starts at just $${PRICING.pro.annualPerMonth}/month per user, which is less than half the price of Loom.`,
 	},
 	{
 		question: "Is Cap available for Windows and Mac?",
@@ -30,7 +27,7 @@ const homePageFAQs = [
 	{
 		question: "Can I use my own storage with Cap?",
 		answer:
-			"Yes, Cap allows you to connect your own S3 storage and custom domain, giving you 100% ownership and control over your content.",
+			"Yes, Cap allows you to connect your own Google Drive or S3 storage and a custom domain, giving you 100% ownership and control over your content.",
 	},
 	{
 		question: "What makes Cap different from other screen recorders?",
@@ -58,11 +55,5 @@ const createHomePageSchema = () => {
 };
 
 export const HomePageSchema = () => {
-	return (
-		<Script
-			id="homepage-structured-data"
-			type="application/ld+json"
-			dangerouslySetInnerHTML={{ __html: createHomePageSchema() }}
-		/>
-	);
+	return <script type="application/ld+json">{createHomePageSchema()}</script>;
 };

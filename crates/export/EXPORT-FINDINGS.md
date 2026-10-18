@@ -26,7 +26,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-02-16
+**Last Updated**: 2026-08-17
 
 ### Performance Summary (Real recording, 71s, debug build)
 
@@ -35,6 +35,15 @@
 | MP4 Render FPS (30fps) | >= 30 fps (1080p), >= 15 fps (4K) | 276-306 fps | 249-286 fps | 106-175 fps | PASS |
 | MP4 Render FPS (60fps) | >= 30 fps | - | 284 fps | - | PASS |
 | Export Completion | No errors | 3/3 | 4/4 | 2/2 | PASS |
+
+### Desktop Shell Comparison (29.95s recording, 1080p60 Social, release)
+
+| Exporter | Median Time | Median CPU | Median RSS | Status |
+|----------|-------------|------------|------------|--------|
+| Current Cap source | 6.950s | 27.4% | 271.6 MB | PASS |
+| Optimized Electron source | 6.958s | 28.4% | 278.8 MB | PASS |
+
+The current and Electron exporters produce byte-identical 21,878,792-byte outputs. The desktop shell is not in the export process: both measurements invoke the release `cap` CLI directly against the same project. The earlier 6.93s / 40.5% result labelled GPUI used an older Tauri `cap-cli` binary and was not a GPUI export measurement.
 
 ### Estimation Accuracy (Real recording, calibrated algorithm)
 
@@ -255,6 +264,61 @@ total_size = bytes_per_frame * total_frames
 4. GIF encoding is gifski-bound (CPU quantization), not renderer-bound; the `add_frame` optimization reduces overhead of frame delivery to gifski
 
 **Stopping point**: Three safe optimizations implemented and verified. Further improvements would require architectural changes (IOSurface bridge, alternative encoder API for zero-copy) or release-mode GIF benchmarks.
+
+### Session 2026-08-17 (GPUI Export Parity Audit)
+
+**Goal**: Verify the reported GPUI export time and CPU regression against the optimized Electron build.
+
+**What was done**:
+1. Traced the GPUI benchmark harness and found that it invoked the Tauri benchmark bundle's `cap-cli`; the GPUI Export button is currently disabled.
+2. Ran four measured interleaved release trials per exporter after one warm-up, using the same 29.95s project, 1920x1080 resolution, 60 fps and Social quality.
+3. Compared the exporter and encoder source trees and confirmed that the reported CPU gap came from a pre-optimization rendering/decoder build.
+4. Built the current Cap CLI, which includes the retained-IOSurface decoder path, and repeated the interleaved comparison against Electron.
+
+**Changes Made**:
+- None to the exporter. The necessary decoder optimization was already present in the current source.
+- Corrected the benchmark graphic to use the verified current results.
+
+**Benchmark Results**:
+- Current Cap: 6.950s median, 27.4% median CPU, 271.6 MB median average RSS.
+- Electron: 6.958s median, 28.4% median CPU, 278.8 MB median average RSS.
+- Current Cap is 0.1% faster, uses 3.3% less CPU and 2.6% less memory in this workload.
+- All eight measured exports completed with 1,797 frames and byte-identical outputs.
+
+**Estimation Accuracy**:
+- Not recalibrated; this audit used the established real recording and did not change estimation logic.
+
+**Stopping point**: No current export regression remains. A real GPUI export flow still needs to be wired into the disabled editor Export control before it can be benchmarked as an application feature.
+
+### Session 2026-08-18 (Zero-Copy VideoToolbox Export Input)
+
+**Goal**: Remove the export video path's per-frame CPU work: GPU->CPU NV12 readback (3.11 MB at 1080p, 12.4 MB at 4K), the memcpy into the reusable AVFrame, and VideoToolbox's own software-frame ingest copy.
+
+**What was done**:
+1. `RgbaToNv12Converter` gained a surface-output mode: the existing compute shader writes the same NV12 bytes (256-aligned stride, values unchanged) and the GPU copies them into an IOSurface-backed 420v CVPixelBuffer from a fixed 8-slot ring — no readback, no map. Fallback to readback mode is automatic if the surface machinery fails.
+2. `Nv12RenderedFrame` optionally carries an `Nv12Surface`; the export render channel is otherwise unchanged. Only `render_video_to_channel_nv12` enables surface output (macOS, hardware adapter), so the editor's NV12 consumers are untouched.
+3. The export encoder thread decides its input mode from the first frame it receives: surface frames open `h264_videotoolbox` with `AV_PIX_FMT_VIDEOTOOLBOX` + `AVHWFramesContext` (the primitive added for recording) and queue wrapped CVPixelBuffers zero-copy; CPU frames (non-macOS, software adapter, escape hatch) keep the existing path. CRF/libx264 exports receive surface frames into the software encoder via a single lock-and-copy (one copy where there used to be readback + two).
+4. `CAP_EXPORT_DISABLE_ZERO_COPY=1` forces the previous readback + software-frame path end to end.
+
+**Verification**:
+- `frame_pipeline::surface_output_tests::the_surface_output_matches_the_readback_output`: surface NV12 bytes match readback NV12 bytes exactly (max delta 0) at 1920x1080 and 1284x722 (stride-padding case).
+- Full-export A/B on `/tmp/cap-performance-fixtures/reference-recording.cap` (release `cap` CLI, 1080p60 Social and 4K60 Social): decoded video is bit-identical (ffmpeg PSNR = inf) between the old and new paths — the same equivalence two runs of the OLD path have with each other (VT export bitstreams are run-to-run nondeterministic; decoded pixels are not). Audio streams byte-identical; file sizes byte-equal; dimensions/duration/frame counts identical.
+- CRF (`--optimize-filesize`) export completes on the software encoder via surface materialization and decodes clean.
+- First-frame screenshot (`screenshots/display.jpg`) still written, now materialized from the surface.
+- cap-export (6), cap-rendering (172, incl. the new exactness test), cap-editor (31) tests pass; `cap-desktop` and the desktop-gpui workspace compile.
+
+**Results** (release `cap` CLI, 30.8s reference recording, M4 Max, /usr/bin/time -l):
+
+| Export | Path | Wall | User CPU | Peak RSS |
+|--------|------|------|----------|----------|
+| 1080p60 Social | old (readback) | 8.70s | 3.43s | 216.5 MB |
+| 1080p60 Social | new (zero-copy) | 8.55s | 3.26s | 171.0 MB (-21%) |
+| 4K60 Social | old (readback) | 20.04s | 5.30s | 402.1 MB |
+| 4K60 Social | new (zero-copy) | 20.09s | 4.31s (-19%) | 213.3 MB (-47%) |
+
+Wall time is neutral on this machine because the 4K export is GPU-render-bound, not encoder-bound; the win is the removed CPU work and memory traffic (readback + 2 memcpys + VT ingest per frame), which matters most on lower-powered hardware where the encoder thread contends with rendering.
+
+**Stopping point**: The macOS export video path is IOSurface end to end: composite (GPU) -> NV12 convert (GPU) -> CVPixelBuffer (GPU copy) -> VideoToolbox (reads the IOSurface). Remaining CPU touches per frame are zero on the happy path.
 
 ### Template for new sessions:
 

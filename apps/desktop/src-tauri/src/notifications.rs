@@ -1,4 +1,5 @@
 use crate::{AppSounds, general_settings::GeneralSettingsStore};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
 #[allow(unused)]
@@ -99,6 +100,14 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
 
     let (title, body, _is_error) = notification_type.details();
 
+    #[cfg(target_os = "linux")]
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = show_linux_notification(title, body).await {
+            tracing::warn!(%error, "Failed to send notification");
+        }
+    });
+
+    #[cfg(not(target_os = "linux"))]
     app.notification()
         .builder()
         .title(title)
@@ -116,5 +125,36 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
 
     if !skip_sound {
         AppSounds::Notification.play();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn build_linux_notification(title: &str, body: &str) -> notify_rust::Notification {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(title).body(body).auto_icon();
+    notification
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn show_linux_notification(title: &str, body: &str) -> Result<(), String> {
+    build_linux_notification(title, body)
+        .show_async()
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("Failed to send notification: {error}"))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::build_linux_notification;
+
+    #[test]
+    fn linux_notification_preserves_content_and_application_icon() {
+        let notification = build_linux_notification("Screenshot Saved", "Saved successfully");
+
+        assert_eq!(notification.summary, "Screenshot Saved");
+        assert_eq!(notification.body, "Saved successfully");
+        assert_eq!(notification.icon, notification.appname);
+        assert!(!notification.icon.is_empty());
     }
 }

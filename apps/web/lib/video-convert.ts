@@ -15,7 +15,9 @@ function runFfmpeg(args: string[]): Promise<void> {
 	const ffmpeg = getFfmpegPath();
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, args, {
+			stdio: ["ignore", "ignore", "pipe"],
+		});
 
 		let stderr = "";
 
@@ -64,6 +66,23 @@ function resolveResourceUrl(
 	}
 
 	return withQuery(new URL(resource, baseUrl).toString(), query);
+}
+
+function escapeXmlAttribute(value: string): string {
+	return value.replace(/[&<>"']/g, (char) => {
+		switch (char) {
+			case "&":
+				return "&amp;";
+			case "<":
+				return "&lt;";
+			case ">":
+				return "&gt;";
+			case '"':
+				return "&quot;";
+			default:
+				return "&apos;";
+		}
+	});
 }
 
 async function materializeHlsPlaylist(
@@ -162,7 +181,7 @@ async function materializeMpdManifest(
 		/(initialization|media)="([^"]+)"/g,
 		(_, attribute: string, resource: string) => {
 			const resolved = resolveResourceUrl(resource, baseUrl, query);
-			return `${attribute}="${resolved}"`;
+			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
 		},
 	);
 
@@ -253,7 +272,7 @@ export async function convertRemoteVideoToMp4Buffer(
 	const result = await convertRemoteVideoToMp4(videoUrl);
 
 	try {
-		return await fs.readFile(result.filePath);
+		return await fs.readFile(/*turbopackIgnore: true*/ result.filePath);
 	} finally {
 		await result.cleanup();
 	}

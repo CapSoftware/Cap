@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Capture Pipeline 2.0 – Q3 Review - Presentation</title>
+<link rel="stylesheet" href="common/slides.css">
+<script src="common/cap.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+	<defs>
+		<filter id="grain" x="0" y="0" width="100%" height="100%">
+			<feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="11" result="n"/>
+			<feColorMatrix in="n" type="matrix" values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.5 0" result="g"/>
+			<feComposite in="g" in2="SourceGraphic" operator="in" result="gi"/>
+			<feBlend in="SourceGraphic" in2="gi" mode="overlay"/>
+		</filter>
+		<filter id="blur8"><feGaussianBlur stdDeviation="8"/></filter>
+		<filter id="blur3"><feGaussianBlur stdDeviation="3"/></filter>
+	</defs>
+</svg>
+<div id="deck"></div>
+<div id="webcam"><canvas id="cam"></canvas></div>
+<script src="common/slides.js"></script>
+<script src="common/webcam.js"></script>
+<script>
+capSetReady();
+</script>
+</body>
+</html>

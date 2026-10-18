@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	FreeScreenRecorderPage,
 	freeScreenRecorderContent,
 } from "@/components/pages/seo/FreeScreenRecorderPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Free screen recorder, no watermarks",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Free Screen Recorder: High-Quality Recording at No Cost",
@@ -18,7 +23,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Free Screen Recorder",
@@ -32,7 +37,7 @@ export const metadata: Metadata = {
 		title: "Free Screen Recorder: High-Quality Recording at No Cost",
 		description:
 			"Cap offers a top-rated, free screen recorder with high-quality video capture, making it perfect for creating tutorials, educational content, and professional demos without any hidden fees.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/free-screen-recorder",
@@ -42,15 +47,9 @@ export const metadata: Metadata = {
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(
-						createFAQSchema(freeScreenRecorderContent.faqs),
-					),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(freeScreenRecorderContent.faqs))}
+			</script>
 			<FreeScreenRecorderPage />
 		</>
 	);

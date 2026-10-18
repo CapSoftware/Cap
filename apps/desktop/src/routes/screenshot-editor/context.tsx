@@ -27,6 +27,20 @@ import { calculateImageTransform } from "./layout";
 
 const NV12_FORMAT_MAGIC = 0x4e563132;
 
+export function hasNoVisibleBackground(source: {
+	type: string;
+	path?: string | null;
+	alpha?: number;
+}): boolean {
+	if (source.type === "color") {
+		return (source.alpha ?? 255) === 0;
+	}
+	if (source.type === "wallpaper" || source.type === "image") {
+		return !source.path;
+	}
+	return false;
+}
+
 type ScreenshotFrameData = FrameData & {
 	revision: number;
 };
@@ -82,6 +96,7 @@ function convertNv12ToRgba(
 
 export type ScreenshotProject = ProjectConfiguration;
 export type { Annotation, AnnotationType };
+export type ScreenshotEditorTool = AnnotationType | "select";
 
 export type CurrentDialog =
 	| { type: "createPreset" }
@@ -111,6 +126,7 @@ const DEFAULT_CAMERA: Camera = {
 const DEFAULT_AUDIO: AudioConfiguration = {
 	mute: false,
 	improve: false,
+	isolation: "balanced",
 	micVolumeDb: 0,
 	micStereoMode: "stereo",
 	systemVolumeDb: 0,
@@ -123,9 +139,9 @@ const DEFAULT_CURSOR: CursorConfiguration = {
 	size: 100,
 	type: "auto",
 	animationStyle: "mellow",
-	tension: 120,
-	mass: 1.1,
-	friction: 18,
+	tension: 470,
+	mass: 3,
+	friction: 70,
 	raw: false,
 	motionBlur: 0,
 	useSvg: true,
@@ -140,7 +156,7 @@ const DEFAULT_PROJECT: ScreenshotProject = {
 		source: {
 			type: "color",
 			value: [255, 255, 255],
-			alpha: 255,
+			alpha: 0,
 		},
 		blur: 0,
 		padding: 20,
@@ -169,9 +185,8 @@ function createScreenshotEditorContext() {
 	const [selectedAnnotationId, setSelectedAnnotationId] = createSignal<
 		string | null
 	>(null);
-	const [activeTool, setActiveTool] = createSignal<AnnotationType | "select">(
-		"select",
-	);
+	const [activeTool, setActiveTool] =
+		createSignal<ScreenshotEditorTool>("select");
 
 	const [layersPanelOpen, setLayersPanelOpen] = makePersisted(
 		createSignal(false),
@@ -204,7 +219,12 @@ function createScreenshotEditorContext() {
 	let wsRef: WebSocket | null = null;
 
 	const [editorInstance] = createResource(async () => {
+		const perfStart = performance.now();
+		const sincePerfStart = () => Math.round(performance.now() - perfStart);
 		const instance = await commands.createScreenshotEditorInstance();
+		console.info(
+			`[screenshot-editor] createScreenshotEditorInstance resolved in ${sincePerfStart()}ms`,
+		);
 
 		if (instance.config) {
 			setProject(reconcile(instance.config));
@@ -246,6 +266,9 @@ function createScreenshotEditorContext() {
 							bitmap,
 							revision: 0,
 						});
+						console.info(
+							`[screenshot-editor] fallback image shown at ${sincePerfStart()}ms`,
+						);
 						setIsRenderReady(true);
 					} catch (e: unknown) {
 						console.error(
@@ -271,8 +294,10 @@ function createScreenshotEditorContext() {
 		const ws = new WebSocket(instance.framesSocketUrl);
 		wsRef = ws;
 		ws.binaryType = "arraybuffer";
+		const wsFirstFrame = { value: true };
 		ws.onmessage = async (event) => {
 			const buffer = event.data as ArrayBuffer;
+			const frameStart = performance.now();
 
 			let isNv12Format = false;
 			if (buffer.byteLength >= 28) {
@@ -341,13 +366,24 @@ function createScreenshotEditorContext() {
 			setIsRenderReady(true);
 
 			try {
-				const imageData = new ImageData(processedData, width, height);
+				const imageBuffer = new ArrayBuffer(processedData.byteLength);
+				const imagePixels = new Uint8ClampedArray(imageBuffer);
+				imagePixels.set(processedData);
+				const imageData = new ImageData(imagePixels, width, height);
 				const bitmap = await createImageBitmap(imageData);
 				const existing = latestFrame();
 				if (existing?.bitmap && existing.bitmap !== bitmap) {
 					existing.bitmap.close();
 				}
 				setLatestFrame({ width, height, bitmap, revision });
+				if (wsFirstFrame.value) {
+					wsFirstFrame.value = false;
+					console.info(
+						`[screenshot-editor] first ws frame ${width}x${height} (${buffer.byteLength} bytes) shown at ${sincePerfStart()}ms, processed in ${Math.round(
+							performance.now() - frameStart,
+						)}ms`,
+					);
+				}
 			} catch {}
 		};
 
@@ -443,8 +479,9 @@ function createScreenshotEditorContext() {
 				imageSize: originalImageSize(),
 				padding: project.background.padding,
 				crop: project.background.crop,
+				aspectRatio: project.aspectRatio,
 			}),
-			({ frame, imageSize, padding, crop }) => {
+			({ frame, imageSize, padding, crop, aspectRatio }) => {
 				if (!frame || !imageSize) return;
 
 				const frameSize = { width: frame.width, height: frame.height };
@@ -463,6 +500,7 @@ function createScreenshotEditorContext() {
 					imageSize,
 					padding,
 					crop,
+					aspectRatio,
 				);
 
 				const rawAnnotations = unwrap(annotations);

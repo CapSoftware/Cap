@@ -15,8 +15,9 @@ describe("MP4 to GIF page metadata", () => {
 		);
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("og.png");
 	});
 
 	it("contains OG url field", () => {
@@ -109,7 +110,7 @@ describe("MP4 to GIF FAQ schema validity", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!).toEqual({
+		expect(schema.mainEntity[0]).toEqual({
 			"@type": "Question",
 			name: "How do I convert MP4 to GIF?",
 			acceptedAnswer: {

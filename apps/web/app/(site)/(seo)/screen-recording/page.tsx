@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	ScreenRecordingPage,
 	screenRecordingContent,
 } from "@/components/pages/seo/ScreenRecordingPage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "Screen recording with instant sharing",
+	tag: "Screen Recorder",
+});
 
 export const metadata: Metadata = {
 	title: "Screen Recording — Free HD Capture, Instant Sharing | Cap",
@@ -21,7 +26,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Screen Recording Software",
@@ -35,20 +40,16 @@ export const metadata: Metadata = {
 		title: "Screen Recording — Free HD Capture, Instant Sharing | Cap",
 		description:
 			"Record your screen in HD with audio and webcam overlay, then share instantly with a link. Free, open-source, available on Mac and Windows.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(createFAQSchema(screenRecordingContent.faqs)),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(screenRecordingContent.faqs))}
+			</script>
 			<ScreenRecordingPage />
 		</>
 	);

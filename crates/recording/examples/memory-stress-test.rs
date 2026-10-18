@@ -45,6 +45,7 @@ async fn test_camera_cycles(config: &CycleTestConfig) -> CycleTestResult {
             .expect("AddSender failed");
 
         feed.ask(camera::SetInput {
+            settings: None,
             id: camera_id.clone(),
         })
         .await
@@ -117,6 +118,7 @@ async fn test_microphone_cycles(config: &CycleTestConfig) -> CycleTestResult {
 
         mic_feed
             .ask(microphone::SetInput {
+                settings: None,
                 label: mic_name.clone(),
             })
             .await
@@ -187,6 +189,7 @@ async fn test_recording_cycles(
         if include_camera && let Some(camera_info) = cap_camera::list_cameras().next() {
             let feed = CameraFeed::spawn(CameraFeed::default());
             feed.ask(camera::SetInput {
+                settings: None,
                 id: DeviceOrModelID::from_info(&camera_info),
             })
             .await
@@ -204,7 +207,10 @@ async fn test_recording_cycles(
             let error_sender = flume::unbounded().0;
             let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
             mic_feed
-                .ask(microphone::SetInput { label: mic_name })
+                .ask(microphone::SetInput {
+                    label: mic_name,
+                    settings: None,
+                })
                 .await
                 .expect("mic SetInput send failed")
                 .await
@@ -286,6 +292,7 @@ async fn test_sustained_recording(duration_secs: u64, include_camera: bool, incl
         println!("Camera: {}", camera_info.display_name());
         let feed = CameraFeed::spawn(CameraFeed::default());
         feed.ask(camera::SetInput {
+            settings: None,
             id: DeviceOrModelID::from_info(&camera_info),
         })
         .await
@@ -303,7 +310,10 @@ async fn test_sustained_recording(duration_secs: u64, include_camera: bool, incl
         let error_sender = flume::unbounded().0;
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
         mic_feed
-            .ask(microphone::SetInput { label: mic_name })
+            .ask(microphone::SetInput {
+                label: mic_name,
+                settings: None,
+            })
             .await
             .expect("mic SetInput send failed")
             .await

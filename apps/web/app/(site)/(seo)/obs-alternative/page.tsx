@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import {
 	ObsAlternativePage,
 	obsAlternativeContent,
 } from "@/components/pages/seo/ObsAlternativePage";
+import { ogImageUrl } from "@/lib/og/url";
 import { createFAQSchema } from "@/utils/web-schema";
+
+const ogImage = ogImageUrl({
+	title: "The simple OBS alternative",
+	tag: "Compare",
+});
 
 export const metadata: Metadata = {
 	title: "OBS Alternative — Easier Screen Recording with Instant Sharing | Cap",
@@ -22,7 +27,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: OBS Alternative for Async Screen Recording",
@@ -37,20 +42,16 @@ export const metadata: Metadata = {
 			"OBS Alternative — Easier Screen Recording with Instant Sharing | Cap",
 		description:
 			"Cap is the modern OBS alternative for async screen sharing. Record in 4K, get a shareable link in seconds, and collaborate with timestamped comments. No configuration required.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 };
 
 export default function Page() {
 	return (
 		<>
-			<Script
-				id="faq-structured-data"
-				type="application/ld+json"
-				dangerouslySetInnerHTML={{
-					__html: JSON.stringify(createFAQSchema(obsAlternativeContent.faqs)),
-				}}
-			/>
+			<script type="application/ld+json">
+				{JSON.stringify(createFAQSchema(obsAlternativeContent.faqs))}
+			</script>
 			<ObsAlternativePage />
 		</>
 	);

@@ -6,7 +6,9 @@ import { serverEnv } from "@cap/env";
 const ALGORITHM = { name: "AES-GCM", length: 256 };
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
-const KEY_LENGTH = 32;
+// Coolify 4.3.1+ generates SERVICE_HEX_32 values as 16 bytes; keys made
+// before that, and by `openssl rand -hex 32`, are 32 bytes.
+const KEY_LENGTHS = [16, 32];
 const ITERATIONS = 100000;
 
 const ENCRYPTION_KEY = () => {
@@ -15,11 +17,9 @@ const ENCRYPTION_KEY = () => {
 
 	try {
 		const keyBuffer = Buffer.from(key, "hex");
-		if (keyBuffer.length !== KEY_LENGTH) {
+		if (!KEY_LENGTHS.includes(keyBuffer.length)) {
 			throw new Error(
-				`Encryption key must be ${KEY_LENGTH} bytes (${
-					KEY_LENGTH * 2
-				} hex characters)`,
+				"Encryption key must be 16 or 32 bytes (32 or 64 hex characters)",
 			);
 		}
 	} catch (error: unknown) {
@@ -32,7 +32,7 @@ const ENCRYPTION_KEY = () => {
 	return key;
 };
 
-async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(salt: BufferSource): Promise<CryptoKey> {
 	const key = ENCRYPTION_KEY();
 	if (!key) throw new Error("Encryption key is not available");
 
@@ -81,9 +81,9 @@ export async function encrypt(text: string): Promise<string> {
 		);
 
 		const result = Buffer.concat([
-			Buffer.from(salt as any) as any,
-			Buffer.from(iv as any) as any,
-			Buffer.from(encrypted as any) as any,
+			Buffer.from(salt),
+			Buffer.from(iv),
+			Buffer.from(encrypted),
 		]);
 
 		return result.toString("base64");
@@ -107,7 +107,7 @@ export async function decrypt(encryptedText: string): Promise<string> {
 		const iv = encrypted.subarray(SALT_LENGTH, SALT_LENGTH + IV_LENGTH);
 		const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH);
 
-		const key = await deriveKey(salt as Uint8Array);
+		const key = await deriveKey(salt);
 
 		const decrypted = await crypto.subtle.decrypt(
 			{
@@ -156,10 +156,7 @@ export async function hashPassword(password: string): Promise<string> {
 		PASSWORD_KEY_LENGTH * 8,
 	);
 
-	const result = Buffer.concat([
-		Buffer.from(salt as any) as any,
-		Buffer.from(derived as any) as any,
-	]);
+	const result = Buffer.concat([Buffer.from(salt), Buffer.from(derived)]);
 
 	return result.toString("base64");
 }

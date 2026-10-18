@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PRICING } from "@/data/pricing";
 
 interface FaqItem {
 	title: string;
@@ -19,8 +20,7 @@ const faqContent: FaqItem[] = [
 	},
 	{
 		title: "How much does it cost?",
-		answer:
-			"Cap offers a free version for personal use. You can upgrade to Cap Pro for just $8.16/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.",
+		answer: `Cap offers a free version for personal use. You can upgrade to Cap Pro for just $${PRICING.pro.annualPerMonth}/month (when billed annually) to unlock unlimited cloud storage, unlimited recording length, custom domain support, advanced team features, password-protected videos, analytics, and priority support. We also offer commercial licenses and self-hosted options for businesses.`,
 	},
 	{
 		title: "Which platforms does Cap support?",
@@ -30,7 +30,7 @@ const faqContent: FaqItem[] = [
 	{
 		title: "What makes Cap different from Loom?",
 		answer:
-			"Cap is open source, privacy-focused, and lets you own your data. You can connect custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do. Plus, our built-in Loom video importer makes switching effortless.",
+			"Cap is open source, privacy-focused, and lets you own your data. You can connect your own Google Drive or custom S3 storage buckets, self-host the entire platform, and get a lightweight, faster experience. We focus strongly on design, user experience, and building with our community at the center of everything we do. Plus, our built-in Loom video importer makes switching effortless.",
 	},
 	{
 		title: "Can I import my Loom videos to Cap?",
@@ -41,6 +41,24 @@ const faqContent: FaqItem[] = [
 		title: "Can I self-host Cap?",
 		answer:
 			"Yes! Cap can be self-hosted on your own infrastructure, giving you full control over your data.",
+	},
+	{
+		title: "Is Cap SOC 2 compliant?",
+		answer:
+			"Yes. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant. You can request our reports and view our security practices in Cap's Trust Portal.",
+		link: {
+			text: "Visit the Trust Portal",
+			href: "https://trust.cap.so",
+		},
+	},
+	{
+		title: "Is Cap HIPAA compliant?",
+		answer:
+			"Yes. Cap is fully HIPAA compliant. We sign Business Associate Agreements (BAAs) with organizations handling protected health information, and every vendor in Cap's production infrastructure is covered by a BAA. For even more control, you can bring your own storage or self-host Cap entirely.",
+		link: {
+			text: "Learn about HIPAA-compliant recording",
+			href: "/hipaa-compliant-screen-recording",
+		},
 	},
 	{
 		title: "Is there a commercial license available?",

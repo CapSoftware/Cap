@@ -2,12 +2,16 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { encrypt, hashPassword, verifyPassword } from "@cap/database/crypto";
-import { videos } from "@cap/database/schema";
+import {
+	hashPassword,
+	verifyPassword as verifyPlainPassword,
+} from "@cap/database/crypto";
+import { spaces, spaceVideos, videos } from "@cap/database/schema";
+import { collectPasswordHashes } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { setVerifiedPasswordCookie } from "@/lib/password-cookie";
 
 export async function setVideoPassword(
 	videoId: Video.VideoId,
@@ -85,22 +89,37 @@ export async function verifyVideoPassword(
 ) {
 	try {
 		if (!videoId || typeof password !== "string")
-			throw new Error("Missing data");
+			return { success: false, error: "Failed to verify password" };
 
 		const [video] = await db()
 			.select()
 			.from(videos)
 			.where(eq(videos.id, videoId));
 
-		if (!video || !video.password) throw new Error("No password set");
+		if (!video) return { success: false, error: "Failed to verify password" };
 
-		const valid = await verifyPassword(video.password, password);
+		const spacePasswords = await db()
+			.select({ password: spaces.password })
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.where(eq(spaceVideos.videoId, videoId));
 
-		if (!valid) throw new Error("Invalid password");
+		const passwordHashes = collectPasswordHashes({
+			videoPassword: video.password,
+			spacePasswords,
+		});
 
-		(await cookies()).set("x-cap-password", await encrypt(video.password));
+		for (const passwordHash of passwordHashes) {
+			const valid = await verifyPlainPassword(passwordHash, password);
+			if (valid) {
+				await setVerifiedPasswordCookie(passwordHash);
+				return { success: true, value: "Password verified" };
+			}
+		}
 
-		return { success: true, value: "Password verified" };
+		// Wrong passwords and links whose password was since removed are expected
+		// outcomes — return without logging so console.error stays signal.
+		return { success: false, error: "Failed to verify password" };
 	} catch (error) {
 		console.error("Error verifying video password:", error);
 		return { success: false, error: "Failed to verify password" };

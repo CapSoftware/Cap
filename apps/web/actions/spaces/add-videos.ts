@@ -7,6 +7,8 @@ import { sharedVideos, spaceVideos, videos } from "@cap/database/schema";
 import type { Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
+import { getSpaceAccess } from "@/actions/organization/space-authorization";
 
 export async function addVideosToSpace(
 	spaceId: Space.SpaceIdOrOrganisationId,
@@ -24,6 +26,17 @@ export async function addVideosToSpace(
 		}
 
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
+		if (isAllSpacesEntry) {
+			await requireOrganizationSettingsManager(user.id, spaceId);
+		} else {
+			const access = await getSpaceAccess(user.id, spaceId);
+			if (!access?.canManage) {
+				throw new Error(
+					"You don't have permission to add videos to this space",
+				);
+			}
+		}
 
 		const userVideos = await db()
 			.select({ id: videos.id })
@@ -64,7 +77,6 @@ export async function addVideosToSpace(
 					);
 			}
 
-			// Insert new videos
 			if (newVideoIds.length > 0) {
 				const sharedVideoEntries = newVideoIds.map((videoId) => ({
 					id: nanoId(),
@@ -75,7 +87,6 @@ export async function addVideosToSpace(
 				await db().insert(sharedVideos).values(sharedVideoEntries);
 			}
 		} else {
-			// Check which videos already exist in spaceVideos
 			const existingSpaceVideos = await db()
 				.select({ videoId: spaceVideos.videoId })
 				.from(spaceVideos)

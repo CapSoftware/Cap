@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { videos, videoUploads } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -24,6 +24,8 @@ interface TrackPayload {
 	userAgent?: string;
 	occurredAt?: string;
 }
+
+const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
 
 const sanitizeString = (value?: string | null) => {
 	const trimmed = value?.trim();
@@ -109,8 +111,11 @@ export async function POST(request: NextRequest) {
 						firstViewEmailSentAt: videos.firstViewEmailSentAt,
 						videoName: videos.name,
 						createdAt: videos.createdAt,
+						updatedAt: videos.updatedAt,
+						activeUploadVideoId: videoUploads.videoId,
 					})
 					.from(videos)
+					.leftJoin(videoUploads, eq(videoUploads.videoId, videos.id))
 					.where(eq(videos.id, Video.VideoId.make(body.videoId)))
 					.limit(1),
 			).pipe(
@@ -121,11 +126,21 @@ export async function POST(request: NextRequest) {
 							firstViewEmailSentAt: Date | null;
 							videoName: string;
 							createdAt: Date;
+							updatedAt: Date;
+							activeUploadVideoId: string | null;
 						}[],
 				),
 			);
 
 			if (videoRecord && userId === videoRecord.ownerId) {
+				return;
+			}
+
+			if (
+				videoRecord &&
+				(videoRecord.activeUploadVideoId ||
+					Date.now() - videoRecord.updatedAt.getTime() < VIEW_TRACKING_DELAY_MS)
+			) {
 				return;
 			}
 

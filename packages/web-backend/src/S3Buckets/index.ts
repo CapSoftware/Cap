@@ -1,7 +1,8 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import type { S3Bucket, User } from "@cap/web-domain";
+import type { Organisation, S3Bucket, User } from "@cap/web-domain";
+import type { RequestPresigningArguments } from "@smithy/types";
 import { Config, Effect, Layer, Option } from "effect";
 
 import { AwsCredentials } from "../Aws.ts";
@@ -9,11 +10,13 @@ import { Database } from "../Database.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
+import { s3ConnectionPool } from "./S3ConnectionPool.ts";
 
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
-	effect: Effect.gen(function* () {
+	scoped: Effect.gen(function* () {
 		const repo = yield* S3BucketsRepo;
 		const { credentials } = yield* AwsCredentials;
+		const requestHandler = yield* s3ConnectionPool;
 
 		const defaultConfigs = {
 			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
@@ -42,7 +45,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
 				requestStreamBufferSize: 16 * 1024,
+				requestHandler,
 			});
+		const defaultInternalClient = createDefaultClient(true);
+		const defaultPublicClient = createDefaultClient(false);
 
 		const endpointIsPathStyle = (endpoint: string, bucket: string) => {
 			try {
@@ -77,6 +83,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
+				requestHandler,
 			});
 		};
 
@@ -96,9 +103,13 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
 			Option.map((cloudfrontEnvs) =>
 				Effect.flatMap(createS3BucketAccess, (s3) => {
-					const getCloudFrontSignedUrl = (key: string) => {
+					const getCloudFrontSignedUrl = (
+						key: string,
+						signingArgs?: RequestPresigningArguments,
+					) => {
 						const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
-						const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
+						const expiresIn = signingArgs?.expiresIn ?? 3600;
+						const expires = Math.floor((Date.now() + expiresIn * 1000) / 1000);
 
 						const policy = {
 							Statement: [
@@ -137,8 +148,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			const bucketAccess = yield* Option.match(customBucket, {
 				onNone: () => {
 					const provider = Layer.succeed(S3BucketClientProvider, {
-						getInternal: Effect.succeed(createDefaultClient(true)),
-						getPublic: Effect.succeed(createDefaultClient(false)),
+						getInternal: Effect.succeed(defaultInternalClient),
+						getPublic: Effect.succeed(defaultPublicClient),
 						bucket: defaultConfigs.bucket,
 						isPathStyle: defaultConfigs.forcePathStyle,
 					});
@@ -195,6 +206,17 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						);
 				},
 			),
+			getBucketAccessForOrganization: Effect.fn(
+				"S3Buckets.getBucketAccessForOrganization",
+			)(function* (organizationId: Organisation.OrganisationId) {
+				const customBucket = yield* repo.getForOrganization(organizationId);
+
+				return yield* Option.match(customBucket, {
+					onNone: () => Effect.succeed(Option.none()),
+					onSome: (bucket) =>
+						getBucketAccess(Option.some(bucket)).pipe(Effect.map(Option.some)),
+				});
+			}),
 		};
 	}),
 	dependencies: [
@@ -209,4 +231,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		);
 	static getBucketAccessForUser = (userId: User.UserId) =>
 		Effect.flatMap(S3Buckets, (b) => b.getBucketAccessForUser(userId));
+	static getBucketAccessForOrganization = (
+		organizationId: Organisation.OrganisationId,
+	) =>
+		Effect.flatMap(S3Buckets, (b) =>
+			b.getBucketAccessForOrganization(organizationId),
+		);
 }

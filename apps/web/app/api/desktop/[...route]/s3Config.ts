@@ -3,14 +3,59 @@ import { db } from "@cap/database";
 import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets } from "@cap/database/schema";
-import { S3Bucket } from "@cap/web-domain";
+import { Organisation, S3Bucket } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
+import {
+	getAccessibleOrganization,
+	getManagedOrganizationStorage,
+	getOrganizationS3Bucket,
+} from "./organizationStorage";
 
 export const app = new Hono().use(withAuth);
+
+const defaultS3Config = {
+	provider: "aws",
+	accessKeyId: "",
+	secretAccessKey: "",
+	endpoint: "https://s3.amazonaws.com",
+	bucketName: "",
+	region: "us-east-1",
+};
+
+const orgIdQuery = z.object({
+	orgId: z
+		.string()
+		.optional()
+		.transform((value) =>
+			value ? Organisation.OrganisationId.make(value) : undefined,
+		),
+});
+
+const decryptBucketConfig = async (
+	bucket: typeof s3Buckets.$inferSelect,
+	exposeSecrets: boolean,
+) => ({
+	provider: bucket.provider,
+	accessKeyId: exposeSecrets ? await decrypt(bucket.accessKeyId) : "",
+	secretAccessKey: exposeSecrets ? await decrypt(bucket.secretAccessKey) : "",
+	endpoint: bucket.endpoint
+		? await decrypt(bucket.endpoint)
+		: "https://s3.amazonaws.com",
+	bucketName: await decrypt(bucket.bucketName),
+	region: await decrypt(bucket.region),
+});
+
+const getS3ErrorMetadata = (error: unknown) => {
+	if (!error || typeof error !== "object" || !("$metadata" in error)) {
+		return undefined;
+	}
+
+	return error.$metadata as { httpStatusCode?: number } | undefined;
+};
 
 app.post(
 	"/",
@@ -30,7 +75,6 @@ app.post(
 		const data = c.req.valid("json");
 
 		try {
-			// Encrypt the sensitive data
 			const encryptedConfig = {
 				id: S3Bucket.S3BucketId.make(nanoId()),
 				provider: data.provider,
@@ -40,24 +84,22 @@ app.post(
 				bucketName: await encrypt(data.bucketName),
 				region: await encrypt(data.region),
 				ownerId: user.id,
+				organizationId: null,
+				active: true,
 			};
 
-			// Check if user already has a bucket config
-			const [existingBucket] = await db()
-				.select()
-				.from(s3Buckets)
-				.where(eq(s3Buckets.ownerId, user.id));
-
-			if (existingBucket) {
-				// Update existing config
-				await db()
+			await db().transaction(async (tx) => {
+				await tx
 					.update(s3Buckets)
-					.set(encryptedConfig)
-					.where(eq(s3Buckets.id, existingBucket.id));
-			} else {
-				// Insert new config
-				await db().insert(s3Buckets).values(encryptedConfig);
-			}
+					.set({ active: false })
+					.where(
+						and(
+							eq(s3Buckets.ownerId, user.id),
+							isNull(s3Buckets.organizationId),
+						),
+					);
+				await tx.insert(s3Buckets).values(encryptedConfig);
+			});
 
 			return c.json({ success: true });
 		} catch (error) {
@@ -77,8 +119,12 @@ app.delete("/delete", async (c) => {
 	const user = c.get("user");
 
 	try {
-		// Delete the S3 configuration for the user
-		await db().delete(s3Buckets).where(eq(s3Buckets.ownerId, user.id));
+		await db()
+			.update(s3Buckets)
+			.set({ active: false })
+			.where(
+				and(eq(s3Buckets.ownerId, user.id), isNull(s3Buckets.organizationId)),
+			);
 
 		return c.json({ success: true });
 	} catch (error) {
@@ -93,40 +139,65 @@ app.delete("/delete", async (c) => {
 	}
 });
 
-app.get("/get", async (c) => {
+app.get("/get", zValidator("query", orgIdQuery), async (c) => {
 	const user = c.get("user");
+	const { orgId } = c.req.valid("query");
 
 	try {
+		if (orgId) {
+			const organization = await getAccessibleOrganization(user.id, orgId);
+			if (!organization)
+				return c.json({ error: "forbidden_org" }, { status: 403 });
+
+			const managedByOrganization = await getManagedOrganizationStorage(
+				user.id,
+				orgId,
+			);
+			if (managedByOrganization?.activeProvider === "s3") {
+				const bucket = await getOrganizationS3Bucket(orgId);
+				if (bucket) {
+					return c.json({
+						config: await decryptBucketConfig(bucket, false),
+						source: "organization" as const,
+						managedByOrganization,
+					});
+				}
+			}
+
+			if (managedByOrganization) {
+				return c.json({
+					config: defaultS3Config,
+					source: "organization" as const,
+					managedByOrganization,
+				});
+			}
+		}
+
 		const [bucket] = await db()
 			.select()
 			.from(s3Buckets)
-			.where(eq(s3Buckets.ownerId, user.id));
+			.where(
+				and(
+					eq(s3Buckets.ownerId, user.id),
+					isNull(s3Buckets.organizationId),
+					eq(s3Buckets.active, true),
+				),
+			)
+			.orderBy(desc(s3Buckets.updatedAt))
+			.limit(1);
 
 		if (!bucket)
 			return c.json({
-				config: {
-					provider: "aws",
-					accessKeyId: "",
-					secretAccessKey: "",
-					endpoint: "https://s3.amazonaws.com",
-					bucketName: "",
-					region: "us-east-1",
-				},
+				config: defaultS3Config,
+				source: "default" as const,
+				managedByOrganization: null,
 			});
 
-		// Decrypt the values before sending
-		const decryptedConfig = {
-			provider: bucket.provider,
-			accessKeyId: await decrypt(bucket.accessKeyId),
-			secretAccessKey: await decrypt(bucket.secretAccessKey),
-			endpoint: bucket.endpoint
-				? await decrypt(bucket.endpoint)
-				: "https://s3.amazonaws.com",
-			bucketName: await decrypt(bucket.bucketName),
-			region: await decrypt(bucket.region),
-		};
-
-		return c.json({ config: decryptedConfig });
+		return c.json({
+			config: await decryptBucketConfig(bucket, true),
+			source: "user" as const,
+			managedByOrganization: null,
+		});
 	} catch (error) {
 		console.error("Error in S3 config get route:", error);
 		return c.json(
@@ -197,7 +268,7 @@ app.post(
 					} else if (error.name === "AccessDenied") {
 						errorMessage =
 							"Access denied. Please check your credentials and bucket permissions.";
-					} else if ((error as any).$metadata?.httpStatusCode === 301) {
+					} else if (getS3ErrorMetadata(error)?.httpStatusCode === 301) {
 						errorMessage =
 							"Received 301 redirect. This usually means the endpoint URL is incorrect or the bucket is in a different region.";
 					}
@@ -207,7 +278,7 @@ app.post(
 					{
 						error: errorMessage,
 						details: error instanceof Error ? error.message : String(error),
-						metadata: (error as any)?.$metadata,
+						metadata: getS3ErrorMetadata(error),
 					},
 					{ status: 500 },
 				);
@@ -219,7 +290,7 @@ app.post(
 				{
 					error: "Failed to connect to S3",
 					details: error instanceof Error ? error.message : String(error),
-					metadata: (error as any)?.$metadata,
+					metadata: getS3ErrorMetadata(error),
 				},
 				{ status: 500 },
 			);

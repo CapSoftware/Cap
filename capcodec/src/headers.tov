@@ -1,0 +1,262 @@
+import { BitWriter } from "./bitwriter"
+
+export type StreamParams = {
+  width: int,
+  height: int,
+  mbw: int,
+  mbh: int,
+  profile: int,
+  level: int,
+  refs: int,
+  fpsNum: int,
+  fpsDen: int,
+  log2MaxFrameNum: int,
+  cabac: bool,
+  transform8x8: bool,
+  weightedPred: bool,
+  dpbRefs: int,
+  bframes: int,
+  pyramid: bool,
+}
+
+export type SliceParams = {
+  idr: bool,
+  sliceType: int,
+  frameNum: int,
+  idrPicId: int,
+  qpDelta: int,
+  refsActive: int,
+  deblock: int,
+  alphaOffset: int,
+  betaOffset: int,
+  cabacInitIdc: int,
+  firstMb: int,
+  wpLuma: bool,
+  wpChroma: bool,
+  wp: int[],
+  poc: int,
+  nalRef: bool,
+  reorder: int[],
+  mmco: int[],
+}
+
+export const SLICE_P = 0
+export const SLICE_B = 1
+export const SLICE_I = 2
+export const LOG2_MAX_POC_LSB = 16
+
+const LEVELS: int[] = [
+  30, 40500, 1620, 8100, 10000,
+  31, 108000, 3600, 18000, 14000,
+  32, 216000, 5120, 20480, 20000,
+  40, 245760, 8192, 32768, 20000,
+  41, 245760, 8192, 32768, 50000,
+  42, 522240, 8704, 34816, 50000,
+  50, 589824, 22080, 110400, 135000,
+  51, 983040, 36864, 184320, 240000,
+  52, 2073600, 36864, 184320, 240000,
+]
+
+export function chooseLevel(mbw: int, mbh: int, fps: f64, refs: int, kbps: int): int {
+  const fs = mbw * mbh
+  const mbps = f64(fs) * fps
+  for (let i = 0; i < LEVELS.length; i += 5) {
+    const maxFs = LEVELS[i + 2]!
+    const side = Math.trunc(Math.sqrt(f64(maxFs * 8)))
+    if (fs > maxFs || mbw > side || mbh > side) continue
+    if (mbps > f64(LEVELS[i + 1]!)) continue
+    if (refs * fs > LEVELS[i + 3]!) continue
+    if (kbps > LEVELS[i + 4]!) continue
+    return LEVELS[i]!
+  }
+  return 52
+}
+
+export function maxDpbFrames(level: int, mbw: int, mbh: int): int {
+  for (let i = 0; i < LEVELS.length; i += 5) {
+    if (LEVELS[i]! === level) return Math.min(16, Math.trunc(LEVELS[i + 3]! / (mbw * mbh)))
+  }
+  return 1
+}
+
+export function writeSps(p: StreamParams): u8[] {
+  const bw = new BitWriter()
+  bw.putBits(p.profile, 8)
+  bw.putBits(p.profile === 77 ? 0x40 : 0, 8)
+  bw.putBits(p.level, 8)
+  bw.ue(0)
+  if (p.profile === 100) {
+    bw.ue(1)
+    bw.ue(0)
+    bw.ue(0)
+    bw.putBit(0)
+    bw.putBit(0)
+  }
+  bw.ue(p.log2MaxFrameNum - 4)
+  if (p.bframes > 0) {
+    bw.ue(0)
+    bw.ue(LOG2_MAX_POC_LSB - 4)
+  } else {
+    bw.ue(2)
+  }
+  bw.ue(p.dpbRefs)
+  bw.putBit(0)
+  bw.ue(p.mbw - 1)
+  bw.ue(p.mbh - 1)
+  bw.putBit(1)
+  bw.putBit(1)
+  const cropRight = (p.mbw * 16 - p.width) >> 1
+  const cropBottom = (p.mbh * 16 - p.height) >> 1
+  if (cropRight > 0 || cropBottom > 0) {
+    bw.putBit(1)
+    bw.ue(0)
+    bw.ue(cropRight)
+    bw.ue(0)
+    bw.ue(cropBottom)
+  } else {
+    bw.putBit(0)
+  }
+  bw.putBit(1)
+  bw.putBit(0)
+  bw.putBit(0)
+  bw.putBit(1)
+  bw.putBits(5, 3)
+  bw.putBit(0)
+  bw.putBit(1)
+  bw.putBits(1, 8)
+  bw.putBits(1, 8)
+  bw.putBits(1, 8)
+  bw.putBit(0)
+  bw.putBit(1)
+  bw.putBits(p.fpsDen, 32)
+  bw.putBits(2 * p.fpsNum, 32)
+  bw.putBit(0)
+  bw.putBit(0)
+  bw.putBit(0)
+  bw.putBit(0)
+  bw.putBit(1)
+  bw.putBit(1)
+  bw.ue(0)
+  bw.ue(0)
+  bw.ue(15)
+  bw.ue(15)
+  bw.ue(p.pyramid ? 2 : p.bframes > 0 ? 1 : 0)
+  bw.ue(p.dpbRefs)
+  bw.trailing()
+  return bw.buf
+}
+
+export function writePps(p: StreamParams): u8[] {
+  const bw = new BitWriter()
+  bw.ue(0)
+  bw.ue(0)
+  bw.putBit(p.cabac ? 1 : 0)
+  bw.putBit(0)
+  bw.ue(0)
+  bw.ue(p.refs - 1)
+  bw.ue(0)
+  bw.putBit(p.weightedPred ? 1 : 0)
+  bw.putBits(p.bframes > 0 && p.weightedPred ? 2 : 0, 2)
+  bw.se(0)
+  bw.se(0)
+  bw.se(0)
+  bw.putBit(1)
+  bw.putBit(0)
+  bw.putBit(0)
+  if (p.profile === 100) {
+    bw.putBit(p.transform8x8 ? 1 : 0)
+    bw.putBit(0)
+    bw.se(0)
+  }
+  bw.trailing()
+  return bw.buf
+}
+
+export function writeSliceHeader(bw: BitWriter, p: StreamParams, s: SliceParams) {
+  bw.ue(s.firstMb)
+  bw.ue(s.sliceType + 5)
+  bw.ue(0)
+  bw.putBits(s.frameNum, p.log2MaxFrameNum)
+  if (s.idr) bw.ue(s.idrPicId)
+  if (p.bframes > 0) bw.putBits(s.poc & ((1 << LOG2_MAX_POC_LSB) - 1), LOG2_MAX_POC_LSB)
+  if (s.sliceType === SLICE_B) {
+    bw.putBit(1)
+    if (p.refs !== 1) {
+      bw.putBit(1)
+      bw.ue(0)
+      bw.ue(0)
+    } else {
+      bw.putBit(0)
+    }
+    bw.putBit(0)
+    bw.putBit(0)
+  }
+  if (s.sliceType === SLICE_P) {
+    if (s.refsActive !== p.refs) {
+      bw.putBit(1)
+      bw.ue(s.refsActive - 1)
+    } else {
+      bw.putBit(0)
+    }
+    if (s.reorder.length > 0) {
+      bw.putBit(1)
+      for (let i = 0; i < s.reorder.length; i += 2) {
+        bw.ue(s.reorder[i]!)
+        bw.ue(s.reorder[i + 1]!)
+      }
+      bw.ue(3)
+    } else {
+      bw.putBit(0)
+    }
+    if (p.weightedPred) {
+      bw.ue(6)
+      bw.ue(6)
+      for (let i = 0; i < s.refsActive; i++) {
+        const lw = i === 0 && s.wpLuma
+        bw.putBit(lw ? 1 : 0)
+        if (lw) {
+          bw.se(s.wp[0]!)
+          bw.se(s.wp[1]!)
+        }
+        const cw = i === 0 && s.wpChroma
+        bw.putBit(cw ? 1 : 0)
+        if (cw) {
+          bw.se(s.wp[2]!)
+          bw.se(s.wp[3]!)
+          bw.se(s.wp[4]!)
+          bw.se(s.wp[5]!)
+        }
+      }
+    }
+  }
+  if (s.idr) {
+    bw.putBit(0)
+    bw.putBit(0)
+  } else if (s.sliceType !== SLICE_B || s.nalRef) {
+    if (s.mmco.length > 0) {
+      bw.putBit(1)
+      for (const d of s.mmco) {
+        bw.ue(1)
+        bw.ue(d)
+      }
+      bw.ue(0)
+    } else {
+      bw.putBit(0)
+    }
+  }
+  if (p.cabac && s.sliceType !== SLICE_I) bw.ue(s.cabacInitIdc)
+  bw.se(s.qpDelta)
+  bw.ue(s.deblock)
+  if (s.deblock !== 1) {
+    bw.se(s.alphaOffset >> 1)
+    bw.se(s.betaOffset >> 1)
+  }
+}
+
+test("level selection follows the brief", () => {
+  expect(chooseLevel(120, 68, 60.0, 1, 0)).toBe(42)
+  expect(chooseLevel(240, 135, 30.0, 1, 0)).toBe(51)
+  expect(chooseLevel(120, 68, 30.0, 4, 0)).toBe(40)
+  expect(chooseLevel(80, 45, 30.0, 1, 0)).toBe(31)
+  expect(maxDpbFrames(40, 120, 68)).toBe(4)
+})

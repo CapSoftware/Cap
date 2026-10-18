@@ -10,7 +10,7 @@ import {
 	faWandMagicSparkles,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext, useTheme } from "../../Contexts";
 
 const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {

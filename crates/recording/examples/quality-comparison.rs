@@ -62,6 +62,7 @@ async fn run_recording(
     max_fps: u32,
 ) -> Result<RecordingResult, Box<dyn std::error::Error>> {
     let quality_label = match quality {
+        StudioQuality::Compatibility => "Compatibility",
         StudioQuality::Balanced => "Balanced",
         StudioQuality::Ultra => "Ultra",
     };
@@ -185,6 +186,7 @@ fn print_comparison(results: &[RecordingResult]) {
 
     for r in results {
         let quality_label = match r.quality {
+            StudioQuality::Compatibility => "Compatibility",
             StudioQuality::Balanced => "Balanced",
             StudioQuality::Ultra => "Ultra",
         };
@@ -216,6 +218,7 @@ fn print_comparison(results: &[RecordingResult]) {
                 let a_label = format!(
                     "{} ({})",
                     match a.quality {
+                        StudioQuality::Compatibility => "Compatibility",
                         StudioQuality::Balanced => "Balanced",
                         StudioQuality::Ultra => "Ultra",
                     },
@@ -224,6 +227,7 @@ fn print_comparison(results: &[RecordingResult]) {
                 let b_label = format!(
                     "{} ({})",
                     match b.quality {
+                        StudioQuality::Compatibility => "Compatibility",
                         StudioQuality::Balanced => "Balanced",
                         StudioQuality::Ultra => "Ultra",
                     },
@@ -250,6 +254,7 @@ fn print_comparison(results: &[RecordingResult]) {
     println!("Output paths:");
     for r in results {
         let quality_label = match r.quality {
+            StudioQuality::Compatibility => "Compatibility",
             StudioQuality::Balanced => "Balanced",
             StudioQuality::Ultra => "Ultra",
         };

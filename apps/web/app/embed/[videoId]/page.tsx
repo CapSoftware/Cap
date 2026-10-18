@@ -4,20 +4,35 @@ import {
 	comments,
 	organizations,
 	sharedVideos,
+	spaces,
+	spaceVideos,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
-import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
-import { type Organisation, Policy, type Video } from "@cap/web-domain";
+import { Logo } from "@cap/ui";
+import { userIsPro } from "@cap/utils";
+import {
+	ImageUploads,
+	provideOptionalAuth,
+	resolveEffectiveVideoRules,
+	Videos,
+	VideosPolicy,
+} from "@cap/web-backend";
+import { type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
+import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
@@ -34,54 +49,12 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
-					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
-						videos: [
-							{
-								url: new URL(
-									`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1280,
-								height: 720,
-								type: "video/mp4",
-							},
-						],
-					},
-					twitter: {
-						card: "player",
-						title: `${video.name} | Cap Recording`,
-						description: "Watch this video on Cap",
-						images: [
-							new URL(
-								`/api/video/og?videoId=${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-						],
-						players: {
-							playerUrl: new URL(
-								`/embed/${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							streamUrl: new URL(
-								`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							width: 1280,
-							height: 720,
-						},
-					},
+					...buildShareVideoMetadata({
+						videoId,
+						name: video.name,
+						sourceType: video.source.type,
+						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+					}),
 					robots: "index, follow",
 				}),
 			}),
@@ -105,6 +78,19 @@ export async function generateMetadata(
 	);
 }
 
+const renderEmbedPolicyDenied = () =>
+	Effect.succeed(
+		<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
+			<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+			<p className="text-gray-400">
+				If you own this video, please <Link href="/login">sign in</Link> to
+				manage sharing.
+			</p>
+		</div>,
+	);
+
+const renderNoSuchElement = () => Effect.sync(() => notFound());
+
 export default async function EmbedVideoPage(
 	props: PageProps<"/embed/[videoId]">,
 ) {
@@ -112,6 +98,17 @@ export default async function EmbedVideoPage(
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
+	const minimal = searchParams.slack === "true";
+	// `?t=` mirrors the share page, so an embed snippet copied "at 1:23" opens
+	// there too. Repeated params arrive as an array; take the first.
+	const startTimeParam = Array.isArray(searchParams.t)
+		? searchParams.t[0]
+		: searchParams.t;
+	const parsedStartTime = Number.parseInt(startTimeParam ?? "", 10);
+	const startTime =
+		Number.isFinite(parsedStartTime) && parsedStartTime > 0
+			? parsedStartTime
+			: null;
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -128,6 +125,7 @@ export default async function EmbedVideoPage(
 					effectiveCreatedAt: videos.effectiveCreatedAt,
 					updatedAt: videos.updatedAt,
 					bucket: videos.bucket,
+					storageIntegrationId: videos.storageIntegrationId,
 					metadata: videos.metadata,
 					public: videos.public,
 					videoStartTime: videos.videoStartTime,
@@ -151,9 +149,14 @@ export default async function EmbedVideoPage(
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-						Boolean,
-					),
+					orgSettings: organizations.settings,
+					organizationName: organizations.name,
+					organizationIconUrl: organizations.iconUrl,
+					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
+					hasActiveUpload:
+						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+							Boolean,
+						),
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
@@ -170,25 +173,28 @@ export default async function EmbedVideoPage(
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="min-h-screen bg-black">
+			<div
+				key={videoId}
+				className={
+					minimal
+						? "h-screen overflow-hidden bg-black"
+						: "min-h-screen bg-black"
+				}
+			>
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
-					<EmbedContent video={data.video} autoplay={autoplay} />
+					<EmbedContent
+						video={data.video}
+						autoplay={autoplay}
+						startTime={startTime}
+						minimal={minimal}
+					/>
 				)}
 			</div>
 		)),
 		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed(
-					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
-						<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
-						<p className="text-gray-400">
-							If you own this video, please <Link href="/login">sign in</Link>{" "}
-							to manage sharing.
-						</p>
-					</div>,
-				),
-			NoSuchElementException: () => Effect.sync(() => notFound()),
+			PolicyDenied: renderEmbedPolicyDenied,
+			NoSuchElementException: renderNoSuchElement,
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
@@ -198,16 +204,41 @@ export default async function EmbedVideoPage(
 async function EmbedContent({
 	video,
 	autoplay,
+	startTime,
+	minimal,
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
+		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
+		organizationName: (typeof organizations.$inferSelect)["name"] | null;
+		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
+		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
 	};
 	autoplay: boolean;
+	startTime: number | null;
+	minimal: boolean;
 }) {
 	const user = await getCurrentUser();
+	const sharedSpaces = await db()
+		.select({
+			id: spaces.id,
+			name: spaces.name,
+			settings: spaces.settings,
+			hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+		})
+		.from(spaceVideos)
+		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+		.where(eq(spaceVideos.videoId, video.id));
+
+	const rules = resolveEffectiveVideoRules({
+		videoSettings: video.settings,
+		organizationSettings: video.orgSettings,
+		spaces: sharedSpaces,
+	});
 
 	let aiGenerationEnabled = false;
+	let ownerIsProUser = false;
 	const videoOwnerQuery = await db()
 		.select({
 			email: users.email,
@@ -221,13 +252,17 @@ async function EmbedContent({
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
 		const videoOwner = videoOwnerQuery[0];
 		aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
+		ownerIsProUser = userIsPro(videoOwner);
 	}
 
 	if (
+		video.isScreenshot !== true &&
+		!rules.settings.disableTranscript &&
 		video.transcriptionStatus !== "COMPLETE" &&
 		video.transcriptionStatus !== "PROCESSING" &&
 		video.transcriptionStatus !== "SKIPPED" &&
-		video.transcriptionStatus !== "NO_AUDIO"
+		video.transcriptionStatus !== "NO_AUDIO" &&
+		video.transcriptionStatus !== "ERROR"
 	) {
 		transcribeVideo(video.id, video.ownerId, aiGenerationEnabled);
 	}
@@ -255,6 +290,45 @@ async function EmbedContent({
 		);
 	}
 
+	// Same quota gate as the share page, so embeds are not a loophole around
+	// it. Fail-open: a broken count must never take the embed down.
+	const overShareLimit =
+		!ownerIsProUser &&
+		(await isVideoOverShareableLinkLimit({
+			id: video.id,
+			ownerId: video.ownerId,
+			createdAt: video.createdAt,
+			isScreenshot: video.isScreenshot,
+		}).catch((error) => {
+			console.error(
+				`[EmbedVideoPage] Shareable link quota check failed for ${video.id}:`,
+				error,
+			);
+			return false;
+		}));
+
+	if (overShareLimit) {
+		return (
+			<div className="flex flex-col gap-3 justify-center items-center px-6 min-h-screen text-center bg-black">
+				<Logo className="w-auto h-7" white />
+				<h1 className="text-lg font-semibold text-white">
+					This video is over its free limit
+				</h1>
+				<p className="max-w-sm text-sm leading-relaxed text-white/60">
+					{`The owner of this video has used all ${Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this video will be instantly viewable.`}
+				</p>
+				<a
+					href={`${buildEnv.NEXT_PUBLIC_WEB_URL}/s/${video.id}`}
+					target="_blank"
+					rel="noreferrer"
+					className="mt-2 rounded-full border border-gray-5 bg-gray-3 px-5 py-2 text-sm font-medium text-gray-12 transition-colors hover:bg-gray-6"
+				>
+					Open on Cap
+				</a>
+			</div>
+		);
+	}
+
 	const commentsQuery = await db()
 		.select({
 			id: comments.id,
@@ -266,6 +340,9 @@ async function EmbedContent({
 			createdAt: comments.createdAt,
 			updatedAt: comments.updatedAt,
 			parentCommentId: comments.parentCommentId,
+			mediaKey: comments.mediaKey,
+			mediaDuration: comments.mediaDuration,
+			mediaMeta: comments.mediaMeta,
 			authorName: users.name,
 		})
 		.from(comments)
@@ -275,20 +352,70 @@ async function EmbedContent({
 	const videoOwner = await db()
 		.select({
 			name: users.name,
+			image: users.image,
 		})
 		.from(users)
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
+	const ownerImageUrl = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
+			Option.map(imageUploads.resolveImageUrl),
+			Effect.transposeOption,
+			Effect.map(Option.getOrNull),
+		);
+	}).pipe(EffectRuntime.runPromise);
+
+	const branding = await Effect.gen(function* () {
+		const brandingInput = {
+			owner: { isPro: ownerIsProUser },
+			orgSettings: video.orgSettings,
+			organizationName: video.organizationName,
+		};
+		const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+			? video.organizationIconUrl
+			: video.shareableLinkIconUrl;
+
+		if (!ownerIsProUser || !icon || minimal) {
+			return getSharePageBranding(brandingInput);
+		}
+
+		const imageUploads = yield* ImageUploads;
+		const imageUrl = yield* imageUploads.resolveImageUrl(icon);
+
+		return getSharePageBranding({
+			...brandingInput,
+			organizationIconUrl: imageUrl,
+			shareableLinkIconUrl: imageUrl,
+		});
+	}).pipe(EffectRuntime.runPromise);
+
 	return (
 		<EmbedVideo
 			data={video}
+			branding={branding}
 			user={user}
 			comments={commentsQuery}
-			chapters={initialAiData?.chapters || []}
+			chapters={
+				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
+			}
 			ownerName={videoOwner[0]?.name || null}
+			ownerImageUrl={ownerImageUrl}
 			autoplay={autoplay}
+			startTime={startTime}
+			minimal={minimal}
+			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+				video.settings?.defaultPlaybackSpeed,
+				video.orgSettings?.defaultPlaybackSpeed,
+			)}
+			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
 		/>
 	);
 }

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Uploading - Cap</title>
+	</head>
+	<body>
+		<main id="stage" class="stage" data-mode="waiting">
+			<header class="brand">
+				<svg
+					class="brand-logo"
+					xmlns="http://www.w3.org/2000/svg"
+					fill="none"
+					viewBox="0 0 103 40"
+					aria-label="Cap"
+				>
+					<title>Cap</title>
+					<path
+						fill="#4785FF"
+						d="M20 36c8.837 0 16-7.163 16-16S28.837 4 20 4 4 11.164 4 20s7.164 16 16 16"
+					></path>
+					<path
+						fill="#ADC9FF"
+						d="M20 33c7.18 0 13-5.82 13-13S27.18 7 20 7 7 12.82 7 20s5.82 13 13 13"
+					></path>
+					<path
+						fill="#fff"
+						d="M20 30c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10"
+					></path>
+					<path
+						fill="currentColor"
+						d="M58.416 30.448c-5.404 0-9.212-3.864-9.212-10.36 0-6.384 3.668-10.416 9.268-10.416 5.068 0 7.784 2.66 8.624 7.168l-3.808.196c-.476-2.604-2.072-4.2-4.816-4.2-3.388 0-5.488 2.828-5.488 7.252 0 4.48 2.156 7.196 5.46 7.196 2.94 0 4.508-1.708 4.956-4.564l3.808.196c-.784 4.676-3.752 7.532-8.792 7.532m16.23-.112c-3.137 0-5.209-1.484-5.209-4.088 0-2.576 1.596-3.948 4.872-4.592l4.956-.98c0-2.1-.98-3.192-2.856-3.192-1.764 0-2.716.812-3.052 2.324l-3.668-.168c.588-3.136 2.996-4.928 6.72-4.928 4.256 0 6.44 2.24 6.44 6.216v5.432c0 .812.28 1.036.84 1.036h.476V30c-.224.056-.812.112-1.288.112-1.624 0-2.828-.588-3.136-2.436-.728 1.596-2.632 2.66-5.096 2.66m.727-2.604c2.38 0 3.892-1.512 3.892-3.78v-.84l-3.864.784c-1.596.308-2.24.98-2.24 2.016 0 1.176.784 1.82 2.212 1.82M86.874 34.2V15.048h3.444l.056 2.212c.868-1.652 2.52-2.548 4.48-2.548 4.256 0 6.356 3.5 6.356 7.812s-2.128 7.812-6.384 7.812c-1.904 0-3.556-.924-4.368-2.38V34.2zm7.112-6.776c2.184 0 3.5-1.82 3.5-4.9s-1.316-4.9-3.5-4.9-3.528 1.652-3.528 4.9 1.316 4.9 3.528 4.9"
+					></path>
+				</svg>
+			</header>
+			<svg class="doodle" viewBox="0 0 120 104" aria-hidden="true">
+				<defs>
+					<filter id="boil" x="-15%" y="-15%" width="130%" height="130%">
+						<feTurbulence
+							type="fractalNoise"
+							baseFrequency="0.05"
+							numOctaves="2"
+							seed="1"
+							result="noise"
+						>
+							<animate
+								attributeName="seed"
+								values="1;3;5;7"
+								dur="0.6s"
+								repeatCount="indefinite"
+								calcMode="discrete"
+							></animate>
+						</feTurbulence>
+						<feDisplacementMap
+							in="SourceGraphic"
+							in2="noise"
+							scale="3"
+							xChannelSelector="R"
+							yChannelSelector="G"
+						></feDisplacementMap>
+					</filter>
+				</defs>
+				<g class="doodle-boil">
+					<g class="doodle-cloud">
+						<path
+							class="doodle-stroke cloud-path"
+							pathLength="1"
+							d="M 34 58 L 88 58 C 98 58 106 50 106 41 C 106 32 98.5 25 89.5 25 C 86.5 25 84 25.7 81.8 27 C 79 16.5 69.5 9 58.5 9 C 47 9 37.5 16.8 34.8 27.5 C 25.2 28 17.5 35.4 17.5 44 C 17.5 52 24.8 58 34 58 Z"
+						></path>
+						<path
+							class="doodle-stroke cloud-arrow"
+							d="M 60 92 L 60 68 M 49 78 L 60 66 L 71 78"
+						></path>
+					</g>
+					<g class="doodle-check">
+						<path
+							class="doodle-stroke check-path"
+							pathLength="1"
+							d="M 34 58 L 52 76 L 90 30"
+						></path>
+						<path
+							class="spark spark-1"
+							d="M 24 12 L 24 18 M 24 26 L 24 32 M 14 22 L 20 22 M 28 22 L 34 22"
+						></path>
+						<path
+							class="spark spark-2"
+							d="M 98 4 L 98 10 M 98 18 L 98 24 M 88 14 L 94 14 M 102 14 L 108 14"
+						></path>
+						<path
+							class="spark spark-3"
+							d="M 104 56 L 104 61 M 104 67 L 104 72 M 96 64 L 101 64 M 107 64 L 112 64"
+						></path>
+					</g>
+					<g class="doodle-error">
+						<path
+							class="doodle-stroke error-path"
+							pathLength="1"
+							d="M 60 24 L 60 60 M 60 75 L 60 75.4"
+						></path>
+					</g>
+				</g>
+			</svg>
+			<h1 id="upload-title" aria-live="polite">Connecting to your recording</h1>
+			<p id="upload-detail">One moment…</p>
+			<div class="squiggle-row">
+				<svg class="squiggle" viewBox="0 0 360 26" aria-hidden="true">
+					<path
+						class="squiggle-track"
+						pathLength="100"
+						d="M 6 14 q 6 -7 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0"
+					></path>
+					<path
+						id="squiggle-progress"
+						class="squiggle-progress"
+						pathLength="100"
+						d="M 6 14 q 6 -7 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0 t 12 0"
+					></path>
+				</svg>
+				<span id="percent-value" class="percent">0%</span>
+			</div>
+			<p id="upload-meta" class="upload-meta" hidden></p>
+			<a id="share-link" class="share-link" target="_self" hidden
+				>Open your Cap</a
+			>
+			<div id="error-actions" class="error-actions" hidden>
+				<button id="retry-upload" class="action-button" type="button">
+					Try again
+				</button>
+				<button
+					id="download-recording"
+					class="action-button is-secondary"
+					type="button"
+				>
+					Download recording
+				</button>
+			</div>
+		</main>
+		<p class="footnote">
+			Keep this tab in the background. We'll take you to your Cap the moment
+			it's ready.
+		</p>
+		<script type="module" src="/src/uploading/main.ts"></script>
+	</body>
+</html>

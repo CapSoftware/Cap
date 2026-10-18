@@ -1,4 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
+import { cx } from "cva";
 import type { Component, ComponentProps, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
@@ -7,14 +8,20 @@ import {
 	isSystemAudioSupported,
 } from "~/utils/queries";
 import { useRecordingOptions } from "../OptionsContext";
+import {
+	DEVICE_ROW_CLASS,
+	DEVICE_ROW_ICON_CLASS,
+	DEVICE_ROW_LABEL_CLASS,
+	DEVICE_ROW_TRAILING_CLASS,
+} from "./deviceRowStyles";
 import InfoPill from "./InfoPill";
 
 export default function SystemAudio() {
 	return (
 		<SystemAudioToggleRoot
-			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg border border-gray-5 transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class={cx(DEVICE_ROW_CLASS, "KSelect")}
 			PillComponent={InfoPill}
-			icon={<IconPhMonitorBold class="text-gray-10 size-4" />}
+			icon={<IconPhMonitorBold class={DEVICE_ROW_ICON_CLASS} />}
 		/>
 	);
 }
@@ -25,7 +32,7 @@ export function SystemAudioToggleRoot(
 		"onClick" | "disabled" | "title" | "type" | "children"
 	> & {
 		PillComponent: Component<{
-			variant: "blue" | "red";
+			variant: "blue" | "red" | "gray";
 			children: JSX.Element;
 		}>;
 		icon: JSX.Element;
@@ -54,19 +61,22 @@ export function SystemAudioToggleRoot(
 				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
 			}}
 			disabled={isDisabled()}
+			aria-pressed={rawOptions.captureSystemAudio ? "true" : "false"}
 		>
 			{props.icon}
-			<p class="flex-1 text-sm text-left truncate">
+			<p class={DEVICE_ROW_LABEL_CLASS}>
 				{rawOptions.captureSystemAudio
 					? "Record System Audio"
 					: "No System Audio"}
 			</p>
-			<Dynamic
-				component={props.PillComponent}
-				variant={rawOptions.captureSystemAudio ? "blue" : "red"}
-			>
-				{rawOptions.captureSystemAudio ? "On" : "Off"}
-			</Dynamic>
+			<div class={DEVICE_ROW_TRAILING_CLASS}>
+				<Dynamic
+					component={props.PillComponent}
+					variant={rawOptions.captureSystemAudio ? "blue" : "gray"}
+				>
+					{rawOptions.captureSystemAudio ? "On" : "Off"}
+				</Dynamic>
+			</div>
 		</button>
 	);
 }

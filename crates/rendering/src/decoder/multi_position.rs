@@ -136,9 +136,22 @@ impl DecoderPoolManager {
         requested_time: f32,
         decoder_count: usize,
     ) -> (usize, f32, bool) {
+        self.find_best_decoder_for_time_with_reuse_threshold(
+            requested_time,
+            decoder_count,
+            self.reposition_threshold,
+        )
+    }
+
+    pub fn find_best_decoder_for_time_with_reuse_threshold(
+        &mut self,
+        requested_time: f32,
+        decoder_count: usize,
+        reuse_threshold: f32,
+    ) -> (usize, f32, bool) {
         self.total_accesses += 1;
 
-        let frame = (requested_time * self.config.fps as f32).floor() as u32;
+        let frame = super::request_frame(requested_time, self.config.fps);
         *self.access_history.entry(frame).or_insert(0) += 1;
 
         if self.access_history.len() > Self::MAX_ACCESS_HISTORY_ENTRIES {
@@ -150,6 +163,7 @@ impl DecoderPoolManager {
         let mut best_decoder_id = 0;
         let mut best_distance = f32::MAX;
         let mut needs_reset = true;
+        let reuse_threshold = reuse_threshold.clamp(0.0, self.reposition_threshold);
 
         if decoder_count == 0 {
             return (0, f32::MAX, true);
@@ -158,7 +172,7 @@ impl DecoderPoolManager {
         for position in self.positions.iter().filter(|p| p.id < decoder_count) {
             let distance = (position.position_secs - requested_time).abs();
             let is_usable = position.position_secs <= requested_time
-                && (requested_time - position.position_secs) < self.reposition_threshold;
+                && (requested_time - position.position_secs) < reuse_threshold;
 
             if is_usable && distance < best_distance {
                 best_distance = distance;
@@ -168,12 +182,31 @@ impl DecoderPoolManager {
         }
 
         if needs_reset {
-            for position in self.positions.iter().filter(|p| p.id < decoder_count) {
-                let distance = (position.position_secs - requested_time).abs();
-                if distance < best_distance {
-                    best_distance = distance;
-                    best_decoder_id = position.id;
+            let has_unused_decoder = self
+                .positions
+                .iter()
+                .any(|position| position.id < decoder_count && position.access_count == 0);
+
+            if has_unused_decoder {
+                for position in self
+                    .positions
+                    .iter()
+                    .filter(|position| position.id < decoder_count && position.access_count == 0)
+                {
+                    let distance = (position.position_secs - requested_time).abs();
+                    if distance < best_distance {
+                        best_distance = distance;
+                        best_decoder_id = position.id;
+                    }
                 }
+            } else if let Some(position) = self
+                .positions
+                .iter()
+                .filter(|position| position.id < decoder_count)
+                .min_by_key(|position| position.last_access_time)
+            {
+                best_distance = (position.position_secs - requested_time).abs();
+                best_decoder_id = position.id;
             }
         }
 
@@ -320,6 +353,7 @@ impl Default for ScrubDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_calculate_optimal_pool_size_short_video() {
@@ -383,5 +417,48 @@ mod tests {
             MAX_DECODER_POOL_SIZE
         );
         assert_eq!(calculate_reposition_threshold(duration_55_min), 10.0);
+    }
+
+    #[test]
+    fn test_custom_reuse_threshold_forces_reset_when_decoder_is_too_far_behind() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let config = MultiPositionDecoderConfig {
+            path: PathBuf::from("fixture.mp4"),
+            tokio_handle: runtime.handle().clone(),
+            keyframe_index: None,
+            fps: 60,
+            duration_secs: 20.0,
+        };
+        let mut manager = DecoderPoolManager::new(config);
+
+        let (decoder_id, _, needs_reset) =
+            manager.find_best_decoder_for_time_with_reuse_threshold(6.0, 5, 0.5);
+
+        assert_eq!(decoder_id, 1);
+        assert!(needs_reset);
+    }
+
+    #[test]
+    fn test_reposition_preserves_accessed_decoder_when_unused_decoder_is_available() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let config = MultiPositionDecoderConfig {
+            path: PathBuf::from("fixture.mp4"),
+            tokio_handle: runtime.handle().clone(),
+            keyframe_index: None,
+            fps: 60,
+            duration_secs: 200.0,
+        };
+        let mut manager = DecoderPoolManager::new(config);
+
+        let (first_decoder_id, _, first_needs_reset) =
+            manager.find_best_decoder_for_time_with_reuse_threshold(15.0, 5, 0.5);
+        manager.update_decoder_position(first_decoder_id, 17.0);
+        let (second_decoder_id, _, second_needs_reset) =
+            manager.find_best_decoder_for_time_with_reuse_threshold(15.0, 5, 0.5);
+
+        assert_eq!(first_decoder_id, 0);
+        assert!(first_needs_reset);
+        assert_eq!(second_decoder_id, 1);
+        assert!(second_needs_reset);
     }
 }

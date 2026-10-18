@@ -42,7 +42,12 @@ mod windows {
 
             let device = selected.0;
 
-            let video_control = device.output_pin().cast::<IAMVideoControl>().ok();
+            let output_pin = device
+                .output_pin()
+                .expect("failed to bind capture filter for selected device")
+                .clone();
+
+            let video_control = output_pin.cast::<IAMVideoControl>().ok();
 
             let formats = device
                 .media_types()
@@ -65,7 +70,7 @@ mod windows {
 
                     if let Some(video_control) = &video_control {
                         let time_per_frame_list = video_control.time_per_frame_list(
-                            device.output_pin(),
+                            &output_pin,
                             i as i32,
                             SIZE {
                                 cx: width,

@@ -6,16 +6,53 @@ runs:
     - name: install dependencies (ubuntu only)
       if: ${{ runner.os == 'Linux' }}
       shell: bash
+      # NOTE: Do NOT add `ffmpeg` or any `libav*-dev` / `libsw*-dev` packages here.
+      # The Rust build links FFmpeg from the spacedrive native-deps bundle via
+      # `FFMPEG_DIR=target/native-deps` (see scripts/setup.js). Ubuntu's system
+      # FFmpeg dev packages are FFmpeg 6 (libavcodec.so.60, libavutil.so.58, ...),
+      # while native-deps ships FFmpeg 7 (.so.61/.59/.10). If the system dev
+      # packages are present, ffmpeg-sys-next's linker can resolve the system
+      # FFmpeg 6 `.so` instead of the native-deps FFmpeg 7, so the binary records
+      # FFmpeg 6 NEEDED sonames while the .deb bundles the FFmpeg 7 libs that
+      # setup.js stages -> soname mismatch and the loader fails at launch. Keeping
+      # them absent forces the binary to link the same FFmpeg 7 that gets bundled.
       run: |
         sudo apt update
-        sudo apt install libwebkit2gtk-4.1-dev \
+        sudo apt install -y --no-install-recommends \
+          libwebkit2gtk-4.1-dev \
           build-essential \
+          pkg-config \
           curl \
           wget \
           file \
+          clang \
+          libclang-dev \
           libxdo-dev \
           libssl-dev \
           libayatana-appindicator3-dev \
           librsvg2-dev \
           libpipewire-0.3-dev \
-          ffmpeg clang libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev pkg-config libasound2-dev
+          libspa-0.2-dev \
+          libasound2-dev \
+          libasound2-plugins \
+          pulseaudio-utils \
+          libdbus-1-dev \
+          libudev-dev \
+          libx11-dev \
+          libxrandr-dev \
+          libxcb1-dev \
+          libxcb-randr0-dev \
+          libxcb-shm0-dev \
+          libxcb-xfixes0-dev \
+          libxfixes-dev \
+          libwayland-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev \
+          libva-dev \
+          xvfb \
+          xauth \
+          rpm \
+          cpio \
+          libarchive-tools \
+          zstd \
+          patchelf

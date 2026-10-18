@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
@@ -70,7 +71,7 @@ function debouncedLastUsedUpdate(keyHash: string) {
 async function getAuth(c: Context) {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
-	let user;
+	let user: Awaited<ReturnType<typeof getCurrentUser>> | undefined;
 
 	if (authHeader?.length === 36) {
 		const res = await db()
@@ -79,6 +80,7 @@ async function getAuth(c: Context) {
 			.leftJoin(authApiKeys, eq(users.id, authApiKeys.userId))
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
+		if (user && isBlockedAccountEmail(user.email)) user = undefined;
 	} else {
 		user = await getCurrentUser();
 	}
@@ -124,7 +126,7 @@ export const allowedOrigins = [
 export const corsMiddleware = cors({
 	origin: allowedOrigins,
 	credentials: true,
-	allowMethods: ["POST", "OPTIONS"],
+	allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
 	allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 

@@ -7,6 +7,7 @@ import {
 	organizations,
 	sharedVideos,
 	spaceMembers,
+	spaces,
 	spaceVideos,
 	users,
 	videos,
@@ -17,15 +18,17 @@ import {
 	Database,
 	ImageUploads,
 	makeCurrentUserLayer,
+	resolveEffectiveVideoRules,
 	Spaces,
 } from "@cap/web-backend";
 import {
 	type ImageUpload,
 	type Organisation,
 	Space,
+	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -56,8 +59,10 @@ async function fetchFolders(
 			id: folders.id,
 			name: folders.name,
 			color: folders.color,
+			public: folders.public,
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
+			createdAt: folders.createdAt,
 			videoCount: sql<number>`(
           SELECT COUNT(*) FROM ${table} WHERE ${table}.folderId = folders.id
         )`,
@@ -78,7 +83,7 @@ const fetchSpaceMembers = Effect.fn(function* (
 				.select({
 					id: spaceMembers.id,
 					userId: spaceMembers.userId,
-					role: sql<string>`'member'`,
+					role: spaceMembers.role,
 					name: users.name,
 					email: users.email,
 					image: users.image,
@@ -142,6 +147,131 @@ const fetchOrganizationMembers = Effect.fn(function* (
 		);
 });
 
+type SharedSpaceRow = {
+	videoId: string;
+	id: string;
+	name: string;
+	organizationId: string;
+	isOrg: boolean;
+	iconUrl: ImageUpload.ImageUrlOrKey | null;
+	settings: (typeof spaces.$inferSelect)["settings"] | null;
+	hasPassword: boolean;
+};
+
+type SharedSpaceEntry = Omit<SharedSpaceRow, "videoId" | "iconUrl"> & {
+	iconUrl: ImageUpload.ImageUrl | null;
+};
+
+// Sharing is stored in two places: `space_videos` for named spaces and
+// `shared_videos` for the org-wide "All <Org>" entry. Both have to be read
+// here, otherwise the sharing dialog opens with the org-wide entry unchecked
+// and saving would drop it. The `shared_videos` read is limited to the page's
+// organization plus the viewer's own memberships so other organizations'
+// metadata never reaches the client, while an owner's dialog seed still covers
+// every org share `shareCap` is able to preserve (it drops orgs the saver
+// left, regardless of what was submitted).
+async function fetchSharedSpacesForVideos(
+	videoIds: Video.VideoId[],
+	viewer: {
+		userId: User.UserId;
+		organizationId: Organisation.OrganisationId;
+	},
+): Promise<Record<string, SharedSpaceEntry[]>> {
+	if (videoIds.length === 0) return {};
+
+	const [spaceRows, organizationRows] = await Promise.all([
+		db()
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+				iconUrl: spaces.iconUrl,
+				settings: spaces.settings,
+				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.where(inArray(spaceVideos.videoId, videoIds)),
+		db()
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(
+				and(
+					inArray(sharedVideos.videoId, videoIds),
+					or(
+						eq(sharedVideos.organizationId, viewer.organizationId),
+						inArray(
+							sharedVideos.organizationId,
+							db()
+								.select({ organizationId: organizationMembers.organizationId })
+								.from(organizationMembers)
+								.where(eq(organizationMembers.userId, viewer.userId)),
+						),
+					),
+				),
+			),
+	]);
+
+	const rows: SharedSpaceRow[] = [
+		...spaceRows.map((row) => ({
+			videoId: row.videoId,
+			id: row.id,
+			name: row.name,
+			organizationId: row.organizationId,
+			isOrg: false,
+			iconUrl: row.iconUrl ?? null,
+			settings: row.settings ?? null,
+			hasPassword: row.hasPassword,
+		})),
+		...organizationRows.map((row) => ({
+			videoId: row.videoId,
+			id: row.id,
+			name: row.name,
+			organizationId: row.organizationId,
+			isOrg: true,
+			iconUrl: row.iconUrl ?? null,
+			settings: null,
+			hasPassword: false,
+		})),
+	];
+
+	const resolvedRows = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		return yield* Effect.all(
+			rows.map(
+				Effect.fn(function* (row: SharedSpaceRow) {
+					return {
+						...row,
+						iconUrl: row.iconUrl
+							? yield* imageUploads.resolveImageUrl(row.iconUrl)
+							: null,
+					};
+				}),
+			),
+		);
+	}).pipe(runPromise);
+
+	return resolvedRows.reduce<Record<string, SharedSpaceEntry[]>>((acc, row) => {
+		const entries = acc[row.videoId] ?? [];
+		acc[row.videoId] = entries;
+		const { videoId: _videoId, ...entry } = row;
+		entries.push(entry);
+		return acc;
+	}, {});
+}
+
 export default async function SharedCapsPage(props: {
 	params: Promise<{ spaceId: string }>;
 	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -173,6 +303,15 @@ export default async function SharedCapsPage(props: {
 				fetchOrganizationMembers(space.organizationId).pipe(runPromise),
 				fetchFolders(space.id, false),
 			]);
+		const resolvedSpace = await Effect.gen(function* () {
+			const imageUploads = yield* ImageUploads;
+			return {
+				...space,
+				iconUrl: space.iconUrl
+					? yield* imageUploads.resolveImageUrl(space.iconUrl)
+					: null,
+			};
+		}).pipe(runPromise);
 
 		async function fetchSpaceVideos(
 			spaceId: Space.SpaceIdOrOrganisationId,
@@ -188,14 +327,19 @@ export default async function SharedCapsPage(props: {
 						name: videos.name,
 						createdAt: videos.createdAt,
 						metadata: videos.metadata,
+						isScreenshot: videos.isScreenshot,
 						duration: videos.duration,
+						public: videos.public,
+						settings: videos.settings,
+						hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: videos.effectiveCreatedAt,
-						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-							Boolean,
-						),
+						hasActiveUpload:
+							sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+								Boolean,
+							),
 					})
 					.from(spaceVideos)
 					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
@@ -216,6 +360,11 @@ export default async function SharedCapsPage(props: {
 						videos.name,
 						videos.createdAt,
 						videos.metadata,
+						videos.isScreenshot,
+						videos.duration,
+						videos.public,
+						videos.settings,
+						videos.password,
 						users.name,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt))
@@ -240,14 +389,37 @@ export default async function SharedCapsPage(props: {
 			page,
 			limit,
 		);
+		const sharedSpacesMap = await fetchSharedSpacesForVideos(
+			spaceVideoData.map((video) => Video.VideoId.make(video.id)),
+			{ userId: user.id, organizationId: space.organizationId },
+		);
+		const [organizationSettingsRow] = await db()
+			.select({ settings: organizations.settings })
+			.from(organizations)
+			.where(eq(organizations.id, space.organizationId))
+			.limit(1);
+		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = spaceVideoData.map((video) => {
-			const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
+				video;
+			const sharedSpaces = sharedSpacesMap[video.id] ?? [];
+			const rules = resolveEffectiveVideoRules({
+				videoSettings: video.settings,
+				organizationSettings,
+				// Org-wide entries are not spaces; their rules already come in
+				// through `organizationSettings`.
+				spaces: sharedSpaces.filter((space) => !space.isOrg),
+			});
 			return {
 				...videoWithoutEffectiveDate,
 				id: Video.VideoId.make(video.id),
+				hasInheritedPassword: rules.hasInheritedPassword,
+				inheritedPasswordSources: rules.inheritedPasswordSources,
+				inheritedSpaceSettings: rules.inheritedSettings,
+				sharedSpaces,
 				ownerName: video.ownerName ?? null,
 				metadata: video.metadata as
-					| { customCreatedAt?: string; [key: string]: any }
+					| { customCreatedAt?: string; [key: string]: unknown }
 					| undefined,
 			};
 		});
@@ -256,7 +428,7 @@ export default async function SharedCapsPage(props: {
 			<SharedCaps
 				data={processedVideoData}
 				count={totalCount}
-				spaceData={space}
+				spaceData={resolvedSpace}
 				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				analyticsEnabled={Boolean(
 					serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
@@ -286,14 +458,19 @@ export default async function SharedCapsPage(props: {
 						name: videos.name,
 						createdAt: videos.createdAt,
 						metadata: videos.metadata,
+						isScreenshot: videos.isScreenshot,
 						duration: videos.duration,
+						public: videos.public,
+						settings: videos.settings,
+						hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: videos.effectiveCreatedAt,
-						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-							Boolean,
-						),
+						hasActiveUpload:
+							sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+								Boolean,
+							),
 					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
@@ -312,8 +489,12 @@ export default async function SharedCapsPage(props: {
 						videos.name,
 						videos.createdAt,
 						videos.metadata,
+						videos.isScreenshot,
 						users.name,
 						videos.duration,
+						videos.public,
+						videos.settings,
+						videos.password,
 					)
 					.orderBy(desc(videos.effectiveCreatedAt))
 					.limit(limit)
@@ -345,14 +526,37 @@ export default async function SharedCapsPage(props: {
 			]);
 
 		const { videos: orgVideoData, totalCount } = organizationVideos;
+		const sharedSpacesMap = await fetchSharedSpacesForVideos(
+			orgVideoData.map((video) => Video.VideoId.make(video.id)),
+			{ userId: user.id, organizationId: organization.id },
+		);
+		const [organizationSettingsRow] = await db()
+			.select({ settings: organizations.settings })
+			.from(organizations)
+			.where(eq(organizations.id, organization.id))
+			.limit(1);
+		const organizationSettings = organizationSettingsRow?.settings ?? null;
 		const processedVideoData = orgVideoData.map((video) => {
-			const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
+				video;
+			const sharedSpaces = sharedSpacesMap[video.id] ?? [];
+			const rules = resolveEffectiveVideoRules({
+				videoSettings: video.settings,
+				organizationSettings,
+				// Org-wide entries are not spaces; their rules already come in
+				// through `organizationSettings`.
+				spaces: sharedSpaces.filter((space) => !space.isOrg),
+			});
 			return {
 				...videoWithoutEffectiveDate,
 				id: Video.VideoId.make(video.id),
+				hasInheritedPassword: rules.hasInheritedPassword,
+				inheritedPasswordSources: rules.inheritedPasswordSources,
+				inheritedSpaceSettings: rules.inheritedSettings,
+				sharedSpaces,
 				ownerName: video.ownerName ?? null,
 				metadata: video.metadata as
-					| { customCreatedAt?: string; [key: string]: any }
+					| { customCreatedAt?: string; [key: string]: unknown }
 					| undefined,
 			};
 		});

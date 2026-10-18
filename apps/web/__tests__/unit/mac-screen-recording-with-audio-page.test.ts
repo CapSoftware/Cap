@@ -40,8 +40,9 @@ describe("MacScreenRecordingWithAudioPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets mac-screen-recording-with-audio keyword", () => {
@@ -171,7 +172,7 @@ describe("MacScreenRecordingWithAudioPage FAQ schema", () => {
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
 		const schema = createFAQSchema(faqs);
 
-		expect(schema.mainEntity[0]!).toEqual({
+		expect(schema.mainEntity[0]).toEqual({
 			"@type": "Question",
 			name: "Why doesn't macOS record internal audio by default?",
 			acceptedAnswer: {

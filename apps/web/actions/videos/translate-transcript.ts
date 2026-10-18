@@ -1,13 +1,18 @@
 "use server";
 
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import { videos } from "@cap/database/schema";
+import { provideOptionalAuth, Storage, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
+import { generateText } from "ai";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { Effect, Exit, Option } from "effect";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { runWithAiProviders } from "@/lib/ai/run";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 import {
 	type LanguageCode,
 	SUPPORTED_LANGUAGES,
@@ -37,22 +42,30 @@ export async function translateTranscript(
 		};
 	}
 
-	const groq = getGroqClient();
-	if (!groq) {
+	if (!isAiConfigured()) {
 		return {
 			success: false,
 			message: "Translation service not configured",
 		};
 	}
 
-	const query = await db()
-		.select({
-			video: videos,
-			bucket: s3Buckets,
-		})
-		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-		.where(eq(videos.id, videoId));
+	if (await isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT)) {
+		return { success: false, message: "Too many requests" };
+	}
+
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
+
+		return yield* Effect.promise(() =>
+			db().select({ video: videos }).from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
+
+	if (Exit.isFailure(exit)) {
+		return { success: false, message: "Video not found" };
+	}
+
+	const query = exit.value;
 
 	if (query.length === 0 || !query[0]?.video) {
 		return { success: false, message: "Video not found" };
@@ -64,8 +77,8 @@ export async function translateTranscript(
 
 	try {
 		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(query[0]?.bucket?.id),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 			return yield* bucket.getObject(translatedKey);
 		}).pipe(runPromise);
@@ -82,8 +95,8 @@ export async function translateTranscript(
 	}
 
 	const originalVtt = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(
-			Option.fromNullable(query[0]?.bucket?.id),
+		const [bucket] = yield* Storage.getAccessForVideo(
+			decodeStorageVideo(video),
 		);
 		return yield* bucket.getObject(
 			`${video.ownerId}/${videoId}/transcription.vtt`,
@@ -97,7 +110,6 @@ export async function translateTranscript(
 	const translatedVtt = await translateVttContent(
 		originalVtt.value,
 		targetLanguage,
-		groq,
 	);
 
 	if (!translatedVtt) {
@@ -106,8 +118,8 @@ export async function translateTranscript(
 
 	try {
 		await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(query[0]?.bucket?.id),
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
 			);
 			yield* bucket.putObject(translatedKey, translatedVtt, {
 				contentType: "text/vtt",
@@ -127,7 +139,6 @@ export async function translateTranscript(
 async function translateVttContent(
 	vttContent: string,
 	targetLanguage: LanguageCode,
-	groq: NonNullable<ReturnType<typeof getGroqClient>>,
 ): Promise<string | null> {
 	const targetLanguageName = SUPPORTED_LANGUAGES[targetLanguage];
 
@@ -147,19 +158,22 @@ VTT content to translate:
 ${vttContent}`;
 
 	try {
-		const response = await groq.chat.completions.create({
-			model: GROQ_MODEL,
-			messages: [{ role: "user", content: prompt }],
-			temperature: 0.3,
-			max_tokens: 8000,
+		return await runWithAiProviders("generation", async (selection) => {
+			const response = await generateText({
+				model: selection.model(),
+				prompt,
+				maxOutputTokens: 8000,
+				...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
+			});
+
+			// Validate inside the provider loop so a fulfilled response that
+			// dropped the WEBVTT header falls through to the next provider.
+			if (!response.text.includes("WEBVTT")) {
+				throw new Error("translation response did not contain WEBVTT");
+			}
+
+			return response.text.trim();
 		});
-
-		const content = response.choices[0]?.message?.content;
-		if (content?.includes("WEBVTT")) {
-			return content.trim();
-		}
-
-		return null;
 	} catch (error) {
 		console.error("[translateVttContent] Translation error:", error);
 		return null;

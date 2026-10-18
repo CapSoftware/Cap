@@ -1,27 +1,120 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use ffmpeg::{
-    Packet,
+    Packet, Rational,
     codec::encoder,
     format::{self},
     frame,
 };
 
+pub trait PacketSink {
+    fn stream_time_base(&self, stream_index: usize) -> Rational;
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error>;
+}
+
+impl PacketSink for format::context::Output {
+    fn stream_time_base(&self, stream_index: usize) -> Rational {
+        self.stream(stream_index).unwrap().time_base()
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        packet.write_interleaved(self)
+    }
+}
+
+pub struct PacketQueue {
+    stream_time_base: Rational,
+    packets: Vec<Packet>,
+}
+
+impl PacketQueue {
+    pub fn new(stream_time_base: Rational) -> Self {
+        Self {
+            stream_time_base,
+            packets: Vec::new(),
+        }
+    }
+
+    pub fn take(&mut self) -> Vec<Packet> {
+        std::mem::take(&mut self.packets)
+    }
+}
+
+impl PacketSink for PacketQueue {
+    fn stream_time_base(&self, _stream_index: usize) -> Rational {
+        self.stream_time_base
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        self.packets.push(packet);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EncodedPacket {
+    pub bytes: u64,
+    pub key: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct EncodedPacketStats {
+    packets: Mutex<Vec<EncodedPacket>>,
+}
+
+impl EncodedPacketStats {
+    pub fn record(&self, packet: &Packet) {
+        if let Ok(mut packets) = self.packets.lock() {
+            packets.push(EncodedPacket {
+                bytes: packet.size() as u64,
+                key: packet.is_key(),
+            });
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<EncodedPacket> {
+        self.packets
+            .lock()
+            .map(|packets| packets.clone())
+            .unwrap_or_default()
+    }
+}
+
 pub struct EncoderBase {
     packet: ffmpeg::Packet,
+    packet_stats: Option<Arc<EncodedPacketStats>>,
     stream_index: usize,
     first_pts: Option<i64>,
+    last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
+    /// One-packet reorder buffer: a packet is written once its successor is
+    /// known so a synthesized duration can be replaced with the real dts
+    /// delta. Fragmenting muxers place each fragment at the accumulated
+    /// duration of the previous one, and the last sample of a fragment uses
+    /// the packet duration verbatim — a nominal duration there collapses any
+    /// capture gap that lands on a fragment cut, playing post-gap content
+    /// during the gap. The bool records whether the duration was synthesized.
+    held_packet: Option<(Packet, bool)>,
 }
 
 impl EncoderBase {
     pub(crate) fn new(stream_index: usize) -> Self {
         Self {
             packet: Packet::empty(),
+            packet_stats: None,
             first_pts: None,
+            last_frame_pts: None,
             stream_index,
             last_written_dts: None,
+            held_packet: None,
         }
+    }
+
+    pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
+        self.packet_stats = Some(stats);
     }
 
     pub fn update_pts(
@@ -37,7 +130,9 @@ impl EncoderBase {
             let pts = (timestamp.as_secs_f64() * rate).round() as i64;
             let first_pts = self.first_pts.get_or_insert(pts);
 
-            frame.set_pts(Some(pts - *first_pts));
+            let pts = normalize_input_pts(pts - *first_pts, self.last_frame_pts);
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
         } else {
             let Some(pts) = frame.pts() else {
                 tracing::error!("Frame has no pts");
@@ -46,14 +141,54 @@ impl EncoderBase {
 
             let first_pts = self.first_pts.get_or_insert(pts);
 
-            frame.set_pts(Some(pts - *first_pts));
+            let pts = normalize_input_pts(pts - *first_pts, self.last_frame_pts);
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
         }
     }
 
-    pub fn send_frame(
+    /// Stamps the frame's pts from its capture timestamp using an explicit
+    /// tick rate. Audio input frames must be stamped in *input sample rate*
+    /// units — the resampler rescales them to the encoder's output rate —
+    /// whereas [`Self::update_pts`] uses the encoder's own (output) time
+    /// base. Mixing the two conventions plays non-48kHz microphones at the
+    /// wrong speed.
+    pub fn update_pts_with_rate(
+        &mut self,
+        frame: &mut frame::Frame,
+        timestamp: Duration,
+        rate: f64,
+    ) {
+        if timestamp != Duration::MAX {
+            let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else if let Some(pts) = frame.pts() {
+            let first_pts = *self.first_pts.get_or_insert(pts);
+            let mut pts = pts - first_pts;
+            if let Some(last) = self.last_frame_pts
+                && pts <= last
+            {
+                pts = last + 1;
+            }
+            self.last_frame_pts = Some(pts);
+            frame.set_pts(Some(pts));
+        } else {
+            tracing::error!("Frame has no pts");
+        }
+    }
+
+    pub fn send_frame<S: PacketSink + ?Sized>(
         &mut self,
         frame: &frame::Frame,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_frame(frame)?;
@@ -61,17 +196,33 @@ impl EncoderBase {
         self.process_packets(output, encoder)
     }
 
-    fn process_packets(
+    fn process_packets<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
-        while encoder.receive_packet(&mut self.packet).is_ok() {
+        while packet_available(encoder.receive_packet(&mut self.packet))? {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),
-                output.stream(self.stream_index).unwrap().time_base(),
+                output.stream_time_base(self.stream_index),
             );
+
+            match (self.packet.pts(), self.packet.dts()) {
+                (Some(pts), None) => self.packet.set_dts(Some(pts)),
+                (None, Some(dts)) => self.packet.set_pts(Some(dts)),
+                _ => {}
+            }
+
+            let duration_synthesized = self.packet.duration() <= 0;
+            if duration_synthesized
+                && let Some(duration) = nominal_packet_duration(
+                    output.stream_time_base(self.stream_index),
+                    encoder.frame_rate(),
+                )
+            {
+                self.packet.set_duration(duration);
+            }
 
             if let (Some(dts), Some(last_dts)) = (self.packet.dts(), self.last_written_dts)
                 && dts <= last_dts
@@ -92,19 +243,243 @@ impl EncoderBase {
             }
 
             self.last_written_dts = self.packet.dts();
-            self.packet.write_interleaved(output)?;
+            if let Some(stats) = &self.packet_stats {
+                stats.record(&self.packet);
+            }
+
+            let current = std::mem::replace(&mut self.packet, Packet::empty());
+            if let Some((mut previous, previous_synthesized)) = self.held_packet.take() {
+                if previous_synthesized
+                    && let (Some(prev_dts), Some(cur_dts)) = (previous.dts(), current.dts())
+                    && cur_dts > prev_dts
+                {
+                    previous.set_duration(cur_dts - prev_dts);
+                }
+                output.write_packet(previous)?;
+            }
+            self.held_packet = Some((current, duration_synthesized));
         }
 
         Ok(())
     }
 
-    pub fn process_eof(
+    pub fn process_eof<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_eof()?;
 
-        self.process_packets(output, encoder)
+        self.process_packets(output, encoder)?;
+
+        if let Some((previous, _)) = self.held_packet.take() {
+            output.write_packet(previous)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn packet_available(result: Result<(), ffmpeg::Error>) -> Result<bool, ffmpeg::Error> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(ffmpeg::Error::Eof) => Ok(false),
+        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn nominal_packet_duration(time_base: Rational, frame_rate: Rational) -> Option<i64> {
+    let time_base_num = time_base.numerator();
+    let time_base_den = time_base.denominator();
+    let frame_rate_num = frame_rate.numerator();
+    let frame_rate_den = frame_rate.denominator();
+
+    if time_base_num <= 0 || time_base_den <= 0 || frame_rate_num <= 0 || frame_rate_den <= 0 {
+        return None;
+    }
+
+    let ticks = (frame_rate_den as f64 * time_base_den as f64)
+        / (frame_rate_num as f64 * time_base_num as f64);
+    ticks
+        .is_finite()
+        .then(|| ticks.round() as i64)
+        .filter(|ticks| *ticks > 0)
+}
+
+fn normalize_input_pts(pts: i64, last_pts: Option<i64>) -> i64 {
+    let Some(last_pts) = last_pts else {
+        return pts;
+    };
+
+    if pts > last_pts {
+        return pts;
+    }
+
+    // A tie or backwards timestamp carries no time — advance a single tick
+    // so pts stay strictly monotonic and the real timestamps immediately
+    // take over again. Any larger bump outruns a source delivering faster
+    // than the nominal rate (each corrected frame pushes the next one into
+    // correction too), re-timing the recording to the bump cadence.
+    last_pts + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guard sentinel E02 (scripts/verify/guards.toml): a stream whose first
+    /// frame carries a non-zero pts is rebased to start at 0 and keeps its
+    /// frame spacing. Exports start at 0 anyway, so removing the rebase
+    /// changes no export output today; this checks the rebase itself.
+    #[test]
+    fn guard_e02_rebases_a_stream_whose_first_pts_is_not_zero() {
+        ffmpeg::init().unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new().encoder();
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for pts in [3_000_i64, 3_512, 4_024, 4_536] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            frame.set_pts(Some(pts));
+            base.update_pts(&mut frame, Duration::MAX, &mut encoder);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(512), Some(1_024), Some(1_536)]);
+
+        // Capture timestamps (time base 1/90000) starting 2.5 s in.
+        let mut video = ffmpeg::codec::context::Context::new()
+            .encoder()
+            .video()
+            .unwrap();
+        video.set_time_base((1, 90_000));
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for ms in [2_500_u64, 2_533, 2_567, 2_600] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            base.update_pts(&mut frame, Duration::from_millis(ms), &mut video);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(2_970), Some(6_030), Some(9_000)]);
+    }
+
+    #[test]
+    fn normalize_input_pts_passes_monotonic_input_through() {
+        // Any strictly-forward delta passes untouched, even sub-frame ones
+        // from sources far faster than the nominal rate (1000fps = 1ms).
+        assert_eq!(normalize_input_pts(16_667, Some(0)), 16_667);
+        assert_eq!(normalize_input_pts(1_000, Some(0)), 1_000);
+    }
+
+    #[test]
+    fn normalize_input_pts_bumps_non_monotonic_input_by_one_tick() {
+        // Any larger bump outruns a fast source: each corrected frame pushes
+        // the next into correction too, re-timing the whole recording.
+        assert_eq!(normalize_input_pts(90_000, Some(100_000)), 100_001);
+        assert_eq!(normalize_input_pts(100_000, Some(100_000)), 100_001);
+    }
+
+    #[test]
+    fn receive_success_exposes_one_packet() {
+        assert_eq!(packet_available(Ok(())), Ok(true));
+    }
+
+    #[test]
+    fn receive_eof_finishes_packet_drain() {
+        assert_eq!(packet_available(Err(ffmpeg::Error::Eof)), Ok(false));
+    }
+
+    #[test]
+    fn receive_eagain_requests_more_input_without_error() {
+        assert_eq!(
+            packet_available(Err(ffmpeg::Error::Other {
+                errno: ffmpeg::error::EAGAIN,
+            })),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn unexpected_receive_errors_keep_their_exact_error() {
+        for error in [
+            ffmpeg::Error::InvalidData,
+            ffmpeg::Error::Bug,
+            ffmpeg::Error::External,
+            ffmpeg::Error::Exit,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINVAL,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EIO,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::ENOMEM,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINTR,
+            },
+        ] {
+            assert_eq!(packet_available(Err(error)), Err(error));
+        }
+    }
+
+    #[test]
+    fn receive_failure_after_output_does_not_read_another_packet() {
+        let mut results = [Ok(()), Err(ffmpeg::Error::InvalidData), Ok(())].into_iter();
+        let mut processed = 0;
+        let outcome = (|| {
+            while packet_available(results.next().unwrap())? {
+                processed += 1;
+            }
+            Ok::<(), ffmpeg::Error>(())
+        })();
+        assert_eq!(outcome, Err(ffmpeg::Error::InvalidData));
+        assert_eq!(processed, 1);
+        assert_eq!(results.next(), Some(Ok(())));
+    }
+
+    #[test]
+    fn normal_receive_states_do_not_consume_next_input_opportunity() {
+        for terminal in [
+            ffmpeg::Error::Eof,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EAGAIN,
+            },
+        ] {
+            let mut results = [Ok(()), Err(terminal), Ok(())].into_iter();
+            let mut processed = 0;
+            while packet_available(results.next().unwrap()).unwrap() {
+                processed += 1;
+            }
+            assert_eq!(processed, 1);
+            assert_eq!(results.next(), Some(Ok(())));
+        }
+    }
+
+    #[test]
+    fn actual_unopened_encoder_receive_is_not_success_and_keeps_held_packet() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unopened.mp4");
+        let mut output = format::output_as(&path, "mp4").unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new().encoder();
+        let mut base = EncoderBase::new(0);
+        let mut previous = Packet::copy(b"held-packet");
+        previous.set_pts(Some(42));
+        previous.set_dts(Some(40));
+        previous.set_duration(1024);
+        base.held_packet = Some((previous, true));
+        let error = base.process_packets(&mut output, &mut encoder).unwrap_err();
+        assert_eq!(
+            error,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINVAL
+            }
+        );
+        let (previous, synthesized) = base.held_packet.as_ref().unwrap();
+        assert_eq!(previous.data(), Some(b"held-packet".as_slice()));
+        assert_eq!(previous.pts(), Some(42));
+        assert_eq!(previous.dts(), Some(40));
+        assert_eq!(previous.duration(), 1024);
+        assert!(*synthesized);
+        assert!(path.exists());
     }
 }

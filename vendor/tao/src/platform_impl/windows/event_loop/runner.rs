@@ -202,10 +202,18 @@ impl<T> EventLoopRunner<T> {
 /// Event dispatch functions.
 impl<T> EventLoopRunner<T> {
   pub(crate) unsafe fn poll(&self) {
+    if self.runner_state.get() == RunnerState::Destroyed {
+      return;
+    }
+
     self.move_state_to(RunnerState::HandlingMainEvents);
   }
 
   pub(crate) unsafe fn send_event(&self, event: Event<'_, T>) {
+    if self.runner_state.get() == RunnerState::Destroyed {
+      return;
+    }
+
     if let Event::RedrawRequested(_) = event {
       if self.runner_state.get() != RunnerState::HandlingRedrawEvents {
         warn!("RedrawRequested dispatched without explicit MainEventsCleared");
@@ -227,14 +235,26 @@ impl<T> EventLoopRunner<T> {
   }
 
   pub(crate) unsafe fn main_events_cleared(&self) {
+    if self.runner_state.get() == RunnerState::Destroyed {
+      return;
+    }
+
     self.move_state_to(RunnerState::HandlingRedrawEvents);
   }
 
   pub(crate) unsafe fn redraw_events_cleared(&self) {
+    if self.runner_state.get() == RunnerState::Destroyed {
+      return;
+    }
+
     self.move_state_to(RunnerState::Idle);
   }
 
   pub(crate) unsafe fn loop_destroyed(&self) {
+    if self.runner_state.get() == RunnerState::Destroyed {
+      return;
+    }
+
     self.move_state_to(RunnerState::Destroyed);
   }
 
@@ -324,6 +344,10 @@ impl<T> EventLoopRunner<T> {
         self.call_redraw_events_cleared();
         self.call_event_handler(Event::LoopDestroyed);
       }
+      (Destroyed, _) => {
+        self.runner_state.set(Destroyed);
+        warn!("Ignoring event loop state transition from Destroyed");
+      }
       (_, Uninitialized) => panic!("cannot move state to Uninitialized"),
 
       // State transitions that start the event handling process.
@@ -365,7 +389,6 @@ impl<T> EventLoopRunner<T> {
         self.call_event_handler(Event::LoopDestroyed);
       }
 
-      (Destroyed, _) => panic!("cannot move state from Destroyed"),
     }
   }
 
