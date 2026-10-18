@@ -5533,6 +5533,8 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
     let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
     let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    let generate_zoom =
+        std::env::var("CAP_GPUI_AUTO_GENERATE_ZOOM").is_ok_and(|value| value == "1");
     if tab.is_none()
         && select.is_none()
         && canvas.is_none()
@@ -5540,6 +5542,7 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && clip_menu.is_none()
         && camera3d.is_none()
         && add_track.is_none()
+        && !generate_zoom
     {
         return;
     }
@@ -5565,6 +5568,12 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     if let Some(spec) = camera3d {
         handle
             .update(cx, |view, window, cx| view.auto_camera3d(&spec, window, cx))
+            .ok();
+    }
+
+    if generate_zoom {
+        handle
+            .update(cx, |view, window, cx| view.generate_auto_zoom(window, cx))
             .ok();
     }
 
@@ -6311,12 +6320,16 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-/// Repaint the bar between its own 250ms ticks -- the mic meter updates at
-/// ~20Hz and the bar is never the active window.
+/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
+/// up to ~20Hz and the bar is never the active window.
 pub fn refresh_controls_window(cx: &mut App) {
+    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
     if let Some(handle) = cx.global::<AppWindows>().controls {
         handle
-            .update(cx, |_, window, cx| {
+            .update(cx, |controls, window, cx| {
+                if !controls.level_bar_moves(level_db, window.scale_factor()) {
+                    return;
+                }
                 cx.notify();
                 window.refresh();
             })
@@ -7009,6 +7022,7 @@ mod tests {
                 excluded_windows: Vec::new(),
                 camera_feed: None,
                 mic_feed: None,
+                mic_meter: None,
                 linux_instant_camera: None,
                 start_gate: None,
             }),

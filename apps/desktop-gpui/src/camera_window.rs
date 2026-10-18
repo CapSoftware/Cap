@@ -400,9 +400,11 @@ mod frame {
     /// caps its input at 720p, [`crate::camera_blur::BLUR_MAX_DIMS`]), so
     /// the blur path's scaling costs nothing extra.
     ///
-    /// Mirroring is a second hardware pass: a `VTPixelRotationSession` with
-    /// `FlipHorizontalOrientation` flips the converted BGRA buffer into a
-    /// sibling ring. This is the preview-only mirror the Tauri bubble has --
+    /// Mirroring is a second hardware pass: the conversion lands in a single
+    /// scratch buffer and a `VTPixelRotationSession` with
+    /// `FlipHorizontalOrientation` flips it into the ring. Both passes are
+    /// synchronous, so the unflipped scratch is never painted and one buffer
+    /// covers it. This is the preview-only mirror the Tauri bubble has --
     /// its shader flips the sampling UV (`camera.wgsl:97-100`), its legacy
     /// page flips the canvas with `scaleX(-1)` (`camera.tsx:869`), and
     /// neither touches the recorded camera track.
@@ -416,7 +418,7 @@ mod frame {
         /// created (the preview then degrades to unmirrored, logged once).
         flip_session: Option<FlipSession>,
         ring: Vec<arc::R<cv::PixelBuf>>,
-        mirror_ring: Vec<arc::R<cv::PixelBuf>>,
+        scratch: Option<arc::R<cv::PixelBuf>>,
         next: usize,
         src_dims: (usize, usize),
         dst_dims: (usize, usize),
@@ -429,7 +431,11 @@ mod frame {
 
     const RING_SIZE: usize = 4;
 
-    fn buffer_ring(width: usize, height: usize) -> Option<Vec<arc::R<cv::PixelBuf>>> {
+    fn bgra_buffers(
+        count: usize,
+        width: usize,
+        height: usize,
+    ) -> Option<Vec<arc::R<cv::PixelBuf>>> {
         let io_surface_properties = cf::Dictionary::new();
         let keys: [&cf::Type; 2] = [
             cv::pixel_buffer::keys::io_surf_props().as_ref(),
@@ -440,7 +446,7 @@ mod frame {
             cf::Boolean::value_true().as_ref(),
         ];
         let attrs = cf::Dictionary::with_keys_values(&keys, &values)?;
-        (0..RING_SIZE)
+        (0..count)
             .map(|_| {
                 cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, Some(&attrs))
                     .ok()
@@ -485,18 +491,18 @@ mod frame {
                 None
             };
 
-            let ring = buffer_ring(dst_dims.0, dst_dims.1)?;
-            let mirror_ring = if flip_session.is_some() {
-                buffer_ring(dst_dims.0, dst_dims.1)?
+            let ring = bgra_buffers(RING_SIZE, dst_dims.0, dst_dims.1)?;
+            let scratch = if flip_session.is_some() {
+                Some(bgra_buffers(1, dst_dims.0, dst_dims.1)?.pop()?)
             } else {
-                Vec::new()
+                None
             };
 
             Some(Self {
                 session,
                 flip_session,
                 ring,
-                mirror_ring,
+                scratch,
                 next: 0,
                 src_dims,
                 dst_dims,
@@ -528,21 +534,23 @@ mod frame {
             }
             let converter = this.as_mut()?;
 
-            let dst = converter.ring[converter.next].clone();
-            converter.session.transfer(src, &dst).ok()?;
-            let out = if let Some(flip) = &converter.flip_session {
-                let mut flipped = converter.mirror_ring[converter.next].clone();
-                match flip.rotate(&dst, &mut flipped) {
-                    Ok(()) => flipped,
-                    Err(error) => {
-                        tracing::warn!(?error, "camera preview mirroring failed");
-                        converter.flip_session = None;
-                        dst
-                    }
+            let mut out = converter.ring[converter.next].clone();
+            let flipped = match (&converter.flip_session, &converter.scratch) {
+                (Some(flip), Some(scratch)) => {
+                    converter.session.transfer(src, scratch).ok()?;
+                    flip.rotate(scratch, &mut out)
+                        .inspect_err(|error| {
+                            tracing::warn!(?error, "camera preview mirroring failed");
+                        })
+                        .is_ok()
                 }
-            } else {
-                dst
+                _ => false,
             };
+            if !flipped {
+                converter.flip_session = None;
+                converter.scratch = None;
+                converter.session.transfer(src, &out).ok()?;
+            }
             converter.next = (converter.next + 1) % RING_SIZE;
             Some(Converted {
                 buffer: out,
