@@ -12,8 +12,9 @@
 //! Reference rule (the decoder contract documented next to `pts_to_frame`):
 //! a sample is labelled `round(fps * pts_seconds)` on the decoder grid, where
 //! both decoders preserve the stream's presentation timeline. A request for
-//! time `t` asks for grid index `floor(t * fps)`. The correct answer is the
-//! newest sample whose label is at or before that index
+//! time `t` asks for grid index `request_frame(t, fps)`, `floor(t * fps)`
+//! with a few f32 steps of slack for the request time. The correct answer is
+//! the newest sample whose label is at or before that index
 //! (the frame on screen at `t`); when several samples share that label any of
 //! them is accepted. A request before the first sample is answered with the
 //! first sample.
@@ -217,7 +218,7 @@ impl Oracle {
             Decoder::Avf => time,
             Decoder::Ffmpeg => time.max(0.0),
         };
-        (time * self.fps as f32).floor() as u32
+        super::request_frame(time, self.fps)
     }
 
     /// Inclusive range of acceptable sample indices for a request.

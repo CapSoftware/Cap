@@ -228,9 +228,35 @@ link = ""
 [[xfail]]
 case = "recording/instant/late-mic"
 class = "sync-screen-mic"
-platforms = ["macos"]
+platforms = ["macos", "windows"]
 bound = { count = 1, offset-ms = [900, 1100] }
-reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
+reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on macOS and Windows runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "timestamps"
+platforms = ["windows"]
+bound = { count = 2 }
+reason = "NEW: Windows camera encoder frame pacing (WindowsCameraMuxer, crates/recording/src/output_pipeline/win.rs): when no frame arrives within one frame interval it re-encodes the last frame stamped one interval later, the slot the late real frame is stamped for, so the real frame lands on the same timestamp and the muxer moves it by one 90 kHz tick (run 39000141528: 16 duplicated frames, pts 0.266667 then 0.266678). Also in cap-v0.6.0"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "sync-camera-mic"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing: the paced duplicates shift the camera track's frames against their capture times (camera vs mic -38.3 ms in run 39000141528, -18.4 ms, inside the limit, in run 39004015045). Bound: two frame periods early"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "camera-clock"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
 link = ""
 
 [[xfail]]

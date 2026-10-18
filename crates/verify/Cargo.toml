@@ -40,3 +40,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 scap-targets = { path = "../scap-targets" }
+
+[target.'cfg(windows)'.dev-dependencies]
+scap-targets = { path = "../scap-targets" }
+cap-camera-windows = { path = "../camera-windows" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+cpal = { workspace = true }
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }
