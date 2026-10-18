@@ -292,7 +292,7 @@ pub async fn export(
                 fps: run.fps,
                 resolution_base,
                 compression: cap_export::mp4::ExportCompression::Social,
-                custom_bpp: Some(1.0),
+                custom_bpp: None,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: false,
             }

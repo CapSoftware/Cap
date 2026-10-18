@@ -521,6 +521,12 @@ impl Mp4ExportSettings {
 
                 match &input.payload {
                     ExportFramePayload::Cpu(nv12_data) => {
+                        if input.frame_number == 8 {
+                            let dir = PathBuf::from(std::env::var_os("CAP_VERIFY_REPORT_DIR").expect("report directory"));
+                            std::fs::write(dir.join("preencode-frame8.nv12"), nv12_data.as_ref()).map_err(|error| error.to_string())?;
+                            let metadata = serde_json::json!({"width": input.width, "height": input.height, "stride": input.y_stride});
+                            std::fs::write(dir.join("preencode-frame8.json"), metadata.to_string()).map_err(|error| error.to_string())?;
+                        }
                         fill_nv12_frame_direct(
                             &mut reusable_frame,
                             nv12_data,
