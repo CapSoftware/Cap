@@ -10,6 +10,8 @@ use ffmpeg::{
 
 use crate::base::EncoderBase;
 
+const MAX_FRAME_THREADS: usize = 8;
+
 pub struct ProResEncoderBuilder {
     input_config: VideoInfo,
     output_size: Option<(u32, u32)>,
@@ -77,9 +79,13 @@ impl ProResEncoderBuilder {
         };
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
+        // Each frame thread holds a whole frame and its packet, about 130 MB
+        // at 4K. A 4K export is as fast with 8 threads as with 16, and 1 GB
+        // smaller at peak.
         let thread_count = thread::available_parallelism()
             .map(|v| v.get())
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(MAX_FRAME_THREADS);
         // `Config::count` leaves `thread_type` at 0, which libavcodec treats as
         // "no threading" for prores_ks. Frame threading keeps a reference to each
         // sent frame until a worker encodes it, so it is only safe when frames
