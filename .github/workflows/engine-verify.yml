@@ -205,6 +205,7 @@ jobs:
           else
             python3 scripts/verify/plan.py changes --tier "$TIER" --files "$RUNNER_TEMP/changed.txt" --max-files "$MAX" ${SUITES:+--suites "$SUITES"} > "$RUNNER_TEMP/plan.txt"
           fi
+          python3 -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\"shards\":3", "\"shards\":1").replace("\"shard_list\":\"[1, 2, 3]\"", "\"shard_list\":\"[1]\""))' "$RUNNER_TEMP/plan.txt"
           cat "$RUNNER_TEMP/plan.txt"
           cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
           {

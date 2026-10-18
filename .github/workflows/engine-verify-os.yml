@@ -56,6 +56,8 @@ env:
   CAP_VERIFY_CARGO_PROFILE: ci-verify
   CAP_VERIFY_NEXTEST_PROFILE: ci
   CAP_VERIFY_LOCKED: "1"
+  CAP_VERIFY_CASE: "editing/export/basic/seed-23"
+  CAP_VERIFY_TRACE_BLEND: "2"
   CAP_VERIFY_CARGO_CONFIG: ${{ inputs.cargo-config }}
   # A case this runner cannot run fails unless scripts/verify/suites.json
   # allows it as unsupported on this platform (with the reason).
@@ -216,6 +218,11 @@ jobs:
           --title "${{ inputs.platform }} ${{ inputs.tier }}${{ inputs.shards > 1 && format(' shard {0}/{1}', matrix.shard, inputs.shards) || '' }}"
           --junit "$CAP_VERIFY_REPORT_DIR/junit.xml" --flaky "$CAP_VERIFY_FLAKY_FILE"
           "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save source fixture
+        if: always()
+        shell: bash
+        run: cp -R "$CAP_VERIFY_FIXTURE_DIR"/basic-*.cap "$CAP_VERIFY_REPORT_DIR"/
 
       - name: Upload report
         if: always() && steps.test.outcome != 'skipped'

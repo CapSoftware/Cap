@@ -556,6 +556,8 @@ pub fn read_expecting(
                 "[cap-verify-blend-sides] {}",
                 serde_json::json!({
                     "stream": kind,
+                    "cells": cells.levels,
+                    "contrast": cells.contrast,
                     "expected": [o.index, i.index],
                     "p": p,
                     "progress": expected_progress,

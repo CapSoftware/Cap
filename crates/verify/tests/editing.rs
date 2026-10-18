@@ -343,6 +343,15 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
             }
         }
         let config = edits::replay(&base, &ops);
+        let evidence = std::path::PathBuf::from(
+            std::env::var_os("CAP_VERIFY_REPORT_DIR").expect("report directory"),
+        );
+        std::fs::create_dir_all(&evidence).expect("create evidence directory");
+        std::fs::write(
+            evidence.join("seed23-config.json"),
+            serde_json::to_vec_pretty(&config).expect("serialize configuration"),
+        )
+        .expect("save configuration");
         let mut case = Case::new(&id);
         case.note(format!("ops: {ops:?}"));
         let model = project.model(&config);
@@ -362,6 +371,7 @@ fn export_cases(spec: cap_verify::fixture::FixtureSpec, seeds: u64) -> Vec<Strin
         )) {
             Err(e) => case.problem("error", format!("export failed: {e}")),
             Ok(out) => {
+                std::fs::copy(&out, evidence.join("seed23-out.mp4")).expect("save exported output");
                 let frames = common::read_output(&out, Some(&|i| model.expect(i as u32, fps)));
                 common::check_sequence(&mut case, &model, &frames, fps, true);
             }
