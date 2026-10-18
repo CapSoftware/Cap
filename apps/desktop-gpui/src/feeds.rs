@@ -713,6 +713,7 @@ pub struct Feeds {
     // Channel-holding tasks; dropping them ends the pumps.
     _frame_pump: Option<gpui::Task<()>>,
     _meter_pump: Option<gpui::Task<()>>,
+    mic_meter_tx: Option<flume::Sender<MicrophoneSamples>>,
     // The mic error channel must outlive the stream (see recording.rs).
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
 }
@@ -770,6 +771,7 @@ impl Feeds {
             camera_recording_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _frame_pump: None,
             _meter_pump: None,
+            mic_meter_tx: None,
             _mic_errors: None,
         });
         cx.set_global(FeedsGlobal(feeds.clone()));
@@ -807,6 +809,12 @@ impl Feeds {
     pub fn mic_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
         self.microphone.as_ref()?;
         self.mic_actor.clone().filter(|actor| actor.is_alive())
+    }
+
+    /// The level meter's input, for a recording that has to open its own
+    /// microphone feed.
+    pub fn mic_meter(&self) -> Option<flume::Sender<MicrophoneSamples>> {
+        self.mic_meter_tx.clone()
     }
 
     pub fn input_readiness(&self) -> InputReadiness {
@@ -1325,6 +1333,7 @@ impl Feeds {
         // Meter channel, attached once for the actor's lifetime -- the same
         // shape as the Tauri `mic_meter_sender`.
         let (meter_tx, meter_rx) = flume::bounded::<MicrophoneSamples>(16);
+        self.mic_meter_tx = Some(meter_tx.clone());
         {
             let actor = actor.clone();
             gpui_tokio::Tokio::spawn(cx, async move {
