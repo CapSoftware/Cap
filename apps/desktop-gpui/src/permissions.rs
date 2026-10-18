@@ -54,19 +54,6 @@ impl OSPermission {
         }
     }
 
-    pub fn blurb(self) -> &'static str {
-        match self {
-            Self::ScreenRecording => {
-                "Click Grant to allow when macOS asks, or pick Cap in System Settings if needed. Restart the app after allowing screen recording."
-            }
-            Self::Accessibility => {
-                "During recording, Cap collects mouse activity locally to generate automatic zoom in segments."
-            }
-            Self::Microphone => "This permission is required to record audio in your Caps.",
-            Self::Camera => "This permission is required to record your camera in your Caps.",
-        }
-    }
-
     /// Screen recording and accessibility gate the app; mic and camera are
     /// optional. Same split as the Tauri app's `necessary_granted`.
     pub fn required(self) -> bool {

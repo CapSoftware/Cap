@@ -421,37 +421,68 @@ pub fn notification_sounds_enabled() -> bool {
 /// already updated its in-memory copy, which is the same optimistic order
 /// `handleChange` uses in `general.tsx`.
 pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-
-    let entry = store
-        .entry(section.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !entry.is_object() {
-        *entry = Value::Object(Map::new());
-    }
-    entry
-        .as_object_mut()
-        .expect("just replaced any non-object with an object")
-        .insert(key.to_string(), value);
-
-    write_store(&path, &Value::Object(store))
+    modify_store(|store| {
+        let entry = store
+            .entry(section.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        entry
+            .as_object_mut()
+            .expect("just replaced any non-object with an object")
+            .insert(key.to_string(), value);
+        true
+    })
 }
 
 /// Replace or remove one top-level store section. `authStore.set(null)` in
 /// the Tauri app drops the whole `auth` object; writing keys one at a time
 /// would leave a half-signed-out session behind.
 pub fn set_store_value(section: &str, value: Value) -> bool {
+    modify_store(|store| {
+        if value.is_null() {
+            store.remove(section);
+        } else {
+            store.insert(section.to_string(), value);
+        }
+        true
+    })
+}
+
+/// Replace one top-level section only if `update` agrees, deciding from the
+/// section as it is on disk at write time rather than from a copy read before
+/// a network round trip.
+pub fn update_store_section(
+    section: &str,
+    update: impl FnOnce(&mut Map<String, Value>) -> bool,
+) -> bool {
+    modify_store(|store| {
+        let mut current = match store.remove(section) {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let keep = update(&mut current);
+        store.insert(section.to_string(), Value::Object(current));
+        keep
+    })
+}
+
+/// Every write is a read-modify-write of the whole file through one temp
+/// path, so two threads writing at once (an auth write from a tokio worker and
+/// a settings toggle on the main thread) could drop one update or fail the
+/// rename. One process-wide lock serializes them.
+fn modify_store(update: impl FnOnce(&mut Map<String, Value>) -> bool) -> bool {
+    static STORE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = STORE_WRITE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let path = tauri_store_path();
     let Some(mut store) = read_store(&path) else {
         return false;
     };
-    if value.is_null() {
-        store.remove(section);
-    } else {
-        store.insert(section.to_string(), value);
+    if !update(&mut store) {
+        return false;
     }
     write_store(&path, &Value::Object(store))
 }
@@ -1015,36 +1046,34 @@ fn set_device_format_settings(
     let Ok(Value::Object(fields)) = serde_json::to_value(settings) else {
         return false;
     };
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-    let section = store
-        .entry(RECORDING_SETTINGS.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(section) = section.as_object_mut() else {
-        return false;
-    };
-    let map = section
-        .entry(map_key.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(map) = map.as_object_mut() else {
-        return false;
-    };
-    for key in keys {
-        let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
-        let Some(entry) = entry.as_object_mut() else {
+    modify_store(|store| {
+        let section = store
+            .entry(RECORDING_SETTINGS.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(section) = section.as_object_mut() else {
             return false;
         };
-        for (key, value) in &fields {
-            if value.is_null() {
-                entry.remove(key);
-            } else {
-                entry.insert(key.clone(), value.clone());
+        let map = section
+            .entry(map_key.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(map) = map.as_object_mut() else {
+            return false;
+        };
+        for key in keys {
+            let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
+            let Some(entry) = entry.as_object_mut() else {
+                return false;
+            };
+            for (key, value) in &fields {
+                if value.is_null() {
+                    entry.remove(key);
+                } else {
+                    entry.insert(key.clone(), value.clone());
+                }
             }
         }
-    }
-    write_store(&path, &Value::Object(store))
+        true
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1833,12 +1862,10 @@ pub fn set_automations(automations: &AutomationsStore) -> bool {
             return false;
         }
     };
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-    store.insert(AUTOMATIONS.to_string(), value);
-    write_store(&path, &Value::Object(store))
+    modify_store(|store| {
+        store.insert(AUTOMATIONS.to_string(), value);
+        true
+    })
 }
 
 /// The preset names `applyPreset` offers -- `presetsStore.createQuery()` in
@@ -1909,6 +1936,29 @@ mod tests {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
         }
+    }
+
+    #[test]
+    fn section_updates_merge_into_disk_state_and_can_decline() {
+        let store = TempStore::new(
+            "section-update",
+            Some(r#"{"auth":{"user_id":"a","plan":null},"general_settings":{"x":1}}"#),
+        );
+
+        assert!(update_store_section("auth", |auth| {
+            auth.insert("organizations".into(), serde_json::json!([]));
+            true
+        }));
+        let written = store.read();
+        assert_eq!(written["auth"]["user_id"], "a");
+        assert_eq!(written["auth"]["organizations"], serde_json::json!([]));
+        assert_eq!(written["general_settings"]["x"], 1);
+
+        assert!(!update_store_section("auth", |auth| {
+            auth.insert("user_id".into(), "b".into());
+            false
+        }));
+        assert_eq!(store.read()["auth"]["user_id"], "a");
     }
 
     #[test]
