@@ -56,13 +56,6 @@ bound = { camera-frames = 1, delta = 1, frame = [2579, 2579] }
 reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Every run in probe 38762089521 (42 of 42) and on hosted macOS, but it passed on blacksmith-6vcpu-macos-15 in push run 38846099909: whether the previous vend is still cached depends on the decoder's wall-clock idle timeout, so it is flaky there"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
-[[xfail]]
-case = "export/camera-pts-late/full/mp430/ffmpeg"
-class = "future"
-bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
-reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
-link = ""
-
 # Decode deadline under machine starvation. These apply only to a case the
 # starvation sentinel saw stall (starved = true) and only with the signature
 # of the mechanism; the same symptom on a healthy machine is a failure.
@@ -187,14 +180,6 @@ reason = "NEW (minor): loading a legacy (output-timed) project drops a caption t
 link = ""
 
 [[xfail]]
-case = "editing/export/basic/seed-23"
-class = "future"
-platforms = ["linux"]
-bound = { camera-frames = 1, delta = 8, frame = [8, 8] }
-reason = "NEW: Linux only (software renderer): in seed 23's 3 s same-clip cross-fade, output frame 8 shows incoming camera source frame 84 instead of 76. The FFmpeg decoder answers every camera request with the requested frame (traced: request 76 read 76, run 38997099068, identical on macOS), so a later camera frame reaches the renderer's shared camera layer, which draws the outgoing and incoming sides in turn. Before #2661 the shared decoder made output frames 7 to 12 up to 70 frames stale and hid it. Deterministic on Linux; macOS and Windows pass"
-link = ""
-
-[[xfail]]
 case = "playback/basic/cuts-speeds-reorder/realtime30-from25/avf"
 class = "stale"
 platforms = ["macos"]
@@ -228,10 +213,37 @@ link = ""
 [[xfail]]
 case = "recording/instant/late-mic"
 class = "sync-screen-mic"
-platforms = ["macos"]
+platforms = ["macos", "windows"]
 bound = { count = 1, offset-ms = [900, 1100] }
-reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
+reason = "NEW: a microphone whose first sample arrives 1.0 s after the recording starts becomes audio zero, so all audio plays early by its start-up delay minus the screen's (screen late against the mic by 962 to 1040 ms on macOS and Windows runners, every run). Bound: the mic's 1.0 s delay within 100 ms"
 link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "timestamps"
+platforms = ["windows"]
+bound = { count = 2 }
+reason = "NEW: Windows camera encoder frame pacing (WindowsCameraMuxer, crates/recording/src/output_pipeline/win.rs): when no frame arrives within one frame interval it re-encodes the last frame stamped one interval later, the slot the late real frame is stamped for, so the real frame lands on the same timestamp and the muxer moves it by one 90 kHz tick (run 39000141528: 16 duplicated frames, pts 0.266667 then 0.266678). Also in cap-v0.6.0"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "sync-camera-mic"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing: the paced duplicates shift the camera track's frames against their capture times (camera vs mic -38.3 ms in run 39000141528, -18.4 ms, inside the limit, in run 39004015045). Bound: two frame periods early"
+link = ""
+
+[[xfail]]
+case = "recording/studio-camera/*"
+class = "camera-clock"
+platforms = ["windows"]
+flaky = true
+bound = { count = 1, camera-mic-ms = [-70, 0] }
+reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
+link = ""
+
 
 [[xfail]]
 case = "recording/instant/system-only"
