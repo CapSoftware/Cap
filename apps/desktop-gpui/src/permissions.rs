@@ -314,17 +314,24 @@ pub fn open_permission_settings(permission: OSPermission) {
 /// for shutdown: Tauri otherwise sees this process alive and exits without
 /// starting a replacement.
 pub fn relaunch(cx: &mut gpui::App) {
-    static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
     let Ok(exe) = std::env::current_exe() else {
         tracing::error!("relaunch: current_exe unavailable");
         return;
     };
 
-    let mut command = relaunch_command(&exe, std::process::id());
-    if let Err(error) = spawn_relaunch(&mut command, &REQUESTED, || crate::menus::quit(cx)) {
+    if let Err(error) = relaunch_executable(&exe, cx) {
         tracing::error!("relaunch failed to spawn: {error}");
     }
+}
+
+pub(crate) fn relaunch_executable(
+    exe: &std::path::Path,
+    cx: &mut gpui::App,
+) -> std::io::Result<()> {
+    static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    let mut command = relaunch_command(exe, std::process::id());
+    spawn_relaunch(&mut command, &REQUESTED, || crate::menus::quit(cx)).map(drop)
 }
 
 fn relaunch_command(exe: &std::path::Path, pid: u32) -> std::process::Command {

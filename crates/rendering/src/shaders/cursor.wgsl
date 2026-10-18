@@ -30,7 +30,7 @@ var s_cursor: sampler;
 const MAX_ROTATION_RADIANS: f32 = 0.34906584;
 // Smear length ceiling in sprite-UV (1.0 = one cursor-sprite width). A fast
 // flick travels several sprite widths per frame, and the smear length must
-// track it (Screen Studio semantics); this only bounds pathological
+// track it (length-based semantics); this only bounds pathological
 // teleports. The vertex quad expands by the same vector, so the geometry
 // always contains the full streak.
 const MAX_CURSOR_BLUR_UV: f32 = 4.0;

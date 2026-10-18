@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 /// Instead, scan the system fonts a single time per process, then cheaply clone the
 /// resulting font database (memory-mapped faces are reference counted) for each new
 /// `FontSystem`.
-pub(crate) fn new_font_system() -> glyphon::FontSystem {
+pub fn new_font_system() -> glyphon::FontSystem {
     static FONT_TEMPLATE: OnceLock<(String, glyphon::fontdb::Database)> = OnceLock::new();
 
     let font_phase = crate::readiness::Phase::start("font.instance");

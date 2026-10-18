@@ -923,7 +923,7 @@ impl Render for OverlayWindow {
             )
             .size_full()
             .relative()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());

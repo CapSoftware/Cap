@@ -130,17 +130,29 @@ impl SegmentedControl {
         }
     }
 
-    /// The settings window: `inline-flex p-0.5 rounded-lg border border-gray-3
-    /// bg-gray-3` with `px-3 py-1 text-xs font-medium rounded-md` items. The
-    /// selected item is `bg-gray-1 text-gray-12 shadow-sm` -- `bg-gray-1` is
-    /// not in the settings material's remap list, so it stays literal.
     pub fn settings(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
         Self {
             container_bg: Some(theme.settings_fill()),
-            container_border: Some(theme.settings_border()),
-            selected_bg: Some(Hsla::from(theme.gray_1)),
+            container_border: None,
+            container_radius: px(8.),
+            item_padding_x: px(10.),
+            item_padding_y: px(0.),
+            item_height: Some(px(24.)),
+            item_gap: px(4.),
+            icon_size: px(11.),
+            selected_bg: Some(if theme.is_dark() {
+                gpui::hsla(0., 0., 1., 0.16)
+            } else {
+                gpui::white()
+            }),
             selected_text: theme.settings_text(),
             idle_text: theme.settings_muted(),
+            hover_bg: Some(theme.settings_hover()),
+            selected_shadow: if theme.is_dark() {
+                Vec::new()
+            } else {
+                crate::theme::raised_pill_shadow()
+            },
             ..Self::base(theme, id, options)
         }
     }

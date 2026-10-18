@@ -12,6 +12,7 @@ use cap_rendering::{
     get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -983,6 +984,9 @@ impl EditorInstance {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
             let mut cursor_cache = PreviewCursorCache::default();
+            let mut project_rx = self.project_config.1.clone();
+            let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
+            let mut outgoing_zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
 
             loop {
                 preview_rx.changed().await.unwrap();
@@ -1007,7 +1011,14 @@ impl EditorInstance {
                         break;
                     }
 
-                    let project = self.project_config.1.borrow().clone();
+                    let project = {
+                        let project = project_rx.borrow_and_update();
+                        if project.has_changed() {
+                            zoom_timelines.clear();
+                            outgoing_zoom_timelines.clear();
+                        }
+                        project.clone()
+                    };
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1073,15 +1084,21 @@ impl EditorInstance {
                             // Scrub renders sample the same precomputed spring
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
-                            // back to a divergent direct interpolation).
-                            let mut zoom_timeline =
-                                ZoomTransformTimeline::from_project_for_clip(
-                                &project,
-                                &segment_medias.cursor,
-                                total_duration,
-                                self.render_constants.options.screen_size,
-                                segment.recording_clip,
-                            );
+                            // back to a divergent direct interpolation). The
+                            // timeline is kept until the project changes: it
+                            // precomputes from t=0, so rebuilding it per frame
+                            // made each scrub frame cost O(playhead).
+                            let zoom_timeline = zoom_timelines
+                                .entry(segment.recording_clip)
+                                .or_insert_with(|| {
+                                    ZoomTransformTimeline::from_project_for_clip(
+                                        &project,
+                                        &segment_medias.cursor,
+                                        total_duration,
+                                        self.render_constants.options.screen_size,
+                                        segment.recording_clip,
+                                    )
+                                });
                             zoom_timeline
                                 .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
 
@@ -1101,22 +1118,36 @@ impl EditorInstance {
                                     _ = preview_rx.changed() => {
                                         continue;
                                     }
-                                    frames = outgoing_media.decoders.get_frames_initial(
-                                        outgoing.source_time as f32,
-                                        project.requires_camera(),
-                                        true,
-                                        outgoing_offsets,
-                                    ) => frames,
+                                    frames = async {
+                                        let decoders = if outgoing.segment.recording_clip
+                                            == segment.recording_clip
+                                        {
+                                            outgoing_media.decoders.transition_side().await
+                                        } else {
+                                            &outgoing_media.decoders
+                                        };
+                                        decoders
+                                            .get_frames_initial(
+                                                outgoing.source_time as f32,
+                                                project.requires_camera(),
+                                                true,
+                                                outgoing_offsets,
+                                            )
+                                            .await
+                                    } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
-                                    let mut outgoing_zoom =
-                                        ZoomTransformTimeline::from_project_for_outgoing_clip(
-                                            &project,
-                                            &outgoing_media.cursor,
-                                            total_duration,
-                                            self.render_constants.options.screen_size,
-                                            outgoing.segment.recording_clip,
-                                        );
+                                    let outgoing_zoom = outgoing_zoom_timelines
+                                        .entry(outgoing.segment.recording_clip)
+                                        .or_insert_with(|| {
+                                            ZoomTransformTimeline::from_project_for_outgoing_clip(
+                                                &project,
+                                                &outgoing_media.cursor,
+                                                total_duration,
+                                                self.render_constants.options.screen_size,
+                                                outgoing.segment.recording_clip,
+                                            )
+                                        });
                                     outgoing_zoom.ensure_precomputed_until(
                                         (frame_number as f32 + 1.0) / fps as f32,
                                     );
@@ -1140,7 +1171,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                             cursor_timeline,
                                         )
                                     } else {
@@ -1153,7 +1184,7 @@ impl EditorInstance {
                                             &outgoing_media.cursor,
                                             &outgoing_frames,
                                             total_duration,
-                                            &outgoing_zoom,
+                                            outgoing_zoom,
                                         )
                                     };
                                     Some((
@@ -1201,7 +1232,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                         cursor_timeline,
                                     )
                                 } else {
@@ -1214,7 +1245,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         &segment_frames,
                                         total_duration,
-                                        &zoom_timeline,
+                                        zoom_timeline,
                                     )
                                 };
 
@@ -2311,10 +2342,7 @@ mod initial_clip_configuration_tests {
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0].index, 0);
         assert!(clips[0].offsets_auto_calculated);
-        assert_eq!(
-            clips[0].offsets.camera.to_bits(),
-            ((1.23456789_f64 - 0.987654321) as f32).to_bits()
-        );
+        assert_eq!(clips[0].offsets.camera.to_bits(), 0.0_f32.to_bits());
         assert_eq!(
             clips[0].offsets.mic.to_bits(),
             (((1.23456789_f64 - 0.876543219) as f32) + calibration).to_bits()

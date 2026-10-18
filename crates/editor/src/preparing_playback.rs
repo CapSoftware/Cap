@@ -20,7 +20,7 @@ pub struct PreparingAudioSegmentInput {
     pub timing_repair: crate::SegmentAudioTimingRepair,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PreparingPlaybackOptions {
     pub preview: crate::PreparingPreviewOptions,
     pub fps: u32,
@@ -519,19 +519,17 @@ impl PreparingPlaybackRunner {
         };
         sources.validate()?;
         self.audio_sources = Some(sources);
-        if self
+        let _audio_awake = self
             .required_audio
             .iter()
             .flatten()
             .any(|required| *required)
-        {
-            self.audio_output.prewarm();
-        }
+            .then(|| self.audio_output.hold_awake());
         let (frames, received) = flume::bounded(1);
         let discard = received.clone();
         let preview = crate::PreparingPreview::spawn(
             input,
-            self.options.preview,
+            self.options.preview.clone(),
             Box::new(move |request, output, layout| {
                 deliver_latest(&frames, &discard, (request, output, layout));
             }),

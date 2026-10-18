@@ -30,7 +30,7 @@ flume = { workspace = true }
 futures = { workspace = true }
 dirs = "6.0.0"
 include_dir = "0.7"
-image = "0.25.2"
+image = { version = "0.25.2", default-features = false, features = ["rayon", "bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 chrono = "0.4.31"
 base64 = "0.22.1"
 keyring = "4.1.5"
