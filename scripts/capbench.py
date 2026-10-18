@@ -605,6 +605,9 @@ def cmd_run(args):
     variants = [tuple(item.split("=", 1)) for item in args.variant] or [(args.label, args.bin_dir)]
     if len({label for label, _ in variants}) != len(variants):
         sys.exit("variant labels must be unique")
+    for label, _ in variants:
+        if label in ("", ".", "..") or Path(label).name != label:
+            sys.exit(f"label {label!r} must be a plain file name; results are written to <out>/<label>.json")
     variant_env = parse_variant_env([label for label, _ in variants], args.env)
 
     out_root = Path(args.out).resolve()
