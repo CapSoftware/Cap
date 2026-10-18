@@ -453,6 +453,30 @@ pub fn trim_end_bounds(
     }
 }
 
+pub fn audio_trim_start_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.max(segment.start - segment.trim_start);
+    DragBounds {
+        min,
+        max: bounds.max.max(segment.start).max(min),
+    }
+}
+
+pub fn audio_trim_end_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.min(segment.end);
+    let max = segment
+        .duration
+        .filter(|duration| *duration > 0.)
+        .map_or(bounds.max, |duration| {
+            bounds
+                .max
+                .min(segment.start + duration - segment.trim_start)
+        });
+    DragBounds {
+        min,
+        max: max.max(min),
+    }
+}
+
 /// `SegmentContent`'s setup (`TL/MaskTrack.tsx:449-458`): the whole segment
 /// slides, clamped so it cannot pass either neighbour. Expressed as bounds on
 /// the *delta* rather than on the start, which is how the source clamps it.
@@ -479,6 +503,9 @@ pub trait TrackSegmentOps: Clone {
     fn end(&self) -> f64;
     fn set_start(&mut self, value: f64);
     fn set_end(&mut self, value: f64);
+    fn trim_start_to(&mut self, value: f64) {
+        self.set_start(value);
+    }
     fn lane(&self) -> u32 {
         0
     }
@@ -608,6 +635,10 @@ impl TrackSegmentOps for KeyboardTrackSegment {
 }
 
 impl TrackSegmentOps for AudioTrackSegment {
+    fn trim_start_to(&mut self, value: f64) {
+        self.trim_start = (self.trim_start + (value - self.start)).max(0.);
+        self.start = value;
+    }
     fn start(&self) -> f64 {
         self.start
     }
@@ -823,7 +854,7 @@ pub fn set_segment_start(
         if segment.start() == start {
             return false;
         }
-        segment.set_start(start);
+        segment.trim_start_to(start);
         if !matches!(kind, TrackKind::Style | TrackKind::Image) {
             sort_track(segments);
         }
@@ -3547,6 +3578,114 @@ mod tests {
         assert_eq!(timeline.zoom_segments[1].end, 5.0);
         // 3D's split needs the pose evaluator and is not reproduced.
         assert!(!split_segment(timeline, TrackKind::ThreeD, 0, 1.5));
+    }
+
+    #[test]
+    fn audio_trim_handles_stop_at_the_source_and_neighbours() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut audio =
+            default_audio_segment(5., 9., 0, "music.wav".into(), "Music".into(), Some(8.));
+        audio.trim_start = 2.;
+        timeline.audio_segments.push(audio.clone());
+        let model = TimelineModel::build(&project, false, false);
+        let start = trim_start_bounds(&model.audio, 0, 0, 0.5, 30.);
+        let end = trim_end_bounds(&model.audio, 0, 0, 0.5, 30.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 3.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(30.), 8.5);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(30.), 11.);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(0.), 5.5);
+
+        audio.trim_start = 0.;
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 5.);
+        for duration in [None, Some(0.)] {
+            audio.duration = duration;
+            assert_eq!(audio_trim_end_bounds(&audio, end).clamp(40.), 30.);
+        }
+        audio.duration = Some(8.);
+        audio.trim_start = 2.;
+        project.timeline.as_mut().unwrap().audio_segments = vec![
+            default_audio_segment(1., 4., 0, "before.wav".into(), "Before".into(), Some(3.)),
+            audio.clone(),
+            default_audio_segment(10., 12., 0, "after.wav".into(), "After".into(), Some(2.)),
+        ];
+        let model = TimelineModel::build(&project, false, false);
+        let start = trim_start_bounds(&model.audio, 0, 1, 0.5, 30.);
+        let end = trim_end_bounds(&model.audio, 0, 1, 0.5, 30.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 4.);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(30.), 10.);
+    }
+
+    #[test]
+    fn audio_trim_floor_never_expands_a_short_source() {
+        let mut project = zoom_fixture();
+        let audio =
+            default_audio_segment(5., 5.25, 0, "short.wav".into(), "Short".into(), Some(0.25));
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .audio_segments
+            .push(audio.clone());
+        let model = TimelineModel::build(&project, false, false);
+        let min = min_segment_duration(TrackKind::Audio, 0.1);
+        let start =
+            audio_trim_start_bounds(&audio, trim_start_bounds(&model.audio, 0, 0, min, 30.));
+        let end = audio_trim_end_bounds(&audio, trim_end_bounds(&model.audio, 0, 0, min, 30.));
+        assert_eq!(start, DragBounds { min: 5., max: 5. });
+        assert_eq!(
+            end,
+            DragBounds {
+                min: 5.25,
+                max: 5.25
+            }
+        );
+    }
+
+    #[test]
+    fn audio_start_trim_preserves_the_source_at_retained_output_times() {
+        let mut project = zoom_fixture();
+        let mut audio =
+            default_audio_segment(2., 8., 0, "music.wav".into(), "Music".into(), Some(10.));
+        audio.trim_start = 1.;
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .audio_segments
+            .push(audio);
+        let source = (0..10)
+            .flat_map(|second| {
+                std::iter::repeat_n(
+                    (second + 1) as f32 / 16.,
+                    cap_audio::AudioData::SAMPLE_RATE as usize * 2,
+                )
+            })
+            .collect();
+        let music = cap_editor::MusicTracks::from([(
+            "music.wav".into(),
+            Arc::new(cap_audio::AudioData::from_samples(source, 2)),
+        )]);
+        let sample_at = |project: &ProjectConfiguration, time| {
+            let mut renderer = cap_editor::AudioRenderer::new(Vec::new()).with_music(music.clone());
+            renderer.set_playhead(time, project);
+            renderer.render_frame_raw(1, project).unwrap().1
+        };
+        let retained = sample_at(&project, 5.);
+        assert_eq!(retained, vec![5. / 16.; 2]);
+        for start in [3., 4., 3.5, 1., 3.5] {
+            assert!(set_segment_start(
+                project.timeline.as_mut().unwrap(),
+                TrackKind::Audio,
+                0,
+                start,
+            ));
+            assert_eq!(sample_at(&project, 5.), retained);
+        }
+        assert_eq!(
+            project.timeline.as_ref().unwrap().audio_segments[0].trim_start,
+            2.5
+        );
     }
 
     #[test]
