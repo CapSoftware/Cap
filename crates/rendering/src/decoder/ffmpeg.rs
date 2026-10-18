@@ -697,7 +697,7 @@ impl FfmpegDecoder {
                         }
 
                         let requested_time = requested_time.max(0.0);
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        let requested_frame = super::request_frame(requested_time, fps);
 
                         pending_requests.push(PendingRequest {
                             time: requested_time,
@@ -1261,7 +1261,7 @@ impl FfmpegDecoder {
                 }
 
                 let requested_time = requested_time.max(0.0);
-                let requested_frame = (requested_time * fps as f32).floor() as u32;
+                let requested_frame = super::request_frame(requested_time, fps);
 
                 pending_requests.push(PendingRequest {
                     time: requested_time,

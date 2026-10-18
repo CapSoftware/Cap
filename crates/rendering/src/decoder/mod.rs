@@ -704,6 +704,19 @@ pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
         .unwrap_or_default()
 }
 
+/// Frames of slack in [`request_frame`]. A request time is an f32, so the
+/// time of frame `n` can come out a hair below `n / fps` (126 / 30 s is
+/// 4.1999998 s) and floor to the frame before. The f32 error stays under 0.05
+/// frames for two hours at 120 fps, and the slack moves a frame boundary by
+/// at most 0.05 frames.
+const REQUEST_SLACK_FRAMES: f64 = 0.05;
+
+/// The decoder grid index a request for `time` asks for: the frame on screen
+/// at `time`, `floor(time * fps)` up to [`REQUEST_SLACK_FRAMES`].
+pub fn request_frame(time: f32, fps: u32) -> u32 {
+    (f64::from(time) * f64::from(fps) + REQUEST_SLACK_FRAMES).floor() as u32
+}
+
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
     (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
         .round() as u32
@@ -1907,6 +1920,32 @@ mod tests {
     }
 
     #[test]
+    fn request_frame_maps_every_frame_time_back_to_its_frame() {
+        // Frame times as the renderer sends them: n / fps in an f32, for two
+        // hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame 125.
+        for fps in [24, 25, 30, 50, 60, 120, 144, 240] {
+            let frames = if fps > 120 { 3600 } else { 7200 } * fps;
+            for n in 0..frames {
+                let time = (f64::from(n) / f64::from(fps)) as f32;
+                assert_eq!(request_frame(time, fps), n, "{n} at {fps} fps");
+            }
+        }
+    }
+
+    #[test]
+    fn request_frame_keeps_times_inside_a_frame_on_that_frame() {
+        for (time, fps, frame) in [
+            (0.0, 30, 0),
+            (0.031, 30, 0),
+            (0.034, 30, 1),
+            (4.22, 30, 126),
+        ] {
+            assert_eq!(request_frame(time, fps), frame, "{time} at {fps} fps");
+        }
+        assert_eq!(request_frame(-0.5, 30), 0);
+    }
+
+    #[test]
     fn pts_to_frame_maps_real_presentation_time_to_index() {
         let tb = Rational::new(1, 600);
         assert_eq!(pts_to_frame(0, tb, 30), 0);
@@ -2689,7 +2728,7 @@ mod managed_worker_tests {
                 let pts = packet.pts().unwrap();
                 let frame = pts_to_frame(pts.checked_sub(start_time).unwrap(), time_base, fps);
                 let requested_time = ((f64::from(frame) + 0.25) / f64::from(fps)) as f32;
-                assert_eq!((requested_time * fps as f32).floor() as u32, frame);
+                assert_eq!(request_frame(requested_time, fps), frame);
                 println!(
                     "{}",
                     serde_json::json!({
