@@ -803,8 +803,6 @@ fn compute_cursor_idle_opacity(
 
     let time_since_move = (current_time_ms - last_move.time_ms).max(0.0);
 
-    let mut opacity = compute_cursor_fade_in(cursor, current_time_ms, hide_delay_ms);
-
     let fade_out = if time_since_move <= hide_delay_ms {
         1.0
     } else {
@@ -813,8 +811,12 @@ fn compute_cursor_idle_opacity(
         fade.clamp(0.0, 1.0) as f32
     };
 
-    opacity *= fade_out;
-    opacity.clamp(0.0, 1.0)
+    if fade_out == 0.0 {
+        return 0.0;
+    }
+
+    let opacity = compute_cursor_fade_in(cursor, current_time_ms, hide_delay_ms);
+    (opacity * fade_out).clamp(0.0, 1.0)
 }
 
 fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -1390,5 +1392,73 @@ mod tests {
             hide_delay_ms,
         );
         assert_eq!(after_fade, 1.0);
+    }
+
+    #[test]
+    fn opacity_handles_empty_history_and_duplicate_timestamps() {
+        assert_eq!(
+            compute_cursor_idle_opacity(&CursorEvents::default(), 0.0, 1000.0),
+            0.0
+        );
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5000.0, 0.6, 0.6),
+            (5010.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [(0.0, 1.0), (5000.0, 1.0), (5200.0, 0.5), (5400.0, 1.0)] {
+            assert_eq!(compute_cursor_idle_opacity(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_lookahead_boundary_and_resume_fade() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
+        for (time, expected) in [
+            (4749.999, 0.0),
+            (4750.0, 1.0),
+            (4999.0, 1.0),
+            (5000.0, 0.0),
+            (5400.0, 1.0),
+        ] {
+            assert_eq!(compute_cursor_idle_opacity(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_is_consistent_when_seeking_back_and_forth() {
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5010.0, 0.6, 0.6),
+            (10000.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [
+            (10200.0, 0.5),
+            (8000.0, 0.0),
+            (5200.0, 0.5),
+            (5000.0, 1.0),
+            (5400.0, 1.0),
+            (10000.0, 0.0),
+            (10400.0, 1.0),
+            (5200.0, 0.5),
+        ] {
+            assert_eq!(compute_cursor_idle_opacity(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_fade_out_boundary() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
+        for (time, expected) in [(1000.0, 1.0), (1200.0, 0.5), (1400.0, 0.0), (1400.001, 0.0)] {
+            assert_eq!(compute_cursor_idle_opacity(&cursor, time, 1000.0), expected);
+        }
+        assert!(compute_cursor_idle_opacity(&cursor, 1399.999, 1000.0) > 0.0);
+    }
+
+    #[test]
+    fn opacity_preserves_recent_resume_for_out_of_order_history() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (4000.0, 0.6, 0.6)]);
+        assert_eq!(compute_cursor_idle_opacity(&cursor, 5200.0, 1000.0), 0.25);
     }
 }

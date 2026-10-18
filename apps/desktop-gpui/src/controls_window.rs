@@ -32,6 +32,10 @@ pub struct ControlsWindow {
     /// Repaints the timer. An inactive window is repainted lazily by the
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
+    ticking_live: bool,
+    /// The mic level bar's fill in device pixels as last drawn, `None` while
+    /// the bar is hidden.
+    drawn_level_px: std::cell::Cell<Option<u32>>,
 }
 
 #[derive(Clone, Copy)]
@@ -58,16 +62,52 @@ impl ControlsWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
-        cx.observe(&session, |_, _, cx| cx.notify()).detach();
+        cx.observe_in(&session, window, |this, _, window, cx| {
+            let live = this.timer_is_live(cx);
+            if live != this.ticking_live {
+                this.ticking_live = live;
+                this._tick = Self::spawn_tick(window, cx);
+            }
+            cx.notify();
+        })
+        .detach();
 
-        // 4 ticks a second keeps the seconds display honest without burning a
-        // frame budget; `refresh` (not just `notify`) because this window is
-        // usually not the active one while a recording runs.
-        let tick = cx.spawn_in(window, async move |this, cx| {
+        let mut this = Self {
+            session,
+            theme,
+            has_microphone,
+            #[cfg(target_os = "linux")]
+            confirmation_pending: false,
+            _tick: gpui::Task::ready(()),
+            ticking_live: false,
+            drawn_level_px: std::cell::Cell::new(None),
+        };
+        this.ticking_live = this.timer_is_live(cx);
+        this._tick = Self::spawn_tick(window, cx);
+        this
+    }
+
+    fn timer_is_live(&self, cx: &gpui::App) -> bool {
+        matches!(
+            self.session.read(cx).phase,
+            Phase::Recording { paused: false }
+        )
+    }
+
+    /// The timer shows whole seconds, so wake just after each one ticks over;
+    /// `refresh` (not just `notify`) because this window is usually not the
+    /// active one while a recording runs. Respawned whenever the timer starts
+    /// or stops running, so a resume lines up with the next second.
+    fn spawn_tick(window: &mut Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(250))
-                    .await;
+                let Ok(delay) = this.update_in(cx, |this, _, cx| {
+                    let session = this.session.read(cx);
+                    tick_delay(this.timer_is_live(cx), session.elapsed())
+                }) else {
+                    return;
+                };
+                cx.background_executor().timer(delay).await;
                 if this
                     .update_in(cx, |_, window, cx| {
                         cx.notify();
@@ -78,16 +118,14 @@ impl ControlsWindow {
                     return;
                 }
             }
-        });
+        })
+    }
 
-        Self {
-            session,
-            theme,
-            has_microphone,
-            #[cfg(target_os = "linux")]
-            confirmation_pending: false,
-            _tick: tick,
-        }
+    /// Whether a new mic level would move the bar by at least a device pixel.
+    pub fn level_bar_moves(&self, db: f64, scale: f32) -> bool {
+        self.drawn_level_px
+            .get()
+            .is_some_and(|drawn| drawn != level_bar_px(db, scale))
     }
 
     /// `formatTime`: `M:SS`, hours folded into minutes the same way.
@@ -193,14 +231,17 @@ impl ControlsWindow {
     /// gray-10 track). In instant mode with a live mic it doubles as the mute
     /// button -- studio deliberately does not expose mute, since the mic is an
     /// editable track and muted spans would bake zeros in.
-    fn render_microphone(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_microphone(&self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let muted = session.mic_muted;
         let can_mute = session.mode() == Some(RecordingMode::Instant)
             && session.has_microphone()
             && matches!(session.phase, Phase::Recording { .. });
-        let level = feeds::bar_level(Feeds::global(cx).read(cx).mic_level_db);
+        let level_db = Feeds::global(cx).read(cx).mic_level_db;
+        let level = feeds::bar_level(level_db);
+        self.drawn_level_px
+            .set((self.has_microphone && !muted).then(|| level_bar_px(level_db, scale)));
 
         let icon = if !self.has_microphone || muted {
             "icons/mic-off.svg"
@@ -335,7 +376,7 @@ impl ControlsWindow {
         .detach();
     }
 
-    fn render_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_bar(&mut self, scale: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let session = self.session.read(cx);
         let paused = session.is_paused();
@@ -393,7 +434,7 @@ impl ControlsWindow {
                             .items_center()
                             .gap(px(2.))
                             .flex_shrink_0()
-                            .child(self.render_microphone(cx))
+                            .child(self.render_microphone(scale, cx))
                             .child(
                                 self.action_button(
                                     "pause",
@@ -518,7 +559,7 @@ impl Render for ControlsWindow {
                         .child(recording_issue_text(issue)),
                 )
             })
-            .child(self.render_bar(cx))
+            .child(self.render_bar(window.scale_factor(), cx))
     }
 }
 
@@ -539,4 +580,64 @@ fn recording_issue_text(error: String) -> impl IntoElement + Styled {
         } else {
             error
         })
+}
+
+/// The bar's track is 20pt wide.
+fn level_bar_px(db: f64, scale: f32) -> u32 {
+    (feeds::bar_level(db) * 20.0 * f64::from(scale)).round() as u32
+}
+
+fn tick_delay(live: bool, elapsed: Duration) -> Duration {
+    if live {
+        until_next_second(elapsed)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
+fn until_next_second(elapsed: Duration) -> Duration {
+    Duration::from_secs(1)
+        .saturating_sub(Duration::from_nanos(u64::from(elapsed.subsec_nanos())))
+        .max(Duration::from_millis(20))
+}
+
+#[cfg(test)]
+mod repaint_tests {
+    use super::*;
+
+    #[test]
+    fn the_timer_wakes_once_per_displayed_second() {
+        assert_eq!(
+            until_next_second(Duration::from_millis(3_250)),
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            until_next_second(Duration::from_millis(3_995)),
+            Duration::from_millis(20)
+        );
+        assert_eq!(until_next_second(Duration::ZERO), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_resumed_timer_wakes_at_the_next_second_and_a_paused_one_idles() {
+        assert_eq!(
+            tick_delay(true, Duration::from_millis(3_900)),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            tick_delay(false, Duration::from_millis(3_900)),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn level_changes_under_a_device_pixel_do_not_move_the_bar() {
+        assert_eq!(level_bar_px(-30.0, 2.0), level_bar_px(-30.5, 2.0));
+        assert_ne!(level_bar_px(-30.0, 2.0), level_bar_px(-32.0, 2.0));
+        assert_eq!(level_bar_px(-30.0, 1.0), level_bar_px(-31.0, 1.0));
+        assert_ne!(level_bar_px(-30.0, 1.0), level_bar_px(-33.0, 1.0));
+        assert_eq!(level_bar_px(-96.0, 2.0), 0);
+        assert_eq!(level_bar_px(0.0, 1.0), 20);
+        assert_eq!(level_bar_px(0.0, 2.0), 40);
+    }
 }
