@@ -9336,6 +9336,7 @@ mod project_uniforms_tests {
                 Some(project.cursor.click_spring_config()),
             );
             let zoom = ZoomTransformTimeline::from_project(&project, &events, 2.0, size);
+            let project = Arc::new(project);
             let mut legacy_renderer = FrameRenderer::new(&constants);
             let mut indexed_renderer = FrameRenderer::new(&constants);
             let mut hidden_renderer = FrameRenderer::new(&constants);
@@ -9399,7 +9400,7 @@ mod project_uniforms_tests {
                         2.0,
                         &zoom,
                     );
-                    hidden.project.cursor.hide = true;
+                    Arc::make_mut(&mut hidden.project).cursor.hide = true;
                     let hidden = hidden_renderer
                         .render_immediate(frames, hidden, &events, true, &mut hidden_layers)
                         .await
