@@ -362,6 +362,15 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err(format!("Video path {} not found!", path.display()));
     }
 
+    // Repairs tracks older recorders stamped at the wrong rate, and display
+    // fps that finalization replaced with the average rate, before anything
+    // reads them. Non-fatal: the editor opens the files as they are.
+    match cap_recording::track_heal::heal_stretched_tracks(path) {
+        Ok(true) => tracing::info!(?path, "Healed recording tracks"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
+    }
+
     let meta = RecordingMeta::load_for_project(path)
         .map_err(|error| format!("Failed to load recording meta: {error}"))?;
 
