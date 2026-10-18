@@ -87,6 +87,9 @@ impl FramePacer {
             };
             match received {
                 Ok(Some((frame, timestamp))) => {
+                    // The pause so far happened before this frame; if it
+                    // continues, the next call times it from now.
+                    self.paused_since = None;
                     self.last = Some(LastFrame {
                         timestamp,
                         arrived: Instant::now(),
@@ -221,6 +224,28 @@ mod tests {
         };
         assert_eq!(second, at(7));
         resumer.join().unwrap();
+        drop(tx);
+    }
+
+    #[test]
+    fn a_frame_that_arrives_while_paused_ends_the_pause_adjustment() {
+        let (tx, rx) = sync_channel(4);
+        let mut pacer = FramePacer::new(FPS);
+        let paused = AtomicBool::new(false);
+        tx.send(Some((1u32, at(0)))).unwrap();
+        assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(1, _)));
+        paused.store(true, Ordering::Release);
+        tx.send(Some((2, at(1)))).unwrap();
+        assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(2, _)));
+        let arrived = Instant::now();
+        paused.store(false, Ordering::Release);
+        std::thread::sleep(INTERVAL * 6);
+        // Frame 2 has been up for six intervals: its first repeat is overdue.
+        let Paced::Repeat(first) = pacer.next(&rx, &paused) else {
+            panic!("expected a repeat");
+        };
+        assert_eq!(first, at(2));
+        assert!(arrived.elapsed() < INTERVAL * 8);
         drop(tx);
     }
 
