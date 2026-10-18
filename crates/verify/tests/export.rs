@@ -78,6 +78,7 @@ fn run_project(
                     Format::Mp4 => "mp4",
                 };
                 let run = ExportRun {
+                    custom_bpp: None,
                     fps,
                     resolution,
                     format,
@@ -1039,6 +1040,7 @@ fn colour() {
         ));
         let dir = common::scratch_dir(&id);
         let run = ExportRun {
+            custom_bpp: None,
             fps: 30,
             resolution: RES,
             format: Format::Mp4,
@@ -1158,6 +1160,7 @@ fn crop() {
     let mut case = Case::new(&id);
     let dir = common::scratch_dir(&id);
     let run = ExportRun {
+        custom_bpp: None,
         fps: 30,
         resolution: RES,
         format: Format::Mp4,
@@ -1286,6 +1289,7 @@ fn recorded_studio_audio() {
     let mut case = Case::new(&id);
     let dir = common::scratch_dir(&id);
     let run = ExportRun {
+        custom_bpp: None,
         fps: 30,
         resolution: RES,
         format: Format::Mp4,
