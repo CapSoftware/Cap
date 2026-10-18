@@ -40,13 +40,25 @@ impl Video {
 
         let decoder_ctx = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .map_err(|e| format!("Failed to create decoder context: {e}"))?;
-        let decoder = decoder_ctx
-            .decoder()
-            .video()
-            .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
-        let width = decoder.width();
-        let height = decoder.height();
+        // Probe-only fast path: read dimensions straight off the context; fall
+        // back to opening the decoder when the probe did not supply them.
+        let ctx_width = unsafe { (*decoder_ctx.as_ptr()).width };
+        let ctx_height = unsafe { (*decoder_ctx.as_ptr()).height };
+        let (width, height) = if ctx_width > 0 && ctx_height > 0 {
+            (ctx_width as u32, ctx_height as u32)
+        } else {
+            let decoder = decoder_ctx
+                .decoder()
+                .video()
+                .map_err(|e| format!("Failed to get video decoder: {e}"))?;
+            let width = decoder.width();
+            let height = decoder.height();
+            if width == 0 || height == 0 {
+                return Err("Invalid video dimensions".to_string());
+            }
+            (width, height)
+        };
 
         if width == 0 || height == 0 {
             return Err("Invalid video dimensions".to_string());
