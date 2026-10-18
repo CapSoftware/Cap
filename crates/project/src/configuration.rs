@@ -1872,6 +1872,10 @@ pub struct CaptionTrackSegment {
     pub font_size_override: Option<u32>,
 }
 
+/// How far a hold's start may sit from the clips' end, after float rounding,
+/// and still count as a closing title.
+const CLOSING_HOLD_TOLERANCE: f64 = 1e-9;
+
 impl TimelineConfiguration {
     pub fn effective_transition(&self, segment_index: usize) -> Option<ClipTransition> {
         if segment_index == 0 || segment_index >= self.segments.len() {
@@ -1956,7 +1960,10 @@ impl TimelineConfiguration {
                 ) => source,
                 Some(TimelineFrameMapping::Transition { incoming, .. }) => incoming,
                 // A closing title starts at the clips' exclusive end, so it holds their last instant.
-                None => self.last_source()?,
+                None if (effective - self.clips_duration()).abs() <= CLOSING_HOLD_TOLERANCE => {
+                    self.last_source()?
+                }
+                None => return None,
             };
             return Some(TimelineFrameMapping::Hold {
                 source,
@@ -2125,8 +2132,13 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
+        self.clips_duration() + self.held_duration()
+    }
+
+    /// Output seconds covered by the clips, without fullscreen text holds.
+    fn clips_duration(&self) -> f64 {
         let segment_duration: f64 = self.segments.iter().map(TimelineSegment::duration).sum();
-        let segment_duration = if self.transitions.is_empty() {
+        if self.transitions.is_empty() {
             segment_duration
         } else {
             segment_duration
@@ -2134,9 +2146,7 @@ impl TimelineConfiguration {
                     .filter_map(|segment_index| self.effective_transition(segment_index))
                     .map(|transition| transition.duration)
                     .sum::<f64>()
-        };
-
-        segment_duration + self.held_duration()
+        }
     }
 
     /// Gapless-time windows covered by clips that hide the cursor, with
