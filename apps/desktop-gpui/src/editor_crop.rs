@@ -2280,7 +2280,7 @@ async fn decode_display_frame(
             let y = screen.y_plane()?;
             let uv = screen.uv_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
-            cpu_yuv::nv12_to_rgba(
+            cpu_yuv::nv12_to_rgba_with_matrix(
                 y,
                 uv,
                 width,
@@ -2288,6 +2288,7 @@ async fn decode_display_frame(
                 screen.y_stride(),
                 screen.uv_stride(),
                 &mut out,
+                screen.matrix(),
             );
             out
         }
@@ -2296,7 +2297,7 @@ async fn decode_display_frame(
             let u = screen.u_plane()?;
             let v = screen.v_plane()?;
             let mut out = vec![0u8; (width * height * 4) as usize];
-            cpu_yuv::yuv420p_to_rgba(
+            cpu_yuv::yuv420p_to_rgba_with_matrix(
                 y,
                 u,
                 v,
@@ -2305,6 +2306,7 @@ async fn decode_display_frame(
                 screen.y_stride(),
                 screen.uv_stride(),
                 &mut out,
+                screen.matrix(),
             );
             out
         }

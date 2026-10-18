@@ -33,6 +33,7 @@ pub struct AACEncoder {
 impl AACEncoder {
     const OUTPUT_BITRATE: usize = 320 * 1000; // 128k
     const SAMPLE_FORMAT: Sample = Sample::F32(Type::Planar);
+    const FFMPEG_AAC_PRIMING: i32 = 1_024;
 
     pub fn factory(
         input_config: AudioInfo,
@@ -44,7 +45,57 @@ impl AACEncoder {
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, AACEncoderError> {
-        let codec = encoder::find_by_name("aac").ok_or(AACEncoderError::CodecNotFound)?;
+        Self::init_with_codec(
+            "aac",
+            ffmpeg::Dictionary::new(),
+            Self::OUTPUT_BITRATE,
+            input_config,
+            output,
+        )
+    }
+
+    pub fn init_for_recording(
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        let prefer_audiotoolbox = cfg!(target_os = "macos")
+            && std::env::var_os("CAP_RECORDING_FFMPEG_AAC").is_none_or(|value| value.is_empty());
+        Self::init_for_recording_with(prefer_audiotoolbox, input_config, output)
+    }
+
+    pub(crate) fn init_for_recording_with(
+        prefer_audiotoolbox: bool,
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        if prefer_audiotoolbox {
+            let mut options = ffmpeg::Dictionary::new();
+            options.set("aac_at_mode", "abr");
+            let bit_rate = if input_config.channels == 1 {
+                192_000
+            } else {
+                256_000
+            };
+            match Self::init_with_codec("aac_at", options, bit_rate, input_config, output) {
+                Ok(encoder) => return Ok(encoder),
+                Err(error) => {
+                    tracing::warn!(%error, "AudioToolbox AAC encoder unavailable, using FFmpeg's");
+                }
+            }
+        }
+
+        Self::init(input_config, output)
+    }
+
+    fn init_with_codec(
+        name: &str,
+        options: ffmpeg::Dictionary,
+        bit_rate: usize,
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        let codec = encoder::find_by_name(name).ok_or(AACEncoderError::CodecNotFound)?;
+        let audio_codec = codec.audio()?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         let thread_count = thread::available_parallelism()
             .map(|v| v.get())
@@ -53,39 +104,62 @@ impl AACEncoder {
         let mut encoder = encoder_ctx.encoder().audio()?;
 
         let rate = {
-            let mut rates = codec
-                .audio()
-                .unwrap()
+            let mut rates = audio_codec
                 .rates()
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
             rates.sort();
 
-            let Some(&rate) = rates
-                .iter()
-                .find(|r| **r >= input_config.rate())
-                .or(rates.first())
-            else {
-                return Err(AACEncoderError::RateNotSupported(input_config.rate()));
-            };
-            rate
+            if rates.is_empty() {
+                input_config.rate()
+            } else {
+                let Some(&rate) = rates
+                    .iter()
+                    .find(|r| **r >= input_config.rate())
+                    .or(rates.first())
+                else {
+                    return Err(AACEncoderError::RateNotSupported(input_config.rate()));
+                };
+                rate
+            }
+        };
+
+        let sample_format = {
+            let formats = audio_codec
+                .formats()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            if formats.contains(&Self::SAMPLE_FORMAT) {
+                Self::SAMPLE_FORMAT
+            } else {
+                formats.first().copied().unwrap_or(Self::SAMPLE_FORMAT)
+            }
         };
 
         let mut output_config = input_config;
-        output_config.sample_format = Self::SAMPLE_FORMAT;
+        output_config.sample_format = sample_format;
         output_config.sample_rate = rate as u32;
 
         let resampler = BufferedResampler::new(input_config, output_config)
             .map_err(AACEncoderError::Resampler)?;
 
-        encoder.set_bit_rate(Self::OUTPUT_BITRATE);
+        encoder.set_bit_rate(bit_rate);
         encoder.set_rate(rate);
         encoder.set_format(output_config.sample_format);
         encoder.set_channel_layout(output_config.channel_layout());
         encoder.set_time_base(FFRational(1, output_config.rate()));
 
-        let encoder = encoder.open()?;
+        let encoder = encoder.open_with(options)?;
+
+        // Fragmented outputs keep encoder priming in the decoded timeline;
+        // dropping the priming a codec adds beyond FFmpeg's aac (e.g. 2112 vs
+        // 1024 samples for aac_at) keeps every content sample where the native
+        // encoder put it.
+        let leading_trim = unsafe { (*encoder.as_ptr()).initial_padding }
+            .saturating_sub(Self::FFMPEG_AAC_PRIMING)
+            .max(0) as usize;
 
         let mut output_stream = output.add_stream(codec)?;
         output_stream.set_time_base(FFRational(1, output_config.rate()));
@@ -93,13 +167,18 @@ impl AACEncoder {
 
         let stream_index = output_stream.index();
         Ok(Self {
-            base: AudioEncoderBase::new(encoder, resampler, stream_index),
+            base: AudioEncoderBase::new(encoder, resampler, stream_index)
+                .with_leading_trim(leading_trim),
             stream_index,
         })
     }
 
     pub fn stream_index(&self) -> usize {
         self.stream_index
+    }
+
+    pub fn codec_name(&self) -> Option<String> {
+        self.base.codec_name()
     }
 
     pub fn send_frame(
