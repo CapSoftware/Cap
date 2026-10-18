@@ -9,6 +9,9 @@ use crate::{
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
 
+#[cfg(target_os = "macos")]
+use crate::yuv_converter::RetainedImageBuf;
+
 pub struct CameraLayer {
     frame_textures: [wgpu::Texture; 2],
     frame_texture_views: [wgpu::TextureView; 2],
@@ -20,6 +23,8 @@ pub struct CameraLayer {
     last_recording_time: Option<f32>,
     last_frame_storage: Option<DecodedFrameStorageIdentity>,
     yuv_converter: YuvToRgbaConverter,
+    #[cfg(target_os = "macos")]
+    frame_sources: [Option<RetainedImageBuf>; 2],
     blur_bind_group: Option<wgpu::BindGroup>,
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
@@ -87,6 +92,8 @@ impl CameraLayer {
             last_recording_time: None,
             last_frame_storage: None,
             yuv_converter,
+            #[cfg(target_os = "macos")]
+            frame_sources: [None, None],
             blur_bind_group: None,
             blur_active: false,
             blur_cache: None,
@@ -117,6 +124,7 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        self.yuv_converter.set_matrix(camera_frame.matrix());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
@@ -402,6 +410,7 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        self.yuv_converter.set_matrix(camera_frame.matrix());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
@@ -434,6 +443,9 @@ impl CameraLayer {
                 ));
             }
 
+            #[cfg(target_os = "macos")]
+            let mut frame_source = None;
+
             match format {
                 PixelFormat::Rgba => {
                     let frame_data_bytes = camera_frame.data();
@@ -460,57 +472,70 @@ impl CameraLayer {
                     );
                 }
                 PixelFormat::Nv12 => {
-                    if let Err(e) = self.yuv_converter.prepare_for_dimensions(
-                        device,
-                        frame_size.x,
-                        frame_size.y,
-                    ) {
-                        tracing::warn!(error = %e, "YUV converter prepare failed");
-                        return;
-                    }
-
                     #[cfg(target_os = "macos")]
-                    let iosurface_converted = camera_frame
-                        .with_image_buf(|image_buf| {
-                            self.yuv_converter
-                                .convert_nv12_from_iosurface_to_encoder(device, encoder, image_buf)
-                                .is_ok()
-                        })
-                        .unwrap_or(false);
-                    // Submitted on its own ahead of `encoder`, so queue order
-                    // still has the conversion land before the copy below.
-                    #[cfg(target_os = "linux")]
-                    let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
-                        self.yuv_converter
-                            .convert_nv12_cuda(device, queue, cuda)
-                            .inspect_err(|error| {
-                                tracing::warn!(%error, "CUDA camera frame conversion failed")
+                    let converted_into_frame = {
+                        frame_source = camera_frame
+                            .with_image_buf(|image_buf| {
+                                self.yuv_converter
+                                    .convert_nv12_from_iosurface_into(
+                                        device,
+                                        encoder,
+                                        image_buf,
+                                        &self.frame_texture_views[next_texture],
+                                    )
+                                    .ok()
                             })
-                            .is_ok()
-                    });
-                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-                    let iosurface_converted = false;
+                            .flatten();
+                        frame_source.is_some()
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let converted_into_frame = false;
 
-                    if iosurface_converted && self.yuv_converter.output_texture().is_some() {
-                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
-                    } else if let (Some(y_data), Some(uv_data)) =
-                        (camera_frame.y_plane(), camera_frame.uv_plane())
-                        && self
-                            .yuv_converter
-                            .convert_nv12_to_encoder(
-                                device,
-                                queue,
-                                encoder,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                camera_frame.y_stride(),
-                                camera_frame.uv_stride(),
-                            )
-                            .is_ok()
-                    {
-                        self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                    if !converted_into_frame {
+                        if let Err(e) = self.yuv_converter.prepare_for_dimensions(
+                            device,
+                            frame_size.x,
+                            frame_size.y,
+                        ) {
+                            tracing::warn!(error = %e, "YUV converter prepare failed");
+                            return;
+                        }
+
+                        // Submitted on its own ahead of `encoder`, so queue order
+                        // still has the conversion land before the copy below.
+                        #[cfg(target_os = "linux")]
+                        let iosurface_converted = camera_frame.cuda_nv12().is_some_and(|cuda| {
+                            self.yuv_converter
+                                .convert_nv12_cuda(device, queue, cuda)
+                                .inspect_err(|error| {
+                                    tracing::warn!(%error, "CUDA camera frame conversion failed")
+                                })
+                                .is_ok()
+                        });
+                        #[cfg(not(target_os = "linux"))]
+                        let iosurface_converted = false;
+
+                        if iosurface_converted && self.yuv_converter.output_texture().is_some() {
+                            self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                        } else if let (Some(y_data), Some(uv_data)) =
+                            (camera_frame.y_plane(), camera_frame.uv_plane())
+                            && self
+                                .yuv_converter
+                                .convert_nv12_to_encoder(
+                                    device,
+                                    queue,
+                                    encoder,
+                                    y_data,
+                                    uv_data,
+                                    frame_size.x,
+                                    frame_size.y,
+                                    camera_frame.y_stride(),
+                                    camera_frame.uv_stride(),
+                                )
+                                .is_ok()
+                        {
+                            self.copy_from_yuv_output_to_encoder(encoder, next_texture, frame_size);
+                        }
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -548,6 +573,8 @@ impl CameraLayer {
                 }
             }
 
+            #[cfg(target_os = "macos")]
+            RetainedImageBuf::replace(queue, &mut self.frame_sources[next_texture], frame_source);
             self.last_recording_time = Some(recording_time);
             self.last_frame_storage = Some(frame_storage);
             self.current_texture = next_texture;

@@ -337,6 +337,7 @@ pub enum Inner {
     AnimatedGradient(Box<AnimatedGradientLayer>),
     Image {
         path: String,
+        output_size: (u32, u32),
         bind_group: wgpu::BindGroup,
     },
     ColorOrGradient {
@@ -390,8 +391,10 @@ impl BackgroundLayer {
             Background::Image { path } => {
                 match &self.inner {
                     Some(Inner::Image {
-                        path: current_path, ..
-                    }) if current_path == &path => {}
+                        path: current_path,
+                        output_size,
+                        ..
+                    }) if current_path == &path && *output_size == uniforms.output_size => {}
                     _ => {
                         let texture = match constants
                             .background_textures
@@ -456,6 +459,7 @@ impl BackgroundLayer {
                         self.generation += 1;
                         self.inner = Some(Inner::Image {
                             path,
+                            output_size: uniforms.output_size,
                             bind_group: self.image_pipeline.bind_group(
                                 device,
                                 &uniform_buffer,
