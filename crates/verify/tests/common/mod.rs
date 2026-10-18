@@ -265,6 +265,7 @@ pub async fn probe_decoders(case: &mut Case, project: &Project, decoder: Decoder
 }
 
 pub struct ExportRun {
+    pub custom_bpp: Option<f32>,
     pub fps: u32,
     pub resolution: (u32, u32),
     pub format: Format,
@@ -292,7 +293,7 @@ pub async fn export(
                 fps: run.fps,
                 resolution_base,
                 compression: cap_export::mp4::ExportCompression::Social,
-                custom_bpp: None,
+                custom_bpp: run.custom_bpp,
                 force_ffmpeg_decoder: force,
                 optimize_filesize: false,
             }

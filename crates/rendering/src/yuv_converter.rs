@@ -107,6 +107,16 @@ const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
 
+// The 2x2 block kernel was only measured as a win on Linux; Apple GPUs were slower and Windows is untested.
+#[cfg(target_os = "linux")]
+const YUV420P_ENTRY_POINT: &str = "main_block";
+#[cfg(target_os = "linux")]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 16;
+#[cfg(not(target_os = "linux"))]
+const YUV420P_ENTRY_POINT: &str = "main";
+#[cfg(not(target_os = "linux"))]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 8;
+
 fn align_dimension(dim: u32) -> u32 {
     dim.div_ceil(TEXTURE_SIZE_PADDING) * TEXTURE_SIZE_PADDING
 }
@@ -266,6 +276,7 @@ struct MatrixPipelines {
     label: &'static str,
     layout: wgpu::PipelineLayout,
     module: wgpu::ShaderModule,
+    entry_point: &'static str,
     bt601: std::sync::OnceLock<wgpu::ComputePipeline>,
     bt709: std::sync::OnceLock<wgpu::ComputePipeline>,
 }
@@ -276,12 +287,14 @@ impl MatrixPipelines {
         label: &'static str,
         layout: wgpu::PipelineLayout,
         module: wgpu::ShaderModule,
+        entry_point: &'static str,
     ) -> Self {
         Self {
             device: device.clone(),
             label,
             layout,
             module,
+            entry_point,
             bt601: std::sync::OnceLock::new(),
             bt709: std::sync::OnceLock::new(),
         }
@@ -299,7 +312,7 @@ impl MatrixPipelines {
                     label: Some(self.label),
                     layout: Some(&self.layout),
                     module: &self.module,
-                    entry_point: Some("main"),
+                    entry_point: Some(self.entry_point),
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &constants,
                         ..Default::default()
@@ -437,12 +450,14 @@ impl YuvConverterPipelines {
             "NV12 Converter Pipeline",
             nv12_pipeline_layout,
             nv12_shader,
+            "main",
         );
         let yuv420p = MatrixPipelines::new(
             device,
             "YUV420P Converter Pipeline",
             yuv420p_pipeline_layout,
             yuv420p_shader,
+            YUV420P_ENTRY_POINT,
         );
         tracing::info!("Shared YUV converter pipelines created successfully");
 
@@ -932,11 +947,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -964,7 +980,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -1021,11 +1037,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -1053,7 +1070,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -1210,8 +1227,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,
@@ -1256,7 +1273,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1285,8 +1306,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,
@@ -1327,7 +1348,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         Ok(self.current_output_view())
