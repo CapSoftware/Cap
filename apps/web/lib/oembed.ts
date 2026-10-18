@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import type { PublicShareVideo } from "@/lib/public-share-video";
 
 const DEFAULT_WIDTH = 800;
@@ -19,6 +20,16 @@ export type OEmbedVideo = {
 	thumbnail_width?: number;
 	thumbnail_height?: number;
 	duration?: number;
+};
+
+const configuredShareHostname = () => {
+	try {
+		return new URL(serverEnv().WEB_URL).hostname
+			.toLowerCase()
+			.replace(/^www\./, "");
+	} catch {
+		return null;
+	}
 };
 
 const parsePositiveDimension = (value: string | undefined) => {
@@ -71,6 +82,14 @@ export const parseCapShareUrl = (value: string) => {
 		segments[0] !== "video"
 	) {
 		videoId = segments[0];
+	}
+	if (
+		!videoId &&
+		segments.length === 2 &&
+		segments[0] === "s" &&
+		hostname === configuredShareHostname()
+	) {
+		videoId = segments[1];
 	}
 
 	if (!videoId || !/^[A-Za-z0-9_-]{1,128}$/.test(videoId)) return null;
