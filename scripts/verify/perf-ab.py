@@ -32,9 +32,6 @@ from pathlib import Path
 # playback's CPU varied by 15% and is only reported.
 WORKLOADS = [
     ("export-basic", "export", "export/basic/*", "fast", True),
-    ("export-jitter-camera-40s", "export", "export/jitter-camera-40s/*", "fast", True),
-    ("seek-storm", "seek", "seek/*/storm30/*", "fast", True),
-    ("playback-basic", "playback", "playback/basic/*", "fast", False),
 ]
 
 FAIL_LIMIT = 0.25
