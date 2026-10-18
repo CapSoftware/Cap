@@ -410,12 +410,28 @@ async fn restricted_late_uniforms_fail_before_prepare_or_direct_render_work() {
 async fn cached_background_blur_matches_a_fresh_blur_and_follows_edits() {
     let directory = tempfile::tempdir().unwrap();
     let constants = constants(directory.path()).await;
-    let blurred = |blur: f64, from: [u16; 3]| {
+    // A linear gradient is nearly a fixed point of a symmetric blur, so two
+    // strengths can round to identical pixels. A checkerboard cannot.
+    let blurred = |blur: f64, from: [u8; 3]| {
+        let path = directory
+            .path()
+            .join(format!("checker-{}-{}-{}.png", from[0], from[1], from[2]));
+        if !path.exists() {
+            image::RgbaImage::from_fn(64, 48, |x, y| {
+                let [r, g, b] = if (x / 2 + y / 2) % 2 == 0 {
+                    from
+                } else {
+                    [16, 32, 200]
+                };
+                image::Rgba([r, g, b, 255])
+            })
+            .save(&path)
+            .unwrap();
+        }
         let mut project = project();
-        project.background.source = serde_json::from_value(serde_json::json!({
-            "type": "gradient", "from": from, "to": [16, 32, 200], "angle": 90
-        }))
-        .unwrap();
+        project.background.source = cap_project::BackgroundSource::Image {
+            path: Some(path.to_string_lossy().into_owned()),
+        };
         project.background.blur = blur;
         project
     };
