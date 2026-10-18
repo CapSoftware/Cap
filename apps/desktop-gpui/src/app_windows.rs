@@ -6496,8 +6496,8 @@ pub fn prepare_for_screenshot_capture(cx: &mut App) -> bool {
 /// the Tauri app -- and open the screenshot editor on the new bundle, the
 /// `automationShouldOpenScreenshotEditor` default. A failure reveals the main
 /// window if the picker had hidden it, since nothing else will.
-pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
-    let Some(png) = captured else {
+pub fn screenshot_finished(captured: Option<crate::screenshot::CapturedScreenshot>, cx: &mut App) {
+    let Some(crate::screenshot::CapturedScreenshot { png, source }) = captured else {
         let hidden = std::mem::take(&mut cx.global_mut::<AppWindows>().main_hidden_for_picker);
         if hidden && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
             show_main_window(cx);
@@ -6527,7 +6527,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
         // recording hands off to the video editor; `screenshot_editor_closed`
         // brings the main window back.
         cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
-        open_screenshot_editor(png, cx);
+        open_screenshot_editor_with_source(png, Some(source), cx);
         return;
     }
 
@@ -6549,6 +6549,14 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
 /// Must be reached through `cx.defer` from anything inside an entity update:
 /// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
+    open_screenshot_editor_with_source(path, None, cx);
+}
+
+fn open_screenshot_editor_with_source(
+    path: PathBuf,
+    source: Option<screenshot_editor::LoadedSource>,
+    cx: &mut App,
+) {
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
         return;
@@ -6575,16 +6583,61 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             .ok()
             .flatten();
         cx.spawn(async move |cx| {
-            if let Some(native) = &native {
+            if (source.is_none() || cfg!(target_os = "macos"))
+                && let Some(native) = &native
+            {
                 platform::show_native(native);
             }
-            cx.update(|cx| bring_screenshot_editor_forward(handle, cx));
+            cx.update(|cx| {
+                bring_screenshot_editor_forward(handle, cx);
+                if source.is_some() {
+                    screenshot_editor::load_screenshot_project(key, handle, source, cx);
+                }
+            });
         })
         .detach();
         hide_main_window(cx);
         return;
     }
 
+    let Some(handle) = create_screenshot_editor_window(key.clone(), true, cx) else {
+        return;
+    };
+    hide_main_window(cx);
+    cx.defer(move |cx| bring_screenshot_editor_forward(handle, cx));
+    prewarm_shared_wgpu_device(cx);
+    screenshot_editor::load_screenshot_project(key, handle, source, cx);
+}
+
+pub(crate) fn prepare_screenshot_editor_window(
+    path: PathBuf,
+    cx: &mut App,
+) -> Option<WindowHandle<ScreenshotEditorWindow>> {
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return None;
+    }
+    let bundle = screenshot_editor::resolve_bundle(&path)?;
+    create_screenshot_editor_window(editor_key(&bundle), false, cx)
+}
+
+pub(crate) fn discard_prepared_screenshot_editor(
+    handle: WindowHandle<ScreenshotEditorWindow>,
+    cx: &mut App,
+) {
+    cx.global_mut::<AppWindows>()
+        .screenshot_editors
+        .retain(|(_, existing)| existing.window_id() != handle.window_id());
+    handle
+        .update(cx, |_, window, _| window.remove_window())
+        .ok();
+}
+
+fn create_screenshot_editor_window(
+    key: PathBuf,
+    visible: bool,
+    cx: &mut App,
+) -> Option<WindowHandle<ScreenshotEditorWindow>> {
     let (bounds, display_id) = opening_window_placement(
         size(
             px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
@@ -6603,8 +6656,8 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
                 traffic_light_position: None,
             }),
             kind: WindowKind::Normal,
-            focus: true,
-            show: true,
+            focus: visible,
+            show: visible,
             is_resizable: true,
             is_minimizable: true,
             window_min_size: Some(fitted_window_min_size(
@@ -6626,7 +6679,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!("screenshot editor window failed to open: {error:#}");
-            return;
+            return None;
         }
     };
 
@@ -6636,21 +6689,17 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
     handle
         .update(cx, |_, window, _| {
             platform::kick_display_link(window);
-            tracing::info!(
-                number = platform::window_number(window),
-                path = %key.display(),
-                "screenshot editor window opened"
-            );
+            if visible {
+                tracing::info!(
+                    number = platform::window_number(window),
+                    path = %key.display(),
+                    "screenshot editor window opened"
+                );
+            }
         })
         .ok();
 
-    hide_main_window(cx);
-    // A global shortcut fires while another app is frontmost, and a window
-    // opened by an inactive app lands behind that app's windows: the editor
-    // only showed up once Cap was clicked.
-    cx.defer(move |cx| bring_screenshot_editor_forward(handle, cx));
-    prewarm_shared_wgpu_device(cx);
-    screenshot_editor::load_screenshot_project(key, handle, cx);
+    Some(handle)
 }
 
 fn bring_screenshot_editor_forward(handle: WindowHandle<ScreenshotEditorWindow>, cx: &mut App) {

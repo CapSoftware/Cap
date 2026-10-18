@@ -57,7 +57,7 @@ pub const SCREENSHOT_EDITOR_MIN_WIDTH: f32 = 800.;
 pub const SCREENSHOT_EDITOR_MIN_HEIGHT: f32 = 600.;
 
 /// `MAX_DIMENSION` (`screenshot_editor.rs:38` over there).
-const MAX_DIMENSION: u32 = 16_384;
+pub(crate) const MAX_DIMENSION: u32 = 16_384;
 
 /// `saveConfig`'s debounce (`context.tsx:427-438`) -- 1000ms, not the video
 /// editor's 250.
@@ -106,7 +106,7 @@ pub fn resolve_bundle(path: &Path) -> Option<PathBuf> {
 
 /// Everything the window and the renderer need off disk.
 pub struct LoadedSource {
-    pub rgba: Vec<u8>,
+    pub rgba: Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
     pub pretty_name: String,
@@ -153,7 +153,7 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
     let config = ProjectConfiguration::load(bundle).unwrap_or_default();
 
     Ok(LoadedSource {
-        rgba: image.to_rgba8().into_raw(),
+        rgba: Arc::new(image.to_rgba8().into_raw()),
         width,
         height,
         pretty_name: meta.pretty_name.clone(),
@@ -186,6 +186,69 @@ pub enum ExportRequest {
         config: ProjectConfiguration,
         reply: tokio::sync::oneshot::Sender<Result<crate::screenshot_export::RawFrame, String>>,
     },
+}
+
+static WARM_SCREENSHOT_LAYERS: tokio::sync::Mutex<Option<(wgpu::Device, RendererLayers)>> =
+    tokio::sync::Mutex::const_new(None);
+
+fn warm_layers_enabled() -> bool {
+    std::env::var("CAP_GPUI_SCREENSHOT_WARM_LAYERS").as_deref() == Ok("1")
+}
+
+async fn prepare_warm_layers(device: wgpu::Device, queue: wgpu::Queue, software: bool) {
+    let mut slot = WARM_SCREENSHOT_LAYERS.lock().await;
+    if slot.as_ref().is_some_and(|(cached, _)| cached == &device) {
+        return;
+    }
+    *slot = None;
+    let builder_device = device.clone();
+    match tokio::task::spawn_blocking(move || {
+        RendererLayers::new_with_options(&builder_device, &queue, software)
+    })
+    .await
+    {
+        Ok(layers) => {
+            *slot = Some((device, layers));
+        }
+        Err(error) => tracing::warn!(%error, "screenshot renderer warmup failed"),
+    }
+}
+
+pub(crate) fn prewarm_screenshot_layers(cx: &App) {
+    if !warm_layers_enabled() {
+        return;
+    }
+    gpui_tokio::Tokio::spawn(cx, async {
+        if let Some(shared) = crate::app_windows::shared_wgpu_device().await {
+            prepare_warm_layers(shared.device, shared.queue, shared.is_software_adapter).await;
+        }
+    })
+    .detach();
+}
+
+async fn screenshot_layers(constants: &RenderVideoConstants) -> RendererLayers {
+    if warm_layers_enabled() {
+        prepare_warm_layers(
+            constants.device.clone(),
+            constants.queue.clone(),
+            constants.is_software_adapter,
+        )
+        .await;
+        let mut slot = WARM_SCREENSHOT_LAYERS.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|(device, _)| device == &constants.device)
+            && let Some((_, layers)) = slot.take()
+        {
+            return layers;
+        }
+        *slot = None;
+    }
+    RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    )
 }
 
 /// The render loop, on the tokio runtime: build the GPU constants, then
@@ -224,14 +287,10 @@ pub async fn run_still_renderer(
     };
     let _ = setup_tx.send(Ok(()));
 
-    let decoded = DecodedFrame::new_with_arc(Arc::new(source.rgba), source.width, source.height);
+    let decoded = DecodedFrame::new_with_arc(source.rgba, source.width, source.height);
 
     let mut frame_renderer = FrameRenderer::new(&constants);
-    let mut layers = RendererLayers::new_with_options(
-        &constants.device,
-        &constants.queue,
-        constants.is_software_adapter,
-    );
+    let mut layers = screenshot_layers(&constants).await;
 
     let mut dirty = true;
     loop {
@@ -279,6 +338,17 @@ pub async fn run_still_renderer(
                 let _ = reply.send(result);
             }
         }
+    }
+    if warm_layers_enabled() {
+        drop(layers);
+        drop(frame_renderer);
+        drop(decoded);
+        prepare_warm_layers(
+            constants.device.clone(),
+            constants.queue.clone(),
+            constants.is_software_adapter,
+        )
+        .await;
     }
 }
 
@@ -4760,13 +4830,15 @@ fn frame_buffers(frame: &RenderedFrame) -> Option<(Arc<Vec<u8>>, Arc<RenderImage
 pub fn load_screenshot_project(
     bundle: PathBuf,
     handle: WindowHandle<ScreenshotEditorWindow>,
+    captured: Option<LoadedSource>,
     cx: &mut App,
 ) {
     cx.spawn(async move |cx| {
+        let fresh_capture = captured.is_some();
         let load_bundle = bundle.clone();
         let source = cx
             .background_executor()
-            .spawn(async move { load_source(&load_bundle) })
+            .spawn(async move { captured.map_or_else(|| load_source(&load_bundle), Ok) })
             .await;
         let source = match source {
             Ok(source) => source,
@@ -4789,6 +4861,30 @@ pub fn load_screenshot_project(
         let (setup_tx, setup_rx) = flume::bounded(1);
 
         let image_size = (source.width, source.height);
+        let (source, preview) = cx
+            .background_executor()
+            .spawn(async move {
+                let preview = if fresh_capture
+                    && source.width.is_multiple_of(4)
+                    && source.height.is_multiple_of(2)
+                {
+                    image::RgbaImage::from_raw(
+                        source.width,
+                        source.height,
+                        source.rgba.as_ref().clone(),
+                    )
+                    .map(|image| {
+                        (
+                            source.rgba.clone(),
+                            crate::library::rgba_to_render_image(image),
+                        )
+                    })
+                } else {
+                    None
+                };
+                (source, preview)
+            })
+            .await;
         if handle
             .update(cx, |view, window, cx| {
                 view.set_loaded(
@@ -4801,7 +4897,10 @@ pub fn load_screenshot_project(
                     },
                     window,
                     cx,
-                )
+                );
+                if let Some((rgba, image)) = preview {
+                    view.frame_arrived(image, rgba, image_size, window, cx);
+                }
             })
             .is_err()
         {
@@ -4841,7 +4940,9 @@ pub fn load_screenshot_project(
             );
             if handle
                 .update(cx, |view, window, cx| {
-                    view.frame_arrived(image, rgba, size, window, cx)
+                    if revision >= view.revision {
+                        view.frame_arrived(image, rgba, size, window, cx);
+                    }
                 })
                 .is_err()
             {
@@ -5134,7 +5235,7 @@ mod tests {
         let mut config = new_screenshot_config();
         config.annotations.push(arrow("a", 4.));
         LoadedSource {
-            rgba,
+            rgba: Arc::new(rgba),
             width,
             height,
             pretty_name: "bench".into(),
