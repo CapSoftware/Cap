@@ -356,14 +356,23 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 fn prepare_streaming_output(
     output: &std::path::Path,
     eligible: bool,
-) -> Option<mp4::TemporaryMp4Output> {
-    if !eligible
-        || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
-        || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
+) -> Option<mp4::TemporaryExportOutput> {
+    if !eligible || output.extension().and_then(|extension| extension.to_str()) != Some("mp4") {
         return None;
     }
-    mp4::temporary_mp4_output(output).ok()
+    prepare_new_output(output).ok().flatten()
+}
+
+/// Stages a new export beside its destination so a failed or cancelled export
+/// never leaves a partial file there. Existing destinations are written in place.
+fn prepare_new_output(
+    output: &std::path::Path,
+) -> Result<Option<mp4::TemporaryExportOutput>, String> {
+    if !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(None);
+    }
+    mp4::temporary_export_output(output).map(Some)
 }
 
 struct ExportAudioCancellation {
@@ -408,7 +417,7 @@ pub struct ExporterBase {
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
     streaming_audio: Option<ExportAudioRenderer>,
-    streaming_output: Option<mp4::TemporaryMp4Output>,
+    streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
     sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
@@ -631,6 +640,23 @@ mod cancellation_tests {
         std::fs::write(&existing, b"existing").unwrap();
         assert!(prepare_streaming_output(&existing, true).is_none());
         assert_eq!(std::fs::read(existing).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn new_gif_destinations_are_staged_beside_the_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.gif");
+        let staged = prepare_new_output(&output).unwrap().unwrap();
+        let staged_path = staged.to_path_buf();
+        assert_eq!(staged_path.parent(), Some(directory.path()));
+        assert_eq!(staged_path.extension(), output.extension());
+        assert!(!output.exists());
+        staged.persist_noclobber(&output).unwrap();
+        assert!(output.exists());
+        assert!(!staged_path.exists());
+
+        assert!(prepare_new_output(&output).unwrap().is_none());
+        assert!(prepare_new_output(&directory.path().join("missing/export.gif")).is_err());
     }
 
     #[test]
