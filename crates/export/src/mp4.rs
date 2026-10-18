@@ -837,7 +837,13 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         width,
         height,
         ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-    ) {
+    ) && cap_enc_ffmpeg::colour::use_bt709_for_rgb_input(
+        &mut converter,
+        ffmpeg::format::Pixel::RGBA,
+        ffmpeg::format::Pixel::NV12,
+    )
+    .is_ok()
+    {
         let mut nv12_frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
         if converter.run(&rgba_frame, &mut nv12_frame).is_ok() {
             let y_size = nv12_frame.stride(0) * height as usize;
@@ -1383,8 +1389,16 @@ fn save_screenshot_from_nv12(
     let (y_data, uv_data) = nv12_data.split_at(y_plane_size);
 
     let mut rgba = vec![0u8; (width * height * 4) as usize];
+    // The export's own NV12, so BT.709 like the stream it is encoded into.
     cap_rendering::cpu_yuv::nv12_to_rgba_simd(
-        y_data, uv_data, width, height, y_stride, width, &mut rgba,
+        y_data,
+        uv_data,
+        width,
+        height,
+        y_stride,
+        width,
+        &mut rgba,
+        cap_rendering::cpu_yuv::YuvMatrix::Bt709,
     );
     drop(nv12_data);
 
