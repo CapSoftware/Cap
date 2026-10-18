@@ -1613,10 +1613,22 @@ fn process_with_parakeet(
 
     tracing::info!("Parakeet produced {} timed tokens", result.tokens.len());
 
+    caption_segments_from_tokens(result.tokens.iter().map(|token| CaptionWord {
+        text: token.text.clone(),
+        start: token.start,
+        end: token.end,
+    }))
+}
+
+/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
+/// normalize the words and chunk them.
+#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+fn caption_segments_from_tokens(
+    tokens: impl IntoIterator<Item = CaptionWord>,
+) -> Result<Vec<CaptionSegment>, String> {
     let words = normalize_caption_words(
-        result
-            .tokens
-            .iter()
+        tokens
+            .into_iter()
             .filter(|token| !token.text.trim().is_empty())
             .map(|token| CaptionWord {
                 text: token.text.trim().to_string(),
@@ -1679,6 +1691,30 @@ pub fn transcribe_blocking(
         ));
     }
 
+    transcribe_project_with(project_path, |audio_path| {
+        let _guard = lock_transcription_worker_slot();
+        if is_parakeet_model(model) {
+            tracing::info!("Using Parakeet TDT engine");
+            let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
+            schedule_parakeet_release();
+            result
+        } else {
+            tracing::info!("Using Whisper engine");
+            let hints = transcription_hints();
+            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+            let result = process_with_whisper(audio_path, context, language, &hints);
+            release_whisper_context_after_transcription();
+            result
+        }
+    })
+}
+
+/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
+/// and runs `engine` on it.
+fn transcribe_project_with(
+    project_path: &Path,
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
     let temp_dir = std::env::temp_dir().join(format!(
         "cap-gpui-transcription-{}-{}",
         std::process::id(),
@@ -1690,21 +1726,7 @@ pub fn transcribe_blocking(
 
     let result = (|| {
         extract_audio_from_video(project_path, &audio_path)?;
-
-        let _guard = lock_transcription_worker_slot();
-        if is_parakeet_model(model) {
-            tracing::info!("Using Parakeet TDT engine");
-            let result = process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref());
-            schedule_parakeet_release();
-            result
-        } else {
-            tracing::info!("Using Whisper engine");
-            let hints = transcription_hints();
-            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(&audio_path, context, language, &hints);
-            release_whisper_context_after_transcription();
-            result
-        }
+        engine(&audio_path)
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1787,7 +1809,7 @@ fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
         .collect::<String>()
         .to_lowercase();
 
-    normalized.len() <= 1
+    normalized.chars().count() <= 1
         || matches!(
             normalized.as_str(),
             "an" | "as"
@@ -2176,6 +2198,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
 }
 
 #[cfg(test)]
+mod verify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2288,21 +2313,44 @@ mod tests {
 
     #[test]
     fn caption_word_chunks_do_not_end_on_short_connector_when_more_words_follow() {
-        let words = [
-            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(index, text)| word(text, index))
-        .collect::<Vec<_>>();
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "This", "is", "where", "we", "record", connector, "want", "clean", "captions",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
 
-        let chunks = caption_word_chunks(&words);
+            let chunks = caption_word_chunks(&words);
 
-        assert_eq!(
-            caption_text_from_words(chunks[0]),
-            "This is where we record I want"
-        );
-        assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("This is where we record {connector} want")
+            );
+            assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+        }
+    }
+
+    #[test]
+    fn caption_word_chunks_merge_short_tail_starting_with_connector() {
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "These", "captions", "should", "stay", "grouped", "together", connector, "Paris",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
+
+            let chunks = caption_word_chunks(&words);
+
+            assert_eq!(chunks.len(), 1, "connector {connector}");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("These captions should stay grouped together {connector} Paris")
+            );
+        }
     }
 
     // -- Model paths ----------------------------------------------------------
