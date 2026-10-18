@@ -42,6 +42,11 @@ pub fn write_png_file(
     compression: image::codecs::png::CompressionType,
     filter: image::codecs::png::FilterType,
 ) -> image::ImageResult<()> {
+    if compression == image::codecs::png::CompressionType::Default
+        && filter == image::codecs::png::FilterType::Adaptive
+    {
+        return crate::png::write(std::io::BufWriter::new(file), data, width, height, color);
+    }
     let encoder = image::codecs::png::PngEncoder::new_with_quality(
         std::io::BufWriter::new(file),
         compression,
