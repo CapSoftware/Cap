@@ -51,6 +51,20 @@ fn blend_pixel_over(dst: &mut [u8], src: [u8; 4]) {
     dst[3] = (oa * 255.).round() as u8;
 }
 
+// Source-over onto an opaque destination. `oa` is exactly 1.0 for every
+// 8-bit source alpha, so the divide drops out and the result is the integer
+// rounding of `(s*a + d*(255-a)) / 255`, which is bit-identical to the float
+// path for all 16.6M (src, dst, alpha) combinations.
+fn blend_pixel_over_opaque(dst: &mut [u8], src: [u8; 4]) {
+    let alpha = u32::from(src[3]);
+    let inverse = 255 - alpha;
+    for channel in 0..3 {
+        dst[channel] = ((u32::from(src[channel]) * alpha + u32::from(dst[channel]) * inverse + 127)
+            / 255) as u8;
+    }
+    dst[3] = 255;
+}
+
 pub fn blit_over(canvas: &mut [u8], size: (u32, u32), region: &image::RgbaImage, at: (u32, u32)) {
     blit_over_offset(
         canvas,
@@ -92,6 +106,78 @@ pub fn blit_over_offset(
         if is_opaque(source) {
             target.copy_from_slice(source);
         } else {
+            blend_row_over(target, source);
+        }
+    }
+}
+
+enum Backdrop {
+    Transparent,
+    Opaque,
+    Mixed,
+}
+
+// One pass over the destination alpha bytes instead of two predicate scans.
+fn classify_backdrop(rgba: &[u8]) -> Backdrop {
+    const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
+    let (mut transparent, mut opaque) = (true, true);
+    let mut blocks = rgba.chunks_exact(16);
+    for block in blocks.by_ref() {
+        let alpha = u128::from_le_bytes(block.try_into().unwrap()) & ALPHA_MASK;
+        transparent &= alpha == 0;
+        opaque &= alpha == ALPHA_MASK;
+        if !transparent && !opaque {
+            return Backdrop::Mixed;
+        }
+    }
+    for &alpha in blocks.remainder().iter().skip(3).step_by(4) {
+        transparent &= alpha == 0;
+        opaque &= alpha == 255;
+    }
+    match (transparent, opaque) {
+        (true, _) => Backdrop::Transparent,
+        (_, true) => Backdrop::Opaque,
+        _ => Backdrop::Mixed,
+    }
+}
+
+#[inline(never)]
+fn blend_row_over(target: &mut [u8], source: &[u8]) {
+    match classify_backdrop(target) {
+        Backdrop::Transparent => {
+            // Over a fully transparent row the destination contributes
+            // nothing, so each pixel is either the source or left alone.
+            for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                if source[3] != 0 {
+                    target.copy_from_slice(source);
+                }
+            }
+        }
+        Backdrop::Opaque => {
+            // Blocks of four pixels: a fully opaque block is a straight copy,
+            // anything else takes the branchless integer blend so the common
+            // run of opaque pixels never pays for per-pixel branching.
+            const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
+            let mut targets = target.chunks_exact_mut(16);
+            let mut sources = source.chunks_exact(16);
+            for (target, source) in targets.by_ref().zip(sources.by_ref()) {
+                if u128::from_le_bytes(source.try_into().unwrap()) & ALPHA_MASK == ALPHA_MASK {
+                    target.copy_from_slice(source);
+                    continue;
+                }
+                for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+                    blend_pixel_over_opaque(target, source.try_into().unwrap());
+                }
+            }
+            for (target, source) in targets
+                .into_remainder()
+                .chunks_exact_mut(4)
+                .zip(sources.remainder().chunks_exact(4))
+            {
+                blend_pixel_over_opaque(target, source.try_into().unwrap());
+            }
+        }
+        Backdrop::Mixed => {
             for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
                 blend_pixel_over(target, source.try_into().unwrap());
             }
@@ -236,6 +322,56 @@ mod tests {
                     &mut dst[target..target + 4],
                     src[source..source + 4].try_into().unwrap(),
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn uniform_backdrops_match_scalar_source_over() {
+        // Widths either side of the four-pixel block stride the opaque
+        // backdrop path copies through.
+        for width in [1, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33] {
+            let size = (width, 3);
+            let src: Vec<u8> = (0..width * 3)
+                .flat_map(|i| {
+                    [
+                        i as u8,
+                        (i * 17) as u8,
+                        (i * 29) as u8,
+                        match i % 5 {
+                            0 => 0,
+                            1 => 255,
+                            2 => 128,
+                            3 => 1,
+                            _ => 254,
+                        },
+                    ]
+                })
+                .collect();
+            // The export canvas is either cleared to zero or filled with
+            // white, so both uniform backdrops are the real-world cases.
+            for backdrop in [
+                [0, 0, 0, 0],
+                [255, 255, 255, 255],
+                [11, 22, 33, 255],
+                [11, 22, 33, 0],
+                [11, 22, 33, 128],
+            ] {
+                for stray in [None, Some(0usize), Some(1), Some(4), Some(7)] {
+                    let mut initial: Vec<u8> = (0..width * 3).flat_map(|_| backdrop).collect();
+                    // A single differing alpha must drop the row out of the
+                    // uniform fast paths and back onto the general blend.
+                    if let Some(index) = stray
+                        && let Some(pixel) = initial.chunks_exact_mut(4).nth(index)
+                    {
+                        pixel[3] = 97;
+                    }
+                    let mut expected = initial.clone();
+                    let mut actual = initial;
+                    reference_blit(&mut expected, size, &src, size, (0, 0));
+                    blit_over_offset(&mut actual, size, &src, size, (0, 0));
+                    assert_eq!(actual, expected, "{width}, {backdrop:?}, {stray:?}");
+                }
             }
         }
     }

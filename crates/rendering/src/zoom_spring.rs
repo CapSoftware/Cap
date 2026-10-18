@@ -205,6 +205,7 @@ enum ZoomClusters {
 impl ZoomClusters {
     fn new(
         cursor_events: &CursorEvents,
+        moves_time_ordered: bool,
         recording_start: f64,
         recording_end: f64,
         segment: &ZoomSegment,
@@ -213,6 +214,7 @@ impl ZoomClusters {
         let build = |crop| {
             build_clusters(
                 cursor_events,
+                moves_time_ordered,
                 recording_start,
                 recording_end,
                 segment.amount,
@@ -330,6 +332,7 @@ impl ClickCluster {
 /// need no separate pass.
 pub(crate) fn build_clusters(
     cursor_events: &CursorEvents,
+    moves_time_ordered: bool,
     segment_start_secs: f64,
     segment_end_secs: f64,
     zoom_amount: f64,
@@ -351,23 +354,38 @@ pub(crate) fn build_clusters(
         m.x.is_finite() && m.y.is_finite() && m.time_ms.is_finite()
     };
 
-    let events_in_range: Vec<&cap_project::CursorMoveEvent> = cursor_events
-        .moves
+    // The narrowed slices only drop moves the filters below would reject, so
+    // the filters stay and NaN bounds still match a full scan.
+    let moves = cursor_events.moves.as_slice();
+    let (range_moves, moves_until_start, moves_from_start) = if moves_time_ordered {
+        let from_start = moves.partition_point(|m| m.time_ms < start_ms);
+        let through_end = moves
+            .partition_point(|m| m.time_ms <= end_ms)
+            .max(from_start);
+        let through_start = moves.partition_point(|m| m.time_ms <= start_ms);
+        (
+            &moves[from_start..through_end],
+            &moves[..through_start],
+            &moves[from_start..],
+        )
+    } else {
+        (moves, moves, moves)
+    };
+
+    let events_in_range: Vec<&cap_project::CursorMoveEvent> = range_moves
         .iter()
         .filter(finite)
         .filter(|m| m.time_ms >= start_ms && m.time_ms <= end_ms)
         .collect();
 
     if events_in_range.is_empty() {
-        let fallback = cursor_events
-            .moves
+        let fallback = moves_until_start
             .iter()
             .filter(finite)
             .rev()
             .find(|m| m.time_ms <= start_ms)
             .or_else(|| {
-                cursor_events
-                    .moves
+                moves_from_start
                     .iter()
                     .filter(finite)
                     .find(|m| m.time_ms >= start_ms)
@@ -580,6 +598,56 @@ struct StepTargets {
     snap: bool,
 }
 
+/// Segments with a NaN bound can never be active, so they are left out of the
+/// binary-searched index.
+#[derive(Default)]
+struct ZoomSegmentIndex {
+    ordered: Vec<usize>,
+    starts: Vec<f64>,
+    /// Running maximum of `end`, so the first entry reaching `t` is also the
+    /// first segment whose own end reaches `t`.
+    max_ends: Vec<f64>,
+    instant_windows: Vec<(f64, f64)>,
+}
+
+impl ZoomSegmentIndex {
+    fn new(zoom_segments: &[ZoomSegment]) -> Self {
+        let mut index = Self::default();
+        let mut max_end = f64::NEG_INFINITY;
+        for (i, segment) in zoom_segments.iter().enumerate() {
+            if segment.instant_animation {
+                index.instant_windows.push((
+                    segment.start - INSTANT_SNAP_WINDOW_SECS,
+                    segment.end + INSTANT_SNAP_WINDOW_SECS,
+                ));
+            }
+            if segment.start.is_nan() || segment.end.is_nan() {
+                continue;
+            }
+            max_end = max_end.max(segment.end);
+            index.ordered.push(i);
+            index.starts.push(segment.start);
+            index.max_ends.push(max_end);
+        }
+        index
+    }
+
+    /// Same active predicate `SegmentsCursor` used: (start, end].
+    fn active_at(&self, timeline_secs: f64) -> Option<usize> {
+        let started = self.starts.partition_point(|&start| timeline_secs > start);
+        let first_reaching = self
+            .max_ends
+            .partition_point(|&max_end| max_end < timeline_secs);
+        (first_reaching < started).then(|| self.ordered[first_reaching])
+    }
+
+    fn snaps_at(&self, timeline_secs: f64) -> bool {
+        self.instant_windows
+            .iter()
+            .any(|&(start, end)| timeline_secs >= start && timeline_secs <= end)
+    }
+}
+
 /// Deterministic, lazily precomputed zoom transform timeline.
 ///
 /// Construction is cheap (clusters only); integration happens on demand via
@@ -590,6 +658,7 @@ pub struct ZoomTransformTimeline {
     samples: Vec<TimelineSample>,
     state: Option<PrecomputeState>,
     zoom_segments: Vec<ZoomSegment>,
+    segment_index: ZoomSegmentIndex,
     /// Parallel to `zoom_segments`: prebuilt clusters (RECORDING-time ms) for
     /// Auto segments, `None` for Manual ones.
     clusters: Vec<Option<ZoomClusters>>,
@@ -646,6 +715,13 @@ impl ZoomTransformTimeline {
         } = selection;
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
+        let segment_index = ZoomSegmentIndex::new(&zoom_segments);
+        let moves_time_ordered = zoom_segments
+            .iter()
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+            && cursor_events
+                .moves
+                .is_sorted_by(|a, b| a.time_ms <= b.time_ms);
 
         let time_map = if zoom_segments.is_empty() {
             Vec::new()
@@ -671,6 +747,7 @@ impl ZoomTransformTimeline {
                     .max(recording_start);
                     Some(ZoomClusters::new(
                         cursor_events,
+                        moves_time_ordered,
                         recording_start,
                         recording_end,
                         segment,
@@ -694,6 +771,7 @@ impl ZoomTransformTimeline {
                 samples: Vec::new(),
                 state: None,
                 zoom_segments,
+                segment_index,
                 clusters,
                 time_map,
                 recording_clip,
@@ -712,6 +790,7 @@ impl ZoomTransformTimeline {
             samples: Vec::new(),
             state: None,
             zoom_segments,
+            segment_index,
             clusters,
             time_map,
             recording_clip,
@@ -976,17 +1055,8 @@ impl ZoomTransformTimeline {
     }
 
     fn targets_at(&self, timeline_secs: f64, held_center: XY<f32>) -> StepTargets {
-        // Same active predicate `SegmentsCursor` used: (start, end].
-        let active = self
-            .zoom_segments
-            .iter()
-            .position(|s| timeline_secs > s.start && timeline_secs <= s.end);
-
-        let snap = self.zoom_segments.iter().any(|s| {
-            s.instant_animation
-                && timeline_secs >= s.start - INSTANT_SNAP_WINDOW_SECS
-                && timeline_secs <= s.end + INSTANT_SNAP_WINDOW_SECS
-        });
+        let active = self.segment_index.active_at(timeline_secs);
+        let snap = self.segment_index.snaps_at(timeline_secs);
 
         match active {
             Some(index) => {
@@ -2094,6 +2164,125 @@ mod tests {
         );
     }
 
+    fn benchmark_project(duration_secs: f64, zoom_count: usize) -> ProjectConfiguration {
+        let spacing = duration_secs / zoom_count as f64;
+        let zoom_segments = (0..zoom_count)
+            .map(|i| {
+                let start = i as f64 * spacing + spacing * 0.25;
+                auto_segment(start, start + 4.0, 2.0)
+            })
+            .collect();
+        let mut project = project_with_crop_styles(zoom_segments, Vec::new());
+        if let Some(timeline) = project.timeline.as_mut() {
+            timeline.segments.push(TimelineSegment {
+                recording_clip: 0,
+                timescale: 1.0,
+                start: 0.0,
+                end: duration_secs,
+                name: None,
+                speed_audio_mode: None,
+                volume: None,
+                hide_cursor: None,
+            });
+        }
+        project
+    }
+
+    fn benchmark_cursor(duration_secs: f64) -> CursorEvents {
+        let moves = (0..(duration_secs * 60.0) as usize)
+            .map(|i| {
+                move_event(
+                    i as f64 * 1000.0 / 60.0,
+                    ((i as f64 * 0.0011).sin() + 1.0) / 2.0,
+                    ((i as f64 * 0.0007).cos() + 1.0) / 2.0,
+                )
+            })
+            .collect();
+        CursorEvents {
+            moves,
+            clicks: Vec::new(),
+        }
+    }
+
+    fn samples_hash(timeline: &ZoomTransformTimeline) -> u64 {
+        timeline
+            .samples
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, sample| {
+                [
+                    sample.amount.to_bits(),
+                    sample.center.x.to_bits(),
+                    sample.center.y.to_bits(),
+                    sample.activity.to_bits(),
+                    u32::from(sample.snapped),
+                ]
+                .into_iter()
+                .fold(hash, |hash, word| {
+                    (hash ^ u64::from(word)).wrapping_mul(0x0100_0000_01b3)
+                })
+            })
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --release --ignored --nocapture"]
+    fn benchmark_zoom_timeline_rebuild() {
+        use std::time::{Duration, Instant};
+
+        const RUNS: usize = 15;
+        let screen_size = XY::new(1920, 1080);
+        let percentile = |times: &mut Vec<Duration>, p: f64| {
+            times.sort_unstable();
+            let index = ((times.len() - 1) as f64 * p).round() as usize;
+            times[index].as_secs_f64() * 1000.0
+        };
+
+        println!(
+            "| recording | auto zooms | playhead | build p50 | precompute p50 | rebuild p50 | rebuild p95 | samples hash |"
+        );
+        println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
+        for (minutes, zoom_count) in [(10.0, 20), (30.0, 60), (60.0, 120)] {
+            let duration_secs = minutes * 60.0;
+            let project = benchmark_project(duration_secs, zoom_count);
+            let cursor = benchmark_cursor(duration_secs);
+            for playhead_fraction in [0.5, 1.0] {
+                let playhead = (duration_secs * playhead_fraction) as f32;
+                let mut build_times = Vec::with_capacity(RUNS);
+                let mut precompute_times = Vec::with_capacity(RUNS);
+                let mut rebuild_times = Vec::with_capacity(RUNS);
+                let mut checksum = 0.0f64;
+                let mut hash = 0;
+                for _ in 0..RUNS {
+                    let build_start = Instant::now();
+                    let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &cursor,
+                        duration_secs,
+                        screen_size,
+                        0,
+                    );
+                    let build_elapsed = build_start.elapsed();
+                    let precompute_start = Instant::now();
+                    timeline.ensure_precomputed_until(playhead);
+                    let precompute_elapsed = precompute_start.elapsed();
+                    checksum += timeline.sample(playhead).display_amount();
+                    hash = samples_hash(&timeline);
+                    build_times.push(build_elapsed);
+                    precompute_times.push(precompute_elapsed);
+                    rebuild_times.push(build_elapsed + precompute_elapsed);
+                }
+                std::hint::black_box(checksum);
+                println!(
+                    "| {minutes} min | {zoom_count} | {:.0}% | {:.3} ms | {:.3} ms | {:.3} ms | {:.3} ms | {hash:016x} |",
+                    playhead_fraction * 100.0,
+                    percentile(&mut build_times, 0.5),
+                    percentile(&mut precompute_times, 0.5),
+                    percentile(&mut rebuild_times, 0.5),
+                    percentile(&mut rebuild_times, 0.95),
+                );
+            }
+        }
+    }
+
     #[test]
     fn timeline_mapping_filters_clusters_in_recording_time() {
         // Timeline: single segment showing recording range [10s, 20s] at 1x,
@@ -2316,5 +2505,112 @@ mod tests {
             top_flush,
             settled.bounds
         );
+    }
+
+    #[test]
+    fn segment_index_matches_linear_segment_scan() {
+        let mut instant = manual_segment(4.0, 4.5, 2.0, 0.5, 0.5);
+        instant.instant_animation = true;
+        let mut instant_nan = manual_segment(f64::NAN, 9.0, 2.0, 0.5, 0.5);
+        instant_nan.instant_animation = true;
+        let cases = [
+            vec![],
+            vec![manual_segment(1.0, 2.0, 2.0, 0.5, 0.5)],
+            vec![
+                manual_segment(1.0, 6.0, 2.0, 0.5, 0.5),
+                manual_segment(2.0, 3.0, 3.0, 0.5, 0.5),
+                manual_segment(2.0, 3.0, 4.0, 0.5, 0.5),
+                manual_segment(3.0, 3.0, 2.0, 0.5, 0.5),
+                manual_segment(5.0, 4.0, 2.0, 0.5, 0.5),
+                instant,
+            ],
+            vec![
+                manual_segment(f64::NAN, 2.0, 2.0, 0.5, 0.5),
+                manual_segment(-f64::NAN, 2.0, 2.0, 0.5, 0.5),
+                manual_segment(1.0, f64::NAN, 2.0, 0.5, 0.5),
+                manual_segment(-0.0, 0.0, 2.0, 0.5, 0.5),
+                manual_segment(f64::NEG_INFINITY, 0.5, 2.0, 0.5, 0.5),
+                manual_segment(7.0, f64::INFINITY, 2.0, 0.5, 0.5),
+                instant_nan,
+            ],
+        ];
+        for segments in cases {
+            let timeline = timeline_for(&segments, &CursorEvents::default(), 10.0);
+            let mut times: Vec<f64> = segments
+                .iter()
+                .flat_map(|s| [s.start, s.end, s.start - 0.1, s.end + 0.1])
+                .flat_map(|t| [t, t.next_down(), t.next_up()])
+                .collect();
+            times.extend((0..=1300).map(|step| step as f64 * STEP_MS / 1000.0));
+            for t in times {
+                let linear_active = timeline
+                    .zoom_segments
+                    .iter()
+                    .position(|s| t > s.start && t <= s.end);
+                let linear_snap = timeline.zoom_segments.iter().any(|s| {
+                    s.instant_animation
+                        && t >= s.start - INSTANT_SNAP_WINDOW_SECS
+                        && t <= s.end + INSTANT_SNAP_WINDOW_SECS
+                });
+                assert_eq!(timeline.segment_index.active_at(t), linear_active, "t={t}");
+                assert_eq!(timeline.segment_index.snaps_at(t), linear_snap, "t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_cluster_search_matches_full_scan() {
+        let moves = vec![
+            move_event(f64::NEG_INFINITY, 0.1, 0.1),
+            move_event(0.0, 0.2, 0.2),
+            move_event(500.0, f64::NAN, 0.5),
+            move_event(500.0, 0.9, 0.9),
+            move_event(500.0, 0.1, 0.9),
+            move_event(1_000.0, 0.5, f64::INFINITY),
+            move_event(2_000.0, 0.95, 0.05),
+            move_event(2_000.0, 0.05, 0.95),
+            move_event(3_500.0, 0.6, 0.4),
+            move_event(9_000.0, 0.3, 0.7),
+            move_event(f64::INFINITY, 0.8, 0.2),
+        ];
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+        assert!(cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms));
+        let crop = CursorCropMap::from_crop(
+            &Crop {
+                position: XY::new(100, 50),
+                size: XY::new(1600, 900),
+            },
+            XY::new(1920, 1080),
+        );
+        let bounds = [
+            (0.0, 0.0),
+            (0.0, 0.5),
+            (0.5, 0.5),
+            (0.5, 2.0),
+            (0.6, 0.9),
+            (2.5, 3.0),
+            (4.0, 8.0),
+            (10.0, 20.0),
+            (-5.0, -1.0),
+            (f64::NAN, 2.0),
+            (0.5, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+        ];
+        for (start, end) in bounds {
+            for amount in [1.0, 2.0, 4.0] {
+                for crop in [None, crop] {
+                    let ordered = build_clusters(&cursor, true, start, end, amount, crop);
+                    let scanned = build_clusters(&cursor, false, start, end, amount, crop);
+                    assert_eq!(
+                        format!("{ordered:?}"),
+                        format!("{scanned:?}"),
+                        "range {start}..{end} amount {amount}"
+                    );
+                }
+            }
+        }
     }
 }
