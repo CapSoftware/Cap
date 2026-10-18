@@ -322,6 +322,14 @@ jobs:
         run: |
           python3 scripts/verify/summary.py --title "real capture ${{ matrix.runner }} ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
 
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verify-recording-report-${{ matrix.runner }}
+          path: ${{ github.workspace }}/verify-report
+          if-no-files-found: ignore
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -378,8 +386,16 @@ jobs:
           cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
 
+      # Without the manifest the next restore cannot tell which sources the
+      # cached build came from (scripts/verify/mtime.py).
+      - name: Record sources of the cached build
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
       - name: Save build cache
-        if: steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
