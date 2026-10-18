@@ -173,13 +173,6 @@ reason = "NEW: same as editing/mapping/duration-covered, end to end: a 1 s fulls
 link = ""
 
 [[xfail]]
-case = "captions/app/segmentation/unicode"
-class = "caption-segments"
-bound = { count = [1, 3] }
-reason = "NEW (minor): caption chunking decides that a boundary word is a weak one-letter word with String::len() (bytes), so a one-letter word outside ASCII such as the French preposition 'à' is not weak and a caption can end on it (apps/desktop-gpui/src/transcription.rs caption_boundary_word_is_weak). The case reports the first three failing token streams; an unexpected error from the product would add a problem beyond them. Repro: cargo test --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui segmentation_matches_reference_unicode -- --nocapture"
-link = ""
-
-[[xfail]]
 case = "captions/legacy-migration/ends-at-timeline-end"
 class = "caption-migration"
 bound = { count = 1 }
