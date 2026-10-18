@@ -704,6 +704,27 @@ pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
         .unwrap_or_default()
 }
 
+/// f32 steps of slack in [`request_frame`]. The time of frame `n` is the
+/// f32 nearest `n / fps`, up to half a step below it (126 / 30 s is
+/// 4.1999998 s), plus a step or two from the offsets added on the way; a
+/// plain floor then asks for the frame before.
+const REQUEST_SLACK_STEPS: f32 = 4.0;
+/// Most slack, in frames. Past two hours at 240 fps four f32 steps near a
+/// whole frame while half a step is still under a tenth of one, so the cap
+/// keeps an aligned request off the next frame.
+const REQUEST_SLACK_MAX_FRAMES: f64 = 0.25;
+
+/// The decoder grid index a request for `time` asks for: the frame on screen
+/// at `time`, `floor(time * fps)` once `time` is lifted by
+/// [`REQUEST_SLACK_STEPS`] f32 steps, at most [`REQUEST_SLACK_MAX_FRAMES`].
+pub fn request_frame(time: f32, fps: u32) -> u32 {
+    let magnitude = time.abs();
+    let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
+    let fps = f64::from(fps);
+    let slack = (f64::from(step * REQUEST_SLACK_STEPS) * fps).min(REQUEST_SLACK_MAX_FRAMES);
+    (f64::from(time) * fps + slack).floor() as u32
+}
+
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
     (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
         .round() as u32
@@ -712,24 +733,30 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
+/// Bounds the pts-hole map. Holes are facts about the file, and a pooled
+/// reader parked past a hole never re-vends it, so the map keeps every hole a
+/// realistic recording has and only evicts on pathological inputs.
+const MAX_TRACKED_HOLES: usize = 1 << 14;
+
 /// Records a pts hole discovered from a decode-order vend jump (frames vend
-/// in pts order, so a jump means no samples exist in between). The map stays
-/// bounded by dropping the narrowest hole — wide static-screen holds matter
-/// most.
+/// in pts order, so a jump means no samples exist in between). When the map
+/// is full it drops the hole farthest from the one just recorded: requests
+/// trail the reader, so the newest holes are the ones about to be asked for.
 pub(super) fn record_pts_hole(
     holes: &mut std::collections::BTreeMap<u32, u32>,
     start: u32,
     end: u32,
 ) {
-    const MAX_TRACKED_HOLES: usize = 64;
     holes.insert(start, end);
     if holes.len() > MAX_TRACKED_HOLES
-        && let Some(narrowest) = holes
-            .iter()
-            .min_by_key(|&(&s, &e)| e.saturating_sub(s))
-            .map(|(&s, _)| s)
+        && let (Some(&first), Some(&last)) = (holes.keys().next(), holes.keys().next_back())
     {
-        holes.remove(&narrowest);
+        let farthest = if start.abs_diff(first) >= start.abs_diff(last) {
+            first
+        } else {
+            last
+        };
+        holes.remove(&farthest);
     }
 }
 
@@ -1791,6 +1818,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pts_hole_tracking_keeps_the_newest_holes_when_full() {
+        let mut holes = std::collections::BTreeMap::new();
+        let mut frame = 0u32;
+        for i in 0..(MAX_TRACKED_HOLES as u32 + 1000) {
+            let width = if i % 4 == 0 { 3 } else { 2 };
+            record_pts_hole(&mut holes, frame, frame + width);
+            assert_eq!(holes.get(&frame), Some(&(frame + width)));
+            frame += width;
+        }
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert!(
+            holes
+                .keys()
+                .all(|&start| start as usize + 3 * MAX_TRACKED_HOLES >= frame as usize)
+        );
+    }
+
+    #[test]
+    fn pts_hole_tracking_drops_the_farthest_hole_after_a_backward_seek() {
+        let mut holes = std::collections::BTreeMap::new();
+        let last = MAX_TRACKED_HOLES as u32 - 1;
+        for i in 0..=last {
+            record_pts_hole(&mut holes, 1000 + i * 2, 1000 + i * 2 + 2);
+        }
+        record_pts_hole(&mut holes, 10, 40);
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert_eq!(holes.get(&10), Some(&40));
+        assert!(holes.contains_key(&1000));
+        assert!(!holes.contains_key(&(1000 + last * 2)));
+    }
+
+    #[test]
+    fn pts_hole_tracking_keeps_an_old_static_hold_while_later_holes_arrive() {
+        let mut holes = std::collections::BTreeMap::new();
+        record_pts_hole(&mut holes, 1797, 2402);
+        let mut frame = 2402u32;
+        for i in 0..2000u32 {
+            let width = 2 + i % 7;
+            record_pts_hole(&mut holes, frame, frame + width);
+            frame += width;
+        }
+        assert_eq!(holes.get(&1797), Some(&2402));
+    }
+
+    #[test]
     fn decoded_frame_storage_identity_matches_clones() {
         let frame = DecodedFrame::new_nv12(vec![0; 6], 2, 2, 2, 2);
         let cloned = frame.clone();
@@ -1853,6 +1925,34 @@ mod tests {
         assert_eq!(frame.uv_plane().unwrap(), vec![0x22; uv_size]);
         assert_eq!(frame.data().len(), y_size + uv_size);
         assert!(frame.with_image_buf(|_| ()).is_none());
+    }
+
+    #[test]
+    fn request_frame_maps_every_frame_time_back_to_its_frame() {
+        // Frame times as the renderer sends them: n / fps in an f32, for
+        // three hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame
+        // 125; uncapped slack maps frame 1,966,082 at 240 fps (8192.0088 s)
+        // to the next.
+        for fps in [24, 25, 30, 50, 60, 120, 144, 240] {
+            let frames = 3 * 3600 * fps;
+            for n in 0..frames {
+                let time = (f64::from(n) / f64::from(fps)) as f32;
+                assert_eq!(request_frame(time, fps), n, "{n} at {fps} fps");
+            }
+        }
+    }
+
+    #[test]
+    fn request_frame_keeps_times_inside_a_frame_on_that_frame() {
+        for (time, fps, frame) in [
+            (0.0, 30, 0),
+            (0.031, 30, 0),
+            (0.034, 30, 1),
+            (4.22, 30, 126),
+        ] {
+            assert_eq!(request_frame(time, fps), frame, "{time} at {fps} fps");
+        }
+        assert_eq!(request_frame(-0.5, 30), 0);
     }
 
     #[test]
@@ -2638,7 +2738,7 @@ mod managed_worker_tests {
                 let pts = packet.pts().unwrap();
                 let frame = pts_to_frame(pts.checked_sub(start_time).unwrap(), time_base, fps);
                 let requested_time = ((f64::from(frame) + 0.25) / f64::from(fps)) as f32;
-                assert_eq!((requested_time * fps as f32).floor() as u32, frame);
+                assert_eq!(request_frame(requested_time, fps), frame);
                 println!(
                     "{}",
                     serde_json::json!({
@@ -2755,6 +2855,7 @@ mod managed_worker_tests {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
             segment_offset: 10.25,
+            transition_readers: None,
         };
         let input = ManagedSegmentVideoInput::new(
             0,
