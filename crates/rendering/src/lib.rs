@@ -4628,7 +4628,11 @@ impl ProjectUniforms {
                             .map_or(50.0, |s| s.blur),
                         opacity: scene.screen_opacity as f32 * split_fade * takeover_accessory_fade,
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
-                        border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                        border_width: if decorated && border_on {
+                            project.background.border.as_ref().map_or(0.0, |b| b.width)
+                        } else {
+                            0.0
+                        },
                         preserve_source_alpha: 1.0,
                         _padding1: [0.0; 3],
                         border_color,
@@ -4754,7 +4758,11 @@ impl ProjectUniforms {
                         .map_or(50.0, |s| s.blur),
                     opacity: scene.screen_opacity as f32 * takeover_display_fade,
                     border_enabled: if border_on && !frame_active { 1.0 } else { 0.0 },
-                    border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                    border_width: if border_on && !frame_active {
+                        project.background.border.as_ref().map_or(0.0, |b| b.width)
+                    } else {
+                        0.0
+                    },
                     preserve_source_alpha: if options.preserve_screen_alpha {
                         1.0
                     } else {
@@ -5138,6 +5146,7 @@ impl ProjectUniforms {
                 uniforms.shadow = 0.0;
                 uniforms.shadow_opacity = 0.0;
                 uniforms.border_enabled = 0.0;
+                uniforms.border_width = 0.0;
             }
             uniforms
         };
@@ -6178,6 +6187,113 @@ mod style_image_tests {
                 Some(mode)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn uniforms_zero_border_width_when_border_disabled_or_delegated_to_frame() {
+        use cap_project::{BorderConfiguration, FrameConfiguration, FrameStyle};
+
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "border-width-zeroing",
+            "display": { "path": "display.mp4", "fps": 60 },
+            "camera": null, "audio": null, "cursor": null
+        }))
+        .expect("metadata");
+        let meta = recording_meta.studio_meta().expect("studio").clone();
+        let size = XY::new(160, 90);
+        let constants = RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .expect("graphics device");
+
+        let mut project = ProjectConfiguration::default();
+        let cursor = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: Some(DecodedFrame::new(
+                [0, 0, 255, 255].repeat(160 * 90),
+                160,
+                90,
+            )),
+            camera_frame: None,
+            segment_time: 0.0,
+            recording_time: 0.0,
+            segment_has_camera: false,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, size);
+
+        project.background.border = None;
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: false,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: true,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 1.0);
+        assert_eq!(uniforms.display.border_width, 12.0);
+
+        project.background.frame = Some(FrameConfiguration {
+            style: FrameStyle::MacOS,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        assert_eq!(uniforms.display.border_enabled, 0.0);
+        assert_eq!(uniforms.display.border_width, 0.0);
+        let chrome = uniforms.frame_chrome.expect("frame chrome active");
+        assert_eq!(chrome.composite.border_enabled, 1.0);
+        assert_eq!(chrome.composite.border_width, 12.0);
+
+        project.background.border = Some(BorderConfiguration {
+            enabled: false,
+            width: 12.0,
+            ..Default::default()
+        });
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 0, 60, size, &cursor, &frames, 1.0, &zoom,
+        );
+        let chrome = uniforms.frame_chrome.as_ref().expect("frame chrome active");
+        assert_eq!(chrome.composite.border_enabled, 0.0);
+        assert_eq!(chrome.composite.border_width, 0.0);
+
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        layers
+            .prepare(&constants, &uniforms, &frames, &cursor, true)
+            .await
+            .expect("prepare");
+        let mut renderer = FrameRenderer::new(&constants);
+        let preview = renderer
+            .render_immediate(frames, uniforms, &cursor, true, &mut layers)
+            .await
+            .expect("preview");
+        assert!(!preview.data.is_empty());
     }
 
     #[tokio::test]

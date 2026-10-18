@@ -104,9 +104,14 @@ fn coverage_from_distance(distance: f32, anti_alias_width: f32) -> f32 {
     return clamp(1.0 - smoothstep(-anti_alias_width, anti_alias_width, distance), 0.0, 1.0);
 }
 
-fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
+fn rounded_rect_coverage_with_aa(
+    p: vec2<f32>,
+    b: vec2<f32>,
+    r: f32,
+    rounding_type: f32,
+    anti_alias_width: f32,
+) -> f32 {
     let distance = sdf_rounded_rect(p, b, r, rounding_type);
-    let anti_alias_width = max(fwidth(distance), 1.0);
 
     if distance <= -anti_alias_width {
         return 1.0;
@@ -135,6 +140,12 @@ fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32)
         anti_alias_width
     );
     return coverage * 0.25;
+}
+
+fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
+    let distance = sdf_rounded_rect(p, b, r, rounding_type);
+    let anti_alias_width = max(fwidth(distance), 1.0);
+    return rounded_rect_coverage_with_aa(p, b, r, rounding_type, anti_alias_width);
 }
 
 // Sin-free hash so grain stays stable across GPU drivers.
@@ -262,15 +273,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         shadow_enabled
     );
 
-    let shadow_dist = dist;
-
-    // Apply blur and size to shadow
-    let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
-    let shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
+    var shadow_color = vec4<f32>(0.0);
+    let shadow_span = shadow_size + shadow_blur;
+    let shadow_inner = -shadow_blur;
+    if shadow_enabled && shadow_opacity > 0.0001 && abs(shadow_span - shadow_inner) > 0.0001 {
+        let shadow_strength_final = smoothstep(shadow_span, shadow_inner, abs(dist));
+        shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
+    }
 
     let target_uv = (p - uniforms.target_bounds.xy) / uniforms.target_size;
     let crop_bounds_uv = vec4<f32>(uniforms.crop_bounds.xy / uniforms.frame_size, uniforms.crop_bounds.zw / uniforms.frame_size);
-    let edge_padding = max(2.0, uniforms.border_width + 2.0);
+    let border_w = select(0.0, max(0.0, uniforms.border_width), uniforms.border_enabled > 0.0);
+    let edge_padding = max(2.0, border_w + 2.0);
     let edge_padding_uv = edge_padding / uniforms.target_size;
 
     // How far outside the card the motion smear can land (card-UV). Zero when
@@ -295,11 +309,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         uniforms.rounding_type
     );
     var border_coverage = 0.0;
-    if (uniforms.border_enabled > 0.0) {
+    if uniforms.border_enabled > 0.0 && border_w > 0.0 {
         let border_outer_coverage = rounded_rect_coverage(
             p - center,
-            size + vec2<f32>(uniforms.border_width),
-            corner_radius_for(p - center) + uniforms.border_width,
+            size + vec2<f32>(border_w),
+            corner_radius_for(p - center) + border_w,
             uniforms.rounding_type
         );
         border_coverage = clamp(border_outer_coverage - shape_coverage, 0.0, 1.0);
@@ -441,7 +455,7 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         let upscale_ratio = max(target_size.x / source_size.x, target_size.y / source_size.y);
         let is_upscaling = upscale_ratio > 1.05;
 
-        let center_sample = textureSample(frame_texture, frame_sampler, cropped_uv);
+        let center_sample = textureSampleLevel(frame_texture, frame_sampler, cropped_uv, 0.0);
         let center_color = center_sample.rgb;
         let out_alpha = select(1.0, center_sample.a, uniforms.preserve_source_alpha > 0.5);
 
@@ -479,25 +493,29 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-            let left = textureSample(
+            let left = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_x, safe_min, safe_max)
+                clamp(cropped_uv - offset_x, safe_min, safe_max),
+                0.0
             ).rgb;
-            let right = textureSample(
+            let right = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_x, safe_min, safe_max)
+                clamp(cropped_uv + offset_x, safe_min, safe_max),
+                0.0
             ).rgb;
-            let top = textureSample(
+            let top = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_y, safe_min, safe_max)
+                clamp(cropped_uv - offset_y, safe_min, safe_max),
+                0.0
             ).rgb;
-            let bottom = textureSample(
+            let bottom = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_y, safe_min, safe_max)
+                clamp(cropped_uv + offset_y, safe_min, safe_max),
+                0.0
             ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
@@ -514,25 +532,29 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-            let left = textureSample(
+            let left = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_x, safe_min, safe_max)
+                clamp(cropped_uv - offset_x, safe_min, safe_max),
+                0.0
             ).rgb;
-            let right = textureSample(
+            let right = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_x, safe_min, safe_max)
+                clamp(cropped_uv + offset_x, safe_min, safe_max),
+                0.0
             ).rgb;
-            let top = textureSample(
+            let top = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv - offset_y, safe_min, safe_max)
+                clamp(cropped_uv - offset_y, safe_min, safe_max),
+                0.0
             ).rgb;
-            let bottom = textureSample(
+            let bottom = textureSampleLevel(
                 frame_texture,
                 frame_sampler,
-                clamp(cropped_uv + offset_y, safe_min, safe_max)
+                clamp(cropped_uv + offset_y, safe_min, safe_max),
+                0.0
             ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
@@ -551,17 +573,22 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
     let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
     let half_size = uniforms.target_size * 0.5;
-    let coverage = rounded_rect_coverage(
+    let coverage = rounded_rect_coverage_with_aa(
         centered_uv,
         half_size,
         corner_radius_for(centered_uv),
-        uniforms.rounding_type
+        uniforms.rounding_type,
+        1.0
     );
 
     return vec4(current_color.rgb, current_color.a * coverage);
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    let denom = edge1 - edge0;
+    if abs(denom) <= 0.00001 {
+        return 0.0;
+    }
+    let t = clamp((x - edge0) / denom, 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
 }
