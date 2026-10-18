@@ -11,10 +11,10 @@
 //!
 //! Reference rule (the decoder contract documented next to `pts_to_frame`):
 //! a sample is labelled `round(fps * pts_seconds)` on the decoder grid, where
-//! FFmpeg measures pts from the stream start time and AVAssetReader from
-//! zero. A request for time `t` asks for grid index `request_frame(t, fps)`,
-//! `floor(t * fps)` with a few f32 steps of slack for the request time. The
-//! correct answer is the newest sample whose label is at or before that index
+//! both decoders preserve the stream's presentation timeline. A request for
+//! time `t` asks for grid index `request_frame(t, fps)`, `floor(t * fps)`
+//! with a few f32 steps of slack for the request time. The correct answer is
+//! the newest sample whose label is at or before that index
 //! (the frame on screen at `t`); when several samples share that label any of
 //! them is accepted. A request before the first sample is answered with the
 //! first sample.
@@ -185,20 +185,16 @@ fn label(pts: i64, time_base: (i32, i32), fps: u32) -> u32 {
 
 impl Oracle {
     fn new(script: &Script, decoder: Decoder, fps: u32) -> Self {
-        let origin = match decoder {
-            Decoder::Avf => 0,
-            Decoder::Ffmpeg => script.frames[0].pts,
-        };
         Self {
             labels: script
                 .frames
                 .iter()
-                .map(|frame| label(frame.pts - origin, script.time_base, fps))
+                .map(|frame| label(frame.pts, script.time_base, fps))
                 .collect(),
             secs: script
                 .frames
                 .iter()
-                .map(|frame| script.secs(frame.pts - origin))
+                .map(|frame| script.secs(frame.pts))
                 .collect(),
             fps,
             decoder,
@@ -448,7 +444,6 @@ struct Family {
     pattern: PatternKind,
     mode: Mode,
     seeds: usize,
-    avf_only: bool,
 }
 
 const fn family(source: SourceKind, pattern: PatternKind, mode: Mode, seeds: usize) -> Family {
@@ -457,7 +452,6 @@ const fn family(source: SourceKind, pattern: PatternKind, mode: Mode, seeds: usi
         pattern,
         mode,
         seeds,
-        avf_only: false,
     }
 }
 
@@ -495,20 +489,8 @@ const FAMILIES: &[Family] = {
         family(HalfGrid, BackIntoOldGap, Export, 60),
         family(Syn, Edlist, Playback, 8),
         family(Syn, Edlist, Export, 8),
-        Family {
-            source: LateStart,
-            pattern: Sequential,
-            mode: Playback,
-            seeds: 80,
-            avf_only: true,
-        },
-        Family {
-            source: LateStart,
-            pattern: RandomSeeks,
-            mode: Playback,
-            seeds: 80,
-            avf_only: true,
-        },
+        family(LateStart, Sequential, Playback, 80),
+        family(LateStart, RandomSeeks, Playback, 80),
     ]
 };
 
@@ -827,7 +809,6 @@ fn run_suite(decoder: Decoder) {
 
     let families: Vec<&Family> = FAMILIES
         .iter()
-        .filter(|family| decoder == Decoder::Avf || !family.avf_only)
         .filter(|family| {
             filter
                 .as_ref()
@@ -1117,4 +1098,46 @@ fn avassetreader_answers_match_the_reference_model() {
 #[test]
 fn ffmpeg_answers_match_the_reference_model() {
     run_suite(Decoder::Ffmpeg);
+}
+
+#[test]
+fn ffmpeg_preserves_late_pts_across_playback_and_seeks() {
+    let script = Script {
+        time_base: (1, 30),
+        frames: (60..180)
+            .map(|pts| scripted::ScriptFrame {
+                pts,
+                keyframe: pts % 30 == 0,
+            })
+            .collect(),
+        last_duration: 1,
+    };
+    let runtime = runtime();
+    for mode in [Mode::Export, Mode::Playback] {
+        let case = Case {
+            name: "late-pts".into(),
+            seed_index: 0,
+            seed: 0,
+            decoder: Decoder::Ffmpeg,
+            mode,
+            fps: 30,
+            max_fallback_distance: 2,
+            script: script.clone(),
+            requests: (0..180)
+                .chain([135, 15, 75, 165, 45, 105])
+                .enumerate()
+                .map(|(position, frame)| Request {
+                    time: (frame as f32 + 0.25) / 30.0,
+                    initial: mode == Mode::Playback && (position == 0 || position >= 180),
+                })
+                .collect(),
+        };
+        let outcome = run_case(&case, &runtime, false);
+        assert!(
+            outcome.failures.is_empty(),
+            "{mode:?}: {:?}",
+            outcome.failures
+        );
+        assert_eq!(outcome.requests, case.requests.len());
+    }
 }
