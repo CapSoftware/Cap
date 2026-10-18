@@ -177,6 +177,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                        timed_fragments: true,
                         preset,
                         bpp,
                         output_size,
@@ -218,6 +219,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                timed_fragments: false,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 segment_tx,
@@ -310,6 +312,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     .with_timestamps(start_time)
                     .with_start_gate(start_gate.clone())
                     .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                        timed_fragments: true,
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
                         bpp,
@@ -358,6 +361,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
@@ -394,6 +398,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                timed_fragments: true,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: if ultra {
                     H264Preset::Medium
@@ -420,6 +425,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 output_size: Some(output_size),
