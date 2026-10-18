@@ -338,6 +338,11 @@ thread_local! {
     };
 }
 
+#[cfg(test)]
+pub(crate) fn set_test_tauri_store_path(path: Option<PathBuf>) {
+    TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = path);
+}
+
 /// The tauri-plugin-store file, shared with the shipping app.
 ///
 /// `CAP_GPUI_TAURI_STORE` redirects it at a copy, which is how the tests --
@@ -356,6 +361,8 @@ pub fn tauri_store_path() -> PathBuf {
         _ => app_data_dir().join("store"),
     }
 }
+
+static STORE_UPDATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The whole store as raw JSON.
 ///
@@ -421,39 +428,47 @@ pub fn notification_sounds_enabled() -> bool {
 /// already updated its in-memory copy, which is the same optimistic order
 /// `handleChange` uses in `general.tsx`.
 pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-
-    let entry = store
-        .entry(section.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !entry.is_object() {
-        *entry = Value::Object(Map::new());
-    }
-    entry
-        .as_object_mut()
-        .expect("just replaced any non-object with an object")
-        .insert(key.to_string(), value);
-
-    write_store(&path, &Value::Object(store))
+    update_store(|store| {
+        let entry = store
+            .entry(section.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        entry
+            .as_object_mut()
+            .expect("just replaced any non-object with an object")
+            .insert(key.to_string(), value);
+        true
+    })
 }
 
 /// Replace or remove one top-level store section. `authStore.set(null)` in
 /// the Tauri app drops the whole `auth` object; writing keys one at a time
 /// would leave a half-signed-out session behind.
 pub fn set_store_value(section: &str, value: Value) -> bool {
+    update_store(|store| {
+        if value.is_null() {
+            store.remove(section);
+        } else {
+            store.insert(section.to_string(), value);
+        }
+        true
+    })
+}
+
+/// Reads, mutates and rewrites the store as one step, so two writers cannot
+/// both start from the same snapshot and drop each other's changes. Returning
+/// false from `mutate` leaves the file untouched.
+fn update_store(mutate: impl FnOnce(&mut Map<String, Value>) -> bool) -> bool {
+    let _guard = STORE_UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = tauri_store_path();
     let Some(mut store) = read_store(&path) else {
         return false;
     };
-    if value.is_null() {
-        store.remove(section);
-    } else {
-        store.insert(section.to_string(), value);
-    }
-    write_store(&path, &Value::Object(store))
+    mutate(&mut store) && write_store(&path, &Value::Object(store))
 }
 
 /// Pretty JSON, two-space indent, no trailing newline -- byte-shape identical
@@ -658,9 +673,32 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", "Open editor";
-        ShowOverlay = "showOverlay", "Show in overlay";
+        ShowOverlay = "showOverlay", "Show Cap";
+        DoNothing = "doNothing", "Do nothing";
     }
     default = OpenEditor
+}
+
+settings_enum! {
+    /// What a finished screenshot does next. GPUI-only: the Tauri app always
+    /// opened the editor and never reads this key.
+    PostScreenshotBehaviour {
+        OpenEditor = "openEditor", "Open editor";
+        Copy = "copy", "Copy to clipboard";
+        CopyAndOpenEditor = "copyAndOpenEditor", "Copy and open editor";
+        Save = "save", "Do nothing";
+    }
+    default = OpenEditor
+}
+
+impl PostScreenshotBehaviour {
+    pub fn copies(self) -> bool {
+        matches!(self, Self::Copy | Self::CopyAndOpenEditor)
+    }
+
+    pub fn opens_editor(self) -> bool {
+        matches!(self, Self::OpenEditor | Self::CopyAndOpenEditor)
+    }
 }
 
 settings_enum! {
@@ -845,6 +883,7 @@ pub struct GeneralSettings {
     pub recording_countdown: Option<u32>,
     pub main_window_recording_start_behaviour: MainWindowStartBehaviour,
     pub post_studio_recording_behaviour: PostStudioBehaviour,
+    pub post_screenshot_behaviour: PostScreenshotBehaviour,
     pub post_deletion_behaviour: PostDeletionBehaviour,
     pub delete_instant_recordings_after_upload: bool,
     pub crash_recovery_recording: bool,
@@ -991,36 +1030,34 @@ fn set_device_format_settings(
     let Ok(Value::Object(fields)) = serde_json::to_value(settings) else {
         return false;
     };
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-    let section = store
-        .entry(RECORDING_SETTINGS.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(section) = section.as_object_mut() else {
-        return false;
-    };
-    let map = section
-        .entry(map_key.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(map) = map.as_object_mut() else {
-        return false;
-    };
-    for key in keys {
-        let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
-        let Some(entry) = entry.as_object_mut() else {
+    update_store(|store| {
+        let section = store
+            .entry(RECORDING_SETTINGS.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(section) = section.as_object_mut() else {
             return false;
         };
-        for (key, value) in &fields {
-            if value.is_null() {
-                entry.remove(key);
-            } else {
-                entry.insert(key.clone(), value.clone());
+        let map = section
+            .entry(map_key.to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(map) = map.as_object_mut() else {
+            return false;
+        };
+        for key in keys {
+            let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
+            let Some(entry) = entry.as_object_mut() else {
+                return false;
+            };
+            for (key, value) in &fields {
+                if value.is_null() {
+                    entry.remove(key);
+                } else {
+                    entry.insert(key.clone(), value.clone());
+                }
             }
         }
-    }
-    write_store(&path, &Value::Object(store))
+        true
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1151,10 +1188,13 @@ impl Default for GeneralSettings {
 
 impl GeneralSettings {
     pub fn load() -> Self {
+        let store = read_store(&tauri_store_path()).unwrap_or_default();
+        let empty = Map::new();
+        let section = |name: &str| store.get(name).and_then(Value::as_object).unwrap_or(&empty);
         Self::from_sections(
-            &store_section(GENERAL_SETTINGS),
-            &store_section(RECORDING_START_SAFETY),
-            &store_section(AUDIO_ENHANCEMENT),
+            section(GENERAL_SETTINGS),
+            section(RECORDING_START_SAFETY),
+            section(AUDIO_ENHANCEMENT),
         )
     }
 
@@ -1176,6 +1216,7 @@ impl GeneralSettings {
                 "mainWindowRecordingStartBehaviour",
             ),
             post_studio_recording_behaviour: enum_at(general, "postStudioRecordingBehaviour"),
+            post_screenshot_behaviour: enum_at(general, "postScreenshotBehaviour"),
             post_deletion_behaviour: enum_at(general, "postDeletionBehaviour"),
             delete_instant_recordings_after_upload: bool_at(
                 general,
@@ -1808,12 +1849,7 @@ pub fn set_automations(automations: &AutomationsStore) -> bool {
             return false;
         }
     };
-    let path = tauri_store_path();
-    let Some(mut store) = read_store(&path) else {
-        return false;
-    };
-    store.insert(AUTOMATIONS.to_string(), value);
-    write_store(&path, &Value::Object(store))
+    set_store_value(AUTOMATIONS, value)
 }
 
 /// The preset names `applyPreset` offers -- `presetsStore.createQuery()` in
@@ -1883,6 +1919,80 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
+        }
+    }
+
+    fn load_general_settings_separately() -> GeneralSettings {
+        GeneralSettings::from_sections(
+            &store_section(GENERAL_SETTINGS),
+            &store_section(RECORDING_START_SAFETY),
+            &store_section(AUDIO_ENHANCEMENT),
+        )
+    }
+
+    #[test]
+    fn general_settings_load_matches_separate_section_reads() {
+        for contents in [
+            None,
+            Some("invalid json"),
+            Some("[]"),
+            Some(r#"{"general_settings":["wrong shape"],"audio_enhancement":null}"#),
+            Some(
+                r#"{"general_settings":{"theme":"dark","maxFps":24},"recording_start_safety":{"confirmBeforeRecordingWithoutMicrophone":false},"audio_enhancement":{"enabledByDefault":false}}"#,
+            ),
+        ] {
+            let _store = TempStore::new("general-settings-load", contents);
+            assert_eq!(GeneralSettings::load(), load_general_settings_separately());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_general_settings_load() {
+        use std::{hint::black_box, time::Instant};
+
+        for preset_count in [0, 10, 50] {
+            let config =
+                crate::presets::preset_config(&cap_project::ProjectConfiguration::default());
+            let presets: Vec<_> = (0..preset_count)
+                .map(|index| serde_json::json!({"name": format!("Preset {index}"), "config": config}))
+                .collect();
+            let contents = serde_json::to_string_pretty(&serde_json::json!({
+                "general_settings": {"theme": "dark", "maxFps": 60},
+                "recording_start_safety": {"confirmBeforeRecordingWithoutMicrophone": false},
+                "audio_enhancement": {"enabledByDefault": true},
+                "presets": {"presets": presets, "default": null},
+                "teleprompter": {"script": "A recording script. ".repeat(100)}
+            }))
+            .unwrap();
+            let _store = TempStore::new("general-settings-benchmark", Some(&contents));
+            assert_eq!(GeneralSettings::load(), load_general_settings_separately());
+            let measure = |load: fn() -> GeneralSettings| {
+                let start = Instant::now();
+                for _ in 0..200 {
+                    black_box(load());
+                }
+                start.elapsed().as_secs_f64() * 1_000_000.0 / 200.0
+            };
+            let mut separate = Vec::new();
+            let mut current = Vec::new();
+            for round in 0..9 {
+                if round % 2 == 0 {
+                    separate.push(measure(load_general_settings_separately));
+                    current.push(measure(GeneralSettings::load));
+                } else {
+                    current.push(measure(GeneralSettings::load));
+                    separate.push(measure(load_general_settings_separately));
+                }
+            }
+            separate.sort_by(f64::total_cmp);
+            current.sort_by(f64::total_cmp);
+            eprintln!(
+                "presets={preset_count} bytes={} separate_median_us={:.3} current_median_us={:.3} separate_runs_us={separate:?} current_runs_us={current:?}",
+                contents.len(),
+                separate[4],
+                current[4]
+            );
         }
     }
 
@@ -2116,6 +2226,66 @@ mod tests {
             before[RECORDING_SETTINGS]["cameraId"]
         );
         assert_eq!(after[RECORDING_SETTINGS]["future"], 42);
+    }
+
+    #[test]
+    fn concurrent_store_writers_preserve_each_others_changes() {
+        let contents = serde_json::json!({"unknown": "x".repeat(64 * 1024)}).to_string();
+        let store = TempStore::new("concurrent-writers", Some(&contents));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers = (0..16)
+            .map(|index| {
+                let path = store.path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    set_test_tauri_store_path(Some(path));
+                    barrier.wait();
+                    let saved = match index {
+                        0..=3 => set_store_setting(
+                            GENERAL_SETTINGS,
+                            &format!("setting-{index}"),
+                            Value::from(index),
+                        ),
+                        4..=7 => set_store_value(&format!("section-{index}"), Value::from(index)),
+                        8..=11 => set_microphone_device_settings(
+                            &format!("microphone-{index}"),
+                            cap_recording::feeds::microphone::MicrophoneDeviceSettings {
+                                sample_rate: Some(48000),
+                                channels: Some(2),
+                            },
+                        ),
+                        _ => set_automations(&AutomationsStore::default()),
+                    };
+                    set_test_tauri_store_path(None);
+                    saved
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(results.into_iter().all(|saved| saved));
+
+        let after = store.read();
+        assert_eq!(after["unknown"], "x".repeat(64 * 1024));
+        for index in 0..4 {
+            assert_eq!(after[GENERAL_SETTINGS][format!("setting-{index}")], index);
+        }
+        for index in 4..8 {
+            assert_eq!(after[format!("section-{index}")], index);
+        }
+        for index in 8..12 {
+            assert_eq!(
+                after[RECORDING_SETTINGS]["microphoneDeviceSettings"]
+                    [format!("microphone-{index}")],
+                serde_json::json!({"sampleRate": 48000, "channels": 2})
+            );
+        }
+        assert_eq!(
+            after[AUTOMATIONS],
+            serde_json::to_value(AutomationsStore::default()).unwrap()
+        );
     }
 
     #[test]

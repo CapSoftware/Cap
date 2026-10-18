@@ -1532,6 +1532,7 @@ dependencies = [
  "anyhow",
  "ashpd 0.11.1",
  "base64 0.22.1",
+ "bytes",
  "cap-audio",
  "cap-camera",
  "cap-camera-effects",
@@ -1546,6 +1547,7 @@ dependencies = [
  "cap-rendering",
  "cap-timestamp",
  "cap-utils",
+ "cap-verify",
  "chrono",
  "cidre",
  "clipboard-rs",
@@ -1583,6 +1585,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "tauri-winres",
+ "tempfile",
  "tiny-skia",
  "tokio",
  "tracing",
@@ -1756,8 +1759,11 @@ version = "0.1.0"
 dependencies = [
  "cap-audio",
  "cap-project",
+ "crc32fast",
+ "flate2",
  "image 0.25.10",
  "md-5",
+ "simd-adler32",
  "tracing",
 ]
 
@@ -1995,6 +2001,38 @@ dependencies = [
  "windows-sys 0.52.0",
  "workspace-hack",
  "zbus",
+]
+
+[[package]]
+name = "cap-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-enc-avfoundation",
+ "cap-media-info",
+ "cap-project",
+ "cap-recording",
+ "cap-timestamp",
+ "cap-verify-expect",
+ "cidre",
+ "ffmpeg-next",
+ "flume 0.11.1",
+ "futures",
+ "relative-path",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-verify-expect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
 ]
 
 [[package]]

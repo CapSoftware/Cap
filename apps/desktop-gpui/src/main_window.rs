@@ -1767,7 +1767,7 @@ impl MainWindow {
     /// The concrete capture target the current UI state describes, or `None`
     /// when starting makes no sense yet (no target mode, Window mode with no
     /// window picked, Area mode -- which is drawn on the overlay).
-    fn armed_target(&self) -> Option<ScreenCaptureTarget> {
+    pub(crate) fn armed_target(&self) -> Option<ScreenCaptureTarget> {
         match self.target? {
             TargetType::Display => {
                 // The Tauri flow preselects the primary display the moment the
@@ -2108,13 +2108,14 @@ impl MainWindow {
             return;
         }
 
-        let (camera_feed, mic_feed, input_readiness, device_settings) = {
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
             let feeds = Feeds::global(cx);
             feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
             (
                 feeds.camera_actor(),
                 feeds.mic_actor(),
+                feeds.mic_meter(),
                 feeds.input_readiness(),
                 feeds.requested_device_settings(),
             )
@@ -2130,10 +2131,19 @@ impl MainWindow {
             excluded_windows,
             camera_feed,
             mic_feed,
+            mic_meter,
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
             start_gate: None,
         };
+
+        // `RecordingSettingsStore.target`: what the Start shortcuts fall back
+        // to when nothing is selected here.
+        if let Ok(value) = serde_json::to_value(&config.target)
+            && !crate::store::set_store_setting(crate::store::RECORDING_SETTINGS, "target", value)
+        {
+            tracing::warn!("saving the last recording target failed");
+        }
 
         self.start_recording_config(config, cx);
     }
@@ -3690,8 +3700,8 @@ impl MainWindow {
                 .spawn(async move {
                     match kind {
                         LibraryKind::Recordings => {
-                            let mut items = library::list_recordings();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_recordings_limited(library::LIBRARY_PANEL_LIMIT);
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {

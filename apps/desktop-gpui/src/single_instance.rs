@@ -1281,10 +1281,7 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let binary = directory.join("cap-gpui");
         std::fs::copy("/bin/sleep", &binary).unwrap();
-        let mut child = std::process::Command::new(&binary)
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let mut child = spawn_copied_sleep(&binary);
         let pid = child.id() as i32;
         let started = std::time::Instant::now();
         // spawn can return before /proc stops exposing the child's pre-exec image.
@@ -1332,6 +1329,25 @@ mod tests {
         std::fs::write(marker, std::process::id().to_string()).unwrap();
     }
 
+    /// Runs a fresh copy of `/bin/sleep` for 30 s. A test thread that forks
+    /// while the copy's write descriptor is open holds it until its exec, and
+    /// exec of the copy fails with ETXTBSY until then.
+    #[cfg(target_os = "linux")]
+    fn spawn_copied_sleep(binary: &Path) -> std::process::Child {
+        let started = std::time::Instant::now();
+        loop {
+            match std::process::Command::new(binary).arg("30").spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && started.elapsed() < std::time::Duration::from_secs(5) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                result => break result.unwrap(),
+            }
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(super) struct LinuxAcquireFixture {
         directory: std::path::PathBuf,
@@ -1355,10 +1371,7 @@ mod tests {
         pub(super) fn start_incumbent(&mut self) -> u32 {
             let binary = self.directory.join("cap-gpui");
             std::fs::copy("/bin/sleep", &binary).unwrap();
-            let child = std::process::Command::new(&binary)
-                .arg("30")
-                .spawn()
-                .unwrap();
+            let child = spawn_copied_sleep(&binary);
             let pid = child.id();
             self.children.push(child);
             let started = std::time::Instant::now();

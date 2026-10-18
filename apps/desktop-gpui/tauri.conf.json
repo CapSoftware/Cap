@@ -81,6 +81,7 @@
 		"linux": {
 			"deb": {
 				"depends": [
+					"libc6 (>= 2.39)",
 					"libva2",
 					"libva-drm2",
 					"pulseaudio-utils",
