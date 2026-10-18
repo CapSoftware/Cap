@@ -897,8 +897,8 @@ fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
 /// interval apart whenever the screen changes, whatever the holds between
 /// them, and content that changes at a lower rate for most of a recording
 /// still has its faster stretches captured at the full rate. A late frame
-/// leaves one short gap between two long ones, so only gaps beside another
-/// gap of the same length count. Arrival jitter leaves the median a frame or
+/// leaves one short gap between two slightly longer ones, so only gaps in
+/// runs, or between holds, count. Arrival jitter leaves the median a frame or
 /// two per second off, so a rate within 5% of a standard capture rate is
 /// that rate.
 pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
@@ -909,6 +909,7 @@ pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
         24.0, 25.0, 30.0, 48.0, 50.0, 60.0, 72.0, 75.0, 90.0, 100.0, 120.0, 144.0, 165.0, 240.0,
     ];
     const SNAP_TOLERANCE: f64 = 0.05;
+    const HOLD_RATIO: f64 = 3.0;
 
     timestamps.sort_by(f64::total_cmp);
     let gaps: Vec<f64> = timestamps
@@ -924,11 +925,20 @@ pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
             .map(|gap| (gap / center - 1.0).abs() <= CLUSTER_TOLERANCE)
             .collect::<Vec<_>>()
     };
+    // A gap counts beside another of its length (a run of frames) or between
+    // two holds at least HOLD_RATIO times as long (a change captured as a
+    // pair). A late frame's short gap sits between gaps under twice its own.
     let in_runs = |within: &[bool]| {
+        let held = |i: usize, j: Option<usize>| {
+            j.and_then(|j| gaps.get(j))
+                .is_some_and(|gap| *gap >= gaps[i] * HOLD_RATIO)
+        };
         (0..within.len())
             .filter(|&i| {
                 within[i]
-                    && ((i > 0 && within[i - 1]) || within.get(i + 1).copied().unwrap_or(false))
+                    && ((i > 0 && within[i - 1])
+                        || within.get(i + 1).copied().unwrap_or(false)
+                        || (held(i, i.checked_sub(1)) && held(i, Some(i + 1))))
             })
             .count()
     };
@@ -1889,6 +1899,16 @@ mod tests {
             .map(|i| i as f64 / 30.0 + if i % 7 == 0 { 0.012 } else { 0.0 } + jitter(i, 0.001))
             .collect();
         assert_eq!(capture_fps_from_timestamps(timestamps), Some(30));
+    }
+
+    #[test]
+    fn capture_fps_of_changes_captured_in_pairs_is_the_pair_gap() {
+        // A 60 fps capture of a screen that changes once a second, each
+        // change captured as two frames.
+        let timestamps = (0..40u64)
+            .flat_map(|second| [0.0, 1.0 / 60.0].map(|offset| second as f64 + offset))
+            .collect();
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(60));
     }
 
     #[test]
