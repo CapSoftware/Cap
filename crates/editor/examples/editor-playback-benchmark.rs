@@ -89,6 +89,8 @@ struct BenchmarkSummary {
     submitted_frames: u64,
     rendered_frames: u64,
     callback_frames: u64,
+    last_callback: Option<Instant>,
+    callback_gaps: DurationStats,
     dropped_by_renderer: u64,
     send_failures: u64,
     skipped_frames: u64,
@@ -273,7 +275,12 @@ impl BenchmarkSummary {
         }
     }
 
-    fn record_callback_frame(&mut self, bytes: usize) {
+    fn record_callback_frame(&mut self, bytes: usize, received_at: Instant) {
+        if let Some(previous) = self.last_callback {
+            self.callback_gaps
+                .push(received_at.saturating_duration_since(previous));
+        }
+        self.last_callback = Some(received_at);
         self.callback_frames += 1;
         self.bytes_from_callback = self.bytes_from_callback.saturating_add(bytes as u64);
     }
@@ -435,6 +442,12 @@ fn parse_resolution(args: &[String]) -> XY<u32> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LiveEdit {
+    Background,
+    CursorSpring,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -447,6 +460,19 @@ async fn main() {
     ffmpeg::init().expect("Failed to initialize FFmpeg");
 
     let args: Vec<String> = std::env::args().collect();
+    let live_edit = arg_value(&args, "--live-edit").map(|kind| match kind {
+        "background" => LiveEdit::Background,
+        "cursor-spring" => LiveEdit::CursorSpring,
+        _ => panic!("--live-edit must be background or cursor-spring"),
+    });
+    let edit_interval_ms = arg_value(&args, "--edit-interval-ms")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .expect("--edit-interval-ms must be an integer")
+        })
+        .unwrap_or(50);
+    assert!(edit_interval_ms > 0, "--edit-interval-ms must be positive");
 
     let recording_path = arg_value(&args, "--recording-path")
         .map(PathBuf::from)
@@ -533,7 +559,7 @@ async fn main() {
     let layers_rx = finish_renderer_layers_creation(layers_rx).await;
 
     let (telemetry, mut telemetry_rx) = PlaybackTelemetry::channel();
-    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<usize>();
+    let (frame_tx, mut frame_rx) = mpsc::unbounded_channel::<(usize, Instant)>();
     let frame_cb = Box::new(move |output: EditorFrameOutput, _: FrameLayout| {
         let bytes = match output {
             EditorFrameOutput::Nv12(frame) => {
@@ -548,7 +574,7 @@ async fn main() {
             #[cfg(target_os = "macos")]
             EditorFrameOutput::Surface(_) => return,
         };
-        let _ = frame_tx.send(bytes);
+        let _ = frame_tx.send((bytes, Instant::now()));
     });
 
     let renderer = match Renderer::spawn_with_telemetry(
@@ -586,14 +612,21 @@ async fn main() {
             .collect()
     };
 
-    let (_project_tx, project_rx) = watch::channel(project);
+    let base_padding = project.background.padding;
+    let base_tension = project.cursor.tension;
+    let (project_tx, project_rx) = watch::channel(project);
 
     // One persistent output stream shared across presses, like the real app.
-    let audio_output = Arc::new(cap_editor::AudioOutput::new());
+    let audio_output = Arc::new(if args.iter().any(|arg| arg == "--headless") {
+        cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}))
+    } else {
+        cap_editor::AudioOutput::new()
+    });
     audio_output.prewarm();
 
     let mut summary = BenchmarkSummary::default();
     let mut measured_elapsed = 0.0f64;
+    let mut live_edit_high = false;
 
     for (press_idx, (press_start_frame, press_frames)) in presses.iter().copied().enumerate() {
         if press_idx > 0
@@ -628,6 +661,15 @@ async fn main() {
         tokio::pin!(deadline);
 
         let mut press_summary = BenchmarkSummary::default();
+        let mut live_edit_count = 0_u64;
+        let mut edit_timer = live_edit.map(|_| {
+            let mut timer = tokio::time::interval_at(
+                tokio::time::Instant::now() + Duration::from_millis(500),
+                Duration::from_millis(edit_interval_ms),
+            );
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            timer
+        });
 
         loop {
             if press_summary.submitted_frames >= press_frames {
@@ -643,10 +685,19 @@ async fn main() {
                         break;
                     }
                 }
-                bytes = frame_rx.recv() => {
-                    if let Some(bytes) = bytes {
-                        press_summary.record_callback_frame(bytes);
+                frame = frame_rx.recv() => {
+                    if let Some((bytes, received_at)) = frame {
+                        press_summary.record_callback_frame(bytes, received_at);
                     }
+                }
+                _ = async { edit_timer.as_mut().unwrap().tick().await }, if edit_timer.is_some() => {
+                    live_edit_high = !live_edit_high;
+                    let offset = if live_edit_high { 1.0 } else { 0.0 };
+                    project_tx.send_modify(|project| match live_edit.unwrap() {
+                        LiveEdit::Background => project.background.padding = base_padding + offset,
+                        LiveEdit::CursorSpring => project.cursor.tension = base_tension + offset as f32,
+                    });
+                    live_edit_count += 1;
                 }
                 _ = &mut deadline => {
                     break;
@@ -662,8 +713,13 @@ async fn main() {
         while let Ok(event) = telemetry_rx.try_recv() {
             press_summary.record_event(event);
         }
-        while let Ok(bytes) = frame_rx.try_recv() {
-            press_summary.record_callback_frame(bytes);
+        while let Ok((bytes, received_at)) = frame_rx.try_recv() {
+            press_summary.record_callback_frame(bytes, received_at);
+        }
+        if let Some(kind) = live_edit {
+            println!(
+                "Live edits: kind={kind:?} interval_ms={edit_interval_ms} sent={live_edit_count}"
+            );
         }
 
         let press_time_secs = press_start_frame as f64 / fps as f64;
@@ -761,6 +817,7 @@ async fn main() {
     summary.render_finish_submit.print("finish submit");
     summary.render_immediate_flush.print("immediate flush");
     summary.callback.print("callback packing");
+    summary.callback_gaps.print("callback gap");
     DurationStats::print_values("render steady", steady_render_values);
 
     println!("\nRenderer prepare stages:");
