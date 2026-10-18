@@ -173,6 +173,18 @@ pub struct RecordStopArgs {
 impl RecordStart {
     pub async fn run(self, json: bool) -> Result<(), String> {
         let format = resolve_format(json, self.format);
+        match self.run_inner(format).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if format == OutputFormat::Json {
+                    let _ = write_json_line(&RecordEvent::Error { error: &error });
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         self.params.validate()?;
         if self.detach {
             run_detached(self.params, format).await
@@ -183,18 +195,6 @@ impl RecordStart {
 }
 
 async fn run_foreground(params: RecordParams, format: OutputFormat) -> Result<(), String> {
-    match foreground_inner(params, format).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if format == OutputFormat::Json {
-                let _ = write_json_line(&RecordEvent::Error { error: &error });
-            }
-            Err(error)
-        }
-    }
-}
-
-async fn foreground_inner(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let interactive = std::io::stdin().is_terminal();
 
     // Without --duration the recorder blocks for a stop signal. A non-interactive caller (agent, CI,
@@ -250,18 +250,6 @@ fn automation_mode(mode: RecordMode) -> cap_automation::AutomationRecordingMode 
 }
 
 async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), String> {
-    match detached_inner(params, format).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            if format == OutputFormat::Json {
-                let _ = write_json_line(&RecordEvent::Error { error: &error });
-            }
-            Err(error)
-        }
-    }
-}
-
-async fn detached_inner(params: RecordParams, format: OutputFormat) -> Result<(), String> {
     let recording_id = new_recording_id();
     // Validate the target up front so a bad --screen/--window fails fast with a clear message rather
     // than surfacing later from the background worker's log.
@@ -754,15 +742,26 @@ async fn start_recording(
 
     #[cfg(target_os = "macos")]
     let target_for_shareable_content = target.clone();
+    let camera_only_target = matches!(target, ScreenCaptureTarget::CameraOnly);
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
         .with_system_audio(params.system_audio);
     let mut instant_builder =
         instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
     let mut camera_active = false;
+    let camera_recorded =
+        !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
 
     // Feeds must be locked and attached before build(); the lock keeps the device open for the whole
     // recording, so the feed actor handle itself does not need to be retained.
-    if let Some(device_id) = params.camera.as_deref() {
+    // macOS Instant recordings capture only the screen (the desktop app's camera bubble is part of
+    // the screen), so a camera opened here would run for the whole recording without being recorded.
+    if params.camera.is_some() && !camera_recorded {
+        eprintln!(
+            "warning: --camera is ignored for Instant recordings on macOS; the camera is only recorded in Studio mode"
+        );
+    }
+
+    if let Some(device_id) = params.camera.as_deref().filter(|_| camera_recorded) {
         let info = cap_camera::list_cameras()
             .find(|c| c.device_id() == device_id)
             .ok_or_else(|| {
@@ -857,8 +856,13 @@ async fn start_recording(
             if let Some(fps) = params.fps {
                 builder = builder.with_max_fps(fps);
             }
+            // As in the desktop app: the screen and audio tracks both start at
+            // the gate's arm time, so a microphone that is ready late does not
+            // move all audio early. The CLI has no start cue to wait for.
+            let start_gate = cap_recording::RecordingStartGate::new();
+            builder = builder.with_start_gate(start_gate.clone());
 
-            builder
+            let actor = builder
                 .build(
                     #[cfg(target_os = "macos")]
                     Some(
@@ -866,11 +870,12 @@ async fn start_recording(
                     ),
                 )
                 .await
-                .map(|actor| ActorHandle::Instant {
-                    actor,
-                    _upload_lock: upload_lock,
-                })
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            start_gate.arm();
+            Ok(ActorHandle::Instant {
+                actor,
+                _upload_lock: upload_lock,
+            })
         }
     }
 }

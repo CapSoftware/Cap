@@ -99,6 +99,13 @@ pub fn start_renderer_layers_creation(
                 &constants.queue,
                 constants.is_software_adapter,
             );
+            layers.prepare_for_video_dimensions(
+                &constants.device,
+                constants.options.screen_size.x,
+                constants.options.screen_size.y,
+                constants.options.camera_size.map(|size| size.x),
+                constants.options.camera_size.map(|size| size.y),
+            );
             layers.preload_cursor_assets(&constants, use_svg, &cursor_type);
             let _ = layers_tx.send(layers);
         })
@@ -206,6 +213,13 @@ impl Renderer {
                     &render_constants.device,
                     &render_constants.queue,
                     render_constants.is_software_adapter,
+                );
+                layers.prepare_for_video_dimensions(
+                    &render_constants.device,
+                    render_constants.options.screen_size.x,
+                    render_constants.options.screen_size.y,
+                    render_constants.options.camera_size.map(|size| size.x),
+                    render_constants.options.camera_size.map(|size| size.y),
                 );
                 let project = render_constants.recording_meta.project_config();
                 layers.preload_cursor_assets(
