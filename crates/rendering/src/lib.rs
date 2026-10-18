@@ -371,6 +371,67 @@ pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
     pub segment_offset: f64,
+    transition_readers: Option<Arc<TransitionSideDecoders>>,
+}
+
+/// A second set of readers for this clip, opened on first use, for the
+/// outgoing side of a transition between two parts of the same clip. The
+/// FFmpeg and Media Foundation readers each hold one position, so two sides
+/// read through one reader take each other's frames or seek every frame.
+/// The AVAssetReader pool opens readers per position itself and is shared.
+struct TransitionSideDecoders {
+    screen: DecoderSource,
+    camera: Option<DecoderSource>,
+    force_ffmpeg: bool,
+    decoders: tokio::sync::OnceCell<Option<RecordingSegmentDecoders>>,
+}
+
+#[derive(Clone)]
+struct DecoderSource {
+    path: PathBuf,
+    fps: u32,
+    offset: f64,
+}
+
+async fn spawn_screen_decoder(
+    source: DecoderSource,
+    force_ffmpeg: bool,
+) -> Result<AsyncVideoDecoderHandle, String> {
+    spawn_decoder(
+        "screen",
+        source.path,
+        source.fps,
+        source.offset,
+        force_ffmpeg,
+    )
+    .await
+    .map(|decoder| decoder.with_max_fallback_distance(SCREEN_MAX_FALLBACK_DISTANCE))
+    .map_err(|e| format!("Screen:{e}"))
+}
+
+async fn spawn_camera_decoder(
+    source: DecoderSource,
+    force_ffmpeg: bool,
+) -> Result<AsyncVideoDecoderHandle, String> {
+    spawn_decoder(
+        "camera",
+        source.path,
+        source.fps,
+        source.offset,
+        force_ffmpeg,
+    )
+    .await
+    .map(|decoder| decoder.with_max_fallback_distance(CAMERA_MAX_FALLBACK_DISTANCE))
+    .map_err(|e| format!("Camera:{e}"))
+}
+
+fn serves_two_positions(decoder: &AsyncVideoDecoderHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    if decoder.decoder_status().decoder_type == decoder::DecoderType::AVAssetReader {
+        return true;
+    }
+    let _ = decoder;
+    false
 }
 
 const SCREEN_MAX_FALLBACK_DISTANCE: u32 = 4;
@@ -402,46 +463,96 @@ impl RecordingSegmentDecoders {
             camera_offset,
         } = segment_timing::segment_video_timing(meta, segment_i);
 
-        let screen_future = async {
-            spawn_decoder(
-                "screen",
-                display_path,
-                screen_fps,
-                screen_offset,
-                force_ffmpeg,
-            )
-            .await
-            .map(|decoder| decoder.with_max_fallback_distance(SCREEN_MAX_FALLBACK_DISTANCE))
-            .map_err(|e| format!("Screen:{e}"))
+        let screen_source = DecoderSource {
+            path: display_path,
+            fps: screen_fps,
+            offset: screen_offset,
         };
-
-        let camera_future = async {
-            let Some(camera_path) = camera_path else {
-                return Ok::<Option<AsyncVideoDecoderHandle>, String>(None);
-            };
-            let camera_fps = camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?;
-            let camera = spawn_decoder(
-                "camera",
-                camera_path,
-                camera_fps,
-                camera_offset,
-                force_ffmpeg,
-            )
-            .await
-            .map(|decoder| decoder.with_max_fallback_distance(CAMERA_MAX_FALLBACK_DISTANCE))
-            .map_err(|e| format!("Camera:{e}"))?;
-            Ok(Some(camera))
+        let camera_source = match camera_path {
+            Some(path) => Some(DecoderSource {
+                path,
+                fps: camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?,
+                offset: camera_offset,
+            }),
+            None => None,
         };
 
         // Decoders spawn their own threads and just signal readiness, so screen
         // and camera can always initialize concurrently.
-        let (screen, camera) = tokio::try_join!(screen_future, camera_future)?;
+        let camera = async {
+            match camera_source.clone() {
+                Some(source) => spawn_camera_decoder(source, force_ffmpeg).await.map(Some),
+                None => Ok(None),
+            }
+        };
+        let (screen, camera) = tokio::try_join!(
+            spawn_screen_decoder(screen_source.clone(), force_ffmpeg),
+            camera
+        )?;
 
         Ok(Self {
             screen,
             camera,
             segment_offset: latest_start_time.unwrap_or(0.0),
+            transition_readers: Some(Arc::new(TransitionSideDecoders {
+                screen: screen_source,
+                camera: camera_source,
+                force_ffmpeg,
+                decoders: tokio::sync::OnceCell::new(),
+            })),
         })
+    }
+
+    /// The decoders for the outgoing side of a transition whose incoming
+    /// side is read from this clip too. Opens the second readers on first
+    /// use; falls back to these decoders if they cannot open.
+    pub async fn transition_side(&self) -> &RecordingSegmentDecoders {
+        let Some(side) = &self.transition_readers else {
+            return self;
+        };
+        let screen_shared = serves_two_positions(&self.screen);
+        let camera_shared = self.camera.as_ref().is_none_or(serves_two_positions);
+        if screen_shared && camera_shared {
+            return self;
+        }
+        let decoders = side
+            .decoders
+            .get_or_init(|| async {
+                let screen = async {
+                    if screen_shared {
+                        Ok(self.screen.clone())
+                    } else {
+                        spawn_screen_decoder(side.screen.clone(), side.force_ffmpeg).await
+                    }
+                };
+                let camera = async {
+                    match (&self.camera, &side.camera) {
+                        (Some(_), Some(source)) if !camera_shared => {
+                            spawn_camera_decoder(source.clone(), side.force_ffmpeg)
+                                .await
+                                .map(Some)
+                        }
+                        (camera, _) => Ok(camera.clone()),
+                    }
+                };
+                match tokio::try_join!(screen, camera) {
+                    Ok((screen, camera)) => Some(RecordingSegmentDecoders {
+                        screen,
+                        camera,
+                        segment_offset: self.segment_offset,
+                        transition_readers: None,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            "Transition decoders failed to open; both sides share one reader"
+                        );
+                        None
+                    }
+                }
+            })
+            .await;
+        decoders.as_ref().unwrap_or(self)
     }
 
     pub async fn get_frames(
@@ -835,10 +946,11 @@ pub async fn render_video_to_channel(
         let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
             let (incoming, outgoing) = tokio::join!(
                 incoming_decode,
-                decode_timeline_source_frames(
+                decode_transition_outgoing_frames(
                     project,
                     &render_segments,
                     outgoing,
+                    segment_clip_index,
                     needs_camera,
                     current_frame_number,
                     is_initial_frame,
@@ -1441,10 +1553,11 @@ pub async fn render_video_to_channel_nv12(
         let (segment_frames, outgoing_frames) = if let Some((outgoing, _, _)) = transition_mapping {
             let (incoming, outgoing) = tokio::join!(
                 incoming_decode,
-                decode_timeline_source_frames(
+                decode_transition_outgoing_frames(
                     project,
                     &render_segments,
                     outgoing,
+                    segment_clip_index,
                     needs_camera,
                     current_frame_number,
                     is_initial_frame,
@@ -1991,22 +2104,30 @@ struct TransitionExportContext<'a> {
     duration: f64,
 }
 
-async fn decode_timeline_source_frames(
+#[allow(clippy::too_many_arguments)]
+async fn decode_transition_outgoing_frames(
     project: &ProjectConfiguration,
     render_segments: &[RenderSegment],
     source: TimelineSource<'_>,
+    incoming_clip_index: usize,
     needs_camera: bool,
     current_frame_number: u32,
     is_initial_frame: bool,
     fps: u32,
 ) -> Result<Option<DecodedSegmentFrames>, RenderingError> {
-    let render_segment = &render_segments[source.segment.recording_clip as usize];
+    let clip_index = source.segment.recording_clip as usize;
+    let render_segment = &render_segments[clip_index];
+    let decoders = if clip_index == incoming_clip_index {
+        render_segment.decoders.transition_side().await
+    } else {
+        &render_segment.decoders
+    };
     let clip_config = project
         .clips
         .iter()
         .find(|clip| clip.index == source.segment.recording_clip);
     decode_segment_frames_with_retry(
-        &render_segment.decoders,
+        decoders,
         source.source_time,
         needs_camera && render_segment.render_display,
         render_segment.render_display,
@@ -6255,6 +6376,7 @@ mod export_order_tests {
                 screen,
                 camera: None,
                 segment_offset: 0.0,
+                transition_readers: None,
             },
             render_display: true,
         }];

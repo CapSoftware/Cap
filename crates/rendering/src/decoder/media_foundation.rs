@@ -223,7 +223,7 @@ impl MFDecoder {
                         continue;
                     }
 
-                    let frame = (time * fps as f32).floor() as u32;
+                    let frame = super::request_frame(time, fps);
                     match requests.request(frame, sender) {
                         Some((sender, cached)) => answer(sender, cached),
                         None => {
