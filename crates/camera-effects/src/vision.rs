@@ -108,12 +108,13 @@ impl InstanceMaskObservation {
     #[objc::msg_send(instanceMask)]
     fn instance_mask(&self) -> &cv::PixelBuf;
 
+    /// Returns a +1 buffer (`CF_RETURNS_RETAINED`): one per call.
     #[objc::msg_send(generateMaskForInstances:error:)]
     unsafe fn generate_mask_err<'ear>(
         &self,
         instances: &ns::IndexSet,
         error: *mut Option<&'ear ns::Error>,
-    ) -> Option<&'ear cv::PixelBuf>;
+    ) -> Option<arc::Retained<cv::PixelBuf>>;
 }
 
 /// Person instance masks separate everyone in frame, so only the presenter
@@ -150,6 +151,20 @@ struct Session {
     transfer: Option<arc::R<vt::PixelTransferSession>>,
     cleanup: Cleanup,
     instance_areas: Vec<usize>,
+    repeat: RepeatedFrame,
+}
+
+/// The pixels and raw mask of the last frame Vision analysed. A camera
+/// frame held across several output frames arrives again byte for byte;
+/// person instance masks keep no state between frames, so the mask is
+/// reused instead of running Vision again. The cleanup still runs, so the
+/// temporal smoothing advances exactly as it did.
+#[derive(Default)]
+struct RepeatedFrame {
+    pixels: Vec<u8>,
+    dimensions: (u32, u32),
+    mask: Vec<f32>,
+    mask_dimensions: Option<(u32, u32)>,
 }
 
 /// Drops Vision's low-confidence blobs (pillows, chair backs) that are
@@ -161,6 +176,7 @@ struct Cleanup {
     mask: Vec<f32>,
     previous: Vec<f32>,
     motion: Vec<u8>,
+    motion_columns: Vec<usize>,
 }
 
 fn create_request() -> arc::R<vn::GenPersonSegmentationRequest> {
@@ -181,6 +197,7 @@ impl Session {
             transfer: None,
             cleanup: Cleanup::default(),
             instance_areas: Vec::new(),
+            repeat: RepeatedFrame::default(),
         }
     }
 
@@ -188,9 +205,13 @@ impl Session {
         self.handler = vn::SequenceRequestHandler::new();
         self.request = Request::new();
         self.cleanup.previous.clear();
+        self.repeat.mask_dimensions = None;
     }
 
     fn segment(&mut self, job: &mut VisionJob) -> Result<(), String> {
+        let cached = self.repeat.mask_dimensions.take();
+        let mut repeated = None;
+        let mut from_pixels = false;
         let input = match std::mem::replace(&mut job.input, VisionInput::None) {
             VisionInput::PixelBuffer(buffer) => {
                 let (width, height) =
@@ -225,22 +246,46 @@ impl Session {
                     Some(input) if input.width() == width && input.height() == height => input,
                     slot => slot.insert(create_input(width, height)?),
                 };
-                write_bgra(input, &job.bgra, width, height)?;
+                from_pixels = true;
+                repeated = cached.filter(|_| {
+                    self.repeat.dimensions == job.dimensions && self.repeat.pixels == job.bgra
+                });
+                if repeated.is_none() {
+                    write_bgra(input, &job.bgra, width, height)?;
+                }
                 input.clone()
             }
             VisionInput::None => return Err("missing segmentation input".into()),
         };
 
+        let reusable = if let Some(dimensions) = repeated {
+            self.cleanup.mask.clone_from(&self.repeat.mask);
+            job.mask_dimensions = dimensions;
+            repeated
+        } else {
+            self.analyse(&input, job)?;
+            (from_pixels && matches!(self.request, Request::Instances(_))).then(|| {
+                self.repeat.mask.clone_from(&self.cleanup.mask);
+                std::mem::swap(&mut self.repeat.pixels, &mut job.bgra);
+                self.repeat.dimensions = job.dimensions;
+                job.mask_dimensions
+            })
+        };
+        self.cleanup.motion_frame(&input, job.mask_dimensions)?;
+        self.cleanup.finish(job.mask_dimensions, &mut job.mask);
+        self.repeat.mask_dimensions = reusable;
+        Ok(())
+    }
+
+    fn analyse(&mut self, input: &cv::PixelBuf, job: &mut VisionJob) -> Result<(), String> {
         let requests = ns::Array::<vn::Request>::from_slice(&[self.request.as_request()]);
         self.handler
-            .perform_on_cv_pixel_buf(&requests, &input)
+            .perform_on_cv_pixel_buf(&requests, input)
             .map_err(|error| format!("Vision person segmentation failed: {error:?}"))?;
         match &self.request {
             Request::Segmentation(request) => {
                 let results = request.results().ok_or("Vision returned no segmentation")?;
-                let observation = results
-                    .get(0)
-                    .map_err(|_| "Vision returned no segmentation".to_string())?;
+                let observation = results.first().ok_or("Vision returned no segmentation")?;
                 read_mask(
                     observation.pixel_buffer(),
                     &mut self.cleanup.mask,
@@ -248,12 +293,9 @@ impl Session {
                 )?;
             }
             Request::Instances(request) => {
-                let observation = request.results().and_then(|results| {
-                    results
-                        .get(0)
-                        .ok()
-                        .map(|observation| observation.retained())
-                });
+                let observation = request
+                    .results()
+                    .and_then(|results| results.first().map(|observation| observation.retained()));
                 match observation {
                     Some(observation) => primary_person_mask(
                         &observation,
@@ -273,8 +315,6 @@ impl Session {
                 }
             }
         }
-        self.cleanup.motion_frame(&input, job.mask_dimensions)?;
-        self.cleanup.finish(job.mask_dimensions, &mut job.mask);
         Ok(())
     }
 }
@@ -288,8 +328,14 @@ impl Cleanup {
         (width, height): (u32, u32),
     ) -> Result<(), String> {
         let (source_width, source_height) = (frame.width(), frame.height());
+        let (width, height) = (width as usize, height as usize);
+        self.motion_columns.clear();
+        self.motion_columns
+            .extend((0..width).map(|x| x * source_width / width * 4));
+        let columns = &self.motion_columns;
         let motion = &mut self.motion;
         motion.clear();
+        motion.resize(width * height * 4, 0);
         with_locked_base(
             &mut frame.retained(),
             cv::pixel_buffer::LockFlags::READ_ONLY,
@@ -297,16 +343,15 @@ impl Cleanup {
                 if stride < source_width * 4 {
                     return Err("segmentation frame is not addressable".into());
                 }
-                for y in 0..height as usize {
-                    let row = unsafe { base.add(y * source_height / height as usize * stride) };
-                    for x in 0..width as usize {
-                        let pixel = unsafe {
-                            std::slice::from_raw_parts(
-                                row.add(x * source_width / width as usize * 4),
-                                4,
-                            )
-                        };
-                        motion.extend_from_slice(pixel);
+                for (y, output) in motion.chunks_exact_mut(width * 4).enumerate() {
+                    let row = unsafe {
+                        std::slice::from_raw_parts(
+                            base.add(y * source_height / height * stride),
+                            source_width * 4,
+                        )
+                    };
+                    for (pixel, &column) in output.chunks_exact_mut(4).zip(columns) {
+                        pixel.copy_from_slice(&row[column..column + 4]);
                     }
                 }
                 Ok(())
@@ -415,7 +460,7 @@ fn primary_person_mask(
     let mut error = None;
     let mask = unsafe { observation.generate_mask_err(&instances, &mut error) }
         .ok_or_else(|| format!("Vision instance mask failed: {error:?}"))?;
-    read_mask(mask, output, dimensions)
+    read_mask(&mask, output, dimensions)
 }
 
 fn read_mask(

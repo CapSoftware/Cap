@@ -1005,7 +1005,7 @@ impl MainWindow {
             device_format_generation: 0,
             device_format_pending: None,
             device_format_notice: None,
-            system_audio: false,
+            system_audio: crate::store::recording_system_audio(),
             selected_display: None,
             selected_window: None,
             panel: None,
@@ -1767,7 +1767,7 @@ impl MainWindow {
     /// The concrete capture target the current UI state describes, or `None`
     /// when starting makes no sense yet (no target mode, Window mode with no
     /// window picked, Area mode -- which is drawn on the overlay).
-    fn armed_target(&self) -> Option<ScreenCaptureTarget> {
+    pub(crate) fn armed_target(&self) -> Option<ScreenCaptureTarget> {
         match self.target? {
             TargetType::Display => {
                 // The Tauri flow preselects the primary display the moment the
@@ -2134,6 +2134,14 @@ impl MainWindow {
             linux_instant_camera: None,
             start_gate: None,
         };
+
+        // `RecordingSettingsStore.target`: what the Start shortcuts fall back
+        // to when nothing is selected here.
+        if let Ok(value) = serde_json::to_value(&config.target)
+            && !crate::store::set_store_setting(crate::store::RECORDING_SETTINGS, "target", value)
+        {
+            tracing::warn!("saving the last recording target failed");
+        }
 
         self.start_recording_config(config, cx);
     }
@@ -2556,10 +2564,14 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Toggle system audio capture -- the system-audio row is a plain flag.
+    /// Toggle system audio capture -- the system-audio row is a plain flag,
+    /// persisted as `recording_settings.systemAudio` like the Tauri app did.
     pub fn set_system_audio(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.system_audio != enabled {
             self.system_audio = enabled;
+            if !crate::store::set_recording_system_audio(enabled) {
+                tracing::warn!("Could not save the system audio setting");
+            }
             cx.notify();
         }
     }
@@ -3686,8 +3698,8 @@ impl MainWindow {
                 .spawn(async move {
                     match kind {
                         LibraryKind::Recordings => {
-                            let mut items = library::list_recordings();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_recordings_limited(library::LIBRARY_PANEL_LIMIT);
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {

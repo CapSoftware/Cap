@@ -65,6 +65,8 @@ jobs:
         uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || runner.os == 'macOS' && 'aarch64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+          prefix-key: v1-rust-sync
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install desktop dependencies
         uses: ./.github/actions/install-desktop-deps
@@ -145,8 +147,10 @@ jobs:
           cargo test --locked -p cap-camera-effects --lib
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
-          # looking identical to a pass in the CI log.
-          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects
+          # looking identical to a pass in the CI log. The decoder model
+          # fuzzing runs in Engine verify (scripts/verify/suites.json); its
+          # 2 s decode deadline is not meant for a loaded hosted runner.
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model::
           cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
