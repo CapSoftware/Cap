@@ -910,6 +910,7 @@ pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
     ];
     const SNAP_TOLERANCE: f64 = 0.05;
     const HOLD_RATIO: f64 = 3.0;
+    const HOLD_SECS: f64 = 0.1;
 
     timestamps.sort_by(f64::total_cmp);
     let gaps: Vec<f64> = timestamps
@@ -926,12 +927,13 @@ pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
             .collect::<Vec<_>>()
     };
     // A gap counts beside another of its length (a run of frames) or between
-    // two holds at least HOLD_RATIO times as long (a change captured as a
-    // pair). A late frame's short gap sits between gaps under twice its own.
+    // two holds (a change captured as a pair): gaps of at least HOLD_SECS and
+    // HOLD_RATIO times its length. A late frame's short gap always has one
+    // neighbour one capture interval long, under HOLD_SECS at 10 fps and up.
     let in_runs = |within: &[bool]| {
         let held = |i: usize, j: Option<usize>| {
             j.and_then(|j| gaps.get(j))
-                .is_some_and(|gap| *gap >= gaps[i] * HOLD_RATIO)
+                .is_some_and(|gap| *gap >= HOLD_SECS && *gap >= gaps[i] * HOLD_RATIO)
         };
         (0..within.len())
             .filter(|&i| {
@@ -1893,12 +1895,19 @@ mod tests {
 
     #[test]
     fn capture_fps_ignores_the_short_gap_after_a_late_frame() {
-        // 30 fps with every seventh frame 12 ms late: each late frame leaves
-        // one 21 ms gap between a 45 ms one and a 33 ms one.
-        let timestamps = (0..600u64)
-            .map(|i| i as f64 / 30.0 + if i % 7 == 0 { 0.012 } else { 0.0 } + jitter(i, 0.001))
-            .collect();
-        assert_eq!(capture_fps_from_timestamps(timestamps), Some(30));
+        // 30 fps with every seventh frame late: 12 ms leaves a 21 ms gap
+        // between a 45 ms one and a 33 ms one, 25 ms an 8 ms gap between a
+        // 58 ms one and a 33 ms one.
+        for late in [0.012, 0.025, 0.03] {
+            let timestamps = (0..600u64)
+                .map(|i| i as f64 / 30.0 + if i % 7 == 0 { late } else { 0.0 } + jitter(i, 0.001))
+                .collect();
+            assert_eq!(
+                capture_fps_from_timestamps(timestamps),
+                Some(30),
+                "{late} s late"
+            );
+        }
     }
 
     #[test]
