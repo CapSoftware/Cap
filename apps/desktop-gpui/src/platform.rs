@@ -868,10 +868,11 @@ mod mac {
     ///
     /// The shim overrides `occlusionState` on gpui's own window subclasses
     /// (`GPUIWindow`, `GPUIPanel`) to OR the documented bit back in whenever
-    /// AppKit reports any visibility at all. gpui's gate then passes and its
-    /// own occlusion handling keeps working (a truly occluded window still
-    /// reports 0 and stops its link). Remove when the gpui pin understands the
-    /// macOS 26 bit.
+    /// AppKit reports any visibility at all (on macOS 27+, only on a window
+    /// that is ordered in). gpui's gate then passes and its own occlusion
+    /// handling keeps working (a truly occluded window still reports 0 and, on
+    /// macOS 27+, an ordered-out one keeps its raw state, so both stop their
+    /// link). Remove when the gpui pin understands the macOS 26 bit.
     ///
     /// Call once, before any window opens; [`kick_display_link`] re-fires the
     /// (self-delegating) occlusion handler for windows that opened before the
@@ -934,9 +935,22 @@ mod mac {
     pub fn kick_display_link(window: &Window) {
         install_occlusion_shim();
         if let Some(ns_window) = ns_window(window) {
-            unsafe {
-                let _: () = objc2::msg_send![&*ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
-            }
+            rerun_occlusion_handler(&ns_window);
+        }
+    }
+
+    fn rerun_occlusion_handler(ns_window: &NSWindow) {
+        unsafe {
+            let _: () = objc2::msg_send![ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// Where the shim reports an ordered-out window as hidden (so its link
+    /// stops), every native show re-runs the gate rather than trusting AppKit
+    /// to post an occlusion change for the window coming back.
+    fn rerun_occlusion_handler_after_show(ns_window: &NSWindow) {
+        if super::macos_occlusion::ordered_out_windows_keep_raw_state() {
+            rerun_occlusion_handler(ns_window);
         }
     }
 
@@ -1172,12 +1186,70 @@ mod mac {
         false
     }
 
+    pub struct ScreenGeometry {
+        pub id: u32,
+        pub frame: (f64, f64, f64, f64),
+        pub visible: (f64, f64, f64, f64),
+    }
+
+    pub fn screen_geometries() -> Vec<ScreenGeometry> {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSRect, NSString};
+
+        let mut geometries = Vec::new();
+        unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return geometries;
+            }
+            let enumerator: *mut AnyObject = msg_send![screens, objectEnumerator];
+            if enumerator.is_null() {
+                return geometries;
+            }
+            let number_key = NSString::from_str("NSScreenNumber");
+            loop {
+                let screen: *mut AnyObject = msg_send![enumerator, nextObject];
+                if screen.is_null() {
+                    break;
+                }
+                let description: *mut AnyObject = msg_send![screen, deviceDescription];
+                if description.is_null() {
+                    continue;
+                }
+                let number: *mut AnyObject = msg_send![description, objectForKey: &*number_key];
+                if number.is_null() {
+                    continue;
+                }
+                let id: u32 = msg_send![number, unsignedIntValue];
+                let frame: NSRect = msg_send![screen, frame];
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                geometries.push(ScreenGeometry {
+                    id,
+                    frame: (
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    ),
+                    visible: (
+                        visible.origin.x,
+                        visible.origin.y,
+                        visible.size.width,
+                        visible.size.height,
+                    ),
+                });
+            }
+        }
+        geometries
+    }
+
     /// `orderFrontRegardless` on the retained handle: bring a restored window
     /// forward without activating the app -- the dev loop relaunches on every
     /// rebuild and must not steal focus from whatever the user is typing in.
     /// Same task-only rule as every other ordering call here.
     pub fn order_front_native(native: &NativeWindow) {
         unsafe { native.0.orderFrontRegardless() };
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -1305,6 +1377,7 @@ mod mac {
     /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
     pub fn show_native(native: &NativeWindow) {
         native.0.makeKeyAndOrderFront(None);
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// Close the window the way the red traffic light does: ask the
@@ -1638,6 +1711,7 @@ mod mac {
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
             unsafe { ns_window.orderFrontRegardless() };
+            rerun_occlusion_handler_after_show(&ns_window);
         }
     }
 

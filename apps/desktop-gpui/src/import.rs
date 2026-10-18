@@ -834,6 +834,16 @@ fn h264_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
     (area * frame_rate_multiplier * 0.3) as usize
 }
 
+fn frame_duration_ticks(time_base: ffmpeg::Rational, fps: u32) -> i64 {
+    let ticks = f64::from(time_base.denominator())
+        / (f64::from(time_base.numerator().max(1)) * f64::from(fps.max(1)));
+    (ticks.round() as i64).max(1)
+}
+
+fn import_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+}
+
 pub(crate) fn transcode_editor_video(
     source_path: &Path,
     output_path: &Path,
@@ -964,10 +974,15 @@ fn transcode_video(
             .ok_or("No video stream found in file")?
             .parameters(),
     )
-    .map_err(|e| format!("Failed to create decoder: {e}"))?
-    .decoder()
-    .video()
     .map_err(|e| format!("Failed to create decoder: {e}"))?;
+    video_decoder.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::Frame,
+        count: import_decode_threads(),
+    });
+    let mut video_decoder = video_decoder
+        .decoder()
+        .video()
+        .map_err(|e| format!("Failed to create decoder: {e}"))?;
     if strict {
         video_decoder.check(ffmpeg::codec::decoder::Check::EXPLODE);
     }
@@ -1292,6 +1307,7 @@ struct H264Output {
     stream_index: usize,
     pixel_format: avformat::Pixel,
     packet: ffmpeg::Packet,
+    frame_duration: i64,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
@@ -1355,12 +1371,14 @@ fn open_h264_encoder(
                     fps,
                     "import H264 encoder ready"
                 );
+                let frame_duration = frame_duration_ticks(encoder.time_base(), fps);
                 return Ok(H264Output {
                     strict: false,
                     encoder,
                     stream_index,
                     pixel_format,
                     packet: ffmpeg::Packet::empty(),
+                    frame_duration,
                     first_pts: None,
                     last_frame_pts: None,
                     last_written_dts: None,
@@ -1400,6 +1418,10 @@ fn open_h264_with_codec(
         "libx264" => {
             options.set("preset", "veryfast");
             options.set("tune", "zerolatency");
+            // zerolatency also switches x264 to sliced threads, which encode one
+            // frame at a time. An offline import can take frame threads' few
+            // frames of delay; the stream stays free of B-frames and lookahead.
+            options.set("x264-params", "sliced-threads=0");
             options.set("g", &keyframe_interval);
             options.set("keyint_min", &keyframe_interval);
         }
@@ -1480,6 +1502,12 @@ impl H264Output {
             "Video encode",
         )? {
             self.packet.set_stream(self.stream_index);
+            // Encoders leave this at 0, and the mp4 muxer then gives the last
+            // sample no duration, so the edit list ends one frame early and
+            // players discard the final frame.
+            if self.packet.duration() <= 0 {
+                self.packet.set_duration(self.frame_duration);
+            }
             self.packet.rescale_ts(
                 self.encoder.time_base(),
                 output.stream(self.stream_index).unwrap().time_base(),
@@ -2081,6 +2109,154 @@ mod tests {
         assert_eq!(converted.height(), 12);
         assert_eq!(converted.pts(), Some(819));
         assert_ne!(converted.data(0).as_ptr(), original.data(0).as_ptr());
+    }
+
+    fn count_video_packets(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count()
+    }
+
+    fn decoded_video_frames(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut frames = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    frames += 1;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            frames += 1;
+        }
+        frames
+    }
+
+    fn decoded_audio_seconds(path: &Path) -> f64 {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Audio::empty();
+        let mut samples = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    samples += frame.samples();
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            samples += frame.samples();
+        }
+        samples as f64 / f64::from(decoder.rate())
+    }
+
+    #[test]
+    fn a_completed_conversion_keeps_every_source_frame_and_the_audio() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("complete-conversion");
+        let source = root.join("source.mp4");
+        std::fs::write(
+            &source,
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        let audio = root.join("audio.ogg");
+
+        let (fps, sample_rate) =
+            transcode_video(&source, &output, Some(&audio), &root, &|_| {}, None).unwrap();
+
+        assert_eq!(fps, 25);
+        assert!(sample_rate.is_some());
+        assert_eq!(count_video_packets(&source), 25);
+        assert_eq!(count_video_packets(&output), 25);
+        assert_eq!(decoded_video_frames(&output), 25);
+        let duration = media_duration(&output).unwrap().as_secs_f64();
+        assert!((duration - 1.0).abs() < 0.01, "{duration}");
+        let audio_seconds = decoded_audio_seconds(&audio);
+        assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: transcodes the videos named by CAP_IMPORT_BENCH_SOURCES"]
+    fn benchmark_video_import() {
+        ffmpeg::init().unwrap();
+        let sources = std::env::var("CAP_IMPORT_BENCH_SOURCES")
+            .expect("CAP_IMPORT_BENCH_SOURCES must list the videos to import");
+        let runs = std::env::var("CAP_IMPORT_BENCH_RUNS")
+            .ok()
+            .and_then(|runs| runs.parse::<usize>().ok())
+            .unwrap_or(3)
+            .max(1);
+
+        println!("| source | duration | median import | slowest | realtime |");
+        println!("| --- | ---: | ---: | ---: | ---: |");
+        for source in sources.split(',').map(PathBuf::from) {
+            let duration = media_duration(&source)
+                .expect("benchmark source has a duration")
+                .as_secs_f64();
+            let mut seconds = (0..runs)
+                .map(|_| {
+                    let root = temp_dir("bench");
+                    std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+                    let started = std::time::Instant::now();
+                    transcode_video(
+                        &source,
+                        &root.join("display.mp4"),
+                        Some(&root.join("audio.ogg")),
+                        &root,
+                        &|_| {},
+                        None,
+                    )
+                    .unwrap();
+                    let elapsed = started.elapsed().as_secs_f64();
+                    std::fs::remove_dir_all(root).unwrap();
+                    elapsed
+                })
+                .collect::<Vec<_>>();
+            seconds.sort_by(f64::total_cmp);
+            let middle = seconds.len() / 2;
+            let median = if seconds.len() % 2 == 0 {
+                (seconds[middle - 1] + seconds[middle]) / 2.0
+            } else {
+                seconds[middle]
+            };
+            println!(
+                "| {} | {duration:.1} s | {median:.2} s | {:.2} s | {:.2}x |",
+                source.file_name().unwrap().to_string_lossy(),
+                seconds[seconds.len() - 1],
+                duration / median,
+            );
+        }
     }
 }
 
