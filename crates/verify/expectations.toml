@@ -266,6 +266,22 @@ bound = { count = 1, camera-mic-ms = [-70, 0] }
 reason = "NEW: same Windows camera frame pacing, past the drift anchor (camera vs mic -38.3 ms in run 39000141528, -18.4 ms in run 39004015045). Bound: two frame periods early"
 link = ""
 
+
+[[xfail]]
+case = "recording/*studio*"
+class = "export-timing"
+flaky = true
+bound = { count = 1, late-pct = [0, 5], delay-frames = [1, 2] }
+reason = "NEW: export frame requests and source frames follow different grid rules. A request asks for frame floor(t * fps) with t an f32 (crates/rendering/src/decoder/avassetreader.rs, ffmpeg.rs and media_foundation.rs), so export frame 126 at 30 fps (t = 4.2 s) computes 125.99999 and floors to 125, while source frames are labelled round(pts * fps) (pts_to_frame). At those export frames the previous picture shows again, and the next picture arrives one export frame late (7 of 388 pictures on a MacBook Pro, up to 1.5 export frames after their recorded time; 8 of 471 at 60 fps). The decoder model's grid-rounding entries are the same mechanism. Bound: under two export frames, at most 5% of pictures"
+link = ""
+
+[[xfail]]
+case = "recording/*studio*"
+class = "export-missing"
+flaky = true
+bound = { count = 1, missing-pct = [0, 1] }
+reason = "NEW: the same request and source grid mismatch as the export-timing entry: when it falls on consecutive pictures, one is never the answer to any export request (1 of 390 pictures in 1 of 4 runs of recording/studio-camera/long on a MacBook Pro). Bound: at most 1% of pictures"
+link = ""
 [[xfail]]
 case = "recording/instant/system-only"
 class = "sync-screen-system"

@@ -27,7 +27,10 @@ use std::{
 };
 
 use cap_media_info::{RawVideoFormat, VideoInfo};
-use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+use cap_project::{
+    InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, XY,
+};
 use cap_recording::{
     NativeCameraFrame, RecordingDefaults, StudioQuality,
     feeds::{
@@ -1415,6 +1418,9 @@ async fn run_case(
         let before = case.checkpoint();
         IMPLICATED.with(|m| m.borrow_mut().clear());
         analyze(&recorded, reference, case)?;
+        if matches!(spec.mode, Mode::Studio { .. }) {
+            check_export(&recorded, case).await?;
+        }
         let implicated = IMPLICATED.with(|m| std::mem::take(&mut *m.borrow_mut()));
         let excuse = (!product_failed)
             .then(|| frozen_failures(case, before.problems(), &implicated, &freezes))
@@ -3711,6 +3717,226 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         mic.as_ref(),
         system.as_ref(),
     );
+    Ok(())
+}
+
+/// Marker index to the first time a track shows it, on the recording's
+/// timeline (seconds after the recording started), and frames without a
+/// readable screen marker.
+fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, usize)> {
+    let mut first = BTreeMap::new();
+    let mut unreadable = 0;
+    media::decode_video(path, |picture| {
+        match video_code::read_stream(&picture.view(), StreamKind::Screen) {
+            Readout::Marker { marker, .. } if marker.kind == StreamKind::Screen => {
+                first
+                    .entry(marker.index)
+                    .or_insert(offset + picture.pts_secs);
+            }
+            _ => unreadable += 1,
+        }
+    })?;
+    Ok((first, unreadable))
+}
+
+fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<BTreeMap<u32, f64>> {
+    let decoded = media::decode_audio(path, Some(48_000))?;
+    Ok(
+        audio_code::locate_markers(&decoded.mono(), decoded.sample_rate, AudioSource::Mic)
+            .into_iter()
+            .filter_map(|m| Some((m.index?, offset + decoded.start_secs + m.time_secs)))
+            .collect(),
+    )
+}
+
+/// Exports a finished Studio recording at its capture rate and checks the
+/// export against the recording's own tracks, so it fails only for what the
+/// editor and exporter do to them:
+/// - every screen picture the display track shows for at least one export
+///   frame interval is in the export;
+/// - each is first shown within one export frame interval of its recorded
+///   time (the renderer places a frame on the export's grid, so up to one
+///   interval either way);
+/// - each microphone marker plays at its recorded time.
+///
+/// Finalization once stored the display track's average rate as its fps.
+/// Decoders placed frames on that coarse grid, so exports dropped pictures
+/// and drifted from the audio while the tracks themselves were fine.
+async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
+    const EDGE_SECS: f64 = 0.3;
+    const SLACK_SECS: f64 = 0.002;
+    const MIC_TOLERANCE_SECS: f64 = 0.005;
+
+    let layout = layout(&rec.project, case)?;
+    // The editor's timeline starts where the last track started.
+    let timeline_start = [
+        Some(&layout.display),
+        layout.camera.as_ref(),
+        layout.mic.as_ref(),
+        layout.system.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|track| track.start)
+    .fold(layout.display.start, f64::max);
+    let (raw, _) = screen_first_seen(&layout.display.path, layout.display.start)?;
+    let (width, height) = {
+        let input = ffmpeg::format::input(&layout.display.path)?;
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| anyhow::anyhow!("display track has no video stream"))?;
+        let video = ffmpeg::codec::Context::from_parameters(stream.parameters())?
+            .decoder()
+            .video()?;
+        (video.width(), video.height())
+    };
+    let fps = rec.max_fps;
+    let interval = 1.0 / f64::from(fps);
+    let out = rec.project.join("verify-export.mp4");
+    let config = ProjectConfiguration::load(&rec.project).unwrap_or_default();
+    let base = cap_export::ExporterBase::builder(rec.project.clone())
+        .with_config(config)
+        .with_output_path(out.clone())
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("exporter build: {e}"))?;
+    let exported = cap_export::mp4::Mp4ExportSettings {
+        fps,
+        resolution_base: XY::new(width, height),
+        compression: cap_export::mp4::ExportCompression::Social,
+        custom_bpp: None,
+        force_ffmpeg_decoder: false,
+        optimize_filesize: false,
+    }
+    .export(base, |_| true)
+    .await;
+    let path = match exported {
+        Ok(path) => path,
+        Err(e) => {
+            case.problem("export", format!("export failed: {e}"));
+            return Ok(());
+        }
+    };
+    let (shown, unreadable) = screen_first_seen(&path, timeline_start)?;
+
+    let raw_end = raw.values().copied().fold(f64::MIN, f64::max);
+    let ordered: Vec<(u32, f64)> = {
+        let mut v: Vec<(u32, f64)> = raw.iter().map(|(i, t)| (*i, *t)).collect();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v
+    };
+    let required: Vec<(u32, f64)> = ordered
+        .windows(2)
+        .filter(|w| w[1].1 - w[0].1 >= interval + SLACK_SECS)
+        .map(|w| w[0])
+        .filter(|(_, t)| *t >= timeline_start + EDGE_SECS && *t <= raw_end - EDGE_SECS)
+        .collect();
+    let missing: Vec<u32> = required
+        .iter()
+        .filter(|(i, _)| !shown.contains_key(i))
+        .map(|(i, _)| *i)
+        .collect();
+    let pct = |n: usize| (n as f64 * 1000.0 / required.len().max(1) as f64).round() / 10.0;
+    if !missing.is_empty() {
+        case.measure("export-missing", "missing-pct", pct(missing.len()));
+        case.problem(
+            "export-missing",
+            format!(
+                "export: {} of {} screen pictures the display track shows for at least one {fps} fps frame are not in the export, first {:?}",
+                missing.len(),
+                required.len(),
+                &missing[..missing.len().min(8)]
+            ),
+        );
+    }
+
+    let delays: Vec<(u32, f64)> = required
+        .iter()
+        .filter_map(|(i, t)| shown.get(i).map(|e| (*i, e - t)))
+        .collect();
+    let worst_delay = delays
+        .iter()
+        .map(|(_, d)| *d)
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()));
+    case.note(format!(
+        "export: {fps} fps, {} screen pictures, {unreadable} frames without a screen marker, {} of {} required pictures missing, worst {:+.1} ms from the recorded time",
+        shown.len(),
+        missing.len(),
+        required.len(),
+        worst_delay.unwrap_or(f64::NAN) * 1e3
+    ));
+    let late: Vec<String> = delays
+        .iter()
+        .filter(|(_, d)| d.abs() > interval + SLACK_SECS)
+        .map(|(i, d)| {
+            format!(
+                "{i} {:+.1} ms (display pts {:.3} s)",
+                d * 1e3,
+                raw[i] - layout.display.start
+            )
+        })
+        .collect();
+    if !late.is_empty() {
+        case.measure("export-timing", "late-pct", pct(late.len()));
+        case.measure(
+            "export-timing",
+            "delay-frames",
+            (worst_delay.unwrap_or_default().abs() / interval * 100.0).round() / 100.0,
+        );
+        case.problem(
+            "export-timing",
+            format!(
+                "export: {} screen pictures shown more than one {fps} fps frame from their recorded time, first {}",
+                late.len(),
+                late[..late.len().min(5)].join(", ")
+            ),
+        );
+    }
+
+    if let Some(track) = layout.mic.as_ref().filter(|t| t.path.is_file())
+        && !rec.mic_truth.is_empty()
+    {
+        let raw_mic = mic_markers(&track.path, track.start)?;
+        let export_mic = mic_markers(&path, timeline_start)?;
+        let offsets: Vec<f64> = raw_mic
+            .iter()
+            .filter(|(_, t)| **t >= timeline_start + EDGE_SECS)
+            .filter_map(|(i, t)| export_mic.get(i).map(|e| e - t))
+            .collect();
+        if let Some(worst) = offsets
+            .iter()
+            .copied()
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        {
+            let mut sorted = offsets.clone();
+            sorted.sort_by(f64::total_cmp);
+            case.note(format!(
+                "export: {} microphone markers, offsets min {:+.1} median {:+.1} max {:+.1} ms from the recorded time",
+                offsets.len(),
+                sorted[0] * 1e3,
+                sorted[sorted.len() / 2] * 1e3,
+                sorted[sorted.len() - 1] * 1e3
+            ));
+            if worst.abs() > MIC_TOLERANCE_SECS {
+                case.measure("export-sync-mic", "offset-ms", (worst * 1e4).round() / 10.0);
+                case.problem(
+                    "export-sync-mic",
+                    format!(
+                        "export: microphone markers play up to {:+.1} ms from their recorded time ({} compared)",
+                        worst * 1e3,
+                        offsets.len()
+                    ),
+                );
+            }
+        } else {
+            case.problem(
+                "export-sync-mic",
+                "export: no microphone marker matched the mic track",
+            );
+        }
+    }
+    let _ = std::fs::remove_file(&path);
     Ok(())
 }
 
