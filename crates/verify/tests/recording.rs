@@ -3724,19 +3724,28 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
 /// timeline (seconds after the recording started), and frames without a
 /// readable screen marker.
 fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, usize)> {
+    let (samples, unreadable) = screen_samples(path)?;
     let mut first = BTreeMap::new();
+    for (index, pts) in samples {
+        first.entry(index).or_insert(offset + pts);
+    }
+    Ok((first, unreadable))
+}
+
+/// Every decoded frame's screen marker index and pts, in decode order, and
+/// frames without a readable screen marker.
+fn screen_samples(path: &Path) -> anyhow::Result<(Vec<(u32, f64)>, usize)> {
+    let mut samples = Vec::new();
     let mut unreadable = 0;
     media::decode_video(path, |picture| {
         match video_code::read_stream(&picture.view(), StreamKind::Screen) {
             Readout::Marker { marker, .. } if marker.kind == StreamKind::Screen => {
-                first
-                    .entry(marker.index)
-                    .or_insert(offset + picture.pts_secs);
+                samples.push((marker.index, picture.pts_secs));
             }
             _ => unreadable += 1,
         }
     })?;
-    Ok((first, unreadable))
+    Ok((samples, unreadable))
 }
 
 /// The first export frame at `export_fps` that shows the source picture
@@ -3938,19 +3947,45 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
     let screen_offset = timeline_start - layout.display.start;
     let first_frame =
         |label: f64| contract_first_frame(label, source_fps, f64::from(fps), screen_offset);
+    // A pts exactly between two grid frames (a 60 Hz picture on a 30 fps
+    // grid) rounds either way depending on the last bit of the arithmetic;
+    // both labels are the contract.
+    let labels_of = |pts: f64| {
+        let slot = pts * source_fps;
+        if (slot - slot.floor() - 0.5).abs() < 1e-6 {
+            vec![slot.floor(), slot.ceil()]
+        } else {
+            vec![slot.round()]
+        }
+    };
+    // Every label each picture's frames carry, pictures in the order they
+    // first show. When a picture's first frame shares its label with the
+    // previous picture's frames, the decoder may answer that label with
+    // either picture, so this picture can first show at any of its labels.
+    let (samples, _) = screen_samples(&layout.display.path)?;
+    let mut picture_labels: Vec<(u32, Vec<f64>, Vec<f64>)> = Vec::new();
+    for (index, pts) in samples {
+        let labels = labels_of(pts);
+        match picture_labels.iter_mut().find(|(i, _, _)| *i == index) {
+            Some((_, _, all)) => all.extend(labels),
+            None => picture_labels.push((index, labels.clone(), labels)),
+        }
+    }
+    let legal_labels = |index: u32| {
+        let at = picture_labels.iter().position(|(i, _, _)| *i == index)?;
+        let (_, first, all) = &picture_labels[at];
+        let shares = at > 0
+            && picture_labels[at - 1]
+                .2
+                .iter()
+                .any(|label| first.contains(label));
+        Some(if shares { all.clone() } else { first.clone() })
+    };
     let off_contract: Vec<String> = required
         .iter()
         .filter_map(|(i, t)| {
             let shown_at = shown.get(i)?;
-            // A pts exactly between two grid frames (a 60 Hz picture on a
-            // 30 fps grid) rounds either way depending on the last bit of
-            // the arithmetic; both labels are the contract.
-            let slot = (t - layout.display.start) * source_fps;
-            let labels = if (slot - slot.floor() - 0.5).abs() < 1e-6 {
-                vec![slot.floor(), slot.ceil()]
-            } else {
-                vec![slot.round()]
-            };
+            let labels = legal_labels(*i)?;
             let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
             let expected = first_frame(labels[0]);
             (!labels.iter().any(|label| first_frame(*label) == frame)).then(|| {
