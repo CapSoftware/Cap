@@ -31,7 +31,10 @@ def main():
     command = ["cargo", *PROFILE, "test", "--locked", "-p", "cap-verify", "--profile", "perf-verify", "--no-run", "--message-format", "json"]
     for target in TARGETS:
         command += ["--test", target]
-    result = subprocess.run(command, cwd=worktree, stdout=subprocess.PIPE, text=True, check=True)
+    result = subprocess.run(command, cwd=worktree, stdout=subprocess.PIPE, text=True)
+    if result.returncode:
+        print(result.stdout, end="", flush=True)
+        result.check_returncode()
     binaries = {}
     for line in result.stdout.splitlines():
         try:
