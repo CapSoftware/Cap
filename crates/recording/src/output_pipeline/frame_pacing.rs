@@ -23,9 +23,7 @@ use std::{
 const STALL_INTERVALS: u32 = 3;
 
 pub(crate) enum Paced<F> {
-    /// A frame from the source and its timestamp.
     Frame(F, Duration),
-    /// Encode the last frame again at this timestamp.
     Repeat(Duration),
     End,
 }
@@ -33,6 +31,7 @@ pub(crate) enum Paced<F> {
 pub(crate) struct FramePacer {
     interval: Duration,
     last: Option<LastFrame>,
+    paused_since: Option<Instant>,
 }
 
 struct LastFrame {
@@ -46,23 +45,44 @@ impl FramePacer {
         Self {
             interval: Duration::from_secs_f64(1.0 / f64::from(frame_rate.max(1))),
             last: None,
+            paused_since: None,
         }
     }
 
     /// Blocks until a frame arrives, the source has been silent long enough
-    /// to repeat the last one, or the stream ends. While `paused`, nothing is
-    /// repeated and the next frame starts afresh.
+    /// to repeat the last one, or the stream ends. Nothing repeats while
+    /// `paused`. Frame timestamps exclude paused time, so on resume the last
+    /// frame counts as having arrived that much later, and repeats continue
+    /// on its grid two intervals behind real time: a source that sends
+    /// nothing until the screen changes still gets the resumed span. Waits
+    /// are cut to half an interval so a pause is timed to within that.
     pub(crate) fn next<F>(
         &mut self,
         rx: &Receiver<Option<(F, Duration)>>,
         paused: &AtomicBool,
     ) -> Paced<F> {
+        let slice = self.interval / 2;
         loop {
-            let received = match &self.last {
+            let is_paused = paused.load(Ordering::Acquire);
+            match (is_paused, self.paused_since) {
+                (true, None) => self.paused_since = Some(Instant::now()),
+                (false, Some(since)) => {
+                    if let Some(last) = self.last.as_mut() {
+                        last.arrived += since.elapsed();
+                    }
+                    self.paused_since = None;
+                }
+                _ => {}
+            }
+            let due = self
+                .last
+                .as_ref()
+                .map(|last| last.arrived + self.interval * (STALL_INTERVALS + last.repeats));
+            let received = match due {
                 None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                Some(last) => {
-                    let due = last.arrived + self.interval * (STALL_INTERVALS + last.repeats);
-                    rx.recv_timeout(due.saturating_duration_since(Instant::now()))
+                Some(_) if is_paused => rx.recv_timeout(slice),
+                Some(due) => {
+                    rx.recv_timeout(due.saturating_duration_since(Instant::now()).min(slice))
                 }
             };
             match received {
@@ -76,8 +96,7 @@ impl FramePacer {
                 }
                 Ok(None) | Err(RecvTimeoutError::Disconnected) => return Paced::End,
                 Err(RecvTimeoutError::Timeout) => {
-                    if paused.load(Ordering::Acquire) {
-                        self.last = None;
+                    if is_paused || due.is_some_and(|due| Instant::now() < due) {
                         continue;
                     }
                     let Some(last) = self.last.as_mut() else {
@@ -94,7 +113,7 @@ impl FramePacer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::sync_channel;
+    use std::sync::{Arc, mpsc::sync_channel};
 
     // Long intervals so a loaded runner's oversleep (tens of ms) never
     // reaches the three-interval stall in the jitter test.
@@ -173,6 +192,36 @@ mod tests {
         assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(2, ts) if ts == at(40)));
         assert!(matches!(pacer.next(&rx, &paused), Paced::End));
         sender.join().unwrap();
+    }
+
+    #[test]
+    fn repeats_resume_after_a_pause_on_the_last_frames_grid() {
+        let (tx, rx) = sync_channel(4);
+        let mut pacer = FramePacer::new(FPS);
+        let paused = Arc::new(AtomicBool::new(false));
+        tx.send(Some((1u32, at(5)))).unwrap();
+        assert!(matches!(pacer.next(&rx, &paused), Paced::Frame(1, _)));
+        let start = Instant::now();
+        paused.store(true, Ordering::Release);
+        let resumer = {
+            let paused = paused.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(INTERVAL * 6);
+                paused.store(false, Ordering::Release);
+            })
+        };
+        // A static screen: nothing arrives after the resume either.
+        let Paced::Repeat(first) = pacer.next(&rx, &paused) else {
+            panic!("expected a repeat after the resume");
+        };
+        assert_eq!(first, at(6));
+        assert!(start.elapsed() >= INTERVAL * (6 + STALL_INTERVALS));
+        let Paced::Repeat(second) = pacer.next(&rx, &paused) else {
+            panic!("expected a repeat");
+        };
+        assert_eq!(second, at(7));
+        resumer.join().unwrap();
+        drop(tx);
     }
 
     #[test]
