@@ -323,7 +323,7 @@ impl RecordingMeta {
     fn normalize_paths(&mut self) {
         let normalize_video = |meta: &mut VideoMeta| normalize_relative_path(&mut meta.path);
         let normalize_audio = |meta: &mut AudioMeta| normalize_relative_path(&mut meta.path);
-        let normalize_cursor = |path: &mut Option<RelativePathBuf>| {
+        let normalize_optional_path = |path: &mut Option<RelativePathBuf>| {
             if let Some(path) = path {
                 normalize_relative_path(path);
             }
@@ -339,7 +339,7 @@ impl RecordingMeta {
                     if let Some(audio) = &mut segment.audio {
                         normalize_audio(audio);
                     }
-                    normalize_cursor(&mut segment.cursor);
+                    normalize_optional_path(&mut segment.cursor);
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     for segment in &mut inner.segments {
@@ -353,7 +353,8 @@ impl RecordingMeta {
                         if let Some(system_audio) = &mut segment.system_audio {
                             normalize_audio(system_audio);
                         }
-                        normalize_cursor(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.keyboard);
                     }
 
                     if let Cursors::Correct(cursors) = &mut inner.cursors {
@@ -376,6 +377,7 @@ fn normalize_relative_path(path: &mut RelativePathBuf) {
         || normalized.starts_with("screenshots/")
         || normalized.starts_with("output/")
     {
+        *path = RelativePathBuf::from(normalized);
         return;
     }
 

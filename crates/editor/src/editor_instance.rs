@@ -115,6 +115,21 @@ impl PreviewCursorCache {
     }
 }
 
+fn refresh_project_snapshot(
+    project_rx: &mut watch::Receiver<ProjectConfiguration>,
+    snapshot: &mut Arc<ProjectConfiguration>,
+) -> bool {
+    let refreshed = {
+        let project = project_rx.borrow_and_update();
+        if !project.has_changed() {
+            return false;
+        }
+        Arc::new(project.clone())
+    };
+    *snapshot = refreshed;
+    true
+}
+
 fn get_video_duration_fallback(path: &Path) -> Option<f64> {
     tracing::debug!("get_video_duration_fallback called for: {:?}", path);
     let input = match ffmpeg::format::input(path) {
@@ -985,6 +1000,7 @@ impl EditorInstance {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
             let mut cursor_cache = PreviewCursorCache::default();
             let mut project_rx = self.project_config.1.clone();
+            let mut project = Arc::new(project_rx.borrow_and_update().clone());
             let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
             let mut outgoing_zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
 
@@ -1011,14 +1027,10 @@ impl EditorInstance {
                         break;
                     }
 
-                    let project = {
-                        let project = project_rx.borrow_and_update();
-                        if project.has_changed() {
-                            zoom_timelines.clear();
-                            outgoing_zoom_timelines.clear();
-                        }
-                        project.clone()
-                    };
+                    if refresh_project_snapshot(&mut project_rx, &mut project) {
+                        zoom_timelines.clear();
+                        outgoing_zoom_timelines.clear();
+                    }
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1118,12 +1130,23 @@ impl EditorInstance {
                                     _ = preview_rx.changed() => {
                                         continue;
                                     }
-                                    frames = outgoing_media.decoders.get_frames_initial(
-                                        outgoing.source_time as f32,
-                                        project.requires_camera(),
-                                        true,
-                                        outgoing_offsets,
-                                    ) => frames,
+                                    frames = async {
+                                        let decoders = if outgoing.segment.recording_clip
+                                            == segment.recording_clip
+                                        {
+                                            outgoing_media.decoders.transition_side().await
+                                        } else {
+                                            &outgoing_media.decoders
+                                        };
+                                        decoders
+                                            .get_frames_initial(
+                                                outgoing.source_time as f32,
+                                                project.requires_camera(),
+                                                true,
+                                                outgoing_offsets,
+                                            )
+                                            .await
+                                    } => frames,
                                 };
                                 if let Some(outgoing_frames) = outgoing_frames {
                                     let outgoing_zoom = outgoing_zoom_timelines
@@ -2237,6 +2260,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn preview_project_snapshot_is_shared_until_the_project_changes() {
+        let (_untouched_tx, untouched_rx) = watch::channel(ProjectConfiguration::default());
+        let (edited_tx, edited_rx) = watch::channel(ProjectConfiguration::default());
+        edited_tx.send_modify(|project| project.background.padding = 12.0);
+
+        for (mut project_rx, padding) in [(untouched_rx, 0.0), (edited_rx, 12.0)] {
+            let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
+            let initial = Arc::clone(&snapshot);
+            for _ in 0..3 {
+                assert!(!refresh_project_snapshot(&mut project_rx, &mut snapshot));
+                assert!(Arc::ptr_eq(&snapshot, &initial));
+            }
+            assert_eq!(snapshot.background.padding, padding);
+        }
+    }
+
+    #[test]
+    fn preview_project_snapshot_refreshes_once_to_the_latest_project() {
+        let (project_tx, mut project_rx) = watch::channel(ProjectConfiguration::default());
+        let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
+        let initial = Arc::clone(&snapshot);
+
+        for padding in [4.0, 8.0, 16.0] {
+            project_tx.send_modify(|project| project.background.padding = padding);
+        }
+
+        assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot));
+        assert!(!Arc::ptr_eq(&snapshot, &initial));
+        assert_eq!(snapshot.background.padding, 16.0);
+        assert_eq!(initial.background.padding, 0.0);
+
+        let refreshed = Arc::clone(&snapshot);
+        assert!(!refresh_project_snapshot(&mut project_rx, &mut snapshot));
+        assert!(Arc::ptr_eq(&snapshot, &refreshed));
     }
 
     #[test]
