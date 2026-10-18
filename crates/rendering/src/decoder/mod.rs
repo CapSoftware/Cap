@@ -709,14 +709,20 @@ pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
 /// 4.1999998 s), plus a step or two from the offsets added on the way; a
 /// plain floor then asks for the frame before.
 const REQUEST_SLACK_STEPS: f32 = 4.0;
+/// Most slack, in frames. Past two hours at 240 fps four f32 steps near a
+/// whole frame while half a step is still under a tenth of one, so the cap
+/// keeps an aligned request off the next frame.
+const REQUEST_SLACK_MAX_FRAMES: f64 = 0.25;
 
 /// The decoder grid index a request for `time` asks for: the frame on screen
 /// at `time`, `floor(time * fps)` once `time` is lifted by
-/// [`REQUEST_SLACK_STEPS`] f32 steps.
+/// [`REQUEST_SLACK_STEPS`] f32 steps, at most [`REQUEST_SLACK_MAX_FRAMES`].
 pub fn request_frame(time: f32, fps: u32) -> u32 {
     let magnitude = time.abs();
     let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
-    ((f64::from(time) + f64::from(step * REQUEST_SLACK_STEPS)) * f64::from(fps)).floor() as u32
+    let fps = f64::from(fps);
+    let slack = (f64::from(step * REQUEST_SLACK_STEPS) * fps).min(REQUEST_SLACK_MAX_FRAMES);
+    (f64::from(time) * fps + slack).floor() as u32
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -1923,10 +1929,12 @@ mod tests {
 
     #[test]
     fn request_frame_maps_every_frame_time_back_to_its_frame() {
-        // Frame times as the renderer sends them: n / fps in an f32, for two
-        // hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame 125.
+        // Frame times as the renderer sends them: n / fps in an f32, for
+        // three hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame
+        // 125; uncapped slack maps frame 1,966,082 at 240 fps (8192.0088 s)
+        // to the next.
         for fps in [24, 25, 30, 50, 60, 120, 144, 240] {
-            let frames = if fps > 120 { 3600 } else { 7200 } * fps;
+            let frames = 3 * 3600 * fps;
             for n in 0..frames {
                 let time = (f64::from(n) / f64::from(fps)) as f32;
                 assert_eq!(request_frame(time, fps), n, "{n} at {fps} fps");
