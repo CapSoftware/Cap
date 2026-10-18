@@ -136,8 +136,8 @@ pub struct UploadProgressEvent {
 }
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
-const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
-const NETWORK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const MAX_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
+const NETWORK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CONNECTIVITY_PROBE_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const CONNECTIVITY_PROBE_MAX_DELAY: Duration = Duration::from_secs(30);
 
@@ -2761,7 +2761,7 @@ async fn probe_connectivity(app: &AppHandle) -> bool {
     let url = app.make_app_url("/").await;
     app.state::<HttpClient>()
         .head(&url)
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
         .send()
         .await
         .is_ok()
@@ -2781,7 +2781,7 @@ async fn wait_for_network_recovery(app: &AppHandle, video_id: &str) -> bool {
             error!(
                 video_id,
                 elapsed_secs = start.elapsed().as_secs(),
-                "Network recovery timeout exceeded (5 minutes), giving up"
+                "Network recovery timeout exceeded (30 minutes), giving up"
             );
             return false;
         }
