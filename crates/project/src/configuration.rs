@@ -2878,6 +2878,17 @@ impl ProjectConfiguration {
             config.text_anim_version = TEXT_ANIM_VERSION;
         }
 
+        // Auto-calculated camera offsets used to repeat the camera decoder's
+        // start-time alignment, playing the camera ahead by the same amount.
+        // The correct automatic value is always 0; user-entered offsets stay.
+        let mut needs_clip_offset_repair = false;
+        for clip in &mut config.clips {
+            if clip.offsets_auto_calculated && clip.offsets.camera != 0.0 {
+                clip.offsets.camera = 0.0;
+                needs_clip_offset_repair = true;
+            }
+        }
+
         config
             .validate()
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
@@ -2886,6 +2897,7 @@ impl ProjectConfiguration {
             || needs_motion_blur_clamp
             || needs_screen_motion_blur_migration
             || needs_text_size_migration
+            || needs_clip_offset_repair
         {
             match config.write(project_path) {
                 Ok(_) => {
@@ -4249,6 +4261,62 @@ mod tests {
                 "{}",
                 serde_json::json!({"transcript": transcript, "bytes": bytes, "median_ms": runs[10]})
             );
+        }
+    }
+
+    #[test]
+    fn load_resets_auto_calculated_camera_offsets_and_keeps_user_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ProjectConfiguration {
+            clips: vec![
+                ClipConfiguration {
+                    index: 0,
+                    offsets: ClipOffsets {
+                        camera: 1.0,
+                        mic: 0.25,
+                        system_audio: 0.5,
+                    },
+                    offsets_auto_calculated: true,
+                },
+                ClipConfiguration {
+                    index: 1,
+                    offsets: ClipOffsets {
+                        camera: -0.2,
+                        mic: 0.1,
+                        system_audio: 0.0,
+                    },
+                    offsets_auto_calculated: false,
+                },
+            ],
+            ..Default::default()
+        };
+        config.write(dir.path()).unwrap();
+
+        let loaded = ProjectConfiguration::load(dir.path()).unwrap();
+        let written: ProjectConfiguration = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("project-config.json")).unwrap(),
+        )
+        .unwrap();
+
+        for clips in [&loaded.clips, &written.clips] {
+            assert_eq!(
+                [
+                    clips[0].offsets.camera,
+                    clips[0].offsets.mic,
+                    clips[0].offsets.system_audio
+                ],
+                [0.0, 0.25, 0.5]
+            );
+            assert!(clips[0].offsets_auto_calculated);
+            assert_eq!(
+                [
+                    clips[1].offsets.camera,
+                    clips[1].offsets.mic,
+                    clips[1].offsets.system_audio
+                ],
+                [-0.2, 0.1, 0.0]
+            );
+            assert!(!clips[1].offsets_auto_calculated);
         }
     }
 
