@@ -96,7 +96,7 @@ function runCanView(
 ): Promise<"allowed" | "denied" | "password"> {
 	const policy = buildCanView(deps, TEST_VIDEO_ID);
 
-	const program = Effect.zipRight(
+	const program = Effect.andThen(
 		policy,
 		Effect.succeed("allowed" as const),
 	).pipe(
@@ -626,7 +626,7 @@ function runCanViewLoaded(
 ): Promise<"allowed" | "denied" | "password"> {
 	const policy = buildCanViewLoaded(deps, video, password);
 
-	const program = Effect.zipRight(
+	const program = Effect.andThen(
 		policy,
 		Effect.succeed("allowed" as const),
 	).pipe(

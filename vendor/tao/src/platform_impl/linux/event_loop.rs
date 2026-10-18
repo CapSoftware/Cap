@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-  cell::RefCell,
+  cell::{Cell, RefCell},
   collections::{HashSet, VecDeque},
   error::Error,
   process,
@@ -87,9 +87,8 @@ impl<T> EventLoopWindowTarget<T> {
   #[inline]
   pub fn primary_monitor(&self) -> Option<RootMonitorHandle> {
     let monitor = self.display.primary_monitor();
-    monitor.and_then(|monitor| {
-      let handle = MonitorHandle { monitor };
-      Some(RootMonitorHandle { inner: handle })
+    monitor.map(|monitor| RootMonitorHandle {
+      inner: MonitorHandle { monitor },
     })
   }
 
@@ -284,6 +283,15 @@ impl<T: 'static> EventLoop<T> {
 
     let mut taskbar = TaskbarIndicator::new();
     let is_wayland = window_target.is_wayland();
+
+    // Receive portal events
+    #[cfg(feature = "dbus")]
+    {
+      let tx_requests_clone = window_target.window_requests_tx.clone();
+      if let Err(e) = super::portal::receive_theme_changed(tx_requests_clone) {
+        log::debug!("Unable to receive theme changed events: {e}");
+      }
+    }
 
     // Window Request
     window_requests_rx.attach(Some(&context), move |(id, request)| {
@@ -688,8 +696,10 @@ impl<T: 'static> EventLoop<T> {
             });
 
             let tx_clone = event_tx.clone();
+            let last_motion_time = Rc::new(Cell::new(0u32));
             window.connect_motion_notify_event(move |window, motion| {
-              if cursor_moved {
+              let last = last_motion_time.replace(motion.time());
+              if cursor_moved && motion.time() != last {
                 if let Some(cursor) = motion.device() {
                   let scale_factor = window.scale_factor();
                   let (_, x, y) = cursor.window_at_position();
@@ -706,7 +716,7 @@ impl<T: 'static> EventLoop<T> {
                   }
                 }
               }
-              glib::Propagation::Stop
+              glib::Propagation::Proceed
             });
 
             let tx_clone = event_tx.clone();
@@ -723,55 +733,63 @@ impl<T: 'static> EventLoop<T> {
             });
 
             let tx_clone = event_tx.clone();
+            let last_press_time = Rc::new(Cell::new(0u32));
             window.connect_button_press_event(move |_, event| {
-              let button = event.button();
-              if let Err(e) = tx_clone.send(Event::WindowEvent {
-                window_id: RootWindowId(id),
-                event: WindowEvent::MouseInput {
-                  button: match button {
-                    1 => MouseButton::Left,
-                    2 => MouseButton::Middle,
-                    3 => MouseButton::Right,
-                    _ => MouseButton::Other(button as u16),
+              let last = last_press_time.replace(event.time());
+              if event.time() != last {
+                let button = event.button();
+                if let Err(e) = tx_clone.send(Event::WindowEvent {
+                  window_id: RootWindowId(id),
+                  event: WindowEvent::MouseInput {
+                    button: match button {
+                      1 => MouseButton::Left,
+                      2 => MouseButton::Middle,
+                      3 => MouseButton::Right,
+                      _ => MouseButton::Other(button as u16),
+                    },
+                    state: ElementState::Pressed,
+                    device_id: DEVICE_ID,
+                    // this field is depracted so it is fine to pass empty state
+                    modifiers: ModifiersState::empty(),
                   },
-                  state: ElementState::Pressed,
-                  device_id: DEVICE_ID,
-                  // this field is depracted so it is fine to pass empty state
-                  modifiers: ModifiersState::empty(),
-                },
-              }) {
-                log::warn!(
-                  "Failed to send mouse input pressed event to event channel: {}",
-                  e
-                );
+                }) {
+                  log::warn!(
+                    "Failed to send mouse input pressed event to event channel: {}",
+                    e
+                  );
+                }
               }
-              glib::Propagation::Stop
+              glib::Propagation::Proceed
             });
 
             let tx_clone = event_tx.clone();
+            let last_release_time = Rc::new(Cell::new(0u32));
             window.connect_button_release_event(move |_, event| {
-              let button = event.button();
-              if let Err(e) = tx_clone.send(Event::WindowEvent {
-                window_id: RootWindowId(id),
-                event: WindowEvent::MouseInput {
-                  button: match button {
-                    1 => MouseButton::Left,
-                    2 => MouseButton::Middle,
-                    3 => MouseButton::Right,
-                    _ => MouseButton::Other(button as u16),
+              let last = last_release_time.replace(event.time());
+              if event.time() != last {
+                let button = event.button();
+                if let Err(e) = tx_clone.send(Event::WindowEvent {
+                  window_id: RootWindowId(id),
+                  event: WindowEvent::MouseInput {
+                    button: match button {
+                      1 => MouseButton::Left,
+                      2 => MouseButton::Middle,
+                      3 => MouseButton::Right,
+                      _ => MouseButton::Other(button as u16),
+                    },
+                    state: ElementState::Released,
+                    device_id: DEVICE_ID,
+                    // this field is depracted so it is fine to pass empty state
+                    modifiers: ModifiersState::empty(),
                   },
-                  state: ElementState::Released,
-                  device_id: DEVICE_ID,
-                  // this field is depracted so it is fine to pass empty state
-                  modifiers: ModifiersState::empty(),
-                },
-              }) {
-                log::warn!(
-                  "Failed to send mouse input released event to event channel: {}",
-                  e
-                );
+                }) {
+                  log::warn!(
+                    "Failed to send mouse input released event to event channel: {}",
+                    e
+                  );
+                }
               }
-              glib::Propagation::Stop
+              glib::Propagation::Proceed
             });
 
             let tx_clone = event_tx.clone();
@@ -911,7 +929,7 @@ impl<T: 'static> EventLoop<T> {
                 let background_color = unsafe {
                   window
                     .data::<Option<crate::window::RGBA>>("background_color")
-                    .and_then(|c| c.as_ref().clone())
+                    .and_then(|c| *c.as_ref())
                 };
 
                 let rgba = background_color
@@ -949,9 +967,15 @@ impl<T: 'static> EventLoop<T> {
           }
           WindowRequest::SetTheme(theme) => {
             if let Some(settings) = Settings::default() {
-              match theme {
-                Some(Theme::Dark) => settings.set_gtk_application_prefer_dark_theme(true),
-                Some(Theme::Light) | None => settings.set_gtk_application_prefer_dark_theme(false),
+              settings.set_gtk_application_prefer_dark_theme(theme == Some(Theme::Dark));
+              if let Err(e) = event_tx.send(Event::WindowEvent {
+                window_id: RootWindowId(id),
+                event: WindowEvent::ThemeChanged(theme.unwrap_or_default()),
+              }) {
+                log::warn!(
+                  "Failed to send window theme changed event to event channel: {}",
+                  e
+                );
               }
             }
           }
@@ -1011,7 +1035,7 @@ impl<T: 'static> EventLoop<T> {
   /// There are a dew notibale event will sent to callback when state is transisted:
   /// - On any state moves to `LoopDestroyed`, a `LoopDestroyed` event is sent.
   /// - On `NewStart` to `EventQueue`, a `NewEvents` with corresponding `StartCause` depends on
-  /// current control flow is sent.
+  ///   current control flow is sent.
   /// - On `EventQueue` to `DrawQueue`, a `MainEventsCleared` event is sent.
   /// - On `DrawQueue` back to `NewStart`, a `RedrawEventsCleared` event is sent.
   pub(crate) fn run_return<F>(&mut self, mut callback: F) -> i32
@@ -1035,6 +1059,15 @@ impl<T: 'static> EventLoop<T> {
         let draws = &self.draws;
 
         window_target.p.app.activate();
+
+        // If this is a secondary (remote) GIO instance, the activate signal
+        // was forwarded to the primary instance via D-Bus. Exit immediately so
+        // the primary can handle focus (e.g. bring its window to front).
+        // Without this, the secondary hangs forever waiting for a StartCause::Init
+        // event that never arrives (connect_activate only fires on the primary).
+        if window_target.p.app.is_remote() {
+          return 0;
+        }
 
         let mut state = EventState::NewStart;
         let exit_code = loop {
@@ -1098,7 +1131,7 @@ impl<T: 'static> EventLoop<T> {
             EventState::EventQueue => match control_flow {
               ControlFlow::ExitWithCode(code) => {
                 callback(Event::LoopDestroyed, window_target, &mut control_flow);
-                break (code);
+                break code;
               }
               _ => match events.try_recv() {
                 Ok(event) => match event {

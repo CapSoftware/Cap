@@ -69,7 +69,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 				name: data.name,
 				color: data.color,
 				public: data.public,
-				spaceId: Option.fromNullable(activeSpace?.id),
+				spaceId: Option.fromNullishOr(activeSpace?.id),
 				parentId: Option.some(parentFolderId),
 			}),
 		onSuccess: () => {

@@ -9,8 +9,7 @@
 //! them would mean inventing a shared component neither app has.
 //!
 //! The indicator does not slide (no transform in this gpui rev); the selected
-//! item paints the `size-9 rounded-lg bg-gray-3` box itself, which is what the
-//! editor window has always done.
+//! item paints its own `active-bg` box.
 //!
 //! Each tab is exactly one element -- the pill. A wrapper carrying the hit box,
 //! the tooltip anchor or a focus ring would paint its own square corners around
@@ -58,22 +57,12 @@ pub struct TabRail {
     id: ElementId,
     items: Vec<TabRailItem>,
     height: Pixels,
-    box_size: Pixels,
-    box_width: Pixels,
-    icon_size: Pixels,
     bg: Hsla,
-    border: Hsla,
-    indicator: Hsla,
-    hover: Hsla,
-    selected_icon: Hsla,
-    idle_icon: Hsla,
     theme: Theme,
     on_select: Option<TabHandler>,
 }
 
 impl TabRail {
-    /// The editor's config sidebar rail: a 46px bar on the card surface under
-    /// an `ed-line` hairline, with 40x30 tab boxes and 16px icons.
     pub fn editor(
         theme: &Theme,
         id: impl Into<ElementId>,
@@ -83,16 +72,8 @@ impl TabRail {
         Self {
             id: id.into(),
             items,
-            height: px(46.),
-            box_size: px(30.),
-            box_width: px(40.),
-            icon_size: px(16.),
+            height: px(40.),
             bg: panel_bg,
-            border: Hsla::from(theme.editor.line),
-            indicator: Hsla::from(theme.editor.ctl_hover),
-            hover: Hsla::from(theme.editor.ctl),
-            selected_icon: Hsla::from(theme.editor.text_1),
-            idle_icon: Hsla::from(theme.editor.text_2),
             theme: *theme,
             on_select: None,
         }
@@ -117,18 +98,12 @@ impl RenderOnce for TabRail {
             id,
             items,
             height,
-            box_size,
-            box_width,
-            icon_size,
             bg,
-            border,
-            indicator,
-            hover,
-            selected_icon,
-            idle_icon,
             theme,
             on_select,
         } = self;
+        let hover_bg = theme.hover_bg;
+        let hover_icon = theme.text_hover;
 
         let prefix: SharedString = match &id {
             ElementId::Name(name) => name.clone(),
@@ -145,39 +120,50 @@ impl RenderOnce for TabRail {
             .h(height)
             .flex_none()
             .overflow_hidden()
-            .rounded_t(px(11.))
+            .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .justify_around()
-            .px(px(10.))
+            .px(px(8.))
             .border_b_1()
-            .border_color(border)
+            .border_color(theme.border)
             .bg(bg)
             .children(items.into_iter().enumerate().map(|(index, item)| {
                 let handler = handler.clone();
                 let selected = item.selected;
                 let disabled = item.disabled;
                 let label = item.label.clone();
+                let group = SharedString::from(format!("{prefix}-{index}-group"));
+                let icon = if disabled {
+                    theme.text_muted
+                } else if selected {
+                    theme.text_active
+                } else {
+                    theme.text_interactive
+                };
+                let interactive = !selected && !disabled;
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
+                    .group(group.clone())
                     .flex()
                     .flex_none()
                     .items_center()
                     .justify_center()
-                    .h(box_size)
-                    .w(box_width)
-                    .rounded(px(9.))
-                    .when(disabled, |this| this.opacity(0.6))
-                    .when(selected, |this| this.bg(indicator))
-                    .when(!selected && !disabled, |this| {
-                        this.cursor_pointer().hover(move |style| style.bg(hover))
+                    .h(px(28.))
+                    .w(px(32.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                    .when(selected, |this| this.bg(theme.active_bg))
+                    .when(interactive, |this| {
+                        this.cursor_pointer().hover(move |style| style.bg(hover_bg))
                     })
                     .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label.clone()).view(cx))
                     .child(
-                        svg()
-                            .path(item.icon)
-                            .size(icon_size)
-                            .text_color(if selected { selected_icon } else { idle_icon }),
+                        svg().path(item.icon).size(px(16.)).text_color(icon).when(
+                            interactive,
+                            |this| {
+                                this.group_hover(group, move |style| style.text_color(hover_icon))
+                            },
+                        ),
                     )
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))

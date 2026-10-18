@@ -1,10 +1,10 @@
+import { Layer } from "effect";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-} from "@effect/platform";
-import { Layer } from "effect";
+} from "effect/http-api";
 import { isMcpRedirectUri, mcpIssuer, registerMcpClient } from "@/lib/mcp-auth";
 import { mcpApiToHandler, mcpRequest } from "@/lib/mcp-effect";
 import { readMcpBody } from "@/lib/mcp-http";
@@ -93,11 +93,11 @@ async function register(request: Request) {
 
 class Api extends HttpApi.make("CapMcpRegistrationApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.post("register")`/api/mcp/oauth/register`,
+		HttpApiEndpoint.post("register", "/api/mcp/oauth/register"),
 	),
 ) {}
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("register", () => mcpRequest(register)),

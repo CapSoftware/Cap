@@ -120,7 +120,7 @@ function mockSeatLookup({
 
 describe("updateSeatQuantity", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
+		vi.resetAllMocks();
 		resetMockDb();
 		mockStripe.subscriptions.update.mockResolvedValue({
 			id: "sub_1",

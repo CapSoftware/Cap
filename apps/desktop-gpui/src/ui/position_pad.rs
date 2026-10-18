@@ -82,13 +82,13 @@ impl PositionPad {
             x: x.clamp(0., 1.),
             y: y.clamp(0., 1.),
             bounds_cell: bounds,
-            bg: Hsla::from(theme.gray_2),
-            border: Hsla::from(theme.gray_3),
-            cross: Hsla::from(theme.gray_3),
-            knob_bg: Hsla::from(theme.gray_1),
+            bg: Hsla::from(theme.surface_secondary),
+            border: Hsla::from(theme.surface_subtle),
+            cross: Hsla::from(theme.surface_subtle),
+            knob_bg: Hsla::from(theme.surface),
             // `border-gray-400`, the legacy scale the source names here.
-            knob_border: Hsla::from(theme.gray_400_legacy),
-            dot: Hsla::from(theme.gray_5),
+            knob_border: Hsla::from(theme.border_strong),
+            dot: Hsla::from(theme.active_bg),
             on_press: None,
         }
     }
@@ -125,7 +125,7 @@ impl RenderOnce for PositionPad {
             .w_full()
             .h(px(PAD_HEIGHT))
             .overflow_hidden()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
             .border_color(border)
             .bg(bg)
@@ -168,14 +168,19 @@ impl RenderOnce for PositionPad {
                     .ml(px(-KNOB / 2.))
                     .mt(px(-KNOB / 2.))
                     .size(px(KNOB))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .border_1()
                     .border_color(knob_border)
                     .bg(knob_bg)
                     .flex()
                     .justify_center()
                     .items_center()
-                    .child(div().size(px(6.)).rounded_full().bg(dot)),
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                            .bg(dot),
+                    ),
             );
 
         if let Some(handler) = on_press {

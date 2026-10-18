@@ -7,6 +7,6 @@
 		"cap-demo": "./cap-demo.mjs"
 	},
 	"dependencies": {
-		"playwright-core": "^1.62.1"
+		"playwright-core": "^1.64.0"
 	}
 }

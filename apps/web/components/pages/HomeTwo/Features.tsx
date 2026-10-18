@@ -3,7 +3,6 @@ import {
 	ArrowDownToLine,
 	Captions,
 	Gauge,
-	Github,
 	HardDrive,
 	Lock,
 	MessageSquare,
@@ -11,6 +10,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { ComponentType } from "react";
+import { GithubIcon } from "@/components/icons/github-icon";
 import { Eyebrow } from "./Eyebrow";
 import {
 	BAND,
@@ -64,7 +64,7 @@ const FEATURES: Feature[] = [
 		title: "Truly open source",
 		body: "See exactly how Cap works, contribute the feature you need, or self host the whole thing. No black boxes.",
 		accent: "instant",
-		Icon: Github,
+		Icon: GithubIcon,
 	},
 	{
 		title: "Cap AI does the busywork",

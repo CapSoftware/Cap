@@ -7,7 +7,7 @@ import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { hasSsoAccess } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
-import { GeneratePortalLinkIntent } from "@workos-inc/node";
+import { GenerateLinkIntent } from "@workos-inc/node";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
@@ -169,13 +169,13 @@ export async function openOrganizationSsoPortal(
 	returnUrl.searchParams.set("organizationId", organizationId);
 	const successUrl = new URL(returnUrl);
 	successUrl.searchParams.set("sso_setup", "complete");
-	const result = await getWorkOS().portal.generateLink({
+	const result = await getWorkOS().adminPortal.generateLink({
 		organization: organization.id,
 		intent:
 			purpose === "domain_verification" ||
 			!organization.domains.some((entry) => entry.state === "verified")
-				? GeneratePortalLinkIntent.DomainVerification
-				: GeneratePortalLinkIntent.SSO,
+				? GenerateLinkIntent.DomainVerification
+				: GenerateLinkIntent.SSO,
 		returnUrl: returnUrl.toString(),
 		successUrl: successUrl.toString(),
 	});

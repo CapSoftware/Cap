@@ -2,18 +2,12 @@ import "server-only";
 
 import { AgentHttpAuthMiddlewareLive, AgentManagement } from "@cap/web-backend";
 import type { Agent } from "@cap/web-domain";
-import {
-	type HttpApi,
-	HttpApiBuilder,
-	HttpMiddleware,
-	HttpServer,
-} from "@effect/platform";
 import { Layer } from "effect";
+import { HttpMiddleware, HttpRouter, HttpServer } from "effect/http";
 import { allowedOrigins } from "@/utils/cors";
 import { Dependencies } from "./server";
-import { layerTracer } from "./tracing";
 
-const cors = HttpApiBuilder.middlewareCors({
+const cors = HttpRouter.cors({
 	allowedOrigins,
 	credentials: false,
 	allowedMethods: ["GET", "HEAD", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
@@ -28,23 +22,21 @@ const cors = HttpApiBuilder.middlewareCors({
 	],
 });
 
-export const agentApiToHandler = (
-	api: Layer.Layer<
-		HttpApi.Api,
-		never,
-		| Layer.Layer.Success<typeof Dependencies>
-		| Agent.AgentHttpAuthMiddleware
-		| AgentManagement
-	>,
-) =>
-	api.pipe(
-		HttpMiddleware.withSpanNameGenerator((req) => `${req.method} ${req.url}`),
-		Layer.provideMerge(AgentHttpAuthMiddlewareLive),
-		Layer.provideMerge(AgentManagement.Default),
-		Layer.merge(HttpServer.layerContext),
-		Layer.provide(cors),
-		Layer.provide(layerTracer),
-		Layer.provideMerge(Dependencies),
-		HttpApiBuilder.toWebHandler,
-		(v) => (req: Request) => v.handler(req),
+export const agentApiToHandler = <R>(
+	api: Layer.Layer<never, never, R | Agent.AgentHttpAuthMiddleware>,
+) => {
+	const routes = Layer.mergeAll(api, cors).pipe(
+		Layer.provide(AgentHttpAuthMiddlewareLive),
+		Layer.provide(AgentManagement.Default),
+		Layer.provide(Dependencies),
+		Layer.provide(HttpServer.layerServices),
+		Layer.provide(
+			Layer.succeed(
+				HttpMiddleware.SpanNameGenerator,
+				(req) => `${req.method} ${req.url}`,
+			),
+		),
 	);
+	const { handler } = HttpRouter.toWebHandler(routes);
+	return (req: Request) => handler(req);
+};

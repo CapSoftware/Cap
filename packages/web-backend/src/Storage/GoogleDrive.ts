@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { Storage, type User, type Video } from "@cap/web-domain";
-import { Effect, Either, Option, Schedule } from "effect";
+import { Effect, Option, Result, Schedule } from "effect";
 import { getGoogleDriveVideoNames } from "./google-drive-names.ts";
 import {
 	getGoogleDriveRecordingIdentity,
@@ -386,7 +386,7 @@ const refreshPersistedGoogleDriveAccessToken = (
 					times: 8,
 					schedule: Schedule.exponential("100 millis"),
 				}),
-				Effect.catchAll(() =>
+				Effect.catch(() =>
 					refreshPersistedGoogleDriveAccessToken(
 						config,
 						tokenStore,
@@ -536,7 +536,7 @@ const getDriveFileName = (key: string) => {
 };
 
 const getVideoNamesForUpload = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	input: CreateGoogleDriveUploadInput,
 ) =>
 	Effect.gen(function* () {
@@ -557,7 +557,7 @@ const getVideoNamesForUpload = (
 	}).pipe(Effect.mapError((cause) => new Storage.StorageError({ cause })));
 
 const getNewDriveFileName = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	input: CreateGoogleDriveUploadInput,
 ) =>
 	Effect.gen(function* () {
@@ -818,7 +818,7 @@ const createGoogleDriveTextFileWithId = ({
 };
 
 const waitForReservedGoogleDriveObject = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	integrationId: Storage.StorageIntegrationId,
 	objectKey: string,
 ) =>
@@ -857,7 +857,7 @@ const getOrCreateGoogleDriveFolder = ({
 	isVideoFolder,
 	tokenStore,
 }: {
-	repo: StorageRepo;
+	repo: StorageRepo["Service"];
 	config: GoogleDriveIntegrationConfig;
 	input: CreateGoogleDriveUploadInput;
 	folderPath: string;
@@ -939,7 +939,7 @@ const ensureGoogleDriveWarningFile = ({
 	parentId,
 	tokenStore,
 }: {
-	repo: StorageRepo;
+	repo: StorageRepo["Service"];
 	config: GoogleDriveIntegrationConfig;
 	input: CreateGoogleDriveUploadInput;
 	folderPath: string;
@@ -1008,7 +1008,7 @@ const ensureGoogleDriveWarningFile = ({
 	});
 
 const getGoogleDriveUploadParentId = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	config: GoogleDriveIntegrationConfig,
 	input: CreateGoogleDriveUploadInput,
 	tokenStore?: GoogleDriveTokenStore,
@@ -1078,7 +1078,7 @@ const generateGoogleDriveFileId = (
 	);
 
 export const createGoogleDriveResumableUpload = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	config: GoogleDriveIntegrationConfig,
 	input: CreateGoogleDriveUploadInput,
 	tokenStore?: GoogleDriveTokenStore,
@@ -1099,7 +1099,7 @@ export const createGoogleDriveResumableUpload = (
 		if (browserUploadOrigin) headers.Origin = browserUploadOrigin;
 
 		const requireUploadUrl = (response: Response) =>
-			Option.fromNullable(response.headers.get("Location")).pipe(
+			Option.fromNullishOr(response.headers.get("Location")).pipe(
 				Option.match({
 					onNone: () =>
 						Effect.fail(
@@ -1179,12 +1179,12 @@ export const createGoogleDriveResumableUpload = (
 		let uploadUrl: string | undefined;
 		if (!newReservation) {
 			const patched = yield* startSessionForExistingFile(resolvedFileId).pipe(
-				Effect.either,
+				Effect.result,
 			);
-			if (Either.isRight(patched)) {
-				uploadUrl = patched.right;
-			} else if (!isDriveRequestStatus(patched.left, 404, 410)) {
-				return yield* Effect.fail(patched.left);
+			if (Result.isSuccess(patched)) {
+				uploadUrl = patched.success;
+			} else if (!isDriveRequestStatus(patched.failure, 404, 410)) {
+				return yield* Effect.fail(patched.failure);
 			}
 		}
 		if (uploadUrl === undefined) {
@@ -1197,17 +1197,17 @@ export const createGoogleDriveResumableUpload = (
 			const created = yield* startSessionForNewFile(
 				resolvedFileId,
 				parentId,
-			).pipe(Effect.either);
-			if (Either.isRight(created)) {
-				uploadUrl = created.right.uploadUrl;
-				fileName = created.right.fileName;
+			).pipe(Effect.result);
+			if (Result.isSuccess(created)) {
+				uploadUrl = created.success.uploadUrl;
+				fileName = created.success.fileName;
 				createdFile = true;
-			} else if (isDriveRequestStatus(created.left, 409)) {
+			} else if (isDriveRequestStatus(created.failure, 409)) {
 				uploadUrl = yield* startSessionForExistingFile(resolvedFileId);
 			} else if (
 				!newReservation &&
 				object.uploadStatus === "complete" &&
-				isDriveRequestStatus(created.left, 400, 404, 410)
+				isDriveRequestStatus(created.failure, 400, 404, 410)
 			) {
 				const freshFileId = yield* generateGoogleDriveFileId(
 					config,
@@ -1236,19 +1236,19 @@ export const createGoogleDriveResumableUpload = (
 					uploadStatus: "pending",
 				};
 				const fresh = yield* startSessionForNewFile(freshFileId, parentId).pipe(
-					Effect.either,
+					Effect.result,
 				);
-				if (Either.isRight(fresh)) {
-					uploadUrl = fresh.right.uploadUrl;
-					fileName = fresh.right.fileName;
+				if (Result.isSuccess(fresh)) {
+					uploadUrl = fresh.success.uploadUrl;
+					fileName = fresh.success.fileName;
 					createdFile = true;
-				} else if (isDriveRequestStatus(fresh.left, 409)) {
+				} else if (isDriveRequestStatus(fresh.failure, 409)) {
 					uploadUrl = yield* startSessionForExistingFile(freshFileId);
 				} else {
-					return yield* Effect.fail(fresh.left);
+					return yield* Effect.fail(fresh.failure);
 				}
 			} else {
-				return yield* Effect.fail(created.left);
+				return yield* Effect.fail(created.failure);
 			}
 		}
 
@@ -1340,7 +1340,7 @@ export const findGoogleDriveFileByObjectKey = (
 			const files = (body.files ?? []).filter((file) =>
 				googleDriveFileMatchesObjectKey(file, key),
 			);
-			return Option.fromNullable(
+			return Option.fromNullishOr(
 				files.find((file) => Number(file.size ?? 0) > 0) ?? files[0],
 			);
 		}),
@@ -1619,7 +1619,7 @@ export const copyGoogleDriveFile = ({
 	input,
 	tokenStore,
 }: {
-	repo: StorageRepo;
+	repo: StorageRepo["Service"];
 	config: GoogleDriveIntegrationConfig;
 	sourceFileId: string;
 	input: CreateGoogleDriveUploadInput;
@@ -1678,7 +1678,7 @@ export const copyGoogleDriveFile = ({
 	});
 
 export const syncGoogleDriveVideoNames = (
-	repo: StorageRepo,
+	repo: StorageRepo["Service"],
 	config: GoogleDriveIntegrationConfig,
 	video: {
 		id: Video.VideoId;
@@ -1863,4 +1863,6 @@ export const syncGoogleDriveVideoNames = (
 	}).pipe(Effect.mapError((cause) => new Storage.StorageError({ cause })));
 
 export const parseVideoIdFromObjectKey = (key: string) =>
-	Option.fromNullable(key.split("/")[1]).pipe(Option.filter((id) => id !== ""));
+	Option.fromNullishOr(key.split("/")[1]).pipe(
+		Option.filter((id) => id !== ""),
+	);

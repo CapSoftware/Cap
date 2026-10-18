@@ -1,13 +1,13 @@
 import { buildEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
+import { Effect, Layer, Schema } from "effect";
+import { HttpServerResponse } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-	HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer, Schema } from "effect";
+} from "effect/http-api";
 import { buildOEmbedVideo, parseCapShareUrl } from "@/lib/oembed";
 import { getPublicShareVideo } from "@/lib/public-share-video";
 import { apiToHandler } from "@/lib/server";
@@ -21,7 +21,7 @@ const GetOEmbedParams = Schema.Struct({
 
 class Api extends HttpApi.make("CapOEmbedApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.get("getOEmbed")`/api/oembed`.setUrlParams(GetOEmbedParams),
+		HttpApiEndpoint.get("getOEmbed", "/api/oembed", { query: GetOEmbedParams }),
 	),
 ) {}
 
@@ -39,10 +39,10 @@ const jsonResponse = (body: unknown, status = 200) =>
 		},
 	});
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
-			handlers.handle("getOEmbed", ({ urlParams }) =>
+			handlers.handle("getOEmbed", ({ query: urlParams }) =>
 				Effect.gen(function* () {
 					if (urlParams.format && urlParams.format !== "json") {
 						return jsonResponse(
@@ -69,7 +69,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						}),
 					);
 				}).pipe(
-					Effect.catchAll(() =>
+					Effect.catch(() =>
 						Effect.succeed(
 							jsonResponse({ error: "Unable to load video" }, 500),
 						),

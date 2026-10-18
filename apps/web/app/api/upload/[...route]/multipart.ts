@@ -170,7 +170,7 @@ app.post(
 				);
 				return c.json({ uploadId, provider: bucket.provider });
 			}).pipe(
-				Effect.catchAll(() =>
+				Effect.catch(() =>
 					Effect.succeed(
 						c.json({ error: "Could not initiate replacement upload" }, 500),
 					),
@@ -205,7 +205,7 @@ app.post(
 			);
 		}).pipe(
 			Effect.tapError(Effect.logError),
-			Effect.catchAll((e) => {
+			Effect.catch((e) => {
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
 
@@ -555,7 +555,7 @@ app.post(
 							);
 						}
 					}).pipe(
-						Effect.catchAll(() =>
+						Effect.catch(() =>
 							Effect.logError(
 								"Failed to clean up rejected free-plan multipart upload",
 							),
@@ -618,8 +618,8 @@ app.post(
 								: {}),
 						})
 						.pipe(
-							Effect.catchAll((error) =>
-								verify.pipe(Effect.catchAll(() => Effect.fail(error))),
+							Effect.catch((error) =>
+								verify.pipe(Effect.catch(() => Effect.fail(error))),
 							),
 						);
 					const head = yield* verify;
@@ -663,10 +663,10 @@ app.post(
 						invalidateGoogleDriveStorageQuotaCache(
 							Option.getOrNull(video.storageIntegrationId),
 						),
-					).pipe(Effect.catchAll(Effect.logWarning));
+					).pipe(Effect.catch(Effect.logWarning));
 					// Storage resolves outputKey before signing playback URLs; only canonical derived assets need invalidation.
 					yield* Effect.tryPromise(() => invalidateReuploadedVideo(video)).pipe(
-						Effect.catchAll((error) =>
+						Effect.catch((error) =>
 							Effect.logWarning(
 								"Could not refresh derived recording assets; playback uses the new immutable output",
 								error,
@@ -681,7 +681,7 @@ app.post(
 					) {
 						yield* Effect.tryPromise(() =>
 							queueVideoTranscription(videoId),
-						).pipe(Effect.catchAll(Effect.logWarning));
+						).pipe(Effect.catch(Effect.logWarning));
 					}
 					return c.json({
 						success: true,
@@ -689,7 +689,7 @@ app.post(
 						objectIdentity: head.ETag,
 					});
 				}).pipe(
-					Effect.catchAll(() =>
+					Effect.catch(() =>
 						Effect.succeed(
 							c.json({ error: "Could not publish replacement recording" }, 500),
 						),
@@ -753,7 +753,7 @@ app.post(
 								: {}),
 						})
 						.pipe(
-							Effect.catchAll((error) => {
+							Effect.catch((error) => {
 								if (!isRawRecorderUpload(subpath) || bucket.provider !== "s3")
 									return Effect.fail(error);
 								// A lost completion response can leave no multipart session. Match
@@ -818,7 +818,7 @@ app.post(
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
 						}),
-						Effect.catchAll((headError) =>
+						Effect.catch((headError) =>
 							replacesVideo || isRawRecorderUpload(subpath)
 								? Effect.fail(headError)
 								: Effect.logError(
@@ -861,7 +861,7 @@ app.post(
 							}),
 						).pipe(
 							Effect.map(() => true),
-							Effect.catchAll((error) =>
+							Effect.catch((error) =>
 								Effect.logError(
 									"Failed to start video processing workflow after raw upload completion",
 									error,
@@ -897,7 +897,7 @@ app.post(
 										copyResult,
 									);
 								}),
-								Effect.catchAll((e) =>
+								Effect.catch((e) =>
 									Effect.logError(
 										"Warning: Failed to copy object to fix metadata:",
 										e,
@@ -1006,7 +1006,7 @@ app.post(
 							catch: (cause) =>
 								cause instanceof Error ? cause : new Error(String(cause)),
 						}).pipe(
-							Effect.catchAll((error) => {
+							Effect.catch((error) => {
 								console.error("Failed to queue faststart remux:", error);
 								return Effect.succeed(false);
 							}),
@@ -1030,7 +1030,7 @@ app.post(
 											{ videoId, message: result.message },
 										),
 							),
-							Effect.catchAll((error) =>
+							Effect.catch((error) =>
 								Effect.logWarning(
 									"Failed to queue transcription after multipart upload",
 									{ videoId, error },
@@ -1046,7 +1046,7 @@ app.post(
 						fileKey,
 					});
 				}).pipe(
-					Effect.catchAllCause((completeError) => {
+					Effect.catchCause((completeError) => {
 						console.error(
 							"Failed to complete multipart upload:",
 							completeError,
@@ -1069,7 +1069,7 @@ app.post(
 					}),
 				);
 			}).pipe(
-				Effect.catchAll((error) => {
+				Effect.catch((error) => {
 					console.error("Multipart upload failed:", error);
 
 					return Effect.succeed(
@@ -1154,7 +1154,7 @@ app.post("/abort", abortRequestValidator, (c) => {
 				yield* bucket.multipart
 					.abort(replacement.outputKey, replacement.uploadId)
 					.pipe(
-						Effect.catchAll(() =>
+						Effect.catch(() =>
 							Effect.logWarning(
 								"Could not abort canceled replacement storage upload",
 							),
@@ -1180,7 +1180,7 @@ app.post("/abort", abortRequestValidator, (c) => {
 
 		return c.json({ success: true, fileKey, uploadId });
 	}).pipe(
-		Effect.catchAll((error) => {
+		Effect.catch((error) => {
 			console.error("Failed to abort multipart upload:", error);
 
 			return Effect.succeed(

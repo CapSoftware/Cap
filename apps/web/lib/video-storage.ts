@@ -7,12 +7,12 @@ type DbVideo = typeof videos.$inferSelect;
 export const decodeStorageVideo = (video: DbVideo) =>
 	Video.Video.make({
 		...video,
-		metadata: Option.fromNullable(video.metadata),
-		bucketId: Option.fromNullable(video.bucket),
-		storageIntegrationId: Option.fromNullable(video.storageIntegrationId),
-		folderId: Option.fromNullable(video.folderId),
-		transcriptionStatus: Option.fromNullable(video.transcriptionStatus),
-		width: Option.fromNullable(video.width),
-		height: Option.fromNullable(video.height),
-		duration: Option.fromNullable(video.duration),
+		metadata: Option.fromNullishOr(video.metadata),
+		bucketId: Option.fromNullishOr(video.bucket),
+		storageIntegrationId: Option.fromNullishOr(video.storageIntegrationId),
+		folderId: Option.fromNullishOr(video.folderId),
+		transcriptionStatus: Option.fromNullishOr(video.transcriptionStatus),
+		width: Option.fromNullishOr(video.width),
+		height: Option.fromNullishOr(video.height),
+		duration: Option.fromNullishOr(video.duration),
 	});

@@ -1485,9 +1485,9 @@ impl EditorWindow {
         let box_id = id.clone();
 
         let border = if selected {
-            Hsla::from(theme.blue_9)
+            Hsla::from(theme.primary)
         } else if hovered || dragging {
-            Hsla::from(theme.blue_6)
+            Hsla::from(theme.primary_subtle)
         } else {
             gpui::transparent_black()
         };
@@ -1508,7 +1508,7 @@ impl EditorWindow {
                 div()
                     .absolute()
                     .inset_0()
-                    .rounded(px(6.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                     .border_2()
                     .border_color(border),
             )
@@ -1536,8 +1536,8 @@ impl EditorWindow {
                     .top(px(label_top))
                     .px(px(6.))
                     .py(px(2.))
-                    .rounded(px(4.))
-                    .bg(Hsla::from(theme.blue_9))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                    .bg(Hsla::from(theme.primary))
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
@@ -1558,7 +1558,7 @@ impl EditorWindow {
                         .gap(px(8.))
                         .px(px(12.))
                         .py(px(6.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .bg(gpui::hsla(0., 0., 0., 0.8))
                         .text_size(px(12.))
                         .text_color(gpui::white())
@@ -1568,7 +1568,7 @@ impl EditorWindow {
                                 .id(SharedString::from(format!("{id}-edit-zoom")))
                                 .px(px(8.))
                                 .py(px(2.))
-                                .rounded(px(6.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                                 .bg(gpui::hsla(0., 0., 1., 0.15))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("Edit zoom")
@@ -1634,13 +1634,13 @@ impl EditorWindow {
                         .child(
                             div()
                                 .size_full()
-                                .rounded_full()
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                 .border_1()
                                 .border_color(gpui::white())
                                 .bg(if resizable {
-                                    Hsla::from(theme.blue_9)
+                                    Hsla::from(theme.primary)
                                 } else {
-                                    with_alpha(theme.gray_8, 0.6)
+                                    with_alpha(theme.border_strong, 0.6)
                                 }),
                         )
                         .on_mouse_down(
@@ -2279,7 +2279,7 @@ impl EditorWindow {
         let size = (f64::from(canvas.0), f64::from(canvas.1));
         let corners = image_corners(rect, size, rotation);
         let show = self.canvas_selection == Some(element) || self.hovered_canvas == Some(element);
-        let color = Hsla::from(self.theme.blue_9);
+        let color = Hsla::from(self.theme.primary);
         let mut layer = div()
             .id(element.element_id())
             .absolute()
@@ -2349,7 +2349,7 @@ impl EditorWindow {
                         .left(px(x as f32 - 6.))
                         .top(px(y as f32 - 6.))
                         .size(px(12.))
-                        .rounded_full()
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                         .border_1()
                         .border_color(gpui::white())
                         .bg(color)

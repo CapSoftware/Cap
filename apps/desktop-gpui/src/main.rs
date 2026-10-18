@@ -81,12 +81,8 @@ use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 const MAIN_WINDOW_WIDTH: f32 = 330.;
 const MAIN_WINDOW_HEIGHT: f32 = 435.;
 
-/// The corner radius the native material is clipped to. `radius = 16` for
-/// material `"panel"` on both visual systems in
-/// `apps/desktop/src/utils/macos-window-material.ts`, and the same 16 the
-/// shell paints with (`rounded-[16px]`).
-#[cfg(target_os = "macos")]
-const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 16.;
+/// The native content clip must match the root shell's `radius-medium`.
+const MAIN_WINDOW_MATERIAL_RADIUS: f64 = 12.;
 
 fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
     if spec == "screenshot" {
@@ -106,7 +102,8 @@ fn parse_auto_record(spec: &str) -> Option<(main_window::Mode, u64)> {
 /// `CAP_GPUI_AUTO_EDITOR`: a `.cap` path, or `1` for the newest studio
 /// recording the library scan finds. The library is the same one Recents
 /// reads, so `=1` opens exactly the card that would be first in the carousel
-/// (skipping instant recordings and screenshots, which the editor rejects).
+/// (skipping instant recordings, screenshots, and studio recordings with no
+/// segments, all of which the editor rejects).
 fn resolve_auto_editor(target: &str) -> Option<std::path::PathBuf> {
     if target != "1" {
         let path = std::path::PathBuf::from(target);
@@ -114,7 +111,7 @@ fn resolve_auto_editor(target: &str) -> Option<std::path::PathBuf> {
     }
     library::recent_media()
         .into_iter()
-        .find(|item| item.kind == library::MediaKind::Studio)
+        .find(|item| item.kind == library::MediaKind::Studio && item.clip_count > 0)
         .map(|item| item.bundle)
 }
 
@@ -292,9 +289,7 @@ fn main() {
         // document without it. The bytes are the shipping app's icon.png.
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
 
-        if let Err(error) = Assets.load_fonts(cx) {
-            tracing::error!("failed to load embedded fonts: {error:#}");
-        }
+        theme::install_fonts(cx);
 
         // 330x395 is what `CapWindowId::Main::min_size` uses in the Tauri app,
         // and the window is fixed at that size there too.
@@ -355,6 +350,7 @@ fn main() {
                     // rather than by AppKit, so mark the content view as app-owned
                     // titlebar content.
                     app_owns_titlebar_drag: true,
+                    show: !cfg!(target_os = "macos"),
                     window_background: if cfg!(target_os = "windows") {
                         gpui::WindowBackgroundAppearance::Opaque
                     } else {
@@ -523,16 +519,24 @@ fn main() {
                 Some(kind) => tracing::info!(?kind, "installed main window material"),
                 None => tracing::info!("no native window material available"),
             }
-            cx.update(|cx| {
+            let should_show = cx.update(|cx| {
                 cx.set_global(platform::WindowMaterial(kind));
-                // The palette is resolved in `render`, which has already run
-                // by now -- nudge it so the tint replaces the opaque shell.
-                window_handle.update(cx, |_, _, cx| cx.notify()).ok();
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        crate::theme::apply_native(window, cx);
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .ok();
+                cx.global::<app_windows::AppWindows>().onboarding.is_none()
             });
+            if should_show {
+                platform::show_native(&native);
+            }
         })
         .detach();
         #[cfg(target_os = "windows")]
-        cx.spawn(async move |_| {
+        cx.spawn(async move |cx| {
             let Some(native) = native_main else {
                 return;
             };
@@ -544,6 +548,16 @@ fn main() {
             {
                 tracing::warn!(%error, "could not install the Windows session end handler");
             }
+            let _ = platform::install_window_material(&native, MAIN_WINDOW_MATERIAL_RADIUS);
+            cx.update(|cx| {
+                window_handle
+                    .update(cx, |_, window, cx| {
+                        crate::theme::apply_native(window, cx);
+                        cx.notify();
+                        window.refresh();
+                    })
+                    .ok();
+            });
         })
         .detach();
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -683,6 +697,20 @@ fn main() {
                     "CAP_GPUI_AUTO_SCREENSHOT_EDITOR: no screenshot .cap to open"
                 ),
             }
+        }
+
+        // `CAP_GPUI_AUTO_SHOW_MAIN=1`: bring the main window back after the
+        // hooks above open windows that hide it, so every window can be
+        // inspected side by side. The hides land on spawned tasks, so the
+        // reshow waits for them.
+        if std::env::var("CAP_GPUI_AUTO_SHOW_MAIN").is_ok_and(|value| value == "1") {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1500))
+                    .await;
+                cx.update(app_windows::show_main_window);
+            })
+            .detach();
         }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm

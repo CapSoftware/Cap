@@ -91,7 +91,7 @@ export async function uploadShareableLinkIcon(formData: FormData) {
 				fileName: file.name,
 				data: new Uint8Array(arrayBuffer),
 			}),
-			existing: Option.fromNullable(organization.shareableLinkIconUrl),
+			existing: Option.fromNullishOr(organization.shareableLinkIconUrl),
 			keyPrefix: `organizations/${organization.id}/shareable-links`,
 			update: (db, urlOrKey) =>
 				db
@@ -116,7 +116,7 @@ export async function removeShareableLinkIcon(
 
 		yield* imageUploads.applyUpdate({
 			payload: Option.none(),
-			existing: Option.fromNullable(organization.shareableLinkIconUrl),
+			existing: Option.fromNullishOr(organization.shareableLinkIconUrl),
 			keyPrefix: `organizations/${organization.id}/shareable-links`,
 			update: (db, urlOrKey) =>
 				db

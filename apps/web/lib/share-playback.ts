@@ -11,13 +11,13 @@ type SharePlaybackVideo = Omit<
 
 export const getSharePlaybackUrl = (video: SharePlaybackVideo) =>
 	Effect.gen(function* () {
-		const loadedVideo = yield* Schema.decodeUnknown(Video.Video)({
+		const loadedVideo = yield* Schema.decodeUnknownEffect(Video.Video)({
 			...video,
 			ownerId: video.owner.id,
 			bucketId: video.bucket,
 			folderId: null,
-			createdAt: video.createdAt.toISOString(),
-			updatedAt: video.updatedAt.toISOString(),
+			createdAt: video.createdAt,
+			updatedAt: video.updatedAt,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(loadedVideo);
 		return yield* bucket.getSignedObjectUrl(

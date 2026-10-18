@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
@@ -337,10 +338,9 @@ describe("POST /video/convert", () => {
 	});
 
 	test("returns mp4 when conversion succeeds", async () => {
-		const fixturePath = new URL(
-			"../fixtures/test-with-audio.mp4",
-			import.meta.url,
-		).pathname;
+		const fixturePath = fileURLToPath(
+			new URL("../fixtures/test-with-audio.mp4", import.meta.url),
+		);
 		const fixtureBytes = await Bun.file(fixturePath).bytes();
 		const mockMetadata = {
 			duration: 10.5,

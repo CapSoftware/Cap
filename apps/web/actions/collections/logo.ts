@@ -120,7 +120,7 @@ async function setSpaceLogo(
 		const imageUploads = yield* ImageUploads;
 		yield* imageUploads.applyUpdate({
 			payload,
-			existing: Option.fromNullable(logoKey(existing.publicPage?.logoUrl)),
+			existing: Option.fromNullishOr(logoKey(existing.publicPage?.logoUrl)),
 			keyPrefix: `organizations/${space.organizationId}/collections/${id}/logo`,
 			update: (database, key) =>
 				database
@@ -192,7 +192,7 @@ async function setFolderLogo(
 		const imageUploads = yield* ImageUploads;
 		yield* imageUploads.applyUpdate({
 			payload,
-			existing: Option.fromNullable(logoKey(existing.publicPage?.logoUrl)),
+			existing: Option.fromNullishOr(logoKey(existing.publicPage?.logoUrl)),
 			keyPrefix: `organizations/${folder.organizationId}/collections/${id}/logo`,
 			update: (database, key) =>
 				database

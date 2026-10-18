@@ -197,10 +197,10 @@ impl NumberField {
             focused: false,
             // `w-20`
             width: px(80.),
-            bg: Hsla::from(theme.gray_1),
-            border: Hsla::from(theme.gray_12),
-            text_color: Hsla::from(theme.gray_12),
-            unit_color: Hsla::from(theme.gray_11),
+            bg: Hsla::from(theme.surface),
+            border: Hsla::from(theme.text_primary),
+            text_color: Hsla::from(theme.text_primary),
+            unit_color: Hsla::from(theme.text_secondary),
         }
     }
 
@@ -251,7 +251,7 @@ impl RenderOnce for NumberField {
                     .w(width)
                     // `p-1.5`
                     .p(px(6.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(bg)
                     .border_1()
                     .border_color(border)

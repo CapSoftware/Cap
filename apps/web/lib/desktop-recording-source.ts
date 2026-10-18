@@ -4,7 +4,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
-import { Effect, Option, Runtime } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { z } from "zod";
 import {
 	type DesktopRecordingSourceCheckpoint,
@@ -60,7 +60,7 @@ export type DesktopRecordingSource = z.infer<
 >;
 type SourceObject = z.infer<typeof sourceObjectSchema>;
 type DbVideo = typeof videos.$inferSelect;
-type RecordingStorage = Effect.Effect.Success<
+type RecordingStorage = Effect.Success<
 	ReturnType<typeof Storage.getAccessForVideo>
 >[0];
 
@@ -100,8 +100,17 @@ function sourceStorageError(error: unknown): unknown {
 		if (typeof value !== "object" || value === null || visited.has(value))
 			continue;
 		visited.add(value);
-		if (Runtime.isFiberFailure(value))
-			pending.push(value[Runtime.FiberFailureCauseId]);
+		if (Exit.isExit(value) && Exit.isFailure(value)) pending.push(value.cause);
+		if (Cause.isCause(value))
+			pending.push(
+				...value.reasons.map((reason) =>
+					Cause.isFailReason(reason)
+						? reason.error
+						: Cause.isDieReason(reason)
+							? reason.defect
+							: reason,
+				),
+			);
 		const record = value as Record<string, unknown>;
 		if (record.name === "NoSuchUpload") {
 			return new SourceCopyExpiredError(
@@ -188,7 +197,7 @@ const originalObjectSchema = sourceObjectSchema.omit({
 	objectIdentity: true,
 });
 type OriginalObject = z.infer<typeof originalObjectSchema>;
-type WorkflowContext = Effect.Effect.Context<
+type WorkflowContext = Effect.Services<
 	Parameters<typeof runWorkflowPromise>[0]
 >;
 type SourceRun = <A, E>(

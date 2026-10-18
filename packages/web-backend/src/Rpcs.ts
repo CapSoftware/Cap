@@ -1,4 +1,5 @@
 import {
+	CurrentUser,
 	InternalError,
 	RpcAuthMiddleware,
 	UnauthenticatedError,
@@ -24,16 +25,21 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 	Effect.gen(function* () {
 		const database = yield* Database;
 
-		return RpcAuthMiddleware.of(() =>
+		return RpcAuthMiddleware.of((rpcEffect) =>
 			getCurrentUser.pipe(
 				Effect.provideService(Database, database),
-				Effect.catchAll(() =>
+				Effect.catch(() =>
 					Effect.fail(new InternalError({ type: "database" })),
 				),
 				Effect.flatMap(
 					Option.match({
 						onNone: () => Effect.fail(new UnauthenticatedError()),
-						onSome: (user) => Effect.succeed(makeCurrentUser(user)),
+						onSome: (user) =>
+							Effect.provideService(
+								rpcEffect,
+								CurrentUser,
+								makeCurrentUser(user),
+							),
 					}),
 				),
 			),

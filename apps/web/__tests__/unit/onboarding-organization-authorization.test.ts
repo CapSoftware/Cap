@@ -142,14 +142,14 @@ function makeFixture(
 		transaction: <T>(callback: (client: DbClient) => Promise<T>) =>
 			callback(database as unknown as DbClient),
 	};
-	const databaseService = Database.make({
+	const databaseService = Database.of({
 		use: (callback) =>
 			Effect.tryPromise({
 				try: () => callback(database as unknown as DbClient),
 				catch: (cause) => new DatabaseError({ cause }),
 			}),
 	});
-	const imageUploads = ImageUploads.make({
+	const imageUploads = ImageUploads.of({
 		applyUpdate: (args) =>
 			Effect.gen(function* () {
 				uploadedPrefixes.push(args.keyPrefix);

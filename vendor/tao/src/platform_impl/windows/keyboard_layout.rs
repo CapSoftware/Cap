@@ -3,9 +3,8 @@ use std::{
   collections::{hash_map::Entry, HashMap, HashSet},
   ffi::OsString,
   os::windows::ffi::OsStringExt,
+  sync::LazyLock,
 };
-
-use lazy_static::lazy_static;
 
 use windows::Win32::{
   System::SystemServices::{LANG_JAPANESE, LANG_KOREAN},
@@ -18,8 +17,11 @@ use crate::{
   platform_impl::platform::util,
 };
 
-lazy_static! {
-  pub(crate) static ref LAYOUT_CACHE: Mutex<LayoutCache> = Mutex::new(LayoutCache::default());
+pub(crate) static LAYOUT_CACHE: LazyLock<Mutex<LayoutCache>> =
+  LazyLock::new(|| Mutex::new(LayoutCache::default()));
+
+pub(crate) fn get_agnostic_mods() -> ModifiersState {
+  LAYOUT_CACHE.lock().get_agnostic_mods()
 }
 
 fn key_pressed(vkey: VIRTUAL_KEY) -> bool {
@@ -45,28 +47,26 @@ const NUMPAD_VKEYS: [VIRTUAL_KEY; 16] = [
   VK_DIVIDE,
 ];
 
-lazy_static! {
-  static ref NUMPAD_KEYCODES: HashSet<KeyCode> = {
-    let mut keycodes = HashSet::new();
-    keycodes.insert(KeyCode::Numpad0);
-    keycodes.insert(KeyCode::Numpad1);
-    keycodes.insert(KeyCode::Numpad2);
-    keycodes.insert(KeyCode::Numpad3);
-    keycodes.insert(KeyCode::Numpad4);
-    keycodes.insert(KeyCode::Numpad5);
-    keycodes.insert(KeyCode::Numpad6);
-    keycodes.insert(KeyCode::Numpad7);
-    keycodes.insert(KeyCode::Numpad8);
-    keycodes.insert(KeyCode::Numpad9);
-    keycodes.insert(KeyCode::NumpadMultiply);
-    keycodes.insert(KeyCode::NumpadAdd);
-    keycodes.insert(KeyCode::NumpadComma);
-    keycodes.insert(KeyCode::NumpadSubtract);
-    keycodes.insert(KeyCode::NumpadDecimal);
-    keycodes.insert(KeyCode::NumpadDivide);
-    keycodes
-  };
-}
+static NUMPAD_KEYCODES: LazyLock<HashSet<KeyCode>> = LazyLock::new(|| {
+  let mut keycodes = HashSet::new();
+  keycodes.insert(KeyCode::Numpad0);
+  keycodes.insert(KeyCode::Numpad1);
+  keycodes.insert(KeyCode::Numpad2);
+  keycodes.insert(KeyCode::Numpad3);
+  keycodes.insert(KeyCode::Numpad4);
+  keycodes.insert(KeyCode::Numpad5);
+  keycodes.insert(KeyCode::Numpad6);
+  keycodes.insert(KeyCode::Numpad7);
+  keycodes.insert(KeyCode::Numpad8);
+  keycodes.insert(KeyCode::Numpad9);
+  keycodes.insert(KeyCode::NumpadMultiply);
+  keycodes.insert(KeyCode::NumpadAdd);
+  keycodes.insert(KeyCode::NumpadComma);
+  keycodes.insert(KeyCode::NumpadSubtract);
+  keycodes.insert(KeyCode::NumpadDecimal);
+  keycodes.insert(KeyCode::NumpadDivide);
+  keycodes
+});
 
 bitflags! {
     #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -249,7 +249,7 @@ impl LayoutCache {
     }
   }
 
-  pub fn get_agnostic_mods(&mut self) -> ModifiersState {
+  fn get_agnostic_mods(&mut self) -> ModifiersState {
     let (_, layout) = self.get_current_layout();
     let filter_out_altgr = layout.has_alt_graph && key_pressed(VK_RMENU);
     let mut mods = ModifiersState::empty();

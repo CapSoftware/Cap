@@ -1,4 +1,4 @@
-import { RpcGroup } from "@effect/rpc";
+import { RpcGroup } from "effect/rpc";
 
 import { FolderRpcs } from "./Folder.ts";
 import { OrganisationRpcs } from "./Organisation.ts";

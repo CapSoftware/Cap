@@ -137,11 +137,11 @@ export function RecordingUploadStatus() {
 
 const styles = StyleSheet.create({
 	overlay: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		zIndex: 100,
 	},
 	scrim: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		backgroundColor: "rgba(0,0,0,0.28)",
 	},
 	anchor: {

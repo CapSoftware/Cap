@@ -82,7 +82,7 @@ export async function getSubscriptionDetails(
 		billingInterval: interval,
 		pricePerSeat,
 		currentQuantity: item.quantity ?? 1,
-		currentPeriodEnd: subscription.current_period_end,
+		currentPeriodEnd: item.current_period_end,
 		currency: price.currency,
 		cancelAtPeriodEnd: subscription.cancel_at_period_end,
 	};

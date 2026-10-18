@@ -73,8 +73,10 @@ export async function syncLoopsContact(
 		const created = await api.request<LifecycleContact[]>(
 			`contacts/find?email=${encodeURIComponent(email)}`,
 		);
-		if (created.length !== 1) throw new Error("created_contact_not_found");
-		remote = created[0];
+		const [createdContact] = created;
+		if (created.length !== 1 || !createdContact)
+			throw new Error("created_contact_not_found");
+		remote = createdContact;
 	}
 	const update = lifecycleUpdate(source, remote, config, customerCopy);
 	await api.request("contacts/update", "PUT", update);

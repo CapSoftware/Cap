@@ -166,8 +166,8 @@ export async function createVideoAndGetUploadUrl({
 					...existingVideo,
 					bucketId: existingVideo.bucket,
 					storageIntegrationId: existingVideo.storageIntegrationId,
-					createdAt: existingVideo.createdAt.toISOString(),
-					updatedAt: existingVideo.updatedAt.toISOString(),
+					createdAt: existingVideo.createdAt,
+					updatedAt: existingVideo.updatedAt,
 					metadata: existingVideo.metadata,
 				});
 				const screenshotExtension =
@@ -277,8 +277,8 @@ export async function deleteVideoResultFile({
 		...video,
 		bucketId: video.bucket,
 		storageIntegrationId: video.storageIntegrationId,
-		createdAt: video.createdAt.toISOString(),
-		updatedAt: video.updatedAt.toISOString(),
+		createdAt: video.createdAt,
+		updatedAt: video.updatedAt,
 		metadata: video.metadata,
 	});
 	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;

@@ -177,7 +177,7 @@ app.post(
 			});
 		}).pipe(
 			Effect.tapError(Effect.logError),
-			Effect.catchAll((e) => {
+			Effect.catch((e) => {
 				// PolicyDenied maps to 404, not 403: canView succeeds for nonexistent
 				// ids by design, so a 403 here would confirm a private video exists.
 				if (
@@ -247,7 +247,7 @@ app.post(
 			return c.json({ presignedUrl, provider: bucket.provider });
 		}).pipe(
 			Effect.tapError(Effect.logError),
-			Effect.catchAll(() =>
+			Effect.catch(() =>
 				Effect.succeed<Response>(
 					c.json({ error: "Error creating presigned URL for part" }, 500),
 				),
@@ -305,7 +305,7 @@ app.post(
 			if (totalSize > MAX_MEDIA_OBJECT_BYTES) {
 				yield* bucket.multipart
 					.abort(claims.key, uploadId)
-					.pipe(Effect.catchAll(Effect.logError));
+					.pipe(Effect.catch(Effect.logError));
 				c.status(413);
 				return c.json({ error: "Recording is too large" });
 			}
@@ -340,7 +340,7 @@ app.post(
 			});
 		}).pipe(
 			Effect.tapError(Effect.logError),
-			Effect.catchAll(() =>
+			Effect.catch(() =>
 				Effect.succeed<Response>(
 					c.json({ error: "Error completing comment media upload" }, 500),
 				),
@@ -381,7 +381,7 @@ app.post(
 			return c.json({ success: true });
 		}).pipe(
 			Effect.tapError(Effect.logError),
-			Effect.catchAll(() =>
+			Effect.catch(() =>
 				Effect.succeed<Response>(
 					c.json({ error: "Error aborting comment media upload" }, 500),
 				),

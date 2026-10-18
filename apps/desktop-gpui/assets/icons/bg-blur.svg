@@ -1,13 +1,1 @@
-<svg width="16" height="15" viewBox="0 0 16 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect x="0.5" y="6.61108" width="7.93592" height="7.88889" rx="1.5" stroke="currentColor"/>
-<g filter="url(#filter0_f_941_2688)">
-<rect x="3.62793" y="3.5" width="7.93592" height="7.88889" rx="1.5" stroke="currentColor"/>
-</g>
-<defs>
-<filter id="filter0_f_941_2688" x="0.12793" y="0" width="14.936" height="14.8889" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-<feFlood flood-opacity="0" result="BackgroundImageFix"/>
-<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
-<feGaussianBlur stdDeviation="1.5" result="effect1_foregroundBlur_941_2688"/>
-</filter>
-</defs>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5926 2.21C12.2371 1.93 11.7433 1.93 11.3877 2.21C9.51122 3.66 3.97049 8.39 4.00012 13.9C4.00012 18.36 7.58531 22 12.0001 22C16.4149 22 20 18.37 20 13.91C20.0099 8.48 14.4593 3.67 12.5926 2.21Z" stroke="currentColor" stroke-width="1.5"/><path d="M12 2V22" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/><path d="M12 19L20 15M12 14.1806L19 10.5M12 9.36145L16.5727 7" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/></svg>

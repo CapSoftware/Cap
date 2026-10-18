@@ -1,13 +1,13 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
+import { Effect, Layer } from "effect";
+import { HttpServerResponse } from "effect/http";
 import {
 	HttpApi,
 	HttpApiBuilder,
 	HttpApiEndpoint,
 	HttpApiGroup,
-	HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer } from "effect";
+} from "effect/http-api";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { apiToHandler } from "@/lib/server";
 import {
@@ -19,13 +19,13 @@ import { createSlackOAuthState } from "@/lib/slack/oauth-state";
 
 class Api extends HttpApi.make("CapSlackInstallApi").add(
 	HttpApiGroup.make("root").add(
-		HttpApiEndpoint.get("installSlack")`/api/integrations/slack/install`,
+		HttpApiEndpoint.get("installSlack", "/api/integrations/slack/install"),
 	),
 ) {}
 
 const settingsPath = "/dashboard/settings/organization/integrations";
 
-const ApiLive = HttpApiBuilder.api(Api).pipe(
+const ApiLive = HttpApiBuilder.layer(Api).pipe(
 	Layer.provide(
 		HttpApiBuilder.group(Api, "root", (handlers) =>
 			handlers.handle("installSlack", () =>
@@ -62,7 +62,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						{ status: 302 },
 					);
 				}).pipe(
-					Effect.catchAll(() => {
+					Effect.catch(() => {
 						const url = new URL(settingsPath, serverEnv().WEB_URL);
 						url.searchParams.set("slack", "forbidden");
 						return Effect.succeed(

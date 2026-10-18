@@ -28,6 +28,8 @@ pub trait WindowExtAndroid {
   fn content_rect(&self) -> Rect;
 
   fn config(&self) -> Configuration;
+
+  fn activity_name(&self) -> String;
 }
 
 impl WindowExtAndroid for Window {
@@ -38,11 +40,33 @@ impl WindowExtAndroid for Window {
   fn config(&self) -> Configuration {
     self.window.config()
   }
+
+  fn activity_name(&self) -> String {
+    self.window.activity_name().to_string()
+  }
 }
 
 impl<T> EventLoopWindowTargetExtAndroid for EventLoopWindowTarget<T> {}
 
 /// Additional methods on `WindowBuilder` that are specific to Android.
-pub trait WindowBuilderExtAndroid {}
+pub trait WindowBuilderExtAndroid {
+  /// The name of the activity class to create.
+  fn with_activity_name(self, activity_name: String) -> Self;
 
-impl WindowBuilderExtAndroid for WindowBuilder {}
+  /// The name of the activity class that created this window.
+  ///
+  /// This is important to define which stack the activity will be created on.
+  fn with_created_by_activity_name(self, created_by_activity_name: String) -> Self;
+}
+
+impl WindowBuilderExtAndroid for WindowBuilder {
+  fn with_activity_name(mut self, activity_name: String) -> Self {
+    self.platform_specific.activity_name = Some(activity_name);
+    self
+  }
+
+  fn with_created_by_activity_name(mut self, created_by_activity_name: String) -> Self {
+    self.platform_specific.created_by_activity_name = Some(created_by_activity_name);
+    self
+  }
+}

@@ -49,7 +49,6 @@ pub struct EditorButton {
     hover_text: Hsla,
     disabled_text: Hsla,
     hover_bg: Hsla,
-    active_bg: Hsla,
     pressed_bg: Hsla,
     pressed_text: Hsla,
     chevron: Hsla,
@@ -75,14 +74,13 @@ impl EditorButton {
             variant: EditorButtonVariant::Primary,
             disabled: false,
             pressed: false,
-            text: Hsla::from(theme.editor.text_2),
-            hover_text: Hsla::from(theme.editor.text_1),
-            disabled_text: Hsla::from(theme.editor.text_3),
-            hover_bg: Hsla::from(theme.editor.ctl_hover),
-            active_bg: Hsla::from(theme.editor.ctl_active),
-            pressed_bg: Hsla::from(theme.editor.ctl_hover),
-            pressed_text: Hsla::from(theme.editor.text_1),
-            chevron: Hsla::from(theme.editor.text_3),
+            text: Hsla::from(theme.text_secondary),
+            hover_text: Hsla::from(theme.text_primary),
+            disabled_text: Hsla::from(theme.text_muted),
+            hover_bg: Hsla::from(theme.hover_bg),
+            pressed_bg: Hsla::from(theme.active_bg),
+            pressed_text: Hsla::from(theme.text_active),
+            chevron: Hsla::from(theme.text_muted),
             tooltip: None,
             on_click: None,
             on_open: None,
@@ -93,14 +91,14 @@ impl EditorButton {
     /// with `text-gray-1` on it, not a wash.
     pub fn danger(mut self, theme: &Theme) -> Self {
         self.variant = EditorButtonVariant::Danger;
-        self.pressed_bg = Hsla::from(theme.red_300);
-        self.pressed_text = Hsla::from(theme.gray_1);
+        self.pressed_bg = Hsla::from(theme.danger);
+        self.pressed_text = Hsla::from(theme.surface);
         self
     }
 
     /// The "text" ghost: the resting label is `text-1` rather than `text-2`.
     pub fn text(mut self, theme: &Theme) -> Self {
-        self.text = Hsla::from(theme.editor.text_1);
+        self.text = Hsla::from(theme.text_primary);
         self
     }
 
@@ -203,7 +201,6 @@ impl RenderOnce for EditorButton {
             hover_text,
             disabled_text,
             hover_bg,
-            active_bg,
             pressed_bg,
             pressed_text,
             chevron,
@@ -239,7 +236,7 @@ impl RenderOnce for EditorButton {
             .gap(px(6.))
             .h(height)
             .min_w(height)
-            .rounded(px(7.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .flex_shrink_0()
             .when(right_icon_end, |this| this.justify_between())
             .when_some(width, |this, width| this.w(width))
@@ -251,7 +248,6 @@ impl RenderOnce for EditorButton {
             .when(!disabled && !pressed, |this| {
                 this.cursor_pointer()
                     .hover(move |this| this.bg(hover_bg).text_color(hover_text))
-                    .active(move |this| this.bg(active_bg))
             })
             .children(left_icon.map(|icon| {
                 let group = group.clone();

@@ -181,7 +181,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt
 
@@ -207,7 +207,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.88.0
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.settings.target }}
           components: clippy
@@ -319,7 +319,7 @@ jobs:
         uses: ./.github/actions/install-desktop-deps
 
       - name: Rust setup
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.settings.target }}
 
@@ -360,11 +360,11 @@ jobs:
           fi
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" \
-              cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
+              cargo +1.99.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           else
-            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
+            cargo +1.99.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
-          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+          cargo +1.99.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
 
   tauri-plugins:
     name: Verify Tauri plugin versions

@@ -788,11 +788,11 @@ pub fn font_picker_options() -> Vec<(String, String)> {
 /// through family by family; gpui takes one name, so this is the same
 /// [`pick_font_family`] resolution the applied value uses, with the generics
 /// mapped onto the app's own face -- gpui's text system has no `serif` /
-/// `monospace` aliases, so a stack that resolves to a generic draws in Geist.
+/// `monospace` aliases, so a stack that resolves to a generic draws in the UI face.
 fn preset_font_family(stack: &[&str], installed: &[String]) -> SharedString {
     let picked = pick_font_family(stack, installed);
     if matches!(picked.as_str(), "sans-serif" | "serif" | "monospace") {
-        return SharedString::from("Geist");
+        return SharedString::from(crate::theme::ui_font());
     }
     SharedString::from(picked)
 }
@@ -3982,9 +3982,9 @@ impl EditorWindow {
     fn panel_card(&self, content: AnyElement) -> AnyElement {
         div()
             .p(px(16.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(Hsla::from(self.theme.editor.line))
+            .border_color(Hsla::from(self.theme.border_subtle))
             .child(content)
             .into_any_element()
     }
@@ -4101,11 +4101,11 @@ impl EditorWindow {
             div()
                 .px(px(6.))
                 .py(px(2.))
-                .rounded_full()
-                .bg(Hsla::from(theme.gray_3))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                .bg(Hsla::from(theme.surface_subtle))
                 .text_size(px(10.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(Hsla::from(theme.gray_11))
+                .text_color(Hsla::from(theme.text_secondary))
                 .child(label)
                 .into_any_element()
         };
@@ -4121,9 +4121,9 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(14.))
                     .p(px(16.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(theme.editor.line))
+                    .border_color(Hsla::from(theme.border_subtle))
                     .child({
                         let mut field = self.slider_field(
                             "Zoom Amount",
@@ -4159,7 +4159,7 @@ impl EditorWindow {
                                         .children(positions_mixed.then(|| {
                                             div()
                                                 .text_size(px(12.))
-                                                .text_color(Hsla::from(theme.gray_10))
+                                                .text_color(Hsla::from(theme.text_secondary))
                                                 .child(
                                                     "Segments zoom into different spots. Drag \
                                                          to move them all to the same one.",
@@ -4192,14 +4192,14 @@ impl EditorWindow {
                             .items_center()
                             .justify_between()
                             .p(px(10.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .border_1()
-                            .border_color(Hsla::from(theme.gray_4))
-                            .bg(Hsla::from(theme.gray_3))
+                            .border_color(Hsla::from(theme.hover_bg))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(SharedString::from(format!("Zoom {}", index + 1))),
                             )
                             .child(
@@ -4209,13 +4209,13 @@ impl EditorWindow {
                                     .justify_center()
                                     .items_center()
                                     .size(px(20.))
-                                    .rounded_full()
-                                    .bg(Hsla::from(theme.gray_5))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                                    .bg(Hsla::from(theme.active_bg))
                                     .child(
                                         svg()
                                             .path("icons/x.svg")
                                             .size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_11)),
+                                            .text_color(Hsla::from(theme.text_secondary)),
                                     )
                                     .on_click(cx.listener(move |this, _, _window, cx| {
                                         this.remove_from_zoom_selection(index, cx);
@@ -4254,14 +4254,14 @@ impl EditorWindow {
                 .flex()
                 .justify_center()
                 .py(px(10.))
-                .rounded(px(9.6))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                 .text_color(if selected {
-                    Hsla::from(theme.gray_12)
+                    Hsla::from(theme.text_primary)
                 } else {
-                    Hsla::from(theme.gray_11)
+                    Hsla::from(theme.text_secondary)
                 })
                 .when(locked, |this| this.opacity(0.5))
-                .when(selected, |this| this.bg(Hsla::from(theme.gray_3)))
+                .when(selected, |this| this.bg(Hsla::from(theme.surface_subtle)))
                 .child(label)
                 .when(!locked, |this| {
                     this.on_click(cx.listener(move |this, _, window, cx| {
@@ -4279,9 +4279,9 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_12))
+                    .border_color(Hsla::from(theme.text_primary))
                     .p(px(1.))
                     .child(tab("Auto", "zoom-mode-auto", !manual, false, auto_locked))
                     .child(tab("Manual", "zoom-mode-manual", manual, true, false)),
@@ -4290,7 +4290,7 @@ impl EditorWindow {
             .children(auto_locked.then(|| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_11))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(
                         "Auto mode needs cursor capture. Enable \"Custom cursor capture \
                          (Studio)\" in Settings \u{2192} General.",
@@ -4321,13 +4321,13 @@ impl EditorWindow {
                     .w_full()
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_11))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .cursor_pointer()
                     .child(
                         svg()
                             .path("icons/info.svg")
                             .size(px(14.))
-                            .text_color(Hsla::from(theme.gray_11)),
+                            .text_color(Hsla::from(theme.text_secondary)),
                     )
                     .child("How does it work?")
                     .child(
@@ -4339,7 +4339,7 @@ impl EditorWindow {
                                     "icons/chevron-right.svg"
                                 })
                                 .size(px(14.))
-                                .text_color(Hsla::from(theme.gray_11)),
+                                .text_color(Hsla::from(theme.text_secondary)),
                         ),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -4359,11 +4359,11 @@ impl EditorWindow {
                             .relative()
                             .w_full()
                             .h(px(88.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .overflow_hidden()
                             .border_1()
-                            .border_color(Hsla::from(theme.gray_4))
-                            .bg(Hsla::from(theme.gray_3))
+                            .border_color(Hsla::from(theme.hover_bg))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .child(
                                 div()
                                     .absolute()
@@ -4373,13 +4373,12 @@ impl EditorWindow {
                                     .mt(px(-24.))
                                     .w(px(160.))
                                     .h(px(48.))
-                                    .rounded(px(6.))
-                                    .border_2()
-                                    .border_color(crate::editor_sidebar::with_alpha(
-                                        theme.blue_9,
-                                        0.6,
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Compact,
                                     ))
-                                    .bg(crate::editor_sidebar::with_alpha(theme.blue_9, 0.1)),
+                                    .border_2()
+                                    .border_color(Hsla::from(theme.primary))
+                                    .bg(Hsla::from(theme.primary_subtle)),
                             )
                             .child(
                                 div()
@@ -4390,14 +4389,14 @@ impl EditorWindow {
                                         svg()
                                             .path("icons/cursor.svg")
                                             .size(px(14.))
-                                            .text_color(Hsla::from(theme.gray_12)),
+                                            .text_color(Hsla::from(theme.text_primary)),
                                     ),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(if manual {
                                 "Manual zoom stays on a fixed spot you pick below."
                             } else {
@@ -4515,7 +4514,7 @@ impl EditorWindow {
                 // `size-[2rem] rounded-[0.5rem]` with an inset 1px ring.
                 .size(px(32.))
                 .flex_none()
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .bg(crate::editor_sidebar::color_to_hsla(rgb))
                 .border_1()
                 .border_color(crate::editor_sidebar::preview_border_color(rgb))
@@ -4540,10 +4539,10 @@ impl EditorWindow {
                     .height(px(30.))
                     .radius(px(7.))
                     .text_size(px(12.))
-                    .bg(Hsla::from(theme.editor.ctl))
+                    .bg(Hsla::from(theme.surface_subtle))
                     .border(gpui::transparent_black())
-                    .text_color(Hsla::from(theme.editor.text_1))
-                    .caret_color(Hsla::from(theme.editor.accent)),
+                    .text_color(Hsla::from(theme.text_primary))
+                    .caret_color(Hsla::from(theme.primary)),
                 ),
             );
         }
@@ -4562,8 +4561,8 @@ impl EditorWindow {
                 .flex(true)
                 .padding_x(px(12.))
                 .text_size(px(14.))
-                .bg(Hsla::from(theme.gray_2))
-                .border(Hsla::from(theme.editor.line));
+                .bg(Hsla::from(theme.surface_secondary))
+                .border(Hsla::from(theme.border_subtle));
         // A `<textarea>` measures its own height; a single-line box is `h-9`.
         field = match height {
             // `min-h-[80px]` / `min-h-[96px]` on the two textareas.
@@ -4596,12 +4595,12 @@ impl EditorWindow {
                     .padding_x(px(6.))
                     .height(px(30.))
                     .text_size(px(14.))
-                    .bg(Hsla::from(theme.gray_1))
-                    .border(Hsla::from(theme.gray_12)),
+                    .bg(Hsla::from(theme.surface))
+                    .border(Hsla::from(theme.text_primary)),
             )
             .children((!unit.is_empty()).then(|| {
                 div()
-                    .text_color(Hsla::from(theme.gray_11))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(unit)
                     .into_any_element()
             }))
@@ -4741,16 +4740,16 @@ impl EditorWindow {
                 .items_center()
                 .h(px(22.))
                 .px(px(6.))
-                .rounded_full()
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                 .text_size(px(11.))
                 .font_weight(FontWeight::MEDIUM)
                 .when(selected, |this| {
-                    this.bg(Hsla::from(theme.editor.ctl_active))
-                        .text_color(Hsla::from(theme.editor.text_1))
+                    this.bg(Hsla::from(theme.active_bg))
+                        .text_color(Hsla::from(theme.text_primary))
                 })
                 .when(!selected, |this| {
-                    this.text_color(Hsla::from(theme.editor.text_2))
-                        .hover(|style| style.text_color(Hsla::from(theme.editor.text_1)))
+                    this.text_color(Hsla::from(theme.text_secondary))
+                        .hover(|style| style.text_color(Hsla::from(theme.text_primary)))
                 })
                 .child(label)
                 .on_click(cx.listener(move |this, _, _window, cx| {
@@ -4818,7 +4817,7 @@ impl EditorWindow {
                 .justify_center()
                 .relative()
                 .overflow_hidden()
-                .rounded(px(10.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                 .px(px(8.))
                 .pb(px(12.))
                 .bg(gpui::linear_gradient(
@@ -4827,13 +4826,12 @@ impl EditorWindow {
                     gpui::linear_color_stop(gpui::rgb(0x2c2d36), 1.),
                 ))
                 .border_1()
-                .border_color(Hsla::from(theme.editor.line))
+                .border_color(Hsla::from(theme.border_subtle))
                 .when(!selected, |this| {
-                    this.hover(|style| style.border_color(Hsla::from(theme.editor.line_strong)))
+                    this.hover(|style| style.border_color(Hsla::from(theme.border)))
                 })
                 .when(selected, |this| {
-                    this.border_2()
-                        .border_color(Hsla::from(theme.editor.accent))
+                    this.border_2().border_color(Hsla::from(theme.primary))
                 })
                 .child(sample)
                 .child(
@@ -4929,11 +4927,11 @@ impl EditorWindow {
                 .radius(px(9.))
                 .text_size(px(13.))
                 .line_height(px(18.))
-                .bg(Hsla::from(theme.editor.ctl))
+                .bg(Hsla::from(theme.surface_subtle))
                 .border(gpui::transparent_black())
-                .text_color(Hsla::from(theme.editor.text_1))
-                .caret_color(Hsla::from(theme.editor.accent))
-                .placeholder_color(Hsla::from(theme.editor.text_3)),
+                .text_color(Hsla::from(theme.text_primary))
+                .caret_color(Hsla::from(theme.primary))
+                .placeholder_color(Hsla::from(theme.text_muted)),
             )
             .into_any_element()
     }
@@ -4956,21 +4954,21 @@ impl EditorWindow {
             .justify_center()
             .h(px(28.))
             .px(px(10.))
-            .rounded(px(7.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
             .when(italic, |this| this.italic())
             .when(selected, |this| {
-                this.bg(with_alpha(theme.editor.accent, 0.12))
-                    .text_color(Hsla::from(theme.editor.accent))
+                this.bg(Hsla::from(theme.primary_subtle))
+                    .text_color(Hsla::from(theme.primary))
             })
             .when(!selected, |this| {
-                this.bg(Hsla::from(theme.editor.ctl))
-                    .text_color(Hsla::from(theme.editor.text_2))
+                this.bg(Hsla::from(theme.surface_subtle))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .hover(|style| {
                         style
-                            .bg(Hsla::from(theme.editor.ctl_hover))
-                            .text_color(Hsla::from(theme.editor.text_1))
+                            .bg(Hsla::from(theme.hover_bg))
+                            .text_color(Hsla::from(theme.text_primary))
                     })
             })
             .child(label)
@@ -4992,7 +4990,7 @@ impl EditorWindow {
                     segment.animation_in
                 }
             });
-        let accent = Hsla::from(theme.editor.accent);
+        let accent = Hsla::from(theme.primary);
 
         let tile = |slot: usize,
                     animation: TextAnimation,
@@ -5002,7 +5000,7 @@ impl EditorWindow {
             let color = if selected {
                 accent
             } else {
-                Hsla::from(theme.editor.text_2)
+                Hsla::from(theme.text_secondary)
             };
             div()
                 .id(SharedString::from(format!("text-anim-{index}-{slot}")))
@@ -5014,21 +5012,21 @@ impl EditorWindow {
                 .items_center()
                 .justify_center()
                 .gap(px(4.))
-                .rounded(px(9.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
                 .border_color(if selected {
-                    with_alpha(theme.editor.accent, 0.4)
+                    Hsla::from(theme.primary)
                 } else {
                     gpui::transparent_black()
                 })
                 .bg(if selected {
-                    with_alpha(theme.editor.accent, 0.12)
+                    Hsla::from(theme.primary_subtle)
                 } else {
-                    Hsla::from(theme.editor.ctl)
+                    Hsla::from(theme.surface_subtle)
                 })
                 .text_color(color)
                 .when(!selected, |this| {
-                    this.hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                    this.hover(|style| style.bg(Hsla::from(theme.hover_bg)))
                 })
                 .child(text_animation_depiction(animation, color, accent))
                 .child(
@@ -5493,7 +5491,7 @@ impl EditorWindow {
                         .children((layout == TextLayout::Fullscreen).then(|| {
                             div()
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child(
                                     "Pauses the video while the text is shown, then resumes \
                                      where it left off.",
@@ -5600,10 +5598,10 @@ impl EditorWindow {
                 .flex_col()
                 .gap(px(8.))
                 .p(px(10.))
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
-                .border_color(Hsla::from(theme.editor.line))
-                .bg(crate::editor_sidebar::with_alpha(theme.gray_1, 0.8))
+                .border_color(Hsla::from(theme.border_subtle))
+                .bg(Hsla::from(theme.surface))
                 .child(
                     div()
                         .flex()
@@ -5611,7 +5609,7 @@ impl EditorWindow {
                         .justify_between()
                         .items_center()
                         .text_size(px(10.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child(label)
                         .child(SharedString::from(format_time(time))),
                 )
@@ -5625,10 +5623,10 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(12.))
                     .p(px(12.))
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
-                    .border_color(Hsla::from(theme.editor.line))
-                    .bg(crate::editor_sidebar::with_alpha(theme.gray_2, 0.7))
+                    .border_color(Hsla::from(theme.border_subtle))
+                    .bg(Hsla::from(theme.surface_secondary))
                     .child(
                         div()
                             .flex()
@@ -5641,7 +5639,7 @@ impl EditorWindow {
                                     .pt(px(40.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child("to"),
                             )
                             .child(box_for("End", end, end_key)),
@@ -5654,15 +5652,15 @@ impl EditorWindow {
                             .items_center()
                             .px(px(12.))
                             .py(px(8.))
-                            .rounded(px(8.))
-                            .bg(crate::editor_sidebar::with_alpha(theme.gray_1, 0.7))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                            .bg(Hsla::from(theme.surface))
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("Duration")
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(SharedString::from(format!(
                                         "{:.2}s",
                                         (end - start).max(0.)
@@ -5712,10 +5710,12 @@ impl EditorWindow {
                                     .items_center()
                                     .p(px(8.))
                                     .w_full()
-                                    .rounded(px(12.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Medium,
+                                    ))
                                     .border_1()
-                                    .border_color(Hsla::from(theme.editor.line))
-                                    .bg(Hsla::from(theme.gray_2))
+                                    .border_color(Hsla::from(theme.border_subtle))
+                                    .bg(Hsla::from(theme.surface_secondary))
                                     .cursor_pointer()
                                     .tab_index(0)
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -5725,7 +5725,9 @@ impl EditorWindow {
                                         div()
                                             .size(px(40.))
                                             .flex_none()
-                                            .rounded(px(8.))
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Default,
+                                            ))
                                             .bg(TrackKind::Audio.color()),
                                     )
                                     .child(
@@ -5739,13 +5741,13 @@ impl EditorWindow {
                                                     .text_size(px(14.))
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .truncate()
-                                                    .text_color(Hsla::from(theme.gray_12))
+                                                    .text_color(Hsla::from(theme.text_primary))
                                                     .child(SharedString::from(name)),
                                             )
                                             .child(
                                                 div()
                                                     .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_10))
+                                                    .text_color(Hsla::from(theme.text_secondary))
                                                     .child("Tap to change track"),
                                             ),
                                     )
@@ -5758,19 +5760,21 @@ impl EditorWindow {
                                             .px(px(8.))
                                             .h(px(28.))
                                             .flex_none()
-                                            .rounded(px(8.))
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Default,
+                                            ))
                                             .border_1()
-                                            .border_color(Hsla::from(theme.editor.line))
-                                            .bg(Hsla::from(theme.gray_1))
+                                            .border_color(Hsla::from(theme.border_subtle))
+                                            .bg(Hsla::from(theme.surface))
                                             .text_size(px(12.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(Hsla::from(theme.gray_11))
+                                            .text_color(Hsla::from(theme.text_secondary))
                                             .opacity(0.5)
                                             .child(
                                                 svg()
                                                     .path("icons/refresh-cw.svg")
                                                     .size(px(14.))
-                                                    .text_color(Hsla::from(theme.gray_11)),
+                                                    .text_color(Hsla::from(theme.text_secondary)),
                                             )
                                             .child("Change"),
                                     ),
@@ -5793,7 +5797,7 @@ impl EditorWindow {
                                             .child(
                                                 div()
                                                     .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_11))
+                                                    .text_color(Hsla::from(theme.text_secondary))
                                                     .child("Enabled"),
                                             )
                                             .child(
@@ -5904,7 +5908,7 @@ impl EditorWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child("Enabled"),
                             )
                             .child(
@@ -6006,16 +6010,14 @@ impl EditorWindow {
                         div()
                             .id(SharedString::from(format!("{id}-{index}")))
                             .flex_1()
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .border_1()
                             .border_color(if checked {
-                                Hsla::from(theme.blue_8)
+                                Hsla::from(theme.primary_hover)
                             } else {
-                                Hsla::from(theme.gray_3)
+                                Hsla::from(theme.surface_subtle)
                             })
-                            .when(checked, |this| {
-                                this.bg(crate::editor_sidebar::with_alpha(theme.blue_3, 0.4))
-                            })
+                            .when(checked, |this| this.bg(Hsla::from(theme.primary_subtle)))
                             .child(
                                 div()
                                     .flex()
@@ -6024,20 +6026,22 @@ impl EditorWindow {
                                     .gap(px(8.))
                                     .p(px(8.))
                                     .text_size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(
                                         div()
                                             .size(px(16.))
                                             .flex_none()
-                                            .rounded_full()
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Large,
+                                            ))
                                             .border_1()
                                             .border_color(if checked {
-                                                Hsla::from(theme.blue_9)
+                                                Hsla::from(theme.primary)
                                             } else {
-                                                Hsla::from(theme.gray_7)
+                                                Hsla::from(theme.border_strong)
                                             })
                                             .when(checked, |this| {
-                                                this.bg(Hsla::from(theme.blue_9))
+                                                this.bg(Hsla::from(theme.primary))
                                             }),
                                     )
                                     .child(label),
@@ -6136,26 +6140,30 @@ impl EditorWindow {
                                         .items_center()
                                         .py(px(10.))
                                         .px(px(8.))
-                                        .rounded(px(10.))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Medium,
+                                        ))
                                         .border_1()
                                         .border_color(if selected {
-                                            Hsla::from(theme.gray_3)
+                                            Hsla::from(theme.surface_subtle)
                                         } else {
                                             gpui::transparent_black()
                                         })
-                                        .when(selected, |this| this.bg(Hsla::from(theme.gray_3)))
+                                        .when(selected, |this| {
+                                            this.bg(Hsla::from(theme.surface_subtle))
+                                        })
                                         .when(disabled, |this| this.opacity(0.4))
                                         .text_size(px(12.))
                                         .text_color(if selected {
-                                            Hsla::from(theme.gray_12)
+                                            Hsla::from(theme.text_primary)
                                         } else {
-                                            Hsla::from(theme.gray_11)
+                                            Hsla::from(theme.text_secondary)
                                         })
                                         .child(svg().path(*icon).size(px(14.)).text_color(
                                             if selected {
-                                                Hsla::from(theme.gray_12)
+                                                Hsla::from(theme.text_primary)
                                             } else {
-                                                Hsla::from(theme.gray_11)
+                                                Hsla::from(theme.text_secondary)
                                             },
                                         ))
                                         .child(*label)
@@ -6172,16 +6180,16 @@ impl EditorWindow {
                         .child(
                             div()
                                 .p(px(10.))
-                                .rounded(px(6.))
-                                .bg(Hsla::from(theme.gray_2))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+                                .bg(Hsla::from(theme.surface_secondary))
                                 .border_1()
-                                .border_color(Hsla::from(theme.editor.line))
+                                .border_color(Hsla::from(theme.border_subtle))
                                 .child(
                                     div()
                                         .w_full()
                                         .text_size(px(12.))
                                         .text_center()
-                                        .text_color(Hsla::from(theme.gray_11))
+                                        .text_color(Hsla::from(theme.text_secondary))
                                         .child(description),
                                 ),
                         ),
@@ -6212,7 +6220,7 @@ impl EditorWindow {
 
         if split_mode {
             panel = panel
-                .child(dashed_divider(Hsla::from(theme.editor.line)))
+                .child(dashed_divider(Hsla::from(theme.border_subtle)))
                 .child(self.slider_field(
                     "Screen Zoom",
                     SliderKey::Panel(PanelSlider::SceneScreenZoom, index),
@@ -6223,7 +6231,7 @@ impl EditorWindow {
                     ui::Field::stacked(&theme, "Screen Position")
                         .child(self.render_pad(PadKey::SceneScreen(index), cx)),
                 )
-                .child(dashed_divider(Hsla::from(theme.editor.line)))
+                .child(dashed_divider(Hsla::from(theme.border_subtle)))
                 .child(self.slider_field(
                     "Camera Zoom",
                     SliderKey::Panel(PanelSlider::SceneCameraZoom, index),
@@ -6363,12 +6371,12 @@ impl EditorWindow {
                     .relative()
                     .w_full()
                     .h(px(CAMERA3D_LOOK_THUMB))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .overflow_hidden()
                     .bg(camera3d_thumb_bg(theme.is_dark()))
                     .border_2()
                     .border_color(if selected {
-                        Hsla::from(theme.editor.accent)
+                        Hsla::from(theme.primary)
                     } else {
                         gpui::transparent_black()
                     })
@@ -6383,13 +6391,13 @@ impl EditorWindow {
                                 .h(px(13.))
                                 .flex()
                                 .items_center()
-                                .rounded(px(4.))
-                                .bg(crate::editor_sidebar::with_alpha(theme.editor.card, 0.85))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                .bg(Hsla::from(theme.surface_raised))
                                 .child(
                                     svg()
                                         .path("icons/move-right.svg")
                                         .size(px(9.))
-                                        .text_color(Hsla::from(theme.editor.text_2)),
+                                        .text_color(Hsla::from(theme.text_secondary)),
                                 ),
                         )
                     }),
@@ -6402,9 +6410,9 @@ impl EditorWindow {
                     .truncate()
                     .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
                     .text_color(Hsla::from(if selected {
-                        theme.editor.text_1
+                        theme.text_primary
                     } else {
-                        theme.editor.text_2
+                        theme.text_secondary
                     }))
                     .child(name),
             )
@@ -6474,30 +6482,34 @@ impl EditorWindow {
                         .gap(px(3.))
                         .px(px(10.))
                         .py(px(8.))
-                        .rounded(px(8.))
-                        .bg(Hsla::from(theme.editor.ctl))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                        .bg(Hsla::from(theme.surface_subtle))
                         .cursor_pointer()
-                        .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                        .hover(|style| style.bg(Hsla::from(theme.hover_bg)))
                         .child(
                             div()
                                 .text_size(px(11.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.editor.text_1))
+                                .text_color(Hsla::from(theme.text_primary))
                                 .truncate()
                                 .child(scene.name),
                         )
                         .child(
                             div()
                                 .text_size(px(10.))
-                                .text_color(Hsla::from(theme.editor.text_2))
+                                .text_color(Hsla::from(theme.text_secondary))
                                 .child(format!("{shots} shots")),
                         )
                         .child(div().flex().flex_row().gap(px(3.)).pt(px(3.)).children(
                             (0..shots).map(|_| {
-                                div().h(px(4.)).flex_1().rounded(px(2.)).bg(with_alpha(
-                                    gpui::rgb(crate::editor_timeline::track_color::THREE_D),
-                                    0.7,
-                                ))
+                                div()
+                                    .h(px(4.))
+                                    .flex_1()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                    .bg(with_alpha(
+                                        gpui::rgb(crate::editor_timeline::track_color::THREE_D),
+                                        0.7,
+                                    ))
                             }),
                         ))
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -6551,7 +6563,7 @@ impl EditorWindow {
         let (x, y) = camera3d_orbit_point(&pose);
         let key = PadKey::Camera3DOrbit(index);
         let cell = self.sidebar.pad(key);
-        let line = Hsla::from(theme.editor.line_strong);
+        let line = Hsla::from(theme.border);
 
         div()
             .id(SharedString::from(format!("c3d-orbit-{index}")))
@@ -6559,7 +6571,7 @@ impl EditorWindow {
             .size(px(CAMERA3D_ORBIT_PAD))
             .flex_none()
             .overflow_hidden()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .bg(camera3d_thumb_bg(theme.is_dark()))
             .cursor(gpui::CursorStyle::Crosshair)
             .child(
@@ -6602,8 +6614,8 @@ impl EditorWindow {
                     .ml(px(-6.))
                     .mt(px(-6.))
                     .size(px(12.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.editor.accent))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(Hsla::from(theme.primary))
                     .border_2()
                     .border_color(camera3d_thumb_bg(theme.is_dark())),
             )
@@ -6615,7 +6627,7 @@ impl EditorWindow {
                     .bottom(px(6.))
                     .text_center()
                     .text_size(px(10.))
-                    .text_color(Hsla::from(theme.editor.text_2))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child("Drag to orbit"),
             )
             .on_mouse_down(
@@ -6644,7 +6656,7 @@ impl EditorWindow {
             .min_h(px(22.))
             .text_size(px(12.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(self.theme.editor.text_2))
+            .text_color(Hsla::from(self.theme.text_secondary))
             .child(div().flex_none().child(name))
             .child(div().flex_1())
     }
@@ -6655,9 +6667,9 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .p(px(CAMERA3D_GROUP_PADDING))
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(Hsla::from(self.theme.editor.line))
+            .border_color(Hsla::from(self.theme.border_subtle))
             .child(content)
             .into_any_element()
     }
@@ -6681,7 +6693,7 @@ impl EditorWindow {
             .h(px(32.))
             .gap(px(8.))
             .text_size(px(12.))
-            .text_color(Hsla::from(theme.editor.text_2))
+            .text_color(Hsla::from(theme.text_secondary))
             .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child(label))
             .child(
                 div()
@@ -6766,12 +6778,12 @@ impl EditorWindow {
                 div()
                     .w_full()
                     .h(px(CAMERA3D_POSE_CARD_HEIGHT))
-                    .rounded(px(9.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .overflow_hidden()
                     .bg(camera3d_thumb_bg(theme.is_dark()))
                     .border_2()
                     .border_color(if editing {
-                        Hsla::from(theme.editor.accent)
+                        Hsla::from(theme.primary)
                     } else {
                         gpui::transparent_black()
                     })
@@ -6789,9 +6801,9 @@ impl EditorWindow {
                     .text_size(px(11.))
                     .when(editing, |this| this.font_weight(FontWeight::MEDIUM))
                     .text_color(Hsla::from(if editing {
-                        theme.editor.text_1
+                        theme.text_primary
                     } else {
-                        theme.editor.text_2
+                        theme.text_secondary
                     }))
                     // The playhead's own mark: this is the pose on screen.
                     .when(at_playhead, |this| {
@@ -6799,8 +6811,8 @@ impl EditorWindow {
                             div()
                                 .size(px(5.))
                                 .flex_none()
-                                .rounded_full()
-                                .bg(Hsla::from(theme.editor.accent)),
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                                .bg(Hsla::from(theme.primary)),
                         )
                     })
                     .child(div().min_w_0().truncate().child(caption)),
@@ -6935,7 +6947,7 @@ impl EditorWindow {
                         .flex_none()
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child("Auto scene"),
                 )
                 .child(div().flex_1())
@@ -6974,21 +6986,20 @@ impl EditorWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(7.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(active, |this| {
-                        this.bg(Hsla::from(theme.editor.accent))
-                            .text_color(gpui::white())
+                        this.bg(Hsla::from(theme.primary)).text_color(gpui::white())
                     })
                     .when(!active, |this| {
-                        this.bg(Hsla::from(theme.editor.ctl))
-                            .text_color(Hsla::from(theme.editor.text_2))
+                        this.bg(Hsla::from(theme.surface_subtle))
+                            .text_color(Hsla::from(theme.text_secondary))
                     })
                     .when(!available, |this| this.opacity(0.35))
                     .when(available && !active, |this| {
                         this.cursor_pointer()
-                            .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                            .hover(|style| style.bg(Hsla::from(theme.hover_bg)))
                     })
                     .when(available, |this| {
                         this.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -7046,7 +7057,7 @@ impl EditorWindow {
                     .min_w_0()
                     .truncate()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.editor.text_2))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(format!("3D shot \u{b7} {look} \u{b7} {duration:.1}s")),
             )
             .child(
@@ -7090,7 +7101,7 @@ impl EditorWindow {
                             .flex_none()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_2))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("Camera"),
                     )
                     .child(div().flex_1())
@@ -7204,7 +7215,7 @@ impl EditorWindow {
                         .h(px(32.))
                         .gap(px(8.))
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.editor.text_2))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child("Focus"))
                         .child(
                             div().flex_1().min_w_0().child(
@@ -7276,7 +7287,7 @@ impl EditorWindow {
                                 .h(px(32.))
                                 .gap(px(8.))
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.editor.text_2))
+                                .text_color(Hsla::from(theme.text_secondary))
                                 .child(div().w(px(CAMERA3D_ROW_LABEL)).flex_none().child("Bokeh"))
                                 .child(div().flex_1())
                                 .child(
@@ -7309,19 +7320,19 @@ impl EditorWindow {
                     .h(px(34.))
                     .px(px(CAMERA3D_GROUP_PADDING))
                     .gap(px(8.))
-                    .rounded(px(10.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
-                    .border_color(Hsla::from(theme.editor.line))
+                    .border_color(Hsla::from(theme.border_subtle))
                     .cursor_pointer()
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_1))
+                    .text_color(Hsla::from(theme.text_primary))
                     .child("Timing & advanced")
                     .child(div().flex_1())
                     .child(
                         div()
                             .font_weight(FontWeight::NORMAL)
-                            .text_color(Hsla::from(theme.editor.text_2))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(format!(
                                 "{easing_label} \u{b7} Lens {}",
                                 start.fov.round() as i32
@@ -7336,7 +7347,7 @@ impl EditorWindow {
                             })
                             .size(px(13.))
                             .flex_none()
-                            .text_color(Hsla::from(theme.editor.text_3)),
+                            .text_color(Hsla::from(theme.text_muted)),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.sidebar
@@ -7361,7 +7372,7 @@ impl EditorWindow {
                                 // to store a curve (`:5357-5360`).
                                 .when(still, |this| this.opacity(0.5))
                                 .child(if still {
-                                    ui::Select::plain(&theme, "camera3d-easing", easing_label)
+                                    ui::Select::new(&theme, "camera3d-easing", easing_label)
                                         .stretch_label()
                                         .disabled(true)
                                         .into_any_element()
@@ -7409,7 +7420,7 @@ impl EditorWindow {
                     .child(
                         div().pt(px(4.)).pb(px(4.)).child(
                             ui::EditorButton::plain(&theme, "camera3d-reset")
-                                .left_icon("icons/rotate-ccw.svg")
+                                .left_icon("icons/reset.svg")
                                 .label("Reset camera")
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.reset_camera3d_pose(index, window, cx);
@@ -8736,10 +8747,10 @@ impl EditorWindow {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(self.theme.gray_4))
-                    .bg(Hsla::from(self.theme.gray_2))
+                    .border_color(Hsla::from(self.theme.hover_bg))
+                    .bg(Hsla::from(self.theme.surface_secondary))
                     .p(px(12.))
                     .child(
                         div()
@@ -8755,7 +8766,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(self.theme.gray_10))
+                            .text_color(Hsla::from(self.theme.text_secondary))
                             .child("Drag the image to move it. Pull a corner to resize, or use the rotation control below to turn it."),
                     )
                     .child(
@@ -8930,8 +8941,8 @@ impl EditorWindow {
                             .cursor_pointer()
                             .px(px(12.))
                             .py(px(8.))
-                            .rounded(px(6.))
-                            .bg(Hsla::from(self.theme.gray_3))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+                            .bg(Hsla::from(self.theme.surface_subtle))
                             .child(
                                 div()
                                     .flex()

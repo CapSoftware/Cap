@@ -57,32 +57,31 @@ pub struct RadioCards {
     selected_bg: Hsla,
     dot_border: Hsla,
     dot_fill: Hsla,
+    dot_glyph: Hsla,
     title: Hsla,
     description: Hsla,
     on_select: Option<SelectHandler>,
 }
 
 impl RadioCards {
-    /// The editor surface. `data-checked:bg-blue-3/40` is `blue-3` at 40%.
     pub fn plain(
         theme: &Theme,
         id: impl Into<ElementId>,
         items: Vec<RadioCard>,
         selected: Option<usize>,
     ) -> Self {
-        let mut selected_bg = Hsla::from(theme.blue_3);
-        selected_bg.a = 0.4;
         Self {
             id: id.into(),
             items,
             selected,
-            border: Hsla::from(theme.gray_3),
-            selected_border: Hsla::from(theme.blue_8),
-            selected_bg,
-            dot_border: Hsla::from(theme.gray_7),
-            dot_fill: Hsla::from(theme.blue_9),
-            title: Hsla::from(theme.gray_12),
-            description: Hsla::from(theme.gray_11),
+            border: Hsla::from(theme.surface_subtle),
+            selected_border: Hsla::from(theme.primary_hover),
+            selected_bg: Hsla::from(theme.primary_subtle),
+            dot_border: Hsla::from(theme.border_strong),
+            dot_fill: Hsla::from(theme.primary),
+            dot_glyph: Hsla::from(theme.primary_foreground),
+            title: Hsla::from(theme.text_primary),
+            description: Hsla::from(theme.text_secondary),
             on_select: None,
         }
     }
@@ -104,6 +103,7 @@ impl RenderOnce for RadioCards {
             selected_bg,
             dot_border,
             dot_fill,
+            dot_glyph,
             title,
             description,
             on_select,
@@ -127,7 +127,7 @@ impl RenderOnce for RadioCards {
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
                     .border_color(if checked { selected_border } else { border })
                     .when(checked, |this| this.bg(selected_bg))
@@ -148,7 +148,7 @@ impl RenderOnce for RadioCards {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .border_1()
                                     .border_color(if checked { dot_fill } else { dot_border })
                                     .when(checked, |this| {
@@ -156,7 +156,7 @@ impl RenderOnce for RadioCards {
                                             svg()
                                                 .path("icons/check.svg")
                                                 .size(px(12.))
-                                                .text_color(Hsla::from(gpui::rgb(0xffffff))),
+                                                .text_color(dot_glyph),
                                         )
                                     }),
                             )

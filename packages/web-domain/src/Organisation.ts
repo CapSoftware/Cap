@@ -1,6 +1,5 @@
-import { HttpApiSchema } from "@effect/platform";
-import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
@@ -10,7 +9,7 @@ import { PolicyDeniedError } from "./Policy.ts";
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"OrgNotFoundError",
 	{},
-	HttpApiSchema.annotations({ status: 404 }),
+	{ httpApiStatus: 404 },
 ) {}
 
 export const OrganisationId = Schema.String.pipe(
@@ -32,12 +31,12 @@ export type OrganisationUpdate = Schema.Schema.Type<typeof OrganisationUpdate>;
 export class OrganisationRpcs extends RpcGroup.make(
 	Rpc.make("OrganisationUpdate", {
 		payload: OrganisationUpdate,
-		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
+		error: Schema.Union([InternalError, PolicyDeniedError, NotFoundError]),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("OrganisationSoftDelete", {
 		payload: Schema.Struct({
 			id: OrganisationId,
 		}),
-		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
+		error: Schema.Union([InternalError, PolicyDeniedError, NotFoundError]),
 	}).middleware(RpcAuthMiddleware),
 ) {}

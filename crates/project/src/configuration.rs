@@ -392,7 +392,7 @@ impl Default for BackgroundConfiguration {
             inset: 0,
             crop: None,
             display_position: None,
-            shadow: 73.6,
+            shadow: 0.0,
             advanced_shadow: Some(ShadowConfiguration::default()),
             border: None, // Border is disabled by default for backwards compatibility
             frame: None,  // No decorative frame by default
@@ -595,7 +595,7 @@ impl Default for Camera {
             size: 30.0,
             zoom_size: Some(Self::default_zoom_size()),
             rounding: Self::default_rounding(),
-            shadow: 62.5,
+            shadow: 0.0,
             advanced_shadow: Some(ShadowConfiguration {
                 size: 33.9,
                 opacity: 44.2,
@@ -869,7 +869,7 @@ impl Default for CursorConfiguration {
             hide_when_idle: false,
             hide_when_idle_delay: Self::default_hide_when_idle_delay(),
             size: 100,
-            r#type: CursorType::default(),
+            r#type: CursorType::MacOS,
             animation_style,
             tension: 470.0,
             mass: 3.0,
@@ -4765,7 +4765,7 @@ mod tests {
     #[test]
     fn set_cursor_type_replaces_the_private_field() {
         let mut cursor = CursorConfiguration::default();
-        assert_eq!(*cursor.cursor_type(), CursorType::Auto);
+        assert_eq!(*cursor.cursor_type(), CursorType::MacOS);
 
         cursor.set_cursor_type(CursorType::MacOSTahoe);
 

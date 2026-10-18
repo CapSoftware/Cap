@@ -1,80 +1,88 @@
 import * as Db from "@cap/database/schema";
 import { type Organisation, Policy, type Space } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import { Database } from "../Database.ts";
 import { OrganisationsPolicy } from "../Organisations/OrganisationsPolicy.ts";
 import { SpacesPolicy } from "./SpacesPolicy.ts";
 
-export class Spaces extends Effect.Service<Spaces>()("Spaces", {
-	effect: Effect.gen(function* () {
-		const db = yield* Database;
-		const spacesPolicy = yield* SpacesPolicy;
-		const orgsPolicy = yield* OrganisationsPolicy;
+const makeSpaces = Effect.gen(function* () {
+	const db = yield* Database;
+	const spacesPolicy = yield* SpacesPolicy;
+	const orgsPolicy = yield* OrganisationsPolicy;
 
-		// this sucks but right now org ids are also valid space ids,
-		// since the whole-org space is just the org id
-		const getSpaceOrOrg = Effect.fn(function* (
-			spaceOrOrgId: Space.SpaceIdOrOrganisationId,
-		) {
-			const [[space], [org]] = yield* Effect.all([
-				db.use((db) =>
-					db
-						.select({
-							id: Db.spaces.id,
-							name: Db.spaces.name,
-							organizationId: Db.spaces.organizationId,
-							createdById: Db.spaces.createdById,
-							iconUrl: Db.spaces.iconUrl,
-							settings: Db.spaces.settings,
-							public: Db.spaces.public,
-							hasPassword: Dz.sql`${Db.spaces.password} IS NOT NULL`.mapWith(
-								Boolean,
-							),
-						})
-						.from(Db.spaces)
-						.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
-						.limit(1),
-				),
-				db.use((db) =>
-					db
-						.select({
-							id: Db.organizations.id,
-							name: Db.organizations.name,
-							ownerId: Db.organizations.ownerId,
-						})
-						.from(Db.organizations)
-						.where(
-							Dz.eq(
-								Db.organizations.id,
-								spaceOrOrgId as Organisation.OrganisationId,
-							),
-						)
-						.limit(1),
-				),
-			]);
-			if (space)
-				return yield* Effect.succeed({ variant: "space" as const, space }).pipe(
-					Policy.withPolicy(
-						Policy.any(
-							spacesPolicy.isMember(space.id),
-							orgsPolicy.isAdminOrOwner(space.organizationId),
+	// this sucks but right now org ids are also valid space ids,
+	// since the whole-org space is just the org id
+	const getSpaceOrOrg = Effect.fn(function* (
+		spaceOrOrgId: Space.SpaceIdOrOrganisationId,
+	) {
+		const [[space], [org]] = yield* Effect.all([
+			db.use((db) =>
+				db
+					.select({
+						id: Db.spaces.id,
+						name: Db.spaces.name,
+						organizationId: Db.spaces.organizationId,
+						createdById: Db.spaces.createdById,
+						iconUrl: Db.spaces.iconUrl,
+						settings: Db.spaces.settings,
+						public: Db.spaces.public,
+						hasPassword: Dz.sql`${Db.spaces.password} IS NOT NULL`.mapWith(
+							Boolean,
 						),
+					})
+					.from(Db.spaces)
+					.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
+					.limit(1),
+			),
+			db.use((db) =>
+				db
+					.select({
+						id: Db.organizations.id,
+						name: Db.organizations.name,
+						ownerId: Db.organizations.ownerId,
+					})
+					.from(Db.organizations)
+					.where(
+						Dz.eq(
+							Db.organizations.id,
+							spaceOrOrgId as Organisation.OrganisationId,
+						),
+					)
+					.limit(1),
+			),
+		]);
+		if (space)
+			return yield* Effect.succeed({ variant: "space" as const, space }).pipe(
+				Policy.withPolicy(
+					Policy.any(
+						spacesPolicy.isMember(space.id),
+						orgsPolicy.isAdminOrOwner(space.organizationId),
 					),
-				);
-			if (org)
-				return yield* Effect.succeed({
-					variant: "organization" as const,
-					organization: org,
-				}).pipe(Policy.withPolicy(orgsPolicy.isMember(org.id)));
-		});
+				),
+			);
+		if (org)
+			return yield* Effect.succeed({
+				variant: "organization" as const,
+				organization: org,
+			}).pipe(Policy.withPolicy(orgsPolicy.isMember(org.id)));
+	});
 
-		return { getSpaceOrOrg };
-	}),
-	dependencies: [
-		SpacesPolicy.Default,
-		OrganisationsPolicy.Default,
-		Database.Default,
-	],
-}) {}
+	return { getSpaceOrOrg };
+});
+
+export class Spaces extends Context.Service<
+	Spaces,
+	Effect.Success<typeof makeSpaces>
+>()("Spaces") {
+	static readonly Default = Layer.effect(this, makeSpaces).pipe(
+		Layer.provide(
+			Layer.mergeAll(
+				SpacesPolicy.Default,
+				OrganisationsPolicy.Default,
+				Database.Default,
+			),
+		),
+	);
+}

@@ -313,9 +313,9 @@ fn header_button(
 ) -> gpui::Stateful<gpui::Div> {
     let theme = *theme;
     let foreground = Hsla::from(if pressed {
-        theme.editor.text_1
+        theme.text_primary
     } else {
-        theme.editor.text_2
+        theme.text_secondary
     });
     div()
         .id(id)
@@ -324,21 +324,21 @@ fn header_button(
         .gap(px(4.))
         .h(px(22.))
         .px(px(6.))
-        .rounded(px(6.))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
         .text_size(px(12.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(foreground)
-        .when(pressed, |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+        .when(pressed, |this| this.bg(Hsla::from(theme.hover_bg)))
         .when(disabled, |this| this.opacity(0.4))
         .when(!disabled, |this| {
             this.cursor_pointer()
                 .hover(|this| {
-                    this.bg(Hsla::from(theme.editor.ctl_hover))
-                        .text_color(Hsla::from(theme.editor.text_1))
+                    this.bg(Hsla::from(theme.hover_bg))
+                        .text_color(Hsla::from(theme.text_primary))
                 })
-                .active(|this| this.bg(Hsla::from(theme.editor.ctl_active)))
                 .on_click(on_click)
         })
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
         .child(
             svg()
@@ -365,23 +365,24 @@ fn icon_button(
         .items_center()
         .justify_center()
         .size(px(22.))
-        .rounded(px(6.))
-        .text_color(Hsla::from(theme.editor.text_2))
+        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+        .text_color(Hsla::from(theme.text_secondary))
         .when(disabled, |this| this.opacity(0.3))
         .when(!disabled, |this| {
             this.cursor_pointer()
                 .hover(|this| {
-                    this.bg(Hsla::from(theme.editor.ctl_hover))
-                        .text_color(Hsla::from(theme.editor.text_1))
+                    this.bg(Hsla::from(theme.hover_bg))
+                        .text_color(Hsla::from(theme.text_primary))
                 })
                 .on_click(on_click)
         })
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
         .child(
             svg()
                 .path(icon)
                 .size(px(12.))
-                .text_color(Hsla::from(theme.editor.text_2)),
+                .text_color(Hsla::from(theme.text_secondary)),
         )
 }
 
@@ -739,15 +740,15 @@ impl EditorWindow {
             .children(error.map(|error| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.red_11))
+                    .text_color(Hsla::from(theme.text_danger))
                     .child(error)
             }))
             .child(self.render_animated_gradient_presets(cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_animated_gradient_colours(config, cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_animated_gradient_motion(config, cx))
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.render_animated_gradient_fine_tune(config, cx))
             .into_any_element()
     }
@@ -765,19 +766,20 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .size(px(cell))
-            .rounded(px(8.))
-            .bg(Hsla::from(theme.editor.ctl))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+            .bg(Hsla::from(theme.surface_subtle))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line_strong))
-            .text_color(Hsla::from(theme.editor.text_3))
+            .border_color(Hsla::from(theme.border))
+            .text_color(Hsla::from(theme.text_muted))
             .cursor_pointer()
-            .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+            .hover(|this| this.bg(Hsla::from(theme.hover_bg)))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, "Randomize").view(cx))
             .child(
                 svg()
                     .path("icons/shuffle.svg")
                     .size(px(14.))
-                    .text_color(Hsla::from(theme.editor.text_3)),
+                    .text_color(Hsla::from(theme.text_muted)),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.select_animated_gradient(AnimatedGradientConfig::random(), window, cx);
@@ -819,15 +821,15 @@ impl EditorWindow {
                         .items_center()
                         .h(px(32.))
                         .px(px(12.))
-                        .rounded(px(8.))
-                        .bg(Hsla::from(theme.gray_3))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                        .bg(Hsla::from(theme.surface_subtle))
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_12))
+                        .text_color(Hsla::from(theme.text_primary))
                         .when(name_empty, |this| this.opacity(0.4))
                         .when(!name_empty, |this| {
                             this.cursor_pointer()
-                                .hover(|this| this.bg(Hsla::from(theme.gray_4)))
+                                .hover(|this| this.bg(Hsla::from(theme.hover_bg)))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.save_animated_gradient_preset(cx);
                                     this.focus_root(window, cx);
@@ -881,7 +883,7 @@ impl EditorWindow {
                         this.child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(Hsla::from(theme.editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child("Saved"),
                         )
                         .child(swatch_rows(saved))
@@ -905,13 +907,14 @@ impl EditorWindow {
         let swatch = div()
             .id(SharedString::from(format!("animated-gradient-preset-{id}")))
             .size_full()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
+            .border_color(Hsla::from(theme.border_subtle))
             .cursor_pointer()
-            .selection_ring(Hsla::from(theme.editor.card), theme.editor.accent, selected)
+            .selection_ring(Hsla::from(theme.surface), theme.primary, selected)
             .when(!selected, |this| this.hover(|this| this.opacity(0.8)))
             .child(palette(&config, px(6.)))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, name.clone()).view(cx))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_animated_gradient(config.clone(), window, cx);
@@ -932,18 +935,19 @@ impl EditorWindow {
                         .items_center()
                         .justify_center()
                         .size(px(20.))
-                        .rounded_full()
-                        .bg(Hsla::from(theme.gray_12))
-                        .text_color(Hsla::from(theme.gray_1))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                        .bg(Hsla::from(theme.text_primary))
+                        .text_color(Hsla::from(theme.surface))
                         .shadow_sm()
                         .cursor_pointer()
-                        .hover(|this| this.bg(Hsla::from(theme.red_11)))
+                        .hover(|this| this.bg(Hsla::from(theme.text_danger)))
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, "Delete").view(cx))
                         .child(
                             svg()
                                 .path("icons/x.svg")
                                 .size(px(12.))
-                                .text_color(Hsla::from(theme.gray_1)),
+                                .text_color(Hsla::from(theme.surface)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.delete_animated_gradient_preset(&delete_id, cx);
@@ -978,7 +982,7 @@ impl EditorWindow {
                 };
                 let core = div()
                     .size_full()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(color_to_hsla(stop.color));
                 div()
                     .id(SharedString::from(format!(
@@ -989,16 +993,16 @@ impl EditorWindow {
                     .left(gpui::relative(stop.position / 100.))
                     .ml(px(-size / 2.))
                     .size(px(size))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .p(px(2.))
                     .shadow_sm()
                     .cursor_pointer()
                     .map(|this| {
                         if is_selected {
-                            this.bg(Hsla::from(theme.blue_9)).child(
+                            this.bg(Hsla::from(theme.primary)).child(
                                 div()
                                     .size_full()
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .p(px(2.))
                                     .bg(gpui::white())
                                     .child(core),
@@ -1027,9 +1031,9 @@ impl EditorWindow {
                 div()
                     .absolute()
                     .inset_0()
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(theme.editor.line))
+                    .border_color(Hsla::from(theme.border_subtle))
                     .child(
                         canvas(
                             move |bounds, _window, _cx| {
@@ -1067,7 +1071,7 @@ impl EditorWindow {
                     div()
                         .ml_auto()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_11))
+                        .text_color(Hsla::from(theme.text_secondary))
                         .child(format!("{}%", stop.position.round() as i32)),
                 )
                 .child(icon_button(
@@ -1192,7 +1196,7 @@ impl EditorWindow {
                         this.child(header_button(
                             &theme,
                             "animated-gradient-reset",
-                            "icons/rotate-ccw.svg",
+                            "icons/reset.svg",
                             "Reset",
                             "Reset fine-tune settings",
                             false,

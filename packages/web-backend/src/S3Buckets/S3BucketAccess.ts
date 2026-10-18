@@ -6,9 +6,9 @@ import {
 } from "@aws-sdk/s3-presigned-post";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import { S3Error } from "@cap/web-domain";
-import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { type Cause, Effect, Option, Stream } from "effect";
+import { HttpServerRequest } from "effect/http";
 
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 
@@ -64,7 +64,7 @@ export const getRequestAccessibleS3Endpoint = (
 };
 
 const wrapS3Promise = <T>(
-	promise: Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,
+	promise: Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownError>,
 ): Effect.Effect<T, S3Error, never> =>
 	Effect.gen(function* () {
 		if (promise instanceof Promise) {
@@ -83,7 +83,7 @@ const wrapS3Promise = <T>(
 			),
 		);
 	}).pipe(
-		Effect.catchTag("UnknownException", (cause) =>
+		Effect.catchTag("UnknownError", (cause) =>
 			Effect.fail(new S3Error({ cause })),
 		),
 	);
@@ -210,7 +210,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									throw e;
 								}
 							});
-						return Option.fromNullable(a);
+						return Option.fromNullishOr(a);
 					}),
 				),
 			),
@@ -250,33 +250,31 @@ export const createS3BucketAccess = Effect.gen(function* () {
 		) =>
 			wrapS3Promise(
 				provider.getInternal.pipe(
-					Effect.flatMap((client) =>
-						Effect.gen(function* () {
-							let _body: S3.PutObjectCommandInput["Body"];
+					Effect.map((client) => {
+						let _body: S3.PutObjectCommandInput["Body"];
 
-							if (typeof body === "string" || body instanceof Uint8Array) {
-								_body = body;
-							} else if (body instanceof ArrayBuffer) {
-								_body = new Uint8Array(body);
-							} else {
-								_body = body.pipe(
-									Stream.toReadableStreamRuntime(yield* Effect.runtime()),
-									(s) =>
-										Readable.fromWeb(s as unknown as NodeReadableWebStream),
-								);
-							}
-
-							return client.send(
-								new S3.PutObjectCommand({
-									Bucket: provider.bucket,
-									Key: key,
-									Body: _body,
-									ContentType: fields?.contentType,
-									ContentLength: fields?.contentLength,
-								}),
+						if (typeof body === "string" || body instanceof Uint8Array) {
+							_body = body;
+						} else if (body instanceof ArrayBuffer) {
+							_body = new Uint8Array(body);
+						} else {
+							_body = Readable.fromWeb(
+								Stream.toReadableStream(
+									body,
+								) as unknown as NodeReadableWebStream,
 							);
-						}),
-					),
+						}
+
+						return client.send(
+							new S3.PutObjectCommand({
+								Bucket: provider.bucket,
+								Key: key,
+								Body: _body,
+								ContentType: fields?.contentType,
+								ContentLength: fields?.contentLength,
+							}),
+						);
+					}),
 				),
 			).pipe(
 				Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
@@ -340,7 +338,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 							)
 						: Effect.succeed(response),
 				),
-				Effect.when(() => objects.length > 0),
+				Effect.when(Effect.succeed(objects.length > 0)),
 			),
 		getPresignedPutUrl: (
 			key: string,
@@ -505,4 +503,4 @@ export const createS3BucketAccess = Effect.gen(function* () {
 	};
 });
 
-export type S3BucketAccess = Effect.Effect.Success<typeof createS3BucketAccess>;
+export type S3BucketAccess = Effect.Success<typeof createS3BucketAccess>;

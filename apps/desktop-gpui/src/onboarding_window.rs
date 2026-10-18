@@ -386,6 +386,7 @@ impl OnboardingWindow {
             cx.notify();
             return;
         }
+        self.error = None;
         self.welcome_exiting = true;
         self.welcome_exit = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(WELCOME_EXIT).await;
@@ -551,6 +552,8 @@ impl OnboardingWindow {
             serde_json::Value::Bool(self.muted),
         ) {
             self.error = Some("Could not save the sound preference.".into());
+        } else if self.error.as_deref() == Some("Could not save the sound preference.") {
+            self.error = None;
         }
         cx.notify();
     }
@@ -623,19 +626,11 @@ impl OnboardingWindow {
     }
 
     fn success_palette(&self) -> (Hsla, Hsla, Hsla) {
-        if self.theme.is_dark() {
-            (
-                Theme::with_alpha(gpui::rgb(0x46a758), 0.16),
-                Theme::with_alpha(gpui::rgb(0x46a758), 0.38),
-                gpui::rgb(0x63d489).into(),
-            )
-        } else {
-            (
-                gpui::rgb(0xebf9ef).into(),
-                gpui::rgb(0xc9ebd5).into(),
-                gpui::rgb(0x18794e).into(),
-            )
-        }
+        (
+            self.theme.positive_subtle.into(),
+            self.theme.positive.into(),
+            self.theme.text_positive.into(),
+        )
     }
 
     fn render_permission_row(
@@ -657,7 +652,7 @@ impl OnboardingWindow {
                 .gap(px(6.))
                 .px(px(12.))
                 .h(px(28.))
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .bg(success_bg)
                 .border_1()
                 .border_color(success_border)
@@ -699,11 +694,11 @@ impl OnboardingWindow {
             .w(px(CARD_W))
             .px(px(ROW_PAD_X))
             .py(px(12.))
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(theme.body_border(4))
+            .border_color(gpui::Hsla::from(theme.border))
             .bg(if theme.is_dark() {
-                theme.body_fill(2)
+                gpui::Hsla::from(theme.surface_subtle)
             } else {
                 gpui::white()
             })
@@ -724,7 +719,7 @@ impl OnboardingWindow {
                                 div()
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(permission.label()),
                             )
                             .when(!permission.required(), |this| {
@@ -733,9 +728,11 @@ impl OnboardingWindow {
                                         .text_size(px(10.))
                                         .px(px(6.))
                                         .py(px(2.))
-                                        .rounded_full()
-                                        .bg(Hsla::from(theme.gray_3))
-                                        .text_color(Hsla::from(theme.gray_10))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
+                                        .bg(Hsla::from(theme.surface_subtle))
+                                        .text_color(Hsla::from(theme.text_secondary))
                                         .child("Optional"),
                                 )
                             }),
@@ -744,7 +741,7 @@ impl OnboardingWindow {
                         div()
                             .text_size(px(11.))
                             .line_height(px(15.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(permission.blurb()),
                     ),
             )
@@ -788,11 +785,11 @@ fn ease(value: f32) -> f32 {
 impl OnboardingWindow {
     fn card(&self) -> Div {
         div()
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(self.theme.body_border(4))
+            .border_color(gpui::Hsla::from(self.theme.border))
             .bg(if self.theme.is_dark() {
-                self.theme.body_fill(2)
+                gpui::Hsla::from(self.theme.surface_subtle)
             } else {
                 gpui::white()
             })
@@ -816,19 +813,20 @@ impl OnboardingWindow {
                 el.child(
                     self.card()
                         .size(px(48.))
-                        .rounded(px(16.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(glyph(path, 20., theme.gray_11)),
+                        .child(glyph(path, 20., theme.text_secondary)),
                 )
             })
             .child(
-                copy(title, 24., theme.gray_12)
-                    .font_weight(FontWeight::BOLD)
+                copy(title, 24., theme.text_primary)
+                    .font_family(crate::theme::display_font())
+                    .font_weight(FontWeight::NORMAL)
                     .line_height(px(30.)),
             )
-            .child(copy(subtitle, 14., theme.gray_10).line_height(px(21.)))
+            .child(copy(subtitle, 14., theme.text_secondary).line_height(px(21.)))
     }
 
     fn ambient(&self, width: f32, height: f32, welcome: bool) -> AnyElement {
@@ -944,12 +942,14 @@ impl OnboardingWindow {
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(rgb(0x3b82f6), 0.),
-                linear_color_stop(rgb(0x2563eb), 1.),
-            ))
-            .opacity(if welcome { 1. } else { 0.1 })
+            .when(welcome, |el| {
+                el.bg(linear_gradient(
+                    180.,
+                    linear_color_stop(self.theme.primary, 0.),
+                    linear_color_stop(self.theme.primary_active, 1.),
+                ))
+            })
+            .when(!welcome, |el| el.bg(self.theme.primary_subtle))
             .child(clouds)
             .child(
                 img("onboarding/grain.svg")
@@ -964,18 +964,9 @@ impl OnboardingWindow {
 
     fn render_welcome(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let glass = theme
-            .material
-            .filter(|material| material.kind == crate::platform::MaterialKind::LiquidGlass);
-        let button_fill = glass
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(gpui::white);
-        let button_hover = glass
-            .map(|material| Hsla::from(material.control_hover))
-            .unwrap_or_else(|| rgba(0xfffffff2).into());
-        let button_text = glass
-            .map(|material| Hsla::from(material.text))
-            .unwrap_or_else(|| rgb(0x161b26).into());
+        let button_fill: Hsla = theme.button_fill.into();
+        let button_hover: Hsla = theme.button_fill_hover.into();
+        let button_text: Hsla = theme.button_fill_foreground.into();
         let logo = img("onboarding/logo.svg")
             .w(px(80.))
             .h(px(96.))
@@ -1012,19 +1003,20 @@ impl OnboardingWindow {
                     .child(logo),
             )
             .child(
-                copy("Welcome to Cap", 48., gpui::white())
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(48.))
-                    .mt(px(40.))
-                    .mb(px(16.)),
+                copy("Welcome to Cap", 38., theme.primary_foreground)
+                    .font_family(crate::theme::display_font())
+                    .font_weight(FontWeight::NORMAL)
+                    .line_height(px(44.))
+                    .mt(px(28.))
+                    .mb(px(10.)),
             )
             .child(
                 copy(
                     "Beautiful screen recordings, owned by you.",
-                    24.,
-                    gpui::white(),
+                    18.,
+                    theme.primary_foreground,
                 )
-                .line_height(px(32.))
+                .line_height(px(26.))
                 .opacity(0.8)
                 .whitespace_nowrap(),
             )
@@ -1033,63 +1025,40 @@ impl OnboardingWindow {
                     .id("onboarding-get-started")
                     .tab_index(0)
                     .cursor_pointer()
-                    .mt(px(56.))
-                    .w(px(274.))
-                    .h(px(60.))
-                    .px(px(64.))
-                    .py(px(8.))
-                    .rounded_full()
+                    .mt(px(32.))
+                    .w(px(168.))
+                    .h(px(40.))
+                    .px(px(18.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                     .border_1()
-                    .border_color(if glass.is_some() {
-                        gpui::transparent_black()
-                    } else {
-                        rgba(0xffffff4d).into()
-                    })
+                    .border_color(theme.border)
                     .bg(button_fill)
                     .hover(move |el| el.bg(button_hover))
                     .flex()
-                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(2.))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.continue_from_welcome(window, cx)),
                     )
+                    .child(copy("Get Started", 14., button_text).font_weight(FontWeight::MEDIUM)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .mt(px(10.))
+                    .child(copy("or press", 11., theme.primary_foreground))
                     .child(
-                        copy("Get Started", 14., button_text)
-                            .line_height(px(20.))
-                            .font_weight(FontWeight::MEDIUM),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.))
-                            .child(
-                                copy("Click here, or press", 11., rgba(0x161b2694))
-                                    .font_weight(FontWeight::NORMAL)
-                                    .line_height(px(14.)),
-                            )
-                            .child(
-                                copy("Space", 10., theme.gray_11)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .line_height(px(14.))
-                                    .px(px(4.))
-                                    .py(px(1.))
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(theme.gray_6)
-                                    .bg(if theme.is_dark() {
-                                        theme.body_fill(3)
-                                    } else {
-                                        gpui::white()
-                                    }),
-                            ),
+                        copy("Space", 10., theme.button_fill_foreground)
+                            .px(px(5.))
+                            .py(px(2.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                            .bg(theme.button_fill),
                     ),
             )
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., gpui::white()).mt(px(12.)))
+                el.child(copy(error, 12., theme.primary_foreground).mt(px(12.)))
             });
         let mute = div()
             .id("onboarding-mute")
@@ -1161,16 +1130,16 @@ impl OnboardingWindow {
                         .gap(px(12.))
                         .w(px(CARD_W))
                         .p(px(12.))
-                        .rounded(px(12.))
-                        .bg(theme.amber_3)
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                        .bg(theme.warning_subtle)
                         .border_1()
-                        .border_color(theme.amber_6)
-                        .child(glyph("icons/triangle-alert.svg", 16., theme.amber_11))
+                        .border_color(theme.warning)
+                        .child(glyph("icons/triangle-alert.svg", 16., theme.text_warning))
                         .child(
                             copy(
                                 "Granted it in System Settings? Relaunch Cap to apply.",
                                 11.,
-                                theme.amber_11,
+                                theme.text_warning,
                             )
                             .flex_1()
                             .min_w_0(),
@@ -1197,11 +1166,11 @@ impl OnboardingWindow {
         div().flex().flex_col().items_center().justify_center().min_h_full().px(px(40.)).gap(px(32.))
             .child(self.heading("One app, every workflow", "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it.", None))
             .child(div().flex().gap(px(16.)).w_full().max_w(px(540.)).children(MODES.iter().enumerate().map(|(index, mode)| {
-                let card = self.card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(12.)).p(px(20.)).rounded(px(16.))
-                    .child(self.card().size(px(48.)).rounded(px(16.)).flex().items_center().justify_center()
-                        .child(glyph(mode.icon, 20., theme.gray_12)))
-                    .child(copy(mode.title, 14., theme.gray_12).font_weight(FontWeight::BOLD).text_center())
-                    .child(copy(mode.tagline, 11., theme.gray_9).line_height(px(15.)).text_center());
+                let card = self.card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(12.)).p(px(20.)).rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+                    .child(self.card().size(px(48.)).rounded(crate::theme::radius(crate::theme::RadiusToken::Medium)).flex().items_center().justify_center()
+                        .child(glyph(mode.icon, 20., theme.text_primary)))
+                    .child(copy(mode.title, 14., theme.text_primary).font_weight(FontWeight::BOLD).text_center())
+                    .child(copy(mode.tagline, 11., theme.text_muted).line_height(px(15.)).text_center());
                 if !self.animated { return card.into_any_element(); }
                 card.with_animation(("overview-card", index), Animation::new(Duration::from_millis(700 + index as u64 * 100)),
                         |el, t| el.relative().top(px(16. * (1. - ease(t)))).opacity(ease(t))).into_any_element()
@@ -1237,7 +1206,7 @@ impl OnboardingWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(glyph(mode.icon, 20., theme.gray_12)),
+                                    .child(glyph(mode.icon, 20., theme.text_primary)),
                             )
                             .child(
                                 div()
@@ -1245,16 +1214,16 @@ impl OnboardingWindow {
                                     .flex_col()
                                     .gap(px(3.))
                                     .child(
-                                        copy(mode.title, 18., theme.gray_12)
+                                        copy(mode.title, 18., theme.text_primary)
                                             .font_weight(FontWeight::BOLD),
                                     )
                                     .child(
-                                        copy(mode.tagline, 11., theme.gray_9)
+                                        copy(mode.tagline, 11., theme.text_muted)
                                             .font_weight(FontWeight::MEDIUM),
                                     ),
                             ),
                     )
-                    .child(copy(mode.description, 13., theme.gray_10).line_height(px(20.)))
+                    .child(copy(mode.description, 13., theme.text_secondary).line_height(px(20.)))
                     .child(div().flex().flex_col().gap(px(10.)).children(
                         mode.features.iter().map(|feature| {
                             div()
@@ -1264,15 +1233,17 @@ impl OnboardingWindow {
                                 .child(
                                     div()
                                         .size(px(20.))
-                                        .rounded_full()
-                                        .bg(theme.blue_9)
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
+                                        .bg(theme.primary)
                                         .flex_shrink_0()
                                         .flex()
                                         .items_center()
                                         .justify_center()
                                         .child(glyph("icons/check.svg", 10., gpui::white())),
                                 )
-                                .child(copy(*feature, 12., theme.gray_11))
+                                .child(copy(*feature, 12., theme.text_secondary))
                         }),
                     )),
             )
@@ -1281,7 +1252,7 @@ impl OnboardingWindow {
                     .flex_1()
                     .min_w_0()
                     .h(px(if index == 1 { 300. } else { 288. }))
-                    .rounded(px(16.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .p(px(16.))
                     .child(self.render_demo(index)),
             )
@@ -1323,7 +1294,7 @@ impl OnboardingWindow {
                     .gap(px(20.))
                     .child(
                         self.card()
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .flex()
                             .gap(px(24.))
                             .p(px(16.))
@@ -1332,17 +1303,17 @@ impl OnboardingWindow {
                                     .id(("onboarding-mode", index))
                                     .tab_index(0)
                                     .size(px(80.))
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .border_2()
                                     .border_color(if active == index {
-                                        theme.blue_9
+                                        theme.primary
                                     } else {
-                                        theme.gray_5
+                                        theme.active_bg
                                     })
                                     .bg(if active == index {
-                                        theme.body_fill(7)
+                                        gpui::Hsla::from(theme.active_bg)
                                     } else if theme.is_dark() {
-                                        theme.body_fill(3)
+                                        gpui::Hsla::from(theme.surface_subtle)
                                     } else {
                                         gpui::white()
                                     })
@@ -1358,7 +1329,7 @@ impl OnboardingWindow {
                                         glyph(
                                             mode.icon,
                                             if active == index { 35. } else { 32. },
-                                            theme.gray_12,
+                                            theme.text_primary,
                                         )
                                         .opacity(if active == index { 1. } else { 0.5 }),
                                     )
@@ -1370,9 +1341,9 @@ impl OnboardingWindow {
                                 mode.title,
                                 14.,
                                 if active == index {
-                                    theme.gray_12
+                                    theme.text_primary
                                 } else {
-                                    theme.gray_9
+                                    theme.text_muted
                                 },
                             )
                             .w(px(80.))
@@ -1400,10 +1371,10 @@ impl OnboardingWindow {
                 ("Recording Preferences", "FPS, quality, countdown timer, cursor effects, and more"),
             ].into_iter().map(|(title, description)| {
                 self.card().px(px(16.)).py(px(12.)).flex().flex_col().gap(px(4.))
-                    .child(copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM))
-                    .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
+                    .child(copy(title, 13., theme.text_primary).font_weight(FontWeight::MEDIUM))
+                    .child(copy(description, 11., theme.text_secondary).line_height(px(15.)))
             })))
-            .child(copy("Change any of these at any time in Settings", 12., theme.gray_9))
+            .child(copy("Change any of these at any time in Settings", 12., theme.text_muted))
             .into_any_element()
     }
 
@@ -1432,7 +1403,7 @@ impl OnboardingWindow {
                         let open = self.faq_open[index];
                         div()
                             .when(index > 0, |el| {
-                                el.border_t_1().border_color(theme.body_border(4))
+                                el.border_t_1().border_color(gpui::Hsla::from(theme.border))
                             })
                             .child(
                                 div()
@@ -1450,7 +1421,7 @@ impl OnboardingWindow {
                                         cx.notify();
                                     }))
                                     .child(
-                                        copy(*question, 13., theme.gray_12)
+                                        copy(*question, 13., theme.text_primary)
                                             .font_weight(FontWeight::MEDIUM),
                                     )
                                     .child(glyph(
@@ -1460,7 +1431,7 @@ impl OnboardingWindow {
                                             "icons/chevron-down.svg"
                                         },
                                         16.,
-                                        theme.gray_10,
+                                        theme.text_secondary,
                                     )),
                             )
                             .when(open, |el| {
@@ -1469,17 +1440,22 @@ impl OnboardingWindow {
                                         .px(px(20.))
                                         .pb(px(16.))
                                         .child(
-                                            copy(*answer, 13., theme.gray_10).line_height(px(20.)),
+                                            copy(*answer, 13., theme.text_secondary)
+                                                .line_height(px(20.)),
                                         )
                                         .when(index == 0, |el| {
                                             el.child(
-                                                copy("View pricing plans", 13., theme.blue_10)
-                                                    .id("onboarding-faq-pricing")
-                                                    .cursor_pointer()
-                                                    .mt(px(8.))
-                                                    .on_click(|_, _, cx| {
-                                                        cx.open_url(crate::auth::PRICING_URL)
-                                                    }),
+                                                copy(
+                                                    "View pricing plans",
+                                                    13.,
+                                                    theme.primary_hover,
+                                                )
+                                                .id("onboarding-faq-pricing")
+                                                .cursor_pointer()
+                                                .mt(px(8.))
+                                                .on_click(|_, _, cx| {
+                                                    cx.open_url(crate::auth::PRICING_URL)
+                                                }),
                                             )
                                         }),
                                 )
@@ -1487,7 +1463,7 @@ impl OnboardingWindow {
                     })),
             )
             .child(
-                copy("View pricing plans ↗", 13., theme.blue_10)
+                copy("View pricing plans ↗", 13., theme.primary_hover)
                     .id("onboarding-pricing")
                     .cursor_pointer()
                     .on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)),
@@ -1530,10 +1506,10 @@ impl OnboardingWindow {
                     .w_full()
                     .child(div().flex_1().when(current > 0, |el| {
                         el.child(
-                            copy("←  Back", 13., theme.gray_10)
+                            copy("←  Back", 13., theme.text_secondary)
                                 .id("onboarding-back")
                                 .cursor_pointer()
-                                .hover(move |el| el.text_color(theme.gray_12))
+                                .hover(move |el| el.text_color(theme.text_primary))
                                 .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
                         )
                     }))
@@ -1546,13 +1522,13 @@ impl OnboardingWindow {
                                 div()
                                     .h(px(6.))
                                     .w(px(if current == index { 20. } else { 6. }))
-                                    .rounded_full()
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                     .bg(if current == index {
-                                        theme.gray_12
+                                        theme.text_primary
                                     } else if current > index {
-                                        theme.gray_8
+                                        theme.border_strong
                                     } else {
-                                        theme.gray_5
+                                        theme.active_bg
                                     })
                             })),
                     )
@@ -1564,54 +1540,31 @@ impl OnboardingWindow {
                                 .items_center()
                                 .gap(px(6.))
                                 .child(
-                                    div()
-                                        .id("onboarding-continue")
-                                        .tab_index(0)
-                                        .min_w(px(152.))
-                                        .min_h(px(48.))
-                                        .px(px(40.))
-                                        .py(px(12.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap(px(8.))
-                                        .bg(if disabled {
-                                            theme.gray_6
-                                        } else {
-                                            theme.gray_12
-                                        })
-                                        .text_color(if disabled {
-                                            theme.gray_9
-                                        } else {
-                                            theme.gray_1
-                                        })
-                                        .when(!disabled, |el| {
-                                            el.cursor_pointer().on_click(cx.listener(
-                                                |this, _, window, cx| this.next(window, cx),
-                                            ))
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(15.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(label),
-                                        )
-                                        .child(glyph(
-                                            if last {
-                                                "icons/check.svg"
-                                            } else {
-                                                "icons/move-right.svg"
-                                            },
-                                            16.,
-                                            if disabled { theme.gray_9 } else { theme.gray_1 },
-                                        )),
+                                    ui::Button::plain(
+                                        &theme,
+                                        "onboarding-continue",
+                                        ui::ButtonVariant::Primary,
+                                        ui::ButtonSize::Lg,
+                                    )
+                                    .width(px(166.))
+                                    .height(px(36.))
+                                    .label(label)
+                                    .right_icon(if last {
+                                        "icons/check.svg"
+                                    } else {
+                                        "icons/move-right.svg"
+                                    })
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .disabled(disabled)
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.next(window, cx)),
+                                    ),
                                 )
                                 .when(
                                     self.state.necessary_granted() && !self.permissions_only,
                                     |el| {
                                         el.child(
-                                            copy("Skip onboarding", 11., theme.gray_9)
+                                            copy("Skip onboarding", 11., theme.text_muted)
                                                 .id("onboarding-skip")
                                                 .cursor_pointer()
                                                 .on_click(
@@ -1626,10 +1579,10 @@ impl OnboardingWindow {
             .child(copy(
                 "Press Enter ↵ or use ← → arrow keys",
                 10.,
-                theme.gray_8,
+                theme.border_strong,
             ))
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., theme.gray_12))
+                el.child(copy(error, 12., theme.text_primary))
             })
             .into_any_element()
     }
@@ -1650,7 +1603,7 @@ impl OnboardingWindow {
                     .items_center()
                     .gap(px(8.))
                     .when(index > 0, |el| {
-                        el.child(div().w(px(12.)).h(px(1.)).bg(theme.gray_5))
+                        el.child(div().w(px(12.)).h(px(1.)).bg(theme.active_bg))
                     })
                     .child(
                         div()
@@ -1659,34 +1612,34 @@ impl OnboardingWindow {
                             .gap(px(5.))
                             .px(px(8.))
                             .py(px(4.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .border_1()
                             .border_color(if index == active {
-                                theme.blue_5
+                                theme.primary_subtle
                             } else {
-                                theme.gray_4
+                                theme.hover_bg
                             })
                             .bg(if index == active {
-                                Hsla::from(theme.blue_3)
+                                Hsla::from(theme.primary_subtle)
                             } else {
-                                theme.body_fill(1)
+                                gpui::Hsla::from(theme.surface)
                             })
                             .child(copy(
                                 format!("{}", index + 1),
                                 9.,
                                 if index == active {
-                                    theme.blue_11
+                                    theme.text_interactive
                                 } else {
-                                    theme.gray_9
+                                    theme.text_muted
                                 },
                             ))
                             .child(copy(
                                 label,
                                 10.,
                                 if index == active {
-                                    theme.blue_11
+                                    theme.text_interactive
                                 } else {
-                                    theme.gray_10
+                                    theme.text_secondary
                                 },
                             )),
                     )
@@ -1733,13 +1686,13 @@ impl OnboardingWindow {
                 div()
                     .h(px(44.))
                     .w_full()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .flex()
                     .overflow_hidden()
                     .bg(linear_gradient(
                         90.,
-                        linear_color_stop(theme.blue_10, 0.),
-                        linear_color_stop(theme.blue_11, 1.),
+                        linear_color_stop(theme.primary_hover, 0.),
+                        linear_color_stop(theme.text_interactive, 1.),
                     ))
                     .child(
                         div()
@@ -1784,15 +1737,11 @@ impl OnboardingWindow {
         let stopped = self.demo_phase >= 6;
         let time = format!("0:0{}", self.demo_phase.saturating_sub(2).min(3));
         self.card()
-            .bg(if theme.is_dark() {
-                theme.gray_1.into()
-            } else {
-                gpui::white()
-            })
+            .bg(theme.surface)
             .w_full()
             .min_w(px(280.))
             .h(px(40.))
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .flex()
             .items_stretch()
             .overflow_hidden()
@@ -1812,7 +1761,14 @@ impl OnboardingWindow {
                             .px(px(8.))
                             .flex_shrink_0()
                             .when(stopped, |el| {
-                                el.child(div().size(px(8.)).rounded_full().bg(theme.gray_8))
+                                el.child(
+                                    div()
+                                        .size(px(8.))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
+                                        .bg(theme.border_strong),
+                                )
                             })
                             .when(!stopped, |el| {
                                 el.child(glyph("icons/stop-circle.svg", 20., rgb(0xf87171)))
@@ -1821,7 +1777,7 @@ impl OnboardingWindow {
                                 if stopped { "Stopped".into() } else { time },
                                 14.,
                                 if stopped {
-                                    Hsla::from(theme.gray_10)
+                                    Hsla::from(theme.text_secondary)
                                 } else {
                                     rgb(0xf87171).into()
                                 },
@@ -1839,7 +1795,7 @@ impl OnboardingWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(glyph("icons/microphone.svg", 20., theme.gray_12))
+                                    .child(glyph("icons/microphone.svg", 20., theme.text_primary))
                                     .child(
                                         div()
                                             .absolute()
@@ -1847,10 +1803,12 @@ impl OnboardingWindow {
                                             .left(px(4.))
                                             .right(px(4.))
                                             .h(px(2.))
-                                            .rounded_full()
-                                            .bg(theme.gray_10)
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Large,
+                                            ))
+                                            .bg(theme.text_secondary)
                                             .child(
-                                                div().w(relative(0.6)).h_full().bg(theme.blue_9),
+                                                div().w(relative(0.6)).h_full().bg(theme.primary),
                                             ),
                                     ),
                             )
@@ -1868,7 +1826,7 @@ impl OnboardingWindow {
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .child(glyph(path, 20., theme.gray_11))
+                                        .child(glyph(path, 20., theme.text_secondary))
                                 }),
                             ),
                     ),
@@ -1881,9 +1839,9 @@ impl OnboardingWindow {
                     .items_center()
                     .justify_center()
                     .border_l_1()
-                    .border_color(theme.gray_5)
+                    .border_color(theme.active_bg)
                     .opacity(if stopped { 0.45 } else { 1. })
-                    .child(glyph("icons/more-vertical.svg", 20., theme.gray_10)),
+                    .child(glyph("icons/more-vertical.svg", 20., theme.text_secondary)),
             )
     }
 
@@ -1892,7 +1850,7 @@ impl OnboardingWindow {
         let copied = self.demo_phase >= 8;
         self.card()
             .bg(if theme.is_dark() {
-                theme.gray_1.into()
+                theme.surface.into()
             } else {
                 gpui::white()
             })
@@ -1910,14 +1868,14 @@ impl OnboardingWindow {
                     .child(
                         div()
                             .size(px(20.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .bg(self.success_palette().0)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(glyph("icons/check.svg", 12., self.success_palette().2)),
                     )
-                    .child(copy("Link ready to share!", 12., theme.gray_12)),
+                    .child(copy("Link ready to share!", 12., theme.text_primary)),
             )
             .child(
                 div()
@@ -1927,10 +1885,10 @@ impl OnboardingWindow {
                     .m(px(12.))
                     .mt_0()
                     .p(px(8.))
-                    .rounded(px(8.))
-                    .bg(theme.body_fill(3))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
+                    .bg(gpui::Hsla::from(theme.surface_subtle))
                     .child(
-                        copy("cap.so/s/m4k92x", 11., theme.gray_11)
+                        copy("cap.so/s/m4k92x", 11., theme.text_secondary)
                             .flex_1()
                             .min_w_0(),
                     )
@@ -1941,11 +1899,11 @@ impl OnboardingWindow {
                             .gap(px(4.))
                             .px(px(8.))
                             .py(px(5.))
-                            .rounded(px(6.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                             .bg(if copied {
                                 self.success_palette().0
                             } else {
-                                theme.body_fill(1)
+                                gpui::Hsla::from(theme.surface)
                             })
                             .child(glyph(
                                 if copied {
@@ -1977,7 +1935,7 @@ impl OnboardingWindow {
         let theme = self.theme;
         self.card()
             .bg(if theme.is_dark() {
-                theme.gray_1.into()
+                theme.surface.into()
             } else {
                 gpui::white()
             })
@@ -1990,16 +1948,16 @@ impl OnboardingWindow {
                 div()
                     .w(relative(0.75))
                     .h(px(6.))
-                    .rounded_full()
-                    .bg(theme.gray_5)
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(theme.active_bg)
                     .opacity(0.5),
             )
             .child(
                 div()
                     .w(relative(0.5))
                     .h(px(6.))
-                    .rounded_full()
-                    .bg(theme.gray_5)
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(theme.active_bg)
                     .opacity(0.3),
             )
             .child(
@@ -2007,8 +1965,8 @@ impl OnboardingWindow {
                     .w_full()
                     .h(px(20.))
                     .mt(px(4.))
-                    .rounded(px(3.))
-                    .bg(theme.gray_5)
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                    .bg(theme.active_bg)
                     .opacity(0.2),
             )
     }
@@ -2025,7 +1983,7 @@ impl OnboardingWindow {
         };
         self.card()
             .bg(if theme.is_dark() {
-                theme.gray_1.into()
+                theme.surface.into()
             } else {
                 gpui::white()
             })
@@ -2043,22 +2001,24 @@ impl OnboardingWindow {
                     .justify_between()
                     .px(px(12.))
                     .border_b_1()
-                    .border_color(theme.gray_3)
+                    .border_color(theme.surface_subtle)
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
                             .child(self.demo_window_dots())
-                            .child(copy("Cap Editor", 10., theme.gray_11)),
+                            .child(copy("Cap Editor", 10., theme.text_secondary)),
                     )
                     .child(
                         copy("Export", 9., gpui::white())
                             .px(px(10.))
                             .py(px(4.))
-                            .rounded(px(6.))
-                            .bg(theme.blue_9)
-                            .when(phase >= 8, |el| el.border_2().border_color(theme.blue_5)),
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+                            .bg(theme.primary)
+                            .when(phase >= 8, |el| {
+                                el.border_2().border_color(theme.primary_subtle)
+                            }),
                     ),
             )
             .child(
@@ -2072,7 +2032,7 @@ impl OnboardingWindow {
                             div()
                                 .size_full()
                                 .p(px(10.))
-                                .rounded(px(8.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                                 .bg(linear_gradient(
                                     135.,
                                     linear_color_stop(rgb(0x667eea), 0.),
@@ -2086,28 +2046,30 @@ impl OnboardingWindow {
                             .w(px(90.))
                             .flex_shrink_0()
                             .border_l_1()
-                            .border_color(theme.gray_3)
+                            .border_color(theme.surface_subtle)
                             .p(px(8.))
                             .flex()
                             .flex_col()
                             .gap(px(6.))
-                            .child(copy("STYLE", 8., theme.gray_9))
+                            .child(copy("STYLE", 8., theme.text_muted))
                             .child(
                                 div()
                                     .h(px(20.))
-                                    .rounded(px(3.))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                     .border_1()
-                                    .border_color(theme.gray_3)
-                                    .bg(theme.body_fill(2)),
+                                    .border_color(theme.surface_subtle)
+                                    .bg(gpui::Hsla::from(theme.surface_subtle)),
                             )
-                            .child(copy("BACKGROUND", 8., theme.gray_9).mt(px(4.)))
+                            .child(copy("BACKGROUND", 8., theme.text_muted).mt(px(4.)))
                             .child(div().flex().gap(px(4.)).children(
                                 [0x667eea, 0xf78c88, 0xcccccc].map(|color| {
                                     div()
                                         .size(px(16.))
-                                        .rounded_full()
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Large,
+                                        ))
                                         .border_1()
-                                        .border_color(theme.gray_3)
+                                        .border_color(theme.surface_subtle)
                                         .bg(rgb(color))
                                 }),
                             )),
@@ -2149,25 +2111,33 @@ impl OnboardingWindow {
                                                         "Exporting..."
                                                     },
                                                     14.,
-                                                    theme.gray_12,
+                                                    theme.text_primary,
                                                 )),
                                         )
                                         .child(
                                             div()
                                                 .w_full()
                                                 .h(px(8.))
-                                                .rounded_full()
-                                                .bg(theme.gray_4)
+                                                .rounded(crate::theme::radius(
+                                                    crate::theme::RadiusToken::Large,
+                                                ))
+                                                .bg(theme.hover_bg)
                                                 .overflow_hidden()
                                                 .child(
                                                     div()
                                                         .h_full()
                                                         .w(relative(progress as f32 / 100.))
-                                                        .rounded_full()
-                                                        .bg(theme.blue_9),
+                                                        .rounded(crate::theme::radius(
+                                                            crate::theme::RadiusToken::Large,
+                                                        ))
+                                                        .bg(theme.primary),
                                                 ),
                                         )
-                                        .child(copy(format!("{progress}%"), 12., theme.gray_10)),
+                                        .child(copy(
+                                            format!("{progress}%"),
+                                            12.,
+                                            theme.text_secondary,
+                                        )),
                                 ),
                         )
                     }),
@@ -2176,7 +2146,7 @@ impl OnboardingWindow {
                 div()
                     .flex_shrink_0()
                     .border_t_1()
-                    .border_color(theme.gray_3)
+                    .border_color(theme.surface_subtle)
                     .px(px(12.))
                     .py(px(8.))
                     .child(
@@ -2186,33 +2156,37 @@ impl OnboardingWindow {
                             .gap(px(6.))
                             .h(px(24.))
                             .px(px(8.))
-                            .rounded(px(8.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .border_1()
-                            .border_color(theme.gray_3)
+                            .border_color(theme.surface_subtle)
                             .child(
                                 div()
                                     .flex_1()
                                     .h(px(3.))
-                                    .rounded_full()
-                                    .bg(theme.gray_4)
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                                    .bg(theme.hover_bg)
                                     .child(
                                         div()
                                             .w(relative(0.42))
                                             .h_full()
-                                            .rounded_full()
-                                            .bg(theme.gray_8),
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Large,
+                                            ))
+                                            .bg(theme.border_strong),
                                     ),
                             )
-                            .child(copy("0:12", 8., theme.gray_10)),
+                            .child(copy("0:12", 8., theme.text_secondary)),
                     ),
             )
     }
 
     fn demo_window_dots(&self) -> Div {
-        div()
-            .flex()
-            .gap(px(4.))
-            .children((0..3).map(|_| div().size(px(8.)).rounded_full().bg(self.theme.gray_6)))
+        div().flex().gap(px(4.)).children((0..3).map(|_| {
+            div()
+                .size(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                .bg(self.theme.border)
+        }))
     }
 
     fn demo_screenshot(&self) -> AnyElement {
@@ -2226,7 +2200,7 @@ impl OnboardingWindow {
                 .w(relative(0.84))
                 .h(relative(0.78))
                 .border_2()
-                .border_color(theme.blue_9)
+                .border_color(theme.primary)
                 .bg(rgba(0xffffff12))
                 .when(phase >= 4, |el| {
                     el.children(
@@ -2235,10 +2209,10 @@ impl OnboardingWindow {
                                 div()
                                     .absolute()
                                     .size(px(6.))
-                                    .rounded(px(1.))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                     .bg(gpui::white())
                                     .border_1()
-                                    .border_color(theme.blue_9)
+                                    .border_color(theme.primary)
                                     .when(right, |el| el.right(px(-3.)))
                                     .when(!right, |el| el.left(px(-3.)))
                                     .when(bottom, |el| el.bottom(px(-3.)))
@@ -2252,7 +2226,7 @@ impl OnboardingWindow {
                         .absolute()
                         .bottom(px(-26.))
                         .left(relative(0.35))
-                        .rounded(px(4.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                         .px(px(8.))
                         .py(px(3.))
                         .bg(rgba(0x000000b3)),
@@ -2305,7 +2279,7 @@ impl OnboardingWindow {
                     .justify_between()
                     .px(px(12.))
                     .border_b_1()
-                    .border_color(theme.gray_3)
+                    .border_color(theme.surface_subtle)
                     .child(self.demo_window_dots())
                     .child(
                         div().flex().gap(px(4.)).children(
@@ -2322,9 +2296,9 @@ impl OnboardingWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(4.))
-                                    .bg(theme.body_fill(3))
-                                    .child(glyph(path, 12., theme.gray_11))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                    .bg(gpui::Hsla::from(theme.surface_subtle))
+                                    .child(glyph(path, 12., theme.text_secondary))
                             }),
                         ),
                     )
@@ -2333,18 +2307,18 @@ impl OnboardingWindow {
                             .flex()
                             .gap(px(4.))
                             .child(
-                                copy("Copy", 9., theme.gray_12)
+                                copy("Copy", 9., theme.text_primary)
                                     .px(px(6.))
                                     .py(px(4.))
-                                    .rounded(px(4.))
-                                    .bg(theme.body_fill(3)),
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                    .bg(gpui::Hsla::from(theme.surface_subtle)),
                             )
                             .child(
                                 copy("Save", 9., gpui::white())
                                     .px(px(6.))
                                     .py(px(4.))
-                                    .rounded(px(4.))
-                                    .bg(theme.blue_9),
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                    .bg(theme.primary),
                             ),
                     ),
             )
@@ -2355,7 +2329,7 @@ impl OnboardingWindow {
                         .h(px(140.))
                         .w_full()
                         .overflow_hidden()
-                        .rounded(px(4.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                         .when(phase >= 7, |el| {
                             el.bg(linear_gradient(
                                 135.,
@@ -2385,14 +2359,20 @@ impl OnboardingWindow {
                                             .gap(px(6.))
                                             .px(px(12.))
                                             .py(px(6.))
-                                            .rounded_full()
-                                            .bg(theme.body_fill(1))
+                                            .rounded(crate::theme::radius(
+                                                crate::theme::RadiusToken::Large,
+                                            ))
+                                            .bg(gpui::Hsla::from(theme.surface))
                                             .child(glyph(
                                                 "icons/check.svg",
                                                 12.,
                                                 self.success_palette().2,
                                             ))
-                                            .child(copy("Copied to clipboard", 11., theme.gray_12)),
+                                            .child(copy(
+                                                "Copied to clipboard",
+                                                11.,
+                                                theme.text_primary,
+                                            )),
                                     ),
                             )
                         }),
@@ -2510,6 +2490,9 @@ impl Render for OnboardingWindow {
             .items_center()
             .justify_between()
             .bg(theme.header_bg())
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.rounded_t(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
             .border_b_1()
             .border_color(theme.header_border())
             .window_control_area(gpui::WindowControlArea::Drag);
@@ -2533,7 +2516,7 @@ impl Render for OnboardingWindow {
                     .tab_index(0)
                     .size(px(14.))
                     .ml(px(12.))
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(rgb(Theme::TRAFFIC_CLOSE))
                     .hover(|el| el.bg(rgb(0xf25a53)))
                     .active(|el| el.bg(rgb(0xe6564e)))
@@ -2560,9 +2543,13 @@ impl Render for OnboardingWindow {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(16.))
+            // Windows paints this window opaque and DWM rounds its outer corners; a
+            // painted radius there exposes the opaque clear colour in each corner.
+            .when(!cfg!(target_os = "windows"), |shell| {
+                shell.rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            })
             .bg(theme.shell_bg())
-            .font_family(crate::theme::UI_FONT)
+            .font_family(crate::theme::ui_font())
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.body_text())
             .child(header)

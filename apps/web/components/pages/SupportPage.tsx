@@ -1,19 +1,15 @@
 "use client";
 
-import {
-	ArrowUpRight,
-	BookOpen,
-	Github,
-	Mail,
-	MessageCircle,
-} from "lucide-react";
+import { ArrowUpRight, BookOpen, Mail, MessageCircle } from "lucide-react";
 import Link from "next/link";
+import type { ComponentType } from "react";
+import { GithubIcon } from "@/components/icons/github-icon";
 import { ReadyToGetStarted } from "../ReadyToGetStarted";
 
 type SupportChannel = {
 	title: string;
 	description: string;
-	icon: typeof Mail;
+	icon: ComponentType<{ className?: string }>;
 	href: string;
 	cta: string;
 	isExternal?: boolean;
@@ -49,7 +45,7 @@ const supportChannels: SupportChannel[] = [
 		title: "Report an issue",
 		description:
 			"Found a bug or want to request a feature? Cap is open source, so you can open an issue directly on GitHub.",
-		icon: Github,
+		icon: GithubIcon,
 		href: "https://github.com/CapSoftware/Cap/issues",
 		cta: "Open an issue",
 		isExternal: true,

@@ -87,7 +87,7 @@ export async function newMediaComment(data: {
 			// A missing thumbnail degrades the card, it doesn't block the comment.
 			const thumbnailExists = yield* bucket.headObject(thumbnailKey).pipe(
 				Effect.map(() => true),
-				Effect.catchAll(() => Effect.succeed(false)),
+				Effect.catch(() => Effect.succeed(false)),
 			);
 			if (!thumbnailExists) thumbnailKey = null;
 		}

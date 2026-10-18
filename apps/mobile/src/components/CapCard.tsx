@@ -464,7 +464,7 @@ const styles = StyleSheet.create({
 		borderBottomColor: colors.gray3,
 	},
 	thumbnail: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 	},
 	emptyThumbnail: {
 		flex: 1,
@@ -554,7 +554,7 @@ const styles = StyleSheet.create({
 		borderColor: colors.gray7,
 	},
 	uploadOverlay: {
-		...StyleSheet.absoluteFillObject,
+		...StyleSheet.absoluteFill,
 		justifyContent: "flex-end",
 		backgroundColor: "rgba(0, 0, 0, 0.58)",
 		paddingHorizontal: 12,

@@ -186,7 +186,7 @@ function createBucket(
 			if (isTransactionActive()) {
 				throw new Error("Storage read occurred inside a database transaction");
 			}
-			return pipeValue(Option.fromNullable(objects.get(key)));
+			return pipeValue(Option.fromNullishOr(objects.get(key)));
 		}),
 	};
 }

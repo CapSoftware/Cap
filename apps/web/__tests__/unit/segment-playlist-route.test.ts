@@ -1,5 +1,5 @@
-import type { HttpApi } from "@effect/platform";
 import type { Context, Layer as EffectLayer } from "effect";
+import type { HttpRouter } from "effect/http";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -47,10 +47,10 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 		provideOptionalAuth: <A, E, R>(
 			effect: import("effect").Effect.Effect<A, E, R>,
 		) => effect,
-		Storage: Object.assign(Context.GenericTag("PlaylistTestStorage"), {
+		Storage: Object.assign(Context.Service<object>("PlaylistTestStorage"), {
 			getAccessForVideo: () => Effect.succeed([bucket, false] as const),
 		}),
-		Videos: Object.assign(Context.GenericTag("PlaylistTestVideos"), {
+		Videos: Object.assign(Context.Service<object>("PlaylistTestVideos"), {
 			testService: {
 				getByIdForViewing: () =>
 					mocks.denied
@@ -71,28 +71,29 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 
 vi.mock("@/lib/server", async () => {
 	const { Storage, Videos } = await import("@cap/web-backend");
-	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { HttpRouter, HttpServer } = await import("effect/http");
 	const { Layer } = await import("effect");
 	return {
 		apiToHandler: (
 			api: EffectLayer.Layer<
-				HttpApi.Api,
 				never,
-				| Context.Tag.Identifier<typeof Storage>
-				| Context.Tag.Identifier<typeof Videos>
+				never,
+				| Context.Service.Identifier<typeof Storage>
+				| Context.Service.Identifier<typeof Videos>
+				| HttpRouter.HttpRouter
 			>,
 		) => {
 			const videos = Videos as unknown as {
-				testService: Context.Tag.Service<typeof Videos>;
+				testService: Context.Service.Shape<typeof Videos>;
 			};
-			const handler = api.pipe(
-				Layer.provideMerge(
-					Layer.succeed(Storage, {} as Context.Tag.Service<typeof Storage>),
+			const routes = api.pipe(
+				Layer.provide(
+					Layer.succeed(Storage, {} as Context.Service.Shape<typeof Storage>),
 				),
-				Layer.provideMerge(Layer.succeed(Videos, videos.testService)),
-				Layer.merge(HttpServer.layerContext),
-				HttpApiBuilder.toWebHandler,
+				Layer.provide(Layer.succeed(Videos, videos.testService)),
+				Layer.provide(HttpServer.layerServices),
 			);
+			const handler = HttpRouter.toWebHandler(routes);
 			mocks.dispose = handler.dispose;
 			return handler.handler;
 		},

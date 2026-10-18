@@ -10,7 +10,7 @@ import { getHeaders } from "@/utils/helpers";
 export async function DELETE(request: NextRequest) {
 	const user = await getCurrentUser();
 	const { searchParams } = request.nextUrl;
-	const commentId = Option.fromNullable(searchParams.get("commentId")).pipe(
+	const commentId = Option.fromNullishOr(searchParams.get("commentId")).pipe(
 		Option.map(Comment.CommentId.make),
 	);
 	const origin = request.headers.get("origin");

@@ -910,7 +910,7 @@ impl SettingsWindow {
         kind: MenuKind,
         cx: &mut Context<Self>,
     ) -> ui::Select {
-        ui::Select::settings(&self.theme, id, label).on_click(cx.listener(
+        ui::Select::new(&self.theme, id, label).on_click(cx.listener(
             move |this, event: &gpui::ClickEvent, window, cx| {
                 this.open_menu(kind, event.position(), window, cx);
             },
@@ -1586,13 +1586,7 @@ impl SettingsWindow {
     ) -> gpui::AnyElement {
         let theme = self.theme;
         let ink = theme.settings_text();
-        // The card tokens are translucent, so on this tinted panel they read
-        // as gray; the chosen option needs a solid, lighter surface.
-        let raised = if theme.is_dark() {
-            gpui::hsla(0., 0., 1., 0.1)
-        } else {
-            gpui::white()
-        };
+        let raised: gpui::Hsla = theme.surface_raised.into();
         let on_select = std::rc::Rc::new(on_select);
 
         let cards =
@@ -1713,8 +1707,8 @@ impl SettingsWindow {
             .as_ref()
             .filter(|saved| saved.action == action);
         let effect = shortcut_effect(action, &self.settings, mode);
-        let red: Hsla = theme.red_11.into();
-        let amber: Hsla = theme.amber_11.into();
+        let red: Hsla = theme.text_negative.into();
+        let amber: Hsla = theme.text_warning.into();
 
         let blocked =
             self.pages.shortcut_blocked == Some(action) && crate::hotkeys::editing_blocked(cx);
@@ -1994,7 +1988,7 @@ impl SettingsWindow {
             // keyframe ticker for a placeholder).
             None => div()
                 .h(px(80.))
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .bg(theme.settings_fill())
                 .into_any_element(),
             Some(Err(error)) => div()
@@ -2005,7 +1999,7 @@ impl SettingsWindow {
                     div()
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(Hsla::from(theme.red_9))
+                        .text_color(Hsla::from(theme.danger))
                         .child(format!("Couldn't load CLI status: {error}")),
                 )
                 .child(div().child(self.button(
@@ -2147,7 +2141,7 @@ impl SettingsWindow {
                         .truncate()
                         .px(px(8.))
                         .py(px(4.))
-                        .rounded(px(6.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                         .bg(theme.settings_fill())
                         .font_family(MONO_FONT)
                         .text_size(px(11.))
@@ -2178,13 +2172,13 @@ impl SettingsWindow {
                     div()
                         .px(px(12.))
                         .py(px(8.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .border_1()
-                        .border_color(Theme::with_alpha(theme.red_9, 0.4))
-                        .bg(Theme::with_alpha(theme.red_9, 0.1))
+                        .border_color(Hsla::from(theme.danger))
+                        .bg(Hsla::from(theme.negative_subtle))
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(Hsla::from(theme.red_9))
+                        .text_color(Hsla::from(theme.danger))
                         .child(conflict),
                 )
             })
@@ -2194,7 +2188,7 @@ impl SettingsWindow {
                 this.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.red_9))
+                        .text_color(Hsla::from(theme.danger))
                         .child(error),
                 )
             })
@@ -2227,7 +2221,7 @@ impl SettingsWindow {
                         .gap(px(8.))
                         .px(px(12.))
                         .py(px(12.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .border_1()
                         .border_color(theme.settings_border())
                         .bg(theme.settings_fill())
@@ -2245,7 +2239,9 @@ impl SettingsWindow {
                                         .truncate()
                                         .px(px(8.))
                                         .py(px(6.))
-                                        .rounded(px(6.))
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Compact,
+                                        ))
                                         .bg(theme.settings_card_bg())
                                         .font_family(MONO_FONT)
                                         .text_size(px(12.))
@@ -2492,7 +2488,7 @@ impl SettingsWindow {
                         .gap(px(6.))
                         .px(px(10.))
                         .py(px(4.))
-                        .rounded_full()
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                         .bg(theme.settings_fill())
                         .border_1()
                         .border_color(theme.settings_border())
@@ -2758,7 +2754,7 @@ impl SettingsWindow {
                         .items_center()
                         .px(px(16.))
                         .h(px(32.))
-                        .rounded(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                         .border_1()
                         .border_color(gpui::hsla(0., 0., 1., 0.25))
                         .text_size(px(13.))
@@ -3318,7 +3314,7 @@ impl SettingsWindow {
                 "Sent. Thank you -- this helps us find the problem.".to_string(),
                 theme.settings_muted(),
             ),
-            UploadStatus::Error(error) => (error.clone(), Hsla::from(theme.red_9)),
+            UploadStatus::Error(error) => (error.clone(), Hsla::from(theme.danger)),
         };
         Some(
             div()
@@ -3479,7 +3475,7 @@ impl SettingsWindow {
                         div()
                             .text_size(px(12.))
                             .line_height(px(18.))
-                            .text_color(Hsla::from(theme.red_9))
+                            .text_color(Hsla::from(theme.danger))
                             .child(error.clone()),
                     );
                 }
@@ -3538,7 +3534,7 @@ impl SettingsWindow {
                         div()
                             .text_size(px(13.))
                             .line_height(px(19.))
-                            .text_color(Hsla::from(theme.red_9))
+                            .text_color(Hsla::from(theme.danger))
                             .child(error.clone()),
                     )
                     .child(
@@ -3572,35 +3568,36 @@ impl SettingsWindow {
     /// Information block's capture-support chip uses.
     fn verdict_chip(&self, verdict: Option<&str>) -> gpui::AnyElement {
         let theme = self.theme;
-        // The same green/red pair the capture-support chip below uses, plus an
-        // amber for `warn`; `inconclusive` and "no sync test at all" are not
-        // failures, so they stay in the muted grey.
+        // `inconclusive` and "no sync test at all" are not failures, so they
+        // stay neutral.
         let (label, fill, text): (&str, Hsla, Hsla) = match verdict {
             Some("pass") => (
                 "PASS",
-                gpui::rgb(0x22c55e).into(),
-                gpui::rgb(0x4ade80).into(),
+                theme.positive_subtle.into(),
+                theme.text_positive.into(),
             ),
             Some("warn") => (
                 "WARN",
-                gpui::rgb(0xf59e0b).into(),
-                gpui::rgb(0xfbbf24).into(),
+                theme.warning_subtle.into(),
+                theme.text_warning.into(),
             ),
-            Some("fail") => ("FAIL", theme.red_9.into(), theme.red_9.into()),
+            Some("fail") => (
+                "FAIL",
+                theme.negative_subtle.into(),
+                theme.text_negative.into(),
+            ),
             Some("inconclusive") => (
                 "INCONCLUSIVE",
-                theme.settings_muted(),
+                theme.surface_raised.into(),
                 theme.settings_muted(),
             ),
             // No sync test in the report: the environment half still ran.
             _ => (
                 "ENVIRONMENT ONLY",
-                theme.settings_muted(),
+                theme.surface_raised.into(),
                 theme.settings_muted(),
             ),
         };
-        let mut fill = fill;
-        fill.a = 0.2;
         div()
             .flex()
             .flex_row()
@@ -3608,7 +3605,7 @@ impl SettingsWindow {
                 div()
                     .px(px(8.))
                     .py(px(4.))
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .bg(fill)
@@ -3632,7 +3629,7 @@ impl SettingsWindow {
             .w_full()
             .h(px(128.))
             .p(px(8.))
-            .rounded(px(6.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
             .bg(theme.settings_card_bg())
             .border_1()
             .border_color(theme.settings_border())
@@ -3649,7 +3646,7 @@ impl SettingsWindow {
             form = form.child(
                 div()
                     .text_size(px(13.))
-                    .text_color(Hsla::from(theme.red_9))
+                    .text_color(Hsla::from(theme.danger))
                     .child(error.clone()),
             );
         }
@@ -3743,7 +3740,7 @@ impl SettingsWindow {
                             div()
                                 .px(px(8.))
                                 .py(px(6.))
-                                .rounded(px(4.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                 .bg(theme.settings_card_bg())
                                 .font_family(MONO_FONT)
                                 .text_size(px(12.))
@@ -3780,21 +3777,20 @@ impl SettingsWindow {
                                     div()
                                         .px(px(8.))
                                         .py(px(4.))
-                                        .rounded(px(4.))
-                                        .text_size(px(12.))
-                                        .bg(Theme::with_alpha(
-                                            if capture_supported {
-                                                gpui::rgb(0x22c55e)
-                                            } else {
-                                                theme.red_9
-                                            },
-                                            0.2,
+                                        .rounded(crate::theme::radius(
+                                            crate::theme::RadiusToken::Small,
                                         ))
-                                        .text_color(Hsla::from(if capture_supported {
-                                            gpui::rgb(0x4ade80)
+                                        .text_size(px(12.))
+                                        .bg(if capture_supported {
+                                            theme.positive_subtle
                                         } else {
-                                            theme.red_9
-                                        }))
+                                            theme.negative_subtle
+                                        })
+                                        .text_color(if capture_supported {
+                                            theme.text_positive
+                                        } else {
+                                            theme.text_negative
+                                        })
                                         .child(format!(
                                             "Screen Capture: {}",
                                             if capture_supported {
@@ -3978,8 +3974,10 @@ impl SettingsWindow {
                                             div()
                                                 .px(px(8.))
                                                 .py(px(4.))
-                                                .rounded(px(6.))
-                                                .bg(Hsla::from(theme.blue_9))
+                                                .rounded(crate::theme::radius(
+                                                    crate::theme::RadiusToken::Compact,
+                                                ))
+                                                .bg(Hsla::from(theme.primary))
                                                 .text_size(px(12.))
                                                 .font_weight(FontWeight::BOLD)
                                                 .text_color(gpui::white())
@@ -4238,7 +4236,7 @@ impl SettingsWindow {
                     .max_w(px(700.))
                     .mt(px(24.))
                     .p(px(32.))
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
                     .border_color(theme.settings_border())
                     .bg(theme.settings_card_bg())
@@ -4259,7 +4257,9 @@ impl SettingsWindow {
                             .child(
                                 div()
                                     .p(px(12.))
-                                    .rounded(px(8.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Default,
+                                    ))
                                     .border_1()
                                     .border_color(theme.settings_border())
                                     .bg(theme.settings_fill())
@@ -4316,7 +4316,7 @@ impl SettingsWindow {
             .w_full()
             .max_w(px(700.))
             .p(px(24.))
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_color(theme.settings_border())
             .bg(theme.settings_card_bg())
@@ -4353,7 +4353,7 @@ impl SettingsWindow {
                         .mt(px(8.))
                         .text_size(px(13.))
                         .text_center()
-                        .text_color(Hsla::from(theme.red_9))
+                        .text_color(Hsla::from(theme.danger))
                         .child(error),
                 )
             })
@@ -5289,7 +5289,7 @@ impl SettingsWindow {
             children.push(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.red_9))
+                    .text_color(Hsla::from(theme.danger))
                     .child(error)
                     .into_any_element(),
             );
@@ -5463,7 +5463,7 @@ impl SettingsWindow {
             card = card.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.red_9))
+                    .text_color(Hsla::from(theme.danger))
                     .child(error),
             );
         }
@@ -5568,15 +5568,15 @@ impl SettingsWindow {
                 div()
                     .h(px(6.))
                     .w_full()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .bg(theme.settings_fill())
                     .overflow_hidden()
                     .child(
                         div()
                             .h_full()
                             .w(gpui::relative((percent / 100.) as f32))
-                            .rounded_full()
-                            .bg(Hsla::from(theme.blue_9)),
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                            .bg(Hsla::from(theme.primary)),
                     )
             }))
             .child(
@@ -6654,7 +6654,7 @@ impl SettingsWindow {
             // The `Suspense` fallback.
             div()
                 .h(px(96.))
-                .rounded(px(10.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                 .bg(theme.settings_fill())
                 .into_any_element()
         } else if self.pages.automations.rules.is_empty() {
@@ -6683,7 +6683,7 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .text_size(px(12.))
                     .line_height(px(18.))
-                    .text_color(Hsla::from(theme.amber_11))
+                    .text_color(Hsla::from(theme.text_warning))
                     .child("Failed to save automations. Your changes have not been saved.")
                     .child(
                         ui::Button::settings(
@@ -6758,7 +6758,7 @@ impl SettingsWindow {
                         .justify_center()
                         .size(px(44.))
                         .mb(px(4.))
-                        .rounded_full()
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                         .bg(theme.settings_fill())
                         .child(
                             svg()
@@ -6810,7 +6810,7 @@ impl SettingsWindow {
             .gap(px(6.))
             .py(px(10.))
             .w_full()
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_dashed()
             .border_color(theme.settings_border())
@@ -6852,7 +6852,7 @@ impl SettingsWindow {
             .min_w_0()
             .gap(px(12.))
             .p(px(12.))
-            .rounded(px(10.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_color(theme.settings_border())
             .bg(theme.settings_card_bg())
@@ -6865,7 +6865,7 @@ impl SettingsWindow {
                     .justify_center()
                     .size(px(36.))
                     .flex_shrink_0()
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(theme.settings_fill())
                     .child(
                         svg()
@@ -6927,7 +6927,7 @@ impl SettingsWindow {
                     .justify_center()
                     .size(px(36.))
                     .flex_shrink_0()
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(theme.settings_fill())
                     .when(!enabled, |this| this.opacity(0.6))
                     .child(
@@ -7004,7 +7004,7 @@ impl SettingsWindow {
                     .items_center()
                     .justify_center()
                     .size(px(28.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.settings_fill()))
                     .child(
@@ -7262,14 +7262,14 @@ impl SettingsWindow {
                     .gap(px(6.))
                     .h(px(24.))
                     .px(px(8.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .text_size(px(12.))
                     .text_color(theme.settings_muted())
                     .cursor_pointer()
                     .hover(|style| {
                         style
-                            .text_color(Hsla::from(rgb(0xef4444)))
-                            .bg(Theme::with_alpha(rgb(0xef4444), 0.1))
+                            .text_color(theme.text_danger)
+                            .bg(theme.negative_subtle)
                     })
                     .child(
                         svg()
@@ -7311,7 +7311,7 @@ impl SettingsWindow {
                     div()
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(Hsla::from(theme.amber_11))
+                        .text_color(Hsla::from(theme.text_warning))
                         .child(
                             "In the Cap CLI, this automation runs commands or sends network \
                              requests with your permissions. Only use values you trust.",
@@ -7324,7 +7324,7 @@ impl SettingsWindow {
                         .id(("rule-compatibility-result", index))
                         .text_size(px(12.))
                         .line_height(px(18.))
-                        .text_color(Hsla::from(theme.amber_11))
+                        .text_color(Hsla::from(theme.text_warning))
                         .child(
                             "Compatibility checked: this automation doesn't run in Cap yet. \
                              Saved rules remain available to the Cap CLI. No actions were run.",
@@ -7404,7 +7404,7 @@ impl SettingsWindow {
                     .items_start()
                     .gap(px(8.))
                     .p(px(10.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
                     .border_color(theme.settings_border())
                     .bg(theme.settings_card_bg())
@@ -7449,7 +7449,7 @@ impl SettingsWindow {
                     div()
                         .px(px(4.))
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
+                        .text_color(Hsla::from(theme.text_warning))
                         .child("This condition never matches for the selected trigger."),
                 )
             })
@@ -7473,7 +7473,7 @@ impl SettingsWindow {
             .justify_center()
             .size(px(28.))
             .flex_shrink_0()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .when(disabled, |this| this.opacity(0.4))
             .child(
                 svg()
@@ -7562,7 +7562,7 @@ impl SettingsWindow {
             .flex_col()
             .gap(px(12.))
             .p(px(12.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
             .border_color(theme.settings_border())
             .bg(theme.settings_card_bg())
@@ -7572,7 +7572,7 @@ impl SettingsWindow {
                 this.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
+                        .text_color(Hsla::from(theme.text_warning))
                         .child("This action has no effect for the selected trigger."),
                 )
             })

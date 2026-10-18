@@ -101,7 +101,7 @@ impl RenderOnce for CircularProgress {
                     .top_0()
                     .left_0()
                     .size(size)
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .border(stroke)
                     .border_color(track),
             )
@@ -127,7 +127,7 @@ impl RenderOnce for CircularProgress {
                                 .top(px(-f32::from(top)))
                                 .left(px(-f32::from(left)))
                                 .size(size)
-                                .rounded_full()
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                 .border(stroke)
                                 .border_color(fill)
                                 // A partially-filled quadrant fades rather than

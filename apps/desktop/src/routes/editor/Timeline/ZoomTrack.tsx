@@ -128,7 +128,7 @@ export function ZoomTrack(props: {
 			(s) => previewTime >= s.start,
 		).pipe(
 			Option.flatMap((index) =>
-				Option.fromNullable(project.timeline?.zoomSegments?.[index]).pipe(
+				Option.fromNullishOr(project.timeline?.zoomSegments?.[index]).pipe(
 					Option.map((segment) => [segment, index] as const),
 				),
 			),

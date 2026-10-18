@@ -325,7 +325,7 @@ export const runAgentExternalMutation = <A, E, R>(input: {
 		const response = yield* input
 			.execute(providerIdempotencyKey)
 			.pipe(
-				Effect.tapErrorCause(() =>
+				Effect.tapCause(() =>
 					database.use((db) =>
 						db
 							.delete(Db.agentApiIdempotency)
@@ -513,10 +513,10 @@ export const createAgentFeedback = Effect.fn("Agent.createFeedback")(
 					},
 					parentCommentId: input.parentCommentId ?? undefined,
 				}),
-			).pipe(Effect.catchAll(() => Effect.void));
+			).pipe(Effect.catch(() => Effect.void));
 		}
 		yield* Effect.try(() => revalidatePath(`/s/${input.videoId}`)).pipe(
-			Effect.catchAll(() => Effect.void),
+			Effect.catch(() => Effect.void),
 		);
 		return result.response;
 	},
@@ -631,6 +631,6 @@ export const updateAgentCap = Effect.fn("Agent.updateCap")(function* (input: {
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/shared-caps");
 		revalidatePath(`/s/${input.videoId}`);
-	}).pipe(Effect.catchAll(() => Effect.void));
+	}).pipe(Effect.catch(() => Effect.void));
 	return result.response;
 });

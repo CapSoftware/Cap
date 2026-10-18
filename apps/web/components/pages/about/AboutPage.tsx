@@ -1,7 +1,8 @@
 import { classNames } from "@cap/utils/helpers";
-import { ArrowUpRight, Github } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { GithubIcon } from "@/components/icons/github-icon";
 import { htMono, htSans, htSerif } from "@/components/pages/HomeTwo/fonts";
 import {
 	BAND,
@@ -41,7 +42,7 @@ const GitHubButton = ({
 		rel="noopener noreferrer"
 		className={classNames(className, "gap-2.5")}
 	>
-		<Github className="size-[18px]" strokeWidth={1.75} />
+		<GithubIcon className="size-[18px]" />
 		Star on GitHub
 		{stars ? (
 			<span

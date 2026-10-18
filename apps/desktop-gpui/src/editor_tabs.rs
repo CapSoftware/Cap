@@ -761,7 +761,7 @@ impl EditorWindow {
         let kind = menu.kind;
         let items = self.sidebar_menu_items(kind);
         Some(
-            ui::Menu::editor(&self.theme, "sidebar-menu", items, &menu.state)
+            ui::Menu::new(&self.theme, "sidebar-menu", items, &menu.state)
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_sidebar_menu(kind, *index, window, cx);
                 }))
@@ -1161,7 +1161,7 @@ impl EditorWindow {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(self.theme.editor.text_2))
+                    .text_color(Hsla::from(self.theme.text_secondary))
                     .child(label),
             )
             .child(control)
@@ -1175,7 +1175,7 @@ impl EditorWindow {
         label: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        ui::Select::plain(&self.theme, id, label)
+        ui::Select::new(&self.theme, id, label)
             .stretch_label()
             .on_open(
                 cx.listener(move |this, bounds: &Bounds<Pixels>, window, cx| {
@@ -1194,7 +1194,7 @@ impl EditorWindow {
         label: SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        ui::Select::plain(&self.theme, id, label)
+        ui::Select::new(&self.theme, id, label)
             .stretch_label()
             .on_open(
                 cx.listener(move |this, bounds: &Bounds<Pixels>, window, cx| {
@@ -1279,7 +1279,7 @@ impl EditorWindow {
                 ),
             )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
-            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(dashed_divider(Hsla::from(theme.border_subtle)))
             .child(self.slider_field("Size", SliderKey::Camera(CameraSlider::Size), "%", cx))
             .child(self.slider_field(
                 "Size During Zoom",
@@ -1352,7 +1352,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("Custom position (dragged on canvas)"),
                     )
                     .child(
@@ -1414,10 +1414,10 @@ impl EditorWindow {
             .w_full()
             // `h-30`
             .h(px(120.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.gray_2));
+            .border_color(Hsla::from(theme.border_subtle))
+            .bg(Hsla::from(theme.surface_secondary));
 
         for (item_x, item_y) in dots {
             let checked = selected && x_index == item_x && y_index == item_y;
@@ -1429,17 +1429,22 @@ impl EditorWindow {
                 // `size-6 rounded-md`, `bg-blue-9` selected, `bg-gray-5` not.
                 .size(px(24.))
                 .flex_none()
-                .rounded(px(6.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                 .flex()
                 .justify_center()
                 .items_center()
                 .bg(if checked {
-                    Hsla::from(theme.blue_9)
+                    Hsla::from(theme.primary)
                 } else {
-                    Hsla::from(theme.gray_5)
+                    Hsla::from(theme.active_bg)
                 })
                 // `size-2 bg-solid-white rounded-full`
-                .child(div().size(px(8.)).rounded_full().bg(gpui::white()));
+                .child(
+                    div()
+                        .size(px(8.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                        .bg(gpui::white()),
+                );
 
             dot = match item_x {
                 0 => dot.left(px(8.)),
@@ -1629,14 +1634,14 @@ impl EditorWindow {
         ];
         let enabled = self.project.audio.improve;
         let enabled_by_default = self.sidebar.audio_enhancement_default;
-        let accent = Hsla::from(theme.editor.accent);
-        let line = Hsla::from(theme.editor.line);
+        let accent = Hsla::from(theme.primary);
+        let line = Hsla::from(theme.border_subtle);
 
         div()
             .flex()
             .flex_col()
-            .rounded(px(12.))
-            .bg(Hsla::from(theme.editor.card_2))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
+            .bg(Hsla::from(theme.surface_secondary))
             .p(px(14.))
             .child(
                 div()
@@ -1651,17 +1656,17 @@ impl EditorWindow {
                             .items_center()
                             .justify_center()
                             .size(px(30.))
-                            .rounded(px(9.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                             .bg(if enabled {
-                                Theme::with_alpha(theme.editor.accent, 0.12)
+                                Theme::with_alpha(theme.primary, 0.12)
                             } else {
-                                Hsla::from(theme.editor.ctl)
+                                Hsla::from(theme.surface_subtle)
                             })
                             .child(svg().path("icons/microphone.svg").size(px(16.)).text_color(
                                 if enabled {
                                     accent
                                 } else {
-                                    Hsla::from(theme.editor.text_2)
+                                    Hsla::from(theme.text_secondary)
                                 },
                             )),
                     )
@@ -1676,14 +1681,14 @@ impl EditorWindow {
                                 div()
                                     .text_size(px(13.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.editor.text_1))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child("Studio Sound"),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .line_height(px(16.))
-                                    .text_color(Hsla::from(theme.editor.text_3))
+                                    .text_color(Hsla::from(theme.text_muted))
                                     .child(
                                         "Reduces background noise and balances your voice level.",
                                     ),
@@ -1749,7 +1754,7 @@ impl EditorWindow {
                         div()
                             .text_size(px(12.))
                             .line_height(px(16.))
-                            .text_color(Hsla::from(theme.editor.text_3))
+                            .text_color(Hsla::from(theme.text_muted))
                             .child(
                                 isolation_options
                                     .iter()
@@ -1773,7 +1778,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.editor.text_2))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("Use for new recordings"),
                     )
                     .child(
@@ -1798,7 +1803,7 @@ impl EditorWindow {
                 div()
                     .mt(px(8.))
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.editor.playhead))
+                    .text_color(Hsla::from(theme.negative))
                     .child(error.clone())
                     .into_any_element()
             }))
@@ -1880,7 +1885,7 @@ impl EditorWindow {
                                 div()
                                     .w(px(48.))
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(readout),
                             ),
                     ),
@@ -2319,7 +2324,7 @@ impl EditorWindow {
             .children(self.keyboard_generation_message.as_ref().map(|message| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(message.clone())
                     .into_any_element()
             }))
@@ -2333,13 +2338,13 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(14.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child("No keyboard segments yet."),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(
                                 "Click \"Generate Keyboard Segments\" to create segments from \
                                  recorded keyboard presses.",
@@ -2466,7 +2471,7 @@ impl EditorWindow {
         let has_audio = self
             .summary()
             .is_some_and(|summary| summary.has_microphone || summary.has_system_audio);
-        let error_color = Hsla::from(gpui::rgb(0xef4444));
+        let error_color = Hsla::from(self.theme.text_negative);
 
         // The `KSelect.Trigger` with label, description and size
         // (`CaptionsTab.tsx:824-860`); the info tooltip carries the engine
@@ -2480,10 +2485,10 @@ impl EditorWindow {
             .gap(px(8.))
             .px(px(12.))
             .py(px(8.))
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .bg(self.panel_bg())
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
+            .border_color(Hsla::from(theme.border_subtle))
             .child(
                 div()
                     .flex_1()
@@ -2494,14 +2499,14 @@ impl EditorWindow {
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
+                            .text_color(Hsla::from(theme.text_primary))
                             .truncate()
                             .child(model.label),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .truncate()
                             .child(model.description),
                     ),
@@ -2510,7 +2515,7 @@ impl EditorWindow {
                 div()
                     .flex_shrink_0()
                     .text_size(px(10.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(model.size),
             )
             .child(
@@ -2518,8 +2523,9 @@ impl EditorWindow {
                     .path("icons/chevron-down.svg")
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
+                    .text_color(Hsla::from(theme.text_secondary)),
             )
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip({
                 let model_name = SharedString::new_static(model.model_name);
                 move |_window, cx| ui::Tooltip::new(&theme, model_name.clone()).view(cx)
@@ -2575,12 +2581,12 @@ impl EditorWindow {
                                     .path("icons/check.svg")
                                     .size(px(14.))
                                     .flex_shrink_0()
-                                    .text_color(Hsla::from(theme.gray_9)),
+                                    .text_color(Hsla::from(theme.text_muted)),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .truncate()
                                     .child(SharedString::from(format!(
                                         "{} model downloaded",
@@ -2641,21 +2647,21 @@ impl EditorWindow {
                         div()
                             .w_full()
                             .h(px(6.))
-                            .rounded_full()
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                             .overflow_hidden()
-                            .bg(Hsla::from(theme.gray_3))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .child(
                                 div()
                                     .h_full()
-                                    .rounded_full()
-                                    .bg(Hsla::from(theme.blue_9))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                                    .bg(Hsla::from(theme.primary))
                                     .w(relative(download_percent as f32 / 100.)),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(download_message.unwrap_or_else(|| {
                                 "Keep Cap open while the model downloads. Editor reloads will \
                                  reconnect automatically."
@@ -2684,7 +2690,7 @@ impl EditorWindow {
             .children((!transcription::supports_parakeet()).then(|| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child(
                         "Parakeet caption models are unavailable on Intel Macs. Whisper models \
                          remain available.",
@@ -2693,7 +2699,7 @@ impl EditorWindow {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child("One time download to your system. All captions are stored locally."),
             )
             .child(
@@ -2786,7 +2792,7 @@ impl EditorWindow {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_10))
+                                        .text_color(Hsla::from(theme.text_secondary))
                                         .child(
                                             "This is the first version of captions in Cap. \
                                                  Active word highlighting may be inaccurate in \
@@ -2922,18 +2928,18 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(6.))
                     .p(px(6.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .bg(self.panel_bg())
                     .border_1()
                     .border_color(if selected {
-                        Hsla::from(theme.blue_9)
+                        Hsla::from(theme.primary)
                     } else {
-                        Hsla::from(theme.gray_3)
+                        Hsla::from(theme.surface_subtle)
                     })
                     // `ring-1 ring-blue-9`, painted behind an opaque card.
                     .when(selected, |this| {
                         this.shadow(vec![gpui::BoxShadow {
-                            color: Hsla::from(theme.blue_9),
+                            color: Hsla::from(theme.primary),
                             offset: gpui::point(px(0.), px(0.)),
                             blur_radius: px(0.),
                             spread_radius: px(1.),
@@ -2946,9 +2952,10 @@ impl EditorWindow {
                             .px(px(2.))
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
+                            .text_color(Hsla::from(theme.text_primary))
                             .child(preset.label),
                     )
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .tooltip({
                         let description = SharedString::from(preset.description);
                         move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
@@ -2980,7 +2987,7 @@ impl EditorWindow {
         div()
             .h(px(48.))
             .w_full()
-            .rounded(px(6.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
             .overflow_hidden()
             .flex()
             .items_center()
@@ -2996,7 +3003,7 @@ impl EditorWindow {
                     .flex()
                     .items_center()
                     .gap(px(4.))
-                    .rounded(px(4.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                     .px(px(8.))
                     .py(px(4.))
                     .bg(background)
@@ -3018,7 +3025,9 @@ impl EditorWindow {
                                 Hsla::from(color)
                             })
                             .when(pill, |this| {
-                                this.bg(Hsla::from(highlight)).rounded(px(4.)).px(px(4.))
+                                this.bg(Hsla::from(highlight))
+                                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
+                                    .px(px(4.))
                             })
                             .child(text)
                     })),
@@ -3281,13 +3290,13 @@ impl EditorWindow {
                             div()
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.editor.text_2))
+                                .text_color(Hsla::from(theme.text_secondary))
                                 .child("Sync"),
                         )
                         .child(
                             div()
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child(
                                     "Fine-tune source offsets if audio or camera drifts out of \
                                      sync with the screen recording.",
@@ -3309,14 +3318,14 @@ impl EditorWindow {
                             div()
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.editor.text_2))
+                                .text_color(Hsla::from(theme.text_secondary))
                                 .child(SharedString::from(format!("Clip {clip}")))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {
                             div()
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.editor.text_3))
+                                .text_color(Hsla::from(theme.text_muted))
                                 .child(
                                     "Cap calculated these offsets automatically to keep audio in \
                                      sync with the video. Adjust them if anything still sounds \
@@ -3443,12 +3452,12 @@ impl EditorWindow {
                                 )))
                                 .px(px(4.))
                                 .py(px(2.))
-                                .rounded(px(2.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                                 .border_1()
-                                .border_color(Hsla::from(theme.editor.line))
-                                .bg(Hsla::from(theme.gray_1))
+                                .border_color(Hsla::from(theme.border_subtle))
+                                .bg(Hsla::from(theme.surface))
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_11))
+                                .text_color(Hsla::from(theme.text_secondary))
                                 .child(SharedString::from(format!(
                                     "{}{}ms",
                                     if delta > 0 { "+" } else { "-" },

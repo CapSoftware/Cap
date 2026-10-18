@@ -169,7 +169,7 @@ async function applyOrganizationLogoUpdate(
 							fileName: logo.fileName,
 							data: logo.data,
 						}),
-			existing: Option.fromNullable(
+			existing: Option.fromNullishOr(
 				row.iconUrl as ImageUpload.ImageUrlOrKey | null,
 			),
 			keyPrefix: `organizations/${row.id}`,

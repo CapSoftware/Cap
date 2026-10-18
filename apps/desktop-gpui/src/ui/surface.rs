@@ -7,7 +7,7 @@ use gpui::{
     SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
-use crate::theme::Theme;
+use crate::theme::{ShadowToken, Theme, shadow};
 
 /// `<SectionCard>` / `<SectionRows>` -- `rounded-xl border border-gray-3
 /// bg-gray-2`, carrying the `.cap-settings-card` hook the material layer reads.
@@ -16,7 +16,7 @@ pub struct Card;
 impl Card {
     pub fn settings(theme: &Theme, padded: bool) -> Div {
         div()
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .overflow_hidden()
             .bg(theme.settings_card_bg())
             .when(padded, |this| this.px(px(16.)).py(px(16.)))
@@ -34,35 +34,15 @@ impl Card {
         )
     }
 
-    /// `LIQUID_GLASS_SURFACE_CLASS`: `rounded-2xl border border-gray-12/10
-    /// bg-gray-1/82 shadow-xl shadow-black/20 dark:border-white/10
-    /// dark:bg-gray-2/82`. The `backdrop-blur-xl` is dropped -- this gpui rev
-    /// has no per-element backdrop blur.
     pub fn liquid_glass(theme: &Theme) -> Div {
         div()
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(if theme.is_dark() {
-                gpui::hsla(0., 0., 1., 0.1)
-            } else {
-                Theme::with_alpha(theme.gray_12, 0.1)
-            })
-            .bg(if theme.is_dark() {
-                Theme::with_alpha(theme.gray_2, 0.82)
-            } else {
-                Theme::with_alpha(theme.gray_1, 0.82)
-            })
-            .shadow(vec![gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 0., 0.2),
-                offset: gpui::point(px(0.), px(8.)),
-                blur_radius: px(10.),
-                spread_radius: px(-6.),
-                inset: false,
-            }])
+            .border_color(theme.border)
+            .bg(theme.surface_raised)
+            .shadow(shadow(ShadowToken::Two))
     }
 
-    /// The teleprompter footer's pill: `h-8 rounded-full border border-gray-12/6
-    /// bg-gray-12/5 px-2`.
     pub fn glass_pill(theme: &Theme) -> Div {
         div()
             .flex()
@@ -70,10 +50,10 @@ impl Card {
             .items_center()
             .gap(px(6.))
             .h(px(32.))
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .border_1()
-            .border_color(Theme::with_alpha(theme.gray_12, 0.06))
-            .bg(Theme::with_alpha(theme.gray_12, 0.05))
+            .border_color(theme.border)
+            .bg(theme.surface_subtle)
             .px(px(8.))
     }
 }
@@ -86,19 +66,16 @@ impl Card {
 pub struct Popover;
 
 impl Popover {
-    /// The teleprompter's settings popover: `w-48 rounded-2xl border
-    /// border-gray-12/8 bg-gray-1/80 p-2 shadow-xl`. The `backdrop-blur-2xl` is
-    /// the wash only -- no blur hook in this gpui rev.
     pub fn glass(theme: &Theme, width: Pixels) -> Div {
         div()
             .absolute()
             .w(width)
             .p(px(8.))
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(Theme::with_alpha(theme.gray_12, 0.08))
-            .bg(Theme::with_alpha(theme.gray_1, 0.8))
-            .shadow_lg()
+            .border_color(theme.border)
+            .bg(theme.surface_raised)
+            .shadow(shadow(ShadowToken::Two))
     }
 
     /// `PopperContent` on the plain palette: `rounded-xl border border-gray-3
@@ -108,11 +85,11 @@ impl Popover {
             .absolute()
             .flex()
             .flex_col()
-            .rounded(px(12.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
-            .border_color(theme.gray(3))
-            .bg(theme.gray(1))
-            .shadow_lg()
+            .border_color(theme.border)
+            .bg(theme.surface_raised)
+            .shadow(shadow(ShadowToken::Two))
     }
 }
 
@@ -212,7 +189,7 @@ impl Section {
             children,
             pro: false,
             muted: theme.settings_muted(),
-            accent: Hsla::from(theme.blue_9),
+            accent: Hsla::from(theme.primary),
         }
     }
 
@@ -274,7 +251,9 @@ impl RenderOnce for Section {
                                             div()
                                                 .px(px(6.))
                                                 .py(px(2.))
-                                                .rounded(px(6.))
+                                                .rounded(crate::theme::radius(
+                                                    crate::theme::RadiusToken::Compact,
+                                                ))
                                                 .bg(accent)
                                                 .text_size(px(10.))
                                                 .font_weight(FontWeight::MEDIUM)

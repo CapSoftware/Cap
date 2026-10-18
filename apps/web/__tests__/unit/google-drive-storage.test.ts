@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Organisation, Storage, User, Video } from "@cap/web-domain";
-import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Result } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@cap/env", () => ({
@@ -164,12 +164,12 @@ const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 			key: string,
 		) =>
 			Effect.succeed(
-				Option.fromNullable(
+				Option.fromNullishOr(
 					objects.get(objectMapKey(storageIntegrationId, key)),
 				).pipe(Option.map(snapshotObject)),
 			),
 		getVideoForNameSync: (id: Video.VideoId) =>
-			Effect.succeed(Option.fromNullable(videoMap.get(id))),
+			Effect.succeed(Option.fromNullishOr(videoMap.get(id))),
 		reserveObject: (input: StorageObjectInput) =>
 			Effect.sync(() => {
 				reservations.push(input);
@@ -383,7 +383,9 @@ describe("Google Drive recording content identity", () => {
 					makeTokenStore(),
 				),
 			),
-		).rejects.toThrow("Recording object changed");
+		).rejects.toMatchObject({
+			cause: { message: "Recording object changed" },
+		});
 	});
 
 	it("matches the media-server upload identity wire vector", () => {
@@ -432,11 +434,14 @@ describe("Google Drive recording content identity", () => {
 			);
 			await pendingRequest;
 			controller.abort(new Error("Test cancelled"));
-			await expect(pending).rejects.toThrow(
-				stage === "metadata"
-					? "Test cancelled"
-					: "Recording revision is unavailable",
-			);
+			await expect(pending).rejects.toMatchObject({
+				cause: {
+					message:
+						stage === "metadata"
+							? "Test cancelled"
+							: "Recording revision is unavailable",
+				},
+			});
 		},
 	);
 
@@ -547,7 +552,9 @@ describe("Google Drive recording content identity", () => {
 						makeTokenStore(),
 					),
 				),
-			).rejects.toThrow("Recording revision is unavailable");
+			).rejects.toMatchObject({
+				cause: { message: "Recording revision is unavailable" },
+			});
 			expect(request).toHaveBeenCalledTimes(2);
 		},
 	);
@@ -570,7 +577,9 @@ describe("Google Drive recording content identity", () => {
 						makeTokenStore(),
 					),
 				),
-			).rejects.toThrow("Recording object changed");
+			).rejects.toMatchObject({
+				cause: { message: "Recording object changed" },
+			});
 			expect(request).toHaveBeenCalledOnce();
 		},
 	);
@@ -590,7 +599,9 @@ describe("Google Drive recording content identity", () => {
 					makeTokenStore(),
 				),
 			),
-		).rejects.toThrow("Recording object changed");
+		).rejects.toMatchObject({
+			cause: { message: "Recording object changed" },
+		});
 		expect(fetch).toHaveBeenCalledOnce();
 	});
 
@@ -620,7 +631,9 @@ describe("Google Drive recording content identity", () => {
 					makeTokenStore(),
 				),
 			),
-		).rejects.toThrow("Recording revision response is incomplete");
+		).rejects.toMatchObject({
+			cause: { message: "Recording revision response is incomplete" },
+		});
 		expect(cancel).toHaveBeenCalledOnce();
 	});
 });
@@ -1890,7 +1903,7 @@ describe("Google Drive title synchronization", () => {
 
 		const result = await getStorageObjectExit(harness);
 		if (Exit.isSuccess(result)) throw new Error("Recovery conflict was hidden");
-		expect(Option.getOrThrow(Cause.failureOption(result.cause)).cause).toEqual(
+		expect(Result.getOrThrow(Cause.findError(result.cause)).cause).toEqual(
 			new Error("Storage object changed during Google Drive recovery; retry"),
 		);
 		const mapped = harness.objects.get(objectMapKey(integrationId, resultKey));
@@ -1937,7 +1950,7 @@ describe("Google Drive title synchronization", () => {
 
 		const result = await getStorageObjectExit(harness);
 		if (Exit.isSuccess(result)) throw new Error("Pending upload was hidden");
-		expect(Option.getOrThrow(Cause.failureOption(result.cause)).cause).toEqual(
+		expect(Result.getOrThrow(Cause.findError(result.cause)).cause).toEqual(
 			new Error("Cannot replace a Google Drive upload that is not complete"),
 		);
 		expect(

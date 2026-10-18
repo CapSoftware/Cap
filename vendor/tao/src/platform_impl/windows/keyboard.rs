@@ -1,51 +1,51 @@
-use parking_lot::{Mutex, MutexGuard};
 use std::{
   char,
-  collections::{HashMap, HashSet},
+  collections::HashSet,
   ffi::OsString,
   mem::MaybeUninit,
   os::windows::ffi::OsStringExt,
+  sync::atomic::{AtomicU32, Ordering::Relaxed},
 };
-
-use windows::Win32::{
-  Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-  UI::{
-    Input::KeyboardAndMouse::{self as win32km, *},
-    WindowsAndMessaging::{self as win32wm, *},
-  },
-};
-
-use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
   event::{ElementState, KeyEvent},
+  platform_impl::KeyEventExtra,
+};
+use crate::{
   keyboard::{Key, KeyCode, KeyLocation, NativeKeyCode},
-  platform_impl::{
-    platform::{
-      event_loop::ProcResult,
-      keyboard_layout::{get_or_insert_str, Layout, LayoutCache, WindowsModifiers, LAYOUT_CACHE},
-      KeyEventExtra,
+  platform_impl::platform::keyboard_layout::get_or_insert_str,
+};
+use parking_lot::{Mutex, MutexGuard};
+use unicode_segmentation::UnicodeSegmentation;
+use windows::Win32::{
+  Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+  UI::{
+    Input::KeyboardAndMouse::{
+      GetAsyncKeyState, GetKeyState, GetKeyboardState, MapVirtualKeyExW, HKL, MAPVK_VK_TO_VSC_EX,
+      MAPVK_VSC_TO_VK_EX, VIRTUAL_KEY, VK_ABNT_C2, VK_ADD, VK_CAPITAL, VK_CLEAR, VK_CONTROL,
+      VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT, VK_LCONTROL,
+      VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0,
+      VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
+      VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
+      VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
     },
-    WindowId,
+    WindowsAndMessaging::{
+      PeekMessageW, MSG, PM_NOREMOVE, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST,
+      WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    },
   },
 };
 
-pub fn is_msg_keyboard_related(msg: u32) -> bool {
-  let is_keyboard_msg = (WM_KEYFIRST..=WM_KEYLAST).contains(&msg);
-
-  is_keyboard_msg || msg == WM_SETFOCUS || msg == WM_KILLFOCUS
-}
+use crate::platform_impl::platform::{
+  event_loop::ProcResult,
+  keyboard_layout::{Layout, LayoutCache, WindowsModifiers, LAYOUT_CACHE},
+};
 
 pub type ExScancode = u16;
 
 pub struct MessageAsKeyEvent {
   pub event: KeyEvent,
   pub is_synthetic: bool,
-}
-
-lazy_static! {
-  pub(crate) static ref KEY_EVENT_BUILDERS: Mutex<HashMap<WindowId, KeyEventBuilder>> =
-    Mutex::new(HashMap::new());
 }
 
 /// Stores information required to make `KeyEvent`s.
@@ -68,254 +68,270 @@ lazy_static! {
 ///
 /// Key release messages are a bit different due to the fact that they don't contribute to
 /// text input. The "sequence" only consists of one WM_KEYUP / WM_SYSKEYUP event.
-#[derive(Default)]
 pub struct KeyEventBuilder {
-  event_info: Option<PartialKeyEventInfo>,
+  event_info: Mutex<Option<PartialKeyEventInfo>>,
+  pending: PendingEventQueue<MessageAsKeyEvent>,
+}
+impl Default for KeyEventBuilder {
+  fn default() -> Self {
+    KeyEventBuilder {
+      event_info: Mutex::new(None),
+      pending: Default::default(),
+    }
+  }
 }
 impl KeyEventBuilder {
   /// Call this function for every window message.
   /// Returns Some() if this window message completes a KeyEvent.
   /// Returns None otherwise.
   pub(crate) fn process_message(
-    &mut self,
+    &self,
     hwnd: HWND,
     msg_kind: u32,
     wparam: WPARAM,
     lparam: LPARAM,
     result: &mut ProcResult,
   ) -> Vec<MessageAsKeyEvent> {
-    match msg_kind {
-      win32wm::WM_SETFOCUS => {
-        // synthesize keydown events
-        let kbd_state = get_async_kbd_state();
-        let key_events = self.synthesize_kbd_state(ElementState::Pressed, &kbd_state);
-        if !key_events.is_empty() {
-          return key_events;
-        }
-      }
-      win32wm::WM_KILLFOCUS => {
-        // sythesize keyup events
-        let kbd_state = get_kbd_state();
-        let key_events = self.synthesize_kbd_state(ElementState::Released, &kbd_state);
-        if !key_events.is_empty() {
-          return key_events;
-        }
-      }
-      win32wm::WM_KEYDOWN | win32wm::WM_SYSKEYDOWN => {
-        if msg_kind == WM_SYSKEYDOWN && wparam.0 == usize::from(VK_F4.0) {
-          // Don't dispatch Alt+F4 to the application.
-          // This is handled in `event_loop.rs`
-          return vec![];
-        }
-
-        if msg_kind == win32wm::WM_SYSKEYDOWN {
-          *result = ProcResult::DefSubclassProc;
-        } else {
-          *result = ProcResult::Value(LRESULT(0));
-        }
-
-        let mut layouts = LAYOUT_CACHE.lock();
-        let event_info =
-          PartialKeyEventInfo::from_message(wparam, lparam, ElementState::Pressed, &mut layouts);
-
-        let mut next_msg = MaybeUninit::uninit();
-        let peek_retval = unsafe {
-          PeekMessageW(
-            next_msg.as_mut_ptr(),
-            Some(hwnd),
-            WM_KEYFIRST,
-            WM_KEYLAST,
-            PM_NOREMOVE,
-          )
-        };
-        let has_next_key_message = peek_retval.as_bool();
-        self.event_info = None;
-        let mut finished_event_info = Some(event_info);
-        if has_next_key_message {
-          let next_msg = unsafe { next_msg.assume_init() };
-          let next_msg_kind = next_msg.message;
-          let next_belongs_to_this = !matches!(
-            next_msg_kind,
-            win32wm::WM_KEYDOWN | win32wm::WM_SYSKEYDOWN | win32wm::WM_KEYUP | win32wm::WM_SYSKEYUP
-          );
-          if next_belongs_to_this {
-            self.event_info = finished_event_info.take();
-          } else {
-            let (_, layout) = layouts.get_current_layout();
-            let is_fake = {
-              let curr_event = finished_event_info.as_ref().unwrap();
-              is_current_fake(curr_event, next_msg, layout)
-            };
-            if is_fake {
-              finished_event_info = None;
-            }
-          }
-        }
-        if let Some(event_info) = finished_event_info {
-          let ev = event_info.finalize(&mut layouts.strings);
-          return vec![MessageAsKeyEvent {
-            event: ev,
-            is_synthetic: false,
-          }];
-        }
-      }
-      win32wm::WM_DEADCHAR | win32wm::WM_SYSDEADCHAR => {
-        *result = ProcResult::Value(LRESULT(0));
-        // At this point, we know that there isn't going to be any more events related to
-        // this key press
-        let event_info = self.event_info.take().unwrap();
-        let mut layouts = LAYOUT_CACHE.lock();
-        let ev = event_info.finalize(&mut layouts.strings);
-        return vec![MessageAsKeyEvent {
-          event: ev,
-          is_synthetic: false,
-        }];
-      }
-      win32wm::WM_CHAR | win32wm::WM_SYSCHAR => {
-        if self.event_info.is_none() {
-          trace!("Received a CHAR message but no `event_info` was available. The message is probably IME, returning.");
-          return vec![];
-        }
-        *result = ProcResult::Value(LRESULT(0));
-        let is_high_surrogate = (0xD800..=0xDBFF).contains(&wparam.0);
-        let is_low_surrogate = (0xDC00..=0xDFFF).contains(&wparam.0);
-
-        let is_utf16 = is_high_surrogate || is_low_surrogate;
-
-        let more_char_coming;
-        unsafe {
-          let mut next_msg = MaybeUninit::uninit();
-          let has_message = PeekMessageW(
-            next_msg.as_mut_ptr(),
-            Some(hwnd),
-            WM_KEYFIRST,
-            WM_KEYLAST,
-            PM_NOREMOVE,
-          );
-          let has_message = has_message.as_bool();
-          if !has_message {
-            more_char_coming = false;
-          } else {
-            let next_msg = next_msg.assume_init().message;
-            more_char_coming = next_msg == WM_CHAR || next_msg == WM_SYSCHAR;
-          }
-        }
-
-        if is_utf16 {
-          if let Some(ev_info) = self.event_info.as_mut() {
-            ev_info.utf16parts.push(wparam.0 as u16);
-          }
-        } else {
-          // In this case, wparam holds a UTF-32 character.
-          // Let's encode it as UTF-16 and append it to the end of `utf16parts`
-          let utf16parts = match self.event_info.as_mut() {
-            Some(ev_info) => &mut ev_info.utf16parts,
-            None => {
-              warn!("The event_info was None when it was expected to be some");
-              return vec![];
-            }
-          };
-          let start_offset = utf16parts.len();
-          let new_size = utf16parts.len() + 2;
-          utf16parts.resize(new_size, 0);
-          if let Some(ch) = char::from_u32(wparam.0 as u32) {
-            let encode_len = ch.encode_utf16(&mut utf16parts[start_offset..]).len();
-            let new_size = start_offset + encode_len;
-            utf16parts.resize(new_size, 0);
-          }
-        }
-        if !more_char_coming {
-          let mut event_info = match self.event_info.take() {
-            Some(ev_info) => ev_info,
-            None => {
-              warn!("The event_info was None when it was expected to be some");
-              return vec![];
-            }
-          };
-          let mut layouts = LAYOUT_CACHE.lock();
-          // It's okay to call `ToUnicode` here, because at this point the dead key
-          // is already consumed by the character.
-          let kbd_state = get_kbd_state();
-          let mod_state = WindowsModifiers::active_modifiers(&kbd_state);
-
-          let (_, layout) = layouts.get_current_layout();
-          let ctrl_on = if layout.has_alt_graph {
-            let alt_on = mod_state.contains(WindowsModifiers::ALT);
-            !alt_on && mod_state.contains(WindowsModifiers::CONTROL)
-          } else {
-            mod_state.contains(WindowsModifiers::CONTROL)
-          };
-
-          // If Ctrl is not pressed, just use the text with all
-          // modifiers because that already consumed the dead key. Otherwise,
-          // we would interpret the character incorrectly, missing the dead key.
-          if !ctrl_on {
-            event_info.text = PartialText::System(event_info.utf16parts.clone());
-          } else {
-            let mod_no_ctrl = mod_state.remove_only_ctrl();
-            let num_lock_on = kbd_state[usize::from(VK_NUMLOCK.0)] & 1 != 0;
-            let vkey = event_info.vkey;
-            let scancode = event_info.scancode;
-            let keycode = event_info.code;
-            let key = layout.get_key(mod_no_ctrl, num_lock_on, vkey, scancode, keycode);
-            event_info.text = PartialText::Text(key.to_text());
-          }
-          let ev = event_info.finalize(&mut layouts.strings);
-          return vec![MessageAsKeyEvent {
-            event: ev,
-            is_synthetic: false,
-          }];
-        }
-      }
-      win32wm::WM_KEYUP | win32wm::WM_SYSKEYUP => {
-        if msg_kind == win32wm::WM_SYSKEYUP {
-          *result = ProcResult::DefSubclassProc;
-        } else {
-          *result = ProcResult::Value(LRESULT(0));
-        }
-
-        let mut layouts = LAYOUT_CACHE.lock();
-        let event_info =
-          PartialKeyEventInfo::from_message(wparam, lparam, ElementState::Released, &mut layouts);
-        let mut next_msg = MaybeUninit::uninit();
-        let peek_retval = unsafe {
-          PeekMessageW(
-            next_msg.as_mut_ptr(),
-            Some(hwnd),
-            WM_KEYFIRST,
-            WM_KEYLAST,
-            PM_NOREMOVE,
-          )
-        };
-        let has_next_key_message = peek_retval.as_bool();
-        let mut valid_event_info = Some(event_info);
-        if has_next_key_message {
-          let next_msg = unsafe { next_msg.assume_init() };
-          let (_, layout) = layouts.get_current_layout();
-          let is_fake = {
-            let event_info = valid_event_info.as_ref().unwrap();
-            is_current_fake(event_info, next_msg, layout)
-          };
-          if is_fake {
-            valid_event_info = None;
-          }
-        }
-        if let Some(event_info) = valid_event_info {
-          let event = event_info.finalize(&mut layouts.strings);
-          return vec![MessageAsKeyEvent {
-            event,
-            is_synthetic: false,
-          }];
-        }
-      }
-      _ => (),
+    enum MatchResult {
+      Nothing,
+      TokenToRemove(PendingMessageToken),
+      MessagesToDispatch(Vec<MessageAsKeyEvent>),
     }
 
-    Vec::new()
+    let mut matcher = || -> MatchResult {
+      match msg_kind {
+        WM_SETFOCUS => {
+          // synthesize keydown events
+          let kbd_state = get_async_kbd_state();
+          let key_events = Self::synthesize_kbd_state(ElementState::Pressed, &kbd_state);
+          MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
+        }
+        WM_KILLFOCUS => {
+          // synthesize keyup events
+          let kbd_state = get_kbd_state();
+          let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
+          MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
+        }
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+          if msg_kind == WM_SYSKEYDOWN && wparam.0 == usize::from(VK_F4.0) {
+            // Don't dispatch Alt+F4 to the application.
+            // This is handled in `event_loop.rs`
+            return MatchResult::Nothing;
+          }
+          let pending_token = self.pending.add_pending();
+          if msg_kind == WM_SYSKEYDOWN {
+            *result = ProcResult::DefWindowProc;
+          } else {
+            *result = ProcResult::Value(LRESULT(0));
+          }
+
+          let next_msg = next_kbd_msg(hwnd);
+
+          let mut layouts = LAYOUT_CACHE.lock();
+          let mut finished_event_info = Some(PartialKeyEventInfo::from_message(
+            wparam,
+            lparam,
+            ElementState::Pressed,
+            &mut layouts,
+          ));
+          let mut event_info = self.event_info.lock();
+          *event_info = None;
+          if let Some(next_msg) = next_msg {
+            let next_msg_kind = next_msg.message;
+            let next_belongs_to_this = !matches!(
+              next_msg_kind,
+              WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
+            );
+            if next_belongs_to_this {
+              // The next OS event belongs to this Winit event, so let's just
+              // store the partial information, and add to it in the upcoming events
+              *event_info = finished_event_info.take();
+            } else {
+              let (_, layout) = layouts.get_current_layout();
+              let is_fake = {
+                let curr_event = finished_event_info.as_ref().unwrap();
+                is_current_fake(curr_event, next_msg, layout)
+              };
+              if is_fake {
+                finished_event_info = None;
+              }
+            }
+          }
+          if let Some(event_info) = finished_event_info {
+            let ev = event_info.finalize(&mut layouts.strings);
+            return MatchResult::MessagesToDispatch(self.pending.complete_pending(
+              pending_token,
+              MessageAsKeyEvent {
+                event: ev,
+                is_synthetic: false,
+              },
+            ));
+          }
+          MatchResult::TokenToRemove(pending_token)
+        }
+        WM_DEADCHAR | WM_SYSDEADCHAR => {
+          let pending_token = self.pending.add_pending();
+          *result = ProcResult::Value(LRESULT(0));
+          // At this point, we know that there isn't going to be any more events related
+          // to this key press
+          let event_info = self.event_info.lock().take().unwrap();
+          let mut layouts = LAYOUT_CACHE.lock();
+          let ev = event_info.finalize(&mut layouts.strings);
+          MatchResult::MessagesToDispatch(self.pending.complete_pending(
+            pending_token,
+            MessageAsKeyEvent {
+              event: ev,
+              is_synthetic: false,
+            },
+          ))
+        }
+        WM_CHAR | WM_SYSCHAR => {
+          let mut event_info = self.event_info.lock();
+          if event_info.is_none() {
+            trace!(
+              "Received a CHAR message but no `event_info` was available. The \
+                             message is probably IME, returning."
+            );
+            return MatchResult::Nothing;
+          }
+          let pending_token = self.pending.add_pending();
+          *result = ProcResult::Value(LRESULT(0));
+          let is_high_surrogate = (0xd800..=0xdbff).contains(&wparam.0);
+          let is_low_surrogate = (0xdc00..=0xdfff).contains(&wparam.0);
+
+          let is_utf16 = is_high_surrogate || is_low_surrogate;
+
+          if is_utf16 {
+            if let Some(ev_info) = event_info.as_mut() {
+              ev_info.utf16parts.push(wparam.0 as u16);
+            }
+          } else {
+            // In this case, wparam holds a UTF-32 character.
+            // Let's encode it as UTF-16 and append it to the end of `utf16parts`
+            let utf16parts = match event_info.as_mut() {
+              Some(ev_info) => &mut ev_info.utf16parts,
+              None => {
+                warn!("The event_info was None when it was expected to be some");
+                return MatchResult::TokenToRemove(pending_token);
+              }
+            };
+            let start_offset = utf16parts.len();
+            let new_size = utf16parts.len() + 2;
+            utf16parts.resize(new_size, 0);
+            if let Some(ch) = char::from_u32(wparam.0 as u32) {
+              let encode_len = ch.encode_utf16(&mut utf16parts[start_offset..]).len();
+              let new_size = start_offset + encode_len;
+              utf16parts.resize(new_size, 0);
+            }
+          }
+          // It's important that we unlock the mutex, and create the pending event token
+          // before calling `next_msg`
+          std::mem::drop(event_info);
+          let next_msg = next_kbd_msg(hwnd);
+          let more_char_coming = next_msg
+            .map(|m| matches!(m.message, WM_CHAR | WM_SYSCHAR))
+            .unwrap_or(false);
+          if more_char_coming {
+            // No need to produce an event just yet, because there are still more
+            // characters that need to be appended to this keyboard event
+            MatchResult::TokenToRemove(pending_token)
+          } else {
+            let mut event_info = self.event_info.lock();
+            let mut event_info = match event_info.take() {
+              Some(ev_info) => ev_info,
+              None => {
+                warn!("The event_info was None when it was expected to be some");
+                return MatchResult::TokenToRemove(pending_token);
+              }
+            };
+            let mut layouts = LAYOUT_CACHE.lock();
+            // It's okay to call `ToUnicode` here, because at this point the dead key
+            // is already consumed by the character.
+            let kbd_state = get_kbd_state();
+            let mod_state = WindowsModifiers::active_modifiers(&kbd_state);
+
+            let (_, layout) = layouts.get_current_layout();
+            let ctrl_on = if layout.has_alt_graph {
+              let alt_on = mod_state.contains(WindowsModifiers::ALT);
+              !alt_on && mod_state.contains(WindowsModifiers::CONTROL)
+            } else {
+              mod_state.contains(WindowsModifiers::CONTROL)
+            };
+
+            // If Ctrl is not pressed, just use the text with all
+            // modifiers because that already consumed the dead key. Otherwise,
+            // we would interpret the character incorrectly, missing the dead key.
+            if !ctrl_on {
+              event_info.text = PartialText::System(event_info.utf16parts.clone());
+            } else {
+              let mod_no_ctrl = mod_state.remove_only_ctrl();
+              let num_lock_on = kbd_state[usize::from(VK_NUMLOCK.0)] & 1 != 0;
+              let vkey = event_info.vkey;
+              let scancode = event_info.scancode;
+              let keycode = event_info.code;
+              let key = layout.get_key(mod_no_ctrl, num_lock_on, vkey, scancode, keycode);
+              event_info.text = PartialText::Text(key.to_text());
+            }
+            let ev = event_info.finalize(&mut layouts.strings);
+            MatchResult::MessagesToDispatch(self.pending.complete_pending(
+              pending_token,
+              MessageAsKeyEvent {
+                event: ev,
+                is_synthetic: false,
+              },
+            ))
+          }
+        }
+        WM_KEYUP | WM_SYSKEYUP => {
+          let pending_token = self.pending.add_pending();
+          *result = ProcResult::Value(LRESULT(0));
+
+          let mut layouts = LAYOUT_CACHE.lock();
+          let event_info =
+            PartialKeyEventInfo::from_message(wparam, lparam, ElementState::Released, &mut layouts);
+          // We MUST release the layout lock before calling `next_kbd_msg`, otherwise it
+          // may deadlock
+          drop(layouts);
+          // It's important that we create the pending token before reading the next
+          // message.
+          let next_msg = next_kbd_msg(hwnd);
+          let mut valid_event_info = Some(event_info);
+          if let Some(next_msg) = next_msg {
+            let mut layouts = LAYOUT_CACHE.lock();
+            let (_, layout) = layouts.get_current_layout();
+            let is_fake = {
+              let event_info = valid_event_info.as_ref().unwrap();
+              is_current_fake(event_info, next_msg, layout)
+            };
+            if is_fake {
+              valid_event_info = None;
+            }
+          }
+          if let Some(event_info) = valid_event_info {
+            let mut layouts = LAYOUT_CACHE.lock();
+            let event = event_info.finalize(&mut layouts.strings);
+            return MatchResult::MessagesToDispatch(self.pending.complete_pending(
+              pending_token,
+              MessageAsKeyEvent {
+                event,
+                is_synthetic: false,
+              },
+            ));
+          }
+          MatchResult::TokenToRemove(pending_token)
+        }
+        _ => MatchResult::Nothing,
+      }
+    };
+    let matcher_result = matcher();
+    match matcher_result {
+      MatchResult::TokenToRemove(t) => self.pending.remove_pending(t),
+      MatchResult::MessagesToDispatch(m) => m,
+      MatchResult::Nothing => Vec::new(),
+    }
   }
 
   fn synthesize_kbd_state(
-    &mut self,
     key_state: ElementState,
     kbd_state: &[u8; 256],
   ) -> Vec<MessageAsKeyEvent> {
@@ -332,18 +348,17 @@ impl KeyEventBuilder {
     let num_lock_on = kbd_state[usize::from(VK_NUMLOCK.0)] & 1 != 0;
 
     // We are synthesizing the press event for caps-lock first for the following reasons:
-    // 1. If caps-lock is *not* held down but *is* active, then we have to
-    //    synthesize all printable keys, respecting the caps-lock state.
-    // 2. If caps-lock is held down, we could choose to sythesize its
-    //    keypress after every other key, in which case all other keys *must*
-    //    be sythesized as if the caps-lock state was be the opposite
-    //    of what it currently is.
+    // 1. If caps-lock is *not* held down but *is* active, then we have to synthesize all
+    //    printable keys, respecting the caps-lock state.
+    // 2. If caps-lock is held down, we could choose to synthesize its keypress after every
+    //    other key, in which case all other keys *must* be synthesized as if the caps-lock
+    //    state was be the opposite of what it currently is.
     // --
-    // For the sake of simplicity we are choosing to always sythesize
+    // For the sake of simplicity we are choosing to always synthesize
     // caps-lock first, and always use the current caps-lock state
     // to determine the produced text
     if is_key_pressed(VK_CAPITAL) {
-      let event = self.create_synthetic(
+      let event = Self::create_synthetic(
         VK_CAPITAL,
         key_state,
         caps_lock_on,
@@ -359,29 +374,15 @@ impl KeyEventBuilder {
       for vk in 0..256 {
         let vk = VIRTUAL_KEY(vk);
         match vk {
-          win32km::VK_CONTROL
-          | win32km::VK_LCONTROL
-          | win32km::VK_RCONTROL
-          | win32km::VK_SHIFT
-          | win32km::VK_LSHIFT
-          | win32km::VK_RSHIFT
-          | win32km::VK_MENU
-          | win32km::VK_LMENU
-          | win32km::VK_RMENU
-          | win32km::VK_CAPITAL => continue,
+          VK_CONTROL | VK_LCONTROL | VK_RCONTROL | VK_SHIFT | VK_LSHIFT | VK_RSHIFT | VK_MENU
+          | VK_LMENU | VK_RMENU | VK_CAPITAL => continue,
           _ => (),
         }
         if !is_key_pressed(vk) {
           continue;
         }
-        let event = self.create_synthetic(
-          vk,
-          key_state,
-          caps_lock_on,
-          num_lock_on,
-          locale_id as HKL,
-          layouts,
-        );
+        let event =
+          Self::create_synthetic(vk, key_state, caps_lock_on, num_lock_on, locale_id, layouts);
         if let Some(event) = event {
           key_events.push(event);
         }
@@ -398,12 +399,12 @@ impl KeyEventBuilder {
       ];
       for vk in CLEAR_MODIFIER_VKS.iter() {
         if is_key_pressed(*vk) {
-          let event = self.create_synthetic(
+          let event = Self::create_synthetic(
             *vk,
             key_state,
             caps_lock_on,
             num_lock_on,
-            locale_id as HKL,
+            locale_id,
             layouts,
           );
           if let Some(event) = event {
@@ -431,7 +432,6 @@ impl KeyEventBuilder {
   }
 
   fn create_synthetic(
-    &self,
     vk: VIRTUAL_KEY,
     key_state: ElementState,
     caps_lock_on: bool,
@@ -491,7 +491,7 @@ enum PartialText {
 
 enum PartialLogicalKey {
   /// Use the text provided by the WM_CHAR messages and report that as a `Character` variant. If
-  /// the text consists of multiple grapheme clusters (user-precieved characters) that means that
+  /// the text consists of multiple grapheme clusters (user-perceived characters) that means that
   /// dead key could not be combined with the second input, and in that case we should fall back
   /// to using what would have without a dead-key input.
   TextOr(Key<'static>),
@@ -588,7 +588,7 @@ impl PartialKeyEventInfo {
         // We convert dead keys into their character.
         // The reason for this is that `key_without_modifiers` is designed for key-bindings,
         // but the US International layout treats `'` (apostrophe) as a dead key and the
-        // reguar US layout treats it a character. In order for a single binding
+        // regular US layout treats it a character. In order for a single binding
         // configuration to work with both layouts, we forward each dead key as a character.
         Key::Dead(k) => {
           if let Some(ch) = k {
@@ -724,18 +724,13 @@ fn get_async_kbd_state() -> [u8; 256] {
       let vk = VIRTUAL_KEY(vk as u16);
       let async_state = GetAsyncKeyState(i32::from(vk.0));
       let is_down = (async_state & (1 << 15)) != 0;
-      if is_down {
-        *state = 0x80;
-      }
+      *state = if is_down { 0x80 } else { 0 };
 
-      if matches!(
-        vk,
-        win32km::VK_CAPITAL | win32km::VK_NUMLOCK | win32km::VK_SCROLL
-      ) {
+      if matches!(vk, VK_CAPITAL | VK_NUMLOCK | VK_SCROLL) {
         // Toggle states aren't reported by `GetAsyncKeyState`
         let toggle_state = GetKeyState(i32::from(vk.0));
         let is_active = (toggle_state & 1) != 0;
-        *state |= if is_active { 1 } else { 0 };
+        *state |= u8::from(is_active);
       }
     }
     kbd_state
@@ -744,7 +739,7 @@ fn get_async_kbd_state() -> [u8; 256] {
 
 /// On windows, AltGr == Ctrl + Alt
 ///
-/// Due to this equivalence, the system generates a fake Ctrl key-press (and key-release) preceeding
+/// Due to this equivalence, the system generates a fake Ctrl key-press (and key-release) preceding
 /// every AltGr key-press (and key-release). We check if the current event is a Ctrl event and if
 /// the next event is a right Alt (AltGr) event. If this is the case, the current event must be the
 /// fake Ctrl event.
@@ -760,9 +755,174 @@ fn is_current_fake(curr_info: &PartialKeyEventInfo, next_msg: MSG, layout: &Layo
   false
 }
 
-fn get_location(scancode: ExScancode, hkl: HKL) -> KeyLocation {
-  const VK_ABNT_C2: VIRTUAL_KEY = win32km::VK_ABNT_C2;
+enum PendingMessage<T> {
+  Incomplete,
+  Complete(T),
+}
+struct IdentifiedPendingMessage<T> {
+  token: PendingMessageToken,
+  msg: PendingMessage<T>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingMessageToken(u32);
 
+/// While processing keyboard events, we sometimes need
+/// to call `PeekMessageW` (`next_msg`). But `PeekMessageW`
+/// can also call the event handler, which means that the new event
+/// gets processed before finishing to process the one that came before.
+///
+/// This would mean that the application receives events in the wrong order.
+/// To avoid this, we keep track whether we are in the middle of processing
+/// an event. Such an event is an "incomplete pending event". A
+/// "complete pending event" is one that has already finished processing, but
+/// hasn't been dispatched to the application because there still are incomplete
+/// pending events that came before it.
+///
+/// When we finish processing an event, we call `complete_pending`,
+/// which returns an empty array if there are incomplete pending events, but
+/// if all pending events are complete, then it returns all pending events in
+/// the order they were encountered. These can then be dispatched to the application
+pub struct PendingEventQueue<T> {
+  pending: Mutex<Vec<IdentifiedPendingMessage<T>>>,
+  next_id: AtomicU32,
+}
+impl<T> PendingEventQueue<T> {
+  /// Add a new pending event to the "pending queue"
+  pub fn add_pending(&self) -> PendingMessageToken {
+    let token = self.next_token();
+    let mut pending = self.pending.lock();
+    pending.push(IdentifiedPendingMessage {
+      token,
+      msg: PendingMessage::Incomplete,
+    });
+    token
+  }
+
+  /// Returns all finished pending events
+  ///
+  /// If the return value is non empty, it's guaranteed to contain `msg`
+  ///
+  /// See also: `add_pending`
+  pub fn complete_pending(&self, token: PendingMessageToken, msg: T) -> Vec<T> {
+    let mut pending = self.pending.lock();
+    let mut target_is_first = false;
+    for (i, pending_msg) in pending.iter_mut().enumerate() {
+      if pending_msg.token == token {
+        pending_msg.msg = PendingMessage::Complete(msg);
+        if i == 0 {
+          target_is_first = true;
+        }
+        break;
+      }
+    }
+    if target_is_first {
+      // If the message that we just finished was the first one in the pending queue,
+      // then we can empty the queue, and dispatch all of the messages.
+      Self::drain_pending(&mut *pending)
+    } else {
+      Vec::new()
+    }
+  }
+
+  pub fn complete_multi(&self, msgs: Vec<T>) -> Vec<T> {
+    let mut pending = self.pending.lock();
+    if pending.is_empty() {
+      return msgs;
+    }
+    pending.reserve(msgs.len());
+    for msg in msgs {
+      pending.push(IdentifiedPendingMessage {
+        token: self.next_token(),
+        msg: PendingMessage::Complete(msg),
+      });
+    }
+    Vec::new()
+  }
+
+  /// Returns all finished pending events
+  ///
+  /// It's safe to call this even if the element isn't in the list anymore
+  ///
+  /// See also: `add_pending`
+  pub fn remove_pending(&self, token: PendingMessageToken) -> Vec<T> {
+    let mut pending = self.pending.lock();
+    let mut was_first = false;
+    if let Some(m) = pending.first() {
+      if m.token == token {
+        was_first = true;
+      }
+    }
+    pending.retain(|m| m.token != token);
+    if was_first {
+      Self::drain_pending(&mut *pending)
+    } else {
+      Vec::new()
+    }
+  }
+
+  fn drain_pending(pending: &mut Vec<IdentifiedPendingMessage<T>>) -> Vec<T> {
+    pending
+      .drain(..)
+      .map(|m| match m.msg {
+        PendingMessage::Complete(msg) => msg,
+        PendingMessage::Incomplete => {
+          panic!(
+            "Found an incomplete pending message when collecting messages. This \
+                         indicates a bug in tao."
+          )
+        }
+      })
+      .collect()
+  }
+
+  fn next_token(&self) -> PendingMessageToken {
+    // It's okay for the u32 to overflow here. Yes, that could mean
+    // that two different messages have the same token,
+    // but that would only happen after having about 4 billion
+    // messages sitting in the pending queue.
+    //
+    // In that case, having two identical tokens is the least of your concerns.
+    let id = self.next_id.fetch_add(1, Relaxed);
+    PendingMessageToken(id)
+  }
+}
+impl<T> Default for PendingEventQueue<T> {
+  fn default() -> Self {
+    PendingEventQueue {
+      pending: Mutex::new(Vec::new()),
+      next_id: AtomicU32::new(0),
+    }
+  }
+}
+
+/// WARNING: Due to using PeekMessage, the event handler
+/// function may get called during this function.
+/// (Re-entrance to the event handler)
+///
+/// This can cause a deadlock if calling this function
+/// while having a mutex locked.
+///
+/// It can also cause code to get executed in a surprising order.
+pub(crate) fn next_kbd_msg(window: HWND) -> Option<MSG> {
+  unsafe {
+    let mut next_msg = MaybeUninit::uninit();
+    if PeekMessageW(
+      next_msg.as_mut_ptr(),
+      Some(window),
+      WM_KEYFIRST,
+      WM_KEYLAST,
+      PM_NOREMOVE,
+    )
+    .as_bool()
+    {
+      Some(next_msg.assume_init())
+    } else {
+      None
+    }
+  }
+}
+
+fn get_location(scancode: ExScancode, hkl: HKL) -> KeyLocation {
   let extension = 0xE000;
   let extended = (scancode & extension) == extension;
   let vkey =
@@ -772,46 +932,20 @@ fn get_location(scancode: ExScancode, hkl: HKL) -> KeyLocation {
   // This is taken from the `druid` GUI library, specifically
   // druid-shell/src/platform/windows/keyboard.rs
   match vkey {
-    win32km::VK_LSHIFT | win32km::VK_LCONTROL | win32km::VK_LMENU | win32km::VK_LWIN => {
-      KeyLocation::Left
-    }
-    win32km::VK_RSHIFT | win32km::VK_RCONTROL | win32km::VK_RMENU | win32km::VK_RWIN => {
-      KeyLocation::Right
-    }
-    win32km::VK_RETURN if extended => KeyLocation::Numpad,
-    win32km::VK_INSERT
-    | win32km::VK_DELETE
-    | win32km::VK_END
-    | win32km::VK_DOWN
-    | win32km::VK_NEXT
-    | win32km::VK_LEFT
-    | win32km::VK_CLEAR
-    | win32km::VK_RIGHT
-    | win32km::VK_HOME
-    | win32km::VK_UP
-    | win32km::VK_PRIOR => {
+    VK_LSHIFT | VK_LCONTROL | VK_LMENU | VK_LWIN => KeyLocation::Left,
+    VK_RSHIFT | VK_RCONTROL | VK_RMENU | VK_RWIN => KeyLocation::Right,
+    VK_RETURN if extended => KeyLocation::Numpad,
+    VK_INSERT | VK_DELETE | VK_END | VK_DOWN | VK_NEXT | VK_LEFT | VK_CLEAR | VK_RIGHT
+    | VK_HOME | VK_UP | VK_PRIOR => {
       if extended {
         KeyLocation::Standard
       } else {
         KeyLocation::Numpad
       }
     }
-    win32km::VK_NUMPAD0
-    | win32km::VK_NUMPAD1
-    | win32km::VK_NUMPAD2
-    | win32km::VK_NUMPAD3
-    | win32km::VK_NUMPAD4
-    | win32km::VK_NUMPAD5
-    | win32km::VK_NUMPAD6
-    | win32km::VK_NUMPAD7
-    | win32km::VK_NUMPAD8
-    | win32km::VK_NUMPAD9
-    | win32km::VK_DECIMAL
-    | win32km::VK_DIVIDE
-    | win32km::VK_MULTIPLY
-    | win32km::VK_SUBTRACT
-    | win32km::VK_ADD
-    | VK_ABNT_C2 => KeyLocation::Numpad,
+    VK_NUMPAD0 | VK_NUMPAD1 | VK_NUMPAD2 | VK_NUMPAD3 | VK_NUMPAD4 | VK_NUMPAD5 | VK_NUMPAD6
+    | VK_NUMPAD7 | VK_NUMPAD8 | VK_NUMPAD9 | VK_DECIMAL | VK_DIVIDE | VK_MULTIPLY | VK_SUBTRACT
+    | VK_ADD | VK_ABNT_C2 => KeyLocation::Numpad,
     _ => KeyLocation::Standard,
   }
 }

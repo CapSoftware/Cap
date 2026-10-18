@@ -7,7 +7,7 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { Array, Effect, Option } from "effect";
+import { Array, Context, Effect, Layer, Option } from "effect";
 
 import { Database } from "../Database.ts";
 import { OrganisationsRepo } from "../Organisations/OrganisationsRepo.ts";
@@ -59,7 +59,7 @@ export type ViewDecisionDeps = Pick<
 
 const decideCanView = (
 	{ repo, orgsRepo, spacesRepo }: ViewDecisionDeps,
-	user: Option.Option<CurrentUser["Type"]>,
+	user: Option.Option<CurrentUser["Service"]>,
 	video: ViewableVideo,
 	password: Option.Option<string>,
 ) =>
@@ -175,76 +175,81 @@ export function buildCanViewLoaded(
 	);
 }
 
-export class VideosPolicy extends Effect.Service<VideosPolicy>()(
-	"VideosPolicy",
-	{
-		effect: Effect.gen(function* () {
-			const repo = yield* VideosRepo;
-			const orgsRepo = yield* OrganisationsRepo;
-			const spacesRepo = yield* SpacesRepo;
+const makeVideosPolicy = Effect.gen(function* () {
+	const repo = yield* VideosRepo;
+	const orgsRepo = yield* OrganisationsRepo;
+	const spacesRepo = yield* SpacesRepo;
 
-			const deps: VideosPolicyDeps = { repo, orgsRepo, spacesRepo };
+	const deps: VideosPolicyDeps = { repo, orgsRepo, spacesRepo };
 
-			const canView = (videoId: Video.VideoId) => buildCanView(deps, videoId);
+	const canView = (videoId: Video.VideoId) => buildCanView(deps, videoId);
 
-			const canViewLoaded = (
-				video: ViewableVideo,
-				password: Option.Option<string>,
-			) => buildCanViewLoaded(deps, video, password);
+	const canViewLoaded = (
+		video: ViewableVideo,
+		password: Option.Option<string>,
+	) => buildCanViewLoaded(deps, video, password);
 
-			const isOwner = (videoId: Video.VideoId) =>
-				Policy.policy((user) =>
-					repo.getById(videoId).pipe(
-						Effect.map(
-							Option.match({
-								onNone: () => true,
-								onSome: ([video]) => video.ownerId === user.id,
-							}),
+	const isOwner = (videoId: Video.VideoId) =>
+		Policy.policy((user) =>
+			repo.getById(videoId).pipe(
+				Effect.map(
+					Option.match({
+						onNone: () => true,
+						onSome: ([video]) => video.ownerId === user.id,
+					}),
+				),
+			),
+		);
+
+	const isOwnerLoaded = (video: Pick<Video.Video, "ownerId">) =>
+		Policy.policy((user) => Effect.succeed(video.ownerId === user.id));
+
+	const getViewableById = (videoId: Video.VideoId) =>
+		repo.getById(videoId).pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () => Effect.succeed(Option.none<LoadedVideo>()),
+					onSome: (loaded) =>
+						canViewLoaded(loaded[0], loaded[1]).pipe(
+							Effect.as(Option.some(loaded)),
 						),
-					),
-				);
+				}),
+			),
+		);
 
-			const isOwnerLoaded = (video: Pick<Video.Video, "ownerId">) =>
-				Policy.policy((user) => Effect.succeed(video.ownerId === user.id));
+	const getOwnedById = (videoId: Video.VideoId) =>
+		repo.getById(videoId).pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () => Effect.succeed(Option.none<LoadedVideo>()),
+					onSome: (loaded) =>
+						isOwnerLoaded(loaded[0]).pipe(Effect.as(Option.some(loaded))),
+				}),
+			),
+		);
 
-			const getViewableById = (videoId: Video.VideoId) =>
-				repo.getById(videoId).pipe(
-					Effect.flatMap(
-						Option.match({
-							onNone: () => Effect.succeed(Option.none<LoadedVideo>()),
-							onSome: (loaded) =>
-								canViewLoaded(loaded[0], loaded[1]).pipe(
-									Effect.as(Option.some(loaded)),
-								),
-						}),
-					),
-				);
+	return {
+		canView,
+		canViewLoaded,
+		isOwner,
+		isOwnerLoaded,
+		getViewableById,
+		getOwnedById,
+	};
+});
 
-			const getOwnedById = (videoId: Video.VideoId) =>
-				repo.getById(videoId).pipe(
-					Effect.flatMap(
-						Option.match({
-							onNone: () => Effect.succeed(Option.none<LoadedVideo>()),
-							onSome: (loaded) =>
-								isOwnerLoaded(loaded[0]).pipe(Effect.as(Option.some(loaded))),
-						}),
-					),
-				);
-
-			return {
-				canView,
-				canViewLoaded,
-				isOwner,
-				isOwnerLoaded,
-				getViewableById,
-				getOwnedById,
-			};
-		}),
-		dependencies: [
-			VideosRepo.Default,
-			OrganisationsRepo.Default,
-			SpacesRepo.Default,
-			Database.Default,
-		],
-	},
-) {}
+export class VideosPolicy extends Context.Service<
+	VideosPolicy,
+	Effect.Success<typeof makeVideosPolicy>
+>()("VideosPolicy") {
+	static readonly Default = Layer.effect(this, makeVideosPolicy).pipe(
+		Layer.provide(
+			Layer.mergeAll(
+				VideosRepo.Default,
+				OrganisationsRepo.Default,
+				SpacesRepo.Default,
+				Database.Default,
+			),
+		),
+	);
+}

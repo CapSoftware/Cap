@@ -1215,10 +1215,10 @@ index 1d2fea90b477..c2e070e721fe 100644
  
      #[cfg(not(target_os = "macos"))]
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 587315debfa8..e58084906c1f 100644
+index 82fae99..c0cbc3f 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -108,7 +108,7 @@
+@@ -172,7 +172,7 @@ const BACKDROP_MAX_BLURS: usize = 32;
  struct WgpuResources {
      device: Arc<wgpu::Device>,
      queue: Arc<wgpu::Queue>,
@@ -1227,7 +1227,7 @@ index 587315debfa8..e58084906c1f 100644
      pipelines: WgpuPipelines,
      bind_group_layouts: WgpuBindGroupLayouts,
      atlas_sampler: wgpu::Sampler,
-@@ -449,7 +449,7 @@
+@@ -561,7 +561,7 @@ impl WgpuRenderer {
          let resources = WgpuResources {
              device,
              queue,
@@ -1236,7 +1236,7 @@ index 587315debfa8..e58084906c1f 100644
              pipelines,
              bind_group_layouts,
              atlas_sampler,
-@@ -982,9 +982,9 @@
+@@ -1168,9 +1168,9 @@ impl WgpuRenderer {
                  texture.destroy();
              }
  
@@ -1249,7 +1249,7 @@ index 587315debfa8..e58084906c1f 100644
  
              // Invalidate intermediate textures - they will be lazily recreated
              // in draw() after we confirm the surface is healthy. This avoids
-@@ -1040,9 +1040,9 @@
+@@ -1578,9 +1578,9 @@ impl WgpuRenderer {
              let Some(resources) = self.resources.as_mut() else {
                  return;
              };
@@ -1262,9 +1262,9 @@ index 587315debfa8..e58084906c1f 100644
              resources.pipelines = Self::create_pipelines(
                  &resources.device,
                  &resources.bind_group_layouts,
-@@ -1118,24 +1118,30 @@
- 
-         self.atlas.before_frame();
+@@ -1668,24 +1668,30 @@ impl WgpuRenderer {
+             self.blur_free_frames = 0;
+         }
  
 -        let frame = match self.resources().surface.get_current_texture() {
 +        let frame = match self
@@ -1300,7 +1300,7 @@ index 587315debfa8..e58084906c1f 100644
                  return false;
              }
              wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-@@ -1687,6 +1693,15 @@
+@@ -2261,6 +2267,15 @@ impl WgpuRenderer {
          })
      }
  
@@ -1316,7 +1316,7 @@ index 587315debfa8..e58084906c1f 100644
      /// Mark the surface as unconfigured so rendering is skipped until a new
      /// surface is provided via [`replace_surface`](Self::replace_surface).
      ///
-@@ -1745,7 +1760,7 @@
+@@ -2319,7 +2334,7 @@ impl WgpuRenderer {
                  .as_mut()
                  .expect("GPU resources not available");
              surface.configure(&res.device, &self.surface_config);

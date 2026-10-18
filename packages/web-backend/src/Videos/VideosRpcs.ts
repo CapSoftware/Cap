@@ -1,5 +1,5 @@
 import { InternalError, Policy, Video } from "@cap/web-domain";
-import { Effect, Exit, Schema, Unify } from "effect";
+import { Effect, Exit, Schema } from "effect";
 
 import { provideOptionalAuth } from "../Auth.ts";
 import { Videos } from "./index.ts";
@@ -35,7 +35,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag("UnknownException", () =>
+					Effect.catchTag("UnknownError", () =>
 						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
@@ -65,7 +65,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag("UnknownException", () =>
+					Effect.catchTag("UnknownError", () =>
 						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 					Effect.catchTag("StorageError", () =>
@@ -90,7 +90,6 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 										? Effect.fail(e)
 										: Effect.succeed(Exit.fail(e)),
 							}),
-							Effect.map((v) => Unify.unify(v)),
 						),
 					),
 					{ concurrency: 10 },
@@ -99,7 +98,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag("UnknownException", () =>
+					Effect.catchTag("UnknownError", () =>
 						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),
@@ -134,7 +133,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("DatabaseError", () =>
 						Effect.fail(new InternalError({ type: "database" })),
 					),
-					Effect.catchTag("UnknownException", () =>
+					Effect.catchTag("UnknownError", () =>
 						Effect.fail(new InternalError({ type: "unknown" })),
 					),
 				),

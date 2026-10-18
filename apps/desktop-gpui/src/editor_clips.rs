@@ -393,33 +393,20 @@ impl Drop for ClipsState {
     }
 }
 
-/// `hover:bg-red-3 hover:text-red-11` (`ClipsSidebar.tsx:953`): the theme
-/// carries only the red steps the settings pages use, so these two are the
-/// stock Radix values `theme.css` leaves untouched.
 fn red_3(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        gpui::rgb(0x3b1219)
-    } else {
-        gpui::rgb(0xfeebec)
-    }
-    .into()
+    theme.negative_subtle.into()
 }
 
 fn red_11(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        gpui::rgb(0xff9592)
-    } else {
-        gpui::rgb(0xce2c31)
-    }
-    .into()
+    theme.text_danger.into()
 }
 
 /// `bg-gray-2 dark:bg-gray-3` -- the card and the drag ghost (`:877, 1228`).
 fn card_bg(theme: &Theme) -> Hsla {
     if theme.is_dark() {
-        theme.gray_3
+        theme.surface_subtle
     } else {
-        theme.gray_2
+        theme.surface_secondary
     }
     .into()
 }
@@ -770,11 +757,11 @@ impl EditorWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .rounded(px(12.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_1()
                     .border_color(self.card_line())
                     .bg(self.panel_bg())
-                    .shadow(self.theme.editor.card_shadow())
+                    .shadow(crate::theme::shadow(crate::theme::ShadowToken::One))
                     .child(self.render_clips_back_header(cx))
                     .child(self.render_clips_body(cx)),
             )
@@ -794,20 +781,20 @@ impl EditorWindow {
             .px(px(12.))
             .w_full()
             .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
-            .rounded_t(px(11.))
+            .rounded_t(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_b_1()
-            .border_color(Hsla::from(theme.editor.line))
+            .border_color(Hsla::from(theme.border_subtle))
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.editor.text_1))
+            .text_color(Hsla::from(theme.text_primary))
             .cursor_pointer()
-            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
+            .hover(move |style| style.bg(Hsla::from(theme.surface_subtle)))
             .child(
                 svg()
-                    .path("icons/move-left.svg")
+                    .path("icons/arrow-left.svg")
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(Hsla::from(theme.editor.text_2)),
+                    .text_color(Hsla::from(theme.text_secondary)),
             )
             .child("Back to editor")
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
@@ -904,18 +891,18 @@ impl EditorWindow {
                         div()
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
+                            .text_color(Hsla::from(theme.text_primary))
                             .child("Clips"),
                     )
                     .children((recorded_clip_count > 0).then(|| {
                         div()
-                            .rounded(px(6.))
-                            .bg(Hsla::from(theme.gray_3))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
+                            .bg(Hsla::from(theme.surface_subtle))
                             .px(px(6.))
                             .py(px(2.))
                             .text_size(px(10.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_11))
+                            .text_color(Hsla::from(theme.text_secondary))
                             .child(recorded_clip_count.to_string())
                     })),
             )
@@ -955,27 +942,27 @@ impl EditorWindow {
                     .justify_center()
                     .items_center()
                     .size(px(40.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.gray_3))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(Hsla::from(theme.surface_subtle))
                     .child(
                         svg()
                             .path("icons/clapperboard.svg")
                             .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_9)),
+                            .text_color(Hsla::from(theme.text_muted)),
                     ),
             )
             .child(
                 div()
                     .text_size(px(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
+                    .text_color(Hsla::from(theme.text_primary))
                     .child("No clips yet"),
             )
             .child(
                 div()
                     .max_w(px(200.))
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.text_secondary))
                     .child("Record or import a clip and it will show up here."),
             )
     }
@@ -1047,8 +1034,8 @@ impl EditorWindow {
                     .right_0()
                     .top(px(-4.))
                     .h(px(2.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.blue_9))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(Hsla::from(theme.primary))
             }))
             .children(show_bottom_bar.then(|| {
                 div()
@@ -1057,8 +1044,8 @@ impl EditorWindow {
                     .right_0()
                     .bottom(px(-4.))
                     .h(px(2.))
-                    .rounded_full()
-                    .bg(Hsla::from(theme.blue_9))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+                    .bg(Hsla::from(theme.primary))
             }))
             .child(
                 // The card (`:873-879`).
@@ -1070,9 +1057,9 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .gap(px(12.))
-                    .rounded(px(8.))
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_4))
+                    .border_color(Hsla::from(theme.hover_bg))
                     .p(px(8.))
                     .bg(card_bg(&theme))
                     .cursor(if dragging {
@@ -1080,7 +1067,7 @@ impl EditorWindow {
                     } else {
                         CursorStyle::OpenHand
                     })
-                    .hover(move |style| style.border_color(Hsla::from(theme.gray_7)))
+                    .hover(move |style| style.border_color(Hsla::from(theme.border_strong)))
                     .when(is_dragged, |this| this.opacity(0.4))
                     .child(probe)
                     .on_mouse_down(
@@ -1098,9 +1085,9 @@ impl EditorWindow {
                             .overflow_hidden()
                             .w(px(96.))
                             .h(px(54.))
-                            .rounded(px(6.))
+                            .rounded(crate::theme::radius(crate::theme::RadiusToken::Compact))
                             .flex_shrink_0()
-                            .bg(Hsla::from(theme.gray_4))
+                            .bg(Hsla::from(theme.hover_bg))
                             .child(
                                 div()
                                     .absolute()
@@ -1109,13 +1096,13 @@ impl EditorWindow {
                                     .justify_center()
                                     .items_center()
                                     .bg(if theme.is_dark() {
-                                        Hsla::from(theme.gray_4)
+                                        Hsla::from(theme.hover_bg)
                                     } else {
-                                        Hsla::from(theme.gray_3)
+                                        Hsla::from(theme.surface_subtle)
                                     })
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(Hsla::from(theme.gray_9))
+                                    .text_color(Hsla::from(theme.text_muted))
                                     .child((index + 1).to_string()),
                             )
                             .children(thumb.map(|image| {
@@ -1144,11 +1131,11 @@ impl EditorWindow {
                                     .padding_x(px(6.))
                                     .radius(px(4.))
                                     .bg(if theme.is_dark() {
-                                        Hsla::from(theme.gray_4)
+                                        Hsla::from(theme.hover_bg)
                                     } else {
-                                        Hsla::from(theme.gray_1)
+                                        Hsla::from(theme.surface)
                                     })
-                                    .border(Hsla::from(theme.gray_6))
+                                    .border(Hsla::from(theme.border))
                                     .flex(true)
                                     .into_any_element(),
                                     None => div().into_any_element(),
@@ -1159,7 +1146,7 @@ impl EditorWindow {
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .truncate()
-                                    .text_color(Hsla::from(theme.gray_12))
+                                    .text_color(Hsla::from(theme.text_primary))
                                     .child(title)
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -1177,7 +1164,7 @@ impl EditorWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .child(subtitle),
                             ),
                     )
@@ -1196,15 +1183,17 @@ impl EditorWindow {
                                     .flex_none()
                                     .justify_center()
                                     .items_center()
-                                    .rounded(px(6.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Compact,
+                                    ))
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .hover(move |style| {
                                         style
-                                            .bg(Hsla::from(theme.gray_5))
-                                            .text_color(Hsla::from(theme.gray_12))
+                                            .bg(Hsla::from(theme.active_bg))
+                                            .text_color(Hsla::from(theme.text_primary))
                                     })
                                     .child(svg().path("icons/edit.svg").size(px(14.)))
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -1221,11 +1210,13 @@ impl EditorWindow {
                                     .flex_none()
                                     .justify_center()
                                     .items_center()
-                                    .rounded(px(6.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Compact,
+                                    ))
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.text_secondary))
                                     .hover(move |style| {
                                         style.bg(red_3(&theme)).text_color(red_11(&theme))
                                     })
@@ -1389,7 +1380,7 @@ impl EditorWindow {
                 .gap(px(6.))
                 .h(px(24.))
                 .px(px(6.))
-                .rounded(px(4.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Small))
                 .child(div().w(px(12.)).flex_shrink_0())
                 .child(div().flex_1().min_w_0().truncate().child(label))
         };
@@ -1423,15 +1414,17 @@ impl EditorWindow {
                                 .flex_col()
                                 .min_w(px(180.))
                                 .p(px(4.))
-                                .rounded(px(8.))
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                                 .border_1()
-                                .border_color(Hsla::from(theme.gray_3))
-                                .bg(Hsla::from(theme.gray_1))
+                                .border_color(Hsla::from(theme.surface_subtle))
+                                .bg(Hsla::from(theme.surface))
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_12))
+                                .text_color(Hsla::from(theme.text_primary))
                                 .child(
                                     row("clips-import-existing", "Existing recording")
-                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .hover(move |style| {
+                                            style.bg(Hsla::from(theme.surface_subtle))
+                                        })
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.clips.import_menu = None;
                                             cx.notify();
@@ -1440,7 +1433,9 @@ impl EditorWindow {
                                 )
                                 .child(
                                     row("clips-import-mp4", "MP4 Video…")
-                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .hover(move |style| {
+                                            style.bg(Hsla::from(theme.surface_subtle))
+                                        })
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.clips.import_menu = None;
                                             cx.notify();
@@ -1471,14 +1466,14 @@ impl EditorWindow {
                 .items_center()
                 .px(px(12.))
                 .py(px(8.))
-                .rounded(px(8.))
+                .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
                 .border_1()
-                .border_color(Hsla::from(theme.gray_6))
+                .border_color(Hsla::from(theme.border))
                 .shadow_lg()
                 .bg(card_bg(&theme))
                 .text_size(px(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(Hsla::from(theme.gray_12))
+                .text_color(Hsla::from(theme.text_primary))
                 .child(display_name_at(segments, drag.index))
         });
 

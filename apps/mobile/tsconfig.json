@@ -3,12 +3,11 @@
 	"compilerOptions": {
 		"strict": true,
 		"allowImportingTsExtensions": true,
-		"baseUrl": ".",
 		"paths": {
-			"@/*": ["src/*"],
-			"@modules/*": ["modules/*"]
+			"@/*": ["./src/*"],
+			"@modules/*": ["./modules/*"]
 		},
-		"types": ["vitest/globals"]
+		"types": ["vitest/globals", "node"]
 	},
 	"include": [
 		"app",

@@ -923,7 +923,7 @@ impl Render for OverlayWindow {
             )
             .size_full()
             .relative()
-            .font_family(crate::theme::UI_FONT)
+            .font_family(crate::theme::ui_font())
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
@@ -952,7 +952,7 @@ impl OverlayWindow {
     fn render_device_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.device_menu.as_ref()?;
         Some(
-            crate::ui::Menu::plain(
+            crate::ui::Menu::new(
                 &self.theme,
                 "overlay-device-menu",
                 menu.items.clone(),
@@ -1074,18 +1074,18 @@ impl OverlayWindow {
             .h(px(42.))
             .flex_1()
             .min_w_0()
-            .rounded(px(8.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Default))
             .border_1()
-            .border_color(theme.gray_5)
-            .bg(theme.gray_3)
-            .text_color(theme.gray_12)
+            .border_color(theme.active_bg)
+            .bg(theme.surface_subtle)
+            .text_color(theme.text_primary)
             .overflow_hidden()
             .when(disabled, |row| row.opacity(0.7))
             .when(!camera && enabled && !disabled, |row| {
                 row.child(
                     crate::ui::MicrophoneLevel::snapshot(
                         self.select.read(cx).microphone_fill,
-                        theme.blue_9.into(),
+                        theme.primary.into(),
                     )
                     .absolute()
                     .top_0()
@@ -1101,7 +1101,7 @@ impl OverlayWindow {
                     })
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(theme.gray_11),
+                    .text_color(theme.text_secondary),
             )
             .child(
                 div()
@@ -1126,17 +1126,17 @@ impl OverlayWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_full()
+                    .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                     .text_size(px(11.))
                     .bg(if enabled {
-                        Hsla::from(theme.blue_9)
+                        Hsla::from(theme.primary)
                     } else {
-                        Hsla::from(theme.gray_5)
+                        Hsla::from(theme.active_bg)
                     })
                     .text_color(if enabled {
                         gpui::white()
                     } else {
-                        Hsla::from(theme.gray_11)
+                        Hsla::from(theme.text_secondary)
                     })
                     .child(if enabled { "On" } else { "Off" })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1173,7 +1173,7 @@ impl OverlayWindow {
         let state = self.mode_menu.as_ref()?;
         let items = mode_menu_items(self.select.read(cx).recording_mode);
         Some(
-            crate::ui::Menu::plain(&self.theme, "overlay-mode-menu", items, state)
+            crate::ui::Menu::new(&self.theme, "overlay-mode-menu", items, state)
                 .on_select(cx.listener(|this, index: &usize, _window, cx| {
                     this.choose_mode(*index, cx);
                 }))
@@ -1195,7 +1195,7 @@ impl OverlayWindow {
             .map(|(value, label)| crate::ui::MenuItem::new(*label, *value == current))
             .collect();
         Some(
-            crate::ui::Menu::plain(&self.theme, "overlay-countdown-menu", items, state)
+            crate::ui::Menu::new(&self.theme, "overlay-countdown-menu", items, state)
                 .on_select(cx.listener(|this, index: &usize, _, cx| {
                     this.choose_countdown(*index, cx);
                 }))
@@ -1360,11 +1360,14 @@ impl OverlayWindow {
                             .justify_center()
                             .items_center()
                             // `<div class="w-24 h-24">` around the icon.
-                            .children(
-                                icon.map(|icon| {
-                                    img(icon).size(px(96.)).mb(px(12.)).rounded(px(8.))
-                                }),
-                            )
+                            .children(icon.map(|icon| {
+                                img(icon)
+                                    .size(px(96.))
+                                    .mb(px(12.))
+                                    .rounded(crate::theme::radius(
+                                        crate::theme::RadiusToken::Default,
+                                    ))
+                            }))
                             .child(
                                 div()
                                     .mb(px(8.))
@@ -1418,10 +1421,10 @@ impl OverlayWindow {
                             &self.empty_camera_state,
                         )))
                         .border_1()
-                        .border_color(self.theme.gray_6)
+                        .border_color(self.theme.border)
                         .bg(gpui::black())
                         .text_size(px(14.))
-                        .text_color(self.theme.gray_11)
+                        .text_color(self.theme.text_secondary)
                         .child(svg().path("icons/camera.svg").size(px(32.)))
                         .child("Please select a camera"),
                 )
@@ -1455,7 +1458,7 @@ impl OverlayWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(self.theme.gray_11)
+                            .text_color(self.theme.text_secondary)
                             .child("Record using only your camera and microphone"),
                     ),
             )
@@ -1741,7 +1744,7 @@ impl OverlayWindow {
             );
         let click = div()
             .absolute()
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .border_2()
             .border_color(gpui::hsla(0., 0., 1., 0.85))
             .with_animation(
@@ -1836,7 +1839,7 @@ impl OverlayWindow {
                     .items_center()
                     .gap(px(6.))
                     .p(px(6.))
-                    .text_color(self.theme.gray_12)
+                    .text_color(self.theme.text_primary)
                     .child(
                         div()
                             .min_w(px(112.))
@@ -1899,12 +1902,12 @@ impl OverlayWindow {
                         .items_center()
                         .p(px(10.))
                         .my(px(8.))
-                        .rounded(px(12.))
+                        .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
                         .border_1()
-                        .border_color(self.theme.red_4)
-                        .bg(self.theme.red_2)
+                        .border_color(self.theme.negative_subtle)
+                        .bg(self.theme.negative_subtle)
                         .text_size(px(14.))
-                        .text_color(self.theme.gray_12)
+                        .text_color(self.theme.text_primary)
                         .child(format!("Minimum size is {} x {}", min as u32, min as u32))
                         .child(div().text_size(px(11.)).child(format!(
                             "{} x {} is too small",
@@ -1922,17 +1925,17 @@ impl OverlayWindow {
     fn glass_surface(&self) -> gpui::Div {
         let theme = self.theme;
         div()
-            .rounded(px(16.))
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Medium))
             .border_1()
             .border_color(if theme.is_dark() {
                 gpui::hsla(0., 0., 1., 0.1)
             } else {
-                Theme::with_alpha(theme.gray_12, 0.1)
+                Theme::with_alpha(theme.text_primary, 0.1)
             })
             .bg(if theme.is_dark() {
-                Theme::with_alpha(theme.gray_2, 0.82)
+                Theme::with_alpha(theme.surface_secondary, 0.82)
             } else {
-                Theme::with_alpha(theme.gray_1, 0.82)
+                Theme::with_alpha(theme.surface, 0.82)
             })
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::hsla(0., 0., 0., 0.2),
@@ -1983,17 +1986,18 @@ impl OverlayWindow {
                                 .items_center()
                                 .size(px(36.))
                                 .flex_shrink_0()
-                                .rounded_full()
+                                .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
                                 .border_1()
-                                .border_color(theme.gray_5)
-                                .bg(theme.gray_6)
+                                .border_color(theme.active_bg)
+                                .bg(theme.border)
                                 .child(
                                     svg()
                                         .path("icons/gear.svg")
                                         .size(px(20.))
-                                        .text_color(theme.gray_12),
+                                        .text_color(theme.text_primary),
                                 )
                                 .hover(|style| style.opacity(0.8))
+                                .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                                 .tooltip(move |_, cx| {
                                     crate::ui::Tooltip::new(&theme, "Recording countdown").view(cx)
                                 })
@@ -2045,8 +2049,8 @@ impl OverlayWindow {
             .items_center()
             .size(px(36.))
             .flex_shrink_0()
-            .rounded_full()
-            .bg(theme.gray_12)
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
+            .bg(theme.text_primary)
             .hover(|style| style.opacity(0.8))
             .child(
                 svg()
@@ -2055,7 +2059,7 @@ impl OverlayWindow {
                     // light theme's dark circle, black on the dark theme's
                     // light one.
                     .size(px(12.))
-                    .text_color(theme.gray_1),
+                    .text_color(theme.surface),
             )
             .on_click(cx.listener(|this, _, _window, cx| {
                 cx.stop_propagation();
@@ -2075,9 +2079,9 @@ impl OverlayWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let (from, to) = if theme.is_dark() {
-            (theme.blue_9, theme.blue_10)
+            (theme.primary, theme.primary_hover)
         } else {
-            (theme.blue_10, theme.blue_11)
+            (theme.primary_hover, theme.text_interactive)
         };
         let label = match mode {
             Mode::Screenshot => "Take Screenshot",
@@ -2104,7 +2108,7 @@ impl OverlayWindow {
             .overflow_hidden()
             .flex_row()
             .h(px(44.))
-            .rounded_full()
+            .rounded(crate::theme::radius(crate::theme::RadiusToken::Large))
             .text_color(gpui::white())
             // `bg-linear-to-r from-blue-10 via-blue-10 to-blue-11`: the via
             // stop sits at 50% with the from colour, so the ramp only starts
@@ -2128,12 +2132,13 @@ impl OverlayWindow {
                     // the halves round their own outer caps (h-11 -> 22px) or
                     // they paint square corners past the pill onto the glass
                     // card behind it.
-                    .rounded_l(px(22.))
+                    .rounded_l(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     // `opacity-60 cursor-not-allowed hover:bg-transparent`.
                     .when(disabled, |this| this.opacity(0.6))
                     .when(!disabled, |this| {
                         this.hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.1)))
                     })
+                    .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label).view(cx))
                     .child(
                         svg()
@@ -2215,10 +2220,11 @@ impl OverlayWindow {
                     // The right cap of the pill, for the same reason the
                     // leading half takes `rounded_l`: its `bg-white/5` panel
                     // otherwise pokes square corners past `rounded-full`.
-                    .rounded_r(px(22.))
+                    .rounded_r(crate::theme::radius(crate::theme::RadiusToken::Medium))
                     .border_l_1()
                     .border_color(gpui::hsla(0., 0., 1., 0.2))
                     .bg(gpui::hsla(0., 0., 1., 0.05))
+                    .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| {
                         crate::ui::Tooltip::new(&theme, "Choose recording mode").view(cx)
                     })

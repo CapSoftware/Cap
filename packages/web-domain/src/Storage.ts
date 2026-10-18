@@ -15,11 +15,11 @@ export type StorageObjectId = typeof StorageObjectId.Type;
 export const StorageProvider = Schema.Literal("googleDrive");
 export type StorageProvider = typeof StorageProvider.Type;
 
-export const StorageIntegrationStatus = Schema.Literal(
+export const StorageIntegrationStatus = Schema.Literals([
 	"active",
 	"error",
 	"disconnected",
-);
+]);
 export type StorageIntegrationStatus = typeof StorageIntegrationStatus.Type;
 
 export class StorageIntegration extends Schema.Class<StorageIntegration>(
@@ -36,26 +36,26 @@ export class StorageIntegration extends Schema.Class<StorageIntegration>(
 export const S3PostUploadTarget = Schema.Struct({
 	type: Schema.Literal("s3Post"),
 	url: Schema.String,
-	fields: Schema.Record({ key: Schema.String, value: Schema.String }),
+	fields: Schema.Record(Schema.String, Schema.String),
 });
 
 export const PutUploadTarget = Schema.Struct({
 	type: Schema.Literal("put"),
 	url: Schema.String,
-	headers: Schema.Record({ key: Schema.String, value: Schema.String }),
+	headers: Schema.Record(Schema.String, Schema.String),
 });
 
 export const DriveResumableUploadTarget = Schema.Struct({
 	type: Schema.Literal("driveResumable"),
 	url: Schema.String,
-	headers: Schema.Record({ key: Schema.String, value: Schema.String }),
+	headers: Schema.Record(Schema.String, Schema.String),
 });
 
-export const UploadTarget = Schema.Union(
+export const UploadTarget = Schema.Union([
 	S3PostUploadTarget,
 	PutUploadTarget,
 	DriveResumableUploadTarget,
-);
+]);
 export type UploadTarget = typeof UploadTarget.Type;
 
 export class StorageError extends Schema.TaggedError<StorageError>()(

@@ -1,6 +1,6 @@
-import { FileSystem, OpenApi } from "@effect/platform";
-import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { Effect } from "effect";
+import { NodeFileSystem, NodeRuntime } from "@effect/platform-node";
+import { Effect, FileSystem } from "effect";
+import { OpenApi } from "effect/http-api";
 
 import { ApiContract } from "../src/Http/index.ts";
 
@@ -13,4 +13,4 @@ Effect.gen(function* () {
 		process.argv[2] ?? "openapi.json",
 		JSON.stringify(spec, null, 2),
 	);
-}).pipe(Effect.provide(NodeContext.layer), NodeRuntime.runMain);
+}).pipe(Effect.provide(NodeFileSystem.layer), NodeRuntime.runMain);

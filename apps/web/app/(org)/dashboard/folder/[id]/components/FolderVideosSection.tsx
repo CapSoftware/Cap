@@ -69,23 +69,34 @@ export default function FolderVideosSection({
 				}
 			}).pipe(Effect.fork);
 
-			toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-				loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-				success: (data) => {
-					if (data.error) {
+			toast.promise(
+				Effect.runPromise(
+					fiber.await.pipe(
+						Effect.flatMap((exit) =>
+							Exit.isSuccess(exit)
+								? Effect.succeed(exit.value)
+								: Effect.failCause(exit.cause),
+						),
+					),
+				),
+				{
+					loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+					success: (data) => {
+						if (data.error) {
+							return `Successfully deleted ${data.success} cap${
+								data.success === 1 ? "" : "s"
+							}, but failed to delete ${data.error} cap${
+								data.error === 1 ? "" : "s"
+							}`;
+						}
 						return `Successfully deleted ${data.success} cap${
 							data.success === 1 ? "" : "s"
-						}, but failed to delete ${data.error} cap${
-							data.error === 1 ? "" : "s"
 						}`;
-					}
-					return `Successfully deleted ${data.success} cap${
-						data.success === 1 ? "" : "s"
-					}`;
+					},
+					error: (error) =>
+						error.message || "An error occurred while deleting caps",
 				},
-				error: (error) =>
-					error.message || "An error occurred while deleting caps",
-			});
+			);
 
 			return yield* fiber.await.pipe(Effect.flatten);
 		}),

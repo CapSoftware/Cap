@@ -1,11 +1,11 @@
+import { Schema } from "effect";
 import {
 	HttpApi,
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
 	OpenApi,
-} from "@effect/platform";
-import { Schema } from "effect";
+} from "effect/http-api";
 import { HttpAuthMiddleware } from "./Authentication.ts";
 import { CommentId } from "./Comment.ts";
 import { FolderColor, FolderId } from "./Folder.ts";
@@ -113,12 +113,10 @@ export const createMobileSessionLoginRedirectUrl = ({
 	return loginRedirectUrl;
 };
 
-const MobileAuthRedirectUri = Schema.String.pipe(
-	Schema.filter(
-		(redirectUri) =>
-			isMobileAuthRedirectUri(redirectUri) ||
-			"Invalid mobile auth redirect URI",
-	),
+const MobileAuthRedirectUri = Schema.String.check(
+	Schema.makeFilter(isMobileAuthRedirectUri, {
+		message: "Invalid mobile auth redirect URI",
+	}),
 );
 
 export const MobileApiKeyResponse = Schema.Struct({
@@ -139,7 +137,7 @@ export const MobileAuthConfigResponse = Schema.Struct({
 
 export const MobileSessionRequestParams = Schema.Struct({
 	redirectUri: Schema.optional(MobileAuthRedirectUri),
-	provider: Schema.optional(Schema.Literal("apple", "google", "workos")),
+	provider: Schema.optional(Schema.Literals(["apple", "google", "workos"])),
 	organizationId: Schema.optional(Schema.String),
 });
 
@@ -161,14 +159,14 @@ export const MobileUserBlockInput = Schema.Struct({
 });
 
 export const MobileContentReportInput = Schema.Struct({
-	reason: Schema.Literal(
+	reason: Schema.Literals([
 		"harassment",
 		"hate",
 		"sexual",
 		"violence",
 		"copyright",
 		"other",
-	),
+	]),
 });
 
 export const MobileAuthHeaders = Schema.Struct({
@@ -188,16 +186,16 @@ export const MobileOrganization = Schema.Struct({
 	id: OrganisationId,
 	name: Schema.String,
 	iconUrl: Schema.NullOr(Schema.String),
-	role: Schema.Literal("owner", "admin", "member"),
+	role: Schema.Literals(["owner", "admin", "member"]),
 });
 
 export const MobileSpace = Schema.Struct({
 	id: SpaceIdOrOrganisationId,
 	name: Schema.String,
 	iconUrl: Schema.NullOr(Schema.String),
-	kind: Schema.Literal("organization", "space"),
-	privacy: Schema.Literal("Public", "Private"),
-	role: Schema.NullOr(Schema.Literal("owner", "admin", "member")),
+	kind: Schema.Literals(["organization", "space"]),
+	privacy: Schema.Literals(["Public", "Private"]),
+	role: Schema.NullOr(Schema.Literals(["owner", "admin", "member"])),
 	canManage: Schema.Boolean,
 	hasPassword: Schema.Boolean,
 });
@@ -243,7 +241,7 @@ export const MobileCapSummary = Schema.Struct({
 export const MobileComment = Schema.Struct({
 	id: CommentId,
 	videoId: VideoId,
-	type: Schema.Literal("text", "emoji"),
+	type: Schema.Literals(["text", "emoji"]),
 	content: Schema.String,
 	timestamp: Schema.NullOr(Schema.Number),
 	parentCommentId: Schema.NullOr(CommentId),
@@ -266,7 +264,7 @@ export const MobileCapDetail = Schema.Struct({
 	summary: Schema.NullOr(Schema.String),
 	chapters: Schema.Array(MobileChapter),
 	transcriptionStatus: Schema.NullOr(
-		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"),
+		Schema.Literals(["PROCESSING", "COMPLETE", "ERROR", "SKIPPED", "NO_AUDIO"]),
 	),
 	comments: Schema.Array(MobileComment),
 	shareUrl: Schema.String,
@@ -367,7 +365,7 @@ export const MobileReactionCreateInput = Schema.Struct({
 });
 
 export const MobilePlaybackResponse = Schema.Struct({
-	kind: Schema.Literal("mp4", "hls"),
+	kind: Schema.Literals(["mp4", "hls"]),
 	url: Schema.String,
 	transcriptUrl: Schema.NullOr(Schema.String),
 });
@@ -377,12 +375,12 @@ export const MobileDownloadResponse = Schema.Struct({
 	url: Schema.String,
 });
 
-export const MobileAnalyticsRange = Schema.Literal(
+export const MobileAnalyticsRange = Schema.Literals([
 	"24h",
 	"7d",
 	"30d",
 	"lifetime",
-);
+]);
 
 export const MobileAnalyticsParams = Schema.Struct({
 	range: Schema.optional(MobileAnalyticsRange),
@@ -419,9 +417,7 @@ export const MobileAnalyticsData = Schema.Struct({
 		operatingSystems: Schema.Array(MobileAnalyticsBreakdown),
 		devices: Schema.Array(MobileAnalyticsBreakdown),
 		topCaps: Schema.Array(
-			MobileAnalyticsBreakdown.pipe(
-				Schema.extend(Schema.Struct({ id: VideoId })),
-			),
+			Schema.Struct({ ...MobileAnalyticsBreakdown.fields, id: VideoId }),
 		),
 	}),
 });
@@ -434,7 +430,7 @@ export const MobileAnalyticsResponse = Schema.Struct({
 export const MobileOrganizationSettings = Schema.Struct({
 	id: OrganisationId,
 	name: Schema.String,
-	role: Schema.Literal("owner", "admin", "member"),
+	role: Schema.Literals(["owner", "admin", "member"]),
 	canManage: Schema.Boolean,
 	iconUrl: Schema.NullOr(Schema.String),
 	allowedEmailDomain: Schema.NullOr(Schema.String),
@@ -510,7 +506,7 @@ export const MobileRecordingUploadTargetsInput = Schema.Struct({
 });
 
 export const MobileRecordingUploadTargetsResponse = Schema.Struct({
-	uploads: Schema.Record({ key: Schema.String, value: UploadTarget }),
+	uploads: Schema.Record(Schema.String, UploadTarget),
 });
 
 export const MobileRecordingSegment = Schema.Struct({
@@ -527,353 +523,389 @@ export const MobileRecordingCompleteInput = Schema.Struct({
 
 export class MobileHttpApi extends HttpApiGroup.make("mobile")
 	.add(
-		HttpApiEndpoint.get("getAuthConfig", "/session/config").addSuccess(
-			MobileAuthConfigResponse,
-		),
+		HttpApiEndpoint.get("getAuthConfig", "/session/config", {
+			success: MobileAuthConfigResponse,
+		}),
 	)
 	.add(
-		HttpApiEndpoint.get("requestSession", "/session/request")
-			.setUrlParams(MobileSessionRequestParams)
-			.addSuccess(MobileApiKeyResponse)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("requestSession", "/session/request", {
+			query: MobileSessionRequestParams,
+			success: MobileApiKeyResponse,
+			error: [
+				HttpApiError.InternalServerError,
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}),
 	)
 	.add(
-		HttpApiEndpoint.post("requestEmailSession", "/session/email/request")
-			.setPayload(MobileEmailSessionRequestInput)
-			.addSuccess(MobileSuccessResponse)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("requestEmailSession", "/session/email/request", {
+			payload: MobileEmailSessionRequestInput,
+			success: MobileSuccessResponse,
+			error: [
+				HttpApiError.InternalServerError,
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}),
 	)
 	.add(
-		HttpApiEndpoint.post("verifyEmailSession", "/session/email/verify")
-			.setPayload(MobileEmailSessionVerifyInput)
-			.addSuccess(MobileApiKeyResponse)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("verifyEmailSession", "/session/email/verify", {
+			payload: MobileEmailSessionVerifyInput,
+			success: MobileApiKeyResponse,
+			error: [
+				HttpApiError.InternalServerError,
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}),
 	)
 	.add(
-		HttpApiEndpoint.post("revokeSession", "/session/revoke")
-			.setHeaders(MobileAuthHeaders)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("revokeSession", "/session/revoke", {
+			headers: MobileAuthHeaders,
+			success: MobileSuccessResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("requestAccountDeletion", "/user/account-deletion")
-			.setPayload(MobileAccountDeletionInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("requestAccountDeletion", "/user/account-deletion", {
+			payload: MobileAccountDeletionInput,
+			success: MobileSuccessResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.InternalServerError,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("blockUser", "/user/blocks")
-			.setPayload(MobileUserBlockInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("blockUser", "/user/blocks", {
+			payload: MobileUserBlockInput,
+			success: MobileSuccessResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("bootstrap", "/bootstrap")
-			.addSuccess(MobileBootstrapResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("bootstrap", "/bootstrap", {
+			success: MobileBootstrapResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.patch("setActiveOrganization", "/user/active-organization")
-			.setPayload(MobileActiveOrganizationInput)
-			.addSuccess(MobileBootstrapResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.patch(
+			"setActiveOrganization",
+			"/user/active-organization",
+			{
+				payload: MobileActiveOrganizationInput,
+				success: MobileBootstrapResponse,
+				error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.patch("updateProfile", "/user/profile")
-			.setPayload(MobileProfileInput)
-			.addSuccess(MobileUser)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.patch("updateProfile", "/user/profile", {
+			payload: MobileProfileInput,
+			success: MobileUser,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.put("updateProfileImage", "/user/profile/image")
-			.setPayload(MobileProfileImageInput)
-			.addSuccess(MobileUser)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.put("updateProfileImage", "/user/profile/image", {
+			payload: MobileProfileImageInput,
+			success: MobileUser,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.del("removeProfileImage", "/user/profile/image")
-			.addSuccess(MobileUser)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.delete("removeProfileImage", "/user/profile/image", {
+			success: MobileUser,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("listCaps", "/caps")
-			.setUrlParams(MobileCapsListParams)
-			.addSuccess(MobileCapsListResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("listCaps", "/caps", {
+			query: MobileCapsListParams,
+			success: MobileCapsListResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("getCapStatuses", "/caps/statuses")
-			.setPayload(MobileCapStatusesInput)
-			.addSuccess(MobileCapStatusesResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("getCapStatuses", "/caps/statuses", {
+			payload: MobileCapStatusesInput,
+			success: MobileCapStatusesResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("createFolder", "/folders")
-			.setPayload(MobileFolderCreateInput)
-			.addSuccess(MobileFolder)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("createFolder", "/folders", {
+			payload: MobileFolderCreateInput,
+			success: MobileFolder,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getCap", "/caps/:id")
-			.setPath(MobileVideoPath)
-			.addSuccess(MobileCapDetail)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getCap", "/caps/:id", {
+			params: MobileVideoPath,
+			success: MobileCapDetail,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("reportCap", "/caps/:id/report")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileContentReportInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("reportCap", "/caps/:id/report", {
+			params: MobileVideoPath,
+			payload: MobileContentReportInput,
+			success: MobileSuccessResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.InternalServerError,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getCapThumbnail", "/caps/:id/thumbnail")
-			.setPath(MobileVideoPath)
-			.addSuccess(Schema.String)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getCapThumbnail", "/caps/:id/thumbnail", {
+			params: MobileVideoPath,
+			success: Schema.String,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.patch("updateCapSharing", "/caps/:id/sharing")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileCapSharingInput)
-			.addSuccess(MobileCapSummary)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.patch("updateCapSharing", "/caps/:id/sharing", {
+			params: MobileVideoPath,
+			payload: MobileCapSharingInput,
+			success: MobileCapSummary,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.patch("updateCapTitle", "/caps/:id/title")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileCapTitleInput)
-			.addSuccess(MobileCapSummary)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.patch("updateCapTitle", "/caps/:id/title", {
+			params: MobileVideoPath,
+			payload: MobileCapTitleInput,
+			success: MobileCapSummary,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.patch("updateCapPassword", "/caps/:id/password")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileCapPasswordInput)
-			.addSuccess(MobileCapSummary)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.patch("updateCapPassword", "/caps/:id/password", {
+			params: MobileVideoPath,
+			payload: MobileCapPasswordInput,
+			success: MobileCapSummary,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.del("deleteCap", "/caps/:id")
-			.setPath(MobileVideoPath)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.delete("deleteCap", "/caps/:id", {
+			params: MobileVideoPath,
+			success: MobileSuccessResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback")
-			.setPath(MobileVideoPath)
-			.addSuccess(MobilePlaybackResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getPlayback", "/caps/:id/playback", {
+			params: MobileVideoPath,
+			success: MobilePlaybackResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getDownload", "/caps/:id/download")
-			.setPath(MobileVideoPath)
-			.addSuccess(MobileDownloadResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getDownload", "/caps/:id/download", {
+			params: MobileVideoPath,
+			success: MobileDownloadResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getCapAnalytics", "/caps/:id/analytics")
-			.setPath(MobileVideoPath)
-			.setUrlParams(MobileAnalyticsParams)
-			.addSuccess(MobileAnalyticsResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound)
-			.addError(HttpApiError.InternalServerError),
+		HttpApiEndpoint.get("getCapAnalytics", "/caps/:id/analytics", {
+			params: MobileVideoPath,
+			query: MobileAnalyticsParams,
+			success: MobileAnalyticsResponse,
+			error: [
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+				HttpApiError.InternalServerError,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.get("getOrganizationSettings", "/organization/settings")
-			.addSuccess(MobileOrganizationSettings)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.get("getOrganizationSettings", "/organization/settings", {
+			success: MobileOrganizationSettings,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
 		HttpApiEndpoint.patch(
 			"updateOrganizationSettings",
 			"/organization/settings",
-		)
-			.setPayload(MobileOrganizationSettingsInput)
-			.addSuccess(MobileOrganizationSettings)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			{
+				payload: MobileOrganizationSettingsInput,
+				success: MobileOrganizationSettings,
+				error: [
+					HttpApiError.BadRequest,
+					HttpApiError.Forbidden,
+					HttpApiError.NotFound,
+				],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.put("updateOrganizationIcon", "/organization/settings/icon")
-			.setPayload(MobileOrganizationIconInput)
-			.addSuccess(MobileOrganizationSettings)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.put(
+			"updateOrganizationIcon",
+			"/organization/settings/icon",
+			{
+				payload: MobileOrganizationIconInput,
+				success: MobileOrganizationSettings,
+				error: [
+					HttpApiError.BadRequest,
+					HttpApiError.Forbidden,
+					HttpApiError.NotFound,
+				],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.del("removeOrganizationIcon", "/organization/settings/icon")
-			.addSuccess(MobileOrganizationSettings)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.delete(
+			"removeOrganizationIcon",
+			"/organization/settings/icon",
+			{
+				success: MobileOrganizationSettings,
+				error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("importLoom", "/imports/loom")
-			.setPayload(MobileLoomImportInput)
-			.addSuccess(MobileLoomImportResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound)
-			.addError(HttpApiError.InternalServerError),
+		HttpApiEndpoint.post("importLoom", "/imports/loom", {
+			payload: MobileLoomImportInput,
+			success: MobileLoomImportResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+				HttpApiError.InternalServerError,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("createComment", "/caps/:id/comments")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileCommentCreateInput)
-			.addSuccess(MobileComment)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("createComment", "/caps/:id/comments", {
+			params: MobileVideoPath,
+			payload: MobileCommentCreateInput,
+			success: MobileComment,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.del("deleteComment", "/comments/:id")
-			.setPath(MobileCommentPath)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.delete("deleteComment", "/comments/:id", {
+			params: MobileCommentPath,
+			success: MobileSuccessResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("createReaction", "/caps/:id/reactions")
-			.setPath(MobileVideoPath)
-			.setPayload(MobileReactionCreateInput)
-			.addSuccess(MobileComment)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("createReaction", "/caps/:id/reactions", {
+			params: MobileVideoPath,
+			payload: MobileReactionCreateInput,
+			success: MobileComment,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("createUpload", "/uploads")
-			.setPayload(MobileUploadCreateInput)
-			.addSuccess(MobileUploadCreateResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("createUpload", "/uploads", {
+			payload: MobileUploadCreateInput,
+			success: MobileUploadCreateResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("updateUploadProgress", "/uploads/:id/progress")
-			.setPath(MobileUploadPath)
-			.setPayload(MobileUploadProgressInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("updateUploadProgress", "/uploads/:id/progress", {
+			params: MobileUploadPath,
+			payload: MobileUploadProgressInput,
+			success: MobileSuccessResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("completeUpload", "/uploads/:id/complete")
-			.setPath(MobileUploadPath)
-			.setPayload(MobileUploadCompleteInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("completeUpload", "/uploads/:id/complete", {
+			params: MobileUploadPath,
+			payload: MobileUploadCompleteInput,
+			success: MobileSuccessResponse,
+			error: [HttpApiError.Forbidden, HttpApiError.NotFound],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("createRecording", "/recordings")
-			.setPayload(MobileRecordingCreateInput)
-			.addSuccess(MobileRecordingCreateResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("createRecording", "/recordings", {
+			payload: MobileRecordingCreateInput,
+			success: MobileRecordingCreateResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	)
 	.add(
 		HttpApiEndpoint.post(
 			"createRecordingUploadTargets",
 			"/recordings/:id/segments/targets",
-		)
-			.setPath(MobileUploadPath)
-			.setPayload(MobileRecordingUploadTargetsInput)
-			.addSuccess(MobileRecordingUploadTargetsResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+			{
+				params: MobileUploadPath,
+				payload: MobileRecordingUploadTargetsInput,
+				success: MobileRecordingUploadTargetsResponse,
+				error: [
+					HttpApiError.BadRequest,
+					HttpApiError.Forbidden,
+					HttpApiError.NotFound,
+				],
+			},
+		).middleware(HttpAuthMiddleware),
 	)
 	.add(
-		HttpApiEndpoint.post("completeRecording", "/recordings/:id/complete")
-			.setPath(MobileUploadPath)
-			.setPayload(MobileRecordingCompleteInput)
-			.addSuccess(MobileSuccessResponse)
-			.middleware(HttpAuthMiddleware)
-			.addError(HttpApiError.BadRequest)
-			.addError(HttpApiError.Forbidden)
-			.addError(HttpApiError.NotFound),
+		HttpApiEndpoint.post("completeRecording", "/recordings/:id/complete", {
+			params: MobileUploadPath,
+			payload: MobileRecordingCompleteInput,
+			success: MobileSuccessResponse,
+			error: [
+				HttpApiError.BadRequest,
+				HttpApiError.Forbidden,
+				HttpApiError.NotFound,
+			],
+		}).middleware(HttpAuthMiddleware),
 	) {}
 
 export class MobileApiContract extends HttpApi.make("cap-mobile-api")
 	.add(MobileHttpApi)
-	.annotateContext(
+	.annotateMerge(
 		OpenApi.annotations({
 			title: "Cap Mobile API",
 			description: "Authenticated API used by the Cap iOS app",

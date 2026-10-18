@@ -1,6 +1,5 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
-import { HttpApiSchema } from "@effect/platform";
 import { Context, Data, Effect, type Option, Schema } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
 import { CurrentUser } from "./Authentication.ts";
@@ -20,7 +19,7 @@ export type PublicPolicy<E = never, R = never> = Effect.Effect<
 export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
 	"PolicyDenied",
 	{ reason: Schema.optional(Schema.String) },
-	HttpApiSchema.annotations({ status: 403 }),
+	{ httpApiStatus: 403 },
 ) {}
 
 /**
@@ -28,7 +27,7 @@ export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
  */
 export const policy = <E, R>(
 	predicate: (
-		user: CurrentUser["Type"],
+		user: CurrentUser["Service"],
 	) => Effect.Effect<boolean, E | DenyAccess, R>,
 ): Policy<E, R> =>
 	Effect.flatMap(CurrentUser, (user) =>
@@ -46,7 +45,7 @@ export const policy = <E, R>(
  */
 export const publicPolicy = <E, R>(
 	predicate: (
-		user: Option.Option<CurrentUser["Type"]>,
+		user: Option.Option<CurrentUser["Service"]>,
 	) => Effect.Effect<boolean, E, R>,
 ): PublicPolicy<E, R> =>
 	Effect.gen(function* () {
@@ -69,7 +68,7 @@ export class DenyAccess extends Data.TaggedError("DenyAccess")<
 export const withPolicy =
 	<E, R>(policy: Policy<E, R>) =>
 	<A, E2, R2>(self: Effect.Effect<A, E2, R2>) =>
-		Effect.zipRight(policy, self);
+		Effect.andThen(policy, self);
 
 /**
  * Applies a policy as a pre-check to an effect.
@@ -78,7 +77,7 @@ export const withPolicy =
 export const withPublicPolicy =
 	<E, R>(policy: PublicPolicy<E, R>) =>
 	<A, E2, R2>(self: Effect.Effect<A, E2, R2>) =>
-		Effect.zipRight(policy, self);
+		Effect.andThen(policy, self);
 
 /**
  * Composes multiple policies with AND semantics - all policies must pass.
