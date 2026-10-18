@@ -386,8 +386,16 @@ jobs:
           cargo test --locked --profile ci-verify -p cap-verify --test recording --no-run
           echo "build seconds: $(( $(date +%s) - start ))"
 
+      # Without the manifest the next restore cannot tell which sources the
+      # cached build came from (scripts/verify/mtime.py).
+      - name: Record sources of the cached build
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        shell: bash
+        run: |
+          "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
+
       - name: Save build cache
-        if: steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
