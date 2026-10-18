@@ -3791,6 +3791,81 @@ fn contract_first_frame_follows_the_decoder_request_rule_for_long_recordings() {
     }
 }
 
+fn picture_start_labels(samples: &[(u32, f64)], source_fps: f64) -> BTreeMap<u32, Vec<f64>> {
+    let mut pictures: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
+    let mut positions: BTreeMap<u32, usize> = BTreeMap::new();
+    for &(index, pts) in samples {
+        let slot = pts * source_fps;
+        let labels = if (slot - slot.floor() - 0.5).abs() < 1e-6 {
+            vec![slot.floor(), slot.ceil()]
+        } else {
+            vec![slot.round()]
+        };
+        match positions.get(&index).copied() {
+            Some(position) => pictures[position].1.extend(labels),
+            None => {
+                positions.insert(index, pictures.len());
+                pictures.push((labels.clone(), labels));
+            }
+        }
+    }
+    positions
+        .into_iter()
+        .map(|(index, position)| {
+            let (first, _) = &pictures[position];
+            let mut labels = first.clone();
+            if position > 0 {
+                // A cached predecessor may own a shared label. The next request
+                // releases it even when no source sample carries that label.
+                labels.extend(
+                    first
+                        .iter()
+                        .filter(|label| pictures[position - 1].1.contains(label))
+                        .map(|label| label + 1.0),
+                );
+            }
+            labels.sort_by(f64::total_cmp);
+            labels.dedup();
+            (index, labels)
+        })
+        .collect()
+}
+
+#[test]
+fn picture_start_labels_include_the_first_unshared_request_after_a_collision() {
+    for samples in [
+        vec![(59, 2350.0 / 600.0), (60, 2360.0 / 600.0)],
+        vec![(135, 9.017711), (136, 9.048956), (136, 9.095833)],
+    ] {
+        let index = samples[1].0;
+        let first = (samples[1].1 * 30.0_f64).round();
+        assert_eq!(
+            picture_start_labels(&samples, 30.0)[&index],
+            vec![first, first + 1.0]
+        );
+    }
+}
+
+#[test]
+fn picture_start_labels_reject_late_requests_after_a_collision() {
+    let samples = [(1, 10.1 / 30.0), (2, 10.2 / 30.0), (2, 14.0 / 30.0)];
+    assert_eq!(picture_start_labels(&samples, 30.0)[&2], vec![10.0, 11.0]);
+}
+
+#[test]
+fn picture_start_labels_keep_unshared_requests_exact() {
+    let samples = [(1, 9.0 / 30.0), (2, 10.0 / 30.0), (2, 14.0 / 30.0)];
+    assert_eq!(picture_start_labels(&samples, 30.0)[&2], vec![10.0]);
+}
+
+#[test]
+fn picture_start_labels_preserve_half_frame_ties() {
+    assert_eq!(
+        picture_start_labels(&[(1, 10.5 / 30.0)], 30.0)[&1],
+        vec![10.0, 11.0]
+    );
+}
+
 fn display_fps(project: &Path) -> anyhow::Result<u32> {
     let meta = RecordingMeta::load_for_project(project).map_err(|e| anyhow::anyhow!("{e}"))?;
     match meta.studio_meta() {
@@ -3822,9 +3897,7 @@ fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, 
 /// editor and exporter do to them:
 /// - every screen picture the display track shows for at least one export
 ///   frame interval is in the export;
-/// - each is first shown within one export frame interval of its recorded
-///   time (the renderer places a frame on the export's grid, so up to one
-///   interval either way);
+/// - each is first shown on a frame allowed by the decoder's grid contract;
 /// - each microphone marker plays at its recorded time.
 ///
 /// Finalization once stored the display track's average rate as its fps.
@@ -3947,45 +4020,13 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
     let screen_offset = timeline_start - layout.display.start;
     let first_frame =
         |label: f64| contract_first_frame(label, source_fps, f64::from(fps), screen_offset);
-    // A pts exactly between two grid frames (a 60 Hz picture on a 30 fps
-    // grid) rounds either way depending on the last bit of the arithmetic;
-    // both labels are the contract.
-    let labels_of = |pts: f64| {
-        let slot = pts * source_fps;
-        if (slot - slot.floor() - 0.5).abs() < 1e-6 {
-            vec![slot.floor(), slot.ceil()]
-        } else {
-            vec![slot.round()]
-        }
-    };
-    // Every label each picture's frames carry, pictures in the order they
-    // first show. When a picture's first frame shares its label with the
-    // previous picture's frames, the decoder may answer that label with
-    // either picture, so this picture can first show at any of its labels.
     let (samples, _) = screen_samples(&layout.display.path)?;
-    let mut picture_labels: Vec<(u32, Vec<f64>, Vec<f64>)> = Vec::new();
-    for (index, pts) in samples {
-        let labels = labels_of(pts);
-        match picture_labels.iter_mut().find(|(i, _, _)| *i == index) {
-            Some((_, _, all)) => all.extend(labels),
-            None => picture_labels.push((index, labels.clone(), labels)),
-        }
-    }
-    let legal_labels = |index: u32| {
-        let at = picture_labels.iter().position(|(i, _, _)| *i == index)?;
-        let (_, first, all) = &picture_labels[at];
-        let shares = at > 0
-            && picture_labels[at - 1]
-                .2
-                .iter()
-                .any(|label| first.contains(label));
-        Some(if shares { all.clone() } else { first.clone() })
-    };
+    let legal_labels = picture_start_labels(&samples, source_fps);
     let off_contract: Vec<String> = required
         .iter()
         .filter_map(|(i, t)| {
             let shown_at = shown.get(i)?;
-            let labels = legal_labels(*i)?;
+            let labels = legal_labels.get(i)?;
             let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
             let expected = first_frame(labels[0]);
             (!labels.iter().any(|label| first_frame(*label) == frame)).then(|| {
