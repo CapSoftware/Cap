@@ -13,7 +13,23 @@ pub(super) struct FragmentMetadata {
 pub(super) fn read_fragment_metadata(path: &Path) -> io::Result<FragmentMetadata> {
     let mut file = File::open(path)?;
     let file_size = file.metadata()?.len();
-    read_metadata(&mut file, file_size)
+    match read_metadata(&mut file, file_size) {
+        Ok(metadata) => Ok(metadata),
+        Err(error) => {
+            let init = path.with_file_name("init.mp4");
+            if !init.is_file() {
+                return Err(error);
+            }
+            let prefix = super::fragment_prefix::read_fragment_prefix(&init, path)?;
+            if prefix.length != file_size {
+                return Err(invalid_fragment("Fragment contains incomplete media"));
+            }
+            Ok(FragmentMetadata {
+                duration: prefix.duration,
+                file_size,
+            })
+        }
+    }
 }
 
 fn invalid_fragment(message: &'static str) -> io::Error {
