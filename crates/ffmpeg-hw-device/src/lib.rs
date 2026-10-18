@@ -63,6 +63,15 @@ impl HwDevice {
 
                 if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
                     sw_frame.set_pts(src.pts());
+                    // The transfer copies pixels only. Keep the colour tags so
+                    // consumers convert hardware-decoded frames with the same
+                    // matrix as software-decoded ones.
+                    let (dst, src) = (&mut *sw_frame.as_mut_ptr(), &*src.as_ptr());
+                    dst.color_range = src.color_range;
+                    dst.color_primaries = src.color_primaries;
+                    dst.color_trc = src.color_trc;
+                    dst.colorspace = src.colorspace;
+                    dst.chroma_location = src.chroma_location;
                     return Some(sw_frame);
                 };
             }
