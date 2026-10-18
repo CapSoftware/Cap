@@ -117,6 +117,7 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        self.yuv_converter.set_matrix(camera_frame.matrix());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
@@ -402,6 +403,7 @@ impl CameraLayer {
         };
 
         let format = camera_frame.format();
+        self.yuv_converter.set_matrix(camera_frame.matrix());
         let frame_storage = camera_frame.storage_identity();
 
         let is_same_frame = self
