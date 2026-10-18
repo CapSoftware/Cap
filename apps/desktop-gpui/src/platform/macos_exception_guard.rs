@@ -42,8 +42,6 @@ impl GuardedMethod {
         }
     }
 
-    /// Routes `class`'s `selector` through `guard`. Returns false when the
-    /// class does not implement it, or it is already guarded.
     fn install(&self, class: &AnyClass, selector: Sel, guard: VoidMethod) -> bool {
         if self.original.get().is_some() || class.verify_sel::<(), ()>(selector).is_err() {
             return false;
@@ -69,8 +67,6 @@ impl GuardedMethod {
         true
     }
 
-    /// Calls the original implementation; an Objective-C exception it throws
-    /// is logged and dropped. Returns whether one was.
     unsafe fn call(&self, receiver: *mut AnyObject, selector: Sel) -> bool {
         let Some(original) = self.original.get().copied() else {
             return false;
@@ -88,7 +84,6 @@ impl GuardedMethod {
     }
 }
 
-/// `name: reason` of an NSException.
 fn describe(exception: &AnyObject) -> String {
     fn utf8(value: *mut AnyObject) -> String {
         if value.is_null() {

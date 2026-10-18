@@ -618,8 +618,7 @@ mod mac {
         )
     }
 
-    /// Keeps AppKit exceptions Cap cannot cause or prevent (the Touch Bar
-    /// finder's) from crashing the app. Call on the main thread at startup.
+    /// Must run on the main thread before the run loop starts.
     pub fn install_appkit_exception_guards() {
         super::macos_exception_guard::install();
     }
