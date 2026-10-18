@@ -15,6 +15,9 @@ pub mod pipeline;
 pub mod report;
 #[cfg(target_os = "macos")]
 pub mod sched;
+#[cfg(windows)]
+#[path = "sched_windows.rs"]
+pub mod sched;
 pub mod sentinel;
 pub mod stimulus;
 pub mod video_code;

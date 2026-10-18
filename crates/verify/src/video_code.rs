@@ -267,6 +267,30 @@ pub fn rgb_to_ycbcr(r: u8, g: u8, b: u8) -> (f64, f64, f64) {
     )
 }
 
+/// Tightly packed limited-range NV12 (BT.601) of an RGBA picture: the Y
+/// plane, then interleaved Cb/Cr sampled at each 2x2 block's top-left pixel.
+pub fn rgba_to_nv12(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let ycc = |x: usize, y: usize| {
+        let i = (y * width + x) * 4;
+        rgb_to_ycbcr(rgba[i], rgba[i + 1], rgba[i + 2])
+    };
+    let mut out = Vec::with_capacity(width * height * 3 / 2);
+    for y in 0..height {
+        for x in 0..width {
+            let (l, _, _) = ycc(x, y);
+            out.push((16.0 + l * 219.0 / 255.0).round() as u8);
+        }
+    }
+    for y in 0..height / 2 {
+        for x in 0..width / 2 {
+            let (_, cb, cr) = ycc(x * 2, y * 2);
+            out.push((128.0 + cb * 224.0 / 255.0).round() as u8);
+            out.push((128.0 + cr * 224.0 / 255.0).round() as u8);
+        }
+    }
+    out
+}
+
 /// Read access to a decoded picture in luma + centred chroma.
 pub trait PixelSource {
     fn width(&self) -> usize;
