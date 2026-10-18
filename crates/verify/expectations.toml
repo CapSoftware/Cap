@@ -56,13 +56,6 @@ bound = { camera-frames = 1, delta = 1, frame = [2579, 2579] }
 reason = "AVAssetReader serves one camera frame 1 source frame stale after the timeline jumps backward (output frame 2579: source 1048 for 1049): the reader chosen after the jump had already vended past the request and its previous vend was no longer cached, so the nearest older cached frame answered. Every run in probe 38762089521 (42 of 42) and on hosted macOS, but it passed on blacksmith-6vcpu-macos-15 in push run 38846099909: whether the previous vend is still cached depends on the decoder's wall-clock idle timeout, so it is flaky there"
 link = "https://github.com/CapSoftware/Cap/pull/2638"
 
-[[xfail]]
-case = "export/camera-pts-late/full/mp430/ffmpeg"
-class = "future"
-bound = { camera-frames = 178, delta = 60, frame = [1, 178] }
-reason = "NEW: FFmpeg decoder, same as the AVAssetReader case: a camera file whose pts start 2 s in runs ahead from the first output frame (178 of 179 frames, up to 60 source frames ahead, every platform)"
-link = ""
-
 # Decode deadline under machine starvation. These apply only to a case the
 # starvation sentinel saw stall (starved = true) and only with the signature
 # of the mechanism; the same symptom on a healthy machine is a failure.
