@@ -47,7 +47,7 @@ impl BufferedResampler {
             // making the difference negative; that is an overlap, not a gap.
             remaining_samples += (buffer.1 - pts).max(0) as usize;
             remaining_samples += buffer.0.samples();
-            pts += buffer.0.samples() as i64;
+            pts = pts.max(buffer.1) + buffer.0.samples() as i64;
         }
 
         remaining_samples
@@ -416,6 +416,42 @@ mod test {
 
     mod get_frame {
         use super::*;
+
+        #[test]
+        fn gap_is_not_counted_again_for_following_frames() {
+            let mut bufferer = create_resampler(IN_RATE);
+            for pts in [0, 200, 300] {
+                bufferer.add_frame(make_input_frame(100, pts));
+            }
+
+            assert!(bufferer.get_frame(401).is_none());
+
+            let frame = bufferer.get_frame(400).unwrap();
+            assert_eq!(frame.pts(), Some(0));
+            assert_eq!(&frame.data(0)[..100], &[69; 100]);
+            assert_eq!(&frame.data(0)[100..200], &[0; 100]);
+            assert_eq!(&frame.data(0)[200..400], &[69; 200]);
+            assert!(bufferer.flush(400).is_none());
+        }
+
+        #[test]
+        fn flush_counts_multiple_gaps_once_after_partial_read() {
+            let mut bufferer = create_resampler(IN_RATE);
+            for pts in [0, 200, 400] {
+                bufferer.add_frame(make_input_frame(100, pts));
+            }
+            assert_eq!(bufferer.get_frame(25).unwrap().pts(), Some(0));
+
+            let frame = bufferer.flush(1_000).unwrap();
+            assert_eq!(frame.samples(), 475);
+            assert_eq!(frame.pts(), Some(25));
+            assert_eq!(&frame.data(0)[..75], &[69; 75]);
+            assert_eq!(&frame.data(0)[75..175], &[0; 100]);
+            assert_eq!(&frame.data(0)[175..275], &[69; 100]);
+            assert_eq!(&frame.data(0)[275..375], &[0; 100]);
+            assert_eq!(&frame.data(0)[375..475], &[69; 100]);
+            assert!(bufferer.flush(1_000).is_none());
+        }
 
         #[test]
         fn same_format() {
