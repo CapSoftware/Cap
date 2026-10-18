@@ -8,9 +8,10 @@ use cap_enc_ffmpeg::RelocatableSource;
 use cap_enc_ffmpeg::fragmented_mp4::{read_fragment_prefix, tail_is_complete};
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
-    concatenate_m4s_segments_with_init_validated, concatenate_video_fragments, get_media_duration,
-    get_video_base_fps, merge_video_audio, probe_media_valid, probe_video_can_decode,
-    probe_video_seek_points, remux_file,
+    concatenate_m4s_segments_with_init_validated, concatenate_video_fragments,
+    concatenate_video_fragments_on_timeline, get_media_duration, get_video_base_fps,
+    merge_video_audio, probe_media_valid, probe_video_can_decode, probe_video_seek_points,
+    remux_file,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -2336,7 +2337,8 @@ impl RecoveryManager {
             std::fs::rename(&group_outputs[0], output)
                 .map_err(|e| RecoveryError::VideoConcat(cap_enc_ffmpeg::remux::RemuxError::Io(e)))
         } else {
-            concatenate_video_fragments(&group_outputs, output).map_err(RecoveryError::VideoConcat)
+            concatenate_video_fragments_on_timeline(&group_outputs, output)
+                .map_err(RecoveryError::VideoConcat)
         };
 
         for tmp in &temp_paths {
