@@ -163,6 +163,20 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
     })
 }
 
+fn load_source_for_editor(
+    bundle: &Path,
+    captured: Option<LoadedSource>,
+) -> Result<LoadedSource, String> {
+    let source = captured.map_or_else(|| load_source(bundle), Ok)?;
+    if source.width > MAX_DIMENSION || source.height > MAX_DIMENSION {
+        return Err(format!(
+            "Image dimensions exceed maximum: {}x{}",
+            source.width, source.height
+        ));
+    }
+    Ok(source)
+}
+
 // ---------------------------------------------------------------------------
 // The still renderer
 // ---------------------------------------------------------------------------
@@ -4838,7 +4852,7 @@ pub fn load_screenshot_project(
         let load_bundle = bundle.clone();
         let source = cx
             .background_executor()
-            .spawn(async move { captured.map_or_else(|| load_source(&load_bundle), Ok) })
+            .spawn(async move { load_source_for_editor(&load_bundle, captured) })
             .await;
         let source = match source {
             Ok(source) => source,
@@ -5243,6 +5257,26 @@ mod tests {
             meta,
             studio_meta,
         }
+    }
+
+    #[test]
+    fn retained_capture_pixels_obey_the_editor_dimension_limit() {
+        for (width, height) in [(MAX_DIMENSION + 1, 2), (4, MAX_DIMENSION + 1)] {
+            let result = load_source_for_editor(
+                Path::new("unused.cap"),
+                Some(synthetic_source(width, height)),
+            );
+            assert!(
+                matches!(result, Err(message) if message == format!("Image dimensions exceed maximum: {width}x{height}"))
+            );
+        }
+        assert!(
+            load_source_for_editor(
+                Path::new("unused.cap"),
+                Some(synthetic_source(MAX_DIMENSION, 2)),
+            )
+            .is_ok()
+        );
     }
 
     struct DragResult {

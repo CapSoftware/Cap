@@ -202,24 +202,12 @@ async fn capture_and_write(
         None
     };
     let image = match cap_recording::screenshot::capture_screenshot(target.clone()).await {
-        Ok(image)
-            if image.width() <= crate::screenshot_editor::MAX_DIMENSION
-                && image.height() <= crate::screenshot_editor::MAX_DIMENSION =>
-        {
-            image
-        }
-        result => {
+        Ok(image) => image,
+        Err(error) => {
             if let Some((meta, _)) = &prepared {
                 discard_capture_project(&meta.project_path);
             }
-            return Err(match result {
-                Ok(image) => anyhow!(
-                    "Image dimensions exceed maximum: {}x{}",
-                    image.width(),
-                    image.height()
-                ),
-                Err(error) => error.context("capturing the screenshot"),
-            });
+            return Err(error.context("capturing the screenshot"));
         }
     };
     crate::app_sounds::AppSound::Notification.play();
@@ -338,6 +326,28 @@ mod tests {
             let saved = image::open(path).unwrap().to_rgba8().into_raw();
             assert_eq!(retained, expected);
             assert_eq!(saved, retained);
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_capture_pixels_can_still_be_saved() {
+        let directory = tempfile::tempdir().unwrap();
+        for (width, height) in [(16_385, 2), (4, 16_385)] {
+            let path = directory.path().join("original.png");
+            let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                width,
+                height,
+                image::Rgba([13, 71, 129, 255]),
+            ));
+            let retained = write_png(path.clone(), image).await.unwrap();
+            let saved = image::open(&path).unwrap().to_rgba8();
+            assert_eq!(saved.dimensions(), (width, height));
+            assert_eq!(saved.as_raw(), &retained);
+            assert!(matches!(
+                crate::screenshot_editor::load_source(directory.path()),
+                Err(message) if message == format!("Image dimensions exceed maximum: {width}x{height}")
+            ));
+            assert!(path.exists());
         }
     }
 
