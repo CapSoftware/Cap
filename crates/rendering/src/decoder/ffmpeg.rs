@@ -25,6 +25,9 @@ use super::{
     record_pts_hole,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
@@ -96,7 +99,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let v_stride = frame.stride(2) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_height = height / 2;
+            let uv_height = frame.plane_height(1);
             let u_size = (u_stride * uv_height) as usize;
 
             let mut data = Vec::with_capacity(y_size + 2 * u_size);
@@ -128,7 +131,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let uv_stride = frame.stride(1) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_size = (uv_stride * (height / 2)) as usize;
+            let uv_size = (uv_stride * frame.plane_height(1)) as usize;
 
             let mut data = Vec::with_capacity(y_size + uv_size);
             data.extend_from_slice(&frame.data(0)[..y_size]);
@@ -275,13 +278,14 @@ impl CachedFrame {
                             frame
                                 .stride(1)
                                 .saturating_add(frame.stride(2))
-                                .saturating_mul(height / 2),
+                                .saturating_mul(frame.plane_height(1) as usize),
                         )
                     }
-                    format::Pixel::NV12 => frame
-                        .stride(0)
-                        .saturating_mul(height)
-                        .saturating_add(frame.stride(1).saturating_mul(height / 2)),
+                    format::Pixel::NV12 => frame.stride(0).saturating_mul(height).saturating_add(
+                        frame
+                            .stride(1)
+                            .saturating_mul(frame.plane_height(1) as usize),
+                    ),
                     _ => (frame.width() as usize)
                         .saturating_mul(height)
                         .saturating_mul(4),
