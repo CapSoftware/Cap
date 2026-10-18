@@ -80,8 +80,10 @@ pub fn append_transcription_audio(
     output
         .try_reserve_exact(frames)
         .map_err(|_| "Transcription audio is too large".to_string())?;
-    let mut sums = try_zeroed(frames, 0.0_f32, "Transcription audio")?;
     let mut counts = try_zeroed(frames, 0_u32, "Transcription audio")?;
+    let start = output.len();
+    output.resize(start + frames, 0.0);
+    let sums = &mut output[start..];
 
     for source in &take.sources {
         let offset = offset_samples(source.offset_secs, sample_rate)?;
@@ -104,17 +106,18 @@ pub fn append_transcription_audio(
         }
     }
 
-    output.extend(
-        sums.into_iter()
-            .zip(counts)
-            .map(|(sum, count)| if count == 0 { 0.0 } else { sum / count as f32 }),
-    );
+    for (sum, count) in sums.iter_mut().zip(counts) {
+        *sum = if count == 0 { 0.0 } else { *sum / count as f32 };
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TranscriptionAudioSource, TranscriptionAudioTake, assemble_transcription_audio};
+    use super::{
+        TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,
+        assemble_transcription_audio,
+    };
 
     fn take(duration: f64, sources: Vec<TranscriptionAudioSource>) -> TranscriptionAudioTake {
         TranscriptionAudioTake {
@@ -186,6 +189,40 @@ mod tests {
         let output = assemble_transcription_audio(&takes, 2).unwrap();
 
         assert_eq!(output, vec![1.25, 1.25]);
+    }
+
+    #[test]
+    fn appending_audio_preserves_previous_takes() {
+        let mut output = vec![0.25, -0.5];
+        let mixed = take(
+            2.0,
+            vec![
+                source(vec![1.0, 3.0, 3.0, 5.0], 2, -0.5),
+                source(vec![2.0, 4.0, 6.0], 1, 0.0),
+            ],
+        );
+
+        append_transcription_audio(&mut output, &mixed, 2).unwrap();
+        append_transcription_audio(&mut output, &take(1.0, Vec::new()), 2).unwrap();
+
+        assert_eq!(output, vec![0.25, -0.5, 2.0, 3.0, 5.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn failed_append_preserves_existing_audio() {
+        for (take, sample_rate) in [
+            (take(1.0, Vec::new()), 0),
+            (take(f64::NAN, Vec::new()), 2),
+            (take(usize::MAX as f64, Vec::new()), 1),
+            (take(1.0, vec![source(vec![1.0], 0, 0.0)]), 2),
+            (take(1.0, vec![source(vec![1.0], 2, 0.0)]), 2),
+            (take(1.0, vec![source(vec![1.0], 1, f64::INFINITY)]), 2),
+        ] {
+            let mut output = vec![0.25, -0.5];
+
+            assert!(append_transcription_audio(&mut output, &take, sample_rate).is_err());
+            assert_eq!(output, vec![0.25, -0.5]);
+        }
     }
 
     #[test]
