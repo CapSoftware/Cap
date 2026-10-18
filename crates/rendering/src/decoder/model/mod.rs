@@ -13,7 +13,7 @@
 //! a sample is labelled `round(fps * pts_seconds)` on the decoder grid, where
 //! FFmpeg measures pts from the stream start time and AVAssetReader from
 //! zero. A request for time `t` asks for grid index `request_frame(t, fps)`,
-//! `floor(t * fps)` with slack for the f32 request time. The
+//! `floor(t * fps)` with a few f32 steps of slack for the request time. The
 //! correct answer is the newest sample whose label is at or before that index
 //! (the frame on screen at `t`); when several samples share that label any of
 //! them is accepted. A request before the first sample is answered with the

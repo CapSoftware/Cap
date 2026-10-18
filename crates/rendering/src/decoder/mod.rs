@@ -704,17 +704,19 @@ pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
         .unwrap_or_default()
 }
 
-/// Frames of slack in [`request_frame`]. A request time is an f32, so the
-/// time of frame `n` can come out a hair below `n / fps` (126 / 30 s is
-/// 4.1999998 s) and floor to the frame before. The f32 error stays under 0.05
-/// frames for two hours at 120 fps, and the slack moves a frame boundary by
-/// at most 0.05 frames.
-const REQUEST_SLACK_FRAMES: f64 = 0.05;
+/// f32 steps of slack in [`request_frame`]. The time of frame `n` is the
+/// f32 nearest `n / fps`, up to half a step below it (126 / 30 s is
+/// 4.1999998 s), plus a step or two from the offsets added on the way; a
+/// plain floor then asks for the frame before.
+const REQUEST_SLACK_STEPS: f32 = 4.0;
 
 /// The decoder grid index a request for `time` asks for: the frame on screen
-/// at `time`, `floor(time * fps)` up to [`REQUEST_SLACK_FRAMES`].
+/// at `time`, `floor(time * fps)` once `time` is lifted by
+/// [`REQUEST_SLACK_STEPS`] f32 steps.
 pub fn request_frame(time: f32, fps: u32) -> u32 {
-    (f64::from(time) * f64::from(fps) + REQUEST_SLACK_FRAMES).floor() as u32
+    let magnitude = time.abs();
+    let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
+    ((f64::from(time) + f64::from(step * REQUEST_SLACK_STEPS)) * f64::from(fps)).floor() as u32
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
