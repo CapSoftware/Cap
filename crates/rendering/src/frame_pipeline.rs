@@ -2494,8 +2494,8 @@ mod surface_output_tests {
                 .await
                 .expect("surface conversion")
         );
-        queue.submit([encoder.finish()]);
-        converter.after_submit(&queue);
+        let submission = queue.submit([encoder.finish()]);
+        converter.after_submit(&queue, &submission);
         let Some(PendingNv12Output::Surface(mut pending)) = converter.take_pending() else {
             panic!("expected surface output");
         };

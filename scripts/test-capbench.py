@@ -85,6 +85,11 @@ class CapbenchTests(unittest.TestCase):
         self.assertEqual(metrics["scrub_p50_ms"], 93.93)
         self.assertEqual(metrics["scrub_p95_ms"], 141.57)
 
+    def test_playback_runs_with_failed_frames_are_invalid(self):
+        failed = PLAYBACK_OUTPUT + "\n  Decode failures: 3\n  Render failures: 1\n"
+        with self.assertRaisesRegex(capbench.InvalidRun, "4 failed frames"):
+            capbench.parse_playback_pipeline(timed(failed))
+
     def test_decode_metrics(self):
         metrics = capbench.parse_decode(timed(DECODE_OUTPUT))
         self.assertEqual(metrics, {
@@ -111,6 +116,21 @@ class CapbenchTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "overlap"):
                 capbench.cmd_run(args)
             self.assertTrue(fixture.exists())
+
+    def test_binaries_inside_the_work_directory_are_not_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            bins = out / "work" / "build"
+            bins.mkdir(parents=True)
+            fixture = Path(tmp) / "reference.cap"
+            fixture.mkdir()
+            args = SimpleNamespace(
+                bench=["decode-display"], out=str(out), label="run", fixture=str(fixture), bin_dir=str(bins),
+                variant=[], env=[], screen=None, animate=False, affinity=None,
+            )
+            with self.assertRaisesRegex(SystemExit, "inside the work directory"):
+                capbench.cmd_run(args)
+            self.assertTrue(bins.exists())
 
     def test_startup_check_finds_missing_helpers(self):
         args = SimpleNamespace(fixture=".", bin_dir=str(Path(__file__).parent), screen=None, animate=False, affinity=None)
