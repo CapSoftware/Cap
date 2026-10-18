@@ -932,11 +932,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -964,7 +965,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -1021,11 +1022,12 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_height = height / 2;
-        if uv_stride < width {
+        let half_height = height.div_ceil(2);
+        let uv_row_bytes = width.div_ceil(2) * 2;
+        if uv_stride < uv_row_bytes {
             return Err(YuvConversionError::PlaneStrideTooSmall {
                 plane: "UV",
-                expected: width,
+                expected: uv_row_bytes,
                 actual: uv_stride,
             });
         }
@@ -1053,7 +1055,7 @@ impl YuvToRgbaConverter {
                 rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
-                width: width / 2,
+                width: width.div_ceil(2),
                 height: half_height,
                 depth_or_array_layers: 1,
             },
@@ -1210,8 +1212,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,
@@ -1285,8 +1287,8 @@ impl YuvToRgbaConverter {
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
-        let half_width = width / 2;
-        let half_height = height / 2;
+        let half_width = width.div_ceil(2);
+        let half_height = height.div_ceil(2);
 
         upload_plane_with_stride(
             queue,

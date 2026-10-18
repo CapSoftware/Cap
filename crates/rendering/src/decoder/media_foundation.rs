@@ -257,7 +257,7 @@ impl MFDecoder {
                         if sender.is_closed() {
                             return;
                         }
-                        let frame = (requested_time * fps as f32).floor() as u32;
+                        let frame = super::request_frame(requested_time, fps);
                         pending_requests.push(PendingRequest {
                             frame,
                             time: requested_time,

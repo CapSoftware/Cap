@@ -1663,6 +1663,24 @@ fn stamped_on_host_clock(timestamp: &Timestamp) -> bool {
 // and the minimum hand-off lag are used, so the offset cancels.
 const CAPTURE_TIME_OFFSET_NS: i128 = 1 << 62;
 
+// The first frame stays at the track's start, the arm point; every later
+// frame moves by the first frame's lead over it.
+fn shift_from_origin(
+    duration: Duration,
+    is_first_frame: bool,
+    origin_lead: Option<(Instant, Duration)>,
+) -> Duration {
+    match origin_lead {
+        Some((_, lead)) if !is_first_frame => duration + lead,
+        _ => duration,
+    }
+}
+
+fn lead_back(master_ns: u64, origin_lead: Option<(Instant, Duration)>) -> u64 {
+    let lead_ns = origin_lead.map_or(0, |(_, lead)| lead.as_nanos() as u64);
+    master_ns.saturating_sub(lead_ns)
+}
+
 fn capture_elapsed(raw_ns: i64, total_pause: Duration) -> Duration {
     let ns = i128::from(raw_ns) - total_pause.as_nanos() as i128 + CAPTURE_TIME_OFFSET_NS;
     Duration::from_nanos(ns.clamp(0, i128::from(u64::MAX)) as u64)
@@ -1973,6 +1991,11 @@ pub struct SharedPauseState {
 }
 
 impl SharedPauseState {
+    #[cfg(windows)]
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.flag.clone()
+    }
+
     pub fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,
@@ -3494,6 +3517,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         // followed the arm within a frame interval.
         let mut held_frame: Option<TVideo::Frame> = None;
         let mut wall_clock_origin = timestamps.instant();
+        // Set when the start gate starts the video where the audio starts:
+        // the arm point, or the pipeline epoch if the gate was armed before it
+        // (see `RecordingStartGate::video_origin_lead`). Capture times flow
+        // through clock remapping and drift tracking unchanged; only the
+        // muxed timeline is offset.
+        let mut origin_lead: Option<(Instant, Duration)> = None;
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -3553,6 +3582,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                     gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
                                 "Start gate admitted first video frame"
                             );
+                            let origin = audio_epoch(timestamps, Some(gate));
+                            origin_lead = gate
+                                .video_origin_lead(timestamp, origin)
+                                .map(|lead| (origin.instant(), lead));
                         }
                         wall_clock_origin = gate
                             .armed_instant()
@@ -3565,7 +3598,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                     let is_first_frame = first_tx.is_some();
                     if let Some(first_tx) = first_tx.take() {
-                        let _ = first_tx.send(timestamp);
+                        let _ = first_tx.send(
+                            origin_lead.map_or(timestamp, |(armed, _)| Timestamp::Instant(armed)),
+                        );
                     }
 
                     let remap =
@@ -3580,7 +3615,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
 
                     if is_first_frame && let Some(gate) = &video_start_gate {
-                        gate.publish(remap.master_ns);
+                        gate.publish(lead_back(remap.master_ns, origin_lead));
                         debug!(
                             video_start_ns = remap.master_ns,
                             "Published video start timestamp to encoder-pair gate"
@@ -3614,7 +3649,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     };
 
                     if first_frame_offset.is_none() {
-                        first_frame_offset = Some(remap.duration().saturating_sub(total_pause_duration));
+                        first_frame_offset = Some(
+                            remap
+                                .duration()
+                                .saturating_sub(total_pause_duration)
+                                .saturating_sub(origin_lead.map_or(Duration::ZERO, |(_, lead)| lead)),
+                        );
                     }
 
                     let resynced = anomaly_tracker.take_resync_flag();
@@ -3634,6 +3674,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         wall_clock_elapsed,
                         resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                     );
+                    let duration = shift_from_origin(duration, is_first_frame, origin_lead);
                     timestamp_span.record(duration);
 
                     if frame_count.is_multiple_of(300) {
@@ -3695,6 +3736,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             if !gate.admits_video(timestamp) {
                                 continue;
                             }
+                            let origin = audio_epoch(timestamps, Some(gate));
+                            origin_lead = gate
+                                .video_origin_lead(timestamp, origin)
+                                .map(|lead| (origin.instant(), lead));
                             wall_clock_origin = gate
                                 .armed_instant()
                                 .unwrap_or(timestamps.instant());
@@ -3705,7 +3750,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                         let is_first_frame = first_tx.is_some();
                         if let Some(first_tx) = first_tx.take() {
-                            let _ = first_tx.send(timestamp);
+                            let _ = first_tx.send(
+                                origin_lead
+                                    .map_or(timestamp, |(armed, _)| Timestamp::Instant(armed)),
+                            );
                         }
 
                         let remap =
@@ -3715,7 +3763,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
 
                         if is_first_frame && let Some(gate) = &video_start_gate {
-                            gate.publish(remap.master_ns);
+                            gate.publish(lead_back(remap.master_ns, origin_lead));
                             debug!(
                                 video_start_ns = remap.master_ns,
                                 "Published video start timestamp to encoder-pair gate (drain path)"
@@ -3749,7 +3797,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                         if first_frame_offset.is_none() {
                             first_frame_offset = Some(
-                                remap.duration().saturating_sub(shared_pause.total_pause_duration()),
+                                remap
+                                    .duration()
+                                    .saturating_sub(shared_pause.total_pause_duration())
+                                    .saturating_sub(
+                                        origin_lead.map_or(Duration::ZERO, |(_, lead)| lead),
+                                    ),
                             );
                         }
 
@@ -3767,6 +3820,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             wall_clock_elapsed,
                             resynced || matches!(remap.outcome, SourceClockOutcome::HardReset),
                         );
+                        let duration = shift_from_origin(duration, is_first_frame, origin_lead);
                         timestamp_span.record(duration);
 
                         let duplicate = frame.duplicate();
@@ -8809,6 +8863,79 @@ mod tests {
             let timestamps = sent.lock().unwrap().clone();
             assert_eq!(timestamps.first(), Some(&Duration::ZERO));
             assert!(timestamps.len() >= 3, "{timestamps:?}");
+        }
+
+        /// A gated Instant pipeline, its gate armed after the pipeline epoch
+        /// or (`armed_first`) 40 ms before it. Its origin is where the audio
+        /// starts, the later of the two; frames are captured 20, 53 and 86 ms
+        /// after it.
+        async fn record_gated_instant(armed_first: bool) -> (Instant, Vec<Duration>, Timestamp) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            gate.set_video_origin_at_arm();
+            let early_arm = armed_first.then(Timestamps::now);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let epoch = Timestamps::now();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("instant.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(epoch)
+                .with_start_gate(Some(gate.clone()))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            let armed = early_arm.unwrap_or_else(Timestamps::now);
+            assert!(gate.arm_at(armed));
+            let origin = if armed_first { epoch } else { armed };
+            // Fresh frames from 20 ms after the origin, one frame interval
+            // apart, each delivered when it is captured.
+            for offset_ms in [20u64, 53, 86] {
+                let captured = origin.instant() + Duration::from_millis(offset_ms);
+                tokio::time::sleep_until(captured.into()).await;
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(captured),
+                    })
+                    .await
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(33)).await;
+            let outcome = pipeline.stop().await.unwrap();
+            let timestamps = sent.lock().unwrap().clone();
+            (origin.instant(), timestamps, outcome.first_timestamp)
+        }
+
+        fn assert_starts_at_origin(origin: Instant, timestamps: &[Duration], first: Timestamp) {
+            match first {
+                Timestamp::Instant(instant) => assert_eq!(instant, origin),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+            // Later frames keep their capture times relative to the origin.
+            for (index, expected_ms) in [(1, 53), (2, 86)] {
+                let muxed = timestamps.get(index).copied().expect("frame muxed");
+                assert!(
+                    muxed.abs_diff(Duration::from_millis(expected_ms)) <= Duration::from_millis(2),
+                    "{timestamps:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn primed_instant_video_starts_at_the_arm_point() {
+            let (origin, timestamps, first) = record_gated_instant(false).await;
+            assert_starts_at_origin(origin, &timestamps, first);
+        }
+
+        #[tokio::test]
+        async fn primed_instant_video_armed_before_the_epoch_starts_at_the_epoch() {
+            let (origin, timestamps, first) = record_gated_instant(true).await;
+            assert_starts_at_origin(origin, &timestamps, first);
         }
 
         #[tokio::test]
