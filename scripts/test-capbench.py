@@ -132,6 +132,18 @@ class CapbenchTests(unittest.TestCase):
                 capbench.cmd_run(args)
             self.assertTrue(bins.exists())
 
+    def test_labels_that_are_not_plain_file_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "reference.cap"
+            fixture.mkdir()
+            for label in ["feature/gpu", "..", ""]:
+                args = SimpleNamespace(
+                    bench=["decode-display"], out=str(Path(tmp) / "out"), label=label, fixture=str(fixture),
+                    bin_dir=tmp, variant=[], env=[], screen=None, animate=False, affinity=None,
+                )
+                with self.assertRaisesRegex(SystemExit, "file name"):
+                    capbench.cmd_run(args)
+
     def test_startup_check_finds_missing_helpers(self):
         args = SimpleNamespace(fixture=".", bin_dir=str(Path(__file__).parent), screen=None, animate=False, affinity=None)
         with self.assertRaisesRegex(FileNotFoundError, "cap-test"):
