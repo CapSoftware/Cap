@@ -591,7 +591,7 @@ impl DecodedFrame {
         }
 
         let y_bytes = (self.y_stride as usize).saturating_mul(self.height as usize);
-        let uv_bytes = (self.uv_stride as usize).saturating_mul((self.height / 2) as usize);
+        let uv_bytes = (self.uv_stride as usize).saturating_mul(self.height.div_ceil(2) as usize);
 
         match self.format {
             PixelFormat::Rgba => (self.width as usize)
@@ -648,7 +648,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_end = y_size.checked_add(u_size)?;
                 self.data().get(y_size..u_end)
@@ -666,7 +666,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let v_start = y_size.checked_add(u_size)?;
                 self.data().get(v_start..)
@@ -702,6 +702,27 @@ pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
             ))
         })
         .unwrap_or_default()
+}
+
+/// f32 steps of slack in [`request_frame`]. The time of frame `n` is the
+/// f32 nearest `n / fps`, up to half a step below it (126 / 30 s is
+/// 4.1999998 s), plus a step or two from the offsets added on the way; a
+/// plain floor then asks for the frame before.
+const REQUEST_SLACK_STEPS: f32 = 4.0;
+/// Most slack, in frames. Past two hours at 240 fps four f32 steps near a
+/// whole frame while half a step is still under a tenth of one, so the cap
+/// keeps an aligned request off the next frame.
+const REQUEST_SLACK_MAX_FRAMES: f64 = 0.25;
+
+/// The decoder grid index a request for `time` asks for: the frame on screen
+/// at `time`, `floor(time * fps)` once `time` is lifted by
+/// [`REQUEST_SLACK_STEPS`] f32 steps, at most [`REQUEST_SLACK_MAX_FRAMES`].
+pub fn request_frame(time: f32, fps: u32) -> u32 {
+    let magnitude = time.abs();
+    let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
+    let fps = f64::from(fps);
+    let slack = (f64::from(step * REQUEST_SLACK_STEPS) * fps).min(REQUEST_SLACK_MAX_FRAMES);
+    (f64::from(time) * fps + slack).floor() as u32
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -1907,6 +1928,34 @@ mod tests {
     }
 
     #[test]
+    fn request_frame_maps_every_frame_time_back_to_its_frame() {
+        // Frame times as the renderer sends them: n / fps in an f32, for
+        // three hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame
+        // 125; uncapped slack maps frame 1,966,082 at 240 fps (8192.0088 s)
+        // to the next.
+        for fps in [24, 25, 30, 50, 60, 120, 144, 240] {
+            let frames = 3 * 3600 * fps;
+            for n in 0..frames {
+                let time = (f64::from(n) / f64::from(fps)) as f32;
+                assert_eq!(request_frame(time, fps), n, "{n} at {fps} fps");
+            }
+        }
+    }
+
+    #[test]
+    fn request_frame_keeps_times_inside_a_frame_on_that_frame() {
+        for (time, fps, frame) in [
+            (0.0, 30, 0),
+            (0.031, 30, 0),
+            (0.034, 30, 1),
+            (4.22, 30, 126),
+        ] {
+            assert_eq!(request_frame(time, fps), frame, "{time} at {fps} fps");
+        }
+        assert_eq!(request_frame(-0.5, 30), 0);
+    }
+
+    #[test]
     fn pts_to_frame_maps_real_presentation_time_to_index() {
         let tb = Rational::new(1, 600);
         assert_eq!(pts_to_frame(0, tb, 30), 0);
@@ -2689,7 +2738,7 @@ mod managed_worker_tests {
                 let pts = packet.pts().unwrap();
                 let frame = pts_to_frame(pts.checked_sub(start_time).unwrap(), time_base, fps);
                 let requested_time = ((f64::from(frame) + 0.25) / f64::from(fps)) as f32;
-                assert_eq!((requested_time * fps as f32).floor() as u32, frame);
+                assert_eq!(request_frame(requested_time, fps), frame);
                 println!(
                     "{}",
                     serde_json::json!({

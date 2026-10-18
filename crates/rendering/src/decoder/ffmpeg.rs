@@ -25,6 +25,9 @@ use super::{
     record_pts_hole,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
@@ -81,7 +84,6 @@ struct PendingRequest {
     reply: oneshot::Sender<DecodedFrame>,
 }
 
-const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
 const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 /// Cache weight of a frame still on the GPU (it pins an NVDEC surface).
 #[cfg(target_os = "linux")]
@@ -97,7 +99,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let v_stride = frame.stride(2) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_height = height / 2;
+            let uv_height = frame.plane_height(1);
             let u_size = (u_stride * uv_height) as usize;
 
             let mut data = Vec::with_capacity(y_size + 2 * u_size);
@@ -129,7 +131,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let uv_stride = frame.stride(1) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_size = (uv_stride * (height / 2)) as usize;
+            let uv_size = (uv_stride * frame.plane_height(1)) as usize;
 
             let mut data = Vec::with_capacity(y_size + uv_size);
             data.extend_from_slice(&frame.data(0)[..y_size]);
@@ -276,13 +278,14 @@ impl CachedFrame {
                             frame
                                 .stride(1)
                                 .saturating_add(frame.stride(2))
-                                .saturating_mul(height / 2),
+                                .saturating_mul(frame.plane_height(1) as usize),
                         )
                     }
-                    format::Pixel::NV12 => frame
-                        .stride(0)
-                        .saturating_mul(height)
-                        .saturating_add(frame.stride(1).saturating_mul(height / 2)),
+                    format::Pixel::NV12 => frame.stride(0).saturating_mul(height).saturating_add(
+                        frame
+                            .stride(1)
+                            .saturating_mul(frame.plane_height(1) as usize),
+                    ),
                     _ => (frame.width() as usize)
                         .saturating_mul(height)
                         .saturating_mul(4),
@@ -575,7 +578,6 @@ impl FfmpegDecoder {
         };
 
         let time_base = this.decoder().time_base();
-        let start_time = this.start_time();
         let video_width = this.decoder().width();
         let video_height = this.decoder().height();
         let is_hw = this.is_hardware_accelerated();
@@ -627,7 +629,6 @@ impl FfmpegDecoder {
             };
 
             let sw_time_base = sw_this.decoder().time_base();
-            let sw_start_time = sw_this.start_time();
 
             let mut sw_cache = BTreeMap::<u32, CachedFrame>::new();
             let mut sw_last_active_frame = None::<u32>;
@@ -662,8 +663,7 @@ impl FfmpegDecoder {
                 return;
             }
             if let Some(frame) = first_software_frame {
-                let current_frame =
-                    pts_to_frame(frame.pts().unwrap_or(0) - sw_start_time, sw_time_base, fps);
+                let current_frame = pts_to_frame(frame.pts().unwrap_or(0), sw_time_base, fps);
                 let mut cache_frame = CachedFrame::Raw {
                     frame,
                     number: current_frame,
@@ -698,7 +698,7 @@ impl FfmpegDecoder {
                         }
 
                         let requested_time = requested_time.max(0.0);
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        let requested_frame = super::request_frame(requested_time, fps);
 
                         pending_requests.push(PendingRequest {
                             time: requested_time,
@@ -765,24 +765,28 @@ impl FfmpegDecoder {
                         continue;
                     }
 
-                    if is_backward_seek {
-                        let best_cached_frame = sw_cache
-                            .range(..=requested_frame)
-                            .next_back()
-                            .filter(|(k, _)| {
-                                requested_frame.saturating_sub(**k) <= MAX_FRAME_LOOKBACK_TOLERANCE
-                            })
-                            .map(|(k, _)| *k);
-
-                        if let Some(frame_num) = best_cached_frame
-                            && let Some(cached) = sw_cache.get_mut(&frame_num)
-                        {
-                            let data = cached.produce(&mut sw_converter);
+                    // Requests inside a KNOWN pts hole are answered with the
+                    // hole's start frame — the true VFR hold — without
+                    // touching the decoder; see the hardware path below.
+                    if let Some(hole_start) = sw_pts_holes
+                        .range(..=requested_frame)
+                        .next_back()
+                        .filter(|&(_, &end)| requested_frame < end)
+                        .map(|(&start, _)| start)
+                    {
+                        let data = sw_cache
+                            .get_mut(&hole_start)
+                            .map(|c| c.produce(&mut sw_converter))
+                            .or_else(|| sw_gap_hold.clone().filter(|h| h.number == hole_start));
+                        if let Some(data) = data {
+                            sw_gap_hold = Some(data.clone());
                             *sw_last_sent_frame.borrow_mut() = Some(data.clone());
                             let _ = reply.send(data.frame);
                             continue;
                         }
+                    }
 
+                    if is_backward_seek {
                         if let Err(error) = sw_this.reset(requested_time)
                             && let Some(control) = &managed
                         {
@@ -797,28 +801,6 @@ impl FfmpegDecoder {
                         sw_cache.clear();
                         sw_prev_vended = None;
                         sw_reader_at = None;
-                    }
-
-                    // Requests inside a KNOWN pts hole are answered with the
-                    // hole's start frame — the true VFR hold — without
-                    // touching the decoder; see the hardware path above.
-                    if !is_backward_seek
-                        && let Some(hole_start) = sw_pts_holes
-                            .range(..=requested_frame)
-                            .next_back()
-                            .filter(|&(_, &end)| requested_frame < end)
-                            .map(|(&start, _)| start)
-                    {
-                        let data = sw_cache
-                            .get_mut(&hole_start)
-                            .map(|c| c.produce(&mut sw_converter))
-                            .or_else(|| sw_gap_hold.clone().filter(|h| h.number == hole_start));
-                        if let Some(data) = data {
-                            sw_gap_hold = Some(data.clone());
-                            *sw_last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = reply.send(data.frame);
-                            continue;
-                        }
                     }
 
                     if reply.is_closed() {
@@ -915,8 +897,7 @@ impl FfmpegDecoder {
                             if let Ok(frame) = &frame
                                 && let Some(pts) = frame.pts()
                             {
-                                sw_reader_at =
-                                    Some(pts_to_frame(pts - sw_start_time, sw_time_base, fps));
+                                sw_reader_at = Some(pts_to_frame(pts, sw_time_base, fps));
                             }
                             break;
                         }
@@ -932,7 +913,7 @@ impl FfmpegDecoder {
                             sw_prev_vended = None;
                             continue;
                         };
-                        let current_frame = pts_to_frame(pts - sw_start_time, sw_time_base, fps);
+                        let current_frame = pts_to_frame(pts, sw_time_base, fps);
 
                         if let Some(prev) = sw_prev_vended
                             && current_frame > prev + 1
@@ -1157,7 +1138,7 @@ impl FfmpegDecoder {
             return;
         }
         if let Some(frame) = first_frame_result {
-            let current_frame = pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
+            let current_frame = pts_to_frame(frame.pts().unwrap_or(0), time_base, fps);
             let mut cache_frame = CachedFrame::Raw {
                 frame,
                 number: current_frame,
@@ -1227,8 +1208,7 @@ impl FfmpegDecoder {
                             match frames.next() {
                                 Some(Ok(frame)) => {
                                     if let Some(pts) = frame.pts() {
-                                        let current_frame =
-                                            pts_to_frame(pts - start_time, time_base, fps);
+                                        let current_frame = pts_to_frame(pts, time_base, fps);
                                         if let Some(prev) = prev_vended
                                             && current_frame > prev + 1
                                         {
@@ -1280,7 +1260,7 @@ impl FfmpegDecoder {
                 }
 
                 let requested_time = requested_time.max(0.0);
-                let requested_frame = (requested_time * fps as f32).floor() as u32;
+                let requested_frame = super::request_frame(requested_time, fps);
 
                 pending_requests.push(PendingRequest {
                     time: requested_time,
@@ -1348,24 +1328,33 @@ impl FfmpegDecoder {
                     continue;
                 }
 
-                if is_backward_seek {
-                    let best_cached_frame = cache
-                        .range(..=requested_frame)
-                        .next_back()
-                        .filter(|(k, _)| {
-                            requested_frame.saturating_sub(**k) <= MAX_FRAME_LOOKBACK_TOLERANCE
-                        })
-                        .map(|(k, _)| *k);
-
-                    if let Some(frame_num) = best_cached_frame
-                        && let Some(cached) = cache.get_mut(&frame_num)
-                    {
-                        let data = cached.produce(&mut converter);
+                // Requests inside a KNOWN pts hole are answered with the
+                // hole's start frame — the true VFR hold (the frame simply
+                // stayed on screen) — without touching the decoder. This
+                // keeps the post-hole frames cached and the reader parked,
+                // however long the hole runs. Only recorded holes qualify: a
+                // bare "some cached frame lies beyond the request" test would
+                // also match disjoint cache islands left by seeks, and
+                // serving stale content there would freeze playback.
+                if let Some(hole_start) = pts_holes
+                    .range(..=requested_frame)
+                    .next_back()
+                    .filter(|&(_, &end)| requested_frame < end)
+                    .map(|(&start, _)| start)
+                {
+                    let data = cache
+                        .get_mut(&hole_start)
+                        .map(|c| c.produce(&mut converter))
+                        .or_else(|| gap_hold.clone().filter(|h| h.number == hole_start));
+                    if let Some(data) = data {
+                        gap_hold = Some(data.clone());
                         *last_sent_frame.borrow_mut() = Some(data.clone());
                         let _ = reply.send(data.frame);
                         continue;
                     }
+                }
 
+                if is_backward_seek {
                     if let Err(error) = this.reset(requested_time)
                         && let Some(control) = &managed
                     {
@@ -1381,33 +1370,6 @@ impl FfmpegDecoder {
                     cache.clear();
                     prev_vended = None;
                     reader_at = None;
-                }
-
-                // Requests inside a KNOWN pts hole are answered with the
-                // hole's start frame — the true VFR hold (the frame simply
-                // stayed on screen) — without touching the decoder. This
-                // keeps the post-hole frames cached and the reader parked,
-                // however long the hole runs. Only recorded holes qualify: a
-                // bare "some cached frame lies beyond the request" test would
-                // also match disjoint cache islands left by seeks, and
-                // serving stale content there would freeze playback.
-                if !is_backward_seek
-                    && let Some(hole_start) = pts_holes
-                        .range(..=requested_frame)
-                        .next_back()
-                        .filter(|&(_, &end)| requested_frame < end)
-                        .map(|(&start, _)| start)
-                {
-                    let data = cache
-                        .get_mut(&hole_start)
-                        .map(|c| c.produce(&mut converter))
-                        .or_else(|| gap_hold.clone().filter(|h| h.number == hole_start));
-                    if let Some(data) = data {
-                        gap_hold = Some(data.clone());
-                        *last_sent_frame.borrow_mut() = Some(data.clone());
-                        let _ = reply.send(data.frame);
-                        continue;
-                    }
                 }
 
                 if reply.is_closed() {
@@ -1502,7 +1464,7 @@ impl FfmpegDecoder {
                         if let Ok(frame) = &frame
                             && let Some(pts) = frame.pts()
                         {
-                            reader_at = Some(pts_to_frame(pts - start_time, time_base, fps));
+                            reader_at = Some(pts_to_frame(pts, time_base, fps));
                         }
                         break;
                     }
@@ -1518,7 +1480,7 @@ impl FfmpegDecoder {
                         prev_vended = None;
                         continue;
                     };
-                    let current_frame = pts_to_frame(pts - start_time, time_base, fps);
+                    let current_frame = pts_to_frame(pts, time_base, fps);
 
                     if let Some(prev) = prev_vended
                         && current_frame > prev + 1
