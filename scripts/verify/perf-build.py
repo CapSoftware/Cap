@@ -28,10 +28,25 @@ PROFILE = [
 def main():
     worktree, out = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--format-version", "1", "--locked"],
+        cwd=worktree,
+        text=True,
+    ))
+    # Another CI cache may have normalized source mtimes, hiding changes from
+    # Cargo. Rebuild local crates while retaining registry and git dependencies.
+    clean = ["cargo", *PROFILE, "clean", "--profile", "perf-verify"]
+    for package in metadata["packages"]:
+        if package["source"] is None:
+            clean += ["-p", package["id"]]
+    subprocess.run(clean, cwd=worktree, check=True)
     command = ["cargo", *PROFILE, "test", "--locked", "-p", "cap-verify", "--profile", "perf-verify", "--no-run", "--message-format", "json"]
     for target in TARGETS:
         command += ["--test", target]
-    result = subprocess.run(command, cwd=worktree, stdout=subprocess.PIPE, text=True, check=True)
+    result = subprocess.run(command, cwd=worktree, stdout=subprocess.PIPE, text=True)
+    if result.returncode:
+        print(result.stdout, end="", flush=True)
+        result.check_returncode()
     binaries = {}
     for line in result.stdout.splitlines():
         try:
