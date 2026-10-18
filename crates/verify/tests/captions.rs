@@ -1450,6 +1450,7 @@ fn render_export(
     out: &Path,
 ) -> Result<Vec<CaptionPixels>, String> {
     let run = common::ExportRun {
+        custom_bpp: None,
         fps: RENDER_FPS,
         resolution: RENDER_RES,
         format: common::Format::Mp4,

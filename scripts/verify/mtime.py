@@ -12,8 +12,10 @@ holds an up-to-date build.
                                the manifest get an old fixed mtime, so cargo
                                sees them as unchanged; every other file keeps
                                the checkout time and its crate rebuilds. With
-                               no manifest (cold build) every file gets the
-                               fixed time.
+                               no manifest and no cached build (cold build)
+                               every file gets the fixed time; a cached build
+                               without a manifest is not trusted, and every
+                               file gets the current time.
 
 Only content equality is trusted, never commit times, so a stale build cannot
 be reused for changed code.
@@ -64,6 +66,15 @@ def main():
             for line in f:
                 blob, _, path = line.rstrip("\n").partition(" ")
                 saved[path] = blob
+    elif os.path.isdir(os.path.dirname(manifest)) and os.listdir(os.path.dirname(manifest)):
+        # A cached build saved without a manifest: nothing says which sources
+        # it was built from, and the fixed time would make cargo reuse all of
+        # it. Every file gets the current time, so every crate rebuilds.
+        print(f"no manifest at {manifest} beside a cached build: rebuilding every crate")
+        for path in current:
+            if os.path.isfile(path) and not os.path.islink(path):
+                os.utime(path, None)
+        return
     else:
         # Cold build: give every file the fixed time too. Build scripts
         # without rerun-if-changed fingerprint the newest mtime of their
