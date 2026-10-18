@@ -292,7 +292,15 @@ pub fn init(app: &AppHandle) {
                 }
 
                 if shortcut.key == Code::Escape {
-                    crate::target_select_overlay::dismiss_picker_from_escape(app);
+                    // This handler runs on the main thread while the plugin
+                    // holds its shortcut registry lock. Dismissing the picker
+                    // ends the picker session, which unregisters Escape through
+                    // that same lock, so doing it inline deadlocks the main
+                    // thread (overlay stuck on screen, app frozen). Defer it.
+                    let dismiss_app = app.clone();
+                    spawn_shortcut_task(async move {
+                        crate::target_select_overlay::dismiss_picker_from_escape(&dismiss_app);
+                    });
                     OnEscapePress.emit(app).ok();
                 }
 
@@ -320,7 +328,7 @@ pub fn init(app: &AppHandle) {
         Ok(Some(s)) => s,
         Ok(None) => HotkeysStore::default(),
         Err(e) => {
-            eprintln!("Failed to load hotkeys store: {e}");
+            tracing::error!("Failed to load hotkeys store: {e}");
             HotkeysStore::default()
         }
     };

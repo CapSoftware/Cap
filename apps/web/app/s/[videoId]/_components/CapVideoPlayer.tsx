@@ -14,7 +14,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import CommentStamp from "./CommentStamp";
+import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
 import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
@@ -100,6 +102,7 @@ interface Props {
 	chaptersSrc: string;
 	captionsSrc: string;
 	disableCaptions?: boolean;
+	captionsInitiallyOff?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
@@ -139,6 +142,7 @@ interface Props {
 	showPlaybackStatusBadge?: boolean;
 	showFloatingVolumeControl?: boolean;
 	onUploadComplete?: () => void;
+	callToAction?: ShareCallToAction | null;
 }
 
 export function CapVideoPlayer({
@@ -149,6 +153,7 @@ export function CapVideoPlayer({
 	chaptersSrc,
 	captionsSrc,
 	disableCaptions,
+	captionsInitiallyOff = false,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
@@ -176,11 +181,12 @@ export function CapVideoPlayer({
 	showPlaybackStatusBadge = false,
 	showFloatingVolumeControl = false,
 	onUploadComplete,
+	callToAction = null,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
 	const [mainControlsVisible, setMainControlsVisible] = useState(false);
-	const [toggleCaptions, setToggleCaptions] = useState(true);
+	const [toggleCaptions, setToggleCaptions] = useState(!captionsInitiallyOff);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
@@ -750,9 +756,19 @@ export function CapVideoPlayer({
 					{captionsSrc && (
 						<track
 							key={captionsSrc}
-							label="English"
+							label={
+								availableCaptions.find(
+									(caption) => caption.code === captionLanguage,
+								)?.name ?? "Original"
+							}
 							kind="captions"
-							srcLang="en"
+							srcLang={
+								captionLanguage &&
+								captionLanguage !== "original" &&
+								captionLanguage !== "off"
+									? captionLanguage
+									: "en"
+							}
 							src={captionsSrc}
 						/>
 					)}
@@ -873,6 +889,17 @@ export function CapVideoPlayer({
 				!showUploadFailureOverlay &&
 				!showPlaybackResolutionError && <MediaPlayerError />}
 			<MediaPlayerVolumeIndicator />
+			{callToAction &&
+				videoLoaded &&
+				!hasActiveProgress &&
+				!showUploadFailureOverlay &&
+				!showPlaybackResolutionError && (
+					<CallToActionOverlay
+						cta={callToAction}
+						videoId={videoId}
+						controlsDocked={externalTimeline && controlsPortalEl !== null}
+					/>
+				)}
 			{showFloatingVolumeControl &&
 				videoLoaded &&
 				!showUploadFailureOverlay &&

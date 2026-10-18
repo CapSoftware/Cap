@@ -946,7 +946,7 @@ impl InstantMultipartUpload {
             await_upload_verification(&app, &pre_created_video.id, &verification, &session).await?;
             return Ok(Some(build_video_meta(&file_path)?));
         }
-        let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
+        let active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
@@ -1036,6 +1036,9 @@ impl InstantMultipartUpload {
                 "Server did not return the uploaded object identity; local recording retained",
             )?,
         )?;
+        // Every byte is on the server now; verification is server-side and resumes on
+        // the next launch via the persisted intent, so it must not block app exit.
+        drop(active_upload);
         await_upload_verification(&app, &video_id, &verification, &session).await?;
         info!("Multipart upload complete for {video_id}.");
 
@@ -1585,7 +1588,7 @@ impl SegmentUploader {
             await_upload_verification(&app, &video_id, &verification, &session).await?;
             return Ok(0);
         }
-        let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
+        let active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         info!("Starting segment uploader for {video_id}");
 
         session.persist_upload(UploadMeta::SegmentUpload {
@@ -2067,6 +2070,10 @@ impl SegmentUploader {
                 }
             }
 
+            // All segments and the final manifest are on the server; the remaining wait is
+            // server-side finalization polled every 5s, which can take minutes and resumes
+            // on the next launch via the persisted verification, so stop blocking app exit.
+            drop(active_upload);
             await_upload_verification(&app, &video_id, &verification, &session).await?;
             emit_upload_complete(&app, &video_id);
 
@@ -4485,6 +4492,7 @@ pub(crate) mod strict_instant {
         events: &mut tokio::sync::mpsc::Receiver<SegmentCompletedEvent>,
         required_audio: bool,
     ) -> Result<(), AuthedApiError> {
+        let active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         let mut uploads = FuturesUnordered::new();
         let mut state = SegmentUploadState::new();
         let mut closed = false;
@@ -4537,6 +4545,7 @@ pub(crate) mod strict_instant {
         control
             .step(|| transport.put("segments/manifest.json", bytes.into()))
             .await?;
+        drop(active_upload);
         control
             .step(|| transport.complete(&manifest, required_audio))
             .await
@@ -4557,7 +4566,6 @@ pub(crate) mod strict_instant {
             session,
             handle: spawn_actor(async move {
                 let _owner = WorkerGuard(control.clone());
-                let _active = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
                 let result = if let Err(error) = worker_session.acquire() {
                     control.0.cleanup.send_replace(Some(true));
                     Err(error)
@@ -4764,6 +4772,7 @@ pub(crate) mod strict_instant {
         session: &lifecycle::Session,
         required_audio: bool,
     ) -> Result<(), AuthedApiError> {
+        let active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         let upload = control
             .step(|| api::upload_multipart_initiate(app, &video.id, false))
             .await?;
@@ -4819,6 +4828,7 @@ pub(crate) mod strict_instant {
                 "Server did not return the uploaded object identity; local recording retained",
             )?,
         )?;
+        drop(active_upload);
         control
             .step(|| await_upload_verification(app, &video.id, &verification, session))
             .await?;
@@ -4990,10 +5000,15 @@ pub(crate) mod strict_instant {
             delay_complete: AtomicBool,
             entered: tokio::sync::Notify,
             released: tokio::sync::Notify,
+            put_without_guard: AtomicBool,
+            complete_with_guard: AtomicBool,
         }
         impl Transport for FakeTransport {
             async fn put(&self, path: &str, _: Bytes) -> Result<(), AuthedApiError> {
                 self.calls.lock().unwrap().push(path.into());
+                if !upload_session_active() {
+                    self.put_without_guard.store(true, Ordering::Release);
+                }
                 if self.fail_audio.load(Ordering::Acquire) && path.starts_with("segments/audio/") {
                     return Err("required audio upload failed".into());
                 }
@@ -5005,12 +5020,19 @@ pub(crate) mod strict_instant {
                 _: bool,
             ) -> Result<(), AuthedApiError> {
                 self.calls.lock().unwrap().push("Complete".into());
+                if upload_session_active() {
+                    self.complete_with_guard.store(true, Ordering::Release);
+                }
                 if self.delay_complete.load(Ordering::Acquire) {
                     self.entered.notify_one();
                     self.released.notified().await;
                 }
                 Ok(())
             }
+        }
+        fn serial() -> std::sync::MutexGuard<'static, ()> {
+            static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
         }
         fn directory(tag: &str) -> PathBuf {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -5050,6 +5072,7 @@ pub(crate) mod strict_instant {
         }
         #[tokio::test]
         async fn strict_segment_eof_waits_for_owned_permission() {
+            let _serial = serial();
             let dir = directory("eof");
             let transport = FakeTransport::default();
             let (control, permission) = Control::new();
@@ -5083,6 +5106,7 @@ pub(crate) mod strict_instant {
         }
         #[tokio::test]
         async fn strict_required_audio_failure_or_absence_never_completes() {
+            let _serial = serial();
             for present in [false, true] {
                 let dir = directory("audio");
                 let transport = FakeTransport::default();
@@ -5108,6 +5132,7 @@ pub(crate) mod strict_instant {
         }
         #[tokio::test]
         async fn strict_complete_inflight_revocation_rejects_late_success() {
+            let _serial = serial();
             let dir = directory("late-complete");
             let transport = FakeTransport::default();
             transport.delay_complete.store(true, Ordering::Release);
@@ -5133,7 +5158,29 @@ pub(crate) mod strict_instant {
             std::fs::remove_dir_all(&dir).unwrap();
         }
         #[tokio::test]
+        async fn strict_exit_guard_covers_transfer_but_not_verification() {
+            let _serial = serial();
+            let dir = directory("exit-guard");
+            let transport = FakeTransport::default();
+            transport.delay_complete.store(true, Ordering::Release);
+            let (control, permission) = Control::new();
+            permission.grant().unwrap();
+            let mut source = events(&dir, false);
+            assert!(!upload_session_active());
+            let future = segments(&transport, &control, &mut source, false);
+            tokio::pin!(future);
+            tokio::select! { _ = transport.entered.notified() => {}, result = &mut future => panic!("Unexpected completion: {result:?}") }
+            assert!(!transport.put_without_guard.load(Ordering::Acquire));
+            assert!(!transport.complete_with_guard.load(Ordering::Acquire));
+            assert!(!upload_session_active());
+            transport.released.notify_one();
+            future.await.unwrap();
+            assert!(!upload_session_active());
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        #[tokio::test]
         async fn strict_permission_drop_and_old_generation_cannot_complete() {
+            let _serial = serial();
             let dir = directory("owner-drop");
             let transport = FakeTransport::default();
             let (old, old_permission) = Control::new();

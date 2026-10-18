@@ -52,6 +52,9 @@ pub struct StartConfig {
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
+    /// When set, the pipeline is primed behind this gate and records nothing
+    /// until the session arms it at the end of the start cue.
+    pub start_gate: Option<cap_recording::RecordingStartGate>,
 }
 
 #[cfg(target_os = "linux")]
@@ -86,6 +89,7 @@ impl<A: Actor> Drop for RecordingOwnedFeed<A> {
 pub struct ActiveRecording {
     handle: Handle,
     pub project_dir: PathBuf,
+    start_gate: Option<cap_recording::RecordingStartGate>,
     instant_upload: Option<SharedInstantUpload>,
     instant_share_link: Option<String>,
     #[cfg(target_os = "linux")]
@@ -419,42 +423,19 @@ async fn finalize_studio(
         completed.meta.status(),
         cap_project::StudioRecordingStatus::NeedsRemux
     );
+    let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
             ensure_finalization_storage(&project_path)?;
         }
-        let preparing = progress
+        let preparing = claim_progress
             .as_ref()
             .and_then(|progress| progress.claim_preparing(&completed));
         let result = match preparing {
             Some(job) => RecoveryManager::remux_stopped_with_preparing(&completed, job),
             None => RecoveryManager::remux_if_needed(&project_path),
         };
-        result.map(|_| completed).map_err(anyhow::Error::from)
-    })
-    .await
-    .context("studio finalize task")?
-    .context("studio finalize")?;
-    tracing::info!(
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "Studio stop remux complete"
-    );
-
-    // Everything `handle_recording_finish` does after the remux,
-    // in its order: the first-frame JPEG the library's card is
-    // drawn from, then the camera preview's blur toggle copied
-    // into the project's configuration. Neither is fatal to a
-    // recording that is already on disk, so both only warn.
-    let project_path = completed.project_path.clone();
-    tokio::task::spawn_blocking(move || {
-        let thumbnail_started = std::time::Instant::now();
-        if let Some(display_path) = studio_display_path(&project_path) {
-            write_bundle_thumbnail(&project_path, &display_path);
-        }
-        tracing::info!(
-            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
-            "Studio stop thumbnail complete"
-        );
+        result.map_err(anyhow::Error::from)?;
         let placement = completed
             .meta
             .camera_path()
@@ -474,6 +455,30 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
+        Ok::<_, anyhow::Error>(completed)
+    })
+    .await
+    .context("studio finalize task")?
+    .context("studio finalize")?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "Studio stop remux complete"
+    );
+
+    if let Some(progress) = &progress {
+        progress.complete(&Ok(completed.project_path.clone()));
+    }
+
+    let project_path = completed.project_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let thumbnail_started = std::time::Instant::now();
+        if let Some(display_path) = studio_display_path(&project_path) {
+            write_bundle_thumbnail(&project_path, &display_path);
+        }
+        tracing::info!(
+            elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio stop thumbnail complete"
+        );
     })
     .await
     .context("studio post-finalize task")?;
@@ -730,13 +735,17 @@ impl StudioFinalizationPublisher {
     }
 
     fn complete(&self, result: &anyhow::Result<PathBuf>) {
-        self.state.send_modify(|state| {
+        self.state.send_if_modified(|state| {
+            if state.result.is_some() && result.is_ok() {
+                return false;
+            }
             state.result = Some(
                 result
                     .as_ref()
                     .map(|_| ())
                     .map_err(|error| format!("{error:#}")),
             );
+            true
         });
     }
 }
@@ -1057,6 +1066,9 @@ impl ActiveRecording {
 
     #[cfg(target_os = "linux")]
     pub(crate) async fn cancel_preserving(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         if let Some(completion) = &self.instant_completion {
             completion.deny();
         }
@@ -1089,6 +1101,9 @@ impl ActiveRecording {
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         #[cfg(target_os = "linux")]
         if let Some(completion) = &self.instant_completion {
             completion.deny();
@@ -2225,6 +2240,9 @@ async fn start_attempt_with_upload(
                 camera_lock.is_some(),
                 None,
             );
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2250,6 +2268,9 @@ async fn start_attempt_with_upload(
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
                     .with_max_output_size(instant_max_resolution);
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2328,6 +2349,7 @@ async fn start_attempt_with_upload(
     Ok(ActiveRecording {
         handle,
         project_dir,
+        start_gate: config.start_gate.clone(),
         instant_upload,
         instant_share_link,
         #[cfg(target_os = "linux")]
@@ -2522,13 +2544,18 @@ fn create_project_dir(
         recording_mode,
         now,
     );
-    // Same normalization chain as the Tauri app: colons break Finder, slashes
-    // break paths.
-    let filename = format!("{}.cap", name.replace([':', '/'], "."));
+    let filename = project_bundle_filename(&name);
     let filename = cap_utils::ensure_unique_filename(&filename, &base)
         .map_err(|e| anyhow!("unique filename: {e}"))?;
 
     Ok(base.join(filename))
+}
+
+/// Preserve GPUI's colon and slash replacement, then strip invalid characters
+/// as the Tauri recording and screenshot paths do.
+pub(crate) fn project_bundle_filename(name: &str) -> String {
+    let name = name.replace([':', '/'], ".");
+    format!("{}.cap", sanitize_filename::sanitize(&name))
 }
 
 fn format_recording_project_name(
@@ -2666,6 +2693,22 @@ mod tests {
             ),
             format!("studio-{}...-{{unknown}}", "x".repeat(180))
         );
+    }
+
+    #[test]
+    fn window_title_with_windows_reserved_characters_creates_a_project_directory() {
+        let filename = project_bundle_filename(
+            "NATO fighter jets | News World | Metro News : / * ? < > (Window)",
+        );
+        assert!(filename.ends_with(".cap"));
+        assert!(!filename.chars().any(|c| "\\/:*?\"<>|".contains(c)));
+
+        #[cfg(windows)]
+        {
+            let base = temp_project("window-title");
+            std::fs::create_dir(base.join(filename)).unwrap();
+            std::fs::remove_dir_all(base).unwrap();
+        }
     }
 
     fn temp_project(tag: &str) -> PathBuf {

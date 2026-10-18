@@ -1,5 +1,4 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -129,7 +128,7 @@ export function Header(props: {
 							clearTimelineSelection();
 
 							console.log({ path: `${editorInstance.path}/` });
-							revealItemInDir(`${editorInstance.path}/`);
+							commands.revealItemInDir(`${editorInstance.path}/`);
 						}}
 						tooltipText="Open recording bundle"
 						leftIcon={<IconLucideFolder />}

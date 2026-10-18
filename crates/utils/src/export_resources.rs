@@ -9,6 +9,8 @@ static DISK_SAMPLE_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_
 const CRITICAL_MEMORY_SAMPLES: u8 = 3;
 const STOP_PREFIX: &str = "Export stopped to protect your computer: ";
 
+// Only macOS reports memory pressure; elsewhere every sample is Unknown.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum MemoryPressure {
     #[default]

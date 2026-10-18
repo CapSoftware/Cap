@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
 import { Feedback } from "@cap/database/emails/feedback";
@@ -108,7 +109,8 @@ async function getDesktopProfileUser(c: Context) {
 			.where(eq(authApiKeys.id, authHeader))
 			.limit(1);
 
-		return user ?? null;
+		if (!user || isBlockedAccountEmail(user.email)) return null;
+		return user;
 	}
 
 	const user = await getCurrentUser();

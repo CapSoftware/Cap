@@ -46,6 +46,22 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				);
 			});
 
+		const hasViewerGrant = (id: Video.VideoId, email: string) =>
+			db.use(async (database) => {
+				const [grant] = await database
+					.select({ id: Db.videoViewerGrants.id })
+					.from(Db.videoViewerGrants)
+					.where(
+						Dz.and(
+							Dz.eq(Db.videoViewerGrants.videoId, id),
+							Dz.eq(Db.videoViewerGrants.email, email.trim().toLowerCase()),
+							Dz.isNull(Db.videoViewerGrants.revokedAt),
+						),
+					)
+					.limit(1);
+				return Boolean(grant);
+			});
+
 		const prepareDelete = (id: Video.VideoId, ownerId: User.UserId) =>
 			db.use((database) =>
 				database.transaction(async (tx) => {
@@ -150,7 +166,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, prepareDelete, delete: delete_, create };
+		return { getById, hasViewerGrant, prepareDelete, delete: delete_, create };
 	}),
 	dependencies: [Database.Default],
 }) {}

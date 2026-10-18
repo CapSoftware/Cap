@@ -204,13 +204,18 @@ pub async fn run_still_renderer(
         preserve_screen_alpha: true,
     };
 
-    let constants = match RenderVideoConstants::new_with_options(
-        options,
-        source.meta,
-        source.studio_meta,
-    )
-    .await
-    {
+    let constants = match match crate::app_windows::shared_wgpu_device().await {
+        Some(shared) => Ok(RenderVideoConstants::from_shared_device(
+            shared,
+            options,
+            source.studio_meta,
+            source.meta,
+            Arc::new(cap_rendering::BackgroundTextureCache::default()),
+        )),
+        None => {
+            RenderVideoConstants::new_with_options(options, source.meta, source.studio_meta).await
+        }
+    } {
         Ok(constants) => constants,
         Err(error) => {
             let _ = setup_tx.send(Err(format!("The GPU renderer failed to start: {error}")));
@@ -391,12 +396,9 @@ async fn render_export_rgba(
             frame.height
         ));
     }
-    let rgba: Vec<u8> = frame
-        .data
-        .chunks(padded)
-        .take(frame.height as usize)
-        .flat_map(|row| row[..row_bytes].iter().copied())
-        .collect();
+    let rgba =
+        cap_gpui_kernels::frame::unpad_rows(&frame.data, row_bytes, padded, frame.height as usize)
+            .ok_or_else(|| "Invalid export buffer rows".to_string())?;
 
     // What the preview renders this config at: `get_base_size`, then the
     // uniforms' own alignment -- `get_output_size` at scale 1. That is what
@@ -903,6 +905,7 @@ pub struct ScreenshotEditorWindow {
     /// `projectHistory` (`context.tsx:549-659`), reusing the video editor's.
     pub(crate) history: ProjectHistory,
     revision: u64,
+    render_gate: RenderInputGate,
     config_tx: Option<tokio::sync::watch::Sender<ConfigUpdate>>,
     export_tx: Option<tokio::sync::mpsc::Sender<ExportRequest>>,
     /// One export at a time: the copy/save buttons grey out while the GPU
@@ -993,6 +996,7 @@ impl ScreenshotEditorWindow {
             project: ProjectConfiguration::default(),
             history: ProjectHistory::new(ProjectConfiguration::default()),
             revision: 0,
+            render_gate: RenderInputGate::default(),
             config_tx: None,
             export_tx: None,
             exporting: false,
@@ -1093,6 +1097,7 @@ impl ScreenshotEditorWindow {
             .set_open(config.background.border.as_ref().is_some_and(|b| b.enabled));
         self.history = ProjectHistory::new(config.clone());
         self.project = config;
+        self.render_gate = RenderInputGate::published(&mut self.project);
         self.image_size = Some(image_size);
         self.config_tx = Some(config_tx);
         self.export_tx = Some(export_tx);
@@ -1204,6 +1209,9 @@ impl ScreenshotEditorWindow {
         let Some(config_tx) = &self.config_tx else {
             return;
         };
+        if !self.render_gate.admit(&mut self.project) {
+            return;
+        }
         self.revision += 1;
         let _ = config_tx.send(ConfigUpdate {
             revision: self.revision,
@@ -4424,7 +4432,7 @@ impl Render for ScreenshotEditorWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             .font_weight(FontWeight::MEDIUM)
             .bg(if theme.is_dark() {
                 theme.gray_1
@@ -4683,27 +4691,61 @@ fn decode_preview_image(path: &Path) -> Option<Arc<RenderImage>> {
 // Loading
 // ---------------------------------------------------------------------------
 
+/// Lets a config through to the still renderer only when something the
+/// renderer reads has changed. Annotations are left out of the comparison
+/// because the renderer never draws them: the editor paints them as gpui
+/// overlays and `screenshot_export::composite` burns them into exports, so an
+/// edit that only touches annotations would otherwise re-render, read back and
+/// re-upload an identical full-resolution frame.
+#[derive(Default)]
+struct RenderInputGate {
+    published: Option<Vec<u8>>,
+}
+
+impl RenderInputGate {
+    fn published(project: &mut ProjectConfiguration) -> Self {
+        Self {
+            published: render_input_key(project),
+        }
+    }
+
+    fn admit(&mut self, project: &mut ProjectConfiguration) -> bool {
+        let key = render_input_key(project);
+        if key.is_some() && key == self.published {
+            return false;
+        }
+        self.published = key;
+        true
+    }
+}
+
+fn render_input_key(project: &mut ProjectConfiguration) -> Option<Vec<u8>> {
+    let annotations = std::mem::take(&mut project.annotations);
+    let key = serde_json::to_vec(&*project);
+    project.annotations = annotations;
+    let mut key = key.ok()?;
+    key.extend(
+        project
+            .hidden_text_segments
+            .iter()
+            .flat_map(|index| index.to_le_bytes()),
+    );
+    Some(key)
+}
+
 /// One rendered frame, in both the forms the window needs: tight RGBA (what a
 /// mask overlay resamples) and the BGRA copy gpui's atlas takes. The rows are
 /// copied once and the swap runs over a clone, so the padded GPU buffer is
 /// walked a single time.
 fn frame_buffers(frame: &RenderedFrame) -> Option<(Arc<Vec<u8>>, Arc<RenderImage>)> {
-    let row_bytes = frame.width as usize * 4;
-    let mut rgba = Vec::with_capacity(row_bytes * frame.height as usize);
-    for row in frame
-        .data
-        .chunks(frame.padded_bytes_per_row as usize)
-        .take(frame.height as usize)
-    {
-        if row.len() < row_bytes {
-            return None;
-        }
-        rgba.extend_from_slice(&row[..row_bytes]);
-    }
+    let rgba = cap_gpui_kernels::frame::unpad_rows(
+        &frame.data,
+        frame.width as usize * 4,
+        frame.padded_bytes_per_row as usize,
+        frame.height as usize,
+    )?;
     let mut bgra = rgba.clone();
-    for pixel in bgra.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    cap_gpui_kernels::frame::swap_red_blue(&mut bgra);
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, bgra)?;
     Some((
         Arc::new(rgba),
@@ -4937,5 +4979,289 @@ mod tests {
         // The 8px floor keeps a gentle tick moving (`Preview.tsx:306`).
         assert_eq!(ctrl_wheel_zoom_step(1.), 8. * 0.005);
         assert_eq!(ctrl_wheel_zoom_step(-1.), -8. * 0.005);
+    }
+
+    fn new_screenshot_config() -> ProjectConfiguration {
+        let mut config = ProjectConfiguration::default();
+        config.background.source = BackgroundSource::Color {
+            value: [255, 255, 255],
+            alpha: 0,
+        };
+        config.background.shadow = 0.0;
+        config
+    }
+
+    fn arrow(id: &str, stroke_width: f64) -> cap_project::Annotation {
+        cap_project::Annotation {
+            id: id.into(),
+            annotation_type: cap_project::AnnotationType::Arrow,
+            x: 120.,
+            y: 80.,
+            width: 300.,
+            height: 160.,
+            stroke_color: "#F05656".into(),
+            stroke_width,
+            fill_color: "transparent".into(),
+            opacity: 1.,
+            rotation: 0.,
+            text: None,
+            mask_type: None,
+            mask_level: None,
+            points: None,
+        }
+    }
+
+    #[test]
+    fn annotation_only_edits_never_reach_the_still_renderer() {
+        let mut project = new_screenshot_config();
+        let mut gate = RenderInputGate::published(&mut project);
+
+        project.annotations.push(arrow("a", 4.));
+        assert!(!gate.admit(&mut project));
+        for width in 5..60 {
+            project.annotations[0].stroke_width = width as f64;
+            assert!(!gate.admit(&mut project));
+        }
+        project.annotations[0].stroke_color = "#2E7DF6".into();
+        project.annotations.push(arrow("b", 8.));
+        assert!(!gate.admit(&mut project));
+        project.annotations.clear();
+        assert!(!gate.admit(&mut project));
+        assert_eq!(project.annotations.len(), 0);
+    }
+
+    #[test]
+    fn renderer_inputs_still_reach_the_still_renderer() {
+        let mut project = new_screenshot_config();
+        project.annotations.push(arrow("a", 4.));
+        let mut gate = RenderInputGate::published(&mut project);
+
+        project.background.padding = 12.;
+        assert!(gate.admit(&mut project));
+        assert!(!gate.admit(&mut project));
+
+        project.background.rounding = 8.;
+        project.annotations[0].stroke_width = 9.;
+        assert!(gate.admit(&mut project));
+        assert_eq!(project.annotations[0].stroke_width, 9.);
+
+        project.background.source = BackgroundSource::Color {
+            value: [10, 20, 30],
+            alpha: 255,
+        };
+        assert!(gate.admit(&mut project));
+
+        project.hidden_text_segments.push(0);
+        assert!(gate.admit(&mut project));
+    }
+
+    #[test]
+    fn an_unloaded_editor_publishes_its_first_config() {
+        let mut project = new_screenshot_config();
+        assert!(RenderInputGate::default().admit(&mut project));
+    }
+
+    #[cfg(unix)]
+    fn cpu_secs() -> f64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        let usage = unsafe { usage.assume_init() };
+        let secs = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1_000_000.0;
+        secs(usage.ru_utime) + secs(usage.ru_stime)
+    }
+
+    #[cfg(windows)]
+    fn cpu_secs() -> f64 {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentProcess, GetProcessTimes},
+        };
+
+        let empty = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (empty, empty, empty, empty);
+        unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut creation,
+                &mut exit,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        let secs = |time: FILETIME| {
+            ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+                / 10_000_000.0
+        };
+        secs(kernel) + secs(user)
+    }
+
+    fn synthetic_source(width: u32, height: u32) -> LoadedSource {
+        let mut rgba = vec![0u8; width as usize * height as usize * 4];
+        for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+            let x = (index % width as usize) as u32;
+            let y = (index / width as usize) as u32;
+            pixel.copy_from_slice(&[
+                (x * 255 / width) as u8,
+                (y * 255 / height) as u8,
+                ((x ^ y) & 0xff) as u8,
+                255,
+            ]);
+        }
+        let studio_meta = StudioRecordingMeta::SingleSegment {
+            segment: cap_project::SingleSegment {
+                display: cap_project::VideoMeta {
+                    path: "original.png".into(),
+                    fps: 0,
+                    start_time: Some(0.0),
+                    device_id: None,
+                },
+                camera: None,
+                audio: None,
+                cursor: None,
+            },
+        };
+        let meta = RecordingMeta {
+            platform: Some(cap_project::Platform::default()),
+            project_path: std::env::temp_dir().join("screenshot-annotation-bench.cap"),
+            pretty_name: "bench".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(studio_meta.clone())),
+            upload: None,
+        };
+        let mut config = new_screenshot_config();
+        config.annotations.push(arrow("a", 4.));
+        LoadedSource {
+            rgba,
+            width,
+            height,
+            pretty_name: "bench".into(),
+            config,
+            meta,
+            studio_meta,
+        }
+    }
+
+    struct DragResult {
+        renders: usize,
+        cpu_ms: f64,
+        render_ms: Vec<f64>,
+    }
+
+    /// Drives the real `run_still_renderer` and frame pump with a 60 Hz
+    /// stroke-width slider drag, publishing every tick the way `publish` did
+    /// before the gate (`gated == false`) or through `RenderInputGate`.
+    async fn drag_stroke_width(width: u32, height: u32, ticks: usize, gated: bool) -> DragResult {
+        let source = synthetic_source(width, height);
+        let mut project = source.config.clone();
+        let (config_tx, config_rx) = tokio::sync::watch::channel(ConfigUpdate {
+            revision: 0,
+            config: project.clone(),
+        });
+        let (_export_tx, export_rx) = tokio::sync::mpsc::channel(1);
+        let (frame_tx, frame_rx) = flume::bounded(2);
+        let (setup_tx, setup_rx) = flume::bounded(1);
+        tokio::spawn(run_still_renderer(
+            source, config_rx, export_rx, frame_tx, setup_tx,
+        ));
+        setup_rx.recv_async().await.unwrap().unwrap();
+        let (first, _) = frame_rx.recv_async().await.unwrap();
+        assert!(frame_buffers(&first).is_some());
+
+        let renders = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let render_ms = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sent_at = Arc::new(std::sync::Mutex::new(
+            HashMap::<u64, std::time::Instant>::new(),
+        ));
+        let pump = {
+            let (renders, render_ms, sent_at) =
+                (renders.clone(), render_ms.clone(), sent_at.clone());
+            tokio::spawn(async move {
+                while let Ok((frame, revision)) = frame_rx.recv_async().await {
+                    let buffers = tokio::task::spawn_blocking(move || frame_buffers(&frame))
+                        .await
+                        .unwrap();
+                    assert!(buffers.is_some());
+                    if let Some(sent) = sent_at.lock().unwrap().remove(&revision) {
+                        render_ms
+                            .lock()
+                            .unwrap()
+                            .push(sent.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            })
+        };
+
+        let mut gate = RenderInputGate::published(&mut project);
+        let mut revision = 0;
+        let cpu_start = cpu_secs();
+        let mut interval = tokio::time::interval(Duration::from_micros(16_667));
+        for tick in 0..ticks {
+            interval.tick().await;
+            project.annotations[0].stroke_width = 4. + (tick % 40) as f64;
+            if gated && !gate.admit(&mut project) {
+                continue;
+            }
+            revision += 1;
+            sent_at
+                .lock()
+                .unwrap()
+                .insert(revision, std::time::Instant::now());
+            config_tx
+                .send(ConfigUpdate {
+                    revision,
+                    config: project.clone(),
+                })
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        let cpu_ms = (cpu_secs() - cpu_start) * 1000.0;
+        drop(config_tx);
+        pump.await.unwrap();
+
+        let render_ms = render_ms.lock().unwrap().clone();
+        DragResult {
+            renders: renders.load(std::sync::atomic::Ordering::Relaxed),
+            cpu_ms,
+            render_ms,
+        }
+    }
+
+    fn median(values: &mut [f64]) -> f64 {
+        if values.is_empty() {
+            return 0.;
+        }
+        values.sort_by(f64::total_cmp);
+        values[values.len() / 2]
+    }
+
+    /// `cargo test --bin cap-gpui benchmark_annotation_slider_drag -- --ignored --nocapture`
+    #[test]
+    #[ignore = "GPU benchmark"]
+    fn benchmark_annotation_slider_drag() {
+        const TICKS: usize = 120;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        println!("| still | mode | renders | process CPU | CPU / tick | median edit-to-frame |");
+        println!("| --- | --- | ---: | ---: | ---: | ---: |");
+        for (width, height) in [(1920, 1080), (3024, 1964), (3840, 2160)] {
+            for gated in [false, true] {
+                let mut result = runtime.block_on(drag_stroke_width(width, height, TICKS, gated));
+                println!(
+                    "| {width}x{height} | {} | {} | {:.0} ms | {:.2} ms | {:.1} ms |",
+                    if gated { "gated" } else { "main" },
+                    result.renders,
+                    result.cpu_ms,
+                    result.cpu_ms / TICKS as f64,
+                    median(&mut result.render_ms),
+                );
+            }
+        }
     }
 }

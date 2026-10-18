@@ -1,3 +1,4 @@
+use crate::RecordingStartGate;
 #[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
 #[cfg(target_os = "linux")]
@@ -707,7 +708,13 @@ async fn create_pipeline(
     system_audio_source: Option<crate::sources::screen_capture::SystemAudioSourceConfig>,
     max_output_size: Option<u32>,
     start_time: Timestamps,
+    start_gate: Option<RecordingStartGate>,
 ) -> anyhow::Result<Pipeline> {
+    // Instant merges its screen and audio tracks by timestamp, and gated
+    // audio starts at the arm point, so the screen must start there too.
+    if let Some(gate) = &start_gate {
+        gate.set_video_origin_at_arm();
+    }
     let ScreenPipelineInput {
         source: screen_capture,
         info: screen_info,
@@ -747,6 +754,7 @@ async fn create_pipeline(
         segments_dir.clone(),
         output_resolution,
         start_time,
+        start_gate.clone(),
         segment_tx_for_video,
     )
     .await?;
@@ -759,7 +767,9 @@ async fn create_pipeline(
                 camera,
             })
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
                 output_size: Some(output_resolution),
@@ -773,6 +783,7 @@ async fn create_pipeline(
             segments_dir.clone(),
             output_resolution,
             start_time,
+            start_gate.clone(),
             segment_tx_for_video,
         )
         .await?
@@ -781,10 +792,17 @@ async fn create_pipeline(
     let has_audio = mic_feed.is_some() || system_audio_source.is_some();
     let audio = if has_audio {
         let audio_dir = content_dir.join("audio");
-        let mut builder =
-            output_pipeline::OutputPipeline::builder(audio_dir.clone()).with_timestamps(start_time);
-        #[cfg(target_os = "linux")]
-        {
+        let mut builder = output_pipeline::OutputPipeline::builder(audio_dir.clone())
+            .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone());
+        // Behind a start gate, zero is the gate's arm time, which the screen
+        // track also starts at (within a frame), not the first audio sample:
+        // a mic that becomes ready late, or loopback system audio that
+        // delivers only while sound plays, would otherwise move all audio
+        // early. Without a gate the screen starts at its first encoded frame,
+        // after capture setup, so the epoch would put audio late instead;
+        // only Linux, whose video also starts at the epoch, anchors there.
+        if start_gate.is_some() || cfg!(target_os = "linux") {
             builder = builder.with_audio_anchor(output_pipeline::AudioAnchor::PipelineEpoch);
         }
 
@@ -857,6 +875,7 @@ pub struct ActorBuilder {
     excluded_windows: Vec<scap_targets::WindowId>,
     #[cfg(target_os = "linux")]
     lifetime: InstantLifetimeOwner,
+    start_gate: Option<RecordingStartGate>,
 }
 
 impl ActorBuilder {
@@ -881,7 +900,15 @@ impl ActorBuilder {
             lifetime: InstantLifetimeOwner::new(),
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
+            start_gate: None,
         }
+    }
+
+    /// Prime the capture pipeline ahead of the start cue; nothing is recorded
+    /// until the gate is armed. See [`RecordingStartGate`].
+    pub fn with_start_gate(mut self, start_gate: RecordingStartGate) -> Self {
+        self.start_gate = Some(start_gate);
+        self
     }
 
     #[cfg(target_os = "linux")]
@@ -961,6 +988,7 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
+                start_gate: self.start_gate,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
@@ -1246,7 +1274,8 @@ async fn build_instant_recording_actor(
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
                     .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
-                    .with_timestamps(timestamps);
+                    .with_timestamps(timestamps)
+                    .with_start_gate(inputs.start_gate.clone());
 
                 if let Some(mic_feed) = inputs.mic_feed.clone() {
                     builder = builder.with_audio_source::<crate::sources::Microphone>(mic_feed);
@@ -1368,6 +1397,7 @@ async fn build_instant_recording_actor(
                 system_audio_source,
                 max_output_size,
                 timestamps,
+                inputs.start_gate.clone(),
             )
             .await?;
 

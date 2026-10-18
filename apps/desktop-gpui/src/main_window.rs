@@ -15,10 +15,10 @@ use gpui::{
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, app_windows, devices,
+    MAIN_WINDOW_WIDTH, app_windows, devices,
     devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     feeds::{self, Feeds},
-    library::{self, MediaKind, RecentItem, RecordingItem, ScreenshotItem},
+    library::{self, RecordingItem, ScreenshotItem},
     recording,
     session::{Phase, RecordingSession},
     settings_window::Page,
@@ -28,18 +28,9 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
-const EXPANDED_WIDTH: f32 = 600.;
-const EXPANDED_HEIGHT: f32 = 672.;
-
-/// `duration: 180` in `resizeMainWindow`.
-const RESIZE_DURATION_SECS: f32 = 0.18;
-
 /// `h-9` on `.cap-window-header`.
 const HEADER_HEIGHT: f32 = 36.;
 
-/// `h-28 w-[196px]` on `RecentCard`.
-const RECENT_CARD_WIDTH: f32 = 196.;
-const RECENT_CARD_HEIGHT: f32 = 112.;
 /// `h-[42px]` in deviceRowStyles.ts.
 const DEVICE_ROW_HEIGHT: f32 = 42.;
 
@@ -179,15 +170,95 @@ impl Mode {
     }
 }
 
-fn capture_hover_fill(theme: Theme, selected: bool, chevron: bool) -> Hsla {
-    if selected {
-        if chevron {
-            Theme::with_alpha(theme.blue_9, if theme.is_dark() { 0.30 } else { 0.22 })
-        } else {
-            theme.tile_selected_hover_bg()
-        }
+fn glass_tint(theme: Theme, light: f32, dark: f32) -> Hsla {
+    if theme.is_dark() {
+        gpui::hsla(0., 0., 1., dark)
     } else {
-        Theme::with_alpha(theme.blue_9, if chevron { 0.16 } else { 0.07 })
+        gpui::hsla(0., 0., 0., light)
+    }
+}
+
+fn glass_hover(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.06, 0.07)
+}
+
+fn glass_press(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.1, 0.11)
+}
+
+fn glass_selected(theme: Theme) -> Hsla {
+    glass_tint(theme, 0.08, 0.1)
+}
+
+fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset,
+    }
+}
+
+/// Drawn in gpui rather than with an `NSGlassEffectView` per button, which
+/// would have to track gpui's layout under the Metal layer. Two shadows, one
+/// unblurred, keep it cheap on a window that repaints with the mic meter.
+fn glass_button<E: Styled>(element: E, theme: Theme, selected: bool) -> E {
+    let dark = theme.is_dark();
+    let (top, bottom, rim) = match (selected, dark) {
+        (false, false) => (
+            gpui::hsla(0., 0., 1., 0.7),
+            gpui::hsla(0., 0., 1., 0.58),
+            gpui::hsla(0., 0., 0., 0.08),
+        ),
+        (false, true) => (
+            gpui::hsla(0., 0., 1., 0.085),
+            gpui::hsla(0., 0., 1., 0.06),
+            gpui::hsla(0., 0., 1., 0.07),
+        ),
+        (true, false) => (
+            Theme::with_alpha(theme.blue_3, 0.9),
+            Theme::with_alpha(theme.blue_3, 0.75),
+            Theme::with_alpha(theme.blue_8, 0.4),
+        ),
+        (true, true) => (
+            Theme::with_alpha(theme.blue_9, 0.24),
+            Theme::with_alpha(theme.blue_9, 0.18),
+            Theme::with_alpha(theme.blue_9, 0.3),
+        ),
+    };
+    let (highlight, lift) = if dark {
+        (gpui::hsla(0., 0., 1., 0.07), gpui::hsla(0., 0., 0., 0.2))
+    } else {
+        (gpui::hsla(0., 0., 1., 0.8), gpui::hsla(0., 0., 0., 0.04))
+    };
+    element
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(top, 0.),
+            gpui::linear_color_stop(bottom, 1.),
+        ))
+        .border_1()
+        .border_color(rim)
+        .shadow(vec![
+            shadow(highlight, 1., 0., 0., true),
+            shadow(lift, 1., 2., 0., false),
+        ])
+}
+
+fn capture_hover_fill(theme: Theme, selected: bool) -> Hsla {
+    if selected {
+        Theme::with_alpha(theme.blue_9, 0.06)
+    } else {
+        glass_tint(theme, 0.04, 0.05)
+    }
+}
+
+fn capture_press_fill(theme: Theme, selected: bool) -> Hsla {
+    if selected {
+        Theme::with_alpha(theme.blue_9, 0.12)
+    } else {
+        glass_tint(theme, 0.07, 0.09)
     }
 }
 
@@ -314,16 +385,6 @@ impl TargetType {
             Self::Window => "Window",
             Self::Area => "Area",
             Self::CameraOnly => "Camera Only",
-        }
-    }
-
-    /// Shown only when expanded.
-    fn description(self) -> &'static str {
-        match self {
-            Self::Display => "Entire screen",
-            Self::Window => "One app",
-            Self::Area => "Custom region",
-            Self::CameraOnly => "No screen",
         }
     }
 
@@ -703,7 +764,6 @@ struct MicrophoneWarning {
 
 pub struct MainWindow {
     theme: Theme,
-    expanded: bool,
     mode: Mode,
     mode_hover: ModeHoverState,
     mode_hover_task: Option<Task<()>>,
@@ -727,9 +787,6 @@ pub struct MainWindow {
     selected_display: Option<DisplayOption>,
     selected_window: Option<WindowOption>,
     panel: Option<Panel>,
-    /// Holds the in-flight expand/collapse animation. Dropping it cancels,
-    /// which is how a second toggle mid-animation takes over cleanly.
-    resize_task: Option<gpui::Task<()>>,
     /// Live filter text for the device and target panels -- a mirror of
     /// `search_input`'s value, kept as a plain `String` because every list in
     /// the panel filters against it from a `&self` method.
@@ -747,13 +804,6 @@ pub struct MainWindow {
     checking_storage: bool,
     deep_link_start: Option<RecordingStartPermit>,
     microphone_warning: Option<MicrophoneWarning>,
-    /// The Recents scan, or `None` while the first one is in flight -- which
-    /// is the query's `isLoading`, and draws the same three skeleton cards.
-    recents: Option<Vec<RecentEntry>>,
-    /// Holds the in-flight scan-and-decode pass. Assigning over it drops the
-    /// previous one, which cancels a refresh a newer one has superseded (the
-    /// same idiom as `resize_task`).
-    recents_task: Option<gpui::Task<()>>,
     /// Header recordings / screenshots panel. Scanned only while that panel
     /// is open so a large library is not walked on every home paint.
     library: Option<LibraryItems>,
@@ -763,10 +813,6 @@ pub struct MainWindow {
     recovery_pending: bool,
     recovery_scan_task: Option<Task<()>>,
     recovery_action_task: Option<Task<()>>,
-    /// `createLicenseQuery()`'s resolution, cached: reading the store file in
-    /// `render_plan_badge` would be I/O per paint. Refreshed on every Recents
-    /// rescan -- the same seam that already re-reads the library on reshow,
-    /// so a sign-in or license activation in Settings lands here too.
     plan: PlanBadge,
     /// Display/window thumbnails and app icons for the target cards. See
     /// `target_thumbnails::ThumbnailCache` for why this is per-view rather
@@ -808,16 +854,6 @@ impl PlanBadge {
     }
 }
 
-/// One `RecentMediaItem` on screen: the scanned entry, plus its thumbnail once
-/// the background pass has decoded one. Missing or undecodable thumbnails stay
-/// `None` and the card draws the icon fallback, which is exactly what the
-/// TSX's `onError` -> `setImageAvailable(false)` does.
-struct RecentEntry {
-    item: RecentItem,
-    thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
-    thumbnail_stale: bool,
-}
-
 impl MainWindow {
     pub fn new(
         session: Entity<RecordingSession>,
@@ -826,6 +862,10 @@ impl MainWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         window.on_window_should_close(cx, |_, cx| {
+            // The custom Windows X hides to the tray; native close requests must still quit.
+            #[cfg(target_os = "windows")]
+            cx.defer(crate::menus::quit);
+            #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false
         });
@@ -943,7 +983,6 @@ impl MainWindow {
 
         Self {
             theme,
-            expanded: false,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
             // and the tray's Select Mode submenu writes the same key, so the
             // window has to start where the store left it rather than at a
@@ -966,11 +1005,10 @@ impl MainWindow {
             device_format_generation: 0,
             device_format_pending: None,
             device_format_notice: None,
-            system_audio: false,
+            system_audio: crate::store::recording_system_audio(),
             selected_display: None,
             selected_window: None,
             panel: None,
-            resize_task: None,
             search: String::new(),
             search_input,
             _search_events: search_events,
@@ -979,8 +1017,6 @@ impl MainWindow {
             checking_storage: false,
             deep_link_start: None,
             microphone_warning: None,
-            recents: None,
-            recents_task: None,
             library: None,
             library_task: None,
             incomplete_recording: None,
@@ -1066,6 +1102,10 @@ impl MainWindow {
                         this.open_panel(Panel::Target(TargetType::Display), window, cx)
                     }
                     Ok("window") => this.open_panel(Panel::Target(TargetType::Window), window, cx),
+                    Ok("camera") => this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx),
+                    Ok("microphone") => {
+                        this.open_panel(Panel::Device(DeviceMenu::Microphone), window, cx)
+                    }
                     _ => {}
                 }
                 // `if (!targetMode) scheduleTargetListPrewarm()` on
@@ -1483,78 +1523,6 @@ impl MainWindow {
         window.refresh();
     }
 
-    /// Re-run the Recents scan and re-decode its thumbnails.
-    ///
-    /// `shouldLoadRecents()` (index.tsx:2210-2215) gates the query on the
-    /// window being expanded, focused, idle, and free of a target mode or an
-    /// open menu. Expanded is the check that carries the weight here: the
-    /// section is not rendered at all when it is false, so a scan then would
-    /// be filesystem work nobody could see. The rest of the gate is the
-    /// Tauri app avoiding a fetch it would immediately re-run; here the
-    /// refresh points are explicit (expanding, and the main window coming
-    /// back) rather than reactive.
-    ///
-    /// The scan and every decode run on the background executor -- a library
-    /// with several hundred bundles is several hundred `read_dir` + JSON
-    /// parses, and the thumbnails are native-resolution JPEGs. The list lands
-    /// first so the cards can paint with their icon fallbacks, then the
-    /// decodes fan out through `library::spawn_decode_pool` and land in
-    /// batches: one entity update per drain of the result channel rather than
-    /// one await-notify-repaint round trip per card.
-    pub fn refresh_recents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.expanded {
-            return;
-        }
-
-        self.plan = PlanBadge::current();
-        self.recents_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let items = cx
-                .background_executor()
-                .spawn(async { library::recent_media() })
-                .await;
-            tracing::info!(count = items.len(), "scanned the recordings library");
-
-            let Ok(thumbnails) =
-                this.update_in(cx, |this, window, cx| this.set_recents(items, window, cx))
-            else {
-                return;
-            };
-
-            let (_decodes, results) = library::spawn_decode_pool(
-                cx.background_executor(),
-                thumbnails,
-                |(index, path)| library::decode_thumbnail(&path).map(|image| (index, image)),
-            );
-            while let Ok(first) = results.recv_async().await {
-                let mut batch = vec![first];
-                batch.extend(results.try_iter());
-                if this
-                    .update_in(cx, |this, window, cx| {
-                        for (index, image) in batch {
-                            let Some(entry) =
-                                this.recents.as_mut().and_then(|items| items.get_mut(index))
-                            else {
-                                continue;
-                            };
-                            if let Some(old) = entry.thumbnail.replace(image) {
-                                let _ = window.drop_image(old);
-                            }
-                            entry.thumbnail_stale = false;
-                        }
-                        cx.notify();
-                        // The main window is not necessarily the active one
-                        // when a recording finishes into it, and an inactive
-                        // window only repaints when asked (the unit-2 finding).
-                        window.refresh();
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        }));
-    }
-
     pub fn start_recovery_check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.scan_incomplete_recordings(window, cx, std::time::Duration::from_secs(2));
     }
@@ -1652,7 +1620,6 @@ impl MainWindow {
                     Ok(project_path) => {
                         this.incomplete_recording = None;
                         this.recovery_error = None;
-                        this.refresh_recents(window, cx);
                         this.refresh_open_library(window, cx);
                         this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
                         if recover {
@@ -1675,130 +1642,6 @@ impl MainWindow {
         }));
     }
 
-    /// Install a fresh scan result, releasing the previous thumbnails from the
-    /// sprite atlas -- the same explicit drop the camera preview does with
-    /// every frame it replaces.
-    fn set_recents(
-        &mut self,
-        items: Vec<RecentItem>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<(usize, std::path::PathBuf)> {
-        let mut cached: std::collections::HashMap<_, _> = self
-            .recents
-            .take()
-            .into_iter()
-            .flatten()
-            .map(|entry| (entry.item.bundle.clone(), entry))
-            .collect();
-        let mut pending = Vec::new();
-        self.recents = Some(
-            items
-                .into_iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    let previous = cached.remove(&item.bundle);
-                    let changed = previous.as_ref().is_none_or(|entry| {
-                        entry.item.thumbnail != item.thumbnail
-                            || entry.item.thumbnail_version != item.thumbnail_version
-                            || entry.thumbnail_stale
-                            || entry.thumbnail.is_none()
-                    });
-                    if changed && let Some(path) = item.thumbnail.clone() {
-                        pending.push((index, path));
-                    }
-                    RecentEntry {
-                        item,
-                        thumbnail: previous.and_then(|entry| entry.thumbnail),
-                        thumbnail_stale: changed,
-                    }
-                })
-                .collect(),
-        );
-        for (_, entry) in cached {
-            if let Some(image) = entry.thumbnail {
-                let _ = window.drop_image(image);
-            }
-        }
-        cx.notify();
-        window.refresh();
-        pending
-    }
-
-    fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let from = self.window_size();
-        self.expanded = !self.expanded;
-        let to = self.window_size();
-        tracing::info!(expanded = self.expanded, "toggling main window size");
-
-        #[cfg(target_os = "linux")]
-        let uses_wayland = matches!(
-            raw_window_handle::HasWindowHandle::window_handle(window),
-            Ok(handle) if matches!(handle.as_raw(), raw_window_handle::RawWindowHandle::Wayland(_))
-        );
-
-        // Matches `resizeMainWindow`: 180ms, ease-out cubic.
-        //
-        // Assigning over the previous task drops it, which cancels a toggle
-        // that is still in flight -- otherwise two animations would fight over
-        // `resize` and the window could settle at an interpolated size.
-        self.resize_task = Some(cx.spawn_in(window, async move |this, cx| {
-            #[cfg(target_os = "linux")]
-            if uses_wayland {
-                // Intermediate sizes and half-pixel center shifts accumulate compositor rounding drift.
-                let height = to.1 + (to.1 - MAIN_WINDOW_HEIGHT).rem_euclid(2.);
-                let _ = this.update_in(cx, |_this, window, _cx| {
-                    window.resize(gpui::size(px(to.0), px(height)));
-                });
-                return;
-            }
-
-            let start = std::time::Instant::now();
-
-            loop {
-                let elapsed = start.elapsed().as_secs_f32();
-                let t = (elapsed / RESIZE_DURATION_SECS).clamp(0., 1.);
-                // ease-out cubic
-                let eased = 1. - (1. - t).powi(3);
-
-                let size = gpui::size(
-                    px(from.0 + (to.0 - from.0) * eased),
-                    px(from.1 + (to.1 - from.1) * eased),
-                );
-
-                if this
-                    .update_in(cx, |_this, window, _cx| window.resize(size))
-                    .is_err()
-                {
-                    return;
-                }
-
-                if t >= 1. {
-                    return;
-                }
-
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(8))
-                    .await;
-            }
-        }));
-
-        // `enabled: shouldLoadRecents()` -- expanding is what turns the query
-        // on, and collapsing leaves the last result in place for the next one.
-        self.refresh_recents(window, cx);
-
-        cx.notify();
-    }
-
-    /// The window size the current state should be drawn at.
-    fn window_size(&self) -> (f32, f32) {
-        if self.expanded {
-            (EXPANDED_WIDTH, EXPANDED_HEIGHT)
-        } else {
-            (MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
-        }
-    }
-
     /// Re-resolve the palette when the system appearance flips, or when the
     /// native material lands.
     ///
@@ -1808,82 +1651,6 @@ impl MainWindow {
     /// window once so this runs again.
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, true);
-    }
-
-    /// `CAP_GPUI_AUTO_EXPAND=1`: open expanded, the way clicking the zoom
-    /// light does. Same reason as the other `CAP_GPUI_AUTO_*` hooks --
-    /// unprivileged synthetic clicks are dropped, so the screenshot harness
-    /// needs a way in.
-    pub fn auto_expand(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if std::env::var("CAP_GPUI_AUTO_EXPAND").is_ok_and(|value| value == "1") {
-            self.ensure_expanded(window, cx);
-        }
-    }
-
-    pub fn is_expanded(&self) -> bool {
-        self.expanded
-    }
-
-    /// Expand through `toggle_expanded` so the restore takes the exact path
-    /// the zoom light takes (resize animation, section reveal, Recents scan).
-    pub fn ensure_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.expanded {
-            self.toggle_expanded(window, cx);
-        }
-    }
-
-    /// `CAP_GPUI_AUTO_RECENT=1`: click the first Recents card, once the
-    /// library scan that only runs while expanded has landed. `=twice` clicks
-    /// it a second time a moment later, which is what proves the editor
-    /// registry reuses a window rather than opening a second one.
-    ///
-    /// Same reason as every other `CAP_GPUI_AUTO_*` hook: unprivileged
-    /// synthetic clicks are dropped, and this goes through
-    /// [`activate_recent`], the card's own handler.
-    pub fn auto_open_recent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(mode) = std::env::var("CAP_GPUI_AUTO_RECENT") else {
-            return;
-        };
-        if mode.is_empty() {
-            return;
-        }
-        if !self.expanded {
-            self.toggle_expanded(window, cx);
-        }
-        let twice = mode == "twice";
-
-        cx.spawn(async move |this, cx| {
-            // The scan and each thumbnail decode run on the background
-            // executor; poll rather than guess how long that takes.
-            for _ in 0..40 {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(250))
-                    .await;
-                let picked = this
-                    .update(cx, |this: &mut MainWindow, cx| {
-                        let entry = this.recents.as_ref()?.first()?;
-                        let item = entry.item.clone();
-                        activate_recent(&item, cx);
-                        Some(item)
-                    })
-                    .ok()
-                    .flatten();
-                let Some(item) = picked else { continue };
-
-                if twice {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(2500))
-                        .await;
-                    cx.update(|cx| {
-                        tracing::info!("second Recents activation for the same project");
-                        activate_recent(&item, cx);
-                    });
-                }
-                return;
-            }
-            tracing::warn!("CAP_GPUI_AUTO_RECENT: the library scan produced nothing");
-        })
-        .detach();
     }
 
     /// Bring the target-select overlays in line with the armed target.
@@ -2000,7 +1767,7 @@ impl MainWindow {
     /// The concrete capture target the current UI state describes, or `None`
     /// when starting makes no sense yet (no target mode, Window mode with no
     /// window picked, Area mode -- which is drawn on the overlay).
-    fn armed_target(&self) -> Option<ScreenCaptureTarget> {
+    pub(crate) fn armed_target(&self) -> Option<ScreenCaptureTarget> {
         match self.target? {
             TargetType::Display => {
                 // The Tauri flow preselects the primary display the moment the
@@ -2365,7 +2132,16 @@ impl MainWindow {
             mic_feed,
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
+            start_gate: None,
         };
+
+        // `RecordingSettingsStore.target`: what the Start shortcuts fall back
+        // to when nothing is selected here.
+        if let Ok(value) = serde_json::to_value(&config.target)
+            && !crate::store::set_store_setting(crate::store::RECORDING_SETTINGS, "target", value)
+        {
+            tracing::warn!("saving the last recording target failed");
+        }
 
         self.start_recording_config(config, cx);
     }
@@ -2788,10 +2564,14 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Toggle system audio capture -- the system-audio row is a plain flag.
+    /// Toggle system audio capture -- the system-audio row is a plain flag,
+    /// persisted as `recording_settings.systemAudio` like the Tauri app did.
     pub fn set_system_audio(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.system_audio != enabled {
             self.system_audio = enabled;
+            if !crate::store::set_recording_system_audio(enabled) {
+                tracing::warn!("Could not save the system audio setting");
+            }
             cx.notify();
         }
     }
@@ -2824,9 +2604,8 @@ impl Render for MainWindow {
             .when_some(theme.shell_border(), |this, color| {
                 this.border_1().border_color(color)
             })
-            .font_family("Geist")
-            // `body { font-family: "Geist Sans"; font-weight: 500 }`
-            // (`ui-solid/src/main.css:189-192`). The shipping app renders
+            .font_family(crate::theme::UI_FONT)
+            // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`). The shipping app renders
             // *everything* Medium unless a `font-*` class says otherwise, so
             // Medium -- not Regular -- is the inherited default at every root.
             .font_weight(FontWeight::MEDIUM)
@@ -3206,20 +2985,6 @@ impl MainWindow {
                     .on_click(|_, window, _| window.minimize_window()),
             )
             .child(
-                button(
-                    "caption-maximize",
-                    if self.expanded {
-                        "icons/caption-restore-windows.svg"
-                    } else {
-                        "icons/caption-maximize-windows.svg"
-                    },
-                    if self.expanded { 11. } else { 10. },
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_expanded(window, cx);
-                })),
-            )
-            .child(
                 button("caption-close", "icons/caption-close-windows.svg", 10.).on_click(
                     cx.listener(|_, _, _, cx| {
                         cx.defer(app_windows::request_close_main);
@@ -3228,19 +2993,6 @@ impl MainWindow {
             )
     }
 
-    /// `CaptionControlsMacOS`: 14px circles (`size-3.5`), 10px apart
-    /// (`gap-2.5`), 12px from the left edge (`ml-3`). Minimize is not drawn --
-    /// the main window passes `showMinimize={false}` -- and zoom is bound to
-    /// expand/collapse rather than a real window zoom.
-    ///
-    /// Always colored, never the TSX's `#DCDCDC` inactive gray: that branch
-    /// runs off `onFocusChanged`, and the shipping main window is a
-    /// non-activating NSPanel whose webview never receives the event --
-    /// measured on the real app, the lights stay colored while the app is
-    /// inactive, so the gray state is dead code in practice. Hovering
-    /// anywhere over the pair reveals both glyphs (`hovered` lives on the
-    /// group container), and each button darkens itself on hover/press
-    /// (`hover:brightness-95 active:brightness-90`).
     fn render_traffic_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // base, brightness(0.95), brightness(0.90) -- precomputed per light.
         let light = |base: u32,
@@ -3261,8 +3013,6 @@ impl MainWindow {
                 .active(move |style| style.bg(rgb(press)))
                 .cursor_default()
                 .child(
-                    // `rgba(0, 0, 0, 0.5)` glyphs, close at 10px and zoom at
-                    // 8px -- the inline SVG sizes in the TSX.
                     svg()
                         .path(icon)
                         .size(px(icon_px))
@@ -3301,19 +3051,6 @@ impl MainWindow {
                     cx.defer(crate::app_windows::request_close_main);
                 })),
             )
-            .child(
-                light(
-                    Theme::TRAFFIC_ZOOM,
-                    0x26be3d,
-                    0x24b43a,
-                    "icons/traffic-zoom.svg",
-                    8.,
-                    "traffic-zoom",
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_expanded(window, cx);
-                })),
-            )
     }
 
     /// The teleported header content: a help button, a drag spacer, then the
@@ -3321,15 +3058,12 @@ impl MainWindow {
     /// 8px from the window edges (`mx-2`).
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let expanded = self.expanded;
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
         let icon_button = |id: &'static str, path: &'static str, size: f32| {
             let label = match id {
                 "help" => "Help & Tour",
-                "expand" if expanded => "Collapse",
-                "expand" => "Expand",
                 "settings" => "Settings",
                 "screenshots" => "Screenshots",
                 "recordings" => "Recordings",
@@ -3392,20 +3126,6 @@ impl MainWindow {
                     .items_center()
                     .gap(px(4.))
                     .flex_shrink_0()
-                    .child(
-                        icon_button(
-                            "expand",
-                            if expanded {
-                                "icons/minimize.svg"
-                            } else {
-                                "icons/enlarge.svg"
-                            },
-                            14.,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_expanded(window, cx);
-                        })),
-                    )
                     .child(icon_button("settings", "icons/settings.svg", 16.).on_click(
                         cx.listener(|_, _, _window, cx| {
                             // `await commands.showWindow({ Settings: {
@@ -3543,9 +3263,6 @@ impl MainWindow {
             None => root
                 .child(self.render_logo_row(cx))
                 .child(
-                    // `flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1
-                    // w-full` -- expanded can overflow once Recents is in, so
-                    // this column has to scroll.
                     div()
                         .id("home-scroll")
                         .flex()
@@ -3557,8 +3274,7 @@ impl MainWindow {
                         .gap(px(8.))
                         .overflow_y_scroll()
                         .child(self.render_targets(cx))
-                        .child(self.render_base_controls(cx))
-                        .when(self.expanded, |this| this.child(self.render_recents())),
+                        .child(self.render_base_controls(cx)),
                 )
                 // A failed start has nowhere else to surface: the overlays are
                 // gone by then and the bar closed itself.
@@ -3783,7 +3499,8 @@ impl MainWindow {
                                     .text_color(theme.gray_12)
                                     .child("Back"),
                             )
-                            .hover(|style| style.bg(theme.body_hover_fill(4)))
+                            .hover(move |style| style.bg(glass_hover(theme)))
+                            .active(move |style| style.bg(glass_press(theme)))
                             .on_click(cx.listener(|this, _, _window, cx| this.back_panel(cx))),
                     )
                     .child(header_trailing),
@@ -3851,6 +3568,8 @@ impl MainWindow {
     }
 
     pub(crate) fn show_recorder(&mut self, cx: &mut Context<Self>) {
+        self.plan = PlanBadge::current();
+        cx.notify();
         if self.panel.is_some() {
             self.close_panel(cx);
         }
@@ -3979,8 +3698,8 @@ impl MainWindow {
                 .spawn(async move {
                     match kind {
                         LibraryKind::Recordings => {
-                            let mut items = library::list_recordings();
-                            items.truncate(library::LIBRARY_PANEL_LIMIT);
+                            let items =
+                                library::list_recordings_limited(library::LIBRARY_PANEL_LIMIT);
                             (Some(items), None)
                         }
                         LibraryKind::Screenshots => {
@@ -4750,7 +4469,6 @@ impl MainWindow {
             }
             this.update_in(cx, |this, window, cx| {
                 this.refresh_library(LibraryKind::Recordings, window, cx);
-                this.refresh_recents(window, cx);
             })
             .ok();
         })
@@ -4786,7 +4504,6 @@ impl MainWindow {
             }
             this.update_in(cx, |this, window, cx| {
                 this.refresh_library(LibraryKind::Screenshots, window, cx);
-                this.refresh_recents(window, cx);
             })
             .ok();
         })
@@ -5296,6 +5013,7 @@ impl MainWindow {
         target: DeviceFormatTarget,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let theme = self.theme;
         let enabled = self.device_changes_allowed(cx);
         let name = match &target {
             DeviceFormatTarget::Camera(camera) => format!("camera-format-{}", camera.device_id),
@@ -5308,18 +5026,19 @@ impl MainWindow {
             .justify_center()
             .w(px(32.))
             .flex_shrink_0()
-            .rounded(px(6.))
+            .rounded(px(10.))
             .when(enabled, |button| {
                 button
                     .cursor_pointer()
-                    .hover(|style| style.bg(self.theme.body_hover_fill(4)))
+                    .hover(move |style| style.bg(glass_hover(theme)))
+                    .active(move |style| style.bg(glass_press(theme)))
             })
             .when(!enabled, |button| button.opacity(0.45))
             .child(
                 svg()
                     .path("icons/settings-2.svg")
-                    .size(px(16.))
-                    .text_color(self.theme.gray_11),
+                    .size(px(15.))
+                    .text_color(theme.gray_10),
             )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.open_device_formats(target.clone(), cx)),
@@ -5335,8 +5054,7 @@ impl MainWindow {
     /// picker routinely holds, so the grid states the width and the cards take
     /// it with `flex_none`.
     fn target_card_width(&self) -> f32 {
-        let (window_width, _) = self.window_size();
-        (window_width - 50.) / 2.
+        (MAIN_WINDOW_WIDTH - 50.) / 2.
     }
 
     /// `TargetMenuGrid`: two columns of cards.
@@ -5650,83 +5368,86 @@ impl MainWindow {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let theme = self.theme;
-
-        let foreground = if selected {
-            gpui::white()
-        } else {
-            Hsla::from(theme.gray_12)
-        };
-        let detail_color = if selected {
-            let mut color = gpui::white();
-            color.a = 0.7;
-            color
-        } else {
-            Hsla::from(theme.gray_10)
-        };
+        let accent = Hsla::from(theme.blue_500);
 
         div()
             .id(id)
             .relative()
-            .overflow_hidden()
             .flex()
-            .flex_col()
-            .gap(px(2.))
-            .px(px(12.))
-            .py(px(10.))
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .px(px(10.))
+            .py(px(7.))
+            .min_h(px(40.))
             .w_full()
-            .rounded(px(8.))
-            .text_size(px(14.))
-            .text_color(foreground)
-            .when(selected, |this| this.bg(theme.blue_500))
+            .rounded(px(10.))
+            .cursor_pointer()
+            .when(selected, |this| this.bg(glass_selected(theme)))
             .when(!selected, |this| {
-                this.hover(|style| style.bg(theme.body_hover_fill(4)))
+                this.hover(move |style| style.bg(glass_hover(theme)))
+                    .active(move |style| style.bg(glass_press(theme)))
             })
-            .when_some(audio_level.filter(|_| selected), |this, level| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left_0()
-                        .right(gpui::relative(level.clamp(0., 1.) as f32))
-                        .rounded(px(8.))
-                        .bg(gpui::hsla(0., 0., 1., 0.25)),
-                )
-            })
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(theme.gray_11),
+            )
             .child(
                 div()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.))
-                    .w_full()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(1.))
                     .child(
-                        svg()
-                            .path(icon)
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .text_color(foreground),
+                        div()
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(theme.gray_12)
+                            .child(label),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(label))
-                    .when(selected, |this| {
+                    .children(detail.map(|detail| {
+                        div()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(theme.gray_10)
+                            .child(detail)
+                    }))
+                    .when_some(audio_level.filter(|_| selected), |this, level| {
                         this.child(
-                            svg()
-                                .path("icons/check.svg")
-                                .size(px(16.))
-                                .flex_shrink_0()
-                                .text_color(foreground),
+                            div()
+                                .mt(px(3.))
+                                .h(px(3.))
+                                .w_full()
+                                .rounded_full()
+                                .overflow_hidden()
+                                .bg(if theme.is_dark() {
+                                    gpui::hsla(0., 0., 1., 0.1)
+                                } else {
+                                    gpui::hsla(0., 0., 0., 0.07)
+                                })
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .rounded_full()
+                                        .bg(accent)
+                                        .w(gpui::relative(1. - level.clamp(0., 1.) as f32)),
+                                ),
                         )
                     }),
             )
-            .children(detail.map(|detail| {
-                div()
-                    // `pl-7` = 16px icon + 12px gap.
-                    .pl(px(28.))
-                    .text_size(px(11.))
-                    .text_color(detail_color)
-                    .truncate()
-                    .child(detail)
-            }))
+            .when(selected, |this| {
+                this.child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .text_color(accent),
+                )
+            })
             .on_click(on_click)
     }
 
@@ -6066,59 +5787,50 @@ impl MainWindow {
     fn render_split_target(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
-        let hover_fill = capture_hover_fill(theme, selected, false);
         let dropdown_id = SharedString::from(format!("{}-dropdown", target.label()));
 
         div()
-            .group(target.label())
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_8)
-            } else {
-                theme.body_border(6)
-            })
-            .bg(if selected {
-                theme.tile_selected_bg()
-            } else {
-                theme.body_fill(2)
-            })
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, true, cx))
             .child(
                 div()
                     .id(dropdown_id.clone())
-                    .group(dropdown_id.clone())
                     .flex()
                     .w(px(28.))
-                    .rounded_r(px(7.))
+                    .rounded_r(px(9.))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .border_l_1()
-                    .border_color(theme.body_border(6))
-                    .bg(if selected {
-                        theme.tile_selected_bg()
-                    } else {
-                        theme.body_fill(2)
-                    })
-                    .text_color(theme.gray_11)
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(10.))
+                            .bottom(px(10.))
+                            .w(px(1.))
+                            .bg(if selected {
+                                Theme::with_alpha(theme.blue_9, 0.25)
+                            } else {
+                                glass_tint(theme, 0.08, 0.1)
+                            }),
+                    )
+                    .relative()
                     .child(
                         svg()
                             .path("icons/chevron-down.svg")
-                            .size(px(16.))
-                            .text_color(theme.gray_11)
-                            .group_hover(dropdown_id, move |style| style.text_color(theme.blue_11)),
+                            .size(px(14.))
+                            .text_color(if selected {
+                                theme.blue_10
+                            } else {
+                                theme.gray_10
+                            }),
                     )
-                    .group_hover(target.label(), move |style| style.bg(hover_fill))
-                    .hover(move |style| {
-                        style
-                            .bg(capture_hover_fill(theme, selected, true))
-                            .text_color(theme.blue_11)
-                    })
-                    .active(move |style| style.bg(theme.tile_selected_hover_bg()))
+                    .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
+                    .active(move |style| style.bg(capture_press_fill(theme, selected)))
                     .tooltip(move |_, cx| {
                         ui::Tooltip::new(
                             &theme,
@@ -6146,24 +5858,11 @@ impl MainWindow {
             .flex()
             .flex_1()
             .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_8)
-            } else {
-                theme.body_border(6)
-            })
-            .bg(if selected {
-                theme.tile_selected_bg()
-            } else {
-                theme.body_fill(2)
-            })
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, selected))
             .child(self.target_button_inner(target, false, cx))
     }
 
-    /// `TargetTypeButton`. Compact stacks the icon over the label
-    /// (`flex-col items-center gap-1 py-2 justify-end`); expanded lays them out
-    /// horizontally with a description (`min-h-14 flex-row gap-2.5 px-3`).
     fn target_button_inner(
         &self,
         target: TargetType,
@@ -6172,9 +5871,6 @@ impl MainWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
-        let expanded = self.expanded;
-        let hover_fill = capture_hover_fill(theme, selected, false);
-
         let icon_color = if selected {
             theme.blue_10
         } else {
@@ -6185,7 +5881,6 @@ impl MainWindow {
         } else {
             theme.gray_12
         };
-        let description_color = icon_color;
 
         let icon = svg()
             .path(target.icon())
@@ -6198,13 +5893,10 @@ impl MainWindow {
             .flex()
             .flex_1()
             .py(px(8.))
-            .when(split, |this| this.rounded_l(px(7.)))
-            .when(!split, |this| this.rounded(px(7.)))
-            .when(split, |this| {
-                this.group_hover(target.label(), move |style| style.bg(hover_fill))
-            })
-            .when(!split, |this| this.hover(move |style| style.bg(hover_fill)))
-            .active(move |style| style.bg(theme.tile_selected_hover_bg()))
+            .when(split, |this| this.rounded_l(px(9.)))
+            .when(!split, |this| this.rounded(px(9.)))
+            .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
+            .active(move |style| style.bg(capture_press_fill(theme, selected)))
             .on_click(cx.listener(move |this, _, _window, cx| {
                 // `toggleTargetMode`: clicking the armed tile again is a
                 // cancel, which takes the overlays down with it.
@@ -6217,65 +5909,29 @@ impl MainWindow {
                 cx.notify();
             }));
 
-        if expanded {
-            base.flex_row()
-                .items_center()
-                .justify_start()
-                .gap(px(10.))
-                .min_h(px(56.))
-                // `pl-3` when expanded for the split controls, `px-3` otherwise.
-                .px(px(12.))
-                .child(icon)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                // `text-xs` / `leading-4` (`TargetTypeButton.tsx:47`).
-                                .line_height(px(16.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(label_color)
-                                .child(target.label()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                // `text-[10px] leading-3`.
-                                .line_height(px(12.))
-                                .text_color(description_color)
-                                .child(target.description()),
-                        ),
-                )
-        } else {
-            base.flex_col()
-                .items_center()
-                .justify_end()
-                .gap(px(4.))
-                // `pl-5` on the split controls when compact, to keep the icon
-                // optically centred against the chevron on the right.
-                .when(split, |this| this.pl(px(20.)))
-                .child(icon)
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .text_color(label_color)
-                        .child(target.label()),
-                )
-        }
+        base.flex_col()
+            .items_center()
+            .justify_end()
+            .gap(px(4.))
+            // `pl-5` on the split controls when compact, to keep the icon
+            // optically centred against the chevron on the right.
+            .when(split, |this| this.pl(px(20.)))
+            .child(icon)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(label_color)
+                    .child(target.label()),
+            )
     }
 
     /// `BaseControls`: camera, microphone, system audio.
     fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let gap = if self.expanded { 10. } else { 8. };
-
         div()
             .flex()
             .flex_col()
-            .gap(px(gap))
+            .gap(px(8.))
             .w_full()
             .child(
                 div()
@@ -6286,8 +5942,7 @@ impl MainWindow {
                     .child("Choose your camera and microphone"),
             )
             .child(
-                self.labelled(
-                    "Camera",
+                div().flex().flex_col().child(
                     self.render_device_row(
                         "camera-row",
                         "icons/camera.svg",
@@ -6322,8 +5977,7 @@ impl MainWindow {
                 ),
             )
             .child(
-                self.labelled(
-                    "Microphone",
+                div().flex().flex_col().child(
                     self.render_device_row(
                         "microphone-row",
                         "icons/microphone.svg",
@@ -6358,8 +6012,7 @@ impl MainWindow {
                 ),
             )
             .child(
-                self.labelled(
-                    "System audio",
+                div().flex().flex_col().child(
                     self.render_device_row(
                         "system-audio-row",
                         "icons/screen.svg",
@@ -6387,305 +6040,6 @@ impl MainWindow {
             )
     }
 
-    /// `Recents.tsx`, expanded only.
-    ///
-    /// Three states, the same three the section has: the loading skeletons
-    /// while the first scan is in flight, the dashed empty box when the
-    /// library is empty, and the card carousel otherwise.
-    fn render_recents(&self) -> impl IntoElement {
-        let theme = self.theme;
-
-        let section = div()
-            // `<div class="pt-2">` around the section in index.tsx.
-            .pt(px(8.))
-            .w_full()
-            .flex_shrink_0()
-            .child(
-                // `mb-2 flex items-center px-0.5`.
-                div().flex().items_center().mb(px(8.)).px(px(2.)).child(
-                    div()
-                        .text_size(px(12.))
-                        // `font-semibold` (`new-main/Recents.tsx:203`) renders
-                        // 700: no 600 face is loaded over there.
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.gray_12)
-                        .child("Recents"),
-                ),
-            );
-
-        match self.recents.as_deref() {
-            // `<Show when={isLoading}>`: three skeleton cards. Theirs pulse
-            // (`animate-pulse`); this gpui rev has no keyframe hook, so these
-            // are the same three slabs, static.
-            None => section.child(
-                self.recent_carousel()
-                    .children((0..3usize).map(|index| {
-                        div()
-                            .id(("recent-skeleton", index))
-                            .flex_shrink_0()
-                            .w(px(RECENT_CARD_WIDTH))
-                            .h(px(RECENT_CARD_HEIGHT))
-                            .rounded(px(12.))
-                            .bg(theme.body_fill(3))
-                    }))
-                    .into_any_element(),
-            ),
-            // `flex h-28 flex-col items-center justify-center gap-2 rounded-xl
-            //  border border-dashed border-gray-5 bg-gray-2 text-center`.
-            Some([]) => section.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(8.))
-                    .w_full()
-                    .h(px(RECENT_CARD_HEIGHT))
-                    .rounded(px(12.))
-                    .border_dashed()
-                    .border_1()
-                    .border_color(theme.body_border(5))
-                    .bg(theme.body_fill(2))
-                    .child(
-                        svg()
-                            .path("icons/history.svg")
-                            .size(px(20.))
-                            .text_color(theme.gray_9),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.gray_10)
-                            .child("Your latest captures will appear here."),
-                    )
-                    .into_any_element(),
-            ),
-            Some(entries) => section.child(
-                self.recent_carousel()
-                    .children(
-                        entries
-                            .iter()
-                            .enumerate()
-                            .map(|(index, entry)| self.render_recent_card(index, entry)),
-                    )
-                    .into_any_element(),
-            ),
-        }
-    }
-
-    /// `RecentCarousel`: `flex snap-x snap-proximity gap-2 overflow-x-auto
-    /// overscroll-x-contain scroll-smooth pb-1 pr-8`.
-    ///
-    /// Snap points and the scroll-position-driven edge-fade mask have no hook
-    /// in this gpui rev (the same `mask-image` gap as the teleprompter's
-    /// vignette); the scroller, the gap and the trailing gutter are real.
-    fn recent_carousel(&self) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id("recents-carousel")
-            .flex()
-            .flex_row()
-            .items_start()
-            .gap(px(8.))
-            .pb(px(4.))
-            .pr(px(32.))
-            .w_full()
-            .overflow_x_scroll()
-    }
-
-    /// `RecentCard`: `group relative h-28 w-[196px] shrink-0 snap-start
-    /// overflow-hidden rounded-xl border border-gray-5 bg-gray-3 text-left
-    /// shadow-sm ... hover:-translate-y-0.5 hover:border-gray-7
-    /// hover:shadow-md`.
-    ///
-    /// The whole card is the button. A studio recording opens the editor, as
-    /// `openRecentMedia` -> `openRecording` does; an instant recording or a
-    /// screenshot still reveals its bundle in Finder (see the README's
-    /// deviation -- neither the share link nor the screenshot editor exists
-    /// here). `hover:-translate-y-0.5` and the thumbnail's
-    /// `group-hover:scale-[1.025]` are transforms, which this gpui rev has
-    /// none of.
-    fn render_recent_card(&self, index: usize, entry: &RecentEntry) -> impl IntoElement {
-        let theme = self.theme;
-        let item = &entry.item;
-        let item_for_click = item.clone();
-
-        div()
-            .id(("recent-card", index))
-            .relative()
-            .flex_shrink_0()
-            .w(px(RECENT_CARD_WIDTH))
-            .h(px(RECENT_CARD_HEIGHT))
-            .overflow_hidden()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(theme.body_border(5))
-            .bg(theme.body_fill(3))
-            .shadow_sm()
-            .cursor_pointer()
-            // `hover:border-gray-7` is not one of the steps theme.css remaps,
-            // so it keeps its Radix value under the material.
-            .hover(|style| style.border_color(theme.body_border(7)).shadow_md())
-            .child(match entry.thumbnail.clone() {
-                Some(image) => {
-                    use gpui::StyledImage as _;
-                    // `h-full w-full object-cover`, and the image carries the
-                    // card's radius itself: cover crops through the atlas
-                    // tile's UVs on this fork, so the rounding lands on the
-                    // real corners rather than being clipped off with the
-                    // overflow -- the same shape the camera bubble's circular
-                    // preview relies on. A flow child rather than an absolute
-                    // one, matching both the TSX and the camera window.
-                    gpui::img(image)
-                        .size_full()
-                        .object_fit(gpui::ObjectFit::Cover)
-                        .rounded(px(12.))
-                        .into_any_element()
-                }
-                // `flex h-full w-full items-center justify-center
-                //  bg-linear-to-br from-gray-3 to-gray-5 text-gray-9`, with the
-                //  `size-7` glyph for the media kind.
-                None => div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(gpui::linear_gradient(
-                        135.,
-                        gpui::linear_color_stop(theme.body_fill(3), 0.),
-                        gpui::linear_color_stop(theme.body_fill(5), 1.),
-                    ))
-                    .child(
-                        svg()
-                            .path(item.kind.fallback_icon())
-                            .size(px(28.))
-                            .text_color(theme.gray_9),
-                    )
-                    .into_any_element(),
-            })
-            // `absolute inset-0 bg-linear-to-t from-black/80 via-black/10
-            //  to-black/5`. gpui's `linear_gradient` takes two stops, so the
-            //  three-stop ramp is two stacked halves that meet at `via`'s 50%
-            //  -- which is the same piecewise-linear curve CSS draws.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(RECENT_CARD_HEIGHT / 2.))
-                    .bg(gpui::linear_gradient(
-                        0.,
-                        gpui::linear_color_stop(black_alpha(0.10), 0.),
-                        gpui::linear_color_stop(black_alpha(0.05), 1.),
-                    )),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(RECENT_CARD_HEIGHT / 2.))
-                    .bg(gpui::linear_gradient(
-                        0.,
-                        gpui::linear_color_stop(black_alpha(0.80), 0.),
-                        gpui::linear_color_stop(black_alpha(0.10), 1.),
-                    )),
-            )
-            // `absolute left-2 top-2 flex items-center gap-1 rounded-full
-            //  border border-white/15 bg-black/45 px-2 py-0.5 text-[9px]
-            //  font-medium text-white/90 backdrop-blur-sm` -- no backdrop blur
-            //  hook, same as everywhere else in this app.
-            .child(
-                div()
-                    .absolute()
-                    .left(px(8.))
-                    .top(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(white_alpha(0.15))
-                    .bg(black_alpha(0.45))
-                    .px(px(8.))
-                    .py(px(2.))
-                    .text_size(px(9.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(white_alpha(0.90))
-                    .child(
-                        svg()
-                            .path(item.kind.pill_icon())
-                            // `size-2.5`.
-                            .size(px(10.))
-                            .flex_shrink_0()
-                            .text_color(white_alpha(0.90)),
-                    )
-                    .child(item.kind.label()),
-            )
-            // `absolute inset-x-0 bottom-0 px-2.5 pb-2 pt-5`.
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .px(px(10.))
-                    .pb(px(8.))
-                    .pt(px(20.))
-                    .child(
-                        // `truncate text-[11px] font-medium text-white`.
-                        div()
-                            .w_full()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(gpui::white())
-                            .truncate()
-                            .child(item.pretty_name.clone()),
-                    )
-                    .when(
-                        // `props.item.kind === "recording" && clip_count > 1`.
-                        item.kind != MediaKind::Screenshot && item.clip_count > 1,
-                        |this| {
-                            this.child(
-                                // `mt-0.5 text-[9px] text-white/65`.
-                                div()
-                                    .mt(px(2.))
-                                    .text_size(px(9.))
-                                    .text_color(white_alpha(0.65))
-                                    .child(format!("{} clips", item.clip_count)),
-                            )
-                        },
-                    ),
-            )
-            .on_click(move |_, _window, cx| activate_recent(&item_for_click, cx))
-    }
-
-    /// `ExpandedControlLabel`: `mb-1 px-1`, `text-xs font-semibold text-gray-12`.
-    /// Only rendered when expanded.
-    fn labelled(&self, title: &'static str, row: impl IntoElement) -> impl IntoElement {
-        let theme = self.theme;
-        let expanded = self.expanded;
-
-        div()
-            .flex()
-            .flex_col()
-            .when(expanded, |this| {
-                this.child(
-                    div().mb(px(4.)).px(px(4.)).child(
-                        div()
-                            .text_size(px(12.))
-                            // `font-semibold` (`new-main/index.tsx:2945`)
-                            // renders 700: no 600 face is loaded over there.
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.gray_12)
-                            .child(title),
-                    ),
-                )
-            })
-            .child(row)
-    }
-
     /// `DEVICE_ROW_CLASS`: 42px tall, `rounded-lg`, `border-gray-6`, `bg-gray-2`,
     /// `pl-3 pr-1.5 gap-2.5`.
     fn render_device_row(
@@ -6710,12 +6064,21 @@ impl MainWindow {
             .pr(px(6.))
             .w_full()
             .h(px(DEVICE_ROW_HEIGHT))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.body_border(6))
-            .bg(theme.body_fill(2))
+            .rounded(px(10.))
+            .map(|this| glass_button(this, theme, false))
             .cursor_default()
             .overflow_hidden()
+            .child(
+                div()
+                    .id(SharedString::from(format!("{id}-hover")))
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .rounded(px(9.))
+                    .group_hover(id, move |style| style.bg(capture_hover_fill(theme, false)))
+                    .group_active(id, move |style| style.bg(capture_press_fill(theme, false))),
+            )
             .when(menu == Some(DeviceMenu::Microphone), |this| {
                 this.child(
                     self.microphone_level.clone().cached(
@@ -6769,39 +6132,7 @@ impl MainWindow {
                         }
                     })),
             )
-            // `hover:border-gray-8` is not one of the classes theme.css remaps, so
-            // the border keeps its Radix step under the material.
-            .hover(|style| {
-                style
-                    .bg(theme.body_hover_fill(4))
-                    .border_color(theme.gray_8)
-            })
-    }
-}
-
-/// What a click on a Recents card does -- `openRecentMedia`.
-///
-/// Studio recordings open the editor, screenshots the screenshot editor.
-/// Instant recordings open the share link when one exists, otherwise the
-/// bundle is revealed.
-pub fn activate_recent(item: &RecentItem, cx: &mut gpui::App) {
-    match item.kind {
-        MediaKind::Studio => {
-            tracing::info!(path = %item.bundle.display(), "opening recent capture in the editor");
-            let bundle = item.bundle.clone();
-            cx.defer(move |cx| app_windows::open_editor(bundle, cx));
-        }
-        MediaKind::Instant => {
-            if let Some(url) = &item.sharing {
-                cx.open_url(url);
-            } else {
-                library::reveal_in_folder(&item.bundle);
-            }
-        }
-        MediaKind::Screenshot => {
-            let bundle = item.bundle.clone();
-            cx.defer(move |cx| app_windows::open_screenshot_editor(bundle, cx));
-        }
+            .group(id)
     }
 }
 
@@ -6809,13 +6140,6 @@ pub fn activate_recent(item: &RecentItem, cx: &mut gpui::App) {
 /// come from neither the Radix palette nor the material tokens.
 fn black_alpha(alpha: f32) -> Hsla {
     let mut color = gpui::black();
-    color.a = alpha;
-    color
-}
-
-/// `white/N`; see [`black_alpha`].
-fn white_alpha(alpha: f32) -> Hsla {
-    let mut color = gpui::white();
     color.a = alpha;
     color
 }

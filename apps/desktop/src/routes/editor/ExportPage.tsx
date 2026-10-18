@@ -182,6 +182,7 @@ export function ExportPage() {
 		refetchMeta,
 		flushProjectConfig,
 		projectRevision,
+		project,
 	} = useEditorContext();
 
 	const projectPath = editorInstance.path;
@@ -193,8 +194,7 @@ export function ExportPage() {
 	const organisations = organizationSelection.organizations;
 
 	const hasTransparentBackground = () => {
-		const backgroundSource =
-			editorInstance.savedProjectConfig.background.source;
+		const backgroundSource = project.background.source;
 		return (
 			backgroundSource.type === "color" &&
 			backgroundSource.alpha !== undefined &&
@@ -554,6 +554,12 @@ export function ExportPage() {
 				if (!isPreviewCurrent(request)) return;
 				return runPreviewRequest(request, retryCount + 1);
 			}
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+			setRenderEstimate(null);
+			setPreviewError(e instanceof Error ? e.message : String(e));
 			setPreviewUnavailable(true);
 			setEstimateLoading(false);
 		}

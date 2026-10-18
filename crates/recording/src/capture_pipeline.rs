@@ -60,6 +60,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -75,6 +76,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -89,6 +91,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -159,6 +162,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<OutOfProcessFragmentedM4SMuxer>(OutOfProcessFragmentedM4SMuxerConfig {
                         preset,
                         bpp,
@@ -171,7 +175,9 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                        timed_fragments: true,
                         preset,
                         bpp,
                         output_size,
@@ -189,6 +195,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
                     output_height: output_size.map(|(_, h)| h),
                     instant_mode: false,
@@ -204,12 +211,15 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                timed_fragments: false,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
                 output_size: Some(output_size),
                 segment_tx,
@@ -226,6 +236,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         fragmented: bool,
         use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -283,6 +294,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<WindowsOOPFragmentedM4SMuxer>(WindowsOOPFragmentedM4SMuxerConfig {
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
@@ -298,7 +310,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 OutputPipeline::builder(fragments_dir)
                     .with_video::<screen_capture::VideoSource>(screen_capture)
                     .with_timestamps(start_time)
+                    .with_start_gate(start_gate.clone())
                     .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                        timed_fragments: true,
                         segment_duration: std::time::Duration::from_secs(2),
                         preset,
                         bpp,
@@ -316,6 +330,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             OutputPipeline::builder(output_path.clone())
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<WindowsMuxer>(WindowsMuxerConfig {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
@@ -338,12 +353,15 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<WindowsFragmentedM4SMuxer>(WindowsFragmentedM4SMuxerConfig {
+                timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 bpp: H264EncoderBuilder::INSTANT_MODE_BPP,
@@ -362,6 +380,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         _fragmented: bool,
         _use_oop_muxer: bool,
         shared_pause_state: Option<SharedPauseState>,
@@ -377,7 +396,9 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         OutputPipeline::builder(fragments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                timed_fragments: true,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: if ultra {
                     H264Preset::Medium
@@ -396,12 +417,15 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         segments_dir: PathBuf,
         output_size: (u32, u32),
         start_time: Timestamps,
+        start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
             .build::<crate::ffmpeg::SegmentedVideoMuxer>(crate::ffmpeg::SegmentedVideoMuxerConfig {
+                timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: H264Preset::Ultrafast,
                 output_size: Some(output_size),

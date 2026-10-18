@@ -67,6 +67,7 @@ use gpui::{
 };
 
 use crate::{
+    editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
     store::SettingsEnum,
@@ -361,6 +362,15 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err(format!("Video path {} not found!", path.display()));
     }
 
+    // Repairs tracks older recorders stamped at the wrong rate, and display
+    // fps that finalization replaced with the average rate, before anything
+    // reads them. Non-fatal: the editor opens the files as they are.
+    match cap_recording::track_heal::heal_stretched_tracks(path) {
+        Ok(true) => tracing::info!(?path, "Healed recording tracks"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
+    }
+
     let meta = RecordingMeta::load_for_project(path)
         .map_err(|error| format!("Failed to load recording meta: {error}"))?;
 
@@ -478,38 +488,33 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     })
 }
 
-/// `meta().hasRecordedCursorData` -- any segment with a cursor file on disk.
-/// The click half of `generate_zoom_segments_for_project`
-/// (`src-tauri/src/recording.rs:3806-3848`): every recorded cursor click, with
-/// the same short-lived-shape stabilisation the Tauri command applies.
 const NO_AUTO_ZOOM_CLICKS_MESSAGE: &str =
     "No clicks found to zoom into. Drag across the lane to add one.";
 
-fn load_recording_clicks(project_path: &std::path::Path) -> Vec<cap_project::CursorClickEvent> {
+fn load_recording_clicks(
+    project_path: &std::path::Path,
+) -> Vec<Vec<cap_project::CursorClickEvent>> {
     let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
         return Vec::new();
     };
-    let cap_project::RecordingMetaInner::Studio(studio) = &meta.inner else {
+    let RecordingMetaInner::Studio(studio) = &meta.inner else {
         return Vec::new();
+    };
+    let load = |cursor: Option<PathBuf>| {
+        cursor
+            .and_then(|cursor| cap_project::CursorEvents::load_clicks_from_file(&cursor).ok())
+            .unwrap_or_default()
     };
     match &**studio {
         StudioRecordingMeta::SingleSegment { segment } => {
-            let Some(cursor) = &segment.cursor else {
-                return Vec::new();
-            };
-            let mut events =
-                cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap_or_default();
-            let pointer_ids = studio.pointer_cursor_ids();
-            events.stabilize_short_lived_cursor_shapes(
-                (!pointer_ids.is_empty()).then_some(&pointer_ids),
-                cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
-            );
-            events.clicks
+            vec![load(
+                segment.cursor.as_ref().map(|cursor| meta.path(cursor)),
+            )]
         }
         StudioRecordingMeta::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .flat_map(|segment| segment.cursor_events(&meta).clicks)
+            .map(|segment| load(segment.cursor.as_ref().map(|cursor| meta.path(cursor))))
             .collect(),
     }
 }
@@ -560,17 +565,12 @@ fn recorded_cursor_family(studio: &StudioRecordingMeta) -> Option<CursorFamily> 
 ///   (`frame_pipeline.rs:809-827`) and gpui's atlas expects BGRA, the same
 ///   swap `library::decode_thumbnail` does after decoding a thumbnail.
 pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
-    let row_bytes = frame.width as usize * 4;
-    let mut tight = Vec::with_capacity(row_bytes * frame.height as usize);
-    for row in frame.data.chunks(frame.padded_bytes_per_row as usize) {
-        if row.len() < row_bytes {
-            return None;
-        }
-        tight.extend_from_slice(&row[..row_bytes]);
-    }
-    for pixel in tight.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
+    let tight = cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+        &frame.data,
+        frame.width as usize,
+        frame.padded_bytes_per_row as usize,
+        frame.height as usize,
+    )?;
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, tight)?;
     Some(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(buffer)
@@ -1586,6 +1586,9 @@ pub struct EditorWindow {
     add_track: Option<AddTrackMenu>,
     add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
+    pub(crate) audio_picker_generation: u64,
+    pub(crate) audio_import_pending: Option<u64>,
+    audio_picker_request: Option<AudioImportRequest>,
     /// A transient line over the player: the one place an action that cannot
     /// apply says so (the editor has no toast host of its own).
     pub(crate) notice: Option<EditorNotice>,
@@ -2150,6 +2153,9 @@ impl EditorWindow {
             add_track: None,
             add_track_opens: 0,
             audio_picker: None,
+            audio_picker_generation: 0,
+            audio_import_pending: None,
+            audio_picker_request: None,
             notice: None,
             notice_seq: 0,
             play_until: None,
@@ -2854,6 +2860,12 @@ impl EditorWindow {
         self.instance
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, instance))
+    }
+
+    pub(crate) fn holds_instance(&self, instance: &std::sync::Weak<EditorInstance>) -> bool {
+        self.instance
+            .as_ref()
+            .is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), instance.as_ptr()))
     }
 
     fn retry_preparing_candidate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4178,6 +4190,14 @@ impl EditorWindow {
             .and_then(|timeline| timeline.segments.get(index))
             .map(|segment| (segment.start, segment.end));
 
+        let audio_segment = if kind == TrackKind::Audio {
+            self.project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.audio_segments.get(index))
+        } else {
+            None
+        };
         let kind_of_drag = match (kind, hit) {
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
@@ -4193,16 +4213,22 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_start_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimStart {
                     start,
-                    bounds: edits::trim_start_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_start_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Handle { start: false, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
                     end,
-                    bounds: edits::trim_end_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_end_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Body { .. }) => Some(DragKind::Move {
@@ -5340,14 +5366,60 @@ impl EditorWindow {
     }
 
     pub(crate) fn open_audio_picker(&mut self, lane: u32, cx: &mut Context<Self>) {
+        self.audio_picker_generation = self.audio_picker_generation.wrapping_add(1);
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Add { lane });
+        self.audio_picker_request = AudioImportRequest::new(
+            crate::editor_audio::AudioPicker::Add { lane },
+            self.audio_picker_generation,
+            &self.project,
+        );
         self.set_selection(None, cx);
         cx.notify();
     }
 
     pub(crate) fn open_audio_replace(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.audio_picker_generation = self.audio_picker_generation.wrapping_add(1);
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Replace { index });
+        self.audio_picker_request = AudioImportRequest::new(
+            crate::editor_audio::AudioPicker::Replace { index },
+            self.audio_picker_generation,
+            &self.project,
+        );
         cx.notify();
+    }
+
+    fn begin_audio_import(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AudioImportRequest> {
+        self.audio_picker?;
+        if self.audio_import_pending == Some(self.audio_picker_generation) {
+            return None;
+        }
+        let request = self.audio_picker_request.as_ref()?;
+        if !request.accepts(
+            self.audio_picker,
+            self.audio_picker_generation,
+            &self.project,
+        ) {
+            self.close_stale_audio_picker(window, cx);
+            return None;
+        }
+        let request = request.clone();
+        self.audio_import_pending = Some(request.generation);
+        cx.notify();
+        Some(request)
+    }
+
+    fn close_stale_audio_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.audio_picker = None;
+        self.audio_picker_request = None;
+        self.show_notice(
+            "This audio segment changed. Select it and choose a replacement again.",
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn add_library_track(
@@ -5357,7 +5429,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(picker) = self.audio_picker else {
+        let Some(request) = self.begin_audio_import(window, cx) else {
             return;
         };
         let project_path = self.project_path.clone();
@@ -5368,92 +5440,120 @@ impl EditorWindow {
                     async move { crate::editor_audio::copy_library_track(&project_path, id, name) },
                 )
                 .await;
-            match imported {
-                Ok((path, name, duration)) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.commit_picked_audio(picker, path, name, duration, window, cx);
-                    })
-                    .ok();
-                }
-                Err(error) => tracing::error!("adding library audio failed: {error}"),
-            }
+            this.update_in(cx, |this, window, cx| {
+                this.finish_audio_import(
+                    request,
+                    imported.map(|(path, name, duration)| {
+                        Some(ImportedAudio {
+                            path,
+                            name,
+                            duration,
+                        })
+                    }),
+                    window,
+                    cx,
+                );
+            })
+            .ok();
         })
         .detach();
     }
 
     pub(crate) fn import_audio_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.audio_picker {
-            Some(crate::editor_audio::AudioPicker::Add { lane }) => {
-                self.import_audio_for_lane(lane, window, cx);
-            }
-            Some(crate::editor_audio::AudioPicker::Replace { index }) => {
-                self.replace_audio_from_file(index, window, cx);
-            }
-            None => {}
-        }
+        let Some(request) = self.begin_audio_import(window, cx) else {
+            return;
+        };
+        self.import_audio_from_file(request, window, cx);
     }
 
-    fn commit_picked_audio(
+    fn finish_audio_import(
         &mut self,
-        picker: crate::editor_audio::AudioPicker,
-        path: String,
-        name: String,
-        duration: f64,
+        request: AudioImportRequest,
+        imported: Result<Option<ImportedAudio>, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match picker {
+        if self.audio_import_pending != Some(request.generation) {
+            return;
+        }
+        self.audio_import_pending = None;
+        if !request.accepts(
+            self.audio_picker,
+            self.audio_picker_generation,
+            &self.project,
+        ) {
+            if self.audio_picker == Some(request.picker)
+                && self.audio_picker_generation == request.generation
+            {
+                self.close_stale_audio_picker(window, cx);
+            } else {
+                cx.notify();
+            }
+            return;
+        }
+        let imported = match imported {
+            Ok(Some(imported)) => imported,
+            Ok(None) => {
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                tracing::error!("importing audio failed: {error}");
+                cx.notify();
+                return;
+            }
+        };
+        match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                self.commit_audio_import(
-                    lane,
-                    ImportedAudio {
-                        path,
-                        name,
-                        duration,
-                    },
+                self.commit_audio_import(lane, imported, window, cx);
+            }
+            crate::editor_audio::AudioPicker::Replace { index } => {
+                self.replace_audio_segment(
+                    index,
+                    imported.path,
+                    imported.name,
+                    imported.duration,
                     window,
                     cx,
                 );
             }
-            crate::editor_audio::AudioPicker::Replace { index } => {
-                self.replace_audio_segment(index, path, name, duration, window, cx);
-            }
         }
         self.audio_picker = None;
+        cx.notify();
     }
 
-    fn replace_audio_from_file(
+    fn import_audio_from_file(
         &mut self,
-        index: usize,
+        request: AudioImportRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let Some(source) = crate::platform::open_audio_panel() else {
-                return;
-            };
-            let imported = cx
-                .background_executor()
-                .spawn(async move { import_audio_file(&project_path, &source) })
-                .await;
-            match imported {
-                Ok(imported) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.replace_audio_segment(
-                            index,
-                            imported.path,
-                            imported.name,
-                            imported.duration,
-                            window,
-                            cx,
-                        );
-                        this.audio_picker = None;
-                    })
-                    .ok();
+            let imported = match crate::platform::open_audio_panel() {
+                Some(source)
+                    if this
+                        .update_in(cx, |this, _, _| {
+                            this.audio_import_pending == Some(request.generation)
+                                && request.accepts(
+                                    this.audio_picker,
+                                    this.audio_picker_generation,
+                                    &this.project,
+                                )
+                        })
+                        .unwrap_or(false) =>
+                {
+                    cx.background_executor()
+                        .spawn(async move { import_audio_file(&project_path, &source) })
+                        .await
+                        .map(Some)
                 }
-                Err(error) => tracing::error!("replacing audio failed: {error}"),
-            }
+                Some(_) | None => Ok(None),
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.finish_audio_import(request, imported, window, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -5468,15 +5568,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let changed = self.edit(
-            |timeline| {
-                let Some(segment) = timeline.audio_segments.get_mut(index) else {
-                    return false;
-                };
-                segment.path = path;
-                segment.name = Some(name);
-                segment.duration = (duration > 0.0).then_some(duration);
-                true
-            },
+            |timeline| replace_audio_asset(timeline, index, path, name, duration),
             window,
             cx,
         );
@@ -5488,7 +5580,7 @@ impl EditorWindow {
     /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.
-    fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.generating_auto_zoom {
             return;
         }
@@ -5496,30 +5588,33 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let duration = self.recording_duration;
         let amount = f64::from(
             crate::store::GeneralSettings::load()
                 .default_zoom_amount
                 .unwrap_or(edits::DEFAULT_AUTO_ZOOM_AMOUNT as f32),
         );
         cx.spawn_in(window, async move |this, cx| {
-            let segments = cx
+            let clicks = cx
                 .background_executor()
-                .spawn(async move {
-                    let clicks = load_recording_clicks(&path);
-                    edits::generate_zoom_segments_from_clicks(clicks, duration, amount)
-                })
+                .spawn(async move { load_recording_clicks(&path) })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.generating_auto_zoom = false;
                 this.hovering_generate_zoom = false;
+                edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
+                let segments = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .map_or_else(Vec::new, |timeline| {
+                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                    });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
                     this.auto_zoom_message = Some(NO_AUTO_ZOOM_CLICKS_MESSAGE);
                     cx.notify();
                     return;
                 }
-                edits::ensure_timeline(&mut this.project, &this.clip_display_durations);
                 let applied = this.edit(
                     |timeline| {
                         timeline.zoom_segments = segments;
@@ -7592,32 +7687,6 @@ impl EditorWindow {
             self.set_selection(Some(Selection::single(TrackKind::Image, index)), cx);
             self.seek_to_time(start, cx);
         }
-    }
-
-    fn import_audio_for_lane(&mut self, lane: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let project_path = self.project_path.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let Some(source) = crate::platform::open_audio_panel() else {
-                return;
-            };
-            let imported = cx
-                .background_executor()
-                .spawn(async move { import_audio_file(&project_path, &source) })
-                .await;
-            match imported {
-                Ok(imported) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.commit_audio_import(lane, imported, window, cx);
-                        this.audio_picker = None;
-                    })
-                    .ok();
-                }
-                Err(error) => {
-                    tracing::error!("importing audio failed: {error}");
-                }
-            }
-        })
-        .detach();
     }
 
     fn commit_audio_import(
@@ -11145,7 +11214,7 @@ impl Render for EditorWindow {
                 .size_full()
                 .flex()
                 .flex_col()
-                .font_family("Geist")
+                .font_family(crate::theme::UI_FONT)
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
@@ -11172,7 +11241,7 @@ impl Render for EditorWindow {
             .size_full()
             .flex()
             .flex_col()
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
@@ -11660,10 +11729,6 @@ fn import_audio_file(
     })
 }
 
-fn probe_audio_duration(_path: &std::path::Path) -> f64 {
-    0.0
-}
-
 fn aspect_ratio_eq(
     left: &Option<cap_project::AspectRatio>,
     right: &Option<cap_project::AspectRatio>,
@@ -11785,6 +11850,161 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_zoom_loads_clicks_without_losing_take_indices() {
+        let root =
+            std::env::temp_dir().join(format!("cap-auto-zoom-clicks-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let click = cap_project::CursorClickEvent {
+            active_modifiers: vec!["Shift".into()],
+            cursor_num: 1,
+            cursor_id: "pointer".into(),
+            time_ms: 4000.0,
+            down: true,
+        };
+        let events = cap_project::CursorEvents {
+            clicks: vec![click.clone()],
+            moves: vec![cap_project::CursorMoveEvent {
+                active_modifiers: Vec::new(),
+                cursor_id: "arrow".into(),
+                time_ms: 4000.0,
+                x: 0.5,
+                y: 0.5,
+            }],
+        };
+        std::fs::write(
+            root.join("cursor.json"),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(root.join("broken.json"), b"{\"clicks\":[").unwrap();
+        let display = serde_json::json!({ "path": "display.mp4", "fps": 30 });
+        let meta_path = root.join("recording-meta.json");
+        std::fs::write(
+            &meta_path,
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Auto zoom test", "platform": "MacOS",
+                "segments": [
+                    { "display": display },
+                    { "display": display, "cursor": "missing.json" },
+                    { "display": display, "cursor": "broken.json" },
+                    { "display": display, "cursor": "cursor.json" }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            load_recording_clicks(&root),
+            vec![vec![], vec![], vec![], vec![click.clone()]]
+        );
+        std::fs::write(
+            &meta_path,
+            serde_json::to_vec(&serde_json::json!({
+                "pretty_name": "Auto zoom test", "platform": "MacOS",
+                "display": display, "cursor": "cursor.json"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(load_recording_clicks(&root), vec![vec![click]]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "set CAP_AUTO_ZOOM_BENCH_PROJECT to a disposable recording bundle"]
+    fn auto_zoom_click_loading_benchmark() {
+        let path = PathBuf::from(std::env::var_os("CAP_AUTO_ZOOM_BENCH_PROJECT").unwrap());
+        let meta = RecordingMeta::load_for_project(&path).unwrap();
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            panic!("benchmark requires a Studio recording");
+        };
+        let full_events = || match &**studio {
+            StudioRecordingMeta::SingleSegment { segment } => {
+                let mut events = segment
+                    .cursor
+                    .as_ref()
+                    .map_or_else(cap_project::CursorEvents::default, |cursor| {
+                        cap_project::CursorEvents::load_from_file(&meta.path(cursor)).unwrap()
+                    });
+                let pointer_ids = studio.pointer_cursor_ids();
+                events.stabilize_short_lived_cursor_shapes(
+                    (!pointer_ids.is_empty()).then_some(&pointer_ids),
+                    cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+                );
+                vec![events.clicks]
+            }
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|segment| segment.cursor_events(&meta).clicks)
+                .collect(),
+        };
+        let times = |clips: Vec<Vec<cap_project::CursorClickEvent>>| {
+            clips
+                .into_iter()
+                .map(|clicks| {
+                    clicks
+                        .into_iter()
+                        .map(|click| click.time_ms)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(times(full_events()), times(load_recording_clicks(&path)));
+        for round in 0..7 {
+            for full in if round % 2 == 0 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let start = std::time::Instant::now();
+                let clicks = if full {
+                    full_events()
+                } else {
+                    load_recording_clicks(&path)
+                };
+                std::hint::black_box(&clicks);
+                println!(
+                    "round={round} full_events={full} elapsed_ms={:.3}",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn importing_short_audio_keeps_source_and_probes_copied_duration() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-short-audio-import-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("short.wav");
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&32_036_u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&8_000_u32.to_le_bytes());
+        wav.extend_from_slice(&16_000_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&32_000_u32.to_le_bytes());
+        wav.resize(32_044, 0);
+        std::fs::write(&source, &wav).unwrap();
+        let project = root.join("project.cap");
+        let imported = import_audio_file(&project, &source).unwrap();
+        assert!((imported.duration - 2.0).abs() < 0.001);
+        assert_eq!(imported.name, "short");
+        assert_eq!(std::fs::read(&source).unwrap(), wav);
+        assert_eq!(std::fs::read(project.join(imported.path)).unwrap(), wav);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn add_track_tray_and_tiles_animate_in_sequence_and_settle() {

@@ -73,7 +73,7 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
 
     // The same naming chain `create_project_dir` uses for recordings: default
     // template only (the custom-template deviation recordings already have),
-    // colons and slashes dotted, then uniqued against the directory.
+    // then sanitized and uniqued against the directory.
     let target_name = target.title().unwrap_or_else(|| "Unknown".into());
     let now = chrono::Local::now();
     let pretty_name = format!(
@@ -83,7 +83,7 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
         now.format("%Y-%m-%d"),
         now.format("%I.%M %p"),
     );
-    let filename = format!("{}.cap", pretty_name.replace([':', '/'], "."));
+    let filename = crate::recording::project_bundle_filename(&pretty_name);
     let filename = cap_utils::ensure_unique_filename(&filename, &base)
         .map_err(|e| anyhow!("unique filename: {e}"))?;
     let bundle = base.join(filename);
@@ -150,13 +150,16 @@ async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<
 
         let file =
             std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
-        let encoder = image::codecs::png::PngEncoder::new_with_quality(
-            std::io::BufWriter::new(file),
+        cap_gpui_kernels::codec::write_png_file(
+            file,
+            &data,
+            width,
+            height,
+            color_type.into(),
             compression,
             image::codecs::png::FilterType::Adaptive,
-        );
-        image::ImageEncoder::write_image(encoder, &data, width, height, color_type.into())
-            .context("encoding the screenshot PNG")
+        )
+        .context("encoding the screenshot PNG")
     })
     .await
     .context("the PNG encode task died")?

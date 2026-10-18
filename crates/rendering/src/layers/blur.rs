@@ -10,6 +10,19 @@ pub struct BlurLayer {
     uniforms_buffer_v: wgpu::Buffer,
     pipeline: BlurPipeline,
     cached_uniforms: Option<BlurUniforms>,
+    result: Option<(BlurResultKey, wgpu::Texture)>,
+}
+
+/// Everything the blurred background depends on. While it matches, the
+/// previous frame's blurred background is still exact and two full-frame
+/// gaussian passes collapse into one texture copy. On a software rasterizer
+/// those passes are most of the frame's cost.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlurResultKey {
+    pub background_generation: u64,
+    pub blur_amount_bits: u64,
+    pub output_size: (u32, u32),
+    pub texture_size: (u32, u32),
 }
 
 impl BlurLayer {
@@ -39,7 +52,44 @@ impl BlurLayer {
             uniforms_buffer_v: make_buffer(1.0),
             pipeline: BlurPipeline::new(device),
             cached_uniforms: None,
+            result: None,
         }
+    }
+
+    pub fn cached_result(&self, key: BlurResultKey) -> Option<&wgpu::Texture> {
+        self.result
+            .as_ref()
+            .filter(|(cached, _)| *cached == key)
+            .map(|(_, texture)| texture)
+    }
+
+    pub fn store_result(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        key: BlurResultKey,
+        source: &wgpu::Texture,
+    ) {
+        let size = source.size();
+        let reusable = self
+            .result
+            .take()
+            .map(|(_, texture)| texture)
+            .filter(|texture| texture.size() == size && texture.format() == source.format());
+        let texture = reusable.unwrap_or_else(|| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Blurred Background Cache"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: source.format(),
+                usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        });
+        encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), size);
+        self.result = Some((key, texture));
     }
 
     pub fn prepare(&mut self, queue: &wgpu::Queue, uniforms: &ProjectUniforms) {

@@ -2,6 +2,7 @@ use crate::export_audio::{EXPORT_AUDIO_BLOCK_SAMPLES, ExportAudioError, ExportAu
 use cap_audio::{
     AudioData, AudioRendererTrack, DecodedAudio, FromSampleBytes, StereoMode, VoiceAudio,
     VoiceEnhancer, VoiceSource, cast_bytes_to_f32_slice, cast_f32_slice_to_bytes,
+    high_quality_resampler_options,
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
@@ -10,8 +11,7 @@ use cap_project::{
     TimelineConfiguration, TimelineFrameMapping, TimelineSource, VoiceIsolation,
 };
 use ffmpeg::{
-    ChannelLayout, Dictionary, filter, format as avformat, frame::Audio as FFAudio,
-    software::resampling,
+    ChannelLayout, filter, format as avformat, frame::Audio as FFAudio, software::resampling,
 };
 use ringbuf::{
     HeapRb,
@@ -1394,10 +1394,6 @@ impl AudioResampler {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
 
-        let mut options = Dictionary::new();
-        options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
-
         let context = resampling::Context::get_with(
             AudioData::SAMPLE_FORMAT,
             ChannelLayout::STEREO,
@@ -1405,7 +1401,7 @@ impl AudioResampler {
             output_info.sample_format,
             output_info.channel_layout(),
             output_info.sample_rate,
-            options,
+            high_quality_resampler_options(),
         )?;
 
         info!(
@@ -1691,6 +1687,26 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         }
     }
 
+    /// Blocks until the next `samples` reads are rendered (or the render
+    /// finished or failed). Returns false on timeout or failure.
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn wait_until_rendered(&self, samples: usize, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let ready = match &self.mode {
+                PrerenderedAudioBufferMode::Progressive(buffer) => buffer.rendered(samples),
+                PrerenderedAudioBufferMode::Streaming(buffer) => buffer.rendered(samples),
+            };
+            match ready {
+                Some(ready) if !ready && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                Some(ready) => return ready,
+                None => return false,
+            }
+        }
+    }
+
     pub fn set_playhead(&mut self, playhead_secs: f64) {
         match &mut self.mode {
             PrerenderedAudioBufferMode::Progressive(buffer) => buffer.set_playhead(playhead_secs),
@@ -1846,6 +1862,35 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
                 "progressive audio render did not complete in time"
             );
             std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// Whether the next `samples` reads are rendered; `None` once the
+    /// render can no longer produce them.
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, samples: usize) -> Option<bool> {
+        let timeline = &self.timeline;
+        let start = self.read_position.min(timeline.samples.len());
+        let end = (self.read_position + samples).min(timeline.samples.len());
+        if start >= end || timeline.complete.load(Ordering::Acquire) {
+            return Some(true);
+        }
+        let primary_end = timeline.primary_end.load(Ordering::Acquire);
+        let wrap_end = timeline.wrap_end.load(Ordering::Acquire);
+        let primary = timeline.primary_start;
+        let covered = if start >= primary {
+            primary_end >= end
+        } else if end <= primary {
+            wrap_end >= end
+        } else {
+            wrap_end >= primary && primary_end >= end
+        };
+        if covered {
+            Some(true)
+        } else if timeline.stop.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(false)
         }
     }
 
@@ -2058,6 +2103,18 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
                 return false;
             }
         }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn rendered(&self, samples: usize) -> Option<bool> {
+        if self.timeline.failed.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(
+            self.timeline.published_generation.load(Ordering::Acquire) == self.generation
+                && self.timeline.published_end.load(Ordering::Acquire)
+                    >= self.read_position + samples,
+        )
     }
 
     fn set_playhead(&mut self, playhead_secs: f64) {

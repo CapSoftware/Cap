@@ -4,10 +4,10 @@ use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CameraShape, CornerStyle, CursorClickEvent, GlideDirection, InstantRecordingMeta,
+    MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration,
+    TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 #[cfg(target_os = "macos")]
 use cap_recording::SendableShareableContent;
@@ -188,45 +188,37 @@ pub async fn import_current_desktop_background(project_path: String) -> Result<S
     let project_dir = PathBuf::from(project_path);
 
     tokio::task::spawn_blocking(move || {
-        let assets_dir = project_dir.join("assets");
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis())
-            .unwrap_or(0);
-        let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
-        let output_path = assets_dir.join(&output_name);
-        let pending_path = assets_dir.join(format!(
-            "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
-        ));
-
-        if !matches!(
-            write_current_desktop_background_to(&output_path, &pending_path, None, false)?,
-            CurrentDesktopBackgroundWrite::Stored
-        ) {
-            return Err("Current desktop background snapshot was skipped".to_string());
-        }
-        remove_imported_desktop_background_snapshots(&assets_dir, &output_name);
-
-        Ok(output_path.to_string_lossy().into_owned())
+        let source_path = current_desktop_background_source_path(None)
+            .ok_or_else(|| "Current desktop background path not found".to_string())?;
+        import_current_desktop_background_from_source(&project_dir, &source_path)
     })
     .await
     .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
 }
 
-fn remove_imported_desktop_background_snapshots(assets_dir: &Path, keep_name: &str) {
-    let Ok(entries) = std::fs::read_dir(assets_dir) else {
-        return;
-    };
+fn import_current_desktop_background_from_source(
+    project_dir: &Path,
+    source_path: &Path,
+) -> Result<String, String> {
+    let assets_dir = project_dir.join("assets");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
+    let output_path = assets_dir.join(&output_name);
+    let pending_path = assets_dir.join(format!(
+        "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
+    ));
 
-    let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
-    for entry in entries.flatten() {
-        if let Some(name) = entry.file_name().to_str()
-            && name != keep_name
-            && name.starts_with(prefix.as_str())
-        {
-            let _ = std::fs::remove_file(entry.path());
-        }
+    if !matches!(
+        write_desktop_background_source_to(source_path, &output_path, &pending_path)?,
+        CurrentDesktopBackgroundWrite::Stored
+    ) {
+        return Err("Current desktop background snapshot was skipped".to_string());
     }
+
+    Ok(output_path.to_string_lossy().into_owned())
 }
 
 fn write_current_desktop_background_to(
@@ -244,6 +236,14 @@ fn write_current_desktop_background_to(
         ));
     }
 
+    write_desktop_background_source_to(&source_path, output_path, pending_path)
+}
+
+fn write_desktop_background_source_to(
+    source_path: &Path,
+    output_path: &Path,
+    pending_path: &Path,
+) -> Result<CurrentDesktopBackgroundWrite, String> {
     if !source_path.exists() {
         return Err(format!(
             "Current desktop background does not exist: {}",
@@ -257,7 +257,7 @@ fn write_current_desktop_background_to(
     }
 
     let _ = std::fs::remove_file(pending_path);
-    if let Err(error) = write_desktop_background_snapshot(&source_path, pending_path) {
+    if let Err(error) = write_desktop_background_snapshot(source_path, pending_path) {
         let _ = std::fs::remove_file(pending_path);
         return Err(error);
     }
@@ -2414,16 +2414,14 @@ async fn start_recording_prepared(
         }
     }
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    let mut countdown_visible = false;
     crate::target_select_overlay::close_target_select_overlay_windows(&app);
     if clean_generation.is_none() {
-        countdown_visible = ShowCapWindow::InProgressRecording {
+        let _ = ShowCapWindow::InProgressRecording {
             countdown,
             capture_target: Some(inputs.capture_target.clone()),
         }
         .show(&app)
-        .await
-        .is_ok();
+        .await;
 
         if let Some(window) = CapWindowId::Main.get(&app) {
             let _ = general_settings
@@ -2432,8 +2430,9 @@ async fn start_recording_prepared(
                 .perform(&window);
         }
     }
-    let play_countdown_sound =
-        crate::audio::should_play_countdown_sound(countdown, countdown_visible);
+    let start_gate = cap_recording::RecordingStartGate::new();
+    let start_cue = crate::audio::prime_recording_start_sound();
+    let start_cancelled: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
     crate::windows::apply_content_protection(&app, true);
 
     if let Some(editor_target) = EditorRecordingTarget::current(&app)
@@ -2443,67 +2442,69 @@ async fn start_recording_prepared(
         let _ = editor_window.minimize();
     }
 
-    if let Some(countdown) = countdown {
-        for t in 0..countdown {
-            #[cfg(target_os = "linux")]
-            if inputs.mode == RecordingMode::Instant
-                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-            {
-                return Err("Instant startup cancelled".into());
-            }
-            let _ = RecordingEvent::Countdown {
-                value: countdown - t,
-            }
-            .emit(&app);
-            let tick = tokio::time::sleep(Duration::from_secs(1));
-            tokio::pin!(tick);
-            loop {
-                tokio::select! {
-                    _ = &mut tick => break,
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-                }
-                if clean_generation.is_some_and(|generation| {
-                    crate::clean_capture::stop_requested(&app, generation)
-                }) {
-                    return Err("Recording cancelled".into());
-                }
-                #[cfg(target_os = "linux")]
-                if inputs.mode == RecordingMode::Instant
-                    && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-                {
-                    return Err("Instant startup cancelled".into());
-                }
-            }
+    let start_cancel_reason = {
+        let app = app.clone();
+        #[cfg(target_os = "linux")]
+        let mode = inputs.mode;
+        move || -> Option<&'static str> {
             if clean_generation
                 .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
             {
-                return Err("Recording cancelled".into());
+                return Some("Recording cancelled");
             }
+            #[cfg(target_os = "linux")]
+            if mode == RecordingMode::Instant
+                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
+            {
+                return Some("Instant startup cancelled");
+            }
+            None
         }
+    };
+
+    let countdown = countdown.unwrap_or(0);
+    // Every countdown second but the last elapses before the pipeline is
+    // primed; the last one overlaps its warm-up so capture is live at the cue.
+    for t in 0..countdown.saturating_sub(1) {
+        if let Some(reason) = start_cancel_reason() {
+            return Err(reason.into());
+        }
+        let _ = RecordingEvent::Countdown {
+            value: countdown - t,
+        }
+        .emit(&app);
+        countdown_tick(&start_cancel_reason).await?;
     }
 
-    if play_countdown_sound {
-        let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
-        let sound = crate::audio::play_recording_start_sound();
-        tokio::pin!(sound);
-        loop {
-            tokio::select! {
-                _ = &mut sound => break,
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    let start_cue_flow = {
+        let app = app.clone();
+        let start_gate = start_gate.clone();
+        let start_cancelled = start_cancelled.clone();
+        let start_cancel_reason = start_cancel_reason.clone();
+        async move {
+            if countdown >= 1 {
+                let _ = RecordingEvent::Countdown { value: 1 }.emit(&app);
+                if let Err(reason) = countdown_tick(&start_cancel_reason).await {
+                    let _ = start_cancelled.set(reason);
+                    start_gate.arm();
+                    return;
+                }
+                let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
             }
-            if clean_generation
-                .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
-            {
-                return Err("Recording cancelled".into());
-            }
-            #[cfg(target_os = "linux")]
-            if inputs.mode == RecordingMode::Instant
-                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-            {
-                return Err("Instant startup cancelled".into());
+            let cue = crate::audio::play_recording_start_sound(start_cue, start_gate);
+            tokio::pin!(cue);
+            loop {
+                tokio::select! {
+                    _ = &mut cue => break,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
+                if let Some(reason) = start_cancel_reason() {
+                    let _ = start_cancelled.set(reason);
+                    break;
+                }
             }
         }
-    }
+    };
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     #[cfg(target_os = "linux")]
@@ -2524,6 +2525,8 @@ async fn start_recording_prepared(
         let general_settings = general_settings.cloned();
         let recording_dir = project_file_path.clone();
         let inputs = inputs.clone();
+        let start_gate = start_gate.clone();
+        let start_cancelled = start_cancelled.clone();
         async move {
             fail!("recording::spawn_actor");
 
@@ -2686,6 +2689,8 @@ async fn start_recording_prepared(
                                 None,
                             );
 
+                            builder = builder.with_start_gate(start_gate.clone());
+
                             #[cfg(target_os = "macos")]
                             {
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2730,6 +2735,8 @@ async fn start_recording_prepared(
                             )
                             .with_system_audio(inputs.capture_system_audio)
                             .with_max_output_size(instant_mode_max_resolution);
+
+                            builder = builder.with_start_gate(start_gate.clone());
 
                             #[cfg(target_os = "macos")]
                             {
@@ -2865,7 +2872,18 @@ async fn start_recording_prepared(
 
                 match actor_result {
                     Ok(mut actor) => {
+                        // The recording stays out of app state until the cue has
+                        // armed the gate, so nothing reports "recording" while the
+                        // primed pipeline is still discarding frames.
+                        while !start_gate.is_armed() && start_cancelled.get().is_none() {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
                         let mut state = state_mtx.write().await;
+                        if let Some(reason) = start_cancelled.get().copied() {
+                            drop(state);
+                            let _ = cancel_discarded_recording(&app_handle, actor).await;
+                            return Err(anyhow!(reason));
+                        }
                         if clean_generation.is_some_and(|generation| {
                             !crate::clean_capture::is_current(&app_handle, generation)
                         }) || !matches!(state.recording_state, RecordingState::Pending { .. })
@@ -2979,10 +2997,18 @@ async fn start_recording_prepared(
         }
     };
 
-    let actor_task_res = AssertUnwindSafe(actor_task).catch_unwind().await;
+    let (actor_task_res, ()) =
+        futures::join!(AssertUnwindSafe(actor_task).catch_unwind(), start_cue_flow);
 
     let (actor_done_fut, health_rx, automatic_stop) = match actor_task_res {
         Ok(Ok(v)) => v,
+        Ok(Err(err))
+            if start_cancelled
+                .get()
+                .is_some_and(|reason| err.to_string() == *reason) =>
+        {
+            return Err(err.to_string());
+        }
         Ok(Err(err)) => {
             let message = format!("{err:#}");
             handle_spawn_failure(
@@ -3401,11 +3427,24 @@ async fn start_recording_prepared(
         });
     }
 
-    if !play_countdown_sound {
-        AppSounds::StartRecording.play();
-    }
-
     Ok(RecordingAction::Started)
+}
+
+async fn countdown_tick(
+    cancel_reason: &impl Fn() -> Option<&'static str>,
+) -> Result<(), &'static str> {
+    let tick = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(tick);
+    loop {
+        tokio::select! {
+            _ = &mut tick => break,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        if let Some(reason) = cancel_reason() {
+            return Err(reason);
+        }
+    }
+    cancel_reason().map_or(Ok(()), Err)
 }
 
 #[tauri::command]
@@ -6661,6 +6700,7 @@ fn apply_recording_camera_preview_state(
         CameraPreviewShape::Round => {
             config.camera.shape = CameraShape::Square;
             config.camera.rounding = 100.0;
+            config.camera.rounding_type = CornerStyle::Rounded;
         }
         CameraPreviewShape::Square => {
             config.camera.shape = CameraShape::Square;
@@ -7371,6 +7411,41 @@ mod tests {
             Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
             home
         ));
+    }
+
+    #[test]
+    fn importing_a_desktop_background_preserves_referenced_snapshots() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("project.cap");
+        let source = dir.path().join("wallpaper.jpg");
+        image::RgbImage::from_pixel(32, 16, image::Rgb([40, 120, 200]))
+            .save(&source)
+            .unwrap();
+        let previous = project.join("assets/current-desktop-background-1.jpg");
+        let previous_pending = project.join("assets/current-desktop-background-1.pending.jpg");
+        assert!(matches!(
+            write_desktop_background_source_to(&source, &previous, &previous_pending).unwrap(),
+            CurrentDesktopBackgroundWrite::Stored
+        ));
+        let saved_style_path = previous.clone();
+        let history_path = previous.clone();
+        let previous_bytes = std::fs::read(&previous).unwrap();
+        let sibling_pending = project.join("assets/current-desktop-background-2.pending.jpg");
+        std::fs::write(&sibling_pending, b"another import in progress").unwrap();
+
+        image::RgbImage::from_pixel(48, 24, image::Rgb([180, 60, 30]))
+            .save(&source)
+            .unwrap();
+        let imported = import_current_desktop_background_from_source(&project, &source).unwrap();
+
+        assert_ne!(Path::new(&imported), previous);
+        assert_eq!(image::image_dimensions(&imported).unwrap(), (48, 24));
+        assert_eq!(std::fs::read(saved_style_path).unwrap(), previous_bytes);
+        assert_eq!(image::image_dimensions(history_path).unwrap(), (32, 16));
+        assert_eq!(
+            std::fs::read(sibling_pending).unwrap(),
+            b"another import in progress"
+        );
     }
 
     #[test]
@@ -10103,6 +10178,19 @@ mod preparing_presentation_parity_tests {
         ProjectConfiguration::default()
     }
 
+    fn preparing_static_projection(
+        preset: &ProjectConfiguration,
+        target: &ScreenCaptureTarget,
+        stopped: &TimelineConfiguration,
+    ) -> ProjectConfiguration {
+        let mut snapshot = preparing_presentation_snapshot(Some(preset), Some(target)).unwrap();
+        apply_recording_camera_preview_state(
+            &mut snapshot,
+            &crate::camera::CameraPreviewState::default(),
+        );
+        crate::editor_preparing::project_from_preparing_presentation(&snapshot, stopped)
+    }
+
     fn ordinary_static_projection(
         preset: &ProjectConfiguration,
         target: &ScreenCaptureTarget,
@@ -10136,10 +10224,8 @@ mod preparing_presentation_parity_tests {
                 mass: 1.0,
             };
             let original = value(&preset);
-            let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
             let stopped = recording_timeline(one_segment(6.0), Vec::new());
-            let projected =
-                crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+            let projected = preparing_static_projection(&preset, &target, &stopped);
             let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
             assert_eq!(value(&projected), value(&ordinary));
             assert_eq!(value(&preset), original);
@@ -10191,12 +10277,8 @@ mod preparing_presentation_parity_tests {
                     damping: 22.0,
                     mass: 0.8,
                 };
-                let snapshot =
-                    preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
                 let stopped = recording_timeline(one_segment(6.0), Vec::new());
-                let projected = crate::editor_preparing::project_from_preparing_presentation(
-                    &snapshot, &stopped,
-                );
+                let projected = preparing_static_projection(&preset, &target, &stopped);
                 assert_eq!(
                     value(&projected),
                     value(&ordinary_static_projection(
@@ -10279,10 +10361,8 @@ mod preparing_presentation_parity_tests {
         }))
         .unwrap();
         preset.timeline = Some(recording_timeline(one_segment(2.0), vec![old_zoom]));
-        let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
         let stopped = recording_timeline(one_segment(6.0), Vec::new());
-        let projected =
-            crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+        let projected = preparing_static_projection(&preset, &target, &stopped);
         let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
         assert_eq!(value(&projected), value(&ordinary));
         let timeline = projected.timeline.as_ref().unwrap();
@@ -10298,7 +10378,7 @@ mod preparing_presentation_parity_tests {
     }
 
     #[test]
-    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+    fn ordinary_late_camera_state_preserves_unrelated_camera_fields() {
         for (shape, expected_shape, rounding) in [
             (CameraPreviewShape::Round, CameraShape::Square, 100.0),
             (CameraPreviewShape::Square, CameraShape::Square, 25.0),
@@ -10315,6 +10395,9 @@ mod preparing_presentation_parity_tests {
                 let mut expected = config.clone();
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
+                if shape == CameraPreviewShape::Round {
+                    expected.camera.rounding_type = CornerStyle::Rounded;
+                }
                 expected.camera.background_blur.mode = blur;
                 apply_recording_camera_preview_state(
                     &mut config,

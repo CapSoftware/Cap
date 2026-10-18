@@ -551,14 +551,20 @@ pub struct MediaFoundationDecoder {
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
+    // COM can unload the decoder DLL, so release every COM field before its apartment shuts down.
+    _init_guard: MFInitGuard,
 }
 
-struct MFInitGuard;
+struct MFInitGuard {
+    media_foundation_started: bool,
+}
 
 impl Drop for MFInitGuard {
     fn drop(&mut self) {
         unsafe {
-            let _ = MFShutdown();
+            if self.media_foundation_started {
+                let _ = MFShutdown();
+            }
             CoUninitialize();
         }
     }
@@ -574,12 +580,15 @@ impl MediaFoundationDecoder {
             CoInitializeEx(None, COINIT_MULTITHREADED)
                 .ok()
                 .map_err(|e| format!("Failed to initialize COM: {e:?}"))?;
-
+        }
+        let mut guard = MFInitGuard {
+            media_foundation_started: false,
+        };
+        unsafe {
             MFStartup(MF_API_VERSION, MFSTARTUP_NOSOCKET)
                 .map_err(|e| format!("Failed to start Media Foundation: {e:?}"))?;
         }
-
-        let guard = MFInitGuard;
+        guard.media_foundation_started = true;
 
         let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
@@ -615,8 +624,6 @@ impl MediaFoundationDecoder {
             "MediaFoundation decoder initialized"
         );
 
-        std::mem::forget(guard);
-
         Ok(Self {
             source_reader,
             d3d11_device,
@@ -632,6 +639,7 @@ impl MediaFoundationDecoder {
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
+            _init_guard: guard,
         })
     }
 
@@ -865,15 +873,6 @@ impl MediaFoundationDecoder {
         }
 
         Ok(())
-    }
-}
-
-impl Drop for MediaFoundationDecoder {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = MFShutdown();
-            CoUninitialize();
-        }
     }
 }
 
@@ -1118,6 +1117,20 @@ unsafe impl Send for MediaFoundationDecoder {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn repeatedly_releases_decoder_objects_before_com_shutdown() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        for _ in 0..20 {
+            let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+            for _ in 0..5 {
+                assert!(decoder.read_sample().unwrap().is_some());
+            }
+            drop(decoder);
+        }
+    }
 
     fn normalized(path: &str) -> String {
         let encoded = media_foundation_path(Path::new(path));

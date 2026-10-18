@@ -34,7 +34,6 @@ struct DevState {
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 struct MainState {
-    expanded: bool,
     visible: bool,
     frame: Option<Frame>,
 }
@@ -42,7 +41,6 @@ struct MainState {
 impl Default for MainState {
     fn default() -> Self {
         Self {
-            expanded: false,
             visible: true,
             frame: None,
         }
@@ -106,9 +104,7 @@ impl DevRestore {
     /// re-asserting a saved frame over it once shrank the window under its
     /// content (a 396pt frame from an older layout against the 432pt
     /// collapsed size): the body scrolled, and the poller kept re-saving the
-    /// shrunken frame, so every relaunch inherited it. Bottom-left anchoring
-    /// matches `setContentSize:`, which is what `window.resize` uses on
-    /// macOS, so an expanded restore grows back into the exact saved frame.
+    /// shrunken frame, so every relaunch inherited it.
     pub fn main_window_bounds(&self, size: Size<Pixels>, cx: &App) -> Option<Bounds<Pixels>> {
         let (x, y, width, height) = self.state.as_ref()?.main.frame?;
         if !platform::frame_is_on_screen(x, y, width, height) {
@@ -152,7 +148,6 @@ fn opening_origin(
 
 fn restore(state: DevState, cx: &mut App) {
     tracing::info!(
-        expanded = state.main.expanded,
         main_frame = ?state.main.frame,
         settings = state.settings.as_ref().map(|s| s.page.as_str()),
         editors = state.editors.len(),
@@ -160,11 +155,6 @@ fn restore(state: DevState, cx: &mut App) {
         "dev-restore: reopening the previous session"
     );
 
-    let main = cx.global::<AppWindows>().main;
-    if state.main.expanded {
-        main.update(cx, |view, window, cx| view.ensure_expanded(window, cx))
-            .ok();
-    }
     if let Some(settings) = &state.settings {
         let page = settings_window::Page::from_slug(&settings.page)
             .unwrap_or(settings_window::Page::General);
@@ -191,8 +181,6 @@ fn restore(state: DevState, cx: &mut App) {
     }
 
     cx.spawn(async move |cx| {
-        // Let the first frames and the expand animation land before the
-        // frames are re-asserted.
         cx.background_executor()
             .timer(Duration::from_millis(600))
             .await;
@@ -358,8 +346,7 @@ fn snapshot(cx: &mut App) -> DevState {
     };
 
     let main = main
-        .update(cx, |view, window, _| MainState {
-            expanded: view.is_expanded(),
+        .update(cx, |_, window, _| MainState {
             visible: platform::window_is_visible(window),
             frame: capture_frame(window),
         })

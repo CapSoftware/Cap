@@ -96,6 +96,8 @@ export function LoginForm() {
 			} else if (error === "SsoMissingProfileAttributes") {
 				setShowOrgInput(true);
 				return;
+			} else if (error === "SignupBlocked") {
+				return;
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(

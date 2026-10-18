@@ -1,3 +1,4 @@
+use crate::cpu_yuv::YuvMatrix;
 use ::ffmpeg::Rational;
 use std::{
     fmt,
@@ -11,7 +12,10 @@ use tracing::info;
 #[cfg(target_os = "macos")]
 use cidre::{arc::R, cv};
 #[cfg(target_os = "macos")]
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -19,6 +23,8 @@ mod ffmpeg;
 mod frame_converter;
 #[cfg(target_os = "windows")]
 mod media_foundation;
+#[cfg(test)]
+mod model;
 #[cfg(target_os = "macos")]
 pub mod multi_position;
 
@@ -153,12 +159,15 @@ pub struct DecodedFrame {
     width: u32,
     height: u32,
     format: PixelFormat,
+    matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
     #[cfg(target_os = "macos")]
     image_buf_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
+    #[cfg(target_os = "linux")]
+    cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -276,12 +285,15 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Rgba,
+            matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -291,13 +303,41 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Rgba,
+            matrix: YuvMatrix::Bt601,
             y_stride: width * 4,
             uv_stride: 0,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
+    }
+
+    /// NV12 frame that never left GPU memory (NVDEC on Linux render hosts).
+    /// `storage` is the decoder's per-frame allocation: layers compare it to
+    /// skip re-uploading a frame they already hold (VFR holds, fps upsampling).
+    #[cfg(target_os = "linux")]
+    pub fn new_nv12_cuda(
+        frame: Arc<crate::linux_gpu::CudaNv12Frame>,
+        storage: Arc<Vec<u8>>,
+    ) -> Self {
+        Self {
+            data: storage,
+            width: frame.width,
+            height: frame.height,
+            format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
+            y_stride: frame.y_pitch as u32,
+            uv_stride: frame.uv_pitch as u32,
+            cuda_nv12: Some(frame),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn cuda_nv12(&self) -> Option<&Arc<crate::linux_gpu::CudaNv12Frame>> {
+        self.cuda_nv12.as_ref()
     }
 
     pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
@@ -306,12 +346,15 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -327,12 +370,15 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -349,6 +395,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
@@ -367,12 +414,15 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Yuv420p,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -388,12 +438,15 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Yuv420p,
+            matrix: YuvMatrix::Bt601,
             y_stride,
             uv_stride,
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
+            #[cfg(target_os = "linux")]
+            cuda_nv12: None,
         }
     }
 
@@ -404,6 +457,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -424,6 +478,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -449,6 +504,7 @@ impl DecodedFrame {
             width,
             height,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: width,
             uv_stride: width,
             #[cfg(target_os = "macos")]
@@ -519,13 +575,23 @@ impl DecodedFrame {
         self.format
     }
 
+    /// The Y'CbCr matrix to convert this frame's planes to RGB with.
+    pub fn matrix(&self) -> YuvMatrix {
+        self.matrix
+    }
+
+    pub fn with_matrix(mut self, matrix: YuvMatrix) -> Self {
+        self.matrix = matrix;
+        self
+    }
+
     pub fn byte_len(&self) -> usize {
         if !self.data.is_empty() {
             return self.data.len();
         }
 
         let y_bytes = (self.y_stride as usize).saturating_mul(self.height as usize);
-        let uv_bytes = (self.uv_stride as usize).saturating_mul((self.height / 2) as usize);
+        let uv_bytes = (self.uv_stride as usize).saturating_mul(self.height.div_ceil(2) as usize);
 
         match self.format {
             PixelFormat::Rgba => (self.width as usize)
@@ -582,7 +648,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_end = y_size.checked_add(u_size)?;
                 self.data().get(y_size..u_end)
@@ -600,7 +666,7 @@ impl DecodedFrame {
                     .and_then(|v| usize::try_from(v).ok())?;
                 let u_size = self
                     .uv_stride
-                    .checked_mul(self.height / 2)
+                    .checked_mul(self.height.div_ceil(2))
                     .and_then(|v| usize::try_from(v).ok())?;
                 let v_start = y_size.checked_add(u_size)?;
                 self.data().get(v_start..)
@@ -622,6 +688,43 @@ pub enum VideoDecoderMessage {
     GetFrame(f32, u32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
+/// The source's Y'CbCr matrix from its colour tag, for decoders that do not
+/// see FFmpeg frames (Media Foundation). BT.601 when the file cannot be read.
+#[cfg(target_os = "windows")]
+pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
+    ::ffmpeg::format::input(path)
+        .ok()
+        .and_then(|input| {
+            let stream = input.streams().best(::ffmpeg::media::Type::Video)?;
+            let context = ::ffmpeg::codec::Context::from_parameters(stream.parameters()).ok()?;
+            Some(YuvMatrix::from_color_space(
+                context.decoder().video().ok()?.color_space(),
+            ))
+        })
+        .unwrap_or_default()
+}
+
+/// f32 steps of slack in [`request_frame`]. The time of frame `n` is the
+/// f32 nearest `n / fps`, up to half a step below it (126 / 30 s is
+/// 4.1999998 s), plus a step or two from the offsets added on the way; a
+/// plain floor then asks for the frame before.
+const REQUEST_SLACK_STEPS: f32 = 4.0;
+/// Most slack, in frames. Past two hours at 240 fps four f32 steps near a
+/// whole frame while half a step is still under a tenth of one, so the cap
+/// keeps an aligned request off the next frame.
+const REQUEST_SLACK_MAX_FRAMES: f64 = 0.25;
+
+/// The decoder grid index a request for `time` asks for: the frame on screen
+/// at `time`, `floor(time * fps)` once `time` is lifted by
+/// [`REQUEST_SLACK_STEPS`] f32 steps, at most [`REQUEST_SLACK_MAX_FRAMES`].
+pub fn request_frame(time: f32, fps: u32) -> u32 {
+    let magnitude = time.abs();
+    let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
+    let fps = f64::from(fps);
+    let slack = (f64::from(step * REQUEST_SLACK_STEPS) * fps).min(REQUEST_SLACK_MAX_FRAMES);
+    (f64::from(time) * fps + slack).floor() as u32
+}
+
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
     (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
         .round() as u32
@@ -630,25 +733,49 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 
+/// Bounds the pts-hole map. Holes are facts about the file, and a pooled
+/// reader parked past a hole never re-vends it, so the map keeps every hole a
+/// realistic recording has and only evicts on pathological inputs.
+const MAX_TRACKED_HOLES: usize = 1 << 14;
+
 /// Records a pts hole discovered from a decode-order vend jump (frames vend
-/// in pts order, so a jump means no samples exist in between). The map stays
-/// bounded by dropping the narrowest hole — wide static-screen holds matter
-/// most.
+/// in pts order, so a jump means no samples exist in between). When the map
+/// is full it drops the hole farthest from the one just recorded: requests
+/// trail the reader, so the newest holes are the ones about to be asked for.
 pub(super) fn record_pts_hole(
     holes: &mut std::collections::BTreeMap<u32, u32>,
     start: u32,
     end: u32,
 ) {
-    const MAX_TRACKED_HOLES: usize = 64;
     holes.insert(start, end);
     if holes.len() > MAX_TRACKED_HOLES
-        && let Some(narrowest) = holes
-            .iter()
-            .min_by_key(|&(&s, &e)| e.saturating_sub(s))
-            .map(|(&s, _)| s)
+        && let (Some(&first), Some(&last)) = (holes.keys().next(), holes.keys().next_back())
     {
-        holes.remove(&narrowest);
+        let farthest = if start.abs_diff(first) >= start.abs_diff(last) {
+            first
+        } else {
+            last
+        };
+        holes.remove(&farthest);
     }
+}
+
+/// How long an offline export waits for one decoded frame or one GPU readback
+/// before it stops with an error. Deadlines shorter than this only log there:
+/// export output must not depend on how loaded the machine is.
+pub(crate) const EXPORT_STALL_LIMIT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameDeadline {
+    /// Playback: a missed deadline returns no frame so the caller can move on.
+    Drop,
+    /// Offline export: a missed deadline keeps waiting for the same reply.
+    Wait,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DecodeStalled {
+    pub waited: Duration,
 }
 
 #[derive(Clone)]
@@ -657,6 +784,18 @@ pub struct AsyncVideoDecoderHandle {
     offset: f64,
     status: DecoderStatus,
     max_fallback_distance: u32,
+    #[cfg(target_os = "macos")]
+    fallback: Option<Arc<MacOsDecoderFallback>>,
+    #[cfg(target_os = "macos")]
+    sequential_access: Option<Arc<AtomicBool>>,
+}
+
+#[cfg(target_os = "macos")]
+struct MacOsDecoderFallback {
+    name: &'static str,
+    path: PathBuf,
+    fps: u32,
+    decoder: tokio::sync::OnceCell<Result<AsyncVideoDecoderHandle, String>>,
 }
 
 impl AsyncVideoDecoderHandle {
@@ -675,8 +814,15 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        self.get_frame_with_timeout(time, self.normal_timeout_ms(), self.max_fallback_distance)
-            .await
+        self.get_frame_with_timeout(
+            time,
+            self.normal_timeout_ms(),
+            self.max_fallback_distance,
+            FrameDeadline::Drop,
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     pub async fn get_frame_initial(&self, time: f32) -> Option<DecodedFrame> {
@@ -685,8 +831,32 @@ impl AsyncVideoDecoderHandle {
             Self::INITIAL_SEEK_TIMEOUT_MS,
             self.max_fallback_distance
                 .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
+            FrameDeadline::Drop,
         )
         .await
+        .ok()
+        .flatten()
+    }
+
+    /// Offline export: the decode deadline only triggers a warning. The same
+    /// request keeps waiting, so a slow machine gets the same frame later
+    /// instead of none. `Err` only after `EXPORT_STALL_LIMIT`.
+    pub(crate) async fn get_frame_for_export(
+        &self,
+        time: f32,
+        initial: bool,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        let (timeout_ms, max_fallback_distance) = if initial {
+            (
+                Self::INITIAL_SEEK_TIMEOUT_MS,
+                self.max_fallback_distance
+                    .min(Self::INITIAL_MAX_FALLBACK_DISTANCE),
+            )
+        } else {
+            (self.normal_timeout_ms(), self.max_fallback_distance)
+        };
+        self.get_frame_with_timeout(time, timeout_ms, max_fallback_distance, FrameDeadline::Wait)
+            .await
     }
 
     async fn get_frame_with_timeout(
@@ -694,8 +864,71 @@ impl AsyncVideoDecoderHandle {
         time: f32,
         timeout_ms: u64,
         max_fallback_distance: u32,
-    ) -> Option<DecodedFrame> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        #[cfg(target_os = "macos")]
+        if let Some(fallback) = &self.fallback {
+            if let Some(result) = fallback.decoder.get() {
+                return match result {
+                    Ok(decoder) => {
+                        decoder
+                            .request_frame(time, timeout_ms, max_fallback_distance, deadline)
+                            .await
+                    }
+                    Err(_) => Ok(None),
+                };
+            }
+            let primary = self
+                .request_frame(time, timeout_ms, max_fallback_distance, deadline)
+                .await;
+            if let Ok(Some(frame)) = primary {
+                return Ok(Some(frame));
+            }
+            let result = fallback
+                .decoder
+                .get_or_init(|| async {
+                    tracing::warn!(
+                        name = fallback.name,
+                        "Video reader stopped returning frames; switching to software decoding"
+                    );
+                    let mut decoder = spawn_ffmpeg_decoder(
+                        fallback.name,
+                        fallback.path.clone(),
+                        fallback.fps,
+                        self.offset,
+                        Duration::from_secs(30),
+                        false,
+                    )
+                    .await?;
+                    decoder.status.fallback_reason =
+                        Some("AVAssetReader returned no frame".to_string());
+                    Ok(decoder)
+                })
+                .await;
+            return match result {
+                Ok(decoder) => {
+                    decoder
+                        .request_frame(time, timeout_ms, max_fallback_distance, deadline)
+                        .await
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Software video decoder fallback failed");
+                    primary
+                }
+            };
+        }
+        self.request_frame(time, timeout_ms, max_fallback_distance, deadline)
+            .await
+    }
+
+    async fn request_frame(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
         if self
@@ -711,18 +944,38 @@ impl AsyncVideoDecoderHandle {
                 time = adjusted_time,
                 "decoder thread is gone; frame request dropped"
             );
-            return None;
+            return Ok(None);
         }
 
-        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await {
-            Ok(result) => result.ok(),
-            Err(_) => {
-                tracing::warn!(
-                    time = adjusted_time,
-                    timeout_ms = timeout_ms,
-                    "Frame decode request timed out"
-                );
-                None
+        let started = tokio::time::Instant::now();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), &mut rx).await {
+                Ok(result) => return Ok(result.ok()),
+                Err(_) if deadline == FrameDeadline::Wait => {
+                    let waited = started.elapsed();
+                    if waited >= EXPORT_STALL_LIMIT {
+                        tracing::error!(
+                            time = adjusted_time,
+                            waited_ms = waited.as_millis() as u64,
+                            "Frame decode request stalled"
+                        );
+                        return Err(DecodeStalled { waited });
+                    }
+                    tracing::warn!(
+                        time = adjusted_time,
+                        timeout_ms = timeout_ms,
+                        waited_ms = waited.as_millis() as u64,
+                        "Frame decode is slow; still waiting for the same frame"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        time = adjusted_time,
+                        timeout_ms = timeout_ms,
+                        "Frame decode request timed out"
+                    );
+                    return Ok(None);
+                }
             }
         }
     }
@@ -731,16 +984,48 @@ impl AsyncVideoDecoderHandle {
         time + self.offset as f32
     }
 
+    /// A handle served by a test thread instead of a real decoder.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        sender: mpsc::Sender<VideoDecoderMessage>,
+        video_width: u32,
+        video_height: u32,
+    ) -> Self {
+        Self {
+            sender,
+            offset: 0.0,
+            status: DecoderStatus {
+                decoder_type: DecoderType::FFmpegSoftware,
+                video_width,
+                video_height,
+                fallback_reason: None,
+            },
+            max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+            #[cfg(target_os = "macos")]
+            fallback: None,
+            #[cfg(target_os = "macos")]
+            sequential_access: None,
+        }
+    }
+
     pub fn decoder_status(&self) -> &DecoderStatus {
+        #[cfg(target_os = "macos")]
+        if let Some(Ok(decoder)) = self
+            .fallback
+            .as_ref()
+            .and_then(|fallback| fallback.decoder.get())
+        {
+            return &decoder.status;
+        }
         &self.status
     }
 
     pub fn decoder_type(&self) -> DecoderType {
-        self.status.decoder_type
+        self.decoder_status().decoder_type
     }
 
     pub fn is_hardware_accelerated(&self) -> bool {
-        self.status.decoder_type.is_hardware_accelerated()
+        self.decoder_type().is_hardware_accelerated()
     }
 
     pub fn video_dimensions(&self) -> (u32, u32) {
@@ -748,12 +1033,23 @@ impl AsyncVideoDecoderHandle {
     }
 
     pub fn fallback_reason(&self) -> Option<&str> {
-        self.status.fallback_reason.as_deref()
+        self.decoder_status().fallback_reason.as_deref()
     }
 
     pub fn with_max_fallback_distance(mut self, max_fallback_distance: u32) -> Self {
         self.max_fallback_distance = max_fallback_distance;
         self
+    }
+
+    /// For consumers that read front to back, such as export. The native
+    /// reader then keeps only a few decoded frames behind the newest request
+    /// instead of a playback-sized cache, and returns to the playback cache
+    /// if a request ever moves backwards.
+    pub fn prefer_sequential_access(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(sequential_access) = &self.sequential_access {
+            sequential_access.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -1003,6 +1299,10 @@ impl ManagedVideoDecoder {
             offset: self.offset,
             status: status.clone(),
             max_fallback_distance: self.max_fallback_distance,
+            #[cfg(target_os = "macos")]
+            fallback: None,
+            #[cfg(target_os = "macos")]
+            sequential_access: None,
         });
         Ok(status)
     }
@@ -1161,12 +1461,13 @@ async fn spawn_ffmpeg_decoder(
     fps: u32,
     offset: f64,
     timeout_duration: Duration,
-    path_display: &str,
+    use_hw_acceleration: bool,
 ) -> Result<AsyncVideoDecoderHandle, String> {
+    let path_display = path.display().to_string();
     let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
     let (tx, rx) = mpsc::channel();
 
-    ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, true)
+    ffmpeg::FfmpegDecoder::spawn_with_hw_config(name, path, fps, rx, ready_tx, use_hw_acceleration)
         .map_err(|e| format!("'{name}' FFmpeg decoder / {e}"))?;
 
     match tokio::time::timeout(timeout_duration, ready_rx).await {
@@ -1186,6 +1487,10 @@ async fn spawn_ffmpeg_decoder(
                 offset,
                 status,
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                #[cfg(target_os = "macos")]
+                fallback: None,
+                #[cfg(target_os = "macos")]
+                sequential_access: None,
             })
         }
         Ok(Ok(Err(e))) => Err(format!(
@@ -1217,15 +1522,22 @@ pub async fn spawn_decoder(
                 "Video '{}' using FFmpeg decoder",
                 name
             );
-            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, &path_display)
-                .await;
+            return spawn_ffmpeg_decoder(name, path, fps, offset, timeout_duration, true).await;
         }
 
         let avasset_result = {
             let (ready_tx, ready_rx) = oneshot::channel::<Result<DecoderInitResult, String>>();
             let (tx, rx) = mpsc::channel();
+            let sequential_access = Arc::new(AtomicBool::new(false));
 
-            avassetreader::AVAssetReaderDecoder::spawn(name, path.clone(), fps, rx, ready_tx);
+            avassetreader::AVAssetReaderDecoder::spawn(
+                name,
+                path.clone(),
+                fps,
+                rx,
+                ready_tx,
+                sequential_access.clone(),
+            );
 
             match tokio::time::timeout(timeout_duration, ready_rx).await {
                 Ok(Ok(Ok(init_result))) => {
@@ -1244,6 +1556,15 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        #[cfg(target_os = "macos")]
+                        fallback: Some(Arc::new(MacOsDecoderFallback {
+                            name,
+                            path: path.clone(),
+                            fps,
+                            decoder: tokio::sync::OnceCell::new(),
+                        })),
+                        #[cfg(target_os = "macos")]
+                        sequential_access: Some(sequential_access),
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!("AVAssetReader initialization failed: {e}")),
@@ -1289,6 +1610,10 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
+                            #[cfg(target_os = "macos")]
+                            sequential_access: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1332,6 +1657,10 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        #[cfg(target_os = "macos")]
+                        fallback: None,
+                        #[cfg(target_os = "macos")]
+                        sequential_access: None,
                     })
                 }
                 Ok(Ok(Err(e))) => Err(format!(
@@ -1366,6 +1695,10 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
+                            #[cfg(target_os = "macos")]
+                            sequential_access: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1419,6 +1752,10 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            #[cfg(target_os = "macos")]
+                            fallback: None,
+                            #[cfg(target_os = "macos")]
+                            sequential_access: None,
                         })
                     }
                     Ok(Ok(Err(e))) => Err(format!(
@@ -1461,6 +1798,10 @@ pub async fn spawn_decoder(
                     offset,
                     status,
                     max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                    #[cfg(target_os = "macos")]
+                    fallback: None,
+                    #[cfg(target_os = "macos")]
+                    sequential_access: None,
                 })
             }
             Ok(Ok(Err(e))) => Err(format!("'{name}' decoder initialization failed: {e}")),
@@ -1475,6 +1816,51 @@ pub async fn spawn_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pts_hole_tracking_keeps_the_newest_holes_when_full() {
+        let mut holes = std::collections::BTreeMap::new();
+        let mut frame = 0u32;
+        for i in 0..(MAX_TRACKED_HOLES as u32 + 1000) {
+            let width = if i % 4 == 0 { 3 } else { 2 };
+            record_pts_hole(&mut holes, frame, frame + width);
+            assert_eq!(holes.get(&frame), Some(&(frame + width)));
+            frame += width;
+        }
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert!(
+            holes
+                .keys()
+                .all(|&start| start as usize + 3 * MAX_TRACKED_HOLES >= frame as usize)
+        );
+    }
+
+    #[test]
+    fn pts_hole_tracking_drops_the_farthest_hole_after_a_backward_seek() {
+        let mut holes = std::collections::BTreeMap::new();
+        let last = MAX_TRACKED_HOLES as u32 - 1;
+        for i in 0..=last {
+            record_pts_hole(&mut holes, 1000 + i * 2, 1000 + i * 2 + 2);
+        }
+        record_pts_hole(&mut holes, 10, 40);
+        assert_eq!(holes.len(), MAX_TRACKED_HOLES);
+        assert_eq!(holes.get(&10), Some(&40));
+        assert!(holes.contains_key(&1000));
+        assert!(!holes.contains_key(&(1000 + last * 2)));
+    }
+
+    #[test]
+    fn pts_hole_tracking_keeps_an_old_static_hold_while_later_holes_arrive() {
+        let mut holes = std::collections::BTreeMap::new();
+        record_pts_hole(&mut holes, 1797, 2402);
+        let mut frame = 2402u32;
+        for i in 0..2000u32 {
+            let width = 2 + i % 7;
+            record_pts_hole(&mut holes, frame, frame + width);
+            frame += width;
+        }
+        assert_eq!(holes.get(&1797), Some(&2402));
+    }
 
     #[test]
     fn decoded_frame_storage_identity_matches_clones() {
@@ -1539,6 +1925,34 @@ mod tests {
         assert_eq!(frame.uv_plane().unwrap(), vec![0x22; uv_size]);
         assert_eq!(frame.data().len(), y_size + uv_size);
         assert!(frame.with_image_buf(|_| ()).is_none());
+    }
+
+    #[test]
+    fn request_frame_maps_every_frame_time_back_to_its_frame() {
+        // Frame times as the renderer sends them: n / fps in an f32, for
+        // three hours. A plain f32 floor maps 126 / 30 s (4.1999998) to frame
+        // 125; uncapped slack maps frame 1,966,082 at 240 fps (8192.0088 s)
+        // to the next.
+        for fps in [24, 25, 30, 50, 60, 120, 144, 240] {
+            let frames = 3 * 3600 * fps;
+            for n in 0..frames {
+                let time = (f64::from(n) / f64::from(fps)) as f32;
+                assert_eq!(request_frame(time, fps), n, "{n} at {fps} fps");
+            }
+        }
+    }
+
+    #[test]
+    fn request_frame_keeps_times_inside_a_frame_on_that_frame() {
+        for (time, fps, frame) in [
+            (0.0, 30, 0),
+            (0.031, 30, 0),
+            (0.034, 30, 1),
+            (4.22, 30, 126),
+        ] {
+            assert_eq!(request_frame(time, fps), frame, "{time} at {fps} fps");
+        }
+        assert_eq!(request_frame(-0.5, 30), 0);
     }
 
     #[test]
@@ -2060,6 +2474,56 @@ mod managed_worker_tests {
         paths
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn stalled_native_decoder_falls_back_once_and_preserves_offsets_across_clones() {
+        let directory = tempfile::tempdir().unwrap();
+        encode_gapped_segments(directory.path());
+        let (sender, receiver) = mpsc::channel();
+        let decoder = AsyncVideoDecoderHandle {
+            sender,
+            offset: 0.25,
+            status: DecoderStatus {
+                decoder_type: DecoderType::AVAssetReader,
+                video_width: 160,
+                video_height: 120,
+                fallback_reason: None,
+            },
+            max_fallback_distance: 2,
+            fallback: Some(Arc::new(MacOsDecoderFallback {
+                name: "screen",
+                path: directory.path().to_path_buf(),
+                fps: 30,
+                decoder: tokio::sync::OnceCell::new(),
+            })),
+            sequential_access: None,
+        };
+        let cloned = decoder.clone();
+        let (first, second) = tokio::join!(
+            decoder.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop),
+            cloned.get_frame_with_timeout(0.0, 200, 2, FrameDeadline::Drop)
+        );
+        let first = first.unwrap().unwrap();
+        assert_eq!(
+            frame_pixels(&first),
+            frame_pixels(&second.unwrap().unwrap())
+        );
+        assert_eq!(decoder.decoder_type(), DecoderType::FFmpegSoftware);
+        assert_eq!(cloned.decoder_type(), DecoderType::FFmpegSoftware);
+        assert!(decoder.fallback_reason().is_some());
+        let (reference, join) = ordinary_worker(directory.path().to_path_buf(), 0.25, false).await;
+        assert_eq!(
+            frame_pixels(&first),
+            frame_pixels(&reference.get_frame_initial(0.0).await.unwrap())
+        );
+        let pending_before = receiver.try_iter().count();
+        assert_eq!(pending_before, 2);
+        assert!(decoder.get_frame_initial(0.5).await.is_some());
+        assert_eq!(receiver.try_iter().count(), 0);
+        drop(reference);
+        join.join().unwrap();
+    }
+
     async fn ordinary_worker(
         path: PathBuf,
         offset: f64,
@@ -2099,6 +2563,10 @@ mod managed_worker_tests {
                     fallback_reason: None,
                 },
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                #[cfg(target_os = "macos")]
+                fallback: None,
+                #[cfg(target_os = "macos")]
+                sequential_access: None,
             },
             join,
         )
@@ -2270,7 +2738,7 @@ mod managed_worker_tests {
                 let pts = packet.pts().unwrap();
                 let frame = pts_to_frame(pts.checked_sub(start_time).unwrap(), time_base, fps);
                 let requested_time = ((f64::from(frame) + 0.25) / f64::from(fps)) as f32;
-                assert_eq!((requested_time * fps as f32).floor() as u32, frame);
+                assert_eq!(request_frame(requested_time, fps), frame);
                 println!(
                     "{}",
                     serde_json::json!({
@@ -2387,6 +2855,7 @@ mod managed_worker_tests {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
             segment_offset: 10.25,
+            transition_readers: None,
         };
         let input = ManagedSegmentVideoInput::new(
             0,

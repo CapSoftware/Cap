@@ -18,6 +18,7 @@ import { produce } from "solid-js/store";
 import type { TextSegment as TauriTextSegment } from "~/utils/tauri";
 import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { FPS, useEditorContext } from "./context";
+import { createOverlaySegments } from "./overlay-segments";
 import { SNAP_PX, snapMovingRect } from "./snapping";
 import {
 	TEXT_FONT_SIZE_MAX,
@@ -54,20 +55,10 @@ export function TextOverlay(props: TextOverlayProps) {
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
 
-	const visibleTextSegments = createMemo(() => {
-		const segments = project.timeline?.textSegments ?? [];
-		const time = currentAbsoluteTime();
-		return segments
-			.map((segment, index) => ({ segment, index }))
-			.filter(
-				({ segment }) =>
-					segment.enabled && time >= segment.start && time < segment.end,
-			)
-			.sort(
-				(a, b) =>
-					(a.segment.track ?? 0) - (b.segment.track ?? 0) || a.index - b.index,
-			);
-	});
+	const { visible: visibleTextSegments } = createOverlaySegments(
+		() => project.timeline?.textSegments ?? [],
+		currentAbsoluteTime,
+	);
 
 	const selectedTextIndex = createMemo(() => {
 		const selection = editorState.timeline.selection;

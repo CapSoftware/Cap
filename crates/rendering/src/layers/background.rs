@@ -349,6 +349,9 @@ pub enum Inner {
 
 pub struct BackgroundLayer {
     inner: Option<Inner>,
+    /// Bumped whenever `inner` is replaced, so consumers can cache anything
+    /// derived from a static background (e.g. its blurred copy).
+    generation: u64,
     image_pipeline: ImageBackgroundPipeline,
     color_pipeline: GradientOrColorPipeline,
 }
@@ -357,6 +360,7 @@ impl BackgroundLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             inner: None,
+            generation: 0,
             image_pipeline: ImageBackgroundPipeline::new(device),
             color_pipeline: GradientOrColorPipeline::new(device),
         }
@@ -377,6 +381,7 @@ impl BackgroundLayer {
                     layer.prepare(device, queue, config, uniforms);
                 }
                 _ => {
+                    self.generation += 1;
                     self.inner = Some(Inner::AnimatedGradient(Box::new(
                         AnimatedGradientLayer::new(device, config, uniforms),
                     )));
@@ -398,6 +403,7 @@ impl BackgroundLayer {
                                 let fallback_background = Background::Color([1.0, 1.0, 1.0, 1.0]);
                                 let buffer = GradientOrColorUniforms::from(fallback_background)
                                     .to_buffer(device);
+                                self.generation += 1;
                                 self.inner = Some(Inner::ColorOrGradient {
                                     value: ColorOrGradient::Color([1.0, 1.0, 1.0, 1.0]),
                                     bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -447,6 +453,7 @@ impl BackgroundLayer {
                         let texture_view =
                             texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+                        self.generation += 1;
                         self.inner = Some(Inner::Image {
                             path,
                             bind_group: self.image_pipeline.bind_group(
@@ -465,6 +472,7 @@ impl BackgroundLayer {
                 }) if &color == current_color => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Color(color),
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -479,6 +487,7 @@ impl BackgroundLayer {
                 }) if &gradient == current_gradient => {}
                 _ => {
                     let buffer = GradientOrColorUniforms::from(background).to_buffer(device);
+                    self.generation += 1;
                     self.inner = Some(Inner::ColorOrGradient {
                         value: ColorOrGradient::Gradient(gradient),
                         bind_group: self.color_pipeline.bind_group(device, &buffer),
@@ -489,6 +498,15 @@ impl BackgroundLayer {
         }
 
         Ok(())
+    }
+
+    /// Identifies the current background while it renders the same pixels
+    /// every frame; `None` for animated backgrounds.
+    pub fn static_generation(&self) -> Option<u64> {
+        match &self.inner {
+            Some(Inner::Image { .. } | Inner::ColorOrGradient { .. }) => Some(self.generation),
+            _ => None,
+        }
     }
 
     pub fn render_surface(&mut self, encoder: &mut wgpu::CommandEncoder) {
