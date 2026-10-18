@@ -57,7 +57,7 @@ impl ProResEncoderBuilder {
             || input_config.width != output_width
             || input_config.height != output_height
         {
-            Some(ffmpeg::software::scaling::Context::get(
+            let mut converter = ffmpeg::software::scaling::Context::get(
                 input_config.pixel_format,
                 input_config.width,
                 input_config.height,
@@ -65,7 +65,13 @@ impl ProResEncoderBuilder {
                 output_width,
                 output_height,
                 ffmpeg::software::scaling::flag::Flags::BICUBIC,
-            )?)
+            )?;
+            super::colour::use_bt709_for_rgb_input(
+                &mut converter,
+                input_config.pixel_format,
+                output_format,
+            )?;
+            Some(converter)
         } else {
             None
         };
@@ -83,7 +89,9 @@ impl ProResEncoderBuilder {
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
         encoder.set_colorspace(color::Space::BT709);
-        encoder.set_color_range(color::Range::JPEG);
+        // Limited range: what the converter above produces (and the ProRes
+        // convention).
+        encoder.set_color_range(color::Range::MPEG);
         unsafe {
             (*encoder.as_mut_ptr()).color_primaries =
                 ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;

@@ -132,12 +132,17 @@ pub fn export_bounds(scaled: &[Annotation], canvas: (u32, u32)) -> ExportBounds 
 pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     let width = raw.width.max(1);
     let height = raw.height.max(1);
-    if config.annotations.is_empty()
-        && raw.rgba.len() == width as usize * height as usize * 4
-        && pixels::is_opaque(&raw.rgba)
-    {
+    if config.annotations.is_empty() && raw.rgba.len() == width as usize * height as usize * 4 {
+        let rgba = if has_no_visible_background(&config.background.source)
+            || pixels::is_opaque(&raw.rgba)
+        {
+            raw.rgba.clone()
+        } else {
+            pixels::flatten_onto_white(&raw.rgba)
+        };
+
         return Composited {
-            rgba: raw.rgba.clone(),
+            rgba,
             width,
             height,
         };
@@ -581,7 +586,7 @@ fn draw_text(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
 
     let stack = TEXT_STACK.get_or_init(|| {
         Mutex::new((
-            cosmic_text::FontSystem::new(),
+            cap_rendering::new_font_system(),
             cosmic_text::SwashCache::new(),
         ))
     });
@@ -861,7 +866,15 @@ mod tests {
                     invisible_background(&mut config);
                 }
                 let out = composite(&raw, &config);
-                let reference = reference_unannotated_composite(&raw, &config);
+                let reference = if invisible {
+                    Composited {
+                        rgba: raw.rgba.clone(),
+                        width: raw.width.max(1),
+                        height: raw.height.max(1),
+                    }
+                } else {
+                    reference_unannotated_composite(&raw, &config)
+                };
                 assert_eq!(out.rgba, reference.rgba);
                 let expected = if needs_transparency(&reference, &config) {
                     reference
