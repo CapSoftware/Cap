@@ -509,7 +509,8 @@ pub fn spawn_cursor_recorder(
         let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
 
-        let mut last_position = cap_cursor_capture::RawCursorPosition::get();
+        let mut last_position =
+            cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
 
         std::fs::create_dir_all(&cursors_dir).unwrap();
 
@@ -544,15 +545,16 @@ pub fn spawn_cursor_recorder(
             }
 
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
-                last_position = cap_cursor_capture::RawCursorPosition::get();
                 last_mouse_state = device_state.get_mouse();
+                last_position =
+                    cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
                 last_keys = device_state.get_keys();
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let position = cap_cursor_capture::RawCursorPosition::get();
+            let position = cap_cursor_capture::RawCursorPosition::from_coords(mouse_state.coords);
             // The first sample after the gate opens is always recorded so the
             // cursor has a known position at the recording's time zero.
             let position_changed = position != last_position || std::mem::take(&mut awaiting_start);
