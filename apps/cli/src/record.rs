@@ -844,18 +844,24 @@ async fn start_recording(
             if let Some(fps) = params.fps {
                 builder = builder.with_max_fps(fps);
             }
+            // As in the desktop app: the screen and audio tracks both start at
+            // the gate's arm time, so a microphone that is ready late does not
+            // move all audio early. The CLI has no start cue to wait for.
+            let start_gate = cap_recording::RecordingStartGate::new();
+            builder = builder.with_start_gate(start_gate.clone());
 
-            builder
+            let actor = builder
                 .build(
                     #[cfg(target_os = "macos")]
                     shareable_content,
                 )
                 .await
-                .map(|actor| ActorHandle::Instant {
-                    actor,
-                    _upload_lock: upload_lock,
-                })
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            start_gate.arm();
+            Ok(ActorHandle::Instant {
+                actor,
+                _upload_lock: upload_lock,
+            })
         }
     }
 }

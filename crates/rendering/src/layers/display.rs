@@ -162,6 +162,7 @@ impl DisplayLayer {
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        self.yuv_converter.set_matrix(screen_frame.matrix());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
@@ -578,6 +579,7 @@ impl DisplayLayer {
         let actual_height = screen_frame.height();
         let source_size = XY::new(actual_width, actual_height);
         let format = screen_frame.format();
+        self.yuv_converter.set_matrix(screen_frame.matrix());
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
