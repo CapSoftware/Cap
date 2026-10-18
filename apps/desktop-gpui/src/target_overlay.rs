@@ -640,6 +640,14 @@ fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
         .collect()
 }
 
+/// Overlays are never the active window while the picker is up, and an
+/// inactive window may not present a bare notify, so every state an overlay
+/// draws asks for its repaint explicitly.
+fn repaint(window: &mut Window, cx: &mut Context<OverlayWindow>) {
+    cx.notify();
+    window.refresh();
+}
+
 impl OverlayWindow {
     pub fn new(
         display: &scap_targets::Display,
@@ -649,14 +657,15 @@ impl OverlayWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
-        cx.observe(&select, |_, _, cx| cx.notify()).detach();
+        cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
         let session = crate::session::RecordingSession::global(cx);
         let mut drawn_phase = session.read(cx).phase;
-        cx.observe(&session, move |_, session, cx| {
+        cx.observe_in(&session, window, move |_, session, window, cx| {
             let phase = session.read(cx).phase;
             if phase != drawn_phase {
                 drawn_phase = phase;
-                cx.notify();
+                repaint(window, cx);
             }
         })
         .detach();
@@ -664,7 +673,7 @@ impl OverlayWindow {
         let main_subscription = main
             .update(cx, |_, _, cx| cx.entity())
             .ok()
-            .map(|main| cx.observe(&main, |_, _, cx| cx.notify()));
+            .map(|main| cx.observe_in(&main, window, |_, _, window, cx| repaint(window, cx)));
 
         let logical = display
             .logical_size()
@@ -831,7 +840,7 @@ impl OverlayWindow {
         self.theme.refresh(window, cx, false);
     }
 
-    fn sync_inline_camera(&mut self, cx: &mut Context<Self>) {
+    fn sync_inline_camera(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let camera = (self.select.read(cx).mode == Some(TargetType::CameraOnly))
             .then(|| app_windows::camera_preview_entity(cx))
             .flatten();
@@ -842,7 +851,7 @@ impl OverlayWindow {
         }
         self.inline_camera_subscription = camera
             .as_ref()
-            .map(|camera| cx.observe(camera, |_, _, cx| cx.notify()));
+            .map(|camera| cx.observe_in(camera, window, |_, _, window, cx| repaint(window, cx)));
         self.inline_camera = camera;
     }
 
@@ -875,7 +884,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        self.sync_inline_camera(cx);
+        self.sync_inline_camera(window, cx);
         let viewport = window.viewport_size();
         let display_size = overlay_viewport_size(
             (f32::from(viewport.width), f32::from(viewport.height)),
