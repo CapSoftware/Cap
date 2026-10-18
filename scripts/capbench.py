@@ -364,6 +364,13 @@ def parse_playback_pipeline(lines):
         "scrub_p50_ms": scrub.get("Total (decode+render)", {}).get("p50"),
         "scrub_p95_ms": scrub.get("Total (decode+render)", {}).get("p95"),
     }
+    failed = sum(
+        int(match.group(1))
+        for _, line in lines
+        if (match := re.match(r"(?:Decode|Render) failures:\s*(\d+)", line.strip()))
+    )
+    if failed:
+        raise InvalidRun(f"playback-pipeline-benchmark reported {failed} failed frames")
     return {key: value for key, value in metrics.items() if value is not None}
 
 
@@ -643,6 +650,9 @@ def cmd_run(args):
     work = out_root / "work"
     if ctx.source_fixture.is_relative_to(work) or work.is_relative_to(ctx.source_fixture):
         sys.exit(f"--fixture {ctx.source_fixture} and the work directory {work} overlap; the work directory is deleted before each run")
+    for label, bin_dir in variants:
+        if Path(bin_dir).resolve().is_relative_to(work):
+            sys.exit(f"binaries for {label} ({bin_dir}) are inside the work directory {work}, which is deleted before each run")
     for _, bin_dir in variants:
         ctx.bin_dir = Path(bin_dir).resolve()
         try:
