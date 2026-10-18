@@ -788,7 +788,7 @@ impl Default for ClickSpringConfig {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenMovementSpring {
     pub stiffness: f32,
@@ -987,7 +987,7 @@ pub enum GlideDirection {
     Down,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSegment {
     pub start: f64,
@@ -1014,7 +1014,7 @@ impl ZoomSegment {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ZoomMode {
     Auto,
