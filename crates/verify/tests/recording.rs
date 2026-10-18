@@ -3739,6 +3739,49 @@ fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, 
     Ok((first, unreadable))
 }
 
+/// The first export frame at `export_fps` that shows the source picture
+/// labelled `label`, under the decoder contract described in `check_export`.
+fn contract_first_frame(label: f64, source_fps: f64, export_fps: f64, screen_offset: f64) -> f64 {
+    let request = |frame: f64| {
+        let time = (frame / export_fps + screen_offset) as f32;
+        let step = f32::from_bits(time.abs().to_bits() + 1) - time.abs();
+        let slack = (f64::from(step) * 4.0 * source_fps).min(0.25);
+        (f64::from(time) * source_fps + slack).floor()
+    };
+    let mut frame = ((label / source_fps - screen_offset) * export_fps).floor() - 2.0;
+    while request(frame) < label {
+        frame += 1.0;
+    }
+    frame
+}
+
+#[test]
+fn contract_first_frame_follows_the_decoder_request_rule_for_long_recordings() {
+    // Up to three hours in, with screen offsets on and between export
+    // frames: the export frame the check expects is the first one whose
+    // request the decoder answers with the picture.
+    for (fps, offset_frames) in [(30u32, 0.0), (30, 0.99), (60, 18.95), (60, 0.5)] {
+        let fps_f = f64::from(fps);
+        let offset = offset_frames / fps_f;
+        for label in (0..3 * 3600 * fps).step_by(997).map(f64::from) {
+            let expected = contract_first_frame(label, fps_f, fps_f, offset);
+            let asks = |frame: f64| {
+                let time = (frame / fps_f + offset) as f32;
+                f64::from(cap_rendering::decoder::request_frame(time, fps))
+            };
+            assert!(
+                asks(expected) >= label,
+                "{label} at {fps} fps, offset {offset_frames}"
+            );
+            // Export frames start at 0; the decoder clamps earlier times.
+            assert!(
+                expected < 1.0 || asks(expected - 1.0) < label,
+                "{label} at {fps} fps, offset {offset_frames}"
+            );
+        }
+    }
+}
+
 fn display_fps(project: &Path) -> anyhow::Result<u32> {
     let meta = RecordingMeta::load_for_project(project).map_err(|e| anyhow::anyhow!("{e}"))?;
     match meta.studio_meta() {
@@ -3883,22 +3926,18 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
         worst_delay.unwrap_or(f64::NAN) * 1e3
     ));
     // Where the decoder contract puts each picture: the display track is
-    // read `screen_offset` into its own time, a request for time t asks for
-    // grid frame floor(t * source_fps), and a picture is labelled
-    // round(pts * source_fps), so it first shows on the first export frame
-    // whose request reaches its label. A label that falls on an export frame
-    // (within a thousandth of one, the f64 error of the times) shows on that
-    // frame.
+    // read `screen_offset` into its own time, and a picture is labelled
+    // round(pts * source_fps). A request is an f32 time t asking for grid
+    // frame floor(t * source_fps), with t lifted by four f32 steps, at most
+    // a quarter frame, so the f32 rounding of frame times never asks for the
+    // frame before (crates/rendering/src/decoder/mod.rs, request_frame).
+    // Written out here rather than called, so a decoder that breaks the
+    // contract disagrees with it. A picture first shows on the first export
+    // frame whose request reaches its label.
     let source_fps = f64::from(display_fps(&rec.project)?);
     let screen_offset = timeline_start - layout.display.start;
-    let first_frame = |label: f64| {
-        let frame = (label / source_fps - screen_offset) * f64::from(fps);
-        if (frame - frame.round()).abs() < 1e-3 {
-            frame.round()
-        } else {
-            frame.ceil()
-        }
-    };
+    let first_frame =
+        |label: f64| contract_first_frame(label, source_fps, f64::from(fps), screen_offset);
     let off_contract: Vec<String> = required
         .iter()
         .filter_map(|(i, t)| {
