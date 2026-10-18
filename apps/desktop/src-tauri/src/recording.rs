@@ -7089,6 +7089,7 @@ async fn emit_recording_started_telemetry(app: &AppHandle, state_mtx: &MutableSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone as _;
     use tempfile::tempdir;
 
     #[test]
