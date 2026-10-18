@@ -59,6 +59,7 @@ pub enum AuthApiError {
     InvalidAuthentication,
     UpgradeRequired,
     Timeout,
+    Status(reqwest::StatusCode, String),
     Other(String),
 }
 
@@ -72,7 +73,7 @@ impl AuthApiError {
                 "User needs to upgrade their account to use this feature!".into()
             }
             Self::Timeout => "The request has timed out".into(),
-            Self::Other(message) => message.clone(),
+            Self::Status(_, message) | Self::Other(message) => message.clone(),
         }
     }
 }
@@ -225,7 +226,24 @@ impl UploadRequestContext {
     }
 }
 
+pub fn api_client() -> Result<reqwest::Client, AuthApiError> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|error| AuthApiError::Other(error.to_string()))
+}
+
 pub async fn authed_request(
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<reqwest::Response, AuthApiError> {
+    authed_request_with(&api_client()?, method, path, body).await
+}
+
+pub async fn authed_request_with(
+    client: &reqwest::Client,
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
@@ -241,11 +259,6 @@ pub async fn authed_request(
         )
     };
     let url = format!("{server}{path}");
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|error| AuthApiError::Other(error.to_string()))?;
     let mut request = client.request(method, url);
     request = apply_desktop_headers(request).bearer_auth(token);
     if let Some(body) = body {

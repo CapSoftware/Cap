@@ -1,0 +1,37 @@
+[package]
+name = "cap-verify-stimulus"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Helper process of the real-capture recording oracle (crates/verify/tests/recording.rs): shows screen markers and plays system-audio markers"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cap-verify-stimulus"
+path = "src/main.rs"
+
+[dependencies]
+cap-verify = { path = "../verify" }
+anyhow = { workspace = true }
+serde_json = "1"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }
+cpal = { workspace = true }
+futures = { workspace = true }
+objc2-foundation = "0.3.1"
+scap-screencapturekit = { path = "../scap-screencapturekit" }
+softbuffer = "0.4"
+winit = "0.30"
+
+[target.'cfg(windows)'.dependencies]
+cpal = { workspace = true }
+winit = "0.30"
+windows = { workspace = true, features = [
+	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
+	"Win32_UI_WindowsAndMessaging",
+] }

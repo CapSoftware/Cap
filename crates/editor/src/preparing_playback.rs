@@ -519,14 +519,12 @@ impl PreparingPlaybackRunner {
         };
         sources.validate()?;
         self.audio_sources = Some(sources);
-        if self
+        let _audio_awake = self
             .required_audio
             .iter()
             .flatten()
             .any(|required| *required)
-        {
-            self.audio_output.prewarm();
-        }
+            .then(|| self.audio_output.hold_awake());
         let (frames, received) = flume::bounded(1);
         let discard = received.clone();
         let preview = crate::PreparingPreview::spawn(
