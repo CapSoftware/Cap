@@ -313,11 +313,21 @@ impl ExportAudioRenderer {
         let Some(timeline) = &project.timeline else {
             return true;
         };
-        if !timeline.audio_segments.is_empty() || !timeline.hold_windows().is_empty() {
+        if !timeline.audio_segments.is_empty() {
+            return false;
+        }
+        let holds = timeline.hold_windows();
+        if holds
+            .iter()
+            .any(|(start, end)| !start.is_finite() || !end.is_finite() || *start < 0.0)
+        {
             return false;
         }
         let mut ends = HashMap::new();
-        let mut duration = 0.0;
+        let mut duration = holds.iter().map(|(start, end)| end - start).sum::<f64>();
+        if !duration.is_finite() || duration * 48_000.0 >= isize::MAX as f64 / 2.0 {
+            return false;
+        }
         for segment in &timeline.segments {
             if segment.timescale != 1.0
                 || !segment.start.is_finite()
@@ -1470,6 +1480,99 @@ mod tests {
         assert_bounded_sink_variants([19], &[1]);
     }
 
+    #[test]
+    fn fullscreen_holds_match_full_renderer_without_retaining_whole_tracks() {
+        assert_bounded_sink_variants(26..32, &[1, 7, 997, 4_096, 48_001]);
+    }
+
+    #[test]
+    fn streaming_eligibility_accepts_valid_fullscreen_holds() {
+        let mut project = project();
+        let hold = serde_json::from_value(serde_json::json!({
+            "start": 0.1, "end": 0.2, "layout": "fullscreen"
+        }))
+        .unwrap();
+        project.timeline.as_mut().unwrap().text_segments.push(hold);
+        assert!(ExportAudioRenderer::eligible_sources(&project, 3));
+        for (start, end) in [
+            (f64::NEG_INFINITY, 0.2),
+            (-1.0, 0.2),
+            (0.1, f64::INFINITY),
+            (0.1, f64::MAX),
+        ] {
+            let hold = &mut project.timeline.as_mut().unwrap().text_segments[0];
+            hold.start = start;
+            hold.end = end;
+            assert!(
+                !ExportAudioRenderer::eligible_sources(&project, 3),
+                "{start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn fullscreen_hold_emits_silence_without_reading_audio_and_cancels_between_blocks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.wav");
+        write_wav(&path, 48_000, 1);
+        let data = Arc::new(AudioData::from_file(&path).unwrap());
+        let (_, mut candidate) = fixture(
+            &[path.clone(), path.clone(), path],
+            &[data.clone(), data.clone(), data],
+        );
+        let mut project = project();
+        project.timeline.as_mut().unwrap().text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 0.0, "end": 1.0, "layout": "fullscreen"
+            }))
+            .unwrap(),
+        );
+        let mut samples = Vec::new();
+        assert_eq!(
+            candidate
+                .render_chunks(4_096, &project, |_, block| {
+                    samples.extend_from_slice(block);
+                    Ok(())
+                })
+                .unwrap(),
+            Some(4_096)
+        );
+        assert_eq!(samples, vec![0.0; 4_096 * 2]);
+        assert!(
+            candidate
+                .sources
+                .tracks
+                .iter()
+                .flatten()
+                .all(|track| track.source.position() == 0)
+        );
+
+        let cancellation = candidate.sources.cancellation.clone();
+        let mut blocks = 0;
+        assert!(matches!(
+            candidate.render_chunks(48_000, &project, |_, block| {
+                assert!(block.iter().all(|sample| *sample == 0.0));
+                blocks += 1;
+                cancellation.store(true, Ordering::Relaxed);
+                Ok(())
+            }),
+            Err(ExportAudioError::Cancelled)
+        ));
+        assert_eq!(blocks, 1);
+        assert!(
+            candidate
+                .sources
+                .tracks
+                .iter()
+                .flatten()
+                .all(|track| track.source.position() == 0)
+        );
+        assert!(matches!(
+            candidate.validate_to_end(),
+            Err(ExportAudioError::Cancelled)
+        ));
+    }
+
     fn assert_bounded_sink_variants(variants: impl IntoIterator<Item = usize>, requests: &[usize]) {
         ffmpeg::init().unwrap();
         let directory = tempfile::tempdir().unwrap();
@@ -1566,6 +1669,34 @@ mod tests {
                             } else {
                                 ClipTransitionType::FadeThroughBlack
                             },
+                            duration: 0.131_234_567,
+                        });
+                    }
+                }
+                26..=31 => {
+                    project.audio.improve = variant == 30;
+                    let timeline = project.timeline.as_mut().unwrap();
+                    let windows: &[(f64, f64)] = match variant {
+                        26 => &[(0.0, 0.071_234_567)],
+                        27 | 30 => &[(0.113_456_789, 0.224_567_891)],
+                        28 => &[(0.1, 0.2), (0.15, 0.25), (0.25, 0.3)],
+                        29 => &[(0.25, 0.4)],
+                        31 => &[(0.0, 0.1), (0.4, 0.5), (0.816_98, 0.9)],
+                        _ => unreachable!(),
+                    };
+                    timeline.text_segments = windows
+                        .iter()
+                        .map(|&(start, end)| {
+                            serde_json::from_value(serde_json::json!({
+                                "start": start, "end": end, "layout": "fullscreen"
+                            }))
+                            .unwrap()
+                        })
+                        .collect();
+                    if variant == 29 {
+                        timeline.transitions.push(ClipTransition {
+                            segment_index: 1,
+                            kind: ClipTransitionType::CrossFade,
                             duration: 0.131_234_567,
                         });
                     }
