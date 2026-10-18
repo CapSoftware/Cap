@@ -588,6 +588,9 @@ pub struct PanelBehavior {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod macos_exception_guard;
+
+#[cfg(target_os = "macos")]
 mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
@@ -613,6 +616,12 @@ mod mac {
                 .get()
                 .is_some_and(|requests| requests.request()),
         )
+    }
+
+    /// Keeps AppKit exceptions Cap cannot cause or prevent (the Touch Bar
+    /// finder's) from crashing the app. Call on the main thread at startup.
+    pub fn install_appkit_exception_guards() {
+        super::macos_exception_guard::install();
     }
 
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
