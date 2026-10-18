@@ -1991,6 +1991,11 @@ pub struct SharedPauseState {
 }
 
 impl SharedPauseState {
+    #[cfg(windows)]
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.flag.clone()
+    }
+
     pub fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,

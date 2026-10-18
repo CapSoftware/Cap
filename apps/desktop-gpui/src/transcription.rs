@@ -1809,7 +1809,7 @@ fn caption_boundary_word_is_weak(word: &CaptionWord) -> bool {
         .collect::<String>()
         .to_lowercase();
 
-    normalized.len() <= 1
+    normalized.chars().count() <= 1
         || matches!(
             normalized.as_str(),
             "an" | "as"
@@ -2313,21 +2313,44 @@ mod tests {
 
     #[test]
     fn caption_word_chunks_do_not_end_on_short_connector_when_more_words_follow() {
-        let words = [
-            "This", "is", "where", "we", "record", "I", "want", "clean", "captions",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(index, text)| word(text, index))
-        .collect::<Vec<_>>();
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "This", "is", "where", "we", "record", connector, "want", "clean", "captions",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
 
-        let chunks = caption_word_chunks(&words);
+            let chunks = caption_word_chunks(&words);
 
-        assert_eq!(
-            caption_text_from_words(chunks[0]),
-            "This is where we record I want"
-        );
-        assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("This is where we record {connector} want")
+            );
+            assert_eq!(caption_text_from_words(chunks[1]), "clean captions");
+        }
+    }
+
+    #[test]
+    fn caption_word_chunks_merge_short_tail_starting_with_connector() {
+        for connector in ["I", "à", "à,", "a\u{300}", "日"] {
+            let words = [
+                "These", "captions", "should", "stay", "grouped", "together", connector, "Paris",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, text)| word(text, index))
+            .collect::<Vec<_>>();
+
+            let chunks = caption_word_chunks(&words);
+
+            assert_eq!(chunks.len(), 1, "connector {connector}");
+            assert_eq!(
+                caption_text_from_words(chunks[0]),
+                format!("These captions should stay grouped together {connector} Paris")
+            );
+        }
     }
 
     // -- Model paths ----------------------------------------------------------
