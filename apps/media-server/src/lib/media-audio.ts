@@ -560,6 +560,9 @@ function openRemoteAudioExtractStream(
 						cleanup();
 					});
 					reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+				} catch (error) {
+					cleanup();
+					throw error;
 				} finally {
 					resolveReady();
 				}

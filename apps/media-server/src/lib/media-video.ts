@@ -420,6 +420,102 @@ export async function materializeHlsPlaylist(
 	return filePath;
 }
 
+function currentDashBase(bases: string[], fallback: string): string {
+	return bases[bases.length - 1] ?? fallback;
+}
+
+function rememberDashResource(
+	resource: string,
+	base: string,
+	query: string,
+	urls: string[],
+): string {
+	const resolved = resolveResourceUrl(resource, base, query);
+	if (resolved.includes("$")) {
+		throw new Error("DASH template URL cannot be fetched locally");
+	}
+	if (!new URL(resolved).pathname.endsWith("/")) urls.push(resolved);
+	return resolved;
+}
+
+function rewriteDashAttributes(
+	attributes: string,
+	base: string,
+	query: string,
+	urls: string[],
+): string {
+	return attributes.replace(
+		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
+		(_, attribute: string, resource: string) => {
+			const resolved = rememberDashResource(
+				decodeXmlAttribute(resource),
+				base,
+				query,
+				urls,
+			);
+			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
+		},
+	);
+}
+
+function rewriteDashManifest(
+	content: string,
+	manifestBase: string,
+	query: string,
+): { urls: string[]; xml: string } {
+	const urls: string[] = [];
+	const bases = [manifestBase];
+	const pattern =
+		/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<(BaseURL|Location)\b([^>]*)>([\s\S]*?)<\/\1>|<\/([A-Za-z0-9:_-]+)\s*>|<([A-Za-z0-9:_-]+)\b([^>]*?)(\/)?\s*>/gi;
+	let xml = "";
+	let cursor = 0;
+
+	for (const match of content.matchAll(pattern)) {
+		const index = match.index ?? 0;
+		xml += content.slice(cursor, index);
+		cursor = index + match[0].length;
+		if (match[0].startsWith("<!--") || match[0].startsWith("<![")) {
+			xml += match[0];
+			continue;
+		}
+
+		const baseElement = match[1];
+		if (baseElement) {
+			const resolved = resolveResourceUrl(
+				decodeXmlAttribute((match[3] ?? "").trim()),
+				currentDashBase(bases, manifestBase),
+				query,
+			);
+			const directory = new URL(resolved).pathname.endsWith("/");
+			if (directory || baseElement.toLowerCase() === "location") {
+				bases[bases.length - 1] = new URL(".", resolved).toString();
+				continue;
+			}
+			if (resolved.includes("$")) {
+				throw new Error("DASH template URL cannot be fetched locally");
+			}
+			urls.push(resolved);
+			bases[bases.length - 1] = resolved;
+			xml += `<${baseElement}${rewriteDashAttributes(match[2] ?? "", resolved, query, urls)}>${escapeXmlAttribute(resolved)}</${baseElement}>`;
+			continue;
+		}
+
+		if (match[4]) {
+			if (bases.length > 1) bases.pop();
+			xml += match[0];
+			continue;
+		}
+
+		const base = currentDashBase(bases, manifestBase);
+		const attributes = rewriteDashAttributes(match[6] ?? "", base, query, urls);
+		const selfClosing = Boolean(match[7]);
+		xml += `<${match[5]}${attributes}${selfClosing ? " />" : ">"}`;
+		if (!selfClosing) bases.push(base);
+	}
+
+	return { urls, xml: xml + content.slice(cursor) };
+}
+
 export async function materializeMpdManifest(
 	manifestUrl: string,
 	dirPath: string,
@@ -437,40 +533,12 @@ export async function materializeMpdManifest(
 
 	const content = await response.text();
 	const parsedUrl = new URL(manifestUrl);
-	const baseUrl = new URL(".", parsedUrl).toString();
-	const query = parsedUrl.search;
 	const filePath = join(dirPath, `${randomUUID()}.mpd`);
-	const resolvedUrls: string[] = [];
-	const rewrittenElements = content.replace(
-		/<(BaseURL|Location)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
-		(_, tag: string, attributes: string, resource: string) => {
-			const resolved = resolveResourceUrl(
-				decodeXmlAttribute(resource.trim()),
-				baseUrl,
-				query,
-			);
-			resolvedUrls.push(resolved);
-			return `<${tag}${attributes}>${escapeXmlAttribute(resolved)}</${tag}>`;
-		},
+	const { urls: resolvedUrls, xml: rewritten } = rewriteDashManifest(
+		content,
+		new URL(".", parsedUrl).toString(),
+		parsedUrl.search,
 	);
-
-	const rewritten = rewrittenElements.replace(
-		/(initialization|media|sourceURL|xlink:href|href)="([^"]+)"/gi,
-		(_, attribute: string, resource: string) => {
-			const resolved = resolveResourceUrl(
-				decodeXmlAttribute(resource),
-				baseUrl,
-				query,
-			);
-			resolvedUrls.push(resolved);
-			return `${attribute}="${escapeXmlAttribute(resolved)}"`;
-		},
-	);
-	for (const url of resolvedUrls) {
-		if (url.includes("$")) {
-			throw new Error("DASH template URL cannot be fetched locally");
-		}
-	}
 	const limit = createLimiter(4);
 	const localByUrl = new Map<string, string>();
 	await Promise.all(

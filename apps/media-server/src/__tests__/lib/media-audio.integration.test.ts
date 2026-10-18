@@ -233,6 +233,24 @@ describe("mediaAudio integration tests", () => {
 			await waitForAudioOperations(beforeCount);
 		});
 
+		test("releases the operation when a remote download fails", async () => {
+			const beforeCount = getActiveProcessCount();
+			const server = Bun.serve({
+				port: 0,
+				fetch: () => new Response("Missing", { status: 404 }),
+			});
+
+			try {
+				const { stream } = extractAudioStream(`${server.url}clip.mp4`);
+				await expect(readStream(stream)).rejects.toThrow(
+					"Failed to fetch media: 404",
+				);
+				await waitForAudioOperations(beforeCount);
+			} finally {
+				await server.stop(true);
+			}
+		});
+
 		test("cleans up when a real stream is cancelled", async () => {
 			const beforeCount = getActiveProcessCount();
 			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);

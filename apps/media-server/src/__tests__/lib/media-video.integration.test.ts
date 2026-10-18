@@ -710,11 +710,14 @@ describe("processVideo integration tests", () => {
 		const requestedUrls: string[] = [];
 
 		globalThis.fetch = (async (input: RequestInfo | URL) => {
-			requestedUrls.push(
-				input instanceof Request ? input.url : input.toString(),
-			);
-			return new Response(
-				`<MPD>
+			const url = input instanceof Request ? input.url : input.toString();
+			requestedUrls.push(url);
+			if (new URL(url).pathname.endsWith("/")) {
+				return new Response("Missing directory", { status: 404 });
+			}
+			if (url.includes("manifest.mpd")) {
+				return new Response(
+					`<MPD>
 						<Period>
 							<AdaptationSet mimeType="video/mp4">
 								<Representation id="v1" bandwidth="800000">
@@ -727,8 +730,10 @@ describe("processVideo integration tests", () => {
 							</AdaptationSet>
 						</Period>
 					</MPD>`,
-				{ status: 200, statusText: "OK" },
-			);
+					{ status: 200, statusText: "OK" },
+				);
+			}
+			return new Response("segment", { status: 200, statusText: "OK" });
 		}) as unknown as typeof fetch;
 
 		try {
@@ -740,12 +745,16 @@ describe("processVideo integration tests", () => {
 
 			expect(path.endsWith(".mpd")).toBe(true);
 			expect(requestedUrls).toContain(
-				"https://cdn.example/video/init.mp4?Policy=a&Signature=b",
+				"https://cdn.example/video/media/init.mp4?Policy=a&Signature=b",
 			);
 			expect(requestedUrls).toContain(
-				"https://cdn.example/video/seg-1.m4s?Policy=a&Signature=b",
+				"https://cdn.example/video/media/seg-1.m4s?Policy=a&Signature=b",
 			);
+			expect(
+				requestedUrls.some((url) => new URL(url).pathname.endsWith("/")),
+			).toBe(false);
 			expect(content).not.toContain("https://cdn.example");
+			expect(content).not.toContain("<BaseURL>");
 		} finally {
 			globalThis.fetch = originalFetch;
 			rmSync(manifestDir, { recursive: true, force: true });
