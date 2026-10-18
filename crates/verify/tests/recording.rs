@@ -3739,14 +3739,17 @@ fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, 
     Ok((first, unreadable))
 }
 
-fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<BTreeMap<u32, f64>> {
+/// Microphone marker index to its start on the recording's timeline, and
+/// where the track ends.
+fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, f64)> {
     let decoded = media::decode_audio(path, Some(48_000))?;
-    Ok(
-        audio_code::locate_markers(&decoded.mono(), decoded.sample_rate, AudioSource::Mic)
-            .into_iter()
-            .filter_map(|m| Some((m.index?, offset + decoded.start_secs + m.time_secs)))
-            .collect(),
-    )
+    let mono = decoded.mono();
+    let end = offset + decoded.start_secs + mono.len() as f64 / f64::from(decoded.sample_rate);
+    let markers = audio_code::locate_markers(&mono, decoded.sample_rate, AudioSource::Mic)
+        .into_iter()
+        .filter_map(|m| Some((m.index?, offset + decoded.start_secs + m.time_secs)))
+        .collect();
+    Ok((markers, end))
 }
 
 /// Exports a finished Studio recording at its capture rate and checks the
@@ -3897,11 +3900,35 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
     if let Some(track) = layout.mic.as_ref().filter(|t| t.path.is_file())
         && !rec.mic_truth.is_empty()
     {
-        let raw_mic = mic_markers(&track.path, track.start)?;
-        let export_mic = mic_markers(&path, timeline_start)?;
-        let offsets: Vec<f64> = raw_mic
+        let (raw_mic, _) = mic_markers(&track.path, track.start)?;
+        let (export_mic, export_end) = mic_markers(&path, timeline_start)?;
+        let inside: Vec<(u32, f64)> = raw_mic
             .iter()
-            .filter(|(_, t)| **t >= timeline_start + EDGE_SECS)
+            .filter(|(_, t)| {
+                **t >= timeline_start + EDGE_SECS
+                    && **t + audio_code::MARKER_SECS <= export_end - EDGE_SECS
+            })
+            .map(|(i, t)| (*i, *t))
+            .collect();
+        let lost: Vec<u32> = inside
+            .iter()
+            .filter(|(i, _)| !export_mic.contains_key(i))
+            .map(|(i, _)| *i)
+            .collect();
+        if !lost.is_empty() {
+            case.measure("export-audio-missing", "missing", lost.len() as f64);
+            case.problem(
+                "export-audio-missing",
+                format!(
+                    "export: {} of {} microphone markers inside the export are not in its audio, first {:?}",
+                    lost.len(),
+                    inside.len(),
+                    &lost[..lost.len().min(8)]
+                ),
+            );
+        }
+        let offsets: Vec<f64> = inside
+            .iter()
             .filter_map(|(i, t)| export_mic.get(i).map(|e| e - t))
             .collect();
         if let Some(worst) = offsets
