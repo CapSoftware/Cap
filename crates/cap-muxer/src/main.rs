@@ -25,30 +25,37 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::from(EXIT_OK),
         Err(MuxerError::Protocol(err)) => {
-            eprintln!("cap-muxer protocol error: {err}");
+            report(format_args!("cap-muxer protocol error: {err}"));
             ExitCode::from(EXIT_PROTOCOL_ERROR)
         }
         Err(MuxerError::DiskFull(err)) => {
-            eprintln!("cap-muxer disk full: {err:#}");
+            report(format_args!("cap-muxer disk full: {err:#}"));
             ExitCode::from(EXIT_DISK_FULL)
         }
         Err(MuxerError::FFmpeg(err)) => {
-            eprintln!("cap-muxer ffmpeg error: {err:#}");
+            report(format_args!("cap-muxer ffmpeg error: {err:#}"));
             ExitCode::from(EXIT_FFMPEG_ERROR)
         }
         Err(MuxerError::Init(err)) => {
-            eprintln!("cap-muxer init error: {err:#}");
+            report(format_args!("cap-muxer init error: {err:#}"));
             ExitCode::from(EXIT_INIT_ERROR)
         }
         Err(MuxerError::Abort(reason)) => {
-            eprintln!("cap-muxer parent abort: {reason}");
+            report(format_args!("cap-muxer parent abort: {reason}"));
             ExitCode::from(EXIT_ABORT)
         }
         Err(MuxerError::BadState(reason)) => {
-            eprintln!("cap-muxer bad state: {reason}");
+            report(format_args!("cap-muxer bad state: {reason}"));
             ExitCode::from(EXIT_BAD_STATE)
         }
     }
+}
+
+/// Writes to stderr without panicking: when the recorder dies, the pipe it
+/// read our stderr through is closed, and the open fragment must still be
+/// finished after that.
+fn report(message: std::fmt::Arguments) {
+    let _ = writeln!(io::stderr(), "{message}");
 }
 
 fn init_tracing() {
@@ -56,6 +63,7 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .try_init();
 }
 
