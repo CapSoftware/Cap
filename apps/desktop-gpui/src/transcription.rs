@@ -860,6 +860,59 @@ fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
 
+/// The loaded Parakeet model and its ONNX Runtime arena hold ~1.8 GB for
+/// `best`; keep them only long enough for a quick regenerate.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+const PARAKEET_IDLE_RELEASE: Duration = Duration::from_secs(60);
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+static PARAKEET_LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+/// Call with `slot` held, so a run in flight always bumps the generation
+/// before the release thread can take the slot. The thread returns whether it
+/// dropped a cached value.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_idle_release<T: Send + 'static>(
+    slot: &'static Mutex<()>,
+    cache: &'static Mutex<Option<T>>,
+    last_use: &'static AtomicU64,
+    delay: Duration,
+) -> std::io::Result<std::thread::JoinHandle<bool>> {
+    let generation = last_use.fetch_add(1, Ordering::AcqRel) + 1;
+    std::thread::Builder::new()
+        .name("parakeet-release".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let _slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            if last_use.load(Ordering::Acquire) != generation {
+                return false;
+            }
+            let released = cache.lock().unwrap_or_else(PoisonError::into_inner).take();
+            let was_cached = released.is_some();
+            drop(released);
+            if was_cached {
+                tracing::info!("Released idle Parakeet TDT model");
+            }
+            was_cached
+        })
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn schedule_parakeet_release() {
+    let spawned = schedule_idle_release(
+        &TRANSCRIPTION_LOCK,
+        &PARAKEET_CONTEXT,
+        &PARAKEET_LAST_USE,
+        PARAKEET_IDLE_RELEASE,
+    );
+    if let Err(error) = spawned {
+        tracing::warn!("Failed to schedule Parakeet release: {error}");
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn schedule_parakeet_release() {}
+
 // ---------------------------------------------------------------------------
 // Audio extraction
 // ---------------------------------------------------------------------------
@@ -1560,10 +1613,22 @@ fn process_with_parakeet(
 
     tracing::info!("Parakeet produced {} timed tokens", result.tokens.len());
 
+    caption_segments_from_tokens(result.tokens.iter().map(|token| CaptionWord {
+        text: token.text.clone(),
+        start: token.start,
+        end: token.end,
+    }))
+}
+
+/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
+/// normalize the words and chunk them.
+#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+fn caption_segments_from_tokens(
+    tokens: impl IntoIterator<Item = CaptionWord>,
+) -> Result<Vec<CaptionSegment>, String> {
     let words = normalize_caption_words(
-        result
-            .tokens
-            .iter()
+        tokens
+            .into_iter()
             .filter(|token| !token.text.trim().is_empty())
             .map(|token| CaptionWord {
                 text: token.text.trim().to_string(),
@@ -1626,6 +1691,30 @@ pub fn transcribe_blocking(
         ));
     }
 
+    transcribe_project_with(project_path, |audio_path| {
+        let _guard = lock_transcription_worker_slot();
+        if is_parakeet_model(model) {
+            tracing::info!("Using Parakeet TDT engine");
+            let result = process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref());
+            schedule_parakeet_release();
+            result
+        } else {
+            tracing::info!("Using Whisper engine");
+            let hints = transcription_hints();
+            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+            let result = process_with_whisper(audio_path, context, language, &hints);
+            release_whisper_context_after_transcription();
+            result
+        }
+    })
+}
+
+/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
+/// and runs `engine` on it.
+fn transcribe_project_with(
+    project_path: &Path,
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
     let temp_dir = std::env::temp_dir().join(format!(
         "cap-gpui-transcription-{}-{}",
         std::process::id(),
@@ -1637,19 +1726,7 @@ pub fn transcribe_blocking(
 
     let result = (|| {
         extract_audio_from_video(project_path, &audio_path)?;
-
-        let _guard = lock_transcription_worker_slot();
-        if is_parakeet_model(model) {
-            tracing::info!("Using Parakeet TDT engine");
-            process_with_parakeet(&audio_path, model_file.to_string_lossy().as_ref())
-        } else {
-            tracing::info!("Using Whisper engine");
-            let hints = transcription_hints();
-            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-            let result = process_with_whisper(&audio_path, context, language, &hints);
-            release_whisper_context_after_transcription();
-            result
-        }
+        engine(&audio_path)
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -2121,6 +2198,9 @@ pub fn caption_generation_error_message(message: &str) -> String {
 }
 
 #[cfg(test)]
+mod verify_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2152,6 +2232,56 @@ mod tests {
             text: caption_text_from_words(&words),
             words,
         }
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_drops_cached_value_after_delay() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let handle = schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::from_millis(10))
+            .expect("spawns");
+
+        assert!(handle.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_is_cancelled_by_a_newer_run() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let slot = SLOT.lock().unwrap();
+        let older =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        LAST_USE.fetch_add(1, Ordering::AcqRel);
+        drop(slot);
+
+        assert!(!older.join().expect("joins"));
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn idle_release_waits_for_a_run_in_flight() {
+        static SLOT: Mutex<()> = Mutex::new(());
+        static CACHE: Mutex<Option<u32>> = Mutex::new(Some(7));
+        static LAST_USE: AtomicU64 = AtomicU64::new(0);
+
+        let run = SLOT.lock().unwrap();
+        let handle =
+            schedule_idle_release(&SLOT, &CACHE, &LAST_USE, Duration::ZERO).expect("spawns");
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!handle.is_finished());
+        assert_eq!(*CACHE.lock().unwrap(), Some(7));
+        drop(run);
+
+        assert!(handle.join().expect("joins"));
+        assert!(CACHE.lock().unwrap().is_none());
     }
 
     // -- captions.rs's own unit tests, carried over --------------------------

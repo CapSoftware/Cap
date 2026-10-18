@@ -50,7 +50,13 @@ const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
 fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfiguration) -> bool {
-    let settings = |segment: &cap_project::TimelineSegment| {
+    let settings = |project: &ProjectConfiguration, segment: &cap_project::TimelineSegment| {
+        let offsets = project
+            .clips
+            .iter()
+            .find(|clip| clip.index == segment.recording_clip)
+            .map(|clip| clip.offsets)
+            .unwrap_or_default();
         (
             segment.recording_clip,
             segment.start,
@@ -58,14 +64,19 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.timescale,
             segment.speed_audio_mode,
             segment.volume(),
+            offsets.mic,
+            offsets.system_audio,
         )
     };
     match (&previous.timeline, &next.timeline) {
-        (Some(previous), Some(next)) => !previous
+        (Some(previous_timeline), Some(next_timeline)) => !previous_timeline
             .segments
             .iter()
-            .map(settings)
-            .eq(next.segments.iter().map(settings)),
+            .map(|segment| settings(previous, segment))
+            .eq(next_timeline
+                .segments
+                .iter()
+                .map(|segment| settings(next, segment))),
         (None, None) => false,
         _ => true,
     }
@@ -478,9 +489,13 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
     };
     let transition = async {
         let transition = transition?;
+        let transition_decoders = if transition.segment_index == segment_index {
+            transition.decoders.transition_side().await
+        } else {
+            &transition.decoders
+        };
         let segment_frames = if is_initial {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames_initial(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -489,8 +504,7 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
                 )
                 .await
         } else {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -905,6 +919,11 @@ impl Playback {
             telemetry.emit(PlaybackTelemetryEvent::AudioSegmentsResolved {
                 elapsed: audio_wait_start.elapsed(),
             });
+        }
+        // Restarts an idle-paused output stream while the video warms up, so
+        // the play request after warmup finds it already running.
+        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            self.audio_output.prewarm();
         }
 
         diagnostic.field(Field::number(
@@ -2062,6 +2081,63 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "clips": [{ "index": 1 }, { "index": 0 }],
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 },
+                { "recordingSegment": 1, "start": 1.0, "end": 3.0, "timescale": 2.0 }
+            ] }
+        }))
+        .unwrap();
+
+        for clip in 0..project.clips.len() {
+            for offset in [-0.1, 0.1] {
+                let mut next = project.clone();
+                next.clips[clip].offsets.mic = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+
+                let mut next = project.clone();
+                next.clips[clip].offsets.system_audio = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+            }
+        }
+    }
+
+    #[test]
+    fn visual_and_unused_clip_offsets_do_not_refresh_playback_audio() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+            ] }
+        }))
+        .unwrap();
+        let mut next = project.clone();
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 0,
+            offsets_auto_calculated: true,
+            offsets: ClipOffsets {
+                camera: 0.1,
+                ..Default::default()
+            },
+        });
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 1,
+            offsets: ClipOffsets {
+                mic: 0.1,
+                system_audio: -0.1,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        next.clips.reverse();
+        assert!(!clip_audio_changed(&next, &project));
+    }
 
     #[test]
     fn clip_audio_changes_refresh_playback_without_refreshing_for_names() {

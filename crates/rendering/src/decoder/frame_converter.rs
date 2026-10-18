@@ -2,6 +2,8 @@
 
 use ffmpeg::{format, frame, software};
 
+use crate::cpu_yuv::YuvMatrix;
+
 pub struct FrameConverter {
     scaler: Option<ScalerState>,
     rgba_frame: frame::Video,
@@ -10,6 +12,7 @@ pub struct FrameConverter {
 struct ScalerState {
     context: software::scaling::Context,
     input_format: format::Pixel,
+    matrix: YuvMatrix,
     width: u32,
     height: u32,
 }
@@ -34,7 +37,12 @@ impl FrameConverter {
         let width = frame.width();
         let height = frame.height();
 
-        self.ensure_scaler(frame.format(), width, height);
+        self.ensure_scaler(
+            frame.format(),
+            YuvMatrix::from_color_space(frame.color_space()),
+            width,
+            height,
+        );
         self.ensure_rgba_frame(width, height);
 
         {
@@ -56,16 +64,31 @@ impl FrameConverter {
         )
     }
 
-    fn ensure_scaler(&mut self, input_format: format::Pixel, width: u32, height: u32) {
+    fn ensure_scaler(
+        &mut self,
+        input_format: format::Pixel,
+        matrix: YuvMatrix,
+        width: u32,
+        height: u32,
+    ) {
         let needs_new = self.scaler.as_ref().is_none_or(|state| {
-            state.input_format != input_format || state.width != width || state.height != height
+            state.input_format != input_format
+                || state.matrix != matrix
+                || state.width != width
+                || state.height != height
         });
 
         if needs_new {
+            let mut context =
+                software::converter((width, height), input_format, format::Pixel::RGBA)
+                    .expect("failed to create frame scaler");
+            if matrix == YuvMatrix::Bt709 {
+                use_bt709_source(&mut context);
+            }
             self.scaler = Some(ScalerState {
-                context: software::converter((width, height), input_format, format::Pixel::RGBA)
-                    .expect("failed to create frame scaler"),
+                context,
                 input_format,
+                matrix,
                 width,
                 height,
             });
@@ -77,6 +100,41 @@ impl FrameConverter {
         if self.rgba_frame.width() != width || self.rgba_frame.height() != height {
             self.rgba_frame = frame::Video::new(format::Pixel::RGBA, width, height);
         }
+    }
+}
+
+/// swscale converts YUV with BT.601 unless told otherwise: switch the source
+/// matrix to BT.709 and keep the ranges and adjustments it chose.
+fn use_bt709_source(context: &mut software::scaling::Context) {
+    unsafe {
+        let mut inv_table = std::ptr::null_mut();
+        let mut table = std::ptr::null_mut();
+        let (mut src_range, mut dst_range) = (0, 0);
+        let (mut brightness, mut contrast, mut saturation) = (0, 0, 0);
+        if ffmpeg::ffi::sws_getColorspaceDetails(
+            context.as_mut_ptr(),
+            &mut inv_table,
+            &mut src_range,
+            &mut table,
+            &mut dst_range,
+            &mut brightness,
+            &mut contrast,
+            &mut saturation,
+        ) < 0
+        {
+            return;
+        }
+        let bt709 = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            context.as_mut_ptr(),
+            bt709,
+            src_range,
+            table,
+            dst_range,
+            brightness,
+            contrast,
+            saturation,
+        );
     }
 }
 
