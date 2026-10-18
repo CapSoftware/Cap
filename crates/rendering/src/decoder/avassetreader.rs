@@ -778,7 +778,7 @@ impl AVAssetReaderDecoder {
                         max_fallback_distance,
                         sender,
                     ) => {
-                        let frame = (requested_time * fps as f32).floor() as u32;
+                        let frame = super::request_frame(requested_time, fps);
                         if !sender.is_closed() {
                             pending_requests.push(PendingRequest {
                                 frame,
@@ -797,7 +797,7 @@ impl AVAssetReaderDecoder {
                             max_fallback_distance,
                             sender,
                         ) => {
-                            let frame = (requested_time * fps as f32).floor() as u32;
+                            let frame = super::request_frame(requested_time, fps);
                             if !sender.is_closed() {
                                 pending_requests.push(PendingRequest {
                                     frame,

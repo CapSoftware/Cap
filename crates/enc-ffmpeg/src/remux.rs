@@ -750,6 +750,25 @@ fn get_media_duration_inner(path: &Path) -> Option<Duration> {
     Some(Duration::from_micros(duration_ts as u64))
 }
 
+/// The stream's base frame rate (`r_frame_rate`): the rate every timestamp of
+/// a variable-rate track sits on, unlike `get_video_fps`'s average, which a
+/// mostly static screen recording pulls far below its capture rate.
+pub fn get_video_base_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = (|| {
+        let input = avformat::input(path).ok()?;
+        let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+        let rate = stream.rate();
+        if rate.numerator() <= 0 || rate.denominator() <= 0 {
+            return None;
+        }
+        let fps = (rate.numerator() as f64 / rate.denominator() as f64).round() as u32;
+        (1..=240).contains(&fps).then_some(fps)
+    })();
+    restore_ffmpeg_logs();
+    result
+}
+
 pub fn get_video_fps(path: &Path) -> Option<u32> {
     suppress_ffmpeg_logs();
     let result = get_video_fps_inner(path);
@@ -848,6 +867,131 @@ fn probe_video_pts_ladder_inner(path: &Path, nominal_fps: u32) -> Option<LadderP
     }
 
     Some(probe)
+}
+
+/// The rate a variable-rate video track was captured at, from the first
+/// `MAX_PACKETS` packet timestamps. A static screen only lengthens some
+/// gaps, so the average rate understates the capture rate, and
+/// `r_frame_rate` is the finest grid every timestamp lies on, which can be
+/// the display's refresh rate rather than the capture rate.
+pub fn get_video_capture_fps(path: &Path) -> Option<u32> {
+    suppress_ffmpeg_logs();
+    let result = get_video_capture_fps_inner(path);
+    restore_ffmpeg_logs();
+    result
+}
+
+fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
+    const MAX_PACKETS: usize = 20_000;
+
+    let mut ictx = avformat::input(path).ok()?;
+    let (stream_index, time_base) = {
+        let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
+        let tb = stream.time_base();
+        if tb.numerator() <= 0 || tb.denominator() <= 0 {
+            return None;
+        }
+        (
+            stream.index(),
+            f64::from(tb.numerator()) / f64::from(tb.denominator()),
+        )
+    };
+    let mut timestamps = Vec::new();
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        if let Some(pts) = packet.pts().or(packet.dts()) {
+            timestamps.push(pts as f64 * time_base);
+        }
+        if timestamps.len() >= MAX_PACKETS {
+            break;
+        }
+    }
+    capture_fps_from_timestamps(timestamps)
+}
+
+/// The shortest gap between frames that recurs in runs, in 5% bins, refined
+/// by the median of the gaps within 20% of it. Frames land one capture
+/// interval apart whenever the screen changes, whatever the holds between
+/// them, and content that changes at a lower rate for most of a recording
+/// still has its faster stretches captured at the full rate. A late frame
+/// leaves one short gap between two slightly longer ones, so only gaps in
+/// runs, or between holds, count. Arrival jitter leaves the median a frame or
+/// two per second off, so a rate within 5% of a standard capture rate is
+/// that rate.
+pub fn capture_fps_from_timestamps(mut timestamps: Vec<f64>) -> Option<u32> {
+    const MIN_GAPS: usize = 10;
+    const BIN_RATIO: f64 = 1.05;
+    const CLUSTER_TOLERANCE: f64 = 0.2;
+    const STANDARD_RATES: [f64; 14] = [
+        24.0, 25.0, 30.0, 48.0, 50.0, 60.0, 72.0, 75.0, 90.0, 100.0, 120.0, 144.0, 165.0, 240.0,
+    ];
+    const SNAP_TOLERANCE: f64 = 0.05;
+    const HOLD_RATIO: f64 = 3.0;
+    const HOLD_SECS: f64 = 0.1;
+
+    timestamps.sort_by(f64::total_cmp);
+    let gaps: Vec<f64> = timestamps
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .filter(|gap| *gap > 1e-4)
+        .collect();
+    if gaps.len() < MIN_GAPS {
+        return None;
+    }
+    let within = |center: f64| {
+        gaps.iter()
+            .map(|gap| (gap / center - 1.0).abs() <= CLUSTER_TOLERANCE)
+            .collect::<Vec<_>>()
+    };
+    // A gap counts beside another of its length (a run of frames) or between
+    // two holds (a change captured as a pair): gaps of at least HOLD_SECS and
+    // HOLD_RATIO times its length. A late frame's short gap always has one
+    // neighbour one capture interval long, under HOLD_SECS at 10 fps and up.
+    let in_runs = |within: &[bool]| {
+        let held = |i: usize, j: Option<usize>| {
+            j.and_then(|j| gaps.get(j))
+                .is_some_and(|gap| *gap >= HOLD_SECS && *gap >= gaps[i] * HOLD_RATIO)
+        };
+        (0..within.len())
+            .filter(|&i| {
+                within[i]
+                    && ((i > 0 && within[i - 1])
+                        || within.get(i + 1).copied().unwrap_or(false)
+                        || (held(i, i.checked_sub(1)) && held(i, Some(i + 1))))
+            })
+            .count()
+    };
+    let bins: std::collections::BTreeSet<i64> = gaps
+        .iter()
+        .map(|gap| (gap.ln() / BIN_RATIO.ln()).round() as i64)
+        .collect();
+    // A bin is narrower than the jitter, so the first one with support can
+    // sit to one side of the interval: recentre on the cluster's median.
+    let mut interval = bins
+        .into_iter()
+        .map(|bin| BIN_RATIO.powi(bin as i32))
+        .find(|center| in_runs(&within(*center)) >= MIN_GAPS)?;
+    for _ in 0..3 {
+        let mut cluster: Vec<f64> = gaps
+            .iter()
+            .copied()
+            .filter(|gap| (gap / interval - 1.0).abs() <= CLUSTER_TOLERANCE)
+            .collect();
+        if cluster.len() < MIN_GAPS {
+            return None;
+        }
+        cluster.sort_by(f64::total_cmp);
+        interval = cluster[cluster.len() / 2];
+    }
+    let measured = 1.0 / interval;
+    let fps = STANDARD_RATES
+        .into_iter()
+        .filter(|rate| (measured / rate - 1.0).abs() <= SNAP_TOLERANCE)
+        .min_by(|a, b| (measured - a).abs().total_cmp(&(measured - b).abs()))
+        .unwrap_or(measured.round());
+    (1.0..=240.0).contains(&fps).then_some(fps as u32)
 }
 
 pub fn probe_m4s_can_decode_with_init(
@@ -1226,10 +1370,11 @@ fn merge_video_audio_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_seek_probe_positions, concat_fragment_entry, concatenate_audio_to_ogg,
-        concatenate_m4s_segments_with_init, concatenate_m4s_segments_with_init_validated,
+        build_seek_probe_positions, capture_fps_from_timestamps, concat_fragment_entry,
+        concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
+        concatenate_m4s_segments_with_init_validated,
         concatenate_m4s_segments_with_init_validated_with_reader, concatenate_video_fragments,
-        probe_video_pts_ladder, write_concat_list,
+        get_video_capture_fps, get_video_fps, probe_video_pts_ladder, write_concat_list,
     };
     use std::{
         path::{Path, PathBuf},
@@ -1699,6 +1844,131 @@ mod tests {
         file.finish().unwrap();
 
         dir.join("ladder_probe_test.mp4")
+    }
+
+    /// A 60 fps capture of a mostly static screen: a burst of `burst`
+    /// frames on the 60 fps grid, then a hold of `hold` intervals, repeated.
+    fn bursty_timestamps(bursts: u64, burst: u64, hold: u64) -> Vec<Duration> {
+        (0..bursts)
+            .flat_map(|b| (0..burst).map(move |i| b * (burst + hold) + i))
+            .map(|slot| Duration::from_nanos(slot * 1_000_000_000 / 60))
+            .collect()
+    }
+
+    fn secs(timestamps: &[Duration]) -> Vec<f64> {
+        timestamps.iter().map(Duration::as_secs_f64).collect()
+    }
+
+    #[test]
+    fn capture_fps_of_a_bursty_capture_is_its_grid_not_its_average() {
+        let timestamps = secs(&bursty_timestamps(20, 6, 30));
+        let span = timestamps.last().unwrap() - timestamps[0];
+        assert!(timestamps.len() as f64 / span < 12.0);
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(60));
+    }
+
+    /// Up to `max` seconds either side of a frame's slot, uniformly.
+    fn jitter(index: u64, max: f64) -> f64 {
+        let mut x = index.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x >> 11) as f64 / (1u64 << 53) as f64 * 2.0 * max - max
+    }
+
+    #[test]
+    fn capture_fps_absorbs_arrival_jitter() {
+        for (fps, max) in [(30, 0.003), (60, 0.002), (120, 0.001)] {
+            let timestamps = (0..600)
+                .map(|i| i as f64 / f64::from(fps) + jitter(i, max))
+                .collect();
+            assert_eq!(capture_fps_from_timestamps(timestamps), Some(fps));
+        }
+        let bursts = bursty_timestamps(20, 6, 30)
+            .iter()
+            .enumerate()
+            .map(|(i, t)| t.as_secs_f64() + jitter(i as u64, 0.0015))
+            .collect();
+        assert_eq!(capture_fps_from_timestamps(bursts), Some(60));
+    }
+
+    #[test]
+    fn capture_fps_of_mostly_slower_content_is_its_fastest_run() {
+        // A 60 fps capture of content that changes 30 times a second for
+        // most of it, with idle holds and one 12-frame scroll at 60 fps.
+        let mut timestamps = Vec::new();
+        let mut t = 0.0;
+        for burst in 0..200 {
+            for i in 0..10 {
+                t += 1.0 / 30.0;
+                timestamps.push(t + jitter(burst * 10 + i, 0.0015));
+            }
+            t += 0.5;
+        }
+        for i in 0..12 {
+            t += 1.0 / 60.0;
+            timestamps.push(t + jitter(5000 + i, 0.001));
+        }
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(60));
+    }
+
+    #[test]
+    fn capture_fps_ignores_the_short_gap_after_a_late_frame() {
+        // 30 fps with every seventh frame late: 12 ms leaves a 21 ms gap
+        // between a 45 ms one and a 33 ms one, 25 ms an 8 ms gap between a
+        // 58 ms one and a 33 ms one.
+        for late in [0.012, 0.025, 0.03] {
+            let timestamps = (0..600u64)
+                .map(|i| i as f64 / 30.0 + if i % 7 == 0 { late } else { 0.0 } + jitter(i, 0.001))
+                .collect();
+            assert_eq!(
+                capture_fps_from_timestamps(timestamps),
+                Some(30),
+                "{late} s late"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_fps_of_changes_captured_in_pairs_is_the_pair_gap() {
+        // A 60 fps capture of a screen that changes once a second, each
+        // change captured as two frames.
+        let timestamps = (0..40u64)
+            .flat_map(|second| [0.0, 1.0 / 60.0].map(|offset| second as f64 + offset))
+            .collect();
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(60));
+    }
+
+    #[test]
+    fn capture_fps_keeps_a_non_standard_rate() {
+        let timestamps = (0..300).map(|i| f64::from(i) / 37.0).collect();
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(37));
+    }
+
+    #[test]
+    fn capture_fps_of_a_slow_capture_on_a_fine_grid_is_the_capture_rate() {
+        // 30 fps frames stamped on a 120 Hz display's vsync grid, with holds:
+        // r_frame_rate reads 120 here.
+        let timestamps = (0..400u32)
+            .map(|i| f64::from(i * 4 + (i / 20) * 40) / 120.0)
+            .collect();
+        assert_eq!(capture_fps_from_timestamps(timestamps), Some(30));
+    }
+
+    #[test]
+    fn capture_fps_needs_enough_frames() {
+        assert_eq!(
+            capture_fps_from_timestamps((0..5).map(|i| f64::from(i) / 60.0).collect()),
+            None
+        );
+    }
+
+    #[test]
+    fn capture_fps_reads_an_encoded_variable_rate_track() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = encode_test_mp4(dir.path(), &bursty_timestamps(20, 6, 30));
+        assert!(get_video_fps(&path).unwrap() < 12);
+        assert_eq!(get_video_capture_fps(&path), Some(60));
     }
 
     #[test]

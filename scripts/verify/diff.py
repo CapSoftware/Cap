@@ -34,7 +34,7 @@ def lane_of(artifact):
     m = re.match(r"verify-report-(.+?)-(fast|full)(-\d+)?$", artifact)
     if m:
         return m.group(1)
-    m = re.match(r"verify-recording-(.+)$", artifact)
+    m = re.match(r"verify-recording-(?:report-)?(.+)$", artifact)
     if m:
         return "recording-" + m.group(1)
     return artifact
@@ -326,6 +326,7 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--title", default="baseline vs main")
     ap.add_argument("--na", help="file of 'case-glob<TAB>reason' lines: cases n/a on the baseline")
+    ap.add_argument("--fail-on-worse", action="store_true", help="exit 1 when any lane has WORSE or junit WORSE rows")
     args = ap.parse_args()
 
     na = load_na(args.na)
@@ -400,7 +401,31 @@ def main():
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(out, fh, indent=1, default=list)
+    if args.fail_on_worse:
+        # A unit test that main no longer has was renamed or removed with the
+        # code it tested; the case-level rows cover the product.
+        def counted(items):
+            return [item for item in items or [] if not any(r.startswith("missing on main (baseline") for r in item[1])]
+
+        worse = sum(len(counted(lane.get("WORSE"))) + len(counted(lane.get("JUNIT-WORSE"))) for lane in out.values())
+        # A baseline run that stopped early, or a baseline suite that fell
+        # behind main's, leaves main's cases unmatched. Cases new on main are
+        # expected, a tenth of a lane is not.
+        for lane in lanes:
+            main_cases = len(mrec.get(lane) or {})
+            only_main = len(out.get(lane, {}).get("ONLY-MAIN") or [])
+            if main_cases and (not brec.get(lane) or only_main * 10 > main_cases):
+                print(
+                    f"lane {lane}: {only_main} of {main_cases} main cases have no baseline record "
+                    "(re-run the baseline, or refresh its suite)",
+                    file=sys.stderr,
+                )
+                worse += 1
+        if worse:
+            print(f"\n{worse} row(s) worse than the baseline", file=sys.stderr)
+            return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
