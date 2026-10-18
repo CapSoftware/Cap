@@ -9,13 +9,12 @@
 //! Every check here is a preflight API: `CGPreflightScreenCaptureAccess` for
 //! screen recording, `AXIsProcessTrusted` for accessibility, and
 //! `AVCaptureDevice.authorizationStatus(for:)` for camera / microphone. None
-//! of them prompt, and none of them materialise anything. The one API this
-//! module must never call is `SCShareableContent` -- the Tauri app polled it
-//! for permission state at 250ms and leaked the whole window/app/display
-//! graph per call (~137KB, issue #2023, the 82GB incident). Zed does the same
-//! thing from the other direction: its gpui fork touches `SCShareableContent`
-//! exactly once, at the moment the user actually starts a screen share, and
-//! has no permission poller at all.
+//! of them prompt, and none of them materialise anything. `SCShareableContent`
+//! must never be polled -- the Tauri app once polled it for permission state at
+//! 250ms and leaked the whole window/app/display graph per call (~137KB, issue
+//! #2023, the 82GB incident). It is only asked once a screen-recording
+//! preflight passes, to confirm the grant is real, and a success is cached
+//! (see [`screen_capture`]).
 //!
 //! ## Status model
 //!
@@ -370,6 +369,9 @@ fn spawn_relaunch(
 }
 
 #[cfg(target_os = "macos")]
+mod screen_capture;
+
+#[cfg(target_os = "macos")]
 mod macos {
     use super::{MediaAuthorization, OSPermission, RawPermissions};
 
@@ -392,8 +394,9 @@ mod macos {
     /// and AVFoundation's status query autoreleases temporaries (the same
     /// leak class `do_permissions_check` in the Tauri app plugs the same way).
     pub fn check_raw() -> RawPermissions {
+        let screen_preflight = unsafe { CGPreflightScreenCaptureAccess() };
         objc2::rc::autoreleasepool(|_| RawPermissions {
-            screen_granted: unsafe { CGPreflightScreenCaptureAccess() },
+            screen_granted: super::screen_capture::available(screen_preflight),
             accessibility_granted: unsafe { AXIsProcessTrusted() },
             microphone: media_authorization(false),
             camera: media_authorization(true),
