@@ -1911,6 +1911,10 @@ pub struct CaptionTrackSegment {
     pub font_size_override: Option<u32>,
 }
 
+/// How far a hold's start may sit from the clips' end, after float rounding,
+/// and still count as a closing title.
+const CLOSING_HOLD_TOLERANCE: f64 = 1e-9;
+
 impl TimelineConfiguration {
     pub fn effective_transition(&self, segment_index: usize) -> Option<ClipTransition> {
         if segment_index == 0 || segment_index >= self.segments.len() {
@@ -1988,10 +1992,17 @@ impl TimelineConfiguration {
 
         if let Some((hold_start, hold_end)) = active_hold_window(&holds, frame_time) {
             let effective = hold_start - held_time_before(&holds, hold_start);
-            let source = match self.get_frame_mapping_unheld(effective)? {
-                TimelineFrameMapping::Single { source, .. }
-                | TimelineFrameMapping::Hold { source, .. } => source,
-                TimelineFrameMapping::Transition { incoming, .. } => incoming,
+            let source = match self.get_frame_mapping_unheld(effective) {
+                Some(
+                    TimelineFrameMapping::Single { source, .. }
+                    | TimelineFrameMapping::Hold { source, .. },
+                ) => source,
+                Some(TimelineFrameMapping::Transition { incoming, .. }) => incoming,
+                // A closing title starts at the clips' exclusive end, so it holds their last instant.
+                None if (effective - self.clips_duration()).abs() <= CLOSING_HOLD_TOLERANCE => {
+                    self.last_source()?
+                }
+                None => return None,
             };
             return Some(TimelineFrameMapping::Hold {
                 source,
@@ -2033,6 +2044,19 @@ impl TimelineConfiguration {
                 output_end: clamp_end(output_end),
             },
             hold @ TimelineFrameMapping::Hold { .. } => hold,
+        })
+    }
+
+    fn last_source(&self) -> Option<TimelineSource<'_>> {
+        let (segment_index, segment) = self
+            .segments
+            .iter()
+            .enumerate()
+            .rfind(|(_, segment)| segment.duration() > 0.0)?;
+        Some(TimelineSource {
+            source_time: segment.end.next_down(),
+            segment_index,
+            segment,
         })
     }
 
@@ -2147,8 +2171,13 @@ impl TimelineConfiguration {
     }
 
     pub fn duration(&self) -> f64 {
+        self.clips_duration() + self.held_duration()
+    }
+
+    /// Output seconds covered by the clips, without fullscreen text holds.
+    fn clips_duration(&self) -> f64 {
         let segment_duration: f64 = self.segments.iter().map(TimelineSegment::duration).sum();
-        let segment_duration = if self.transitions.is_empty() {
+        if self.transitions.is_empty() {
             segment_duration
         } else {
             segment_duration
@@ -2156,9 +2185,7 @@ impl TimelineConfiguration {
                     .filter_map(|segment_index| self.effective_transition(segment_index))
                     .map(|transition| transition.duration)
                     .sum::<f64>()
-        };
-
-        segment_duration + self.held_duration()
+        }
     }
 
     /// Gapless-time windows covered by clips that hide the cursor, with
@@ -3736,6 +3763,73 @@ mod tests {
         let (later, segment) = timeline.get_segment_time(7.5).unwrap();
         assert_eq!(later, 10.5);
         assert_eq!(segment.recording_clip, 1);
+    }
+
+    #[test]
+    fn fullscreen_outro_maps_every_frame_to_the_last_clip() {
+        for transitions in [
+            Vec::new(),
+            vec![ClipTransition {
+                segment_index: 1,
+                kind: ClipTransitionType::CrossFade,
+                duration: 1.0,
+            }],
+        ] {
+            let mut timeline = timeline_with_transitions(transitions);
+            timeline.segments[1].timescale = 2.0;
+            timeline.text_segments = vec![fullscreen_text(1.0, 3.0)];
+            let outro_start = timeline.duration();
+            let outro_end = outro_start + 3.0;
+            timeline
+                .text_segments
+                .push(fullscreen_text(outro_start, outro_end));
+            let timeline: TimelineConfiguration =
+                serde_json::from_value(serde_json::to_value(&timeline).unwrap()).unwrap();
+
+            assert_eq!(timeline.duration(), outro_end);
+            for frame in 0..(outro_end * 30.0) as u32 {
+                let time = f64::from(frame) / 30.0;
+                let mapping = timeline.get_frame_mapping(time);
+                assert!(mapping.is_some(), "no source at output time {time}");
+                if time >= outro_start {
+                    assert!(matches!(
+                        mapping,
+                        Some(TimelineFrameMapping::Hold { source, output_end })
+                            if source.segment.recording_clip == 1
+                                && source.source_time > 16.0 - 1e-12
+                                && source.source_time < 16.0
+                                && output_end == outro_end
+                    ));
+                }
+            }
+            assert!(timeline.get_frame_mapping(outro_end).is_none());
+        }
+    }
+
+    #[test]
+    fn closing_title_after_an_intro_maps_despite_rounding() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 1.2;
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0), fullscreen_text(4.2, 6.2)];
+        for time in [4.2, 5.0, 6.1] {
+            assert!(matches!(
+                timeline.get_frame_mapping(time),
+                Some(TimelineFrameMapping::Hold { source, output_end })
+                    if source.segment_index == 0 && source.source_time < 1.2 && output_end == 6.2
+            ));
+        }
+    }
+
+    #[test]
+    fn fullscreen_title_does_not_create_a_source_for_an_empty_timeline() {
+        let mut timeline = timeline_with_transitions(Vec::new());
+        timeline.text_segments = vec![fullscreen_text(0.0, 3.0)];
+        timeline.segments.truncate(1);
+        timeline.segments[0].end = 0.0;
+        assert!(timeline.get_frame_mapping(1.0).is_none());
+        timeline.segments.clear();
+        assert!(timeline.get_frame_mapping(1.0).is_none());
     }
 
     #[test]
