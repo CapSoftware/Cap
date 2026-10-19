@@ -80,6 +80,76 @@ pub fn concatenate_video_fragments(fragments: &[PathBuf], output: &Path) -> Resu
     result
 }
 
+/// Joins files cut from one recording timeline, such as the output of each
+/// muxer process when one was replaced mid-recording. Each file keeps its own
+/// start time, so video after a gap stays at its capture time instead of
+/// closing the gap; the last frame before a gap is held across it.
+pub fn concatenate_video_fragments_on_timeline(
+    fragments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    if fragments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+
+    for fragment in fragments {
+        if !fragment.exists() {
+            return Err(RemuxError::FragmentNotFound(fragment.clone()));
+        }
+    }
+
+    let spans = fragments
+        .iter()
+        .map(|fragment| media_span(fragment))
+        .collect::<Result<Vec<_>, _>>()?;
+    let concat_list_path = output.with_extension("concat.txt");
+    let entries = fragments
+        .iter()
+        .enumerate()
+        .map(|(index, fragment)| {
+            let entry = concat_fragment_entry(fragment, &concat_list_path)?;
+            Ok(match timeline_duration(&spans, index) {
+                Some(duration) => format!("{entry}duration {duration}us\n"),
+                None => entry,
+            })
+        })
+        .collect::<Result<Vec<_>, RemuxError>>()?;
+    std::fs::write(&concat_list_path, entries.concat())?;
+
+    let result = concatenate_with_concat_demuxer(&concat_list_path, output);
+
+    let _ = std::fs::remove_file(&concat_list_path);
+
+    result
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MediaSpan {
+    start: i64,
+    duration: i64,
+}
+
+fn media_span(path: &Path) -> Result<Option<MediaSpan>, RemuxError> {
+    let input = ffmpeg::format::input(path)?;
+    let (start, duration) = (container_start_time(&input), input.duration());
+    Ok((start != ffmpeg::ffi::AV_NOPTS_VALUE && duration > 0)
+        .then_some(MediaSpan { start, duration }))
+}
+
+fn container_start_time(input: &avformat::context::Input) -> i64 {
+    unsafe { (*input.as_ptr()).start_time }
+}
+
+/// How far into the joined timeline the file after `index` starts, in
+/// microseconds: the gap between the two start times, but never less than the
+/// file's own duration, so overlapping files still play end to end. `None`
+/// leaves the concat demuxer to use the file's probed duration.
+fn timeline_duration(spans: &[Option<MediaSpan>], index: usize) -> Option<i64> {
+    let current = spans.get(index).copied().flatten()?;
+    let next = spans.get(index + 1).copied().flatten()?;
+    Some((next.start - current.start).max(current.duration))
+}
+
 fn concat_fragment_entry(fragment: &Path, concat_list: &Path) -> Result<String, RemuxError> {
     let fragment = std::path::absolute(fragment)?;
     let concat_list = std::path::absolute(concat_list)?;
@@ -1374,7 +1444,8 @@ mod tests {
         concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
         concatenate_m4s_segments_with_init_validated,
         concatenate_m4s_segments_with_init_validated_with_reader, concatenate_video_fragments,
-        get_video_capture_fps, get_video_fps, probe_video_pts_ladder, write_concat_list,
+        concatenate_video_fragments_on_timeline, get_video_capture_fps, get_video_fps,
+        probe_video_pts_ladder, write_concat_list,
     };
     use std::{
         path::{Path, PathBuf},
@@ -1792,6 +1863,113 @@ mod tests {
         let duration = input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE);
         assert!((0.35..0.6).contains(&duration), "duration={duration}");
         assert!(!output.with_extension("concat.txt").exists());
+    }
+
+    fn first_video_pts_after(path: &Path, frames_before: usize) -> f64 {
+        let (time_base, packets) = video_packet_contents(path);
+        let mut pts: Vec<i64> = packets.iter().filter_map(|packet| packet.pts).collect();
+        pts.sort_unstable();
+        pts[frames_before] as f64 * f64::from(time_base)
+    }
+
+    fn timeline_inputs(parent: &Path, second_start_frame: u64) -> [PathBuf; 2] {
+        let frames = |range: std::ops::Range<u64>| -> Vec<Duration> {
+            range
+                .map(|frame| Duration::from_nanos(frame * 1_000_000_000 / 30))
+                .collect()
+        };
+        let first_dir = parent.join("first");
+        let second_dir = parent.join("second");
+        std::fs::create_dir_all(&first_dir).unwrap();
+        std::fs::create_dir_all(&second_dir).unwrap();
+        let second = second_dir.join("shifted.mp4");
+        shift_test_mp4(
+            &encode_test_mp4(&second_dir, &frames(0..12)),
+            &second,
+            second_start_frame as f64 / 30.0,
+        );
+        [encode_test_mp4(&first_dir, &frames(0..12)), second]
+    }
+
+    /// A copy of `input` whose packets start `offset` seconds later, like a
+    /// replacement muxer's output on the recording's shared timeline.
+    fn shift_test_mp4(input: &Path, output: &Path, offset: f64) {
+        let mut ictx = ffmpeg::format::input(input).unwrap();
+        let mut octx = ffmpeg::format::output(output).unwrap();
+        let stream = ictx.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let (index, time_base) = (stream.index(), stream.time_base());
+        let mut output_stream = octx.add_stream(None).unwrap();
+        output_stream.set_parameters(stream.parameters());
+        unsafe {
+            (*output_stream.as_mut_ptr())
+                .codecpar
+                .as_mut()
+                .unwrap()
+                .codec_tag = 0;
+        }
+        octx.write_header().unwrap();
+        let output_time_base = octx.stream(0).unwrap().time_base();
+        let shift = (offset * f64::from(time_base.denominator()) / f64::from(time_base.numerator()))
+            .round() as i64;
+        for (stream, mut packet) in ictx.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            packet.set_pts(packet.pts().map(|pts| pts + shift));
+            packet.set_dts(packet.dts().map(|dts| dts + shift));
+            packet.rescale_ts(time_base, output_time_base);
+            packet.set_stream(0);
+            packet.set_position(-1);
+            packet.write_interleaved(&mut octx).unwrap();
+        }
+        octx.write_trailer().unwrap();
+    }
+
+    #[test]
+    fn timeline_concat_keeps_a_later_file_at_its_start_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let inputs = timeline_inputs(directory.path(), 30);
+        let start = |path: &Path| {
+            super::container_start_time(&ffmpeg::format::input(path).unwrap()) as f64
+                / f64::from(ffmpeg::ffi::AV_TIME_BASE)
+        };
+        assert!(
+            (start(&inputs[1]) - 1.0).abs() < 0.002,
+            "{}",
+            start(&inputs[1])
+        );
+
+        let joined = directory.path().join("timeline.mp4");
+        concatenate_video_fragments_on_timeline(&inputs, &joined).unwrap();
+        let second_at = first_video_pts_after(&joined, 12);
+        assert!(
+            (second_at - 1.0).abs() < 0.002,
+            "second file starts at {second_at}"
+        );
+        assert_eq!(video_packet_contents(&joined).1.len(), 24);
+        assert!(!joined.with_extension("concat.txt").exists());
+
+        let end_to_end = directory.path().join("end-to-end.mp4");
+        concatenate_video_fragments(&inputs, &end_to_end).unwrap();
+        assert!(first_video_pts_after(&end_to_end, 12) < 0.5);
+    }
+
+    #[test]
+    fn timeline_concat_plays_overlapping_files_end_to_end() {
+        let directory = tempfile::tempdir().unwrap();
+        let inputs = timeline_inputs(directory.path(), 6);
+
+        let joined = directory.path().join("timeline.mp4");
+        concatenate_video_fragments_on_timeline(&inputs, &joined).unwrap();
+        let packets = video_packet_contents(&joined).1;
+        assert_eq!(packets.len(), 24);
+        let dts: Vec<i64> = packets.iter().filter_map(|packet| packet.dts).collect();
+        assert!(dts.windows(2).all(|pair| pair[0] < pair[1]), "{dts:?}");
+        let second_at = first_video_pts_after(&joined, 12);
+        assert!(
+            second_at >= 0.39,
+            "overlap played over the first file: {second_at}"
+        );
     }
 
     #[test]
