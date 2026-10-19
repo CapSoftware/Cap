@@ -104,9 +104,10 @@ if [[ "$mode" == list ]]; then
   exit 0
 fi
 
-# The crash suite spawns the out-of-process muxer; build it with the same
-# profile so it sits beside the test binaries (target/<profile>/cap-muxer).
-if [[ " ${suite_names//,/ } " == *" crash "* && "$mode" != archive ]]; then
+# The crash and chaos suites spawn the out-of-process muxer; build it with
+# the same profile so it sits beside the test binaries
+# (target/<profile>/cap-muxer).
+if [[ ( " ${suite_names//,/ } " == *" crash "* || " ${suite_names//,/ } " == *" chaos "* ) && "$mode" != archive ]]; then
   cargo build --profile "$profile" -p cap-muxer ${CAP_VERIFY_LOCKED:+--locked}
 fi
 

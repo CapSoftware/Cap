@@ -238,9 +238,8 @@ fn encode_png(out: &Composited) -> Result<Vec<u8>, String> {
 /// share flow only ever picks it when the output is fully opaque, and the
 /// flatten here is the same belt the browser's own encode wears.
 fn encode_jpeg(out: &Composited) -> Result<Vec<u8>, String> {
-    let flat = flatten_onto_white(out);
-    let rgb = codec::rgba_to_rgb(&flat.rgba);
-    codec::encode_jpeg_rgb(&rgb, flat.width, flat.height, 90)
+    let rgb = codec::flatten_rgba_to_rgb_over_white(&out.rgba);
+    codec::encode_jpeg_rgb(&rgb, out.width, out.height, 90)
         .map_err(|e| format!("Failed to encode screenshot export: {e}"))
 }
 

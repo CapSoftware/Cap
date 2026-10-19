@@ -730,6 +730,10 @@ struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
 impl Feeds {
+    pub fn camera_input_pending(&self) -> bool {
+        self.camera_input_pending
+    }
+
     pub fn init(cx: &mut App) -> Entity<Self> {
         let feeds = cx.new(|_| Self {
             camera_actor: None,
@@ -1050,6 +1054,7 @@ impl Feeds {
                     return;
                 }
                 this.camera_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
                     Ok(settings) => {
                         this.applied_settings.camera = settings.camera;
@@ -1182,6 +1187,7 @@ impl Feeds {
                     return;
                 }
                 this.mic_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
                     Ok(settings) => this.applied_settings.microphone = settings.microphone,
                     Err(error) => {
