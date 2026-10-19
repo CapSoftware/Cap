@@ -25,15 +25,22 @@ impl YuvMatrix {
     /// the matrix's Kr and Kb (BT.601 0.299/0.114, BT.709 0.2126/0.0722).
     #[inline(always)]
     pub(crate) fn ycbcr_to_rgb(self, c: i32, d: i32, e: i32) -> [u8; 3] {
+        let [red, green, blue] = self.chroma_contributions(d, e);
+        let luma = 298 * c;
+        [
+            clamp_u8((luma + red) >> 8),
+            clamp_u8((luma + green) >> 8),
+            clamp_u8((luma + blue) >> 8),
+        ]
+    }
+
+    #[inline(always)]
+    fn chroma_contributions(self, d: i32, e: i32) -> [i32; 3] {
         let (rv, gu, gv, bu) = match self {
             Self::Bt601 => (409, 100, 208, 516),
             Self::Bt709 => (459, 55, 136, 541),
         };
-        [
-            clamp_u8((298 * c + rv * e + 128) >> 8),
-            clamp_u8((298 * c - gu * d - gv * e + 128) >> 8),
-            clamp_u8((298 * c + bu * d + 128) >> 8),
-        ]
+        [rv * e + 128, -gu * d - gv * e + 128, bu * d + 128]
     }
 
     /// Floating-point coefficients for the GPU conversion shaders (pipeline
@@ -614,26 +621,27 @@ fn nv12_convert_row_scalar(
     output: &mut [u8],
     matrix: YuvMatrix,
 ) {
-    for col in 0..width {
-        let y_idx = y_row_start + col;
-        let uv_idx = uv_row_start + (col / 2) * 2;
+    let y_row = &y_data[y_row_start..y_row_start + width];
+    let uv_row = &uv_data[uv_row_start..uv_row_start + width.div_ceil(2) * 2];
+    let output_row = &mut output[out_row_start..out_row_start + width * 4];
 
-        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-        let u = uv_data.get(uv_idx).copied().unwrap_or(128) as i32;
-        let v = uv_data.get(uv_idx + 1).copied().unwrap_or(128) as i32;
+    for ((luma, chroma), pixels) in y_row
+        .chunks(2)
+        .zip(uv_row.chunks_exact(2))
+        .zip(output_row.chunks_mut(8))
+    {
+        let d = i32::from(chroma[0]) - 128;
+        let e = i32::from(chroma[1]) - 128;
+        let [red, green, blue] = matrix.chroma_contributions(d, e);
 
-        let c = y - 16;
-        let d = u - 128;
-        let e = v - 128;
-
-        let [r, g, b] = matrix.ycbcr_to_rgb(c, d, e);
-
-        let out_idx = out_row_start + col * 4;
-        if out_idx + 3 < output.len() {
-            output[out_idx] = r;
-            output[out_idx + 1] = g;
-            output[out_idx + 2] = b;
-            output[out_idx + 3] = 255;
+        for (y, pixel) in luma.iter().zip(pixels.chunks_exact_mut(4)) {
+            let c = 298 * (i32::from(*y) - 16);
+            pixel.copy_from_slice(&[
+                clamp_u8((c + red) >> 8),
+                clamp_u8((c + green) >> 8),
+                clamp_u8((c + blue) >> 8),
+                255,
+            ]);
         }
     }
 }
@@ -1018,26 +1026,30 @@ fn yuv420p_convert_row_scalar(
     output: &mut [u8],
     matrix: YuvMatrix,
 ) {
-    for col in 0..width {
-        let y_idx = y_row_start + col;
-        let uv_idx = uv_row_start + (col / 2);
+    let y_row = &y_data[y_row_start..y_row_start + width];
+    let chroma_width = width.div_ceil(2);
+    let u_row = &u_data[uv_row_start..uv_row_start + chroma_width];
+    let v_row = &v_data[uv_row_start..uv_row_start + chroma_width];
+    let output_row = &mut output[out_row_start..out_row_start + width * 4];
 
-        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-        let u = u_data.get(uv_idx).copied().unwrap_or(128) as i32;
-        let v = v_data.get(uv_idx).copied().unwrap_or(128) as i32;
+    for (((luma, u), v), pixels) in y_row
+        .chunks(2)
+        .zip(u_row)
+        .zip(v_row)
+        .zip(output_row.chunks_mut(8))
+    {
+        let d = i32::from(*u) - 128;
+        let e = i32::from(*v) - 128;
+        let [red, green, blue] = matrix.chroma_contributions(d, e);
 
-        let c = y - 16;
-        let d = u - 128;
-        let e = v - 128;
-
-        let [r, g, b] = matrix.ycbcr_to_rgb(c, d, e);
-
-        let out_idx = out_row_start + col * 4;
-        if out_idx + 3 < output.len() {
-            output[out_idx] = r;
-            output[out_idx + 1] = g;
-            output[out_idx + 2] = b;
-            output[out_idx + 3] = 255;
+        for (y, pixel) in luma.iter().zip(pixels.chunks_exact_mut(4)) {
+            let c = 298 * (i32::from(*y) - 16);
+            pixel.copy_from_slice(&[
+                clamp_u8((c + red) >> 8),
+                clamp_u8((c + green) >> 8),
+                clamp_u8((c + blue) >> 8),
+                255,
+            ]);
         }
     }
 }
@@ -1288,6 +1300,109 @@ mod tests {
                 diff <= 2,
                 "YUV420P mismatch at index {i}: scalar={s}, simd={d}, diff={diff}"
             );
+        }
+    }
+
+    #[test]
+    fn test_nv12_simd_matches_scalar_for_pair_tails_and_padded_rows() {
+        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
+            for (width, height, padding) in [
+                (1_u32, 1_u32, 0_u32),
+                (3, 5, 0),
+                (3, 5, 7),
+                (17, 18, 7),
+                (32, 3, 7),
+                (1921, 1081, 7),
+            ] {
+                let y_stride = width + padding;
+                let uv_width = width.div_ceil(2) * 2;
+                let uv_stride = uv_width + padding;
+                let y_len = ((height - 1) * y_stride + width) as usize;
+                let uv_len = ((height.div_ceil(2) - 1) * uv_stride + uv_width) as usize;
+                let y_data: Vec<u8> = (0..y_len).map(|i| (i * 37 + 11) as u8).collect();
+                let uv_data: Vec<u8> = (0..uv_len).map(|i| (i * 53 + 97) as u8).collect();
+                let mut expected = vec![0; (width * height * 4) as usize];
+                let mut actual = vec![0xa5; expected.len()];
+
+                nv12_to_rgba_with_matrix(
+                    &y_data,
+                    &uv_data,
+                    width,
+                    height,
+                    y_stride,
+                    uv_stride,
+                    &mut expected,
+                    matrix,
+                );
+                nv12_to_rgba_simd(
+                    &y_data,
+                    &uv_data,
+                    width,
+                    height,
+                    y_stride,
+                    uv_stride,
+                    &mut actual,
+                    matrix,
+                );
+
+                assert_eq!(
+                    actual, expected,
+                    "NV12 {matrix:?} {width}x{height}, y_stride={y_stride}, uv_stride={uv_stride}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_yuv420p_simd_matches_scalar_for_pair_tails_and_padded_rows() {
+        for matrix in [YuvMatrix::Bt601, YuvMatrix::Bt709] {
+            for (width, height, padding) in [
+                (1_u32, 1_u32, 0_u32),
+                (3, 5, 0),
+                (3, 5, 7),
+                (17, 18, 7),
+                (32, 3, 7),
+                (1921, 1081, 7),
+            ] {
+                let y_stride = width + padding;
+                let uv_width = width.div_ceil(2);
+                let uv_stride = uv_width + padding;
+                let y_len = ((height - 1) * y_stride + width) as usize;
+                let uv_len = ((height.div_ceil(2) - 1) * uv_stride + uv_width) as usize;
+                let y_data: Vec<u8> = (0..y_len).map(|i| (i * 37 + 11) as u8).collect();
+                let u_data: Vec<u8> = (0..uv_len).map(|i| (i * 53 + 97) as u8).collect();
+                let v_data: Vec<u8> = (0..uv_len).map(|i| (i * 71 + 193) as u8).collect();
+                let mut expected = vec![0; (width * height * 4) as usize];
+                let mut actual = vec![0xa5; expected.len()];
+
+                yuv420p_to_rgba_with_matrix(
+                    &y_data,
+                    &u_data,
+                    &v_data,
+                    width,
+                    height,
+                    y_stride,
+                    uv_stride,
+                    &mut expected,
+                    matrix,
+                );
+                yuv420p_to_rgba_simd(
+                    &y_data,
+                    &u_data,
+                    &v_data,
+                    width,
+                    height,
+                    y_stride,
+                    uv_stride,
+                    &mut actual,
+                    matrix,
+                );
+
+                assert_eq!(
+                    actual, expected,
+                    "YUV420P {matrix:?} {width}x{height}, y_stride={y_stride}, uv_stride={uv_stride}"
+                );
+            }
         }
     }
 

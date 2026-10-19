@@ -140,7 +140,7 @@ impl TextBackgroundResources {
         );
     }
 
-    fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, index: usize) {
+    fn render(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_groups[index], &[]);
         pass.draw(0..6, 0..1);
@@ -759,7 +759,7 @@ impl TextLayer {
         }
     }
 
-    fn render_draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, index: usize) {
+    fn render_draw(&self, pass: &mut wgpu::RenderPass<'_>, index: usize) {
         let draw = &self.draws[index];
         if let Some(background) = &self.background {
             for rect in draw.background.clone() {
@@ -773,7 +773,7 @@ impl TextLayer {
         }
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if self.segmented_render {
             for index in 0..self.draws.len() {
                 self.render_draw(pass, index);
@@ -786,7 +786,7 @@ impl TextLayer {
         }
     }
 
-    pub fn render_track<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, track: u32) {
+    pub fn render_track(&self, pass: &mut wgpu::RenderPass<'_>, track: u32) {
         if !self.segmented_render {
             return;
         }

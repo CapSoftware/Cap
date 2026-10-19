@@ -164,6 +164,7 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]

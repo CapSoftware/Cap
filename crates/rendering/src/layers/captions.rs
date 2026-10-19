@@ -1046,7 +1046,7 @@ impl CaptionsLayer {
         self.active_layout
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_caption {
             return;
         }

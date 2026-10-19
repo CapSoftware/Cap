@@ -762,6 +762,119 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 
 ---
 
+### Session 2026-10-15 (Fewer Metal Command Buffers and Render Passes per Frame)
+
+**Goal**: Cut the renderer's fixed per-frame GPU submission work, which editor playback, preview, scrubbing and export all share.
+
+**What was done**:
+1. Metal System Trace showed every rendered frame committing one MTLCommandBuffer per render or compute pass plus an empty one per pass for barriers (gfx-rs/wgpu#5738), and `RendererLayers::render` opening a separate pass for each layer.
+2. `vendor/wgpu-hal` Metal now creates command buffers on first use and never commits empty ones; `RendererLayers::render` draws consecutive layers that target the same texture in one pass; the blurred static background cache now runs in the editor as well as exports.
+3. Measured with `editor-playback-benchmark` (600 frames, 1248x702, 60 FPS) against a build from main, three interleaved runs per binary, plus a Metal System Trace of the blur project.
+
+**Results**:
+- Blur project: playback CPU 2.68 s -> 2.44 s (-9%); GPU busy over an 8 s window 255 ms -> 137 ms (-46%, one trace each; the blur cache accounts for it, and GPU time varies by about a quarter between identical runs, see EXPORT-FINDINGS 2026-10-16); command buffers 8,319 -> 2,292 (-72%).
+- No-blur project: playback CPU 2.46 s -> 2.16 s (-12%).
+- Rendered frames are unchanged: exports from both builds decode to identical frames for every background type with blur, style segments included.
+
+**Stopping point**: Each remaining pass still costs its own command buffer; removing that needs pass coalescing in wgpu-core (gfx-rs/wgpu#10506).
+
+---
+
+### Session 2026-10-16 (GPUI Editor Against Main, Branch-Main-Branch)
+
+**Goal**: Measure the 2026-10-15 renderer changes inside the GPUI app, and check a preview slowdown seen in the first branch run.
+
+**What was done**:
+1. Debug builds of `apps/desktop-gpui` (Rust 1.96.1) from main (83237e994) and from the branch, driven by the `CAP_GPUI_AUTO_*` hooks against a copy of the blur recording with audio muted: an in-editor export, 4 s of playback, and playback with 60 seeks across the timeline. `/usr/bin/time -l` recorded CPU time (user + sys) and instructions retired for the app process. Three runs per scenario.
+2. The sets ran in the order branch, main, branch within about 25 minutes, each starting a few minutes after its own debug build finished; the main set also followed the `cap-gpui` test suite. No other heavy work of ours ran during any set. The second branch set was added because the first painted fewer frames than main while seeking.
+
+**Results** (per run):
+
+| Metric | Branch, 1st set | Main | Branch, 2nd set |
+|--------|-----------------|------|-----------------|
+| Seeking while playing: frames painted | 254 / 253 / 252 | 288 / 276 / 303 | 299 / 287 / 296 |
+| Seeking: paint rate (fps) | 50.6 / 50.2 / 49.5 | 56.2 / 51.8 / 59.2 | 59.8 / 57.0 / 59.1 |
+| Seeking: frames dropped | 0 / 0 / 0 | 0 / 11 / 2 | 0 / 0 / 0 |
+| Seeking: instructions retired (G) | 26.2 / 25.5 / 25.2 | 24.6 / 28.5 / 27.4 | 24.4 / 26.6 / 24.2 |
+| Seeking: CPU (s) | 2.8 / 2.6 / 2.6 | 2.8 / 3.5 / 3.5 | 2.8 / 2.9 / 2.8 |
+| Playback 4 s: frames painted | 238 / 239 / 170 | 239 / 236 / 237 | 239 / 240 |
+| Playback: CPU (s) | 2.0 / 2.0 / 1.9 | 2.6 / 2.5 / 2.4 | 2.0 / 2.2 |
+| Export: instructions retired (G) | 46.3 / 45.0 / 42.2 | 47.5 / 48.8 / 45.8 | 67.4 / 40.5 / 43.0 |
+| Export: CPU (s) | 8.1 / 8.0 / 7.4 | 7.5 / 7.6 / 6.8 | 7.6 / 5.8 / 6.3 |
+
+- Second branch set against main (means): frames painted while seeking +1.7%, paint rate +5.2%, no drops against 13 on main, with 13% less CPU and 6.6% fewer instructions retired. Playback painted as many frames on 16% less CPU. Its third playback run did not report and is missing.
+- In the first branch set, the first two playback runs painted as many frames as main on 20% less CPU; the third dropped 57 frames.
+- The first branch set painted 12.5% fewer frames than main while seeking, without drops. Neither that nor the playback drop recurred in the second set. The cause was not isolated; preceding load does not single the first set out, because the main set also started right after a build and followed the test suite as well.
+- The in-editor export was mixed: the first branch set used 7% more CPU than main with 6% fewer instructions retired, and the second used 10% less CPU, with a first run that retired 67.4 G instructions against 40.5 and 43.0 for the other two (probably first-launch shader compilation after the rebuild; not checked). Exports are paced by the encoder (EXPORT-FINDINGS 2026-10-15), so this scenario says little about rendering.
+
+**Stopping point**: No preview or playback regression in the app: the repeat branch set matches main on frames painted, with no drops and less CPU. These are debug builds; release builds of the GPUI app were not measured.
+
+---
+
+### Session 2026-10-16 (Repository Performance Suite; Preview and Readback Waits)
+
+**Goal**: Run the repository's performance gate against main, explain the slower median render time it showed, and fix the wait behind it.
+
+**What was done**:
+1. Release `cap-test` builds (Rust 1.88.0) ran the command in `.github/workflows/performance-regressions.yml` (`suite performance --duration 8`) on `CapSoftware/cap-performance-fixtures` at 75c8ed2. The suite times 240 frames of decode plus `FrameRenderer::render_immediate` at 1920x1080 and a 120-frame 1080p export. Each comparison is seven interleaved rounds with the order rotated; suite CPU and instructions come from `/usr/bin/time -l`.
+2. The fixture's first load rewrites its `project-config.json`, which among other defaults sets `screenMotionBlur` from 0 to the cursor's 0.5. `ProjectConfiguration::load` returns the rewritten config, so every run renders with it, as a fresh CI checkout does.
+3. As built, the branch's median render time was slower than main's. To test the explanation below, both builds were rebuilt with `PendingReadback::wait` changed to the NV12 readback spin rule.
+4. That spin rule was then applied to `PendingReadback::wait` and the macOS preview's `PendingSurface::wait` and measured, and replaced by a wait on the frame's own submission: `device.poll(WaitForSubmissionIndex)` on a blocking thread under the existing GPU wait timeout, the shape #2541 uses for Windows readbacks.
+
+**Results** (median render time per frame, ms):
+
+| Round | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|-------|---|---|---|---|---|---|---|
+| Main | 2.871 | 2.902 | 2.795 | 2.833 | 2.770 | 3.046 | 2.828 |
+| Branch, before the wait change | 2.787 | 3.688 | 3.567 | 3.698 | 3.458 | 2.822 | 3.362 |
+| Main, spin wait (diagnostic) | 1.171 | 1.283 | 1.508 | 1.222 | 1.098 | 1.117 | 1.167 |
+| Branch, spin wait (diagnostic) | 2.926 | 1.169 | 1.158 | 1.079 | 1.086 | 1.085 | 1.023 |
+
+A later session ran main, the branch before the wait change and the branch with the blocking wait in rotating order:
+
+| Round | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|-------|---|---|---|---|---|---|---|
+| Main | 3.791 | 3.843 | 3.806 | 3.846 | 3.801 | 3.847 | 3.863 |
+| Branch, before the wait change | 3.759 | 3.752 | 3.769 | 3.765 | 3.787 | 3.737 | 3.730 |
+| Branch, blocking wait | 1.701 | 1.649 | 1.609 | 1.661 | 1.650 | 1.651 | 1.649 |
+
+- Every run passed all three of the suite's tests, with no dropped frames.
+- Before the wait change, the branch's median render time was higher in 5 of 7 rounds, by 19-31% (median +24.8%), while its mean (median change -0.3%), p95 (-0.6%), playback throughput (-0.8%) and export throughput (+1.1%) were unchanged. Frames finished in a band near 2.8 ms or one near 3.4-3.7 ms; the branch's median fell in the slower band in five rounds, main's in none.
+- `PendingReadback::wait` polled, yielded nine times and then slept 100 µs, which tokio's timer rounds up to a whole millisecond, so the two bands are one timer tick apart. With less submission work the branch reaches the wait sooner and more often sleeps before the GPU has finished; that sequence is inferred, not traced. In the later session main and the unchanged branch both sat in the slow band, so which band a build lands in varies between sessions.
+- With the diagnostic spin in both builds the bands disappear (main 1.10-1.51 ms, branch 1.02-1.17 ms in six rounds) and the branch is faster: median lower in 6 of 7 rounds (median -8.8%), mean -6.2%, p95 -2.7%, minimum -16.7%. The branch's first round, that binary's first launch, measured 2.93 ms at 143 fps against 326-348 fps for every other spin-wait run; its cause was not found and it is included.
+- The spin rule applied to both waits cut the median render time 63.4% against main (7 of 7 rounds) but raised suite CPU 10.7% (higher in all 7) and instructions 28.7%: it turns the wait into about 0.8 ms of one busy core per frame.
+- Suite CPU of the branch before the wait change against main: -5.4% in one session (lower in 7 of 7, instructions -2.1%) and -3.0% in the later one.
+- The blocking wait against main, all lower or higher in 7 of 7 rounds: median render time -57.1%, mean -40.1%, p95 -26.2%, minimum -46.6%, playback throughput +44.3%, suite CPU -7.1%, instructions -2.1%, suite wall time -9.8%. Against the branch before the wait change in the same session, suite CPU -3.7% (lower in 7 of 7).
+- The blocking wait's p95 still splits around 4.2 and 5.3 ms. The vendored Metal `Device::wait` sleeps 1 ms between checks of the command buffer, which probably quantizes the tail; that was not isolated.
+
+**GPUI app** (debug builds, Rust 1.96.1, the same harness and fixture as the branch-main-branch session above; the blocking-wait branch against that session's main set; each launch hard-limited to 75 s, none reached it):
+
+| Metric | Branch, blocking wait | Main |
+|--------|-----------------------|------|
+| Seeking: paints counter | 295 / 261 / 270 | 288 / 276 / 303 |
+| Seeking: painted frames | 295 / 261 / 263 | |
+| Seeking: paint rate (fps) | 60.6 / 52.4 / 53.5 | 56.2 / 51.8 / 59.2 |
+| Seeking: frames dropped | 0 / 0 / 0 | 0 / 11 / 2 |
+| Seeking: CPU (s) | 4.53 / 2.90 / 2.94 | 2.8 / 3.5 / 3.5 |
+| Playback 4 s: painted frames | 238 / 239 / 240 | 239 / 236 / 237 |
+| Playback: frames dropped | 0 / 0 / 0 | |
+| Playback: CPU (s) | 2.35 / 2.12 / 2.00 | 2.6 / 2.5 / 2.4 |
+
+- Playback painted the same frames (+0.7%; the paints counter +3.2%) with no drops and 13.7% less CPU.
+- Seeking painted 4.7% fewer frames by the paints counter and 5.5% fewer by painted frames, at a paint rate 0.4% lower and a rendered rate 2.5% lower, with no drops against main's 13. The main set's frame count was recorded without saying which counter it used, so both are given. Seeking CPU was 5.8% higher on average, carried by the first launch after the build; the median was 16% lower.
+- Instructions retired were not captured for these runs: `gtimeout` sat between `/usr/bin/time` and the app, so `time` counted only `gtimeout`.
+
+**Waits and platforms**:
+- Changed: `PendingReadback::wait`, behind `render_immediate` (RGBA editor frames, thumbnails, the preparing preview, export preview frames, the GPUI screenshot editor, these benchmarks) and behind `finish_encoder_timed` (GIF and MOV export); and the macOS `PendingSurface::wait` (the editor's BGRA preview and the GPUI camera-blur preview). `PendingSurface::wait` now takes the index of the submission that wrote its surface.
+- Unchanged: the NV12 export waits (#2450 gave the readback one the spin rule; #2464 does the same for the surface ones), the error-path drain, the surface-pool back-pressure retry and the GPU-error retry backoffs.
+- wgpu-core 25 holds the device fence's read lock during the HAL wait while `queue.submit` takes the write lock, so another renderer's submit on a shared device waits for the waited submission. The queue is in order, so that renderer's GPU work could not have started sooner; what it loses is CPU-side overlap. On a hung GPU the caller regains control at the existing timeout, but the blocking thread can hold the lock until wgpu-core's 60 s cleanup wait expires.
+- DX12: the vendored `Device::wait` waited on one auto-reset event per device, so concurrent waiters could lose a wakeup and hold that lock for up to 60 s (#2541 describes it). The branch backports gfx-rs/wgpu#8273, an event per wait, byte-identical to #2541's hunk. Vulkan waits per call (`vkWaitSemaphores`, or `vkWaitForFences` without timeline semaphores). The GLES wait holds the GL context lock; which backend Linux selects was not checked.
+- The camera-blur preview runs on its own device and thread, so it has no shared-device stall; its timing change was not measured. Nothing here was built or run on Windows or Linux.
+
+**Stopping point**: The remaining tail quantization comes from the vendored Metal HAL sleeping 1 ms between checks in `Device::wait`. A wait driven by the fence's `MTLSharedEvent` (a listener plus a condition variable with the same timeout) would remove it, as a second local patch to the vendored HAL.
+
+---
+
 ## References
 
 - `PLAYBACK-BENCHMARKS.md` - Raw performance test data (auto-updated by test runner)

@@ -365,7 +365,9 @@ impl MuxerSubprocess {
             data,
         };
 
-        match write_packet_frame(stdin, &packet) {
+        // Flush every packet: anything left in the buffer is lost if the
+        // recorder dies, and a dead child only shows up as a write error.
+        match write_packet_frame(stdin, &packet).and_then(|()| Ok(stdin.flush()?)) {
             Ok(()) => {
                 self.packets_written.fetch_add(1, Ordering::Relaxed);
                 Ok(())
@@ -869,6 +871,61 @@ mod tests {
             .unwrap();
         assert_eq!(status.code(), Some(i32::from(exit_code)));
         (directory, subprocess)
+    }
+
+    fn script_subprocess(script: &str) -> (tempfile::TempDir, MuxerSubprocess, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("muxer");
+        std::fs::write(&binary, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = MuxerSubprocessConfig {
+            output_directory: directory.path().join("video"),
+            init_segment_name: "init.mp4".into(),
+            media_segment_pattern: "segment_$Number%03d$.m4s".into(),
+            video_init: None,
+            audio_init: None,
+        };
+        let received = directory.path().join("received");
+        let subprocess = MuxerSubprocess::spawn(binary, config, None).unwrap();
+        (directory, subprocess, received)
+    }
+
+    #[test]
+    fn every_packet_reaches_the_child_before_the_next_one_is_written() {
+        let (directory, mut subprocess, received) =
+            script_subprocess("exec cat > \"$(dirname \"$0\")/received\"");
+        let size = |path: &Path| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while size(&received) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let after_start = size(&received);
+        assert!(after_start > 0, "init and start frames never arrived");
+        subprocess
+            .write_video_packet(0, 0, 1, true, &[7; 1000])
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while size(&received) < after_start + 1000 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            size(&received) >= after_start + 1000,
+            "a written packet stayed in the recorder's buffer"
+        );
+        drop(subprocess);
+        drop(directory);
+    }
+
+    #[test]
+    fn a_dead_child_is_reported_on_the_next_packet() {
+        let (_directory, mut subprocess, _) = script_subprocess("sleep 0.3; exit 3");
+        let child = subprocess.child.as_mut().unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(status.code(), Some(3));
+        assert!(matches!(
+            subprocess.write_video_packet(0, 0, 1, true, &[7; 1000]),
+            Err(MuxerSubprocessError::Crashed(_))
+        ));
     }
 
     #[test]
