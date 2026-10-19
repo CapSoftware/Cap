@@ -19,6 +19,17 @@ jobs:
       BUNDLE_ID: so.cap.desktop.ci-onboarding
       SHOTS: ${{ github.workspace }}/walkthrough
     steps:
+      # Long cold builds let the display idle into the screensaver, which
+      # locks the session: every capture then shows the lock screen. Keep
+      # the display awake from the first step.
+      - name: Keep the session unlocked
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          defaults -currentHost write com.apple.screensaver idleTime 0
+          sudo defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -108,6 +119,15 @@ jobs:
           sleep 2
           mkdir -p "$SHOTS"
 
+          cat > "$RUNNER_TEMP/locked.swift" <<'SWIFT'
+          import CoreGraphics
+          let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+          let locked = (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
+          print("screen locked: \(locked)")
+          exit(locked ? 1 : 0)
+          SWIFT
+          swiftc "$RUNNER_TEMP/locked.swift" -o "$RUNNER_TEMP/locked"
+          "$RUNNER_TEMP/locked"
       - name: Walkthrough
         run: |
           set -uo pipefail
