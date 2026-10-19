@@ -328,6 +328,13 @@ fn main() {
             .as_ref()
             .and_then(|restore| restore.main_window_bounds(main_size, cx))
             .unwrap_or_else(|| Bounds::centered(None, main_size, cx));
+        // A first run always lands in onboarding, and these two flags are a
+        // store read rather than the gate's TCC queries -- so the main window
+        // starts hidden instead of flashing up before onboarding replaces it.
+        // Linux keeps the gate: its main window tracks retained visibility.
+        let first_run = cfg!(not(target_os = "linux"))
+            && (!crate::store::has_completed_startup()
+                || !crate::store::has_completed_onboarding());
         let window_handle = cx
             .open_window(
                 WindowOptions {
@@ -373,6 +380,8 @@ fn main() {
                     },
                     is_resizable: false,
                     is_minimizable: cfg!(target_os = "windows"),
+                    focus: !first_run,
+                    show: !first_run,
                     ..Default::default()
                 },
                 {
@@ -430,17 +439,21 @@ fn main() {
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
         // the gate runs off-main and onboarding opens a beat after the main
-        // window instead of holding it back.
-        cx.spawn(async move |cx| {
-            let show_onboarding = cx
-                .background_executor()
-                .spawn(async { crate::store::should_show_onboarding() })
-                .await;
-            if show_onboarding {
-                cx.update(app_windows::open_onboarding);
-            }
-        })
-        .detach();
+        // window instead of holding it back. A first run skips the gate.
+        if first_run {
+            app_windows::open_onboarding(cx);
+        } else {
+            cx.spawn(async move |cx| {
+                let show_onboarding = cx
+                    .background_executor()
+                    .spawn(async { crate::store::should_show_onboarding() })
+                    .await;
+                if show_onboarding {
+                    cx.update(app_windows::open_onboarding);
+                }
+            })
+            .detach();
+        }
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
