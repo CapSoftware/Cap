@@ -927,6 +927,25 @@ impl OnboardingWindow {
         let button_text = glass
             .map(|material| Hsla::from(material.text))
             .unwrap_or_else(|| rgb(0x161b26).into());
+        // The hint under the label tracks the label: on the Liquid Glass
+        // control that text is light, so the white button's navy would vanish.
+        let hint_text = button_text.opacity(0.58);
+        let (kbd_text, kbd_border, kbd_fill) = match glass {
+            Some(_) => (
+                button_text,
+                button_text.opacity(0.3),
+                gpui::transparent_black(),
+            ),
+            None => (
+                Hsla::from(theme.gray_11),
+                Hsla::from(theme.gray_6),
+                if theme.is_dark() {
+                    Hsla::from(theme.body_fill(3))
+                } else {
+                    gpui::white()
+                },
+            ),
+        };
         let logo = img("onboarding/logo.svg")
             .w(px(80.))
             .h(px(96.))
@@ -1018,24 +1037,20 @@ impl OnboardingWindow {
                             .justify_center()
                             .gap(px(4.))
                             .child(
-                                copy("Click here, or press", 11., rgba(0x161b2694))
+                                copy("Click here, or press", 11., hint_text)
                                     .font_weight(FontWeight::NORMAL)
                                     .line_height(px(14.)),
                             )
                             .child(
-                                copy("Space", 10., theme.gray_11)
+                                copy("Space", 10., kbd_text)
                                     .font_weight(FontWeight::MEDIUM)
                                     .line_height(px(14.))
                                     .px(px(4.))
                                     .py(px(1.))
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(theme.gray_6)
-                                    .bg(if theme.is_dark() {
-                                        theme.body_fill(3)
-                                    } else {
-                                        gpui::white()
-                                    }),
+                                    .border_color(kbd_border)
+                                    .bg(kbd_fill),
                             ),
                     ),
             )
