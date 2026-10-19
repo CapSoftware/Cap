@@ -152,11 +152,13 @@ impl ProjectRecordingsMeta {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {
                 let display = Video::new(s.display.path.to_path(recording_path), 0.0)
-                    .expect("Failed to read display video");
-                let camera = s.camera.as_ref().map(|camera| {
-                    Video::new(camera.path.to_path(recording_path), 0.0)
-                        .expect("Failed to read camera video")
-                });
+                    .map_err(|e| format!("video / {e}"))?;
+                let camera = s
+                    .camera
+                    .as_ref()
+                    .map(|camera| Video::new(camera.path.to_path(recording_path), 0.0))
+                    .transpose()
+                    .map_err(|e| format!("camera / {e}"))?;
                 let mic = s.audio.as_ref().and_then(|audio| {
                     match Audio::new(audio.path.to_path(recording_path), 0.0) {
                         Ok(audio) => Some(audio),

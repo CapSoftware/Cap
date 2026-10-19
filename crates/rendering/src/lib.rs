@@ -460,15 +460,18 @@ impl RecordingSegmentDecoders {
             camera_offset,
         } = segment_timing::segment_video_timing(meta, segment_i);
 
+        // A meta fps of 0 means "not recorded" (recovery fills it in); frame
+        // indexing divides by it, so until then decode at the legacy rate.
+        let decoder_fps = |fps: u32| if fps == 0 { 30 } else { fps };
         let screen_source = DecoderSource {
             path: display_path,
-            fps: screen_fps,
+            fps: decoder_fps(screen_fps),
             offset: screen_offset,
         };
         let camera_source = match camera_path {
             Some(path) => Some(DecoderSource {
                 path,
-                fps: camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?,
+                fps: decoder_fps(camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?),
                 offset: camera_offset,
             }),
             None => None,
@@ -706,6 +709,16 @@ pub enum RenderingError {
     PreparingOverlayContent,
     #[error("No segments available in recording")]
     NoSegments,
+    #[error(
+        "The timeline uses recording segment {segment}, but the recording only has {available}"
+    )]
+    MissingRecordingSegment { segment: u32, available: usize },
+    #[error("Timeline clip {index} has an invalid {field}: {value}")]
+    InvalidTimelineSegment {
+        index: usize,
+        field: &'static str,
+        value: f64,
+    },
     #[error(transparent)]
     RequestDeviceFailed(#[from] wgpu::RequestDeviceError),
     #[error("Failed to wait for buffer mapping")]
@@ -755,6 +768,40 @@ pub struct RenderSegment {
     pub render_display: bool,
 }
 
+fn validate_timeline(
+    project: &ProjectConfiguration,
+    available: usize,
+) -> Result<(), RenderingError> {
+    let Some(timeline) = &project.timeline else {
+        return Ok(());
+    };
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        if segment.recording_clip as usize >= available {
+            return Err(RenderingError::MissingRecordingSegment {
+                segment: segment.recording_clip,
+                available,
+            });
+        }
+        let invalid = |field, value| RenderingError::InvalidTimelineSegment {
+            index,
+            field,
+            value,
+        };
+        if !segment.start.is_finite() {
+            return Err(invalid("start", segment.start));
+        }
+        // Rounding in trim edits can leave a zero-length clip's end a hair
+        // before its start; only a clip that genuinely runs backwards fails.
+        if !segment.end.is_finite() || segment.end < segment.start - 1e-6 {
+            return Err(invalid("end", segment.end));
+        }
+        if !segment.timescale.is_finite() || segment.timescale <= 0.0 {
+            return Err(invalid("speed", segment.timescale));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
@@ -769,6 +816,7 @@ pub async fn render_video_to_channel(
     frame_windows: Option<FrameWindows>,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
+    validate_timeline(project, render_segments.len())?;
 
     let start_time = Instant::now();
 
@@ -1349,6 +1397,7 @@ pub async fn render_video_to_channel_nv12(
     let ffmpeg_init_start = Instant::now();
     ffmpeg::init().unwrap();
     let ffmpeg_init_ms = ffmpeg_init_start.elapsed().as_millis() as u64;
+    validate_timeline(project, render_segments.len())?;
 
     let start_time = Instant::now();
 
@@ -3245,6 +3294,7 @@ const FLOATING_CAMERA_FRAC_STACKED: f32 = 0.40;
 const FLOATING_ROUNDING_FRAC: f32 = 0.028;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
+const MAX_OUTPUT_DIMENSION: u32 = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct NotchPlacement {
@@ -3449,11 +3499,17 @@ impl ProjectUniforms {
     }
 
     fn auto_padding_factor(project: &ProjectConfiguration) -> f64 {
-        project.background.padding / 100.0 * SCREEN_MAX_PADDING
+        let padding = project.background.padding;
+        let padding = if padding.is_finite() {
+            padding.clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        padding / 100.0 * SCREEN_MAX_PADDING
     }
 
     fn round_base_dimension(value: f64) -> u32 {
-        (((value.ceil() as u32) + 1) & !1).max(2)
+        ((value.ceil() as u32).saturating_add(1) & !1).max(2)
     }
 
     fn fixed_aspect_base_size(crop: &Crop, target_aspect: f64, padding_factor: f64) -> (u32, u32) {
@@ -3504,8 +3560,8 @@ impl ProjectUniforms {
         match &project.aspect_ratio {
             None => {
                 let scale = 1.0 + padding_factor * 2.0;
-                let width = ((crop.size.x as f64 * scale) as u32 + 1) & !1;
-                let height = ((crop.size.y as f64 * scale) as u32 + 1) & !1;
+                let width = ((crop.size.x as f64 * scale) as u32).saturating_add(1) & !1;
+                let height = ((crop.size.y as f64 * scale) as u32).saturating_add(1) & !1;
                 (width, height)
             }
             Some(AspectRatio::Square) => Self::fixed_aspect_base_size(&crop, 1.0, padding_factor),
@@ -3533,10 +3589,17 @@ impl ProjectUniforms {
 
         let width_scale = resolution_base.x as f32 / base_width as f32;
         let height_scale = resolution_base.y as f32 / base_height as f32;
-        let scale = width_scale.min(height_scale);
+        // Past the device's texture limit every render target fails to
+        // allocate (a padded 6K recording exported at its own size), so
+        // scale down to fit it instead.
+        let limit_scale = (MAX_OUTPUT_DIMENSION as f32 / base_width as f32)
+            .min(MAX_OUTPUT_DIMENSION as f32 / base_height as f32);
+        let scale = width_scale.min(height_scale).min(limit_scale);
 
-        let scaled_width = ((base_width as f32 * scale) as u32 + 3) & !3;
-        let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+        let scaled_width = (((base_width as f32 * scale) as u32).saturating_add(3) & !3)
+            .clamp(4, MAX_OUTPUT_DIMENSION);
+        let scaled_height = (((base_height as f32 * scale) as u32).saturating_add(1) & !1)
+            .clamp(2, MAX_OUTPUT_DIMENSION);
         (scaled_width, scaled_height)
     }
 
