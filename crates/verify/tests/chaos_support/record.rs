@@ -719,7 +719,14 @@ pub fn audio_scripts() -> Vec<(&'static str, AudioScript)> {
     for f in &mut empty {
         f.samples = 0;
     }
-    out.push(ok("empty-buffers", empty));
+    out.push((
+        "empty-buffers",
+        AudioScript {
+            info: AudioInfo::new_raw(F32, 48_000, 1),
+            frames: empty,
+            expect_media: false,
+        },
+    ));
     let mut huge = chunks(F32, 48_000, 1, 0.2, 0.02);
     huge[0].samples = 48_000 * 20;
     out.push(ok("huge-buffer", huge));
