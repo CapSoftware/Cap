@@ -206,7 +206,8 @@ jobs:
               sleep 0.5
             done
             echo "round $r stimulus window: ${window:-not found}"
-            ./target/abperf/cap record start ${window:+--window "$window"} ${window:---screen "$screen"} --mic "BlackHole 2ch" \
+            if [ -n "$window" ]; then target=(--window "$window"); else target=(--screen "$screen"); fi
+            ./target/abperf/cap record start "${target[@]}" --mic "BlackHole 2ch" \
               --path "sync-out/r$r.cap" --duration "$RECORD_SECS" > "sync-out/r$r.record.log" 2>&1
             echo "round $r record exit=$? wall=$(python3 -c "import time;print(round(time.time()-$start,2))")"
             kill "$player" 2>/dev/null || true
