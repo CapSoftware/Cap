@@ -262,10 +262,11 @@ pub struct OnboardingWindow {
     welcome: bool,
     welcome_exiting: bool,
     welcome_exit: Option<gpui::Task<()>>,
-    /// The welcome choreography's clocks; `welcome_at` stays `None` under
-    /// Reduce Motion, which renders the settled frame instead.
     welcome_at: Option<std::time::Instant>,
     welcome_exit_at: Option<std::time::Instant>,
+    welcome_scene: f32,
+    welcome_tick: Option<std::time::Instant>,
+    reduce_motion: bool,
     step_delay: Duration,
     audio: Option<OnboardingAudio>,
     muted: bool,
@@ -317,6 +318,9 @@ impl OnboardingWindow {
             welcome_exit: None,
             welcome_at: None,
             welcome_exit_at: None,
+            welcome_scene: 0.,
+            welcome_tick: None,
+            reduce_motion: cx.reduce_motion(),
             step_delay: Duration::ZERO,
             audio: welcome.then(|| OnboardingAudio::new(muted, cx)),
             muted,
@@ -907,10 +911,12 @@ fn beat(elapsed: f32, delay: f32, duration: f32) -> f32 {
 #[derive(Clone, Copy)]
 struct WelcomeMotion {
     t: f32,
+    /// Advances only while frames are driven, so ambient motion holds still
+    /// while the window is inactive instead of jumping ahead on return.
+    scene: f32,
     exit: f32,
     /// 0 under Reduce Motion: fades only.
     travel: f32,
-    idle: f32,
 }
 
 impl OnboardingWindow {
@@ -965,29 +971,36 @@ impl OnboardingWindow {
     }
 
     fn tick_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let reduce_motion = cx.reduce_motion();
-        if self.welcome_at.is_none() && !reduce_motion {
-            self.welcome_at = Some(std::time::Instant::now());
-        }
-        let entering = self
-            .welcome_at
-            .is_some_and(|at| at.elapsed().as_secs_f32() < WELCOME_ENTRANCE_SECS);
-        if self.welcome_exit_at.is_some() || entering || (self.animated && !reduce_motion) {
+        let now = std::time::Instant::now();
+        self.reduce_motion = cx.reduce_motion();
+        let started = *self.welcome_at.get_or_insert(now);
+        let entering = !self.reduce_motion
+            && now.duration_since(started).as_secs_f32() < WELCOME_ENTRANCE_SECS;
+        let running =
+            self.welcome_exit_at.is_some() || entering || (self.animated && !self.reduce_motion);
+        if running {
+            if let Some(last) = self.welcome_tick {
+                self.welcome_scene += now.duration_since(last).as_secs_f32().min(0.1);
+            }
+            self.welcome_tick = Some(now);
             window.request_animation_frame();
+        } else {
+            self.welcome_tick = None;
         }
     }
 
     fn welcome_motion(&self) -> WelcomeMotion {
-        let moving = self.welcome_at.is_some();
+        let still = self.reduce_motion;
         WelcomeMotion {
-            t: self
-                .welcome_at
-                .map_or(WELCOME_ENTRANCE_SECS, |at| at.elapsed().as_secs_f32()),
+            t: match self.welcome_at {
+                Some(at) if !still => at.elapsed().as_secs_f32(),
+                _ => WELCOME_ENTRANCE_SECS,
+            },
+            scene: self.welcome_scene,
             exit: self.welcome_exit_at.map_or(0., |at| {
                 (at.elapsed().as_secs_f32() / WELCOME_EXIT.as_secs_f32()).clamp(0., 1.)
             }),
-            travel: if moving { 1. } else { 0. },
-            idle: if moving && self.animated { 1. } else { 0. },
+            travel: if still { 0. } else { 1. },
         }
     }
 
@@ -1016,7 +1029,7 @@ impl OnboardingWindow {
                 } = *cloud;
                 let cloud_width = cloud_width * scale * unit * (1. + 0.25 * gone * travel);
                 let span = width + cloud_width;
-                let x = (phase * span + m.t * pace * travel).rem_euclid(span) - cloud_width;
+                let x = (phase * span + m.scene * pace * travel).rem_euclid(span) - cloud_width;
                 div()
                     .absolute()
                     .left(px(x))
@@ -1027,14 +1040,15 @@ impl OnboardingWindow {
         };
         let mist = img("onboarding/mist.svg")
             .absolute()
-            .left(px(-width * 0.1 + 20. * (m.idle * m.t / 7.).sin() * travel))
+            .left(px(-width * 0.1 + 20. * (m.scene / 7.).sin() * travel))
             .top(px(-200. * gone * travel))
             .w(px(width * 1.2))
             .h(px(height * 1.5))
             .object_fit(ObjectFit::Fill)
             .opacity(clouds_in * (1. - gone));
-        let wave =
-            |period: f32, phase: f32| (m.idle * std::f32::consts::TAU * m.t / period + phase).sin();
+        let wave = |period: f32, phase: f32| {
+            (std::f32::consts::TAU * m.scene / period + phase).sin() * travel
+        };
         let light_in = ease(beat(m.t, 0.6, 3.)) * (1. - gone);
         // Twice the window's width so the sheet's edges stay off screen.
         let sun_size = width * 2.;
@@ -1058,7 +1072,7 @@ impl OnboardingWindow {
         };
 
         const GRAIN_JITTER: f32 = 200.;
-        let film_frame = if m.idle > 0. { (m.t * 24.) as u32 } else { 0 };
+        let film_frame = (m.scene * 24. * travel) as u32;
         let shift = |salt: u32| ((film_frame.wrapping_mul(salt) >> 7) % 200) as f32;
         let grain = img("onboarding/grain.svg")
             .absolute()
