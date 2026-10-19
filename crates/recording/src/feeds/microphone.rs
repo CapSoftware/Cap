@@ -3158,6 +3158,12 @@ pub mod synthetic {
                 .map_err(|error| anyhow::anyhow!("synthetic microphone lock: {error}"))
         }
 
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
         /// Delivers interleaved f32 samples whose first frame was captured at
         /// `timestamp`.
         pub async fn push(&self, samples: &[f32], timestamp: Timestamp) {
