@@ -293,8 +293,6 @@ pub async fn ensure_capture_media_permission(permission: OSPermission) -> Result
     macos::ensure_capture_media_permission(permission).await
 }
 
-/// Whether a camera or microphone request is still waiting on the user's
-/// answer to the macOS prompt.
 pub fn media_request_pending() -> bool {
     #[cfg(target_os = "macos")]
     return macos::media_request_pending();

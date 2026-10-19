@@ -76,7 +76,6 @@ impl MediaAccess {
         self.requesting == Some(permission)
     }
 
-    /// Re-read both statuses off the main thread.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.refresh.is_some() {
             return;
@@ -163,7 +162,6 @@ impl MediaAccess {
     }
 }
 
-/// Short action label for a missing permission: what clicking will do.
 pub fn action_label(status: OSPermissionStatus) -> &'static str {
     match status {
         OSPermissionStatus::Denied => "Turn on in Settings",

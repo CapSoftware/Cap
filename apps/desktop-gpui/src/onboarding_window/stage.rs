@@ -97,7 +97,6 @@ pub(super) struct StageState {
     /// permission still to do.
     focused: Option<OSPermission>,
     skipped: Vec<OSPermission>,
-    /// The permission whose action was taken and is now waiting on macOS.
     pub(super) waiting_on: Option<OSPermission>,
     shown: Option<(Stage, bool)>,
     shown_at: Instant,

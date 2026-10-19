@@ -1014,8 +1014,6 @@ struct CameraPreviewView {
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
     effect_issue: Option<(&'static str, &'static str)>,
-    /// Camera access is still being asked for: the prompt is up, so the
-    /// preview says so instead of spinning with no end.
     awaiting_access: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,

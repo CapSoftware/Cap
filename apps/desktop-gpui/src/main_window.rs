@@ -2587,8 +2587,6 @@ impl MainWindow {
     /// Select (or clear) the camera -- the same wiring as the camera panel's
     /// rows: this window's state plus the app-scoped feed, which opens or
     /// closes the preview bubble.
-    /// The pill for a picked device Cap cannot use yet, or `None` when access
-    /// is fine.
     fn access_pill(&self, permission: OSPermission, cx: &gpui::App) -> Option<PillState> {
         let access = MediaAccess::global(cx);
         let access = access.read(cx);
@@ -5770,8 +5768,6 @@ impl MainWindow {
         )
     }
 
-    /// Above a camera/mic list Cap cannot use yet: what is wrong and the one
-    /// button that fixes it.
     fn render_access_banner(
         &self,
         menu: DeviceMenu,
