@@ -227,10 +227,12 @@ def ffprobe_video(path):
         text=True,
     )
     if result.returncode != 0:
-        return {}
+        raise InvalidRun(f"ffprobe could not read {path.name}: {result.stderr.strip()[:200]}")
     data = json.loads(result.stdout)
     stream = (data.get("streams") or [{}])[0]
     fmt = data.get("format", {})
+    if not int(stream.get("nb_read_packets", 0)):
+        raise InvalidRun(f"ffprobe found no video frames in {path.name}")
     return {
         "out_frames": float(stream.get("nb_read_packets", 0)),
         "out_duration_s": float(fmt.get("duration", 0)),
