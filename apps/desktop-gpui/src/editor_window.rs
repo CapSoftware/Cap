@@ -70,6 +70,7 @@ use crate::{
     editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
+    project_save::PendingProjectSave,
     store::SettingsEnum,
     theme::Theme,
     ui,
@@ -1226,45 +1227,6 @@ enum Scrub {
 /// `PROJECT_SAVE_DEBOUNCE_MS` (`ED/context.ts:185`).
 const PROJECT_SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
-/// The debounced `project-config.json` write.
-///
-/// The Tauri editor's `scheduleProjectConfigSave` restarts a 250ms timer on
-/// every store change and `flushProjectConfig` serialises the whole config
-/// through `commands.setProjectConfig` (`ED/context.ts:1186-1252`), which is
-/// `config.write(&project_path)` on the Rust side (`lib.rs:3346-3360`). The
-/// pending value lives behind an `Rc<RefCell<..>>` so the close path -- which
-/// only ever gets an `&mut App` -- can force it out, the same shape the
-/// teleprompter's `onCloseRequested` save uses.
-#[derive(Default)]
-pub struct PendingProjectSave {
-    path: Option<PathBuf>,
-    config: Option<ProjectConfiguration>,
-}
-
-impl PendingProjectSave {
-    /// Drop a scheduled write without performing it -- the reload path after
-    /// an import, where the config on disk is newer than the editor's copy.
-    pub fn discard(&mut self) {
-        self.config = None;
-    }
-
-    pub fn flush(&mut self) {
-        if let Err(error) = self.try_flush() {
-            tracing::error!(path = ?self.path, "failed to persist project config: {error}");
-        }
-    }
-
-    pub fn try_flush(&mut self) -> std::io::Result<()> {
-        let (Some(path), Some(config)) = (&self.path, &self.config) else {
-            return Ok(());
-        };
-        config.write(path)?;
-        tracing::debug!(path = %path.display(), "project config written");
-        self.config = None;
-        Ok(())
-    }
-}
-
 /// Which edge -- or the whole box -- a live drag is moving.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DragKind {
@@ -2053,6 +2015,7 @@ impl EditorWindow {
             sharing: RecordingMeta::load_for_project(&project_path)
                 .ok()
                 .and_then(|meta| meta.sharing),
+            pending_save: Rc::new(RefCell::new(PendingProjectSave::new(project_path.clone()))),
             project_path,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2122,7 +2085,6 @@ impl EditorWindow {
             has_camera: false,
             multiple_clips: false,
             recorded_cursor_family: None,
-            pending_save: Rc::new(RefCell::new(PendingProjectSave::default())),
             save_task: None,
             name_input,
             hex_inputs,
@@ -2196,7 +2158,7 @@ impl EditorWindow {
     /// Hand the close path the pending write, so a `.cap` closed inside the
     /// 250ms debounce still lands on disk -- `onCleanup(() => { ...
     /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
-    pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
+    pub(crate) fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
         self.pending_save.clone()
     }
 
@@ -2238,7 +2200,6 @@ impl EditorWindow {
         self.has_camera = summary.has_camera;
         self.multiple_clips = summary.multiple_clips;
         self.recorded_cursor_family = summary.recorded_cursor_family;
-        self.pending_save.borrow_mut().path = Some(self.project_path.clone());
         // `zoom: zoomOutLimit()` is the store's *initial* value
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
         // the on-mount 80px fit then narrows it on the first render that knows
@@ -2525,11 +2486,18 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
-        self.pending_save.borrow_mut().config = Some(self.project.clone());
+        self.pending_save.borrow_mut().queue(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
             cx.background_executor().timer(PROJECT_SAVE_DEBOUNCE).await;
-            pending.borrow_mut().flush();
+            let Some(save) = pending.borrow().snapshot() else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { save.write() })
+                .await;
+            pending.borrow_mut().complete(result);
         }));
     }
 
@@ -12477,39 +12445,6 @@ mod tests {
         );
         dismiss_indexed_sidebar_menu(&mut menu);
         assert!(menu.is_none());
-    }
-
-    #[test]
-    fn failed_predelete_save_keeps_the_pending_edit_for_retry() {
-        let root = std::env::temp_dir().join(format!(
-            "cap-editor-save-delete-{}",
-            crate::store::new_uuid_v4()
-        ));
-        std::fs::create_dir(&root).unwrap();
-        let source = root.join("source.mp4");
-        std::fs::write(&source, b"original recording").unwrap();
-        let config = ProjectConfiguration {
-            aspect_ratio: Some(cap_project::AspectRatio::Square),
-            ..Default::default()
-        };
-        let mut pending = PendingProjectSave {
-            path: Some(source.clone()),
-            config: Some(config),
-        };
-        assert!(pending.try_flush().is_err());
-        assert!(pending.config.is_some());
-        assert_eq!(std::fs::read(&source).unwrap(), b"original recording");
-        pending.path = Some(root.clone());
-        pending.try_flush().unwrap();
-        assert!(pending.config.is_none());
-        let saved: ProjectConfiguration =
-            serde_json::from_slice(&std::fs::read(root.join("project-config.json")).unwrap())
-                .unwrap();
-        assert!(matches!(
-            saved.aspect_ratio,
-            Some(cap_project::AspectRatio::Square)
-        ));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
