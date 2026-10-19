@@ -1,0 +1,89 @@
+---
+title: "Neon"
+summary: "Use a Neon Object Storage bucket for new Cap uploads"
+tags: "Storage, Neon, S3"
+---
+
+Cap Pro can use [Neon Object Storage](https://neon.com/docs/storage/overview) through its S3-compatible API. New shareable-link uploads use the active Neon configuration. Existing recordings remain on their current provider.
+
+Neon Object Storage only accepts path-style requests. Cap detects Neon endpoints (`*.storage.*.neon.tech`) and uses path-style addressing for them automatically, including for **Test Connection**. No extra settings are needed.
+
+## Prepare Neon
+
+1. Use a Neon project in a region that supports Object Storage, such as AWS US East (Ohio) `aws-us-east-2`. See [Get started with Object Storage](https://neon.com/docs/storage/get-started) for the current list.
+2. Create a **private** bucket on the branch Cap should write to, usually your default branch. In the Neon Console, open the branch's **Object storage** tab and click **New bucket**, or run:
+
+   ```bash
+   neon buckets create cap-recordings
+   ```
+
+3. Create a dedicated credential with the `storage:read` and `storage:write` scopes. In the Neon Console, open **Settings > Credentials > Create credential**, or run:
+
+   ```bash
+   neon credentials create --scope storage:read --scope storage:write --name cap
+   ```
+
+   The secret is shown only once. Store it in a secrets manager before closing the dialog or terminal.
+4. Copy the branch's S3 endpoint and region. In the Neon Console, click **Connect**, open the **Storage** tab, and choose **Parameters only**. The endpoint looks like `https://br-cool-darkness-a1b2c3d4.storage.c-2.us-east-2.aws.neon.tech`.
+
+Neon credentials and buckets are scoped to a branch. A credential works on the branch it was created on and on that branch's descendants, so create both the bucket and the credential on the same branch.
+
+## Configure CORS
+
+Cap Desktop and the browser upload directly to the bucket with presigned URLs. Multipart browser uploads need `PUT` requests and access to the `ETag` response header. Save a CORS policy as `cors.json`:
+
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://cap.so"],
+      "AllowedMethods": ["GET", "HEAD", "PUT"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["ETag"],
+      "MaxAgeSeconds": 3000
+    }
+  ]
+}
+```
+
+Apply it with the AWS CLI, using the Neon credential and endpoint:
+
+```bash
+AWS_ACCESS_KEY_ID=nak_live_... AWS_SECRET_ACCESS_KEY=nsk_live_... \
+aws s3api put-bucket-cors \
+  --bucket cap-recordings \
+  --cors-configuration file://cors.json \
+  --region us-east-2 \
+  --endpoint-url https://br-cool-darkness-a1b2c3d4.storage.c-2.us-east-2.aws.neon.tech
+```
+
+Add your custom or self-hosted Cap origin when applicable. Do not add unrelated origins.
+
+## Connect Cap Desktop
+
+1. Open **Settings > Integrations > S3 Config**.
+2. Select **Neon**.
+3. Enter the credential's `token_id` (starts with `nak_`) as the **Access Key ID**.
+4. Enter the credential's `s3_secret_access_key` (starts with `nsk_`) as the **Secret Access Key**.
+5. Enter the branch's S3 endpoint as the **Endpoint**.
+6. Enter the bucket name and the branch's storage region, for example `us-east-2`.
+7. Click **Test Connection**.
+8. Save after the test succeeds.
+
+The connection test confirms Cap can reach the bucket. Verify a real upload as well because object operations and browser CORS use additional permissions.
+
+## Organization-managed storage
+
+Organization owners and admins can configure Neon centrally from **Dashboard > Settings > Organization > Integrations** by selecting **Neon** as the provider. Members cannot override an organization-managed configuration from Cap Desktop.
+
+Switching from Neon to Google Drive, another S3 provider, or Cap-managed storage changes future uploads only. Existing files are not automatically copied.
+
+## Verify before rollout
+
+1. Upload a non-sensitive sample.
+2. Confirm it appears in the bucket on the branch's **Object storage** tab.
+3. Play it through its Cap link as an allowed viewer.
+4. Confirm the browser reports no CORS failure.
+5. Keep the previous storage provider available until the sample succeeds.
+
+Never paste Neon credentials into an agent chat. An agent may guide and verify the configuration, but secret entry belongs in Cap's protected settings UI or another approved secret channel.

@@ -88,7 +88,7 @@ Core principles:
 ## Storage & Privacy
 
 - Storage targets: Cap Cloud, your own Google Drive (OAuth), any S3-compatible bucket, or fully local.
-- S3-compatible providers: AWS S3, Cloudflare R2, Supabase, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, and more.
+- S3-compatible providers: AWS S3, Cloudflare R2, Supabase, Neon, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, and more.
 - Security: end-to-end encryption for cloud storage; GDPR-friendly via bring-your-own storage in any region; HIPAA compliant with signed BAAs, plus self-hosting for full control.
 - Compliance: SOC 2 Type II, ISO 27001, and HIPAA compliant. Trust Portal: https://trust.cap.so.
 - Self-hosting documentation: https://cap.so/docs/self-hosting.
@@ -242,6 +242,7 @@ Cap offers free browser tools at https://cap.so/tools: WebM→MP4, MOV→MP4, AV
 - Webhooks: https://cap.so/docs/api/webhooks
 - S3 config (AWS): https://cap.so/docs/s3-config/aws-s3
 - S3 config (Cloudflare R2): https://cap.so/docs/s3-config/cloudflare-r2
+- S3 config (Neon): https://cap.so/docs/s3-config/neon
 - Commercial license: https://cap.so/docs/commercial-license
 - Self-hosting: https://cap.so/self-hosting
 - Loom alternative: https://cap.so/loom-alternative

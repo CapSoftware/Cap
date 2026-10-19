@@ -3,7 +3,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./helpers": "./src/helpers.ts"
+		"./helpers": "./src/helpers.ts",
+		"./s3": "./src/s3.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc -b",

@@ -212,6 +212,7 @@ export default function S3ConfigPage() {
 											<option value="aws">AWS S3</option>
 											<option value="cloudflare">Cloudflare R2</option>
 											<option value="supabase">Supabase</option>
+											<option value="neon">Neon</option>
 											<option value="minio">MinIO</option>
 											<option value="other">Other S3-Compatible</option>
 										</select>

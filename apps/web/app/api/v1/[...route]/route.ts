@@ -18,6 +18,7 @@ import {
 	stripe,
 	userIsPro,
 } from "@cap/utils";
+import { s3CompatibleClientOptions } from "@cap/utils/s3";
 import {
 	AgentManagement,
 	collectPasswordHashes,
@@ -1411,6 +1412,7 @@ const testAgentS3Config = Effect.fn("Agent.testS3Config")(function* (
 						accessKeyId: config.accessKeyId,
 						secretAccessKey: config.secretAccessKey,
 					},
+					...s3CompatibleClientOptions(config.endpoint),
 				});
 				await client.send(
 					new HeadBucketCommand({ Bucket: config.bucketName }),
