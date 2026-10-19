@@ -19,9 +19,21 @@ pub fn has_translucent_pixel(rgba: &[u8]) -> bool {
 pub fn flatten_onto_white(rgba: &[u8]) -> Vec<u8> {
     let mut rgba = rgba.to_vec();
     for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = u32::from(pixel[3]);
+        let alpha = pixel[3];
+        if alpha == 255 {
+            continue;
+        }
+        if alpha == 0 {
+            pixel[0] = 255;
+            pixel[1] = 255;
+            pixel[2] = 255;
+            pixel[3] = 255;
+            continue;
+        }
+        let a = u32::from(alpha);
+        let inv = 255 - a;
         for channel in &mut pixel[..3] {
-            *channel = ((u32::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+            *channel = ((u32::from(*channel) * a + 255 * inv + 127) / 255) as u8;
         }
         pixel[3] = 255;
     }
