@@ -49,14 +49,7 @@ pub fn flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
-    let mut png = std::io::Cursor::new(Vec::new());
-    image::codecs::png::PngEncoder::new(&mut png).write_image(
-        rgba,
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    )?;
-    Ok(png.into_inner())
+    crate::png::encode(rgba, width, height, image::ExtendedColorType::Rgba8)
 }
 
 pub fn write_png_file(
@@ -248,10 +241,31 @@ mod tests {
 
     #[test]
     fn png_round_trips_rgba() {
-        let rgba = [10, 20, 30, 40, 50, 60, 70, 255];
-        let png = encode_png_rgba(&rgba, 2, 1).unwrap();
-        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
-        assert_eq!(decoded.as_raw(), &rgba);
+        use image::ImageEncoder as _;
+
+        let samples = [
+            vec![10, 20, 30, 40, 50, 60, 70, 255],
+            (0..=255u8)
+                .flat_map(|value| [value, 255 - value, value.wrapping_mul(17), value])
+                .collect(),
+        ];
+        for (rgba, (width, height)) in samples.into_iter().zip([(2, 1), (16, 16)]) {
+            let png = encode_png_rgba(&rgba, width, height).unwrap();
+            let parallel =
+                crate::png::encode(&rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+            assert_eq!(png, parallel);
+            let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+            assert_eq!(decoded.dimensions(), (width, height));
+            assert_eq!(decoded.as_raw(), &rgba);
+
+            let mut reference = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut reference)
+                .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+                .unwrap();
+            let reference = image::load_from_memory(&reference).unwrap().to_rgba8();
+            assert_eq!(decoded.as_raw(), reference.as_raw());
+        }
+        assert!(encode_png_rgba(&[0, 0, 0, 0], 2, 1).is_err());
     }
 
     #[test]
