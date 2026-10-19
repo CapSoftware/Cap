@@ -116,6 +116,8 @@ global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
+# Round caps and joins for the onboarding doodles; already in the tree via gpui.
+lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
@@ -185,7 +187,6 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
-    "Win32_Media",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",

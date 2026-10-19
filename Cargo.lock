@@ -2160,6 +2160,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cap-audio",
+ "cap-camera-ffmpeg",
  "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",

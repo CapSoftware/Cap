@@ -1477,6 +1477,7 @@ async fn export_render_to_channel(
             let mut first_frame_data: Option<FirstFrameNv12> = None;
             let mut frame_count = 0u32;
             let mut consecutive_timeouts = 0u32;
+            let mut encoder_blocked = Duration::ZERO;
 
             loop {
                 let timeout_secs = if frame_count == 0 {
@@ -1539,7 +1540,10 @@ async fn export_render_to_channel(
                     });
                 }
 
-                if sender.send(export_frame).is_err() {
+                let send_started = std::time::Instant::now();
+                let sent = sender.send(export_frame);
+                encoder_blocked += send_started.elapsed();
+                if sent.is_err() {
                     warn!("Encoder dropped, stopping render forwarding");
                     if stop_on_encoder_drop {
                         return Err(cap_rendering::RenderingError::ImageLoadError(
@@ -1568,13 +1572,32 @@ async fn export_render_to_channel(
                 });
             }
 
-            Ok::<_, cap_rendering::RenderingError>(())
+            Ok::<_, cap_rendering::RenderingError>(encoder_blocked)
         };
 
+        cap_rendering::loop_stats::take();
         tokio::try_join!(render_future, forward_future)
     };
 
-    render_result?;
+    let (_, encoder_blocked) = render_result?;
+
+    // The loop_stats counters are process-wide, so an export that overlaps another one reports
+    // a mix of both. That is fine for profiling one export at a time; per-export numbers need
+    // the counters passed through the render loop instead of kept in statics.
+    if cap_rendering::loop_stats::enabled() {
+        let [decode, render, prefetch, join, render_send, frames] =
+            cap_rendering::loop_stats::take();
+        info!(
+            frames,
+            decode_ms = decode / 1000,
+            render_ms = render / 1000,
+            prefetch_ms = prefetch / 1000,
+            join_ms = join / 1000,
+            render_send_ms = render_send / 1000,
+            encoder_send_ms = encoder_blocked.as_millis() as u64,
+            "NV12 export loop stats"
+        );
+    }
 
     Ok(())
 }

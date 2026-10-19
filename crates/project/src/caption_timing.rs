@@ -370,7 +370,12 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
     if !captions.source_timed {
         let holds = timeline.hold_windows();
         let mappings = build_source_to_edited_mappings(timeline, recording_durations);
-        let to_source = |output: f64| -> Option<f32> {
+        let output_end = timeline.duration() as f32;
+        let to_source = |output: f32| -> Option<f32> {
+            if output == output_end {
+                return mappings.last().map(|mapping| mapping.source_end as f32);
+            }
+            let output = f64::from(output);
             let effective = output
                 - holds
                     .iter()
@@ -389,16 +394,16 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
             .segments
             .iter()
             .filter_map(|caption| {
-                let start = to_source(f64::from(caption.start))?;
-                let end = to_source(f64::from(caption.end))?;
+                let start = to_source(caption.start)?;
+                let end = to_source(caption.end)?;
                 let words = caption
                     .words
                     .iter()
                     .filter_map(|word| {
                         Some(CaptionWord {
                             text: word.text.clone(),
-                            start: to_source(f64::from(word.start))?,
-                            end: to_source(f64::from(word.end))?,
+                            start: to_source(word.start)?,
+                            end: to_source(word.end)?,
                         })
                     })
                     .collect();
@@ -519,6 +524,68 @@ mod tests {
         let track = &project.timeline.as_ref().unwrap().caption_segments;
         assert_eq!(track[0].start, 9.0);
         assert_eq!(track[0].end, 10.0);
+    }
+
+    #[test]
+    fn legacy_caption_migration_preserves_rounded_timeline_end() {
+        let durations = [41.0 / 15.0, 82.0 / 15.0];
+        for (timescale, hold_duration) in [
+            (1.0, 0.0),
+            (2.0, 0.0),
+            (0.5, 0.0),
+            (1.0, 0.1),
+            (1.0, 10000.1),
+        ] {
+            let mut timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+                "segments": [
+                    {"recordingSegment": 0, "start": 0.0, "end": durations[0], "timescale": timescale},
+                    {"recordingSegment": 1, "start": 0.0, "end": durations[1], "timescale": timescale}
+                ],
+                "transitions": [{"segmentIndex": 1, "type": "cross-fade", "duration": 0.2}],
+                "zoomSegments": []
+            }))
+            .unwrap();
+            if hold_duration > 0.0 {
+                timeline.text_segments.push(
+                    serde_json::from_value(serde_json::json!({
+                        "start": 1.0, "end": 1.0 + hold_duration, "layout": "fullscreen"
+                    }))
+                    .unwrap(),
+                );
+            }
+            let end = timeline.duration() as f32;
+            let mut project = project(false, end - 0.5, end);
+            project.timeline = Some(timeline);
+
+            synchronize_captions(&mut project, &durations);
+
+            let captions = project.captions.as_ref().unwrap();
+            assert_eq!(captions.segments.len(), 1, "{timescale}, {hold_duration}");
+            let source_end = durations.iter().sum::<f64>() as f32;
+            assert_eq!(captions.segments[0].end, source_end);
+            assert_eq!(captions.segments[0].words[0].end, source_end);
+            let track = &project.timeline.as_ref().unwrap().caption_segments;
+            assert_eq!(track.len(), 1);
+            assert!((track[0].end - f64::from(end)).abs() <= f64::from(end * f32::EPSILON));
+            let saved = serde_json::to_string(&project).unwrap();
+            synchronize_captions(&mut project, &durations);
+            assert_eq!(serde_json::to_string(&project).unwrap(), saved);
+        }
+    }
+
+    #[test]
+    fn legacy_caption_migration_rejects_times_beyond_rounded_timeline_end() {
+        let mut project = project(false, 8.0, 9.0_f32.next_up());
+        synchronize_captions(&mut project, &[10.0]);
+        assert!(project.captions.as_ref().unwrap().segments.is_empty());
+        assert!(
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .is_empty()
+        );
     }
 
     #[test]
