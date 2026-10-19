@@ -61,6 +61,39 @@ impl BufferedResampler {
         *self.resampler.input()
     }
 
+    fn accepts(&self, frame: &ffmpeg::frame::Audio) -> bool {
+        let input = self.resampler.input();
+        frame.format() == input.format
+            && frame.channel_layout() == input.channel_layout
+            && frame.rate() == input.rate
+    }
+
+    // A source can change format mid-stream (a device reopening with another
+    // config); swr rejects any frame that differs from the input it was built
+    // for, so rebuild it for the new input and keep the same output.
+    fn rebuild_for(&mut self, frame: &ffmpeg::frame::Audio) -> bool {
+        let output = self.output();
+        match ffmpeg::software::resampler(
+            (frame.format(), frame.channel_layout(), frame.rate()),
+            (output.format, output.channel_layout, output.rate),
+        ) {
+            Ok(resampler) => {
+                self.resampler = resampler;
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    format = ?frame.format(),
+                    channels = frame.channels(),
+                    rate = frame.rate(),
+                    "Dropping an audio frame no resampler accepts"
+                );
+                false
+            }
+        }
+    }
+
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
         if let Some(min_next_pts) = self.min_next_pts
             && let Some(pts) = frame.pts()
@@ -70,9 +103,16 @@ impl BufferedResampler {
 
         let pts = frame.pts().unwrap();
 
+        if !self.accepts(&frame) && !self.rebuild_for(&frame) {
+            return;
+        }
+
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
-        self.resampler.run(&frame, &mut resampled_frame).unwrap();
+        if let Err(error) = self.resampler.run(&frame, &mut resampled_frame) {
+            tracing::warn!(?error, "Dropping an audio frame the resampler rejected");
+            return;
+        }
 
         let resampled_pts =
             (pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64)) as i64;
@@ -411,6 +451,73 @@ mod test {
                 ((total as isize) - expected).abs() < 2_000,
                 "drained {total} output samples, expected about {expected}"
             );
+        }
+    }
+
+    mod input_changes {
+        use super::*;
+
+        fn frame(
+            format: format::Sample,
+            channels: i32,
+            rate: u32,
+            samples: usize,
+            pts: i64,
+        ) -> ffmpeg::frame::Audio {
+            let mut frame =
+                ffmpeg::frame::Audio::new(format, samples, ChannelLayout::default(channels));
+            frame.set_rate(rate);
+            frame.set_pts(Some(pts));
+            frame
+        }
+
+        #[test]
+        fn a_new_input_format_rebuilds_the_resampler_and_keeps_the_output() {
+            let packed_u8 = format::Sample::U8(cap_media_info::Type::Packed);
+            let mut bufferer = create_resampler(IN_RATE);
+            let output = bufferer.output();
+
+            bufferer.add_frame(make_input_frame(100, 0));
+            bufferer.add_frame(frame(
+                format::Sample::I16(cap_media_info::Type::Packed),
+                2,
+                200,
+                200,
+                100,
+            ));
+            bufferer.add_frame(frame(
+                format::Sample::F32(cap_media_info::Type::Planar),
+                3,
+                IN_RATE,
+                100,
+                200,
+            ));
+            bufferer.add_frame(frame(packed_u8, 8, IN_RATE, 100, 300));
+
+            let output_after = bufferer.output();
+            assert_eq!(output_after.format, output.format);
+            assert_eq!(output_after.channel_layout, output.channel_layout);
+            assert_eq!(output_after.rate, output.rate);
+            let samples = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
+            assert_eq!(samples, 400);
+        }
+
+        #[test]
+        fn frames_no_resampler_accepts_are_dropped() {
+            let mut bufferer = create_resampler(IN_RATE);
+
+            bufferer.add_frame(make_input_frame(100, 0));
+            bufferer.add_frame(frame(
+                format::Sample::U8(cap_media_info::Type::Packed),
+                1,
+                0,
+                100,
+                100,
+            ));
+            bufferer.add_frame(make_input_frame(100, 200));
+
+            let samples = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
+            assert_eq!(samples, 200);
         }
     }
 
