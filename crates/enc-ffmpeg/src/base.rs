@@ -153,6 +153,17 @@ impl EncoderBase {
     /// whereas [`Self::update_pts`] uses the encoder's own (output) time
     /// base. Mixing the two conventions plays non-48kHz microphones at the
     /// wrong speed.
+    /// Re-expresses the stored timestamp state, kept in input-rate samples,
+    /// at a new input rate.
+    pub fn rescale_input_rate(&mut self, from: f64, to: f64) {
+        if from <= 0.0 || to <= 0.0 || from == to {
+            return;
+        }
+        let rescale = |pts: i64| (pts as f64 * to / from).round() as i64;
+        self.first_pts = self.first_pts.map(rescale);
+        self.last_frame_pts = self.last_frame_pts.map(rescale);
+    }
+
     pub fn update_pts_with_rate(
         &mut self,
         frame: &mut frame::Frame,

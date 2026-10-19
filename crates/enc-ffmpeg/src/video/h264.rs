@@ -1627,8 +1627,12 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let area = (width as f64) * (height as f64);
     let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp as f64) as usize
+    // 1 Gbit/s is far past any real H.264 stream; the cap keeps a hostile
+    // bpp from overflowing the max-bitrate math below.
+    ((pixels_per_second * bpp as f64) as usize).min(MAX_BITRATE)
 }
+
+const MAX_BITRATE: usize = 1_000_000_000;
 
 #[cfg(test)]
 mod self_test_tests {
