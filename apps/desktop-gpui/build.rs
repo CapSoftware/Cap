@@ -3,6 +3,15 @@ mod diagnostic_build;
 
 fn main() {
     diagnostic_build::emit();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=native/exception_guard.m");
+        cc::Build::new()
+            .file("native/exception_guard.m")
+            .flag("-fobjc-exceptions")
+            .flag("-fno-objc-arc")
+            .compile("cap_exception_guard");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }

@@ -79,6 +79,34 @@ pub(crate) mod readback_delay {
     }
 }
 
+async fn wait_for_submission(
+    device: &wgpu::Device,
+    submission: &wgpu::SubmissionIndex,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> bool {
+    loop {
+        let Some(remaining) = timeout.checked_sub(readback_waited(started, frame_number)) else {
+            return false;
+        };
+        let device = device.clone();
+        let submission = submission.clone();
+        let waited = tokio::time::timeout(
+            remaining,
+            tokio::task::spawn_blocking(move || {
+                device.poll(wgpu::PollType::WaitForSubmissionIndex(submission))
+            }),
+        )
+        .await;
+        match waited {
+            Ok(Ok(Ok(_))) => return readback_waited(started, frame_number) <= timeout,
+            Ok(Ok(Err(wgpu::PollError::Timeout))) => {}
+            _ => return false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FinishEncoderTimings {
     pub wait_previous_duration: std::time::Duration,
@@ -1593,28 +1621,19 @@ impl PendingSurface {
     pub async fn wait(
         self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        submission: wgpu::SubmissionIndex,
     ) -> Result<SurfaceFrame, RenderingError> {
-        let completed = Arc::new(AtomicBool::new(false));
-        let callback_completed = Arc::clone(&completed);
-        queue.on_submitted_work_done(move || {
-            callback_completed.store(true, Ordering::Release);
-        });
         let started = Instant::now();
-        let mut poll_count = 0u32;
-        while !completed.load(Ordering::Acquire) {
-            if started.elapsed() > gpu_buffer_wait_timeout(false) {
-                return Err(RenderingError::BufferMapWaitingFailed);
-            }
-            device.poll(wgpu::PollType::Poll)?;
-            poll_count += 1;
-            if poll_count < 10 {
-                tokio::task::yield_now().await;
-            } else if poll_count < 100 {
-                tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
+        if !wait_for_submission(
+            device,
+            &submission,
+            started,
+            self.frame_number,
+            gpu_buffer_wait_timeout(false),
+        )
+        .await
+        {
+            return Err(RenderingError::BufferMapWaitingFailed);
         }
 
         Ok(SurfaceFrame {
@@ -1631,6 +1650,7 @@ impl PendingSurface {
 pub struct PendingReadback {
     readiness_phase: Option<crate::readiness::Phase>,
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    submission: wgpu::SubmissionIndex,
     mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     padded_bytes_per_row: u32,
@@ -1665,52 +1685,28 @@ impl PendingReadback {
     }
 
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
-        let mut poll_count = 0u32;
         let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
-
-        loop {
-            if readback_waited(start_time, self.frame_number) > timeout_duration {
+        let completed = wait_for_submission(
+            device,
+            &self.submission,
+            start_time,
+            self.frame_number,
+            gpu_buffer_wait_timeout(self.export_deadlines),
+        )
+        .await;
+        match (completed, self.rx.try_recv()) {
+            (true, Ok(Ok(()))) => {}
+            (_, Ok(Err(error))) => {
+                self.unmap();
+                return Err(RenderingError::BufferMapFailed(error));
+            }
+            _ => {
                 tracing::error!(
                     frame_number = self.frame_number,
-                    elapsed_secs = start_time.elapsed().as_secs(),
-                    poll_count = poll_count,
-                    "GPU buffer mapping timed out after {}s",
-                    timeout_duration.as_secs()
+                    elapsed_ms = start_time.elapsed().as_millis() as u64,
+                    "GPU buffer mapping timed out or was abandoned"
                 );
                 return Err(self.cancel());
-            }
-
-            match self.rx.try_recv() {
-                Ok(result) => match result {
-                    Ok(()) => break,
-                    Err(error) => {
-                        self.unmap();
-                        return Err(RenderingError::BufferMapFailed(error));
-                    }
-                },
-                Err(oneshot::error::TryRecvError::Empty) => {
-                    device.poll(wgpu::PollType::Poll)?;
-                    poll_count += 1;
-                    if poll_count < 10 {
-                        tokio::task::yield_now().await;
-                    } else if poll_count < 100 {
-                        tokio::time::sleep(std::time::Duration::from_micros(100)).await;
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    }
-                    if poll_count.is_multiple_of(10000) {
-                        tracing::warn!(
-                            frame_number = self.frame_number,
-                            poll_count = poll_count,
-                            elapsed_ms = start_time.elapsed().as_millis() as u64,
-                            "GPU buffer mapping taking longer than expected"
-                        );
-                    }
-                }
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(self.cancel());
-                }
             }
         }
 
@@ -1899,7 +1895,7 @@ impl PipelinedGpuReadback {
         if let Some(phase) = &phase {
             phase.mark("submit_start");
         }
-        queue.submit(std::iter::once(render_encoder.finish()));
+        let submission = queue.submit(std::iter::once(render_encoder.finish()));
         if let Some(phase) = &phase {
             phase.mark("submit_returned");
         }
@@ -1917,6 +1913,7 @@ impl PipelinedGpuReadback {
             readiness_phase: phase,
             mapped: true,
             rx,
+            submission,
             buffer,
             padded_bytes_per_row,
             width: uniforms.output_size.0,
@@ -1944,17 +1941,13 @@ pub struct RenderSession {
     export_deadlines: bool,
 }
 
-/// The blur result cache copies into session textures, so only render hosts
-/// that enable it need them to be copy destinations.
+/// The blurred-background cache copies its result into the current session
+/// texture.
 fn session_texture_usage() -> wgpu::TextureUsages {
-    let usage = wgpu::TextureUsages::TEXTURE_BINDING
+    wgpu::TextureUsages::TEXTURE_BINDING
         | wgpu::TextureUsages::RENDER_ATTACHMENT
-        | wgpu::TextureUsages::COPY_SRC;
-    if crate::blur_result_cache_enabled() {
-        usage | wgpu::TextureUsages::COPY_DST
-    } else {
-        usage
-    }
+        | wgpu::TextureUsages::COPY_SRC
+        | wgpu::TextureUsages::COPY_DST
 }
 
 impl RenderSession {
@@ -2305,11 +2298,11 @@ pub async fn finish_encoder_bgra_surface(
     if let Some(phase) = &phase {
         phase.mark("submit_start");
     }
-    queue.submit(std::iter::once(encoder.finish()));
+    let submission = queue.submit(std::iter::once(encoder.finish()));
     if let Some(phase) = &phase {
         phase.mark("submit_returned");
     }
-    let result = pending.wait(device, queue).await;
+    let result = pending.wait(device, submission).await;
     if let Some(phase) = phase {
         phase.finish(if result.is_ok() {
             "frame_ready"
@@ -2900,9 +2893,9 @@ mod surface_output_tests {
                 )
                 .await
                 .expect("BGRA output");
-            queue.submit(std::iter::once(encoder.finish()));
+            let submission = queue.submit(std::iter::once(encoder.finish()));
             let frame = pending
-                .wait(&device, &queue)
+                .wait(&device, submission)
                 .await
                 .expect("BGRA completion");
             expected.push(bgra_first_pixel(&frame));
@@ -2929,8 +2922,8 @@ mod surface_output_tests {
             .encode(device, &mut encoder, source, width, height, 0, 30)
             .await
             .expect("BGRA submission");
-        queue.submit(std::iter::once(encoder.finish()));
-        pending.wait(device, queue).await.expect("BGRA output")
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        pending.wait(device, submission).await.expect("BGRA output")
     }
 
     #[tokio::test]
