@@ -280,6 +280,16 @@ impl OnboardingWindow {
         }
         this.arm_poll(window, cx);
         this.arm_demo(window, cx);
+        #[cfg(debug_assertions)]
+        if let Ok(name) = std::env::var("CAP_GPUI_ONBOARDING_ACT")
+            && let Some(permission) = OSPermission::ALL
+                .into_iter()
+                .find(|permission| format!("{permission:?}").eq_ignore_ascii_case(&name))
+        {
+            cx.defer_in(window, move |this, window, cx| {
+                this.act(permission, window, cx)
+            });
+        }
         this
     }
 

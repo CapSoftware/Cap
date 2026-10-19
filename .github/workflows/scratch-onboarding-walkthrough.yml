@@ -1,0 +1,205 @@
+name: Scratch GPUI onboarding walkthrough
+
+# Fresh-install walkthrough of #2708's onboarding on a clean macOS runner:
+# screenshots of every step, the permission requests (does Cap land in the
+# TCC lists?), and the granted state. The app bundle gets its own bundle id
+# and data dir, and TCC grants only the runner's own tools (screencapture,
+# osascript), never the app, until the granted phase. Runs only on pushes to
+# this scratch branch.
+on:
+  push:
+    branches: [ci/onboarding-walkthrough]
+
+jobs:
+  walkthrough:
+    runs-on: blacksmith-12vcpu-macos-15
+    timeout-minutes: 120
+    env:
+      TARGET: aarch64-apple-darwin
+      BUNDLE_ID: so.cap.desktop.ci-onboarding
+      SHOTS: ${{ github.workspace }}/walkthrough
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build (debug, for the step and request hooks)
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$TARGET" --bin cap-gpui
+
+      - name: App bundle
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/Cap CI Onboarding.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
+          cp "apps/desktop-gpui/target/$TARGET/debug/cap-gpui" "$app/Contents/MacOS/cap-gpui"
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$app/Contents/Frameworks/Spacedrive.framework"
+          python3 - "$app" <<'PY'
+          import plistlib, sys
+          info = plistlib.load(open("apps/desktop-gpui/Info.plist", "rb"))
+          info.update({
+              "CFBundleIdentifier": "so.cap.desktop.ci-onboarding",
+              "CFBundleName": "Cap CI Onboarding",
+              "CFBundleDisplayName": "Cap CI Onboarding",
+              "CFBundleExecutable": "cap-gpui",
+              "CFBundlePackageType": "APPL",
+              "CFBundleShortVersionString": "0.6.2",
+              "CFBundleVersion": "0.6.2",
+              "LSMinimumSystemVersion": "13.0",
+          })
+          plistlib.dump(info, open(sys.argv[1] + "/Contents/Info.plist", "wb"))
+          print(sorted(info))
+          PY
+          codesign --force -s - "$app"
+          codesign -dv "$app" 2>&1 | grep -E "Identifier|Signature"
+          echo "APP=$app" >> "$GITHUB_ENV"
+
+      - name: Runner permissions (screenshots and keystrokes only)
+        run: |
+          set -euo pipefail
+          sudo mdutil -a -i off || true
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          {
+            echo /usr/sbin/screencapture
+            echo /usr/bin/osascript
+            p=$$
+            while [ "$p" -gt 1 ]; do
+              ps -o comm= -p "$p"
+              p=$(ps -o ppid= -p "$p" | tr -d ' ')
+            done
+          } | sort -u | grep '^/' > "$RUNNER_TEMP/tools"
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row" || true
+            done
+            echo "granted $client"
+          done < "$RUNNER_TEMP/tools"
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+          mkdir -p "$SHOTS"
+
+      - name: Walkthrough
+        run: |
+          set -uo pipefail
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+
+          tcc_rows() {
+            echo "== $1"
+            for d in "$db" "$user_db"; do
+              sudo sqlite3 "$d" "select service, client, auth_value, auth_reason from access where client = '$BUNDLE_ID'" | sed "s|^|$(basename "$(dirname "$(dirname "$d")")"): |"
+            done
+          }
+          quit_all() {
+            pkill -f "Cap CI Onboarding.app" || true
+            pkill -x "System Settings" || true
+            pkill -x UserNotificationCenter || true
+            sleep 2
+          }
+          fresh_dir() {
+            local dir="$RUNNER_TEMP/data-$1"
+            rm -rf "$dir"; mkdir -p "$dir"
+            if [ "${2:-}" = seeded ]; then
+              printf '{"general_settings":{"hasCompletedStartup":true,"hasCompletedOnboarding":false}}' > "$dir/store"
+            fi
+            echo "$dir"
+          }
+          launch() {
+            local dir="$1"; shift
+            open -n "$APP" --env "CAP_GPUI_APP_DATA_DIR=$dir" "$@"
+          }
+          shot() {
+            screencapture -x "$SHOTS/$1.png"
+            echo "shot $1"
+          }
+
+          tcc_rows "before anything"
+
+          # A. A true fresh install: no store, no grants.
+          dir=$(fresh_dir fresh)
+          launch "$dir"
+          sleep 12
+          shot 01-fresh-launch
+          osascript -e 'tell application "System Events" to key code 49' || true
+          sleep 4
+          shot 02-after-welcome
+          tcc_rows "after fresh launch"
+          quit_all
+
+          # B. Every onboarding step, startup already seen.
+          i=10
+          for step in Permissions Overview Instant Studio Screenshot Toggle Shortcuts Faq; do
+            dir=$(fresh_dir "step-$step" seeded)
+            launch "$dir" --env "CAP_GPUI_ONBOARDING_STEP=$step"
+            sleep 9
+            shot "$i-step-$step"
+            quit_all
+            i=$((i + 1))
+          done
+
+          # C. Asking for each required permission on a fresh bundle: the
+          # request must put Cap in the list (a TCC row for the bundle).
+          for permission in ScreenRecording Accessibility; do
+            dir=$(fresh_dir "act-$permission" seeded)
+            launch "$dir" --env "CAP_GPUI_ONBOARDING_ACT=$permission"
+            sleep 6
+            shot "30-request-$permission"
+            sleep 6
+            shot "31-request-$permission-after-grace"
+            tcc_rows "after requesting $permission"
+            quit_all
+          done
+
+          # D. Both required permissions granted to the bundle.
+          now=$(date +%s)
+          for service in kTCCServiceScreenCapture kTCCServiceAccessibility; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$BUNDLE_ID',0,2,4,1,'UNUSED',0,$now);"
+          done
+          sudo killall tccd || true
+          sleep 2
+          dir=$(fresh_dir granted seeded)
+          launch "$dir" --env "CAP_GPUI_ONBOARDING_STEP=Permissions"
+          sleep 12
+          shot 40-granted-permissions
+          tcc_rows "granted"
+          quit_all
+
+          ls -la "$SHOTS"
+          log show --last 30m --predicate 'process == "tccd" AND eventMessage CONTAINS "ci-onboarding"' --style compact 2>/dev/null | tail -60 > "$SHOTS/tccd.log" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: onboarding-walkthrough
+          path: walkthrough
+          if-no-files-found: warn
