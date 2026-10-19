@@ -808,6 +808,9 @@ pub fn recent_media() -> Vec<RecentItem> {
 const THUMBNAIL_WIDTH: u32 = 392;
 const THUMBNAIL_HEIGHT: u32 = 224;
 
+/// IDCT-scaled JPEG thumbnails are not the old full-decode pixels.
+const THUMBNAIL_CACHE_GENERATION: &str = "idct";
+
 /// Cached thumbnails re-encode at 80: `display.jpg` is itself a quality-75
 /// JPEG, and at a few hundred pixels wide the double re-encode stays clean
 /// while the biggest cache file lands around 25KB.
@@ -959,9 +962,9 @@ impl CacheSlot {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
                 prefix: if source.file_name().is_some_and(|name| name == "preview.jpg") {
-                    "preview-thumbnail".to_string()
+                    format!("preview-thumbnail-{THUMBNAIL_CACHE_GENERATION}")
                 } else {
-                    "thumbnail".to_string()
+                    format!("thumbnail-{THUMBNAIL_CACHE_GENERATION}")
                 },
                 mtime,
             });
@@ -969,7 +972,7 @@ impl CacheSlot {
         Some(Self {
             dir: thumbnail_cache_dir(),
             prefix: format!(
-                "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
+                "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}-{THUMBNAIL_CACHE_GENERATION}",
                 fnv1a64(source.to_string_lossy().as_bytes())
             ),
             mtime,
@@ -1094,14 +1097,29 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     // Sniff rather than trust the extension: `list_screenshots` finds the
     // preview by extension scan, and a bundle could hold a mislabelled file.
     let format = image::guess_format(&bytes).ok()?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
-
-    let (width, height) = (decoded.width().max(1), decoded.height().max(1));
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .max(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .min(1.0);
-    let target_width = ((width as f32 * scale).round() as u32).max(1);
-    let target_height = ((height as f32 * scale).round() as u32).max(1);
+    let (decoded, width, height) = if format == image::ImageFormat::Jpeg {
+        crate::jpeg_thumbnail::decode_jpeg_thumbnail(&bytes, |width, height| {
+            let (_, target_width, target_height) = crate::jpeg_thumbnail::cover_target(
+                width,
+                height,
+                THUMBNAIL_WIDTH,
+                THUMBNAIL_HEIGHT,
+            );
+            (target_width, target_height)
+        })
+        .or_else(|| {
+            let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+            let dimensions = (decoded.width(), decoded.height());
+            Some((decoded, dimensions.0, dimensions.1))
+        })?
+    } else {
+        let decoded = image::load_from_memory_with_format(&bytes, format).ok()?;
+        let dimensions = (decoded.width(), decoded.height());
+        (decoded, dimensions.0, dimensions.1)
+    };
+    let (width, height) = (width.max(1), height.max(1));
+    let (scale, target_width, target_height) =
+        crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
@@ -2175,7 +2193,11 @@ mod tests {
         let file = slot.file();
         assert_eq!(file.parent(), Some(screenshots.as_path()));
         let name = file.file_name().unwrap().to_str().unwrap();
-        assert!(name.starts_with("thumbnail-") && name.ends_with(".jpg"));
+        assert!(
+            name.starts_with(&format!("thumbnail-{THUMBNAIL_CACHE_GENERATION}-"))
+                && name.ends_with(".jpg"),
+            "{name}"
+        );
 
         let png = root.join("shot.png");
         std::fs::write(&png, b"png bytes").unwrap();
@@ -2188,8 +2210,11 @@ mod tests {
         assert!(
             shared
                 .prefix
-                .contains(&format!("{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}")),
-            "the target size is part of the key, so a size change re-decodes"
+                .contains(&format!("{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}"))
+                && shared
+                    .prefix
+                    .ends_with(&format!("-{THUMBNAIL_CACHE_GENERATION}")),
+            "the target size and idct generation are part of the key"
         );
 
         assert!(

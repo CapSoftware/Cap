@@ -1895,22 +1895,7 @@ fn decode_scaled_rgba(path: &Path, max: u32) -> Option<image::RgbaImage> {
 }
 
 fn decode_jpeg_thumbnail(bytes: &[u8], max: u32) -> Option<(image::DynamicImage, u32, u32)> {
-    let mut decoder = jpeg_decoder::Decoder::new(bytes);
-    decoder.read_info().ok()?;
-    let info = decoder.info()?;
-    let requested = max.clamp(1, u16::MAX as u32) as u16;
-    let (width, height) = decoder.scale(requested, requested).ok()?;
-    let pixels = decoder.decode().ok()?;
-    let decoded = match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        jpeg_decoder::PixelFormat::L8 => image::DynamicImage::ImageLuma8(
-            image::GrayImage::from_raw(width as u32, height as u32, pixels)?,
-        ),
-        _ => return None,
-    };
-    Some((decoded, info.width as u32, info.height as u32))
+    crate::jpeg_thumbnail::decode_jpeg_thumbnail(bytes, |_, _| (max, max))
 }
 
 /// [`decode_scaled_rgba`] in gpui's BGRA order.
