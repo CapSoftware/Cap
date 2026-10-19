@@ -20,6 +20,7 @@ mod deeplink;
 mod dev_restore;
 mod devices;
 mod diagnostics;
+mod doodle;
 mod editor_audio;
 mod editor_canvas;
 mod editor_clips;
@@ -41,10 +42,13 @@ mod import;
 mod installer;
 mod library;
 mod main_window;
+mod media_access;
 mod menus;
 mod mode_select_window;
 mod onboarding_audio;
+mod onboarding_doodles;
 mod onboarding_window;
+mod permission_guide;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
@@ -62,7 +66,10 @@ mod screenshot_export;
 mod session;
 mod settings_pages;
 mod settings_window;
+mod sign_in;
 mod single_instance;
+#[cfg(debug_assertions)]
+mod snapshot;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -79,7 +86,7 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 432.;
+const MAIN_WINDOW_HEIGHT: f32 = 435.;
 
 /// The corner radius the native material is clipped to. `radius = 16` for
 /// material `"panel"` on both visual systems in
@@ -264,6 +271,8 @@ fn main() {
         store::mark_handoff_session();
     }
 
+    #[cfg(target_os = "macos")]
+    platform::install_appkit_exception_guards();
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
         if argument.contains("token") || argument.contains("api_key") {
@@ -308,7 +317,9 @@ fn main() {
         crate::theme::init(cx);
 
         let session = RecordingSession::init(cx);
+        crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
+        crate::media_access::MediaAccess::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -317,6 +328,13 @@ fn main() {
             .as_ref()
             .and_then(|restore| restore.main_window_bounds(main_size, cx))
             .unwrap_or_else(|| Bounds::centered(None, main_size, cx));
+        // A first run always lands in onboarding, and these two flags are a
+        // store read rather than the gate's TCC queries -- so the main window
+        // starts hidden instead of flashing up before onboarding replaces it.
+        // Linux keeps the gate: its main window tracks retained visibility.
+        let first_run = cfg!(not(target_os = "linux"))
+            && (!crate::store::has_completed_startup()
+                || !crate::store::has_completed_onboarding());
         let window_handle = cx
             .open_window(
                 WindowOptions {
@@ -362,6 +380,8 @@ fn main() {
                     },
                     is_resizable: false,
                     is_minimizable: cfg!(target_os = "windows"),
+                    focus: !first_run,
+                    show: !first_run,
                     ..Default::default()
                 },
                 {
@@ -419,17 +439,21 @@ fn main() {
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
         // the gate runs off-main and onboarding opens a beat after the main
-        // window instead of holding it back.
-        cx.spawn(async move |cx| {
-            let show_onboarding = cx
-                .background_executor()
-                .spawn(async { crate::store::should_show_onboarding() })
-                .await;
-            if show_onboarding {
-                cx.update(app_windows::open_onboarding);
-            }
-        })
-        .detach();
+        // window instead of holding it back. A first run skips the gate.
+        if first_run {
+            app_windows::open_onboarding(cx);
+        } else {
+            cx.spawn(async move |cx| {
+                let show_onboarding = cx
+                    .background_executor()
+                    .spawn(async { crate::store::should_show_onboarding() })
+                    .await;
+                if show_onboarding {
+                    cx.update(app_windows::open_onboarding);
+                }
+            })
+            .detach();
+        }
         // `CAP_GPUI_AUTO_TRAY` / `CAP_GPUI_TRAY_DUMP`: the tray's harness path.
         tray::drive_from_env(cx);
         // `CAP_GPUI_AUTO_CLOSE=settings|main:<secs>`: run the ⌘W body against
@@ -587,6 +611,8 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        #[cfg(debug_assertions)]
+        snapshot::arm_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
