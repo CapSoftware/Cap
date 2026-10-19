@@ -788,7 +788,7 @@ impl ZoomTransformTimeline {
         };
         // One sample per step across the duration, plus one trailing sample so
         // a lookup right at the end always has a lerp partner.
-        let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
+        let total_samples = ((duration_secs * 1000.0 / STEP_MS).ceil() as usize).saturating_add(2);
         if zoom_segments.is_empty() {
             return Self {
                 samples: Vec::new(),
@@ -941,7 +941,9 @@ impl ZoomTransformTimeline {
         }
         let need_ms = (f64::from(timeline_secs).max(0.0)) * 1000.0;
         // +2: floor index plus its lerp partner.
-        let need_samples = ((need_ms / STEP_MS).ceil() as usize + 2).min(self.total_samples);
+        let need_samples = ((need_ms / STEP_MS).ceil() as usize)
+            .saturating_add(2)
+            .min(self.total_samples);
         while self.samples.len() < need_samples && self.state.is_some() {
             self.advance_one_step();
         }
