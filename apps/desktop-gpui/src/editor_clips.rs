@@ -34,9 +34,9 @@ use cap_project::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, RenderImage, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, WindowHandle, div, img,
-    prelude::FluentBuilder, px, svg,
+    ParentElement, Pixels, Point, RenderImage, SharedString, StatefulInteractiveElement as _,
+    Styled, StyledImage as _, UniformListScrollHandle, Window, WindowHandle, div, img,
+    prelude::FluentBuilder, px, svg, uniform_list,
 };
 
 use crate::{
@@ -283,12 +283,11 @@ pub(crate) fn move_clip(
 
 /// `computeDropIndex` (`ClipsSidebar.tsx:692-703`): the insertion point is
 /// after every card whose vertical midpoint the pointer has passed.
-pub(crate) fn compute_drop_index(pointer_y: Pixels, cards: &[Option<Bounds<Pixels>>]) -> usize {
-    let mut insertion = 0;
-    for (index, bounds) in cards.iter().enumerate() {
-        let Some(bounds) = bounds else { continue };
-        if pointer_y > bounds.origin.y + bounds.size.height / 2. {
-            insertion = index + 1;
+fn compute_drop_index(pointer_y: Pixels, cards: &[ClipCardBounds]) -> usize {
+    let mut insertion = cards.first().map_or(0, |card| card.index);
+    for card in cards {
+        if pointer_y > card.bounds.origin.y + card.bounds.size.height / 2. {
+            insertion = card.index + 1;
         }
     }
     insertion
@@ -296,6 +295,7 @@ pub(crate) fn compute_drop_index(pointer_y: Pixels, cards: &[Option<Bounds<Pixel
 
 /// `startClipDrag`'s activation threshold (`:729`).
 const DRAG_THRESHOLD_PX: f32 = 5.;
+const CLIP_CARD_GAP: f32 = 8.;
 
 // ---------------------------------------------------------------------------
 // State
@@ -310,6 +310,11 @@ enum ClipThumb {
     Loading,
     Ready(Arc<RenderImage>),
     Failed,
+}
+
+struct ClipCardBounds {
+    index: usize,
+    bounds: Bounds<Pixels>,
 }
 
 /// `MAX_THUMBNAIL_LOADS` (`:93`).
@@ -345,10 +350,9 @@ pub(crate) struct ClipsState {
     drag: Option<ClipDrag>,
     /// `dropIndex`.
     drop_index: Option<usize>,
-    /// Every card's painted bounds, written by a per-card canvas probe --
-    /// `getBoundingClientRect` for `computeDropIndex`.
-    card_bounds: Rc<RefCell<Vec<Option<Bounds<Pixels>>>>>,
-    scroll: ScrollHandle,
+    /// Visible card bounds retain timeline indices for scrolled drop targets.
+    card_bounds: Rc<RefCell<Vec<ClipCardBounds>>>,
+    scroll: UniformListScrollHandle,
     thumbs: HashMap<ThumbKey, ClipThumb>,
     thumbs_inflight: usize,
 }
@@ -367,7 +371,7 @@ impl Default for ClipsState {
             drag: None,
             drop_index: None,
             card_bounds: Rc::new(RefCell::new(Vec::new())),
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
             thumbs: HashMap::new(),
             thumbs_inflight: 0,
         }
@@ -927,12 +931,16 @@ impl EditorWindow {
                     .min_h_0()
                     .mx(px(-4.))
                     .px(px(4.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.clips.scroll)
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when(self.clip_segments().is_empty(), |this| {
+                        this.overflow_y_scroll()
+                    })
                     .child(if self.clip_segments().is_empty() {
                         self.render_clips_empty().into_any_element()
                     } else {
-                        self.render_clip_list(cx).into_any_element()
+                        self.render_clip_list(cx)
                     }),
             )
     }
@@ -981,15 +989,49 @@ impl EditorWindow {
     }
 
     /// The card list (`:852-964`).
-    fn render_clip_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_clip_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let count = self.clip_segments().len();
-        self.clips.card_bounds.borrow_mut().resize(count, None);
+        self.clips.card_bounds.borrow_mut().clear();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .children((0..count).map(|index| self.render_clip_card(index, cx)))
+        // Offscreen virtual rows lose their key handlers. Keep the rename input
+        // mounted until editing ends so Enter and Escape still reach it.
+        if self.clips.editing.is_some() {
+            let scroll = self.clips.scroll.0.borrow().base_handle.clone();
+            return div()
+                .id("clips-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(CLIP_CARD_GAP))
+                        .children((0..count).map(|index| self.render_clip_card(index, cx))),
+                )
+                .into_any_element();
+        }
+
+        uniform_list(
+            "clips-list",
+            count,
+            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                range
+                    .map(|index| {
+                        div()
+                            .pb(px(CLIP_CARD_GAP))
+                            .child(this.render_clip_card(index, cx))
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(&self.clips.scroll)
+        .flex_1()
+        .min_h_0()
+        // Clip the last row's gap so the scroll range matches the original list.
+        .mb(px(-CLIP_CARD_GAP))
+        .into_any_element()
     }
 
     fn render_clip_card(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1024,10 +1066,7 @@ impl EditorWindow {
             let cell = self.clips.card_bounds.clone();
             gpui::canvas(
                 move |bounds, _window, _cx| {
-                    let mut slots = cell.borrow_mut();
-                    if index < slots.len() {
-                        slots[index] = Some(bounds);
-                    }
+                    cell.borrow_mut().push(ClipCardBounds { index, bounds });
                 },
                 |_, _, _, _| {},
             )
@@ -4076,18 +4115,37 @@ mod tests {
     /// card whose midpoint the pointer has passed.
     #[test]
     fn drop_index_follows_the_card_midpoints() {
-        let card = |top: f32| {
-            Some(Bounds {
+        let card = |index, top: f32| ClipCardBounds {
+            index,
+            bounds: Bounds {
                 origin: point(px(0.), px(top)),
                 size: size(px(100.), px(72.)),
-            })
+            },
         };
-        let cards = vec![card(0.), card(80.), card(160.)];
+        let cards = vec![card(0, 0.), card(1, 80.), card(2, 160.)];
         assert_eq!(compute_drop_index(px(-10.), &cards), 0);
         assert_eq!(compute_drop_index(px(35.), &cards), 0);
         assert_eq!(compute_drop_index(px(37.), &cards), 1);
         assert_eq!(compute_drop_index(px(120.), &cards), 2);
         assert_eq!(compute_drop_index(px(500.), &cards), 3);
+    }
+
+    #[test]
+    fn scrolled_drop_targets_keep_the_visible_clips_timeline_indices() {
+        let cards = [46, 47, 48].map(|index| ClipCardBounds {
+            index,
+            bounds: Bounds {
+                origin: point(px(0.), px((index - 46) as f32 * 80. - 20.)),
+                size: size(px(100.), px(72.)),
+            },
+        });
+        assert_eq!(compute_drop_index(px(0.), &cards), 46);
+        assert_eq!(compute_drop_index(px(16.), &cards), 46);
+        assert_eq!(compute_drop_index(px(17.), &cards), 47);
+        assert_eq!(compute_drop_index(px(96.), &cards), 47);
+        assert_eq!(compute_drop_index(px(97.), &cards), 48);
+        assert_eq!(compute_drop_index(px(300.), &cards), 49);
+        assert_eq!(compute_drop_index(px(0.), &[]), 0);
     }
 
     #[test]

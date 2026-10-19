@@ -690,6 +690,7 @@ pub struct Feeds {
     pub microphone: Option<String>,
     /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
     pub mic_level_db: f64,
+    mic_level_shown: Arc<std::sync::atomic::AtomicU64>,
     pub camera_error: Option<String>,
     camera_preview_parked: bool,
     /// Bumped on every camera/mic selection change; async completions from a
@@ -712,6 +713,7 @@ pub struct Feeds {
     // Channel-holding tasks; dropping them ends the pumps.
     _frame_pump: Option<gpui::Task<()>>,
     _meter_pump: Option<gpui::Task<()>>,
+    mic_meter_tx: Option<flume::Sender<MicrophoneSamples>>,
     // The mic error channel must outlive the stream (see recording.rs).
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
 }
@@ -728,6 +730,10 @@ struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
 impl Feeds {
+    pub fn camera_input_pending(&self) -> bool {
+        self.camera_input_pending
+    }
+
     pub fn init(cx: &mut App) -> Entity<Self> {
         let feeds = cx.new(|_| Self {
             camera_actor: None,
@@ -749,6 +755,7 @@ impl Feeds {
             camera: None,
             microphone: None,
             mic_level_db: -96.0,
+            mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
             camera_error: None,
             camera_preview_parked: false,
             camera_epoch: 0,
@@ -768,6 +775,7 @@ impl Feeds {
             camera_recording_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _frame_pump: None,
             _meter_pump: None,
+            mic_meter_tx: None,
             _mic_errors: None,
         });
         cx.set_global(FeedsGlobal(feeds.clone()));
@@ -805,6 +813,12 @@ impl Feeds {
     pub fn mic_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
         self.microphone.as_ref()?;
         self.mic_actor.clone().filter(|actor| actor.is_alive())
+    }
+
+    /// The level meter's input, for a recording that has to open its own
+    /// microphone feed.
+    pub fn mic_meter(&self) -> Option<flume::Sender<MicrophoneSamples>> {
+        self.mic_meter_tx.clone()
     }
 
     pub fn input_readiness(&self) -> InputReadiness {
@@ -1040,6 +1054,7 @@ impl Feeds {
                     return;
                 }
                 this.camera_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
                     Ok(settings) => {
                         this.applied_settings.camera = settings.camera;
@@ -1111,7 +1126,7 @@ impl Feeds {
         self.microphone_error = None;
         self.mic_input_pending = label.is_some();
         self.mic_input_released = false;
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
         let gate = self.mic_input_gate.clone();
@@ -1172,6 +1187,7 @@ impl Feeds {
                     return;
                 }
                 this.mic_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
                     Ok(settings) => this.applied_settings.microphone = settings.microphone,
                     Err(error) => {
@@ -1223,8 +1239,13 @@ impl Feeds {
             })
             .detach();
         }
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         cx.notify();
+    }
+
+    fn set_mic_level(&mut self, db: f64) {
+        self.mic_level_db = db;
+        self.mic_level_shown.store(db.to_bits(), Ordering::Release);
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
@@ -1318,6 +1339,7 @@ impl Feeds {
         // Meter channel, attached once for the actor's lifetime -- the same
         // shape as the Tauri `mic_meter_sender`.
         let (meter_tx, meter_rx) = flume::bounded::<MicrophoneSamples>(16);
+        self.mic_meter_tx = Some(meter_tx.clone());
         {
             let actor = actor.clone();
             gpui_tokio::Tokio::spawn(cx, async move {
@@ -1328,36 +1350,31 @@ impl Feeds {
             .detach();
         }
 
-        let pump = cx.spawn(async move |this, cx| {
-            // Port of `audio_meter.rs`: a 200ms max-hold window, coalesced to
-            // ~20 updates/s so the meter does not repaint the window per audio
-            // callback.
-            let mut window_entries: Vec<(Instant, f64)> = Vec::new();
-            let mut last_push = Instant::now() - Duration::from_secs(1);
+        // Port of `audio_meter.rs`. The windowing runs off the main thread so
+        // an audio callback (50-100/s) only wakes the UI when the level it
+        // would draw has changed.
+        let (wake, wakes) = flume::bounded::<()>(1);
+        let latest = Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits()));
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: self.mic_level_shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let meter = cx.background_executor().spawn(async move {
             while let Ok(samples) = meter_rx.recv_async().await {
-                let now = Instant::now();
-                let db = db_fs(&samples);
-                window_entries.push((now, db));
-                window_entries
-                    .retain(|(at, _)| now.duration_since(*at) <= Duration::from_millis(200));
-                if now.duration_since(last_push) < Duration::from_millis(50) {
-                    continue;
-                }
-                last_push = now;
-                let max = window_entries
-                    .iter()
-                    .map(|(_, db)| *db)
-                    .fold(f64::MIN, f64::max);
-                // Quantized to 0.5dB -- under a pixel on both level mappings --
-                // so an unchanged level (a silent or absent signal pins at
-                // -96.0) stops waking every `Feeds` observer and the controls
-                // bar at 20Hz for a bar that would not visibly move.
-                let quantized = (max * 2.0).round() / 2.0;
+                sender.push(Instant::now(), db_fs(&samples));
+            }
+        });
+        let pump = cx.spawn(async move |this, cx| {
+            let _meter = meter;
+            while wakes.recv_async().await.is_ok() {
+                let level = f64::from_bits(latest.load(Ordering::Acquire));
                 let changed = this.update(cx, |this: &mut Feeds, cx| {
-                    if this.mic_level_db == quantized {
+                    if this.mic_level_db == level {
                         return false;
                     }
-                    this.mic_level_db = quantized;
+                    this.set_mic_level(level);
                     cx.notify();
                     true
                 });
@@ -1439,6 +1456,56 @@ pub(crate) fn camera_preview_image(
         image::Frame::new(image)
     ]));
     Some((image, (width, height)))
+}
+
+/// A 200ms max-hold window, coalesced to ~20 updates/s and quantized to
+/// 0.5dB (under a pixel on both level mappings).
+#[derive(Default)]
+struct MeterWindow {
+    entries: Vec<(Instant, f64)>,
+    last_push: Option<Instant>,
+}
+
+impl MeterWindow {
+    fn push(&mut self, now: Instant, db: f64) -> Option<f64> {
+        self.entries.push((now, db));
+        self.entries
+            .retain(|(at, _)| now.saturating_duration_since(*at) <= Duration::from_millis(200));
+        if self
+            .last_push
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_millis(50))
+        {
+            return None;
+        }
+        self.last_push = Some(now);
+        let max = self
+            .entries
+            .iter()
+            .map(|(_, db)| *db)
+            .fold(f64::MIN, f64::max);
+        Some((max * 2.0).round() / 2.0)
+    }
+}
+
+/// Only the newest level is kept, so a UI thread that falls behind draws the
+/// current level rather than a queued one.
+struct MeterSender {
+    window: MeterWindow,
+    shown: Arc<std::sync::atomic::AtomicU64>,
+    latest: Arc<std::sync::atomic::AtomicU64>,
+    wake: flume::Sender<()>,
+}
+
+impl MeterSender {
+    fn push(&mut self, now: Instant, db: f64) {
+        let Some(level) = self.window.push(now, db) else {
+            return;
+        };
+        self.latest.store(level.to_bits(), Ordering::Release);
+        if level.to_bits() != self.shown.load(Ordering::Acquire) {
+            let _ = self.wake.try_send(());
+        }
+    }
 }
 
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
@@ -1586,6 +1653,52 @@ mod meter_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_window_coalesces_to_one_update_per_50ms_with_a_200ms_max_hold() {
+        let start = Instant::now();
+        let mut window = MeterWindow::default();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        assert_eq!(window.push(at(0), -20.2), Some(-20.0));
+        assert_eq!(window.push(at(10), -10.0), None);
+        assert_eq!(window.push(at(49), -30.0), None);
+        assert_eq!(window.push(at(50), -40.0), Some(-10.0));
+        assert_eq!(window.push(at(205), -50.0), Some(-10.0));
+        assert_eq!(window.push(at(260), -50.0), Some(-50.0));
+    }
+
+    #[test]
+    fn the_meter_wakes_the_ui_for_new_levels_only_and_keeps_the_newest() {
+        use std::sync::atomic::AtomicU64;
+
+        let shown = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let latest = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let (wake, wakes) = flume::bounded(1);
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let start = Instant::now();
+        let at = |callback: u64| start + Duration::from_micros(callback * 10_667);
+
+        for callback in 0..10 {
+            sender.push(at(callback), -20.0);
+        }
+        for callback in 40..50 {
+            sender.push(at(callback), -30.0);
+        }
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert!(wakes.try_recv().is_err());
+        assert_eq!(f64::from_bits(latest.load(Ordering::Acquire)), -30.0);
+
+        shown.store((-30.0f64).to_bits(), Ordering::Release);
+        for callback in 50..150 {
+            sender.push(at(callback), -30.0);
+        }
+        assert!(wakes.try_recv().is_err());
+    }
 
     #[test]
     fn preview_rejects_frames_queued_before_input_readiness() {

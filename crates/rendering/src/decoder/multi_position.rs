@@ -151,7 +151,7 @@ impl DecoderPoolManager {
     ) -> (usize, f32, bool) {
         self.total_accesses += 1;
 
-        let frame = (requested_time * self.config.fps as f32).floor() as u32;
+        let frame = super::request_frame(requested_time, self.config.fps);
         *self.access_history.entry(frame).or_insert(0) += 1;
 
         if self.access_history.len() > Self::MAX_ACCESS_HISTORY_ENTRIES {

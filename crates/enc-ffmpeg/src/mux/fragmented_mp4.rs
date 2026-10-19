@@ -1,3 +1,4 @@
+pub use super::fragment_prefix::{FragmentPrefix, read_fragment_prefix};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
