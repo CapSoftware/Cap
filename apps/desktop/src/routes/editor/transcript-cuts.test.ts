@@ -1115,6 +1115,17 @@ describe("exact restore", () => {
 	const cutIds = (p: Project) =>
 		(p.captions?.transcriptCuts ?? []).map((cut) => cut.id);
 
+	const pause = (id: string, start: number, end: number): TranscriptCut => ({
+		id,
+		kind: "pause",
+		text: "",
+		start,
+		end,
+		bufferStart: 0,
+		bufferEnd: 0,
+		segmentId: null,
+	});
+
 	it("puts back the overlays a pause cut deleted or trimmed", () => {
 		const recs = recordings(20);
 		const p = project(
@@ -1298,16 +1309,6 @@ describe("exact restore", () => {
 		const p = project(helloWorld, [clip(0, 10)], {
 			zoomSegments: [zoom(3.2, 3.6)],
 		});
-		const pause = (id: string, start: number, end: number): TranscriptCut => ({
-			id,
-			kind: "pause",
-			text: "",
-			start,
-			end,
-			bufferStart: 0,
-			bufferEnd: 0,
-			segmentId: null,
-		});
 		commitTranscriptCutEdit(p, { add: [pause("first", 2, 4)] }, recs);
 		commitTranscriptCutEdit(p, { add: [pause("second", 3, 5)] }, recs);
 		expect(clips(p)).toEqual([
@@ -1325,6 +1326,160 @@ describe("exact restore", () => {
 		restore(p, recs, "second");
 		expect(clips(p)).toEqual([[0, 10]]);
 		expect(spans(p.timeline?.zoomSegments)).toEqual([[3.2, 3.6]]);
+	});
+
+	it("restores an earlier cut's mask movements while a later cut on the same mask stays", () => {
+		const recs = recordings(10);
+		const p = project(helloWorld, [clip(0, 10)], {
+			maskSegments: [
+				{
+					...defaultMaskSegment(1, 9),
+					keyframes: {
+						position: [
+							{ time: 0.5, x: 0.1, y: 0.1 },
+							{ time: 1.5, x: 0.2, y: 0.2 },
+							{ time: 3.0, x: 0.3, y: 0.3 },
+							{ time: 4.5, x: 0.4, y: 0.4 },
+							{ time: 7.0, x: 0.5, y: 0.5 },
+						],
+						size: [],
+						intensity: [],
+					},
+				},
+			],
+		});
+		const mask = () => {
+			const segment = p.timeline?.maskSegments[0];
+			return {
+				end: Number(segment?.end.toFixed(6)),
+				times: segment?.keyframes?.position?.map((keyframe) =>
+					Number(keyframe.time.toFixed(6)),
+				),
+			};
+		};
+		commitTranscriptCutEdit(p, { add: [pause("first", 2, 3)] }, recs);
+		commitTranscriptCutEdit(p, { add: [pause("second", 5, 6)] }, recs);
+		expect(mask()).toEqual({ end: 7, times: [0.5, 2, 5] });
+
+		restore(p, recs, "first");
+		expect(clips(p)).toEqual([
+			[0, 5],
+			[6, 10],
+		]);
+		expect(mask()).toEqual({ end: 8, times: [0.5, 1.5, 3, 6] });
+
+		restore(p, recs, "second");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(mask()).toEqual({ end: 9, times: [0.5, 1.5, 3, 4.5, 7] });
+	});
+
+	it("restores cuts sharing overlays exactly, in any order", () => {
+		const recs = recordings(12);
+		const words: Array<[string, number, number]> = [
+			["intro", 0.2, 0.6],
+			["outro", 11.2, 11.6],
+		];
+		const fresh = () =>
+			project(words, [clip(0, 12)], {
+				zoomSegments: [zoom(1.5, 10.5), zoom(5.5, 6.5)],
+				maskSegments: [
+					{
+						...defaultMaskSegment(1, 11),
+						keyframes: {
+							position: [0.5, 1.5, 2.5, 4.5, 5.5, 7.5, 8.5, 9.5].map(
+								(time, index) => ({ time, x: index / 10, y: index / 10 }),
+							),
+							size: [],
+							intensity: [],
+						},
+					},
+				],
+			});
+		const cuts = [pause("a", 2, 3), pause("b", 6, 7), pause("c", 9, 10)];
+		const state = (p: Project) => ({
+			clips: clips(p),
+			zooms: spans(p.timeline?.zoomSegments).sort((x, y) => x[0] - y[0]),
+			masks: p.timeline?.maskSegments.map((segment) => ({
+				start: Number(segment.start.toFixed(6)),
+				end: Number(segment.end.toFixed(6)),
+				times: segment.keyframes?.position?.map((keyframe) =>
+					Number(keyframe.time.toFixed(6)),
+				),
+			})),
+		});
+		const expected = (ids: readonly string[]) => {
+			const p = fresh();
+			const add = cuts.filter((cut) => ids.includes(cut.id));
+			if (add.length > 0) commitTranscriptCutEdit(p, { add }, recs);
+			return state(p);
+		};
+		const orders = [
+			["a", "b", "c"],
+			["a", "c", "b"],
+			["b", "a", "c"],
+			["b", "c", "a"],
+			["c", "a", "b"],
+			["c", "b", "a"],
+		];
+		for (const batch of [false, true]) {
+			for (const order of orders) {
+				const p = fresh();
+				if (batch) commitTranscriptCutEdit(p, { add: cuts }, recs);
+				else
+					for (const cut of cuts)
+						commitTranscriptCutEdit(p, { add: [cut] }, recs);
+				expect(state(p)).toEqual(expected(["a", "b", "c"]));
+				const remaining = ["a", "b", "c"];
+				for (const id of order) {
+					expect(restore(p, recs, id)).toBe("applied");
+					remaining.splice(remaining.indexOf(id), 1);
+					expect(state(p)).toEqual(expected(remaining));
+				}
+				expect(p.captions?.transcriptCuts).toEqual([]);
+			}
+		}
+	});
+
+	it("moves an overlay an adjacent cut trimmed when the other cut comes back", () => {
+		const recs = recordings(20);
+		const p = project(
+			[
+				["intro", 0.1, 0.3],
+				["outro", 19.6, 19.9],
+			],
+			[clip(0, 20)],
+			{ zoomSegments: [zoom(5.15, 8.85)] },
+		);
+		commitTranscriptCutEdit(p, { add: [pause("first", 2.7, 4.4)] }, recs);
+		commitTranscriptCutEdit(p, { add: [pause("second", 4.4, 5.3)] }, recs);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[2.7, 6.25]]);
+
+		restore(p, recs, "first");
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[4.4, 7.95]]);
+
+		restore(p, recs, "second");
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[5.15, 8.85]]);
+	});
+
+	it("restores an earlier cut's zoom trim while a later cut before it stays", () => {
+		const recs = recordings(10);
+		const p = project(helloWorld, [clip(0, 10)], {
+			zoomSegments: [zoom(2.5, 5.5)],
+		});
+		commitTranscriptCutEdit(p, { add: [pause("first", 5, 6)] }, recs);
+		commitTranscriptCutEdit(p, { add: [pause("second", 2, 3)] }, recs);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[2, 4]]);
+
+		restore(p, recs, "first");
+		expect(clips(p)).toEqual([
+			[0, 2],
+			[3, 10],
+		]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[2, 4.5]]);
+
+		restore(p, recs, "second");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[2.5, 5.5]]);
 	});
 
 	it("returns a word cut across a speed change to the clips it came from", () => {

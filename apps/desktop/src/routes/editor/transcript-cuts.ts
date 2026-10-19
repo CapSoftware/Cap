@@ -47,6 +47,7 @@ const RANGE_EPSILON = 1e-4;
 const MIN_TIMELINE_CUT = 0.001;
 const SNAPSHOT_EPSILON = 1e-6;
 const WORD_TIME_EPSILON = 1e-3;
+const EDGE_SNAP = 1e-9;
 
 const WAVEFORM_BLOCKS_PER_SECOND = 10;
 const WAVEFORM_FLOOR_DB = -60;
@@ -496,6 +497,21 @@ function shiftOverlay<T extends OverlaySegment>(segment: T, by: number): T {
 	return { ...segment, start: segment.start + by, end: segment.end + by };
 }
 
+// A trim leaves an overlay edge on the cut point, but computed along a
+// different float path than the boundary a later cut or restore uses there.
+// Off by a hair, the edge lands on the wrong side: a restore stretches the
+// overlay instead of moving it, and a cut keeps a sliver instead of removing it.
+function snapOverlayEdges(tracks: OverlayTracks, edges: readonly number[]) {
+	for (const key of OVERLAY_TRACKS) {
+		for (const segment of tracks[key] ?? []) {
+			for (const edge of edges) {
+				if (Math.abs(segment.start - edge) <= EDGE_SNAP) segment.start = edge;
+				if (Math.abs(segment.end - edge) <= EDGE_SNAP) segment.end = edge;
+			}
+		}
+	}
+}
+
 function touchOverlays(
 	tracks: OverlayTracks,
 	start: number,
@@ -577,6 +593,54 @@ function putBackOverlays(
 	}
 }
 
+function overlayShape(segment: OverlaySegment) {
+	return shiftOverlay(unwrap(segment), -segment.start);
+}
+
+function editsOverlayAfter(
+	earlier: TranscriptCutPiece,
+	later: TranscriptCutPiece,
+) {
+	const left: OverlayChanges = earlier.overlays ?? {};
+	const right: OverlayChanges = later.overlays ?? {};
+	return OVERLAY_TRACKS.some((key) =>
+		(left[key] ?? []).some((entry) => {
+			const after = entry.after;
+			return (
+				!!after &&
+				(right[key] ?? []).some((other) =>
+					sameValue(overlayShape(after), overlayShape(other.before)),
+				)
+			);
+		}),
+	);
+}
+
+// Overlays are saved as whole snapshots, so they only go back exactly in
+// reverse removal order: a later removal that edited the same overlay (its
+// "before" matches this piece's "after"), and any removal that edited it after
+// that, has to come back first.
+function laterOverlayEdits(
+	restoring: readonly TranscriptCutPiece[],
+	staying: readonly TranscriptCutPiece[],
+) {
+	const found = new Set<TranscriptCutPiece>();
+	const queue = [...restoring];
+	for (let piece = queue.pop(); piece; piece = queue.pop()) {
+		for (const other of staying) {
+			if (
+				found.has(other) ||
+				other.sequence <= piece.sequence ||
+				!editsOverlayAfter(piece, other)
+			)
+				continue;
+			found.add(other);
+			queue.push(other);
+		}
+	}
+	return [...found];
+}
+
 function removeTimelineRange(
 	timeline: TranscriptTimeline,
 	range: MappedTimeRange,
@@ -593,6 +657,7 @@ function removeTimelineRange(
 	const holds = holdWindows(timeline.textSegments);
 	const overlayStart = effectiveToOutput(holds, start);
 	const overlayEnd = effectiveToOutputEnd(holds, end);
+	snapOverlayEdges(timeline, [overlayStart, overlayEnd]);
 	const touched = touchOverlays(timeline, overlayStart, overlayEnd);
 	const original = { ...unwrap(clip) };
 	const durationBefore = clipTimelineDuration(timeline.segments, transitions);
@@ -812,6 +877,7 @@ function insertRecordingRange(
 	const restored = piece
 		? takeOverlays(timeline, piece.overlays, overlayBoundary)
 		: [];
+	snapOverlayEdges(timeline, [overlayBoundary]);
 	rippleInsertAllTracks(timeline, overlayBoundary, shift + (piece?.held ?? 0));
 	putBackOverlays(timeline, restored);
 	return "applied";
@@ -1088,22 +1154,38 @@ export function applyTranscriptCutEdit(
 	const removedPieces = new Map<number, TranscriptCutPiece[]>();
 	const offsets = recordingOffsets(recordingSegments);
 	const savedPieces = currentCuts.flatMap((cut) => cut.removed ?? []);
+	const reinserted = new Set<number>();
 
 	const timeline = project.timeline;
 	if (!timeline && (toRestore.length > 0 || toCut.length > 0)) return "failed";
 	if (timeline) {
-		// A saved piece only goes back whole. When part of one returns (its cut
-		// shrank, or another cut still claims the rest), the whole piece is
-		// restored and the rest cut again, so it gets a fresh piece of its own.
-		const returning = savedPieces.flatMap((piece) => {
+		// A saved piece only goes back whole, and after any later removal that
+		// edited the same overlays. Those pieces are restored with it, and
+		// whatever stays claimed (a shrunk cut's rest, another cut's footage) is
+		// cut again so it gets a fresh piece of its own.
+		const restoring = savedPieces.filter((piece) => {
 			const source = pieceSourceRange(piece, offsets);
-			return source && intersectSourceRanges([source], toRestore).length > 0
-				? [source]
-				: [];
+			return (
+				source !== null && intersectSourceRanges([source], toRestore).length > 0
+			);
 		});
+		const returning = [
+			...restoring,
+			...laterOverlayEdits(
+				restoring,
+				savedPieces.filter((piece) => !restoring.includes(piece)),
+			),
+		];
+		for (const piece of returning) reinserted.add(piece.sequence);
 		const recut = subtractSourceRanges(
 			intersectSourceRanges(
-				subtractSourceRanges(returning, toRestore),
+				subtractSourceRanges(
+					returning.flatMap((piece) => {
+						const source = pieceSourceRange(piece, offsets);
+						return source ? [source] : [];
+					}),
+					toRestore,
+				),
 				nextClaims,
 			),
 			timelineSourceCoverage(timeline.segments, recordingSegments),
@@ -1173,6 +1255,7 @@ export function applyTranscriptCutEdit(
 	const stillRemoved = (piece: TranscriptCutPiece) => {
 		const source = pieceSourceRange(piece, offsets);
 		return (
+			!reinserted.has(piece.sequence) &&
 			source !== null &&
 			sourceRangesDuration(subtractSourceRanges([source], nextRemoved)) <=
 				RANGE_EPSILON
