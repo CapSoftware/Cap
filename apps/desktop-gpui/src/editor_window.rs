@@ -362,6 +362,15 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err(format!("Video path {} not found!", path.display()));
     }
 
+    // Repairs tracks older recorders stamped at the wrong rate, and display
+    // fps that finalization replaced with the average rate, before anything
+    // reads them. Non-fatal: the editor opens the files as they are.
+    match cap_recording::track_heal::heal_stretched_tracks(path) {
+        Ok(true) => tracing::info!(?path, "Healed recording tracks"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
+    }
+
     let meta = RecordingMeta::load_for_project(path)
         .map_err(|error| format!("Failed to load recording meta: {error}"))?;
 
@@ -4200,6 +4209,14 @@ impl EditorWindow {
             .and_then(|timeline| timeline.segments.get(index))
             .map(|segment| (segment.start, segment.end));
 
+        let audio_segment = if kind == TrackKind::Audio {
+            self.project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.audio_segments.get(index))
+        } else {
+            None
+        };
         let kind_of_drag = match (kind, hit) {
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
@@ -4215,16 +4232,22 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_start_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimStart {
                     start,
-                    bounds: edits::trim_start_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_start_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Handle { start: false, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
                     end,
-                    bounds: edits::trim_end_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_end_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Body { .. }) => Some(DragKind::Move {

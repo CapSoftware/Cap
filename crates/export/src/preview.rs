@@ -303,8 +303,12 @@ async fn render_preview_frame(
             .find(|clip| clip.index == outgoing.segment.recording_clip)
             .map(|clip| clip.offsets)
             .unwrap_or_default();
-        let outgoing_frames = outgoing_media
-            .decoders
+        let outgoing_decoders = if outgoing.segment.recording_clip == segment.recording_clip {
+            outgoing_media.decoders.transition_side().await
+        } else {
+            outgoing_media.decoders
+        };
+        let outgoing_frames = outgoing_decoders
             .get_frames(
                 outgoing.source_time as f32,
                 project_config.requires_camera() && !settings.cursor_only,
