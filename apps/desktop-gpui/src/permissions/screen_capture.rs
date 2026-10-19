@@ -34,6 +34,7 @@ const FAILED: u8 = 2;
 static VALIDATED: AtomicBool = AtomicBool::new(false);
 static LAST_OUTCOME: AtomicU8 = AtomicU8::new(UNKNOWN);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static QUERY_ALIVE: AtomicBool = AtomicBool::new(false);
 static LAST_ATTEMPT: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub(super) fn available(preflight_granted: bool) -> bool {
@@ -126,10 +127,24 @@ fn validate() -> bool {
 /// leave the query unresolved forever, so it runs on a thread of its own that
 /// is abandoned at the timeout.
 fn query_displays(timeout: Duration) -> Option<usize> {
+    // A query abandoned at its timeout is still blocked in replayd; starting
+    // another would strand one more thread every retry for as long as
+    // replayd stays wedged.
+    if QUERY_ALIVE.swap(true, Ordering::AcqRel) {
+        tracing::debug!("a ScreenCaptureKit shareable content query is still pending");
+        return None;
+    }
     let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("cap-screen-capture-query".into())
         .spawn(move || {
+            struct AliveReset;
+            impl Drop for AliveReset {
+                fn drop(&mut self) {
+                    QUERY_ALIVE.store(false, Ordering::Release);
+                }
+            }
+            let _alive = AliveReset;
             let displays = objc2::rc::autoreleasepool(|_| {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -146,8 +161,11 @@ fn query_displays(timeout: Duration) -> Option<usize> {
                 })
             });
             let _ = sender.send(displays);
-        })
-        .ok()?;
+        });
+    if spawned.is_err() {
+        QUERY_ALIVE.store(false, Ordering::Release);
+        return None;
+    }
     match receiver.recv_timeout(timeout) {
         Ok(displays) => displays,
         Err(_) => {
