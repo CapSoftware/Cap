@@ -497,8 +497,8 @@ async fn run_portal_stop(
         portal.get_property::<u32>("version"),
     )
     .await??;
-    *fallback_safe = false;
     let session = tokio::time::timeout(Duration::from_secs(5), portal.create_session()).await??;
+    *fallback_safe = false;
     let outcome = async {
         let session_path = serde_json::to_value(&session)?.as_str().ok_or_else(|| anyhow::anyhow!("Invalid shortcut session identity"))?.to_owned();
         let shortcut_id = format!("cap-recording-stop-{generation}");
@@ -796,6 +796,18 @@ fn dispatch(action: HotkeyAction, cx: &mut App) {
     }
 }
 
+fn microphone_available(name: &str) -> bool {
+    use cap_recording::feeds::microphone::MicrophoneFeed;
+
+    if cfg!(target_os = "macos") {
+        MicrophoneFeed::list_names()
+            .iter()
+            .any(|device| device == name)
+    } else {
+        MicrophoneFeed::list().contains_key(name)
+    }
+}
+
 /// `start_recording_from_hotkey` + the `RequestStartRecording` listener
 /// (`hotkeys.rs:158-177`, `lib.rs:5529-5551` over there): confirm a start
 /// without a working microphone, then record. Mic/camera come off the main
@@ -841,16 +853,15 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
             cx.update(|cx| start_now(main, mode, target, cx));
             return;
         }
-        // `MicrophoneFeed::list().contains_key(name)` -- the exact
-        // availability probe the Tauri confirm runs (`hotkeys.rs:126-135`
-        // over there). No selection means no microphone, which needs no
-        // enumeration to know.
+        // The availability probe the Tauri confirm runs. On macOS that is a
+        // name match (`microphone_available_for_confirmation` over there):
+        // `MicrophoneFeed::list()` reads every input device's configuration,
+        // which held the hotkey start for over 100 ms. No selection means no
+        // microphone, which needs no enumeration to know.
         let available = match mic_name {
             Some(name) => {
                 cx.background_executor()
-                    .spawn(async move {
-                        cap_recording::feeds::microphone::MicrophoneFeed::list().contains_key(&name)
-                    })
+                    .spawn(async move { microphone_available(&name) })
                     .await
             }
             None => false,
