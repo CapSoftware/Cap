@@ -30,3 +30,7 @@ harness = false
 [[bench]]
 name = "png_encode"
 harness = false
+
+[[bench]]
+name = "frame_export"
+harness = false
