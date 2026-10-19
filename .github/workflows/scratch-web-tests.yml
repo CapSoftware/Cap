@@ -1,0 +1,33 @@
+name: Scratch web unit tests
+
+# Runs the web unit tests a PR adds (CI only runs a fixed list) on the PR
+# merged with current main. Runs only on pushes to this scratch branch.
+on:
+  push:
+    branches: [ci/web-tests]
+
+jobs:
+  web:
+    name: web tests (#${{ matrix.pr }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 2651
+            tests: __tests__/unit/trimming-tool-effect.test.ts
+          - pr: 2655
+            tests: __tests__/unit/player-time.test.ts
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ matrix.pr }}/merge
+
+      - uses: ./.github/actions/setup-js
+
+      - name: The PR's tests
+        run: bun run --cwd apps/web test ${{ matrix.tests }}
+
+      - name: Every web unit test
+        run: bun run --cwd apps/web test __tests__/unit
