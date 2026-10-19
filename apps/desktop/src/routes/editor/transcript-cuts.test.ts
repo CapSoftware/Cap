@@ -1164,6 +1164,169 @@ describe("exact restore", () => {
 		expect(p.captions?.transcriptCuts).toEqual([]);
 	});
 
+	it("keeps a shrunk cut's overlays for both the part that returns and the part still cut", () => {
+		const sorted = (segments: Array<{ start: number; end: number }> = []) =>
+			spans(segments).sort((a, b) => a[0] - b[0]);
+		const zooms = [
+			zoom(1.5, 2.1),
+			zoom(2.15, 2.25),
+			zoom(2.3, 2.8),
+			zoom(3, 4),
+			zoom(5.5, 7),
+		];
+		for (const [bufferStart, bufferEnd, shrunk] of [
+			[
+				-0.5,
+				0,
+				[
+					[1.5, 2.1],
+					[2.15, 2.25],
+					[2.3, 2.5],
+					[2.5, 3.5],
+				],
+			],
+			[
+				-0.5,
+				-0.5,
+				[
+					[1.5, 2.1],
+					[2.15, 2.25],
+					[2.3, 2.5],
+					[2.5, 4],
+				],
+			],
+		] as const) {
+			const recs = recordings(10);
+			const p = project(
+				[
+					["first", 1.5, 2.0],
+					["next", 6.0, 6.4],
+				],
+				[clip(0, 10)],
+				{ zoomSegments: structuredClone(zooms) },
+			);
+			cutPauseAt(p, recs, 2);
+			const [id] = cutIds(p);
+			expect(
+				commitTranscriptCutEdit(
+					p,
+					{ padding: [{ id, bufferStart, bufferEnd }] },
+					recs,
+				),
+			).toBe("applied");
+			expect(sorted(p.timeline?.zoomSegments)).toEqual(shrunk);
+
+			expect(restore(p, recs, id)).toBe("applied");
+			expect(clips(p)).toEqual([[0, 10]]);
+			expect(sorted(p.timeline?.zoomSegments)).toEqual(sorted(zooms));
+			expect(p.captions?.transcriptCuts).toEqual([]);
+		}
+	});
+
+	it("keeps a fullscreen text hold that stays inside a shrunk cut", () => {
+		const recs = recordings(10);
+		const hold = { ...defaultTextSegment(3, 4), layout: "fullscreen" as const };
+		const p = project(
+			[
+				["intro", 0.5, 1.0],
+				["after", 8.0, 8.4],
+			],
+			[clip(0, 10)],
+			{ textSegments: [hold], zoomSegments: [zoom(9.5, 10.5)] },
+		);
+		cutPauseAt(p, recs, 1);
+		const [id] = cutIds(p);
+		commitTranscriptCutEdit(
+			p,
+			{ padding: [{ id, bufferStart: -0.5, bufferEnd: 0 }] },
+			recs,
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.5],
+			[8, 10],
+		]);
+		expect(p.timeline?.textSegments).toEqual([]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[2, 3]]);
+
+		restore(p, recs, id);
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(spans(p.timeline?.textSegments)).toEqual([[3, 4]]);
+		expect(p.timeline?.textSegments[0].layout).toBe("fullscreen");
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[9.5, 10.5]]);
+	});
+
+	it("shrinks a cut across a speed change and returns both clips exactly", () => {
+		const recs = recordings(10);
+		const p = project(
+			[
+				["hello", 0.5, 0.9],
+				["next", 5.0, 5.3],
+			],
+			[clip(0, 2.1), clip(2.1, 10, { timescale: 2 })],
+			{ zoomSegments: [zoom(1.2, 1.5), zoom(3, 3.5)] },
+		);
+		cutPauseAt(p, recs, 0.9);
+		const [id] = cutIds(p);
+		expect(p.captions?.transcriptCuts?.[0].removed).toHaveLength(2);
+		commitTranscriptCutEdit(
+			p,
+			{ padding: [{ id, bufferStart: -0.5, bufferEnd: 0 }] },
+			recs,
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.4],
+			[5, 10],
+		]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[1.2, 1.4]]);
+
+		restore(p, recs, id);
+		expect(clips(p)).toEqual([
+			[0, 2.1],
+			[2.1, 10],
+		]);
+		expect(p.timeline?.segments.map((segment) => segment.timescale)).toEqual([
+			1, 2,
+		]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([
+			[1.2, 1.5],
+			[3, 3.5],
+		]);
+	});
+
+	it("hands the rest of a restored cut's footage and overlays to the cut still claiming it", () => {
+		const recs = recordings(10);
+		const p = project(helloWorld, [clip(0, 10)], {
+			zoomSegments: [zoom(3.2, 3.6)],
+		});
+		const pause = (id: string, start: number, end: number): TranscriptCut => ({
+			id,
+			kind: "pause",
+			text: "",
+			start,
+			end,
+			bufferStart: 0,
+			bufferEnd: 0,
+			segmentId: null,
+		});
+		commitTranscriptCutEdit(p, { add: [pause("first", 2, 4)] }, recs);
+		commitTranscriptCutEdit(p, { add: [pause("second", 3, 5)] }, recs);
+		expect(clips(p)).toEqual([
+			[0, 2],
+			[5, 10],
+		]);
+
+		restore(p, recs, "first");
+		expect(clips(p)).toEqual([
+			[0, 3],
+			[5, 10],
+		]);
+		expect(p.timeline?.zoomSegments).toEqual([]);
+
+		restore(p, recs, "second");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[3.2, 3.6]]);
+	});
+
 	it("returns a word cut across a speed change to the clips it came from", () => {
 		const recs = recordings(10);
 		const p = project(

@@ -1086,17 +1086,35 @@ export function applyTranscriptCutEdit(
 	const toCut = subtractSourceRanges(nextClaims, previousClaims);
 	let nextRemoved = subtractSourceRanges(removed, toRestore);
 	const removedPieces = new Map<number, TranscriptCutPiece[]>();
+	const offsets = recordingOffsets(recordingSegments);
+	const savedPieces = currentCuts.flatMap((cut) => cut.removed ?? []);
 
 	const timeline = project.timeline;
 	if (!timeline && (toRestore.length > 0 || toCut.length > 0)) return "failed";
 	if (timeline) {
+		// A saved piece only goes back whole. When part of one returns (its cut
+		// shrank, or another cut still claims the rest), the whole piece is
+		// restored and the rest cut again, so it gets a fresh piece of its own.
+		const returning = savedPieces.flatMap((piece) => {
+			const source = pieceSourceRange(piece, offsets);
+			return source && intersectSourceRanges([source], toRestore).length > 0
+				? [source]
+				: [];
+		});
+		const recut = subtractSourceRanges(
+			intersectSourceRanges(
+				subtractSourceRanges(returning, toRestore),
+				nextClaims,
+			),
+			timelineSourceCoverage(timeline.segments, recordingSegments),
+		);
 		if (
 			toRestore.length > 0 &&
 			restoreTimelineSourceRanges(
 				timeline,
-				toRestore,
+				mergeSourceRanges([...toRestore, ...recut]),
 				recordingSegments,
-				currentCuts.flatMap((cut) => cut.removed ?? []),
+				savedPieces,
 			) === "transition"
 		)
 			return "transition";
@@ -1105,7 +1123,10 @@ export function applyTranscriptCutEdit(
 			timeline.segments,
 			recordingSegments,
 		);
-		const present = intersectSourceRanges(toCut, coverage);
+		const present = intersectSourceRanges(
+			mergeSourceRanges([...toCut, ...recut]),
+			coverage,
+		);
 		if (present.length > 0) {
 			const pieces = cutTimelineSourceRanges(
 				timeline,
@@ -1149,7 +1170,6 @@ export function applyTranscriptCutEdit(
 		restoreTrimmedWords(captions, cut.trimmedWords ?? [], nextClaims);
 	}
 
-	const offsets = recordingOffsets(recordingSegments);
 	const stillRemoved = (piece: TranscriptCutPiece) => {
 		const source = pieceSourceRange(piece, offsets);
 		return (
