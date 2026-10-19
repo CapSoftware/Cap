@@ -1263,19 +1263,6 @@ pub mod loop_stats {
     }
 }
 
-/// A blurred static background is identical on every frame. Render hosts
-/// reuse the first frame's result; editor and desktop exports keep blurring
-/// every frame until this has been verified there.
-static BLUR_RESULT_CACHE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn enable_blur_result_cache() {
-    BLUR_RESULT_CACHE.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn blur_result_cache_enabled() -> bool {
-    BLUR_RESULT_CACHE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 /// Layer pipelines take ~0.25-0.5 s to build per render. A process that
 /// renders many ranges of the same project (a render-farm engine) can set a
 /// key naming that project; successful renders then hand their layers to the
@@ -7676,6 +7663,8 @@ pub struct RendererLayers {
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
     realtime_camera_effects: bool,
+    #[cfg(test)]
+    split_layer_passes: bool,
 }
 
 fn join_layer<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
@@ -7799,6 +7788,8 @@ impl RendererLayers {
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
                 realtime_camera_effects: false,
+                #[cfg(test)]
+                split_layer_passes: false,
             }
         });
         layers_phase.finish("returned");
@@ -8000,9 +7991,7 @@ impl RendererLayers {
             )
             .await?;
 
-        if uniforms.project.background.blur > 0.0 {
-            self.background_blur.prepare(&constants.queue, uniforms);
-        }
+        self.background_blur.prepare(&constants.queue, uniforms);
 
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
@@ -8156,9 +8145,7 @@ impl RendererLayers {
         timings.background_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if uniforms.project.background.blur > 0.0 {
-            self.background_blur.prepare(&constants.queue, uniforms);
-        }
+        self.background_blur.prepare(&constants.queue, uniforms);
         self.background_color_grade
             .prepare(&constants.queue, uniforms);
         timings.background_blur_prepare_duration = start.elapsed();
@@ -8304,24 +8291,6 @@ impl RendererLayers {
         render_display: bool,
     ) -> Result<(), RenderingError> {
         self.validate_overlay_uniforms(uniforms)?;
-        macro_rules! render_pass {
-            ($view:expr, $load:expr) => {
-                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: $view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: $load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                })
-            };
-        }
 
         if render_display {
             self.display.copy_to_texture(encoder);
@@ -8330,7 +8299,16 @@ impl RendererLayers {
         self.camera_only.copy_to_texture(encoder);
         self.background.render_surface(encoder);
 
-        let blur_key = (blur_result_cache_enabled() && self.background_blur.blur_amount > 0.0)
+        let mut passes = LayerPasses {
+            encoder,
+            open: None,
+            #[cfg(test)]
+            split: self.split_layer_passes,
+        };
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let load = wgpu::LoadOp::Load;
+
+        let blur_key = (self.background_blur.blur_amount > 0.0)
             .then(|| self.background.static_generation())
             .flatten()
             .map(|background_generation| {
@@ -8342,41 +8320,42 @@ impl RendererLayers {
                     texture_size: (size.width, size.height),
                 }
             });
+        if blur_key.is_none() {
+            self.background_blur.clear_result();
+        }
         if let Some(cached) = blur_key.and_then(|key| self.background_blur.cached_result(key)) {
-            encoder.copy_texture_to_texture(
+            passes.encoder().copy_texture_to_texture(
                 cached.as_image_copy(),
                 session.current_texture().as_image_copy(),
                 cached.size(),
             );
         } else {
-            {
-                let mut pass = render_pass!(
-                    session.current_texture_view(),
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                );
-                self.background.render(&mut pass);
-            }
+            self.background
+                .render(passes.pass(session.current_texture_view(), clear));
 
             // Separable gaussian: horizontal into the spare texture, vertical
             // back into the current one, so the result ends up where it
             // started and no swap is needed.
             if self.background_blur.blur_amount > 0.0 {
-                {
-                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                    self.background_blur.render_h(
-                        &mut pass,
-                        device,
-                        session.current_texture_view(),
-                    );
-                }
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                self.background_blur
-                    .render_v(&mut pass, device, session.other_texture_view());
+                self.background_blur.render_h(
+                    passes.pass(session.other_texture_view(), load),
+                    device,
+                    session.current_texture_view(),
+                );
+                self.background_blur.render_v(
+                    passes.pass(session.current_texture_view(), load),
+                    device,
+                    session.other_texture_view(),
+                );
             }
 
             if let Some(key) = blur_key {
-                self.background_blur
-                    .store_result(device, encoder, key, session.current_texture());
+                self.background_blur.store_result(
+                    device,
+                    passes.encoder(),
+                    key,
+                    session.current_texture(),
+                );
             }
         }
 
@@ -8384,12 +8363,11 @@ impl RendererLayers {
         // backdrop; content layers grade themselves. The fullscreen triangle
         // overwrites every pixel, so the old target contents never load.
         if self.background_color_grade.is_active() {
-            let mut pass = render_pass!(
-                session.other_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            self.background_color_grade.render(
+                passes.pass(session.other_texture_view(), clear),
+                device,
+                session.current_texture_view(),
             );
-            self.background_color_grade
-                .render(&mut pass, device, session.current_texture_view());
 
             session.swap_textures();
         }
@@ -8413,10 +8391,7 @@ impl RendererLayers {
         // stay flat on top. When inactive this is exactly the flat path.
         let camera3d_active = self.camera3d.is_active();
         if camera3d_active {
-            let _pass = render_pass!(
-                session.other_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-            );
+            passes.pass(session.other_texture_view(), clear);
         }
         macro_rules! content_view {
             () => {
@@ -8429,67 +8404,66 @@ impl RendererLayers {
         }
 
         if should_render_screen && self.frame.has_content() {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.frame.render(&mut pass);
+            self.frame.render(passes.pass(content_view!(), load));
         }
 
         if should_render_screen {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.display.render(&mut pass);
+            self.display.render(passes.pass(content_view!(), load));
         }
 
         if should_render_cursor {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.click_ripple.render(&mut pass);
-            self.cursor.render(&mut pass);
+            let pass = passes.pass(content_view!(), load);
+            self.click_ripple.render(pass);
+            self.cursor.render(pass);
         }
 
         // After the cursor, which really does disappear behind the notch on a
         // Mac, but before masks and text, which are editor annotations.
         if should_render_screen && self.notch.has_content() {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.notch.render(&mut pass);
+            self.notch.render(passes.pass(content_view!(), load));
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
         if uniforms.scene.is_transitioning_camera_only() {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.camera_only.render(&mut pass);
+            self.camera_only.render(passes.pass(content_view!(), load));
         }
 
         // Also render regular camera overlay during transitions when its opacity > 0
         if uniforms.scene.should_render_camera()
             && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
-            let mut pass = render_pass!(content_view!(), wgpu::LoadOp::Load);
-            self.camera.render(&mut pass);
+            self.camera.render(passes.pass(content_view!(), load));
         }
 
         if camera3d_active {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.camera3d
-                .render(&mut pass, device, session.other_texture_view());
+            self.camera3d.render(
+                passes.pass(session.current_texture_view(), load),
+                device,
+                session.other_texture_view(),
+            );
         }
 
         // Focus blur over the composed frame (background and warped content
         // together), before the flat annotations.
         match self.camera3d.blur_kind() {
             Some(Camera3DBlurKind::Gaussian) => {
-                {
-                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                    self.camera3d
-                        .render_blur_h(&mut pass, device, session.current_texture_view());
-                }
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                self.camera3d
-                    .render_blur_v(&mut pass, device, session.other_texture_view());
+                self.camera3d.render_blur_h(
+                    passes.pass(session.other_texture_view(), load),
+                    device,
+                    session.current_texture_view(),
+                );
+                self.camera3d.render_blur_v(
+                    passes.pass(session.current_texture_view(), load),
+                    device,
+                    session.other_texture_view(),
+                );
             }
             Some(Camera3DBlurKind::Bokeh) => {
-                {
-                    let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
-                    self.camera3d
-                        .render_blur_v(&mut pass, device, session.current_texture_view());
-                }
+                self.camera3d.render_blur_v(
+                    passes.pass(session.other_texture_view(), load),
+                    device,
+                    session.current_texture_view(),
+                );
                 session.swap_textures();
             }
             None => {}
@@ -8498,19 +8472,22 @@ impl RendererLayers {
         if uniforms.project.overlay_order.is_empty() {
             if !uniforms.masks.is_empty() {
                 for mask in &uniforms.masks {
-                    self.mask.render(device, queue, session, encoder, mask);
+                    self.mask
+                        .render(device, queue, session, passes.encoder(), mask);
                 }
             }
 
             if let Some(overlays) = &self.overlays {
                 if render_display && overlays.images.has_content() {
-                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                    overlays.images.render(&mut pass);
+                    overlays
+                        .images
+                        .render(passes.pass(session.current_texture_view(), load));
                 }
 
                 if !uniforms.texts.is_empty() {
-                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                    overlays.text.render(&mut pass);
+                    overlays
+                        .text
+                        .render(passes.pass(session.current_texture_view(), load));
                 }
             }
         } else if let Some(overlays) = &self.overlays {
@@ -8522,20 +8499,23 @@ impl RendererLayers {
                             .iter()
                             .filter(|mask| mask.track == overlay.track)
                         {
-                            self.mask.render(device, queue, session, encoder, mask);
+                            self.mask
+                                .render(device, queue, session, passes.encoder(), mask);
                         }
                     }
                     OverlayTrackKind::Image
                         if render_display && overlays.images.has_track(overlay.track) =>
                     {
-                        let mut pass =
-                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                        overlays.images.render_track(&mut pass, overlay.track);
+                        overlays.images.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
                     }
                     OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
-                        let mut pass =
-                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                        overlays.text.render_track(&mut pass, overlay.track);
+                        overlays.text.render_track(
+                            passes.pass(session.current_texture_view(), load),
+                            overlay.track,
+                        );
                     }
                     OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }
@@ -8544,16 +8524,87 @@ impl RendererLayers {
 
         if let Some(overlays) = &self.overlays {
             if overlays.keyboard.has_content() {
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                overlays.keyboard.render(&mut pass);
+                overlays
+                    .keyboard
+                    .render(passes.pass(session.current_texture_view(), load));
             }
 
             if overlays.captions.has_content() {
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                overlays.captions.render(&mut pass);
+                overlays
+                    .captions
+                    .render(passes.pass(session.current_texture_view(), load));
             }
         }
         Ok(())
+    }
+}
+
+/// Lets consecutive layer draws into the same texture share one render pass.
+/// Every pass boundary costs a store and reload of the whole attachment on
+/// Apple's tile-based GPUs, and wgpu-core gives each pass its own native
+/// command buffer, so a pass per layer multiplied both by the layer count.
+/// Because consecutive layers share one pass, a layer that changes dynamic
+/// pass state (scissor, viewport, blend constant, stencil reference) must
+/// restore it before returning.
+struct LayerPasses<'a> {
+    encoder: &'a mut wgpu::CommandEncoder,
+    open: Option<(wgpu::TextureView, wgpu::RenderPass<'static>)>,
+    #[cfg(test)]
+    split: bool,
+}
+
+impl LayerPasses<'_> {
+    fn pass(
+        &mut self,
+        view: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) -> &mut wgpu::RenderPass<'static> {
+        let continues_open_pass = matches!(load, wgpu::LoadOp::Load)
+            && !self.splits_every_layer()
+            && self
+                .open
+                .as_ref()
+                .is_some_and(|(open_view, _)| open_view == view);
+        if !continues_open_pass {
+            self.open = None;
+            let pass = self
+                .encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                })
+                .forget_lifetime();
+            self.open = Some((view.clone(), pass));
+        }
+        let Some((_, pass)) = &mut self.open else {
+            unreachable!("a render pass was opened above")
+        };
+        pass
+    }
+
+    fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        self.open = None;
+        self.encoder
+    }
+
+    #[cfg(test)]
+    fn splits_every_layer(&self) -> bool {
+        self.split
+    }
+
+    #[cfg(not(test))]
+    fn splits_every_layer(&self) -> bool {
+        false
     }
 }
 
