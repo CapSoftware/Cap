@@ -175,6 +175,15 @@ class CapbenchTests(unittest.TestCase):
         self.assertIsNotNone(capbench.export_problem({**good, "out_width": 0.0}, 1850.0, "1920x1080"))
         self.assertIsNotNone(capbench.export_problem({**good, "out_height": 2160.0}, 1850.0, "1920x1080"))
 
+    def test_exports_ffprobe_cannot_read_are_invalid(self):
+        if not capbench.shutil.which("ffprobe"):
+            self.skipTest("ffprobe is not on PATH")
+        post = capbench.BENCHES["export-1080p60"]["post"]
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "export.mp4").write_bytes(b"not an mp4")
+            with self.assertRaisesRegex(capbench.InvalidRun, "ffprobe"):
+                post(None, Path(tmp), {"frames": 100.0, "wall_s": 2.0})
+
     def test_compare_flags_only_separated_changes(self):
         def results(values):
             return {"benches": {"b": {"runs": [{"wall_s": v} for v in values], "better": {"wall_s": "lower"}}}}
