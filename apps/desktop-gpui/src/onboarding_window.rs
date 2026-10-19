@@ -41,6 +41,10 @@ enum Step {
     Faq,
 }
 
+fn guided_permission(permission: OSPermission) -> bool {
+    permission.required() && crate::permission_guide::eligible(permission)
+}
+
 impl Step {
     const ALL: [Self; 8] = [
         Self::Permissions,
@@ -172,6 +176,7 @@ pub struct OnboardingWindow {
     permissions_only: bool,
     state: PermissionsState,
     pending: Option<OSPermission>,
+    media_request_pending: bool,
     poll: Option<gpui::Task<()>>,
     verify: Option<gpui::Task<()>>,
     refresh: Option<gpui::Task<()>>,
@@ -220,6 +225,7 @@ impl OnboardingWindow {
             permissions_only,
             state,
             pending: None,
+            media_request_pending: false,
             poll: None,
             verify: None,
             refresh: None,
@@ -318,6 +324,11 @@ impl OnboardingWindow {
                             this.grants_changed();
                             cx.notify();
                         }
+                        let media_request_pending = permissions::media_request_pending();
+                        if media_request_pending != this.media_request_pending {
+                            this.media_request_pending = media_request_pending;
+                            cx.notify();
+                        }
                         this.state.all_shown_granted()
                     })
                     .unwrap_or(true);
@@ -387,6 +398,12 @@ impl OnboardingWindow {
         self.refresh = None;
         self.demo_task = None;
         self.audio = None;
+        // A Screen Recording grant made in this session only takes effect in a
+        // new process, however onboarding was left (Skip the tour included).
+        if self.needs_relaunch() {
+            permissions::relaunch(cx);
+            return;
+        }
         cx.defer(crate::app_windows::onboarding_finished);
     }
 
@@ -592,21 +609,13 @@ impl OnboardingWindow {
                         return false;
                     }
                     let action = this.state.refreshed_action(permission, raw);
-                    // With the drag guide available, Screen Recording and
-                    // Accessibility skip the system alert entirely: its "Open
-                    // System Settings" button and the pane it opens are two
-                    // more hops, and the list may not even contain Cap.
-                    // The pane opens with the guide under it instead.
-                    let guided = action.is_some()
-                        && permission.required()
-                        && crate::permission_guide::eligible(permission);
                     match action {
                         None => {
                             this.pending = None;
                             cx.notify();
                             false
                         }
-                        Some(RowAction::OpenSettings) | Some(RowAction::Request) if guided => {
+                        Some(RowAction::OpenSettings) if guided_permission(permission) => {
                             this.pending = None;
                             this.state.note_settings_opened(permission);
                             permissions::open_permission_settings(permission);
@@ -646,8 +655,17 @@ impl OnboardingWindow {
                 }
                 this.state.apply_raw(raw);
                 this.pending = None;
+                this.media_request_pending = permissions::media_request_pending();
                 if permission.required() && !this.state.status(permission).permitted() {
                     this.state.note_request_failed(permission);
+                    // The request has added Cap to the pane's list (the way
+                    // the Tauri app always asked first); if the alert did not
+                    // end in a grant, the pane opens with the drag guide.
+                    if guided_permission(permission) {
+                        this.state.note_settings_opened(permission);
+                        permissions::open_permission_settings(permission);
+                        cx.defer(move |cx| crate::permission_guide::start(permission, cx));
+                    }
                 }
                 if this.state.all_shown_granted() {
                     this.poll = None;

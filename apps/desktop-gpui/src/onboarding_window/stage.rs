@@ -639,6 +639,7 @@ impl OnboardingWindow {
         let no_prompt = waiting
             && !permission.required()
             && !busy
+            && !self.media_request_pending
             && status == OSPermissionStatus::NotDetermined;
         let card = if no_prompt {
             card.child(
