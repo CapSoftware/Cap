@@ -603,7 +603,14 @@ export function SingleKeycap(props: SingleKeycapProps) {
 
 	const renderClassicBox = () => {
 		return (
-			<span class="inline-flex items-center justify-center px-2.5 py-1 text-sm font-semibold rounded bg-black/80 text-white border border-white/20">
+			<span
+				class="inline-flex items-center justify-center px-2.5 py-1 text-sm font-semibold rounded border"
+				style={{
+					background: palette().surfaceMid,
+					color: palette().textColor,
+					"border-color": palette().surfaceStroke,
+				}}
+			>
 				{displayLabel()}
 			</span>
 		);
@@ -648,6 +655,13 @@ export function KeycapPreviewCluster(props: {
 	const theme = () => props.theme || "white";
 	const scale = () => props.scale || 1.0;
 	const chassisTheme = () => THEME_CHASSIS[theme()] || THEME_CHASSIS.white;
+	const chassisBackground = () => {
+		const customBg = props.customBgColor;
+		if (customBg && customBg.trim() !== "") {
+			return customBg.startsWith("#") ? `${customBg}ee` : customBg;
+		}
+		return chassisTheme().background;
+	};
 
 	return (
 		<div
@@ -655,7 +669,7 @@ export function KeycapPreviewCluster(props: {
 			style={{
 				...(showChassis() && style() !== "classic_box"
 					? {
-							background: chassisTheme().background,
+							background: chassisBackground(),
 							padding: "10px 14px",
 							"border-radius": "18px",
 							border: chassisTheme().border,
