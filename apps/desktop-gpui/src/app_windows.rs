@@ -1417,6 +1417,7 @@ pub fn open_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_finished(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
         handle
             .update(cx, |_, window, _| window.remove_window())
@@ -1436,6 +1437,7 @@ pub fn close_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_closed(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
     if !crate::store::should_show_onboarding() {
@@ -2289,6 +2291,17 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         })
         .filter_map(|number| number.to_string().parse().ok())
         .collect()
+}
+
+/// The overlay's "Sign In To Use": close the picker and put the sign-in
+/// prompt on the main window, brought forward even when the picker was opened
+/// from the tray with the main window closed.
+pub fn show_instant_sign_in(kind: crate::main_window::TargetType, cx: &mut App) {
+    dismiss_target_overlays(cx);
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| view.show_sign_in_prompt(kind, cx))
+        .ok();
+    show_main_window(cx);
 }
 
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
@@ -6320,12 +6333,16 @@ pub fn arm_target_mode(kind: crate::main_window::TargetType, cx: &mut App) {
         .ok();
 }
 
-/// Repaint the bar between its own 250ms ticks -- the mic meter updates at
-/// ~20Hz and the bar is never the active window.
+/// Repaint the bar between its once-a-second ticks -- the mic meter updates at
+/// up to ~20Hz and the bar is never the active window.
 pub fn refresh_controls_window(cx: &mut App) {
+    let level_db = crate::feeds::Feeds::global(cx).read(cx).mic_level_db;
     if let Some(handle) = cx.global::<AppWindows>().controls {
         handle
-            .update(cx, |_, window, cx| {
+            .update(cx, |controls, window, cx| {
+                if !controls.level_bar_moves(level_db, window.scale_factor()) {
+                    return;
+                }
                 cx.notify();
                 window.refresh();
             })
@@ -7018,6 +7035,7 @@ mod tests {
                 excluded_windows: Vec::new(),
                 camera_feed: None,
                 mic_feed: None,
+                mic_meter: None,
                 linux_instant_camera: None,
                 start_gate: None,
             }),
