@@ -381,19 +381,16 @@ impl KeyboardLayer {
             "rose" => ("#E11D48", "#FFFFFF"),
             "purple" => ("#7C3AED", "#FFFFFF"),
             "cyberpunk" => ("#0D0D15", "#00FFA3"),
-            _ => (settings.background_color.as_str(), settings.color.as_str()),
+            _ => ("#EFEFEF", "#1A1A1A"),
         };
 
-        let default_theme_bg = "#000000";
-        let default_theme_text = "#FFFFFF";
-
-        let fallback_bg = if settings.background_color != default_theme_bg && !settings.background_color.is_empty() {
+        let fallback_bg = if !settings.background_color.is_empty() {
             settings.background_color.as_str()
         } else {
             theme_bg_hex
         };
 
-        let fallback_text = if settings.color != default_theme_text && !settings.color.is_empty() {
+        let fallback_text = if !settings.color.is_empty() {
             settings.color.as_str()
         } else {
             theme_text_hex

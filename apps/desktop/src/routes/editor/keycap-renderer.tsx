@@ -1,5 +1,9 @@
 import { createMemo, createUniqueId, For, Show } from "solid-js";
-import type { KeycapStyle, KeycapTheme } from "~/store/keyboard";
+import {
+	KEYCAP_THEME_COLORS,
+	type KeycapStyle,
+	type KeycapTheme,
+} from "~/store/keyboard";
 
 export interface KeycapColorPalette {
 	surfaceTop: string;
@@ -9,6 +13,33 @@ export interface KeycapColorPalette {
 	dishTop: string;
 	dishBottom: string;
 	textColor: string;
+}
+
+export function adjustHex(hex: string, percent: number): string {
+	const clean = hex.replace("#", "");
+	if (clean.length !== 6 && clean.length !== 3) return hex;
+	const fullHex =
+		clean.length === 3
+			? clean
+					.split("")
+					.map((c) => c + c)
+					.join("")
+			: clean;
+	const num = Number.parseInt(fullHex, 16);
+	if (Number.isNaN(num)) return hex;
+	const r = Math.min(
+		255,
+		Math.max(0, Math.round(((num >> 16) & 255) + (255 * percent) / 100)),
+	);
+	const g = Math.min(
+		255,
+		Math.max(0, Math.round(((num >> 8) & 255) + (255 * percent) / 100)),
+	);
+	const b = Math.min(
+		255,
+		Math.max(0, Math.round((num & 255) + (255 * percent) / 100)),
+	);
+	return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
 export const THEME_PALETTES: Record<
@@ -274,11 +305,20 @@ export function SingleKeycap(props: SingleKeycapProps) {
 	const palette = createMemo(() => {
 		const themeData = THEME_PALETTES[theme()] || THEME_PALETTES.white;
 		const base = isMod() ? themeData.mod : themeData.alpha;
+		const defaultColors =
+			KEYCAP_THEME_COLORS[theme()] || KEYCAP_THEME_COLORS.white;
 		const customText = props.customTextColor;
 		const customBg = props.customBgColor;
-		const hasCustomText =
-			customText && customText !== "#FFFFFF" && customText !== "";
-		const hasCustomBg = customBg && customBg !== "#000000" && customBg !== "";
+		const hasCustomText = Boolean(
+			customText &&
+				customText.trim() !== "" &&
+				customText.toLowerCase() !== defaultColors.text.toLowerCase(),
+		);
+		const hasCustomBg = Boolean(
+			customBg &&
+				customBg.trim() !== "" &&
+				customBg.toLowerCase() !== defaultColors.background.toLowerCase(),
+		);
 
 		if (!hasCustomText && !hasCustomBg) {
 			return base;
@@ -286,14 +326,15 @@ export function SingleKeycap(props: SingleKeycapProps) {
 
 		return {
 			...base,
-			...(hasCustomText ? { textColor: customText } : {}),
-			...(hasCustomBg
+			...(hasCustomText && customText ? { textColor: customText } : {}),
+			...(hasCustomBg && customBg
 				? {
-						surfaceTop: customBg,
+						surfaceTop: adjustHex(customBg, 12),
 						surfaceMid: customBg,
-						surfaceBottom: customBg,
-						dishTop: customBg,
-						dishBottom: customBg,
+						surfaceBottom: adjustHex(customBg, -18),
+						surfaceStroke: adjustHex(customBg, 20),
+						dishTop: adjustHex(customBg, 8),
+						dishBottom: adjustHex(customBg, -8),
 					}
 				: {}),
 		};

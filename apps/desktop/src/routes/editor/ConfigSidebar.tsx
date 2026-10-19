@@ -52,6 +52,7 @@ import {
 import {
 	defaultKeyboardSettings,
 	KEYCAP_STYLE_OPTIONS,
+	KEYCAP_THEME_COLORS,
 	KEYCAP_THEME_OPTIONS,
 	type KeyboardSettings,
 	type KeycapStyle,
@@ -3788,6 +3789,18 @@ function KeyboardSegmentConfig(props: {
 		setProject("keyboard", "settings", key, value);
 	};
 
+	const updateSettings = (partial: Partial<KeyboardSettings>) => {
+		if (!project?.keyboard) {
+			setProject("keyboard", {
+				settings: { ...defaultKeyboardSettings, ...partial },
+			});
+			return;
+		}
+		for (const [key, value] of Object.entries(partial)) {
+			setProject("keyboard", "settings", key as keyof KeyboardSettings, value);
+		}
+	};
+
 	const previewKeys = createMemo(() => {
 		const text = props.segment.displayText || "";
 		if (!text) return ["⌨"];
@@ -3881,7 +3894,16 @@ function KeyboardSegmentConfig(props: {
 							value={getSetting("theme")}
 							onChange={(value) => {
 								if (value === null) return;
-								updateSetting("theme", value);
+								const themeColors = KEYCAP_THEME_COLORS[value];
+								updateSettings({
+									theme: value,
+									...(themeColors
+										? {
+												color: themeColors.text,
+												backgroundColor: themeColors.background,
+											}
+										: {}),
+								});
 							}}
 							itemComponent={(p) => (
 								<MenuItem<typeof KSelect.Item> as={KSelect.Item} item={p.item}>
