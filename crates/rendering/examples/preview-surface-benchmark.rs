@@ -330,8 +330,12 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
         pool.pixel_buf().expect("pixel buffer")
     }
 
-    fn submit_and_wait(device: &wgpu::Device, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
-        queue.submit(std::iter::once(encoder.finish()));
+    fn submit_and_wait(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+    ) -> wgpu::SubmissionIndex {
+        let submission = queue.submit(std::iter::once(encoder.finish()));
         let done = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&done);
         queue.on_submitted_work_done(move || signal.store(true, Ordering::Release));
@@ -339,6 +343,7 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
             let _ = device.poll(wgpu::PollType::Poll);
             std::hint::spin_loop();
         }
+        submission
     }
 
     struct Stats {
@@ -592,9 +597,9 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
             let pending = runtime
                 .block_on(bgra.encode(&device, &mut bgra_encoder, &source, width, height, 0, 60))
                 .expect("bgra encode");
-            submit_and_wait(&device, &queue, bgra_encoder);
+            let submission = submit_and_wait(&device, &queue, bgra_encoder);
             let bgra_frame = runtime
-                .block_on(pending.wait(&device, &queue))
+                .block_on(pending.wait(&device, submission))
                 .expect("bgra frame");
 
             // Paint-phase inputs: sampled imports of the converted surfaces,
