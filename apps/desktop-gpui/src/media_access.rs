@@ -21,6 +21,7 @@ pub struct MediaAccess {
     requesting: Option<OSPermission>,
     refresh: Option<Task<()>>,
     request: Option<Task<()>>,
+    settings_watch: Option<Task<()>>,
 }
 
 struct MediaAccessGlobal(Entity<MediaAccess>);
@@ -36,6 +37,7 @@ impl MediaAccess {
                 requesting: None,
                 refresh: None,
                 request: None,
+                settings_watch: None,
             };
             this.refresh(cx);
             this
@@ -99,12 +101,37 @@ impl MediaAccess {
         }));
     }
 
+    /// While the Privacy pane is open nothing in Cap necessarily activates
+    /// again (the camera window is a panel), so poll until the grant lands.
+    fn watch_for_grant(&mut self, permission: OSPermission, cx: &mut Context<Self>) {
+        const INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+        const LIMIT: u32 = 180;
+        self.settings_watch = Some(cx.spawn(async move |this, cx| {
+            for _ in 0..LIMIT {
+                cx.background_executor().timer(INTERVAL).await;
+                let granted = this
+                    .update(cx, |this, cx| {
+                        this.refresh(cx);
+                        this.allowed(permission)
+                    })
+                    .unwrap_or(true);
+                if granted {
+                    break;
+                }
+            }
+            this.update(cx, |this, _| this.settings_watch = None).ok();
+        }));
+    }
+
     /// The one action a missing permission offers: the system prompt while
     /// macOS has not asked yet, the Privacy pane once it has been denied.
     pub fn request(&mut self, permission: OSPermission, cx: &mut Context<Self>) {
         match self.status(permission) {
             OSPermissionStatus::Granted | OSPermissionStatus::NotNeeded => {}
-            OSPermissionStatus::Denied => permissions::open_permission_settings(permission),
+            OSPermissionStatus::Denied => {
+                permissions::open_permission_settings(permission);
+                self.watch_for_grant(permission, cx);
+            }
             OSPermissionStatus::NotDetermined => {
                 if self.requesting.is_some() {
                     return;
