@@ -35,12 +35,26 @@ pub fn fit_centered(image: &RgbaImage, target_width: u32, target_height: u32) ->
         ))
     };
 
-    let mut canvas = RgbaImage::from_pixel(target_width, target_height, image::Rgba([0, 0, 0, 0]));
-
     let offset_x = (target_width - scaled_width) / 2;
     let offset_y = (target_height - scaled_height) / 2;
 
-    image::imageops::overlay(&mut canvas, &*resized, offset_x as i64, offset_y as i64);
+    let mut canvas = RgbaImage::from_pixel(target_width, target_height, image::Rgba([0, 0, 0, 0]));
+
+    let target_stride = target_width as usize * 4;
+    let row_bytes = scaled_width as usize * 4;
+    let canvas_raw = canvas.as_mut();
+    let resized_raw = resized.as_raw();
+
+    if crate::screenshot::is_opaque(resized_raw) {
+        for y in 0..scaled_height as usize {
+            let canvas_start = (y + offset_y as usize) * target_stride + offset_x as usize * 4;
+            let resized_start = y * row_bytes;
+            canvas_raw[canvas_start..canvas_start + row_bytes]
+                .copy_from_slice(&resized_raw[resized_start..resized_start + row_bytes]);
+        }
+    } else {
+        image::imageops::overlay(&mut canvas, &*resized, offset_x as i64, offset_y as i64);
+    }
 
     canvas
 }
