@@ -8,7 +8,8 @@ use cap_project::{
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
 use cursor_interpolation::{
-    InterpolatedCursorPosition, interpolate_cursor, interpolate_cursor_with_click_spring,
+    CursorEventOrder, InterpolatedCursorPosition, interpolate_cursor,
+    interpolate_cursor_with_click_spring,
 };
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 #[cfg(target_os = "macos")]
@@ -460,15 +461,18 @@ impl RecordingSegmentDecoders {
             camera_offset,
         } = segment_timing::segment_video_timing(meta, segment_i);
 
+        // A meta fps of 0 means "not recorded" (recovery fills it in); frame
+        // indexing divides by it, so until then decode at the legacy rate.
+        let decoder_fps = |fps: u32| if fps == 0 { 30 } else { fps };
         let screen_source = DecoderSource {
             path: display_path,
-            fps: screen_fps,
+            fps: decoder_fps(screen_fps),
             offset: screen_offset,
         };
         let camera_source = match camera_path {
             Some(path) => Some(DecoderSource {
                 path,
-                fps: camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?,
+                fps: decoder_fps(camera_fps.ok_or_else(|| "Camera metadata missing".to_string())?),
                 offset: camera_offset,
             }),
             None => None,
@@ -706,6 +710,16 @@ pub enum RenderingError {
     PreparingOverlayContent,
     #[error("No segments available in recording")]
     NoSegments,
+    #[error(
+        "The timeline uses recording segment {segment}, but the recording only has {available}"
+    )]
+    MissingRecordingSegment { segment: u32, available: usize },
+    #[error("Timeline clip {index} has an invalid {field}: {value}")]
+    InvalidTimelineSegment {
+        index: usize,
+        field: &'static str,
+        value: f64,
+    },
     #[error(transparent)]
     RequestDeviceFailed(#[from] wgpu::RequestDeviceError),
     #[error("Failed to wait for buffer mapping")]
@@ -755,6 +769,40 @@ pub struct RenderSegment {
     pub render_display: bool,
 }
 
+fn validate_timeline(
+    project: &ProjectConfiguration,
+    available: usize,
+) -> Result<(), RenderingError> {
+    let Some(timeline) = &project.timeline else {
+        return Ok(());
+    };
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        if segment.recording_clip as usize >= available {
+            return Err(RenderingError::MissingRecordingSegment {
+                segment: segment.recording_clip,
+                available,
+            });
+        }
+        let invalid = |field, value| RenderingError::InvalidTimelineSegment {
+            index,
+            field,
+            value,
+        };
+        if !segment.start.is_finite() {
+            return Err(invalid("start", segment.start));
+        }
+        // Rounding in trim edits can leave a zero-length clip's end a hair
+        // before its start; only a clip that genuinely runs backwards fails.
+        if !segment.end.is_finite() || segment.end < segment.start - 1e-6 {
+            return Err(invalid("end", segment.end));
+        }
+        if !segment.timescale.is_finite() || segment.timescale <= 0.0 {
+            return Err(invalid("speed", segment.timescale));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
@@ -769,6 +817,7 @@ pub async fn render_video_to_channel(
     frame_windows: Option<FrameWindows>,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
+    validate_timeline(project, render_segments.len())?;
 
     let start_time = Instant::now();
 
@@ -1336,6 +1385,7 @@ pub async fn render_video_to_channel_nv12(
     let ffmpeg_init_start = Instant::now();
     ffmpeg::init().unwrap();
     let ffmpeg_init_ms = ffmpeg_init_start.elapsed().as_millis() as u64;
+    validate_timeline(project, render_segments.len())?;
 
     let start_time = Instant::now();
 
@@ -2885,6 +2935,7 @@ pub struct ProjectUniforms {
     /// their edges); the cursor and click-ripple layers scale by it.
     pub cursor_clip_visibility: f32,
     pub click_ripples: Vec<ClickRipple>,
+    cursor_event_order: CursorEventOrder,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
@@ -2916,6 +2967,7 @@ fn collect_click_ripples(
     now_ms: f64,
     cursor_stop_time: Option<f32>,
     cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
+    clicks_ordered: bool,
 ) -> Vec<ClickRipple> {
     let ripple = &project.cursor.ripple;
     if project.cursor.hide || !ripple.enabled {
@@ -2923,8 +2975,19 @@ fn collect_click_ripples(
     }
 
     let duration_ms = ripple.duration_clamped() as f64 * 1000.0;
-    let mut ripples: Vec<ClickRipple> = cursor_events
-        .clicks
+    let clicks = cursor_events.clicks.as_slice();
+    let clicks = if clicks_ordered {
+        let start = clicks.partition_point(|click| now_ms - click.time_ms >= duration_ms);
+        let clicks = &clicks[start..];
+        let end = clicks.partition_point(|click| {
+            let age_ms = now_ms - click.time_ms;
+            age_ms >= 0.0 || age_ms.is_nan()
+        });
+        &clicks[..end]
+    } else {
+        clicks
+    };
+    let mut ripples: Vec<ClickRipple> = clicks
         .iter()
         .filter(|click| click.down)
         .filter_map(|click| {
@@ -3232,6 +3295,7 @@ const FLOATING_CAMERA_FRAC_STACKED: f32 = 0.40;
 const FLOATING_ROUNDING_FRAC: f32 = 0.028;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
+const MAX_OUTPUT_DIMENSION: u32 = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct NotchPlacement {
@@ -3436,11 +3500,17 @@ impl ProjectUniforms {
     }
 
     fn auto_padding_factor(project: &ProjectConfiguration) -> f64 {
-        project.background.padding / 100.0 * SCREEN_MAX_PADDING
+        let padding = project.background.padding;
+        let padding = if padding.is_finite() {
+            padding.clamp(0.0, 100.0)
+        } else {
+            0.0
+        };
+        padding / 100.0 * SCREEN_MAX_PADDING
     }
 
     fn round_base_dimension(value: f64) -> u32 {
-        (((value.ceil() as u32) + 1) & !1).max(2)
+        ((value.ceil() as u32).saturating_add(1) & !1).max(2)
     }
 
     fn fixed_aspect_base_size(crop: &Crop, target_aspect: f64, padding_factor: f64) -> (u32, u32) {
@@ -3491,8 +3561,8 @@ impl ProjectUniforms {
         match &project.aspect_ratio {
             None => {
                 let scale = 1.0 + padding_factor * 2.0;
-                let width = ((crop.size.x as f64 * scale) as u32 + 1) & !1;
-                let height = ((crop.size.y as f64 * scale) as u32 + 1) & !1;
+                let width = ((crop.size.x as f64 * scale) as u32).saturating_add(1) & !1;
+                let height = ((crop.size.y as f64 * scale) as u32).saturating_add(1) & !1;
                 (width, height)
             }
             Some(AspectRatio::Square) => Self::fixed_aspect_base_size(&crop, 1.0, padding_factor),
@@ -3520,10 +3590,17 @@ impl ProjectUniforms {
 
         let width_scale = resolution_base.x as f32 / base_width as f32;
         let height_scale = resolution_base.y as f32 / base_height as f32;
-        let scale = width_scale.min(height_scale);
+        // Past the device's texture limit every render target fails to
+        // allocate (a padded 6K recording exported at its own size), so
+        // scale down to fit it instead.
+        let limit_scale = (MAX_OUTPUT_DIMENSION as f32 / base_width as f32)
+            .min(MAX_OUTPUT_DIMENSION as f32 / base_height as f32);
+        let scale = width_scale.min(height_scale).min(limit_scale);
 
-        let scaled_width = ((base_width as f32 * scale) as u32 + 3) & !3;
-        let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+        let scaled_width = (((base_width as f32 * scale) as u32).saturating_add(3) & !3)
+            .clamp(4, MAX_OUTPUT_DIMENSION);
+        let scaled_height = (((base_height as f32 * scale) as u32).saturating_add(1) & !1)
+            .clamp(2, MAX_OUTPUT_DIMENSION);
         (scaled_width, scaled_height)
     }
 
@@ -3942,6 +4019,7 @@ impl ProjectUniforms {
             total_duration,
             zoom_timeline,
             &cursor_interp_fn,
+            CursorEventOrder::default(),
         )
     }
 
@@ -4005,6 +4083,7 @@ impl ProjectUniforms {
             total_duration,
             zoom_timeline,
             &cursor_interp_fn,
+            precomputed_cursor.event_order(),
         )
     }
 
@@ -4020,6 +4099,7 @@ impl ProjectUniforms {
         total_duration: f64,
         zoom_timeline: &ZoomTransformTimeline,
         cursor_interp_fn: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>,
+        cursor_event_order: CursorEventOrder,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -4084,6 +4164,7 @@ impl ProjectUniforms {
             current_recording_time as f64 * 1000.0,
             cursor_stop_time,
             cursor_interp_fn,
+            cursor_event_order.clicks,
         );
         let lookback_t = (cursor_time_for_interp - 0.4).max(0.0);
         let past_cursor_for_tilt = cursor_interp_fn(lookback_t);
@@ -5107,6 +5188,7 @@ impl ProjectUniforms {
             prev_cursor: prev_interpolated_cursor,
             cursor_clip_visibility,
             click_ripples,
+            cursor_event_order,
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: cursor_motion_blur,
             masks,
@@ -5219,8 +5301,14 @@ mod tests {
         };
 
         for (now_ms, expected_progress) in [(8_750.0, 0.25), (9_000.0, 0.5)] {
-            let ripples =
-                collect_click_ripples(&project, &events, now_ms, Some(8.0), &ripple_cursor_at);
+            let ripples = collect_click_ripples(
+                &project,
+                &events,
+                now_ms,
+                Some(8.0),
+                &ripple_cursor_at,
+                true,
+            );
             let displayed = ripple_cursor_at(cursor_time_for_interpolation(
                 (now_ms / 1000.0) as f32,
                 Some(8.0),
@@ -5244,8 +5332,14 @@ mod tests {
         };
 
         for (stop_time, expected_position) in [(None, 8.5), (Some(9.0), 8.5), (Some(0.0), 0.0)] {
-            let ripples =
-                collect_click_ripples(&project, &events, 8_750.0, stop_time, &ripple_cursor_at);
+            let ripples = collect_click_ripples(
+                &project,
+                &events,
+                8_750.0,
+                stop_time,
+                &ripple_cursor_at,
+                true,
+            );
 
             assert_eq!(ripples.len(), 1);
             assert_eq!(ripples[0].position.coord.x, expected_position);
@@ -5267,8 +5361,14 @@ mod tests {
             ..Default::default()
         };
 
-        let ripples =
-            collect_click_ripples(&project, &events, 9_000.0, Some(8.0), &ripple_cursor_at);
+        let ripples = collect_click_ripples(
+            &project,
+            &events,
+            9_000.0,
+            Some(8.0),
+            &ripple_cursor_at,
+            true,
+        );
 
         assert_eq!(ripples.len(), 1);
         assert_eq!(ripples[0].progress, 0.0);
@@ -5284,20 +5384,93 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        assert!(collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at).is_empty());
+        assert!(
+            collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at, true)
+                .is_empty()
+        );
 
         project.cursor.ripple.enabled = true;
         project.cursor.hide = true;
-        assert!(collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at).is_empty());
+        assert!(
+            collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at, true)
+                .is_empty()
+        );
 
         project.cursor.hide = false;
-        let ripples = collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at);
+        let ripples = collect_click_ripples(&project, &events, 10.0, None, &ripple_cursor_at, true);
         assert_eq!(ripples.len(), layers::MAX_CLICK_RIPPLES);
         assert_eq!(ripples[0].position.coord.x, f64::from(0.004_f32));
         assert_eq!(
             ripples.last().unwrap().position.coord.x,
             f64::from(0.009_f32)
         );
+    }
+
+    #[test]
+    fn ordered_click_ripple_window_matches_linear_scan() {
+        let cases = [
+            vec![0.0, 0.0, 400.0, 400.0, 900.0, 1500.0, 1500.0, 2600.0],
+            vec![-0.0, 0.0, 0.0, 10.0, 100.0],
+            vec![f64::NEG_INFINITY, 0.0, 10.0, f64::INFINITY],
+            vec![0.0, 400.0, 200.0, 900.0],
+            vec![0.0, f64::NAN, 900.0],
+            vec![f64::NAN],
+            vec![],
+        ];
+        let mut project = ProjectConfiguration::default();
+        project.cursor.ripple.enabled = true;
+        let mut compared = 0;
+        for times in cases {
+            let events = CursorEvents {
+                clicks: times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| ripple_click(time, index % 3 != 1))
+                    .collect(),
+                ..Default::default()
+            };
+            if !PrecomputedCursorTimeline::new(&events, None, None)
+                .event_order()
+                .clicks
+            {
+                continue;
+            }
+            for duration in [0.25, 0.6, 1.0, 5.0] {
+                project.cursor.ripple.duration = duration;
+                let duration_ms = project.cursor.ripple.duration_clamped() as f64 * 1000.0;
+                let queries = times.iter().flat_map(|&time| {
+                    [time, time + duration_ms]
+                        .into_iter()
+                        .flat_map(|base| [base.next_down(), base, base.next_up()])
+                });
+                for now_ms in queries.chain([f64::NAN, f64::NEG_INFINITY, f64::INFINITY, 1.0e9]) {
+                    for stop_time in [None, Some(0.5)] {
+                        let bits = |ordered| {
+                            collect_click_ripples(
+                                &project,
+                                &events,
+                                now_ms,
+                                stop_time,
+                                &ripple_cursor_at,
+                                ordered,
+                            )
+                            .iter()
+                            .map(|ripple| {
+                                (
+                                    ripple.position.coord.x.to_bits(),
+                                    ripple.position.coord.y.to_bits(),
+                                    ripple.progress.to_bits(),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                        };
+                        assert_eq!(bits(true), bits(false), "{times:?} at {now_ms}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert!(compared > 0);
     }
 
     fn render_options(screen_width: u32, screen_height: u32) -> RenderOptions {
@@ -9298,6 +9471,248 @@ mod project_uniforms_tests {
                 samples[samples.len() / 2],
                 samples[samples.len() * 95 / 100],
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn ordered_cursor_event_lookups_preserve_rendered_pixels() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        let events = CursorEvents {
+            moves: [0.0, 100.0, 200.0, 300.0, 3000.0, 3050.0, 3100.0]
+                .into_iter()
+                .enumerate()
+                .map(|(index, time)| cursor_move(time, 0.3 + index as f64 * 0.05, 0.5))
+                .collect(),
+            clicks: [
+                (150.0, true),
+                (230.0, false),
+                (3060.0, true),
+                (3120.0, false),
+            ]
+            .into_iter()
+            .map(|(time_ms, down)| cap_project::CursorClickEvent {
+                active_modifiers: Vec::new(),
+                cursor_num: 0,
+                cursor_id: "primary".to_string(),
+                time_ms,
+                down,
+            })
+            .collect(),
+        };
+        let mut project = ProjectConfiguration::default();
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.hide_when_idle = true;
+        project.cursor.hide_when_idle_delay = 0.5;
+        project.cursor.ripple.enabled = true;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let cursor = PrecomputedCursorTimeline::new(
+            &events,
+            Some(SpringMassDamperSimulationConfig {
+                tension: project.cursor.tension,
+                mass: project.cursor.mass,
+                friction: project.cursor.friction,
+            }),
+            Some(project.cursor.click_spring_config()),
+        );
+        assert_eq!(
+            cursor.event_order(),
+            CursorEventOrder {
+                moves: true,
+                clicks: true
+            }
+        );
+        let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        let mut ordered_renderer = FrameRenderer::new(&constants);
+        let mut linear_renderer = FrameRenderer::new(&constants);
+        let mut ordered_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut linear_layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut distinct_frames = std::collections::HashSet::new();
+        for frame_number in [10, 12, 14, 18, 54, 60, 66, 72, 120, 181, 184, 188, 192, 200] {
+            let time = frame_number as f32 / 60.0;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: Some(source.clone()),
+                camera_frame: None,
+                segment_time: time,
+                recording_time: time,
+                segment_has_camera: false,
+            };
+            let ordered = ProjectUniforms::new_with_precomputed_cursor(
+                &constants,
+                &project,
+                frame_number,
+                60,
+                size,
+                &events,
+                &frames,
+                4.0,
+                &zoom,
+                &cursor,
+            );
+            let mut linear = ordered.clone();
+            linear.cursor_event_order = CursorEventOrder::default();
+            linear.click_ripples = collect_click_ripples(
+                &project,
+                &events,
+                f64::from(time) * 1000.0,
+                None,
+                &|time| cursor.interpolate(time),
+                false,
+            );
+            let ordered = ordered_renderer
+                .render_immediate(frames.clone(), ordered, &events, true, &mut ordered_layers)
+                .await
+                .unwrap();
+            let linear = linear_renderer
+                .render_immediate(frames, linear, &events, true, &mut linear_layers)
+                .await
+                .unwrap();
+            assert!(
+                ordered.data == linear.data,
+                "frame={frame_number}: rendered cursor pixels changed"
+            );
+            distinct_frames.insert(ordered.data);
+        }
+        assert!(distinct_frames.len() > 8);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn benchmark_idle_cursor_frame_preparation() {
+        let mut constants = cursor_test_constants().await;
+        let size = XY::new(320, 180);
+        constants.options.screen_size = size;
+        println!("idle_cursor adapter={}", constants.adapter_name());
+        let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
+        for duration_secs in [60u32, 600, 3600] {
+            let mut project = ProjectConfiguration::default();
+            project.cursor.set_cursor_type(CursorType::Circle);
+            project.cursor.hide_when_idle = true;
+            project.cursor.ripple.enabled = true;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": duration_secs, "timescale": 1.0 }],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            );
+            let periods = duration_secs / 6;
+            let events = CursorEvents {
+                moves: (0..periods)
+                    .flat_map(|period| {
+                        (0..240).map(move |index| {
+                            cursor_move(
+                                f64::from(period) * 6000.0 + f64::from(index) * 1000.0 / 60.0,
+                                f64::from((period * 240 + index) % 479) / 479.0,
+                                f64::from((period * 240 + index) % 283) / 283.0,
+                            )
+                        })
+                    })
+                    .collect(),
+                clicks: (0..periods)
+                    .flat_map(|period| {
+                        [1000.0, 1080.0, 3000.0, 3080.0]
+                            .into_iter()
+                            .enumerate()
+                            .map(move |(index, offset)| cap_project::CursorClickEvent {
+                                active_modifiers: Vec::new(),
+                                cursor_num: 0,
+                                cursor_id: "primary".to_string(),
+                                time_ms: f64::from(period) * 6000.0 + offset,
+                                down: index % 2 == 0,
+                            })
+                    })
+                    .collect(),
+            };
+            let cursor = PrecomputedCursorTimeline::new(
+                &events,
+                Some(SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+                Some(project.cursor.click_spring_config()),
+            );
+            let zoom = ZoomTransformTimeline::from_project(
+                &project,
+                &events,
+                f64::from(duration_secs),
+                size,
+            );
+            let mut renderer = FrameRenderer::new(&constants);
+            let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+            let mut random = 0x9e37_79b9_u32;
+            for workload in ["start", "middle", "end", "random_seek"] {
+                let mut uniform_samples = Vec::new();
+                let mut cursor_samples = Vec::new();
+                for index in 0..544u32 {
+                    random ^= random << 13;
+                    random ^= random >> 17;
+                    random ^= random << 5;
+                    let period = match workload {
+                        "start" => index % 4,
+                        "middle" => periods / 2 + index % 4,
+                        "end" => periods - 4 + index % 4,
+                        _ => random % periods,
+                    };
+                    let frame_number = period * 360 + 255 + index % 90;
+                    let time = frame_number as f32 / 60.0;
+                    let frames = DecodedSegmentFrames {
+                        screen_size: size,
+                        screen_frame: Some(source.clone()),
+                        camera_frame: None,
+                        segment_time: time,
+                        recording_time: time,
+                        segment_has_camera: false,
+                    };
+                    let started = Instant::now();
+                    let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                        &constants,
+                        &project,
+                        frame_number,
+                        60,
+                        size,
+                        &events,
+                        &frames,
+                        f64::from(duration_secs),
+                        &zoom,
+                        &cursor,
+                    );
+                    let uniforms_us = started.elapsed().as_secs_f64() * 1e6;
+                    let (_, timings) = renderer
+                        .render_immediate_with_timings(frames, uniforms, &events, true, &mut layers)
+                        .await
+                        .unwrap();
+                    if index >= 32 {
+                        uniform_samples.push(uniforms_us);
+                        cursor_samples.push(timings.cursor_prepare_duration.as_secs_f64() * 1e6);
+                    }
+                }
+                uniform_samples.sort_by(f64::total_cmp);
+                cursor_samples.sort_by(f64::total_cmp);
+                let percentile =
+                    |samples: &[f64], percent: usize| samples[samples.len() * percent / 100];
+                println!(
+                    "idle_cursor duration_secs={duration_secs} moves={} clicks={} workload={workload} \
+                     uniforms_p50_us={:.3} uniforms_p95_us={:.3} \
+                     cursor_prepare_p50_us={:.3} cursor_prepare_p95_us={:.3}",
+                    events.moves.len(),
+                    events.clicks.len(),
+                    percentile(&uniform_samples, 50),
+                    percentile(&uniform_samples, 95),
+                    percentile(&cursor_samples, 50),
+                    percentile(&cursor_samples, 95),
+                );
+            }
         }
     }
 

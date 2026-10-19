@@ -370,6 +370,12 @@ impl RecordingMeta {
 }
 
 fn normalize_relative_path(path: &mut RelativePathBuf) {
+    // No real file name holds a NUL, and every media opener (FFmpeg, AVFoundation)
+    // converts the path to a C string, which a NUL makes fail or panic. Dropping
+    // it turns a damaged meta into an ordinary missing file.
+    if path.as_str().contains('\0') {
+        *path = RelativePathBuf::from(path.as_str().replace('\0', ""));
+    }
     let original = path.as_str();
     let normalized = original.replace('\\', "/");
 
@@ -1519,5 +1525,17 @@ mod ordinary_media_access_tests {
                 .is_err()
         );
         assert!(diagnostics.is_dir());
+    }
+}
+
+#[cfg(test)]
+mod nul_path_tests {
+    use super::*;
+
+    #[test]
+    fn a_nul_in_a_media_path_is_dropped() {
+        let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
+        normalize_relative_path(&mut path);
+        assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
     }
 }

@@ -928,6 +928,7 @@ pub struct HotkeysConfiguration {
 pub struct TimelineSegment {
     #[serde(default, rename = "recordingSegment")]
     pub recording_clip: u32,
+    #[serde(deserialize_with = "deserialize_timescale")]
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -948,6 +949,44 @@ pub enum ClipSpeedAudioMode {
     Mute,
     MaintainPitch,
     MatchSpeed,
+}
+
+// Real clips end at or within rounding of their recording's end. One that
+// runs on far past it (a damaged project) would make export render billions
+// of frames and the editor precompute zoom for all of them.
+const MAX_CLIP_OVERRUN_SECS: f64 = 60.0;
+
+/// Pulls back the end of any timeline clip that runs more than a minute past
+/// its recording segment (`recording_durations[i]`, in seconds).
+pub fn clamp_timeline_to_sources(project: &mut ProjectConfiguration, recording_durations: &[f64]) {
+    let Some(timeline) = project.timeline.as_mut() else {
+        return;
+    };
+    for segment in &mut timeline.segments {
+        let Some(&duration) = recording_durations.get(segment.recording_clip as usize) else {
+            continue;
+        };
+        if duration.is_finite() && duration > 0.0 && segment.end > duration + MAX_CLIP_OVERRUN_SECS
+        {
+            segment.end = duration.max(segment.start);
+        }
+    }
+}
+
+// Clip speeds are 0.25x to 8x in the editor. A damaged project's zero,
+// non-finite or vanishingly small speed stretches the clip toward infinite
+// duration and hangs playback and export, so it reads as normal speed.
+const MIN_TIMESCALE: f64 = 0.01;
+
+fn deserialize_timescale<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f64, D::Error> {
+    let timescale = f64::deserialize(deserializer)?;
+    Ok(if timescale.is_finite() && timescale >= MIN_TIMESCALE {
+        timescale
+    } else {
+        1.0
+    })
 }
 
 impl TimelineSegment {
@@ -4956,5 +4995,58 @@ mod overlay_order_tests {
             project.resolved_overlay_order(&[text, new_image, image]),
             [new_image, image, text]
         );
+    }
+}
+
+#[cfg(test)]
+mod timeline_repair_tests {
+    use super::*;
+
+    fn project(segments: serde_json::Value) -> ProjectConfiguration {
+        serde_json::from_value(
+            serde_json::json!({ "timeline": { "segments": segments, "zoomSegments": [] } }),
+        )
+        .unwrap()
+    }
+
+    fn ends(project: &ProjectConfiguration) -> Vec<f64> {
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|s| s.end)
+            .collect()
+    }
+
+    #[test]
+    fn only_clips_far_past_their_recording_are_pulled_back() {
+        let mut config = project(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.02 },
+            { "recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 1e300 },
+            { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 500.0 },
+            { "recordingSegment": 7, "timescale": 1.0, "start": 0.0, "end": 1e300 }
+        ]));
+        clamp_timeline_to_sources(&mut config, &[10.0, 0.0]);
+        assert_eq!(ends(&config), vec![10.02, 10.0, 500.0, 1e300]);
+    }
+
+    #[test]
+    fn hostile_speeds_read_as_normal_speed() {
+        let config = project(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 0.0, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": 1e-300, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": -2.0, "start": 0.0, "end": 1.0 },
+            { "recordingSegment": 0, "timescale": 0.25, "start": 0.0, "end": 1.0 }
+        ]));
+        let speeds: Vec<f64> = config
+            .timeline
+            .unwrap()
+            .segments
+            .iter()
+            .map(|s| s.timescale)
+            .collect();
+        assert_eq!(speeds, vec![1.0, 1.0, 1.0, 0.25]);
     }
 }
