@@ -3,7 +3,7 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -480,6 +480,9 @@ struct LocalCallback {
     complete: flume::Receiver<AuthParams>,
 }
 
+const MAX_CALLBACK_CONNECTIONS: usize = 8;
+const CALLBACK_REQUEST_DEADLINE: Duration = Duration::from_secs(30);
+
 fn start_local_callback(control: Arc<CallbackControl>) -> std::io::Result<LocalCallback> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -499,6 +502,7 @@ fn serve_local_callback(
 ) {
     let started = Instant::now();
     let mut completed_at = None;
+    let active = Arc::new(AtomicUsize::new(0));
     loop {
         if control.stop.load(Ordering::Acquire) {
             return;
@@ -513,11 +517,23 @@ fn serve_local_callback(
         }
         match listener.accept() {
             Ok((stream, _)) => {
+                // A browser needs one or two connections; anything local
+                // holding more open must not pin a thread each.
+                if active.load(Ordering::Acquire) >= MAX_CALLBACK_CONNECTIONS {
+                    drop(stream);
+                    continue;
+                }
+                active.fetch_add(1, Ordering::AcqRel);
                 let tx = tx.clone();
+                let connection_active = active.clone();
                 let spawned = std::thread::Builder::new()
                     .name("cap-sign-in-request".into())
-                    .spawn(move || handle_callback_connection(stream, port, &tx));
+                    .spawn(move || {
+                        handle_callback_connection(stream, port, &tx);
+                        connection_active.fetch_sub(1, Ordering::AcqRel);
+                    });
                 if let Err(error) = spawned {
+                    active.fetch_sub(1, Ordering::AcqRel);
                     tracing::warn!("sign-in callback connection thread: {error}");
                 }
             }
@@ -547,7 +563,8 @@ fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Send
     {
         return;
     }
-    let Some(target) = read_request_target(&mut stream) else {
+    let deadline = Instant::now() + CALLBACK_REQUEST_DEADLINE;
+    let Some(target) = read_request_target(&mut stream, deadline) else {
         return;
     };
     let params = parse_auth_params(&format!("http://127.0.0.1:{port}{target}"));
@@ -571,12 +588,12 @@ fn handle_callback_connection(mut stream: TcpStream, port: u16, tx: &flume::Send
 /// The request target of an HTTP/1 request, after reading the whole header
 /// block: closing a socket with unread request bytes makes the kernel answer
 /// with a reset, which browsers show as an error page instead of ours.
-fn read_request_target(stream: &mut impl Read) -> Option<String> {
+fn read_request_target(stream: &mut impl Read, deadline: Instant) -> Option<String> {
     const MAX_HEADER_BYTES: usize = 32 * 1024;
     let mut request = Vec::with_capacity(1024);
     let mut chunk = [0u8; 4096];
     while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-        if request.len() > MAX_HEADER_BYTES {
+        if request.len() > MAX_HEADER_BYTES || Instant::now() >= deadline {
             return None;
         }
         match stream.read(&mut chunk) {
@@ -734,14 +751,27 @@ mod tests {
         control.stop.store(true, Ordering::Release);
     }
 
+    fn far_future() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
+    #[test]
+    fn a_request_past_its_deadline_is_dropped() {
+        let mut slow = "GET /?api_key=k HTTP/1.1\r\n\r\n".as_bytes();
+        assert_eq!(read_request_target(&mut slow, Instant::now()), None);
+    }
+
     #[test]
     fn request_target_needs_a_path() {
         let mut ok = "GET /?api_key=k HTTP/1.1\r\nHost: x\r\n\r\n".as_bytes();
-        assert_eq!(read_request_target(&mut ok).as_deref(), Some("/?api_key=k"));
+        assert_eq!(
+            read_request_target(&mut ok, far_future()).as_deref(),
+            Some("/?api_key=k")
+        );
         let mut absolute = "GET http://evil/ HTTP/1.1\r\n\r\n".as_bytes();
-        assert_eq!(read_request_target(&mut absolute), None);
+        assert_eq!(read_request_target(&mut absolute, far_future()), None);
         let mut empty = "".as_bytes();
-        assert_eq!(read_request_target(&mut empty), None);
+        assert_eq!(read_request_target(&mut empty, far_future()), None);
     }
 
     #[test]
