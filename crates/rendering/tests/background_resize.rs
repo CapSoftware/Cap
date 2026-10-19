@@ -8,7 +8,6 @@ use cap_rendering::{
 
 #[tokio::test]
 async fn image_background_resize_matches_fresh_layers() {
-    cap_rendering::enable_blur_result_cache();
     let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
         "pretty_name": "background-resize",
         "display": { "path": "display.mp4", "fps": 30 },
