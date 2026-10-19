@@ -59,6 +59,8 @@ pub enum ExporterBuildError {
     MediaLoad(String),
     #[error("IO error at path '{0}': {1}")]
     IO(PathBuf, std::io::Error),
+    #[error("There is nothing to export: the timeline is empty")]
+    NothingToExport,
 }
 
 pub struct ExporterBuilder {
@@ -150,6 +152,12 @@ impl ExporterBuilder {
                 .map(|segment| segment.display.duration)
                 .collect::<Vec<_>>(),
         );
+
+        let duration =
+            cap_rendering::get_duration(&recordings, &recording_meta, studio_meta, &project_config);
+        if duration.is_nan() || duration <= 0.0 {
+            return Err(Error::NothingToExport);
+        }
 
         let output_path = self
             .output_path
