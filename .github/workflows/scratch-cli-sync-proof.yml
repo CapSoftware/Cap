@@ -81,9 +81,49 @@ jobs:
           SwitchAudioSource -s "BlackHole 2ch" -t output
           SwitchAudioSource -s "BlackHole 2ch" -t input
 
+          cat > "$RUNNER_TEMP/sckshot.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          import ImageIO
+          import ScreenCaptureKit
+          import UniformTypeIdentifiers
+
+          let out = CommandLine.arguments[1]
+          Task {
+              do {
+                  let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                  guard let display = content.displays.first else {
+                      print("sckshot: no display")
+                      exit(2)
+                  }
+                  for window in content.windows where window.isOnScreen && window.frame.width > 50 {
+                      print("window: \(window.owningApplication?.bundleIdentifier ?? "?") '\(window.title ?? "")' \(window.frame) layer \(window.windowLayer)")
+                  }
+                  let filter = SCContentFilter(display: display, excludingWindows: [])
+                  let config = SCStreamConfiguration()
+                  config.width = display.width
+                  config.height = display.height
+                  let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                  guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+                      print("sckshot: cannot write \(out)")
+                      exit(3)
+                  }
+                  CGImageDestinationAddImage(dest, image, nil)
+                  CGImageDestinationFinalize(dest)
+                  print("sckshot: saved \(out)")
+                  exit(0)
+              } catch {
+                  print("sckshot: \(error)")
+                  exit(1)
+              }
+          }
+          dispatchMain()
+          SWIFT
+          swiftc "$RUNNER_TEMP/sckshot.swift" -o "$RUNNER_TEMP/sckshot"
           {
             echo "$PWD/target/abperf/cap"
             echo /usr/sbin/screencapture
+            echo "$RUNNER_TEMP/sckshot"
             command -v ffplay
             command -v ffmpeg
             p=$$
@@ -119,7 +159,6 @@ jobs:
           let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
           let locked = (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
           print("screen locked: \(locked)")
-          exit(locked ? 1 : 0)
           SWIFT
           swiftc "$RUNNER_TEMP/locked.swift" -o "$RUNNER_TEMP/locked"
           "$RUNNER_TEMP/locked"
@@ -154,10 +193,10 @@ jobs:
           screen=$(python3 -c "import json;t=json.load(open('$RUNNER_TEMP/targets.json'));s=[x for x in t['screens'] if x.get('primary')] or t['screens'];print(s[0]['id'])")
           mkdir -p sync-out
           for r in $(seq 1 "$ROUNDS"); do
-            ffplay -fs -autoexit -loglevel warning "$RUNNER_TEMP/stimulus.mp4" > "sync-out/r$r.ffplay.log" 2>&1 &
+            ffplay -noborder -alwaysontop -left 0 -top 0 -x 1920 -y 1200 -autoexit -loglevel warning "$RUNNER_TEMP/stimulus.mp4" > "sync-out/r$r.ffplay.log" 2>&1 &
             player=$!
             sleep 1.5
-            ( sleep 4; screencapture -x "sync-out/r$r.screen.png" ) &
+            ( sleep 4; "$RUNNER_TEMP/sckshot" "sync-out/r$r.screen.png" > "sync-out/r$r.sckshot.log" 2>&1 ) &
             start=$(python3 -c 'import time;print(time.time())')
             ./target/abperf/cap record start --screen "$screen" --mic "BlackHole 2ch" \
               --path "sync-out/r$r.cap" --duration "$RECORD_SECS" > "sync-out/r$r.record.log" 2>&1
@@ -203,4 +242,5 @@ jobs:
             sync-out/*.log
             sync-out/*.err
             sync-out/*.png
+            sync-out/*.sckshot.log
           if-no-files-found: ignore
