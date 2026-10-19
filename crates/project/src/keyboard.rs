@@ -604,6 +604,7 @@ fn project_keyboard_events(
     };
     let mut edited_start = 0.0;
     let mut result = Vec::new();
+    let mut prepared: Vec<Option<Vec<&KeyPressEvent>>> = (0..takes.len()).map(|_| None).collect();
     for (index, clip) in timeline.segments.iter().enumerate() {
         if !clip.start.is_finite()
             || !clip.end.is_finite()
@@ -624,12 +625,15 @@ fn project_keyboard_events(
             let source_end = clip.end + capture_offset;
             let mut presses = Vec::new();
             let mut modifiers = Vec::new();
-            let mut ordered: Vec<_> = events
-                .presses
-                .iter()
-                .filter(|event| event.time_ms.is_finite())
-                .collect();
-            ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+            let ordered = prepared[clip.recording_clip as usize].get_or_insert_with(|| {
+                let mut ordered: Vec<_> = events
+                    .presses
+                    .iter()
+                    .filter(|event| event.time_ms.is_finite())
+                    .collect();
+                ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+                ordered
+            });
             for event in ordered {
                 let source = event.time_ms / 1000.0;
                 if source < source_start {
@@ -695,12 +699,24 @@ pub fn group_key_events(
         return segments;
     }
 
-    let active_modifiers_at = |time_ms: f64| -> Vec<String> {
-        let mut active = Vec::new();
-        for event in &events.presses {
+    let ordered = events.presses.iter().all(|event| event.time_ms.is_finite())
+        && events
+            .presses
+            .windows(2)
+            .all(|pair| pair[0].time_ms <= pair[1].time_ms);
+    let mut next_modifier_event = 0;
+    let mut active = Vec::new();
+    let mut active_modifiers_at = |time_ms: f64| -> Vec<String> {
+        if !ordered {
+            next_modifier_event = 0;
+            active.clear();
+        }
+        while let Some(event) = events.presses.get(next_modifier_event) {
             if event.time_ms > time_ms {
                 break;
             }
+            // Equal-time releases after this press still affect its modifier state.
+            next_modifier_event += 1;
             if is_modifier_key(&event.key) {
                 if event.down {
                     if !active.contains(&event.key) {
@@ -711,7 +727,7 @@ pub fn group_key_events(
                 }
             }
         }
-        active
+        active.clone()
     };
 
     let mut current_group_start: Option<f64> = None;
@@ -1300,6 +1316,118 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "⌘W");
+    }
+
+    #[test]
+    fn modifiers_at_the_same_timestamp_include_later_presses_and_releases() {
+        for (presses, expected) in [
+            (
+                vec![
+                    key_down("a", 100.0),
+                    key_down("LMeta", 100.0),
+                    key_down("b", 200.0),
+                    key_up("LMeta", 250.0),
+                ],
+                vec!["⌘A", "⌘B"],
+            ),
+            (
+                vec![
+                    key_down("LMeta", 100.0),
+                    key_down("a", 100.0),
+                    key_up("LMeta", 100.0),
+                ],
+                vec!["a"],
+            ),
+        ] {
+            let segments = group_key_events(&KeyboardEvents { presses }, 300.0, 500.0, true, true);
+            assert_eq!(
+                segments
+                    .iter()
+                    .map(|segment| segment.display_text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn signed_zero_timestamps_preserve_duplicate_modifier_release_and_start_bits() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("LMeta", -0.0),
+                key_down("LMeta", 0.0),
+                key_down("a", -0.0),
+                key_up("LMeta", 0.0),
+                key_down("b", 20.0),
+            ],
+        };
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "ab");
+        assert_eq!(segments[0].start.to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(segments[0].keys.len(), 2);
+        assert_eq!(segments[0].keys[1].time_offset, 20.0);
+    }
+
+    #[test]
+    fn hidden_keys_do_not_hide_modifier_releases() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("LMeta", 100.0),
+                key_down("a", 150.0),
+                key_up("a", 180.0),
+                key_up("LMeta", 200.0),
+                key_down("Tab", 250.0),
+                key_up("Tab", 260.0),
+                key_down("b", 300.0),
+            ],
+        };
+        for (show_modifiers, expected) in [(true, vec!["⌘A", "b"]), (false, vec!["ab"])] {
+            let segments = group_key_events(&events, 300.0, 500.0, show_modifiers, false);
+            assert_eq!(
+                segments
+                    .iter()
+                    .map(|segment| segment.display_text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn unordered_keys_preserve_modifier_lookup_from_the_original_prefix() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_down("LMeta", 300.0),
+                key_down("b", 200.0),
+                key_up("LMeta", 400.0),
+            ],
+        };
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "a");
+        assert_eq!(segments[1].display_text, "⌘b");
+        assert_eq!(segments[1].start, 0.3);
+        assert_eq!(segments[1].keys[1].time_offset, -100.0);
+    }
+
+    #[test]
+    fn non_finite_keys_preserve_modifier_lookup_through_the_original_prefix() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("LMeta", 100.0),
+                key_down("a", f64::NAN),
+                key_up("LMeta", 200.0),
+                key_down("b", 300.0),
+            ],
+        };
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "⌘ab");
+        assert_eq!(segments[0].start, 0.1);
+        assert_eq!(segments[0].end, 0.8);
+        assert!(segments[0].keys[1].time_offset.is_nan());
     }
 }
 

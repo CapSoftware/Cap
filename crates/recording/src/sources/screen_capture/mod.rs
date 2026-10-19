@@ -715,6 +715,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn h264_bounded_capture_matches_the_encoder_downscale() {
+        for (width, height) in [
+            (5120, 2880),
+            (6016, 3384),
+            (5120, 2160),
+            (2880, 5120),
+            (4096, 2304),
+        ] {
+            let bounded = constrain_capture_size(
+                PhysicalSize::new(width as f64, height as f64),
+                Some((crate::H264_MAX_DIMENSION, crate::H264_MAX_DIMENSION)),
+            );
+            let encoder_size =
+                crate::calculate_gpu_compatible_size(width, height, crate::H264_MAX_DIMENSION)
+                    .unwrap_or((width, height));
+            assert_eq!(
+                (bounded.width() as u32, bounded.height() as u32),
+                encoder_size,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn linux_window_source_preserves_selected_window_id() {
         let id: WindowId = "247".parse().unwrap();
