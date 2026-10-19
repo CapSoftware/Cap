@@ -865,6 +865,22 @@ fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
     normalized
 }
 
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn end_words_where_speech_stops(words: &mut [CaptionWord], pauses: &cap_audio::SpeechPauses) {
+    let mut moved = 0;
+    for word in words.iter_mut() {
+        let end = pauses.audible_end(word.start, word.end);
+        if end < word.end {
+            word.end = end;
+            moved += 1;
+        }
+    }
+    tracing::info!(
+        "Ended {moved} of {} words where their speech stops",
+        words.len()
+    );
+}
+
 fn caption_text_from_words<'a>(words: impl IntoIterator<Item = &'a CaptionWord>) -> String {
     let mut text = String::new();
 
@@ -1284,19 +1300,35 @@ fn process_with_parakeet(
         }
     };
 
+    let mut reader = hound::WavReader::open(audio_path)
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
+    let spec = reader.spec();
+    if spec.channels != 1 || spec.sample_rate != WHISPER_SAMPLE_RATE {
+        return Err(format!(
+            "Expected 16 kHz mono audio, got {} Hz with {} channels",
+            spec.sample_rate, spec.channels
+        ));
+    }
+    let samples = reader
+        .samples::<i16>()
+        .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    let pauses = cap_audio::SpeechPauses::detect(&samples, spec.sample_rate);
+
     let result = {
         let mut parakeet = model_arc
             .lock()
             .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
         parakeet
-            .transcribe_file(audio_path, Some(TimestampMode::Words))
+            .transcribe_samples(samples, spec.sample_rate, 1, Some(TimestampMode::Words))
             .map_err(|e| format!("Parakeet transcription failed: {e}"))?
     };
 
     tracing::info!("Transcription text: {}", result.text);
     tracing::info!("Got {} timed tokens", result.tokens.len());
 
-    let words = normalize_caption_words(
+    let mut words = normalize_caption_words(
         result
             .tokens
             .iter()
@@ -1308,6 +1340,10 @@ fn process_with_parakeet(
             })
             .collect(),
     );
+    match &pauses {
+        Some(pauses) => end_words_where_speech_stops(&mut words, pauses),
+        None => tracing::info!("Speech is not clearly above the noise; keeping word ends"),
+    }
 
     if words.is_empty() {
         tracing::warn!("Parakeet produced no words");
@@ -2885,8 +2921,39 @@ mod tests {
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
     mod parakeet {
-        use super::super::parakeet_model_dir_matches;
+        use super::super::{CaptionWord, end_words_where_speech_stops, parakeet_model_dir_matches};
         use tempfile::tempdir;
+
+        #[test]
+        fn stretched_words_end_where_their_speech_stops() {
+            let mut samples = vec![0.0_f32; 16_000 * 4];
+            for (index, sample) in samples.iter_mut().enumerate() {
+                let time = index as f32 / 16_000.0;
+                if (1.0..1.5).contains(&time) || (2.5..3.0).contains(&time) {
+                    *sample = 0.1 * (std::f32::consts::TAU * 220.0 * time).sin();
+                }
+            }
+            let pauses =
+                cap_audio::SpeechPauses::detect(&samples, 16_000).expect("speech is audible");
+            let mut words = vec![
+                CaptionWord {
+                    text: "hello".to_string(),
+                    start: 1.0,
+                    end: 2.5,
+                },
+                CaptionWord {
+                    text: "world.".to_string(),
+                    start: 2.5,
+                    end: 3.0,
+                },
+            ];
+
+            end_words_where_speech_stops(&mut words, &pauses);
+
+            assert_eq!(words[0].start, 1.0);
+            assert!((words[0].end - 1.6).abs() < 0.02, "{}", words[0].end);
+            assert_eq!((words[1].start, words[1].end), (2.5, 3.0));
+        }
 
         #[test]
         fn parakeet_model_dir_match_uses_full_directory_path() {

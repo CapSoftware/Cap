@@ -7,7 +7,8 @@
 //!   timed tokens (one word per marker, some followed by a punctuation token
 //!   and empty tokens). Every word must sit at its source time on the
 //!   concatenated recordings, and the caption segments built by the Parakeet
-//!   path ([`caption_segments_from_tokens`]) must match the reference
+//!   path ([`caption_segments_from_tokens`], without the audio pause pass
+//!   that `cap_audio::SpeechPauses` covers) must match the reference
 //!   segmentation below. Multi-segment Studio projects with per-track start
 //!   offsets, legacy single-segment Studio projects, and Instant projects
 //!   (refused: Instant recordings are transcribed by the web app).
@@ -337,7 +338,7 @@ fn check_project(case: &mut Case, project: &Path, takes: &Takes) {
     let mut tokens = Vec::new();
     let result = transcribe_project_with(project, |audio_path| {
         tokens = fake_tokens(audio_path)?;
-        caption_segments_from_tokens(tokens.clone())
+        caption_segments_from_tokens(tokens.clone(), None)
     });
     let segments = match result {
         Ok(segments) => segments,
@@ -606,7 +607,7 @@ fn segmentation_case(id: &str, unicode: bool) {
             unicode,
         );
         let reference = reference_segments(&tokens);
-        match caption_segments_from_tokens(tokens.clone()) {
+        match caption_segments_from_tokens(tokens.clone(), None) {
             Err(e) if reference.is_empty() && e.contains("No speech") => empty += 1,
             Err(e) => {
                 failed += 1;

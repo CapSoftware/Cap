@@ -1652,6 +1652,10 @@ fn process_with_parakeet(
     if samples.is_empty() {
         return Err("No speech detected in the audio".to_string());
     }
+    let pauses = cap_audio::SpeechPauses::detect(&samples, sample_rate);
+    if pauses.is_none() {
+        tracing::info!("Speech is not clearly above the noise; keeping word ends");
+    }
 
     let mut tokens = Vec::new();
     {
@@ -1678,16 +1682,18 @@ fn process_with_parakeet(
 
     tracing::info!("Parakeet produced {} timed tokens", tokens.len());
 
-    caption_segments_from_tokens(tokens)
+    caption_segments_from_tokens(tokens, pauses.as_ref())
 }
 
 /// Parakeet's timed word tokens -> caption segments: drop empty tokens,
-/// normalize the words and chunk them.
+/// normalize the words, end them where their speech stops in the
+/// transcription audio, and chunk them.
 #[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
+    pauses: Option<&cap_audio::SpeechPauses>,
 ) -> Result<Vec<CaptionSegment>, String> {
-    let words = normalize_caption_words(
+    let mut words = normalize_caption_words(
         tokens
             .into_iter()
             .filter(|token| !token.text.trim().is_empty())
@@ -1698,6 +1704,9 @@ fn caption_segments_from_tokens(
             })
             .collect(),
     );
+    if let Some(pauses) = pauses {
+        end_words_where_speech_stops(&mut words, pauses);
+    }
 
     if words.is_empty() {
         return Err("No speech detected in the audio".to_string());
@@ -1924,6 +1933,23 @@ fn normalize_caption_words(words: Vec<CaptionWord>) -> Vec<CaptionWord> {
     }
 
     normalized
+}
+
+/// `end_words_where_speech_stops` (`captions.rs`).
+#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+fn end_words_where_speech_stops(words: &mut [CaptionWord], pauses: &cap_audio::SpeechPauses) {
+    let mut moved = 0;
+    for word in words.iter_mut() {
+        let end = pauses.audible_end(word.start, word.end);
+        if end < word.end {
+            word.end = end;
+            moved += 1;
+        }
+    }
+    tracing::info!(
+        "Ended {moved} of {} words where their speech stops",
+        words.len()
+    );
 }
 
 /// `caption_text_from_words` (`captions.rs:833-849`).
@@ -2473,6 +2499,40 @@ mod tests {
                 format!("These captions should stay grouped together {connector} Paris")
             );
         }
+    }
+
+    #[test]
+    fn parakeet_words_end_where_their_speech_stops() {
+        let mut samples = vec![0.0_f32; 16_000 * 5];
+        for (index, sample) in samples.iter_mut().enumerate() {
+            let time = index as f32 / 16_000.0;
+            if (1.0..1.5).contains(&time) || (2.5..3.0).contains(&time) {
+                *sample = 0.1 * (std::f32::consts::TAU * 220.0 * time).sin();
+            }
+        }
+        let pauses = cap_audio::SpeechPauses::detect(&samples, 16_000).expect("speech is audible");
+        let token = |text: &str, start: f32, end: f32| CaptionWord {
+            text: text.to_string(),
+            start,
+            end,
+        };
+
+        let segments = caption_segments_from_tokens(
+            [
+                token(" hello", 1.0, 2.5),
+                token(" world", 2.5, 3.04),
+                token(".", 3.04, 4.2),
+            ],
+            Some(&pauses),
+        )
+        .expect("segments");
+
+        let words = &segments[0].words;
+        assert_eq!(caption_text_from_words(words), "hello world.");
+        assert_eq!((words[0].start, words[1].start), (1.0, 2.5));
+        assert!((words[0].end - 1.6).abs() < 0.02, "{}", words[0].end);
+        assert!((words[1].end - 3.1).abs() < 0.02, "{}", words[1].end);
+        assert_eq!(segments[0].end, words[1].end);
     }
 
     // -- Model paths ----------------------------------------------------------
