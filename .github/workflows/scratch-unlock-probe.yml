@@ -60,6 +60,26 @@ jobs:
           SWIFT
           swiftc "$RUNNER_TEMP/type.swift" -o "$RUNNER_TEMP/type"
 
+          echo "== K: auto-login password from /etc/kcpassword"
+          pw=$(sudo python3 - <<'PY'
+          key = [0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F]
+          data = open("/etc/kcpassword", "rb").read()
+          out = bytearray()
+          for i, b in enumerate(data):
+              c = b ^ key[i % len(key)]
+              if c == 0:
+                  break
+              out.append(c)
+          print(out.decode())
+          PY
+          )
+          echo "::add-mask::$pw"
+          echo "decoded length ${#pw}"
+          "$RUNNER_TEMP/type" "$pw"
+          sleep 4; "$RUNNER_TEMP/locked"
+          sudo "$RUNNER_TEMP/type" "$pw"
+          sleep 4; "$RUNNER_TEMP/locked"
+
           echo "== A: screensaver password off"
           defaults -currentHost write com.apple.screensaver askForPassword -int 0
           sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
