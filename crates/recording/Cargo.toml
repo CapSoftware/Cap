@@ -90,6 +90,7 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
     "Win32_Storage_Xps",
+    "Win32_Storage_FileSystem",
 ] }
 
 cap-d3d-adapter = { path = "../d3d-adapter" }

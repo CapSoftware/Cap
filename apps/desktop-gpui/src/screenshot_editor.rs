@@ -2275,10 +2275,13 @@ impl ScreenshotEditorWindow {
                     this.update_in(cx, |this, window, cx| {
                         this.finish_share_error(
                             toast,
-                            "You need to sign in to create shareable links".into(),
+                            "Sign in to Cap in your browser, then share again".into(),
                             window,
                             cx,
-                        )
+                        );
+                        crate::sign_in::SignIn::global(cx).update(cx, |sign_in, cx| {
+                            sign_in.start(crate::sign_in::SignInOrigin::ScreenshotEditor, cx)
+                        });
                     })
                     .ok();
                     return;
