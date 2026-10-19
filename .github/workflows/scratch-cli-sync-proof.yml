@@ -72,6 +72,7 @@ jobs:
 
           {
             echo "$PWD/target/abperf/cap"
+            echo /usr/sbin/screencapture
             command -v ffplay
             command -v ffmpeg
             p=$$
@@ -88,7 +89,7 @@ jobs:
           now=$(date +%s)
           until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
           sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
-            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone kTCCServiceAccessibility kTCCServicePostEvent; do
               row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
               sudo sqlite3 "$db" "$row"
               sqlite3 "$user_db" "$row"
@@ -121,16 +122,21 @@ jobs:
             -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest \
             "$RUNNER_TEMP/stimulus.mp4"
           ls -la "$RUNNER_TEMP/stimulus.mp4"
+          for t in 2.9 3.05; do
+            ffmpeg -v error -ss "$t" -i "$RUNNER_TEMP/stimulus.mp4" -frames:v 1 -vf "signalstats,metadata=print:key=lavfi.signalstats.YAVG" -f null - 2>&1 | grep -o "YAVG=[0-9.]*" | sed "s/^/stimulus t=$t /"
+          done
 
       - name: Record, export and measure
         run: |
+          set +e
           set -uo pipefail
           screen=$(python3 -c "import json;t=json.load(open('$RUNNER_TEMP/targets.json'));s=[x for x in t['screens'] if x.get('primary')] or t['screens'];print(s[0]['id'])")
           mkdir -p sync-out
           for r in $(seq 1 "$ROUNDS"); do
-            ffplay -fs -autoexit -loglevel error "$RUNNER_TEMP/stimulus.mp4" &
+            ffplay -fs -autoexit -loglevel warning "$RUNNER_TEMP/stimulus.mp4" > "sync-out/r$r.ffplay.log" 2>&1 &
             player=$!
             sleep 1.5
+            ( sleep 4; screencapture -x "sync-out/r$r.screen.png" ) &
             start=$(python3 -c 'import time;print(time.time())')
             ./target/abperf/cap record start --screen "$screen" --mic "BlackHole 2ch" \
               --path "sync-out/r$r.cap" --duration "$RECORD_SECS" > "sync-out/r$r.record.log" 2>&1
@@ -175,4 +181,5 @@ jobs:
             sync-out/*.json
             sync-out/*.log
             sync-out/*.err
+            sync-out/*.png
           if-no-files-found: ignore
