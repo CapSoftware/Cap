@@ -123,7 +123,7 @@ jobs:
             "$RUNNER_TEMP/stimulus.mp4"
           ls -la "$RUNNER_TEMP/stimulus.mp4"
           for t in 2.9 3.05; do
-            ffmpeg -v error -ss "$t" -i "$RUNNER_TEMP/stimulus.mp4" -frames:v 1 -vf "signalstats,metadata=print:key=lavfi.signalstats.YAVG" -f null - 2>&1 | grep -o "YAVG=[0-9.]*" | sed "s/^/stimulus t=$t /"
+            ffmpeg -v info -ss "$t" -i "$RUNNER_TEMP/stimulus.mp4" -frames:v 1 -vf "signalstats,metadata=print:key=lavfi.signalstats.YAVG" -f null - 2>&1 | grep -o "YAVG=[0-9.]*" | sed "s/^/stimulus t=$t /" || true
           done
 
       - name: Record, export and measure
