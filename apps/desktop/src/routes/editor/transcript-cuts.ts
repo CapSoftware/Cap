@@ -48,6 +48,14 @@ const MIN_TIMELINE_CUT = 0.001;
 const SNAPSHOT_EPSILON = 1e-6;
 const WORD_TIME_EPSILON = 1e-3;
 
+const WAVEFORM_BLOCKS_PER_SECOND = 10;
+const WAVEFORM_FLOOR_DB = -60;
+const SILENCE_ABOVE_NOISE_DB = 6;
+const MAX_SILENCE_DB = -45;
+const MIN_SPEECH_HEADROOM_DB = 15;
+const SPEECH_RELEASE = 0.1;
+const MIN_WORD_SPEECH = 0.1;
+
 export type SourceRange = TranscriptRange;
 
 type TranscriptProject = Pick<
@@ -141,6 +149,124 @@ export function timelineSourceCoverage(
 			const offset = offsets[segment.recordingSegment ?? 0] ?? 0;
 			return { start: offset + segment.start, end: offset + segment.end };
 		}),
+	);
+}
+
+export type RecordedAudioTrack = { levels: readonly number[]; offset: number };
+
+function waveformLevel(value: number | undefined) {
+	return typeof value === "number" && Number.isFinite(value)
+		? Math.max(value, WAVEFORM_FLOOR_DB)
+		: WAVEFORM_FLOOR_DB;
+}
+
+function percentile(sorted: readonly number[], fraction: number) {
+	return sorted[
+		Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))
+	];
+}
+
+function recordingBlockLevels(
+	duration: number,
+	tracks: readonly RecordedAudioTrack[],
+): Array<number | null> {
+	const sources = tracks.filter((track) => track.levels.length > 0);
+	const count = Math.ceil(duration * WAVEFORM_BLOCKS_PER_SECOND - 1e-6);
+	const levels: Array<number | null> = [];
+	for (let block = 0; block < count; block++) {
+		let level: number | null = null;
+		for (const track of sources) {
+			const shift = track.offset * WAVEFORM_BLOCKS_PER_SECOND;
+			const first = Math.max(0, Math.floor(block + shift + 1e-6));
+			const last = Math.min(
+				track.levels.length - 1,
+				Math.ceil(block + 1 + shift - 1e-6) - 1,
+			);
+			for (let index = first; index <= last; index++) {
+				level = Math.max(
+					level ?? WAVEFORM_FLOOR_DB,
+					waveformLevel(track.levels[index]),
+				);
+			}
+		}
+		levels.push(level);
+	}
+	return levels;
+}
+
+/**
+ * Source ranges where every recorded track is quiet, from the editor's 100 ms
+ * waveform peaks. The threshold follows the recording's noise floor; when
+ * speech doesn't stand clearly above it, nothing counts as silence.
+ */
+export function recordingSilence(
+	recordingSegments: SegmentRecordings[],
+	tracks: ReadonlyArray<readonly RecordedAudioTrack[]>,
+): SourceRange[] {
+	const offsets = recordingOffsets(recordingSegments);
+	const blocks = recordingSegments.map((recording, index) =>
+		recordingBlockLevels(recording.display.duration, tracks[index] ?? []),
+	);
+	const known = blocks
+		.flat()
+		.filter((level): level is number => level !== null)
+		.sort((a, b) => a - b);
+	if (known.length === 0) return [];
+	const threshold = Math.min(
+		percentile(known, 0.1) + SILENCE_ABOVE_NOISE_DB,
+		MAX_SILENCE_DB,
+	);
+	if (percentile(known, 0.9) - threshold < MIN_SPEECH_HEADROOM_DB) return [];
+
+	const silence: SourceRange[] = [];
+	blocks.forEach((levels, index) => {
+		const offset = offsets[index];
+		const duration = recordingSegments[index].display.duration;
+		let runStart = -1;
+		for (let block = 0; block <= levels.length; block++) {
+			const level = levels[block];
+			if (typeof level === "number" && level < threshold) {
+				if (runStart === -1) runStart = block;
+				continue;
+			}
+			if (runStart === -1) continue;
+			silence.push({
+				start: offset + runStart / WAVEFORM_BLOCKS_PER_SECOND,
+				end: offset + Math.min(block / WAVEFORM_BLOCKS_PER_SECOND, duration),
+			});
+			runStart = -1;
+		}
+	});
+	return mergeSourceRanges(silence);
+}
+
+function silenceBefore(silence: readonly SourceRange[], time: number) {
+	let low = 0;
+	let high = silence.length;
+	while (low < high) {
+		const mid = (low + high) >>> 1;
+		if (silence[mid].end < time - RANGE_EPSILON) low = mid + 1;
+		else high = mid;
+	}
+	const range = silence[low];
+	return range && range.start < time - RANGE_EPSILON ? range : undefined;
+}
+
+// parakeet-rs ends each token where the next begins, so a word's end runs
+// through the silence after it (up to MAX_CAPTION_WORD_DURATION); only the
+// audio shows where speech stopped. Its timestamps also drift ~0.2s either
+// way, so a word can sit wholly in that silence: it keeps a sliver so a cut
+// there trims it rather than swallowing it.
+function audibleWordEnd(
+	word: { start: number; end: number },
+	silence: readonly SourceRange[],
+) {
+	const end = spokenWordEnd(word);
+	const quiet = silenceBefore(silence, end);
+	if (!quiet) return end;
+	return Math.min(
+		end,
+		Math.max(quiet.start + SPEECH_RELEASE, word.start + MIN_WORD_SPEECH),
 	);
 }
 
@@ -1087,8 +1213,13 @@ export function tokenStart(token: TranscriptToken) {
 	return token.type === "word" ? token.word.start : token.cut.start;
 }
 
-function tokenSpeechEnd(token: TranscriptToken) {
-	return token.type === "word" ? spokenWordEnd(token.word) : token.cut.end;
+function tokenSpeechEnd(
+	token: TranscriptToken,
+	audioSilence: readonly SourceRange[],
+) {
+	return token.type === "word"
+		? audibleWordEnd(token.word, audioSilence)
+		: token.cut.end;
 }
 
 export function transcriptTokens(
@@ -1137,6 +1268,7 @@ export function buildTranscriptItems(
 	cuts: readonly TranscriptCut[],
 	coverage: readonly SourceRange[],
 	speech: readonly SourceRange[] = [],
+	audioSilence: readonly SourceRange[] = [],
 	threshold = PAUSE_DETECTION_THRESHOLD,
 ): TranscriptItem[] {
 	const cutPauses = cuts
@@ -1157,7 +1289,7 @@ export function buildTranscriptItems(
 	tokens.forEach((token, index) => {
 		const previous = tokens[index - 1];
 		const gap = {
-			start: previous ? tokenSpeechEnd(previous) : 0,
+			start: previous ? tokenSpeechEnd(previous, audioSilence) : 0,
 			end: tokenStart(token),
 		};
 		const pauses =
@@ -1220,6 +1352,7 @@ export type PlanContext = {
 	segmentIds: readonly (string | undefined)[];
 	coverage: readonly SourceRange[];
 	speech: readonly SourceRange[];
+	audioSilence?: readonly SourceRange[];
 	blocked?: (range: SourceRange) => boolean;
 	createId?: () => string;
 };
@@ -1315,7 +1448,7 @@ function planCuts(
 		const gapStart = !previous
 			? 0
 			: previous.type === "word" && !previousRecord
-				? spokenWordEnd(previous.word)
+				? audibleWordEnd(previous.word, context.audioSilence ?? [])
 				: itemEnd(previous);
 		const gap = itemStart(current) - gapStart;
 		if (gap <= RANGE_EPSILON) continue;
@@ -1472,6 +1605,7 @@ export function transcriptPlanContext(
 	project: TranscriptProject,
 	recordingSegments: SegmentRecordings[],
 	words?: readonly FlatWord[],
+	audioSilence: readonly SourceRange[] = [],
 ): PlanContext {
 	const segments = project.captions?.segments ?? [];
 	const cuts = project.captions?.transcriptCuts ?? [];
@@ -1494,10 +1628,12 @@ export function transcriptPlanContext(
 			cuts,
 			coverage,
 			speech,
+			audioSilence,
 		),
 		segmentIds: segments.map((segment) => segment.id),
 		coverage,
 		speech,
+		audioSilence,
 		blocked: (range) =>
 			timeline
 				? sourceRangeBlockedByTransition(timeline, range, recordingSegments)

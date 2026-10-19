@@ -44,6 +44,7 @@ import {
 	planAutoClean,
 	planPauseCut,
 	planWordCuts,
+	recordingSilence,
 	type SourceRange,
 	type TranscriptCutEdit,
 	type TranscriptItem,
@@ -89,9 +90,31 @@ export function TranscriptPanel() {
 		previewResolutionBase,
 		playbackIntent,
 		requestHandoffPlayback,
+		micWaveforms,
+		systemAudioWaveforms,
 	} = useEditorContext();
 
 	const recordingSegments = () => editorInstance.recordings.segments;
+
+	const audioSilence = createMemo(() => {
+		const mic = micWaveforms();
+		const system = systemAudioWaveforms();
+		return recordingSilence(
+			recordingSegments(),
+			recordingSegments().map((_, index) => {
+				const offsets = project.clips?.find(
+					(clip) => clip.index === index,
+				)?.offsets;
+				return [
+					{ levels: mic?.[index] ?? [], offset: offsets?.mic ?? 0 },
+					{
+						levels: system?.[index] ?? [],
+						offset: offsets?.system_audio ?? 0,
+					},
+				];
+			}),
+		);
+	});
 
 	const [textSizeIndex, setTextSizeIndex] = makePersisted(createSignal(1), {
 		name: "editorTranscriptTextSize",
@@ -124,7 +147,12 @@ export function TranscriptPanel() {
 	);
 
 	const transcript = createMemo(() =>
-		transcriptPlanContext(project, recordingSegments(), allWords()),
+		transcriptPlanContext(
+			project,
+			recordingSegments(),
+			allWords(),
+			audioSilence(),
+		),
 	);
 
 	const transcriptItems = () => transcript().items;
@@ -764,7 +792,8 @@ function TranscriptWord(props: {
 					data-active-word={props.isActive || undefined}
 					class={cx(
 						"transition-colors duration-100 rounded-xs relative",
-						props.isFiller && "underline decoration-dotted decoration-amber-9",
+						props.isFiller &&
+							"underline decoration-dotted decoration-amber-500",
 						props.isSelected && "bg-blue-4/50",
 						props.isActive
 							? "text-blue-11"
@@ -906,7 +935,7 @@ function CutTranscriptWord(props: {
 					<Show when={props.isSelected}>
 						<button
 							type="button"
-							class="flex items-center justify-center gap-1 h-6 px-1.5 rounded-md bg-green-9 text-white hover:bg-green-10 transition-colors text-xs"
+							class="flex items-center justify-center gap-1 h-6 px-1.5 rounded-md bg-emerald-9 text-white hover:bg-emerald-10 transition-colors text-xs"
 							title="Restore this word and its video (Delete)"
 							onClick={(e) => {
 								e.stopPropagation();
@@ -955,7 +984,7 @@ function PauseBadge(props: {
 				class={cx(
 					"absolute -top-2 -right-2 z-10 hidden size-4 items-center justify-center rounded-full text-white shadow-sm transition-colors group-hover:flex",
 					props.cut
-						? "bg-green-9 hover:bg-green-10"
+						? "bg-emerald-9 hover:bg-emerald-10"
 						: "bg-gray-11 hover:bg-gray-10",
 				)}
 				title={props.cut ? "Restore pause" : "Cut pause from the video"}
@@ -1100,7 +1129,7 @@ function CutPaddingPopover(props: {
 			</div>
 			<button
 				type="button"
-				class="mt-3 flex w-full items-center justify-center gap-1 rounded-md bg-green-9 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-green-10"
+				class="mt-3 flex w-full items-center justify-center gap-1 rounded-md bg-emerald-9 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-10"
 				onClick={() => props.onRestore()}
 			>
 				<IconLucideRotateCcw class="size-3" />

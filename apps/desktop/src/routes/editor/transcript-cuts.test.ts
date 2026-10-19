@@ -27,6 +27,8 @@ import {
 	planAutoClean,
 	planPauseCut,
 	planWordCuts,
+	recordingSilence,
+	type SourceRange,
 	subtractSourceRanges,
 	type TranscriptItem,
 	transcriptPlanContext,
@@ -684,6 +686,222 @@ describe("transcript pauses", () => {
 		expect(
 			track.flatMap((segment) => segment.words ?? []).map((word) => word.text),
 		).toEqual(["so", "next"]);
+	});
+});
+
+describe("pauses heard in the recording", () => {
+	const SPEECH_DB = -20;
+	const ROOM_DB = -58;
+
+	function levels(
+		duration: number,
+		speech: Array<[number, number]>,
+		quiet = ROOM_DB,
+		loud = SPEECH_DB,
+	) {
+		return Array.from({ length: Math.round(duration * 10) }, (_, block) =>
+			speech.some(
+				([start, end]) => block / 10 < end && (block + 1) / 10 > start,
+			)
+				? loud
+				: quiet,
+		);
+	}
+
+	function heard(recs: SegmentRecordings[], speech: Array<[number, number]>) {
+		return recordingSilence(recs, [
+			[{ levels: levels(recs[0].display.duration, speech), offset: 0 }],
+		]);
+	}
+
+	function audioContext(
+		p: Project,
+		recs: SegmentRecordings[],
+		silence: SourceRange[],
+	) {
+		return {
+			...transcriptPlanContext(p, recs, undefined, silence),
+			createId,
+		};
+	}
+
+	function pauses(items: readonly TranscriptItem[]) {
+		return items.flatMap((item) =>
+			item.type === "pause"
+				? [[Number(item.start.toFixed(6)), Number(item.end.toFixed(6))]]
+				: [],
+		);
+	}
+
+	const rounded = (ranges: SourceRange[]) =>
+		ranges.map((range) => [
+			Number(range.start.toFixed(6)),
+			Number(range.end.toFixed(6)),
+		]);
+
+	it("finds where every track is quiet, across recordings and clip offsets", () => {
+		const recs = recordings(4, 2);
+		const silence = recordingSilence(recs, [
+			[
+				{
+					levels: levels(4, [
+						[0, 1],
+						[2, 2.5],
+					]),
+					offset: 0,
+				},
+				{ levels: levels(4, [[1.5, 1.7]]), offset: 0.2 },
+			],
+			[{ levels: levels(2, [[0.5, 1]]), offset: 0 }],
+		]);
+		expect(rounded(silence)).toEqual([
+			[1, 1.3],
+			[1.5, 2],
+			[2.5, 4.5],
+			[5, 6],
+		]);
+	});
+
+	it("reports no silence without waveforms or without speech clearly above the noise", () => {
+		const recs = recordings(4);
+		expect(recordingSilence(recs, [])).toEqual([]);
+		expect(recordingSilence(recs, [[{ levels: [], offset: 0 }]])).toEqual([]);
+		expect(
+			recordingSilence(recs, [
+				[{ levels: levels(4, [[1, 3]], -50, -50), offset: 0 }],
+			]),
+		).toEqual([]);
+		expect(
+			recordingSilence(recs, [
+				[{ levels: levels(4, [[1, 3]], ROOM_DB, -48), offset: 0 }],
+			]),
+		).toEqual([]);
+	});
+
+	it("starts the pause where the audio goes quiet, even under a word stamped late", () => {
+		const recs = recordings(8);
+		const p = project(
+			[
+				["these", 1.0, 1.3],
+				["two?", 1.3, 3.8],
+				["See", 5.0, 5.4],
+				["now", 5.4, 5.8],
+			],
+			[clip(0, 8)],
+		);
+		const silence = heard(recs, [
+			[1.0, 1.2],
+			[5.0, 5.8],
+		]);
+		expect(pauses(context(p, recs).items)).toEqual([
+			[0, 1],
+			[3.8, 5],
+		]);
+		const ctx = audioContext(p, recs, silence);
+		expect(pauses(ctx.items)).toEqual([
+			[0, 1],
+			[1.4, 5],
+		]);
+
+		const pause = ctx.items.find(
+			(item) => item.type === "pause" && item.start > 1,
+		);
+		if (pause?.type !== "pause") throw new Error("No pause");
+		expect(commitTranscriptCutEdit(p, planPauseCut(ctx, pause), recs)).toBe(
+			"applied",
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.4],
+			[5, 8],
+		]);
+		expect(liveWords(p)).toEqual(["these", "two?", "See", "now"]);
+		expect(p.captions?.segments[0].words?.[1].end).toBeCloseTo(1.4);
+
+		commitTranscriptCutEdit(
+			p,
+			{ restore: [p.captions?.transcriptCuts?.[0]?.id ?? ""] },
+			recs,
+		);
+		expect(clips(p)).toEqual([[0, 8]]);
+		expect(p.captions?.segments[0].words?.[1]).toMatchObject({
+			text: "two?",
+			end: 3.8,
+		});
+	});
+
+	it("finds a pause the transcript hides entirely inside a word", () => {
+		const recs = recordings(4);
+		const p = project(
+			[
+				["so", 1.0, 2.4],
+				["next", 2.4, 2.8],
+			],
+			[clip(0, 4)],
+		);
+		const silence = heard(recs, [
+			[1.0, 1.4],
+			[2.4, 2.8],
+		]);
+		expect(pauses(context(p, recs).items)).toEqual([[0, 1]]);
+		expect(pauses(audioContext(p, recs, silence).items)).toEqual([
+			[0, 1],
+			[1.5, 2.4],
+		]);
+	});
+
+	it("never reaches into audio that runs up to the next word", () => {
+		const recs = recordings(4);
+		const p = project(
+			[
+				["so", 1.0, 2.4],
+				["next", 2.4, 2.8],
+			],
+			[clip(0, 4)],
+		);
+		for (const speech of [
+			[[1.0, 2.8]],
+			[
+				[1.0, 1.4],
+				[2.3, 2.8],
+			],
+		] as Array<Array<[number, number]>>) {
+			expect(pauses(audioContext(p, recs, heard(recs, speech)).items)).toEqual([
+				[0, 1],
+			]);
+		}
+	});
+
+	it("lets Auto Clean take the silence a stretched word hides before a filler", () => {
+		const recs = recordings(5);
+		const words: Array<[string, number, number]> = [
+			["so", 1.0, 2.0],
+			["um", 2.0, 2.3],
+			["right", 2.3, 2.7],
+		];
+		const silence = heard(recs, [
+			[1.0, 1.3],
+			[2.0, 2.7],
+		]);
+
+		const transcriptOnly = project(words, [clip(0, 5)]);
+		const plain = planAutoClean(context(transcriptOnly, recs), 5).edit;
+		if (!plain) throw new Error("Nothing planned");
+		commitTranscriptCutEdit(transcriptOnly, plain, recs);
+		expect(clips(transcriptOnly)).toEqual([
+			[0, 2],
+			[2.3, 5],
+		]);
+
+		const p = project(words, [clip(0, 5)]);
+		const { edit } = planAutoClean(audioContext(p, recs, silence), 5);
+		if (!edit) throw new Error("Nothing planned");
+		expect(commitTranscriptCutEdit(p, edit, recs)).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 1.4],
+			[2.3, 5],
+		]);
+		expect(liveWords(p)).toEqual(["so", "right"]);
+		expect(p.captions?.segments[0].words?.[0].end).toBeCloseTo(1.4);
 	});
 });
 
