@@ -1524,6 +1524,108 @@ describe("exact restore", () => {
 		expect(spans(p.timeline?.zoomSegments)).toEqual([[2.5, 5.5]]);
 	});
 
+	it("puts footage cut up to a closing title back ahead of it", () => {
+		const recs = recordings(10);
+		const p = project(
+			[
+				["thanks", 8.0, 8.4],
+				["bye", 9.0, 9.5],
+			],
+			[clip(0, 10)],
+			{
+				textSegments: [
+					{ ...defaultTextSegment(10, 12), layout: "fullscreen" as const },
+				],
+				zoomSegments: [zoom(9.2, 11.5)],
+			},
+		);
+		cut(p, recs, "bye");
+		const { id } = cutRecord(p, "bye");
+		commitTranscriptCutEdit(
+			p,
+			{ padding: [{ id, bufferStart: 0, bufferEnd: 0.5 }] },
+			recs,
+		);
+		expect(clips(p)).toEqual([[0, 9]]);
+		expect(spans(p.timeline?.textSegments)).toEqual([[9, 11]]);
+
+		expect(restore(p, recs, id)).toBe("applied");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(spans(p.timeline?.textSegments)).toEqual([[10, 12]]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[9.2, 11.5]]);
+	});
+
+	it("treats a closing title a hair off the clips' end as sitting at it", () => {
+		for (const offset of [-1e-12, 1e-12]) {
+			const recs = recordings(10);
+			const p = project(
+				[
+					["thanks", 8.0, 8.4],
+					["bye", 9.0, 9.5],
+				],
+				[clip(0, 10)],
+				{
+					textSegments: [
+						{
+							...defaultTextSegment(10 + offset, 12),
+							layout: "fullscreen" as const,
+						},
+					],
+				},
+			);
+			cut(p, recs, "bye");
+			const { id } = cutRecord(p, "bye");
+			commitTranscriptCutEdit(
+				p,
+				{ padding: [{ id, bufferStart: 0, bufferEnd: 0.5 }] },
+				recs,
+			);
+			expect(spans(p.timeline?.textSegments)).toEqual([[9, 11]]);
+
+			expect(restore(p, recs, id)).toBe("applied");
+			expect(clips(p)).toEqual([[0, 10]]);
+			expect(spans(p.timeline?.textSegments)).toEqual([[10, 12]]);
+		}
+	});
+
+	it("keeps a fullscreen hold between two adjacent cuts in either restore order", () => {
+		for (const order of [
+			["first", "second"],
+			["second", "first"],
+		]) {
+			const recs = recordings(10);
+			const p = project(
+				[
+					["intro", 0.5, 1.0],
+					["outro", 9.0, 9.4],
+				],
+				[clip(0, 10)],
+				{
+					textSegments: [
+						{ ...defaultTextSegment(4, 5), layout: "fullscreen" as const },
+					],
+					zoomSegments: [zoom(3.5, 6.5)],
+				},
+			);
+			commitTranscriptCutEdit(p, { add: [pause("first", 3, 4)] }, recs);
+			commitTranscriptCutEdit(p, { add: [pause("second", 4, 5)] }, recs);
+			expect(clips(p)).toEqual([
+				[0, 3],
+				[5, 10],
+			]);
+			expect(spans(p.timeline?.textSegments)).toEqual([[3, 4]]);
+
+			expect(restore(p, recs, order[0])).toBe("applied");
+			expect(spans(p.timeline?.textSegments)).toEqual([
+				order[0] === "first" ? [4, 5] : [3, 4],
+			]);
+			expect(restore(p, recs, order[1])).toBe("applied");
+			expect(clips(p)).toEqual([[0, 10]]);
+			expect(spans(p.timeline?.textSegments)).toEqual([[4, 5]]);
+			expect(spans(p.timeline?.zoomSegments)).toEqual([[3.5, 6.5]]);
+		}
+	});
+
 	it("restores a cut that another cut overlaps by a sliver on a sped-up clip", () => {
 		const recs = recordings(10);
 		const p = project(

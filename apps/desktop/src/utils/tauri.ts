@@ -1409,6 +1409,12 @@ start: number; end: number;
  */
 held?: number;
 /**
+ * Output time of fullscreen text holds that sat right where the removed
+ * footage ended. They stay with what follows the cut, so restoring puts
+ * the footage back in ahead of them.
+ */
+heldAfter?: number;
+/**
  * Overlay segments the removal deleted or trimmed, timed from the cut
  * point in output time.
  */

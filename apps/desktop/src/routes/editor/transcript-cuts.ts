@@ -512,6 +512,32 @@ function snapOverlayEdges(tracks: OverlayTracks, edges: readonly number[]) {
 	}
 }
 
+// A hold sits at one point of recording-flow time but is stored in output
+// time, so one meant to sit right at a cut point (a closing title at the
+// clips' end) can land a hair before or after it. Off by a hair, a cut
+// swallows the hold, or a restore puts footage back on the wrong side of it.
+function snapHoldsTo(timeline: TranscriptTimeline, time: number) {
+	let output = time;
+	for (const [start, end] of holdWindows(timeline.textSegments)) {
+		if (output < start - EDGE_SNAP) return;
+		if (output <= start + EDGE_SNAP && output !== start) {
+			const by = output - start;
+			for (const segment of timeline.textSegments ?? []) {
+				if (
+					segment.layout !== "fullscreen" ||
+					segment.enabled === false ||
+					segment.start < start ||
+					segment.end > end
+				)
+					continue;
+				segment.start = segment.start === start ? output : segment.start + by;
+				segment.end += by;
+			}
+		}
+		output += end - start;
+	}
+}
+
 function touchOverlays(
 	tracks: OverlayTracks,
 	start: number,
@@ -654,6 +680,8 @@ function removeTimelineRange(
 	];
 	const start = Math.max(range.start, clipStart);
 	const end = Math.min(range.end, clipStart + clipDuration(clip));
+	snapHoldsTo(timeline, start);
+	snapHoldsTo(timeline, end);
 	const holds = holdWindows(timeline.textSegments);
 	const overlayStart = effectiveToOutput(holds, start);
 	const overlayEnd = effectiveToOutputEnd(holds, end);
@@ -670,12 +698,14 @@ function removeTimelineRange(
 		return null;
 
 	const held = overlayEnd - overlayStart - (end - start);
+	const heldAfter = effectiveToOutput(holds, end) - overlayEnd;
 	return {
 		sequence,
 		clip: original,
 		start: original.start + (start - clipStart) * original.timescale,
 		end: original.start + (end - clipStart) * original.timescale,
 		held: held > RANGE_EPSILON ? held : 0,
+		heldAfter: heldAfter > RANGE_EPSILON ? heldAfter : 0,
 		overlays: overlayChanges(timeline, touched, overlayStart),
 	};
 }
@@ -870,9 +900,14 @@ function insertRecordingRange(
 	const shift =
 		clipTimelineDuration(timeline.segments, timeline.transitions ?? []) -
 		durationBefore;
-	const overlayBoundary = effectiveToOutput(
-		holdWindows(timeline.textSegments),
-		boundary,
+	// Holds that sat right where the removed footage ended (a closing title
+	// after a cut reaching the end of the clips) stayed with what follows, so
+	// the footage goes back in ahead of them.
+	snapHoldsTo(timeline, boundary);
+	const holds = holdWindows(timeline.textSegments);
+	const overlayBoundary = Math.max(
+		effectiveToOutputEnd(holds, boundary),
+		effectiveToOutput(holds, boundary) - (piece?.heldAfter ?? 0),
 	);
 	const restored = piece
 		? takeOverlays(timeline, piece.overlays, overlayBoundary)

@@ -2454,6 +2454,11 @@ pub struct TranscriptCutPiece {
     /// sat inside it.
     #[serde(default)]
     pub held: f64,
+    /// Output time of fullscreen text holds that sat right where the removed
+    /// footage ended. They stay with what follows the cut, so restoring puts
+    /// the footage back in ahead of them.
+    #[serde(default)]
+    pub held_after: f64,
     /// Overlay segments the removal deleted or trimmed, timed from the cut
     /// point in output time.
     #[serde(default)]
@@ -3270,6 +3275,7 @@ mod tests {
         assert_eq!(piece.sequence, 3);
         assert_eq!(piece.clip.recording_clip, 1);
         assert_eq!(piece.held, 0.0);
+        assert_eq!(piece.held_after, 0.0);
         assert!(piece.overlays.zoom_segments[0].after.is_none());
         assert_eq!(
             piece.overlays.zoom_segments[1]
