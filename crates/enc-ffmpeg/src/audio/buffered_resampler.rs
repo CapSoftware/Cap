@@ -78,6 +78,13 @@ impl BufferedResampler {
             (output.format, output.channel_layout, output.rate),
         ) {
             Ok(resampler) => {
+                let previous_rate = self.resampler.input().rate;
+                if previous_rate > 0 && frame.rate() > 0 {
+                    self.min_next_pts = self.min_next_pts.map(|pts| {
+                        (pts as f64 * f64::from(frame.rate()) / f64::from(previous_rate)).round()
+                            as i64
+                    });
+                }
                 self.resampler = resampler;
                 true
             }
@@ -95,6 +102,10 @@ impl BufferedResampler {
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
+        if !self.accepts(&frame) && !self.rebuild_for(&frame) {
+            return;
+        }
+
         if let Some(min_next_pts) = self.min_next_pts
             && let Some(pts) = frame.pts()
         {
@@ -102,10 +113,6 @@ impl BufferedResampler {
         }
 
         let pts = frame.pts().unwrap();
-
-        if !self.accepts(&frame) && !self.rebuild_for(&frame) {
-            return;
-        }
 
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
@@ -500,6 +507,32 @@ mod test {
             assert_eq!(output_after.rate, output.rate);
             let samples = bufferer.buffer.iter().map(|f| f.0.samples()).sum::<usize>();
             assert_eq!(samples, 400);
+        }
+
+        #[test]
+        fn a_rate_change_keeps_the_timeline_continuous() {
+            let packed_u8 = format::Sample::U8(cap_media_info::Type::Packed);
+            let mut bufferer = BufferedResampler::new(
+                AudioInfo::new_raw(packed_u8, 48_000, 1),
+                AudioInfo::new_raw(packed_u8, 48_000, 1),
+            )
+            .unwrap();
+            for k in 0..100i64 {
+                bufferer.add_frame(frame(packed_u8, 1, 48_000, 4_800, k * 4_800));
+            }
+            bufferer.add_frame(frame(packed_u8, 1, 8_000, 800, 80_000));
+
+            let (last, pts) = bufferer
+                .buffer
+                .iter()
+                .rev()
+                .find(|(frame, _)| frame.samples() > 0)
+                .unwrap();
+            let end_secs = (*pts as f64 + last.samples() as f64) / 48_000.0;
+            assert!(
+                (10.0..10.3).contains(&end_secs),
+                "the 8 kHz frame ends at {end_secs} s, not right after the 10 s at 48 kHz"
+            );
         }
 
         #[test]
