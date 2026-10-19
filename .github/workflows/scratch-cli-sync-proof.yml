@@ -115,6 +115,7 @@ jobs:
 
           cat > "$RUNNER_TEMP/locked.swift" <<'SWIFT'
           import CoreGraphics
+          import Foundation
           let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
           let locked = (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
           print("screen locked: \(locked)")
