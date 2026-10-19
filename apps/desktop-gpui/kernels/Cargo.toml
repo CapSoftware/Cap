@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "frame_export"
 harness = false
+
+[[bench]]
+name = "screenshot_alpha"
+harness = false
