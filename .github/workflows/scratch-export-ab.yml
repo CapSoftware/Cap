@@ -62,7 +62,15 @@ jobs:
           cat .cargo/config.toml
           for side in base head; do
             mkdir -p "$RUNNER_TEMP/$side/.cargo"
-            cp .cargo/config.toml "$RUNNER_TEMP/$side/.cargo/config.toml"
+            python3 - "$GITHUB_WORKSPACE" "$RUNNER_TEMP/$side/.cargo/config.toml" <<'PY'
+          import re, sys
+          root, out = sys.argv[1], sys.argv[2]
+          text = open(root + "/.cargo/config.toml").read()
+          text = re.sub(r'relative = true, (force = true, )?value = "([^"]+)"',
+                        lambda m: f'{m.group(1) or ""}value = "{root}/{m.group(2)}"', text)
+          open(out, "w").write(text)
+          print(text)
+          PY
           done
 
       - name: Build both sides
