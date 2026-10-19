@@ -106,11 +106,13 @@ impl AudioData {
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
         let mut resampler_output = ResamplerOutput::new();
         let mut samples = Vec::new();
+        let compressed_bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
         let _ = samples.try_reserve(decoded_sample_capacity(
             stream_duration,
             stream_time_base,
             target_channels,
             range.as_ref(),
+            compressed_bytes,
         ));
         let mut resampled_samples = Vec::new();
         let mut next_source_sample = if sought { None } else { Some(0usize) };
@@ -316,13 +318,26 @@ fn target_channels_for_source(channels: u16) -> u16 {
     if channels <= 1 { 1 } else { 2 }
 }
 
+// Packed f32 bytes per compressed byte. ~6 kbps speech expands to 48 kHz stereo
+// f32 by ~512×; 1024× leaves a 2× margin for container overhead and resampler delay.
+const MAX_F32_BYTES_PER_COMPRESSED_BYTE: u64 = 1024;
+const MAX_DECODED_SAMPLES: usize = 8 * 3_600 * AudioData::SAMPLE_RATE as usize * 2;
+
+fn decoded_samples_from_compressed_bytes(compressed_bytes: u64) -> usize {
+    let decoded_bytes = compressed_bytes.saturating_mul(MAX_F32_BYTES_PER_COMPRESSED_BYTE);
+    usize::try_from(decoded_bytes / std::mem::size_of::<f32>() as u64).unwrap_or(usize::MAX)
+}
+
 fn decoded_sample_capacity(
     duration: i64,
     stream_time_base: f64,
     target_channels: u16,
     range: Option<&Range<usize>>,
+    compressed_bytes: u64,
 ) -> usize {
     let channels = usize::from(target_channels);
+    let from_file =
+        decoded_samples_from_compressed_bytes(compressed_bytes).min(MAX_DECODED_SAMPLES);
     if duration <= 0 || !stream_time_base.is_finite() || stream_time_base <= 0.0 {
         return 0;
     }
@@ -332,7 +347,8 @@ fn decoded_sample_capacity(
     }
     let from_duration = (frames.ceil() as usize)
         .saturating_add(64)
-        .saturating_mul(channels);
+        .saturating_mul(channels)
+        .min(from_file);
     let Some(window) = range else {
         return from_duration;
     };
@@ -819,16 +835,19 @@ mod tests {
     #[test]
     fn decoded_sample_capacity_uses_range_or_duration() {
         assert_eq!(
-            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..1_250)), u64::MAX),
             500
         );
         assert_eq!(
-            decoded_sample_capacity(0, 1.0 / 48_000.0, 2, Some(&(1_000..1_250))),
+            decoded_sample_capacity(0, 1.0 / 48_000.0, 2, Some(&(1_000..1_250)), u64::MAX),
             0
         );
-        assert_eq!(decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, None), 0);
         assert_eq!(
-            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, None),
+            decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, None, u64::MAX),
+            0
+        );
+        assert_eq!(
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, None, u64::MAX),
             (48_000 + 64) * 2
         );
     }
@@ -837,21 +856,45 @@ mod tests {
     fn decoded_sample_capacity_caps_load_track_open_ended_end() {
         let end = usize::MAX / 4;
         assert_eq!(
-            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 1, Some(&(0..end))),
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 1, Some(&(0..end)), u64::MAX),
             48_000 + 64
         );
         assert_eq!(
-            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..end))),
+            decoded_sample_capacity(48_000, 1.0 / 48_000.0, 2, Some(&(1_000..end)), u64::MAX),
             (48_000 + 64) * 2
         );
         assert_eq!(
-            decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, Some(&(0..end))),
+            decoded_sample_capacity(-1, 1.0 / 48_000.0, 2, Some(&(0..end)), u64::MAX),
             0
         );
         assert_eq!(
-            decoded_sample_capacity(48_000, f64::NAN, 2, Some(&(0..end))),
+            decoded_sample_capacity(48_000, f64::NAN, 2, Some(&(0..end)), u64::MAX),
             0
         );
+    }
+
+    #[test]
+    fn decoded_sample_capacity_clamps_forged_duration_to_file_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tiny.wav");
+        write_pcm_wav(&path, AudioData::SAMPLE_RATE, 8, &[1]);
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        assert!(file_len < 1_024);
+
+        let ten_hours = 10 * 3_600 * i64::from(AudioData::SAMPLE_RATE);
+        let open_ended = 0..(usize::MAX / 4);
+        let reserved =
+            decoded_sample_capacity(ten_hours, 1.0 / 48_000.0, 2, Some(&open_ended), file_len);
+        let max_from_file =
+            decoded_samples_from_compressed_bytes(file_len).min(MAX_DECODED_SAMPLES);
+
+        assert_eq!(reserved, max_from_file);
+        assert!(reserved > 0);
+        assert!(reserved < 1_000_000);
+
+        let unclamped_hours = (10 * 3_600 * AudioData::SAMPLE_RATE as usize + 64) * 2;
+        assert!(unclamped_hours > 3_000_000_000usize);
+        assert!(reserved < unclamped_hours / 1_000);
     }
 
     #[test]
