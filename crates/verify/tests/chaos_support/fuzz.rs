@@ -345,7 +345,6 @@ fn small_export(ctx: &Ctx, dir: &Path) -> anyhow::Result<Verdict> {
         project::Format::Mp4 { bpp: None },
         5,
         (160, 90),
-        false,
     ))
 }
 

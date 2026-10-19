@@ -221,7 +221,9 @@ pub fn child_main(all: fn() -> Vec<Probe>) {
             Err(_) => ("panicked", String::new()),
         };
         log_line(&["verdict", &seed.to_string(), kind, &one_line(&text)]);
-        let _ = std::fs::remove_dir_all(&dir);
+        if !keep_scratch() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
     log_line(&["end"]);
     // Leftover engine threads must not keep the child alive (or run
@@ -528,7 +530,7 @@ pub fn run_seeds(probe: &Probe, first: u64, end: u64, keep: Option<&str>) -> Vec
             }
         }
     }
-    if std::env::var_os("CAP_VERIFY_CHAOS_KEEP_SCRATCH").is_none() {
+    if !keep_scratch() {
         let _ = std::fs::remove_dir_all(&dir);
     }
     outcomes
@@ -704,4 +706,8 @@ pub fn run_group(all: fn() -> Vec<Probe>, prefix: &str) {
     failures.sort();
     let failures: Vec<String> = failures.into_iter().map(|(_, e)| e).collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn keep_scratch() -> bool {
+    std::env::var_os("CAP_VERIFY_CHAOS_KEEP_SCRATCH").is_some()
 }

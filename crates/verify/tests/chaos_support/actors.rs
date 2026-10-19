@@ -41,8 +41,14 @@ mod mac {
         Cancel,
         /// Stop and cancel at the same time.
         StopAndCancel,
-        DropCamera,
-        DropMic,
+        /// The camera handle goes away: frames stop, the feed stays.
+        StallCamera,
+        /// The microphone handle goes away: samples stop, the feed stays.
+        StallMic,
+        /// The camera feed loses its device (`RemoveInput`).
+        DisconnectCamera,
+        /// The microphone feed loses its device (`RemoveInput`).
+        DisconnectMic,
         /// The camera switches to this size and format.
         CameraShape(u32, u32, Pixel),
         /// Camera timestamps run backwards from here.
@@ -108,13 +114,23 @@ mod mac {
             ),
             seq("pause-then-stop", vec![Frames(0.5), Pause, Stop], true),
             seq(
-                "camera-vanishes",
-                vec![Frames(0.5), DropCamera, Frames(0.5), Stop],
+                "camera-stalls",
+                vec![Frames(0.5), StallCamera, Frames(0.5), Stop],
                 true,
             ),
             seq(
-                "mic-vanishes",
-                vec![Frames(0.5), DropMic, Frames(0.5), Stop],
+                "mic-stalls",
+                vec![Frames(0.5), StallMic, Frames(0.5), Stop],
+                true,
+            ),
+            seq(
+                "camera-disconnects",
+                vec![Frames(0.5), DisconnectCamera, Frames(0.5), Stop],
+                true,
+            ),
+            seq(
+                "mic-disconnects",
+                vec![Frames(0.5), DisconnectMic, Frames(0.5), Stop],
                 true,
             ),
             seq(
@@ -321,12 +337,24 @@ mod mac {
                     stopped |= a.is_ok();
                     a.and(b)
                 }
-                Step::DropCamera => {
+                Step::StallCamera => {
                     camera = None;
                     Ok(())
                 }
-                Step::DropMic => {
+                Step::StallMic => {
                     mic = None;
+                    Ok(())
+                }
+                Step::DisconnectCamera => {
+                    if let Some(camera) = camera.take() {
+                        camera.remove_input().await;
+                    }
+                    Ok(())
+                }
+                Step::DisconnectMic => {
+                    if let Some(mic) = mic.take() {
+                        mic.remove_input().await;
+                    }
                     Ok(())
                 }
                 Step::CameraShape(w, h, f) => {

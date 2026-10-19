@@ -152,14 +152,17 @@
 				"full": ["macos"]
 			},
 			"roots": ["cap-verify", "cap-muxer"],
-			"own": ["crates/verify/tests/chaos.rs", "crates/verify/tests/chaos_support/**"],
+			"own": [
+				"crates/verify/tests/chaos.rs",
+				"crates/verify/tests/chaos_support/**"
+			],
 			"cases": {
 				"prefix": "chaos/",
 				"fast": {
-					"macos": 0
+					"macos": 477
 				},
 				"full": {
-					"macos": 0
+					"macos": 764
 				}
 			}
 		},

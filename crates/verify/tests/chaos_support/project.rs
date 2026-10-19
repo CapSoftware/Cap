@@ -1020,7 +1020,6 @@ pub async fn export(
     format: Format,
     fps: u32,
     resolution: (u32, u32),
-    expect_media: bool,
 ) -> anyhow::Result<Verdict> {
     let base = match cap_export::ExporterBase::builder(dir.to_path_buf())
         .with_output_path(out.to_path_buf())
@@ -1063,23 +1062,25 @@ pub async fn export(
             .await
         }
     };
-    let path = match result {
-        Ok(path) => path,
-        Err(e) => return Ok(Verdict::rejected(format!("export: {e}"))),
-    };
-    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    if !expect_media {
-        return Ok(Verdict::Ok(format!("{size} bytes")));
+    match result {
+        Ok(path) => Ok(judge_export(&path, format)),
+        Err(e) => Ok(Verdict::rejected(format!("export: {e}"))),
     }
+}
+
+/// An export that reports success must have written playable media, however
+/// damaged its input was: rejecting is fine, an empty file is not.
+fn judge_export(path: &Path, format: Format) -> Verdict {
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size == 0 {
-        return Ok(Verdict::Wrong(format!(
+        return Verdict::Wrong(format!(
             "export reported success with an empty file {}",
             path.display()
-        )));
+        ));
     }
     match format {
-        Format::Gif => Ok(Verdict::Ok(format!("{size} bytes"))),
-        _ => Ok(super::media_check::judge_output(&path, true)),
+        Format::Gif => Verdict::Ok(format!("{size} bytes")),
+        _ => super::media_check::judge_output(path, true),
     }
 }
 
@@ -1102,7 +1103,6 @@ fn file_probes(out: &mut Vec<Probe>) {
                             Format::Mp4 { bpp: None },
                             10,
                             (320, 180),
-                            usable,
                         )),
                     }
                 },
@@ -1141,8 +1141,8 @@ const FAST_EDITOR: &[&str] = &[
     "background-hostile",
 ];
 
-/// (name, format, fps, resolution, usable output expected, FULL only)
-type ExportCase = (&'static str, Format, u32, (u32, u32), bool, bool);
+/// (name, format, fps, resolution, FULL only)
+type ExportCase = (&'static str, Format, u32, (u32, u32), bool);
 
 fn export_probes(out: &mut Vec<Probe>) {
     let cases: Vec<ExportCase> = vec![
@@ -1151,7 +1151,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             Format::Mp4 { bpp: None },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1160,14 +1159,12 @@ fn export_probes(out: &mut Vec<Probe>) {
             10,
             (0, 0),
             false,
-            false,
         ),
         (
             "mp4/resolution-1x1",
             Format::Mp4 { bpp: None },
             10,
             (1, 1),
-            false,
             false,
         ),
         (
@@ -1176,14 +1173,12 @@ fn export_probes(out: &mut Vec<Probe>) {
             10,
             (3, 3),
             false,
-            false,
         ),
         (
             "mp4/resolution-odd",
             Format::Mp4 { bpp: None },
             10,
             (641, 361),
-            true,
             false,
         ),
         (
@@ -1192,14 +1187,12 @@ fn export_probes(out: &mut Vec<Probe>) {
             10,
             (2, 4000),
             false,
-            false,
         ),
         (
             "mp4/resolution-16384",
             Format::Mp4 { bpp: None },
             1,
             (16384, 16384),
-            false,
             true,
         ),
         (
@@ -1208,30 +1201,14 @@ fn export_probes(out: &mut Vec<Probe>) {
             1,
             (u32::MAX, u32::MAX),
             false,
-            false,
         ),
-        (
-            "mp4/fps-0",
-            Format::Mp4 { bpp: None },
-            0,
-            (320, 180),
-            false,
-            false,
-        ),
-        (
-            "mp4/fps-1",
-            Format::Mp4 { bpp: None },
-            1,
-            (320, 180),
-            true,
-            false,
-        ),
+        ("mp4/fps-0", Format::Mp4 { bpp: None }, 0, (320, 180), false),
+        ("mp4/fps-1", Format::Mp4 { bpp: None }, 1, (320, 180), false),
         (
             "mp4/fps-240",
             Format::Mp4 { bpp: None },
             240,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1239,7 +1216,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             Format::Mp4 { bpp: None },
             u32::MAX,
             (320, 180),
-            false,
             true,
         ),
         (
@@ -1249,7 +1225,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1257,7 +1232,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             Format::Mp4 { bpp: Some(-1.0) },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1267,7 +1241,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1275,20 +1248,18 @@ fn export_probes(out: &mut Vec<Probe>) {
             Format::Mp4 { bpp: Some(0.0) },
             10,
             (320, 180),
-            true,
             false,
         ),
-        ("gif/control", Format::Gif, 10, (320, 180), true, false),
-        ("gif/resolution-0x0", Format::Gif, 10, (0, 0), false, false),
-        ("gif/resolution-1x1", Format::Gif, 10, (1, 1), false, false),
-        ("gif/fps-0", Format::Gif, 0, (320, 180), false, false),
-        ("gif/fps-240", Format::Gif, 240, (160, 90), true, true),
+        ("gif/control", Format::Gif, 10, (320, 180), false),
+        ("gif/resolution-0x0", Format::Gif, 10, (0, 0), false),
+        ("gif/resolution-1x1", Format::Gif, 10, (1, 1), false),
+        ("gif/fps-0", Format::Gif, 0, (320, 180), false),
+        ("gif/fps-240", Format::Gif, 240, (160, 90), true),
         (
             "mov/control",
             Format::Mov { cursor_only: false },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1296,7 +1267,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             Format::Mov { cursor_only: true },
             10,
             (320, 180),
-            true,
             false,
         ),
         (
@@ -1305,7 +1275,6 @@ fn export_probes(out: &mut Vec<Probe>) {
             10,
             (0, 0),
             false,
-            false,
         ),
         (
             "mov/fps-0",
@@ -1313,10 +1282,9 @@ fn export_probes(out: &mut Vec<Probe>) {
             0,
             (320, 180),
             false,
-            false,
         ),
     ];
-    for (name, format, fps, resolution, expect, full) in cases {
+    for (name, format, fps, resolution, full) in cases {
         let probe = Probe::new(format!("chaos/export/{name}"), 120, move |ctx: &Ctx| {
             let dir = prepare(ctx)?;
             let ext = match format {
@@ -1330,7 +1298,6 @@ fn export_probes(out: &mut Vec<Probe>) {
                 format,
                 fps,
                 resolution,
-                expect,
             ))
         });
         out.push(if full { probe.full() } else { probe });
@@ -1416,10 +1383,7 @@ async fn export_config(
     .export(base, |_| true)
     .await
     {
-        Ok(path) => Ok(Verdict::Ok(format!(
-            "{} bytes",
-            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-        ))),
+        Ok(path) => Ok(judge_export(&path, Format::Mp4 { bpp: None })),
         Err(e) => Ok(Verdict::rejected(format!("export: {e}"))),
     }
 }
