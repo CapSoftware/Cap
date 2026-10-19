@@ -16,6 +16,9 @@ use crate::{
     theme::Theme,
 };
 
+#[cfg(target_os = "windows")]
+use crate::ui;
+
 mod stage;
 
 pub use stage::Paper;
