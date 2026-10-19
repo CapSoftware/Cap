@@ -82,7 +82,7 @@ impl MediaAccess {
         self.refresh = Some(cx.spawn(async move |this, cx| {
             let raw = cx
                 .background_executor()
-                .spawn(async { crate::permissions_ui::sweep_raw() })
+                .spawn(async { crate::permissions_ui::sweep_raw_preflight() })
                 .await;
             this.update(cx, |this, cx| {
                 this.refresh = None;

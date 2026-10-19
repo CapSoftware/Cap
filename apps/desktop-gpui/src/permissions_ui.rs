@@ -180,6 +180,14 @@ pub fn sweep_raw() -> Option<RawPermissions> {
     }
 }
 
+/// [`sweep_raw`] built on [`permissions::check_raw_preflight`].
+pub fn sweep_raw_preflight() -> Option<RawPermissions> {
+    match fake_spec() {
+        Some(spec) => parse_fake(&spec),
+        None => permissions::check_raw_preflight(),
+    }
+}
+
 fn fake_spec() -> Option<String> {
     std::env::var("CAP_GPUI_FAKE_PERMISSIONS")
         .ok()

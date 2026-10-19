@@ -34,7 +34,8 @@ const FAILED: u8 = 2;
 static VALIDATED: AtomicBool = AtomicBool::new(false);
 static LAST_OUTCOME: AtomicU8 = AtomicU8::new(UNKNOWN);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-static QUERY_ALIVE: AtomicBool = AtomicBool::new(false);
+static QUERIES_ALIVE: AtomicU8 = AtomicU8::new(0);
+const MAX_QUERIES_ALIVE: u8 = 3;
 static LAST_ATTEMPT: Mutex<Option<Instant>> = Mutex::new(None);
 
 pub(super) fn available(preflight_granted: bool) -> bool {
@@ -125,13 +126,17 @@ fn validate() -> bool {
 
 /// Display count, or `None` on an error or timeout. A wedged `replayd` can
 /// leave the query unresolved forever, so it runs on a thread of its own that
-/// is abandoned at the timeout.
+/// is abandoned at the timeout. An abandoned query that answers later still
+/// records the grant, and at most [`MAX_QUERIES_ALIVE`] are left waiting, so a
+/// replayd that never recovers strands a bounded number of threads.
 fn query_displays(timeout: Duration) -> Option<usize> {
-    // A query abandoned at its timeout is still blocked in replayd; starting
-    // another would strand one more thread every retry for as long as
-    // replayd stays wedged.
-    if QUERY_ALIVE.swap(true, Ordering::AcqRel) {
-        tracing::debug!("a ScreenCaptureKit shareable content query is still pending");
+    if QUERIES_ALIVE
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |alive| {
+            (alive < MAX_QUERIES_ALIVE).then_some(alive + 1)
+        })
+        .is_err()
+    {
+        tracing::debug!("ScreenCaptureKit shareable content queries are still pending");
         return None;
     }
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -141,7 +146,7 @@ fn query_displays(timeout: Duration) -> Option<usize> {
             struct AliveReset;
             impl Drop for AliveReset {
                 fn drop(&mut self) {
-                    QUERY_ALIVE.store(false, Ordering::Release);
+                    QUERIES_ALIVE.fetch_sub(1, Ordering::AcqRel);
                 }
             }
             let _alive = AliveReset;
@@ -160,10 +165,14 @@ fn query_displays(timeout: Duration) -> Option<usize> {
                     }
                 })
             });
+            if displays.is_some_and(|displays| displays > 0) {
+                VALIDATED.store(true, Ordering::Release);
+                LAST_OUTCOME.store(OK, Ordering::Release);
+            }
             let _ = sender.send(displays);
         });
     if spawned.is_err() {
-        QUERY_ALIVE.store(false, Ordering::Release);
+        QUERIES_ALIVE.fetch_sub(1, Ordering::AcqRel);
         return None;
     }
     match receiver.recv_timeout(timeout) {

@@ -211,6 +211,20 @@ pub fn check_raw() -> Option<RawPermissions> {
     }
 }
 
+/// [`check_raw`] without the ScreenCaptureKit confirmation of a screen
+/// recording grant, for pollers that only need camera / microphone status or
+/// watch for a grant to flip: it never queries `SCShareableContent`.
+pub fn check_raw_preflight() -> Option<RawPermissions> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(macos::check_raw_preflight())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// The startup / tray gate: screen recording + accessibility.
 pub fn necessary_granted() -> bool {
     match check_raw() {
@@ -277,6 +291,15 @@ async fn media_permission_result(
 #[cfg(target_os = "macos")]
 pub async fn ensure_capture_media_permission(permission: OSPermission) -> Result<(), String> {
     macos::ensure_capture_media_permission(permission).await
+}
+
+/// Whether a camera or microphone request is still waiting on the user's
+/// answer to the macOS prompt.
+pub fn media_request_pending() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::media_request_pending();
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 pub fn open_permission_settings(permission: OSPermission) {
@@ -394,9 +417,16 @@ mod macos {
     /// and AVFoundation's status query autoreleases temporaries (the same
     /// leak class `do_permissions_check` in the Tauri app plugs the same way).
     pub fn check_raw() -> RawPermissions {
-        let screen_preflight = unsafe { CGPreflightScreenCaptureAccess() };
+        let raw = check_raw_preflight();
+        RawPermissions {
+            screen_granted: super::screen_capture::available(raw.screen_granted),
+            ..raw
+        }
+    }
+
+    pub fn check_raw_preflight() -> RawPermissions {
         objc2::rc::autoreleasepool(|_| RawPermissions {
-            screen_granted: super::screen_capture::available(screen_preflight),
+            screen_granted: unsafe { CGPreflightScreenCaptureAccess() },
             accessibility_granted: unsafe { AXIsProcessTrusted() },
             microphone: media_authorization(false),
             camera: media_authorization(true),
@@ -456,6 +486,18 @@ mod macos {
         std::sync::Mutex::new(None);
     static MICROPHONE_REQUEST: std::sync::Mutex<Option<super::PendingMediaRequest>> =
         std::sync::Mutex::new(None);
+
+    pub fn media_request_pending() -> bool {
+        use futures_util::FutureExt as _;
+        [&CAMERA_REQUEST, &MICROPHONE_REQUEST]
+            .into_iter()
+            .any(|slot| {
+                slot.lock().is_ok_and(|slot| {
+                    slot.as_ref()
+                        .is_some_and(|pending| pending.clone().now_or_never().is_none())
+                })
+            })
+    }
 
     fn shared_media_request(camera: bool) -> Result<super::PendingMediaRequest, String> {
         use futures_util::FutureExt as _;
