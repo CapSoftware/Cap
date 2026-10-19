@@ -367,11 +367,14 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok((icon_wanted, active)) = this.update(cx, |this: &mut Self, cx| {
+                let Ok((icon_wanted, active, changed)) = this.update(cx, |this: &mut Self, cx| {
                     let (display, window) = probe;
-                    this.microphone_fill =
+                    let microphone_fill =
                         crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
-                    let changed = this.cursor_display != display || this.hovered_window != window;
+                    let changed = this.cursor_display != display
+                        || this.hovered_window != window
+                        || this.microphone_fill != microphone_fill;
+                    this.microphone_fill = microphone_fill;
                     this.cursor_display = display;
                     this.hovered_window = window;
                     if changed {
@@ -383,10 +386,12 @@ impl TargetSelect {
                             .map(|window| window.id.clone())
                             .filter(|id| !this.icons.contains_key(&id.to_string())),
                         this.active_window().cloned(),
+                        changed,
                     )
                 }) else {
                     return;
                 };
+                let fetched_icon = icon_wanted.is_some();
                 if let Some(id) = icon_wanted {
                     Self::fetch_icon(id, &this, cx).await;
                 }
@@ -399,8 +404,11 @@ impl TargetSelect {
 
                 // Repaint the overlays explicitly: none of them is the active
                 // window while the user hovers another app, and an inactive
-                // window only repaints when asked (the unit-2 finding).
-                cx.update(app_windows::refresh_target_overlays);
+                // window only repaints when asked (the unit-2 finding). A tick
+                // that changed nothing they draw has nothing to repaint.
+                if changed || fetched_icon {
+                    cx.update(app_windows::refresh_target_overlays);
+                }
                 cx.background_executor().timer(POLL_INTERVAL).await;
             }
         }));
@@ -632,6 +640,14 @@ fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
         .collect()
 }
 
+/// Overlays are never the active window while the picker is up, and an
+/// inactive window may not present a bare notify, so every state an overlay
+/// draws asks for its repaint explicitly.
+fn repaint(window: &mut Window, cx: &mut Context<OverlayWindow>) {
+    cx.notify();
+    window.refresh();
+}
+
 impl OverlayWindow {
     pub fn new(
         display: &scap_targets::Display,
@@ -641,12 +657,23 @@ impl OverlayWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
-        cx.observe(&select, |_, _, cx| cx.notify()).detach();
+        cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
+        let session = crate::session::RecordingSession::global(cx);
+        let mut drawn_phase = session.read(cx).phase;
+        cx.observe_in(&session, window, move |_, session, window, cx| {
+            let phase = session.read(cx).phase;
+            if phase != drawn_phase {
+                drawn_phase = phase;
+                repaint(window, cx);
+            }
+        })
+        .detach();
         let main = cx.global::<app_windows::AppWindows>().main;
         let main_subscription = main
             .update(cx, |_, _, cx| cx.entity())
             .ok()
-            .map(|main| cx.observe(&main, |_, _, cx| cx.notify()));
+            .map(|main| cx.observe_in(&main, window, |_, _, window, cx| repaint(window, cx)));
 
         let logical = display
             .logical_size()
@@ -813,7 +840,7 @@ impl OverlayWindow {
         self.theme.refresh(window, cx, false);
     }
 
-    fn sync_inline_camera(&mut self, cx: &mut Context<Self>) {
+    fn sync_inline_camera(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let camera = (self.select.read(cx).mode == Some(TargetType::CameraOnly))
             .then(|| app_windows::camera_preview_entity(cx))
             .flatten();
@@ -824,7 +851,7 @@ impl OverlayWindow {
         }
         self.inline_camera_subscription = camera
             .as_ref()
-            .map(|camera| cx.observe(camera, |_, _, cx| cx.notify()));
+            .map(|camera| cx.observe_in(camera, window, |_, _, window, cx| repaint(window, cx)));
         self.inline_camera = camera;
     }
 
@@ -857,7 +884,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        self.sync_inline_camera(cx);
+        self.sync_inline_camera(window, cx);
         let viewport = window.viewport_size();
         let display_size = overlay_viewport_size(
             (f32::from(viewport.width), f32::from(viewport.height)),

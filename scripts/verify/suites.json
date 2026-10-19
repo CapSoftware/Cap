@@ -143,6 +143,30 @@
 			}
 		},
 		{
+			"name": "chaos",
+			"about": "chaos and resilience: hostile device data, files, projects and settings through the recording, editor, playback, export and recovery engines, each probe in a child process so panics, aborts, signals, Objective-C exceptions and hangs are classified (needs the cap-muxer binary, built by run.sh)",
+			"cargo": ["-p", "cap-verify", "--test", "chaos"],
+			"binaries": ["cap-verify::chaos"],
+			"platforms": {
+				"fast": ["macos"],
+				"full": ["macos"]
+			},
+			"roots": ["cap-verify", "cap-muxer"],
+			"own": [
+				"crates/verify/tests/chaos.rs",
+				"crates/verify/tests/chaos_support/**"
+			],
+			"cases": {
+				"prefix": "chaos/",
+				"fast": {
+					"macos": 477
+				},
+				"full": {
+					"macos": 764
+				}
+			}
+		},
+		{
 			"name": "audio",
 			"about": "export and offline playback audio against sample-accurate markers (mic, system audio, cuts, speeds, mute, volume, A/V offset)",
 			"cargo": ["-p", "cap-verify", "--test", "audio"],

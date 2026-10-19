@@ -588,6 +588,9 @@ pub struct PanelBehavior {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod macos_exception_guard;
+
+#[cfg(target_os = "macos")]
 mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
@@ -613,6 +616,11 @@ mod mac {
                 .get()
                 .is_some_and(|requests| requests.request()),
         )
+    }
+
+    /// Must run on the main thread before the run loop starts.
+    pub fn install_appkit_exception_guards() {
+        super::macos_exception_guard::install();
     }
 
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
@@ -868,10 +876,11 @@ mod mac {
     ///
     /// The shim overrides `occlusionState` on gpui's own window subclasses
     /// (`GPUIWindow`, `GPUIPanel`) to OR the documented bit back in whenever
-    /// AppKit reports any visibility at all. gpui's gate then passes and its
-    /// own occlusion handling keeps working (a truly occluded window still
-    /// reports 0 and stops its link). Remove when the gpui pin understands the
-    /// macOS 26 bit.
+    /// AppKit reports any visibility at all (on macOS 27+, only on a window
+    /// that is ordered in). gpui's gate then passes and its own occlusion
+    /// handling keeps working (a truly occluded window still reports 0 and, on
+    /// macOS 27+, an ordered-out one keeps its raw state, so both stop their
+    /// link). Remove when the gpui pin understands the macOS 26 bit.
     ///
     /// Call once, before any window opens; [`kick_display_link`] re-fires the
     /// (self-delegating) occlusion handler for windows that opened before the
@@ -934,9 +943,22 @@ mod mac {
     pub fn kick_display_link(window: &Window) {
         install_occlusion_shim();
         if let Some(ns_window) = ns_window(window) {
-            unsafe {
-                let _: () = objc2::msg_send![&*ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
-            }
+            rerun_occlusion_handler(&ns_window);
+        }
+    }
+
+    fn rerun_occlusion_handler(ns_window: &NSWindow) {
+        unsafe {
+            let _: () = objc2::msg_send![ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// Where the shim reports an ordered-out window as hidden (so its link
+    /// stops), every native show re-runs the gate rather than trusting AppKit
+    /// to post an occlusion change for the window coming back.
+    fn rerun_occlusion_handler_after_show(ns_window: &NSWindow) {
+        if super::macos_occlusion::ordered_out_windows_keep_raw_state() {
+            rerun_occlusion_handler(ns_window);
         }
     }
 
@@ -1235,6 +1257,7 @@ mod mac {
     /// Same task-only rule as every other ordering call here.
     pub fn order_front_native(native: &NativeWindow) {
         unsafe { native.0.orderFrontRegardless() };
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -1362,6 +1385,7 @@ mod mac {
     /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
     pub fn show_native(native: &NativeWindow) {
         native.0.makeKeyAndOrderFront(None);
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// Close the window the way the red traffic light does: ask the
@@ -1695,6 +1719,7 @@ mod mac {
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
             unsafe { ns_window.orderFrontRegardless() };
+            rerun_occlusion_handler_after_show(&ns_window);
         }
     }
 

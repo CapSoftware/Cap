@@ -27,7 +27,10 @@ use std::{
 };
 
 use cap_media_info::{RawVideoFormat, VideoInfo};
-use cap_project::{InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta};
+use cap_project::{
+    InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, XY,
+};
 use cap_recording::{
     NativeCameraFrame, RecordingDefaults, StudioQuality,
     feeds::{
@@ -1415,6 +1418,9 @@ async fn run_case(
         let before = case.checkpoint();
         IMPLICATED.with(|m| m.borrow_mut().clear());
         analyze(&recorded, reference, case)?;
+        if matches!(spec.mode, Mode::Studio { .. }) {
+            check_export(&recorded, case).await?;
+        }
         let implicated = IMPLICATED.with(|m| std::mem::take(&mut *m.borrow_mut()));
         let excuse = (!product_failed)
             .then(|| frozen_failures(case, before.problems(), &implicated, &freezes))
@@ -3711,6 +3717,406 @@ fn analyze(rec: &Recorded, reference: u64, case: &mut Case) -> anyhow::Result<()
         mic.as_ref(),
         system.as_ref(),
     );
+    Ok(())
+}
+
+/// Marker index to the first time a track shows it, on the recording's
+/// timeline (seconds after the recording started), and frames without a
+/// readable screen marker.
+fn screen_first_seen(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, usize)> {
+    let (samples, unreadable) = screen_samples(path)?;
+    let mut first = BTreeMap::new();
+    for (index, pts) in samples {
+        first.entry(index).or_insert(offset + pts);
+    }
+    Ok((first, unreadable))
+}
+
+/// Every decoded frame's screen marker index and pts, in decode order, and
+/// frames without a readable screen marker.
+fn screen_samples(path: &Path) -> anyhow::Result<(Vec<(u32, f64)>, usize)> {
+    let mut samples = Vec::new();
+    let mut unreadable = 0;
+    media::decode_video(path, |picture| {
+        match video_code::read_stream(&picture.view(), StreamKind::Screen) {
+            Readout::Marker { marker, .. } if marker.kind == StreamKind::Screen => {
+                samples.push((marker.index, picture.pts_secs));
+            }
+            _ => unreadable += 1,
+        }
+    })?;
+    Ok((samples, unreadable))
+}
+
+/// The first export frame at `export_fps` that shows the source picture
+/// labelled `label`, under the decoder contract described in `check_export`.
+fn contract_first_frame(label: f64, source_fps: f64, export_fps: f64, screen_offset: f64) -> f64 {
+    let request = |frame: f64| {
+        let time = (frame / export_fps + screen_offset) as f32;
+        let step = f32::from_bits(time.abs().to_bits() + 1) - time.abs();
+        let slack = (f64::from(step) * 4.0 * source_fps).min(0.25);
+        (f64::from(time) * source_fps + slack).floor()
+    };
+    let mut frame = ((label / source_fps - screen_offset) * export_fps).floor() - 2.0;
+    while request(frame) < label {
+        frame += 1.0;
+    }
+    frame
+}
+
+#[test]
+fn contract_first_frame_follows_the_decoder_request_rule_for_long_recordings() {
+    // Up to three hours in, with screen offsets on and between export
+    // frames: the export frame the check expects is the first one whose
+    // request the decoder answers with the picture.
+    for (fps, offset_frames) in [(30u32, 0.0), (30, 0.99), (60, 18.95), (60, 0.5)] {
+        let fps_f = f64::from(fps);
+        let offset = offset_frames / fps_f;
+        for label in (0..3 * 3600 * fps).step_by(997).map(f64::from) {
+            let expected = contract_first_frame(label, fps_f, fps_f, offset);
+            let asks = |frame: f64| {
+                let time = (frame / fps_f + offset) as f32;
+                f64::from(cap_rendering::decoder::request_frame(time, fps))
+            };
+            assert!(
+                asks(expected) >= label,
+                "{label} at {fps} fps, offset {offset_frames}"
+            );
+            // Export frames start at 0; the decoder clamps earlier times.
+            assert!(
+                expected < 1.0 || asks(expected - 1.0) < label,
+                "{label} at {fps} fps, offset {offset_frames}"
+            );
+        }
+    }
+}
+
+fn picture_start_labels(samples: &[(u32, f64)], source_fps: f64) -> BTreeMap<u32, Vec<f64>> {
+    let mut pictures: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
+    let mut positions: BTreeMap<u32, usize> = BTreeMap::new();
+    for &(index, pts) in samples {
+        let slot = pts * source_fps;
+        let labels = if (slot - slot.floor() - 0.5).abs() < 1e-6 {
+            vec![slot.floor(), slot.ceil()]
+        } else {
+            vec![slot.round()]
+        };
+        match positions.get(&index).copied() {
+            Some(position) => pictures[position].1.extend(labels),
+            None => {
+                positions.insert(index, pictures.len());
+                pictures.push((labels.clone(), labels));
+            }
+        }
+    }
+    positions
+        .into_iter()
+        .map(|(index, position)| {
+            let (first, _) = &pictures[position];
+            let mut labels = first.clone();
+            if position > 0 {
+                // A cached predecessor may own a shared label. The next request
+                // releases it even when no source sample carries that label.
+                labels.extend(
+                    first
+                        .iter()
+                        .filter(|label| pictures[position - 1].1.contains(label))
+                        .map(|label| label + 1.0),
+                );
+            }
+            labels.sort_by(f64::total_cmp);
+            labels.dedup();
+            (index, labels)
+        })
+        .collect()
+}
+
+#[test]
+fn picture_start_labels_include_the_first_unshared_request_after_a_collision() {
+    for samples in [
+        vec![(59, 2350.0 / 600.0), (60, 2360.0 / 600.0)],
+        vec![(135, 9.017711), (136, 9.048956), (136, 9.095833)],
+    ] {
+        let index = samples[1].0;
+        let first = (samples[1].1 * 30.0_f64).round();
+        assert_eq!(
+            picture_start_labels(&samples, 30.0)[&index],
+            vec![first, first + 1.0]
+        );
+    }
+}
+
+#[test]
+fn picture_start_labels_reject_late_requests_after_a_collision() {
+    let samples = [(1, 10.1 / 30.0), (2, 10.2 / 30.0), (2, 14.0 / 30.0)];
+    assert_eq!(picture_start_labels(&samples, 30.0)[&2], vec![10.0, 11.0]);
+}
+
+#[test]
+fn picture_start_labels_keep_unshared_requests_exact() {
+    let samples = [(1, 9.0 / 30.0), (2, 10.0 / 30.0), (2, 14.0 / 30.0)];
+    assert_eq!(picture_start_labels(&samples, 30.0)[&2], vec![10.0]);
+}
+
+#[test]
+fn picture_start_labels_preserve_half_frame_ties() {
+    assert_eq!(
+        picture_start_labels(&[(1, 10.5 / 30.0)], 30.0)[&1],
+        vec![10.0, 11.0]
+    );
+}
+
+fn display_fps(project: &Path) -> anyhow::Result<u32> {
+    let meta = RecordingMeta::load_for_project(project).map_err(|e| anyhow::anyhow!("{e}"))?;
+    match meta.studio_meta() {
+        Some(StudioRecordingMeta::MultipleSegments { inner }) => inner
+            .segments
+            .first()
+            .map(|segment| segment.display.fps)
+            .ok_or_else(|| anyhow::anyhow!("recording has no segments")),
+        Some(StudioRecordingMeta::SingleSegment { segment }) => Ok(segment.display.fps),
+        None => anyhow::bail!("not a studio recording"),
+    }
+}
+
+/// Microphone marker index to its start on the recording's timeline, and
+/// where the track ends.
+fn mic_markers(path: &Path, offset: f64) -> anyhow::Result<(BTreeMap<u32, f64>, f64)> {
+    let decoded = media::decode_audio(path, Some(48_000))?;
+    let mono = decoded.mono();
+    let end = offset + decoded.start_secs + mono.len() as f64 / f64::from(decoded.sample_rate);
+    let markers = audio_code::locate_markers(&mono, decoded.sample_rate, AudioSource::Mic)
+        .into_iter()
+        .filter_map(|m| Some((m.index?, offset + decoded.start_secs + m.time_secs)))
+        .collect();
+    Ok((markers, end))
+}
+
+/// Exports a finished Studio recording at its capture rate and checks the
+/// export against the recording's own tracks, so it fails only for what the
+/// editor and exporter do to them:
+/// - every screen picture the display track shows for at least one export
+///   frame interval is in the export;
+/// - each is first shown on a frame allowed by the decoder's grid contract;
+/// - each microphone marker plays at its recorded time.
+///
+/// Finalization once stored the display track's average rate as its fps.
+/// Decoders placed frames on that coarse grid, so exports dropped pictures
+/// and drifted from the audio while the tracks themselves were fine.
+async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
+    const EDGE_SECS: f64 = 0.3;
+    const SLACK_SECS: f64 = 0.002;
+    const MIC_TOLERANCE_SECS: f64 = 0.005;
+
+    let layout = layout(&rec.project, case)?;
+    // The editor's timeline starts where the last track started.
+    let timeline_start = [
+        Some(&layout.display),
+        layout.camera.as_ref(),
+        layout.mic.as_ref(),
+        layout.system.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|track| track.start)
+    .fold(layout.display.start, f64::max);
+    let (raw, _) = screen_first_seen(&layout.display.path, layout.display.start)?;
+    let (width, height) = {
+        let input = ffmpeg::format::input(&layout.display.path)?;
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| anyhow::anyhow!("display track has no video stream"))?;
+        let video = ffmpeg::codec::Context::from_parameters(stream.parameters())?
+            .decoder()
+            .video()?;
+        (video.width(), video.height())
+    };
+    let fps = rec.max_fps;
+    let interval = 1.0 / f64::from(fps);
+    let out = rec.project.join("verify-export.mp4");
+    let config = ProjectConfiguration::load(&rec.project).unwrap_or_default();
+    let base = cap_export::ExporterBase::builder(rec.project.clone())
+        .with_config(config)
+        .with_output_path(out.clone())
+        .build()
+        .await
+        .map_err(|e| anyhow::anyhow!("exporter build: {e}"))?;
+    let exported = cap_export::mp4::Mp4ExportSettings {
+        fps,
+        resolution_base: XY::new(width, height),
+        compression: cap_export::mp4::ExportCompression::Social,
+        custom_bpp: None,
+        force_ffmpeg_decoder: false,
+        optimize_filesize: false,
+    }
+    .export(base, |_| true)
+    .await;
+    let path = match exported {
+        Ok(path) => path,
+        Err(e) => {
+            case.problem("export", format!("export failed: {e}"));
+            return Ok(());
+        }
+    };
+    let (shown, unreadable) = screen_first_seen(&path, timeline_start)?;
+
+    let raw_end = raw.values().copied().fold(f64::MIN, f64::max);
+    let ordered: Vec<(u32, f64)> = {
+        let mut v: Vec<(u32, f64)> = raw.iter().map(|(i, t)| (*i, *t)).collect();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v
+    };
+    let required: Vec<(u32, f64)> = ordered
+        .windows(2)
+        .filter(|w| w[1].1 - w[0].1 >= interval + SLACK_SECS)
+        .map(|w| w[0])
+        .filter(|(_, t)| *t >= timeline_start + EDGE_SECS && *t <= raw_end - EDGE_SECS)
+        .collect();
+    let missing: Vec<u32> = required
+        .iter()
+        .filter(|(i, _)| !shown.contains_key(i))
+        .map(|(i, _)| *i)
+        .collect();
+    let pct = |n: usize| (n as f64 * 1000.0 / required.len().max(1) as f64).round() / 10.0;
+    if !missing.is_empty() {
+        case.measure("export-missing", "missing-pct", pct(missing.len()));
+        case.problem(
+            "export-missing",
+            format!(
+                "export: {} of {} screen pictures the display track shows for at least one {fps} fps frame are not in the export, first {:?}",
+                missing.len(),
+                required.len(),
+                &missing[..missing.len().min(8)]
+            ),
+        );
+    }
+
+    let delays: Vec<(u32, f64)> = required
+        .iter()
+        .filter_map(|(i, t)| shown.get(i).map(|e| (*i, e - t)))
+        .collect();
+    let worst_delay = delays
+        .iter()
+        .map(|(_, d)| *d)
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()));
+    case.note(format!(
+        "export: {fps} fps, {} screen pictures, {unreadable} frames without a screen marker, {} of {} required pictures missing, worst {:+.1} ms from the recorded time",
+        shown.len(),
+        missing.len(),
+        required.len(),
+        worst_delay.unwrap_or(f64::NAN) * 1e3
+    ));
+    // Where the decoder contract puts each picture: the display track is
+    // read `screen_offset` into its own time, and a picture is labelled
+    // round(pts * source_fps). A request is an f32 time t asking for grid
+    // frame floor(t * source_fps), with t lifted by four f32 steps, at most
+    // a quarter frame, so the f32 rounding of frame times never asks for the
+    // frame before (crates/rendering/src/decoder/mod.rs, request_frame).
+    // Written out here rather than called, so a decoder that breaks the
+    // contract disagrees with it. A picture first shows on the first export
+    // frame whose request reaches its label.
+    let source_fps = f64::from(display_fps(&rec.project)?);
+    let screen_offset = timeline_start - layout.display.start;
+    let first_frame =
+        |label: f64| contract_first_frame(label, source_fps, f64::from(fps), screen_offset);
+    let (samples, _) = screen_samples(&layout.display.path)?;
+    let legal_labels = picture_start_labels(&samples, source_fps);
+    let off_contract: Vec<String> = required
+        .iter()
+        .filter_map(|(i, t)| {
+            let shown_at = shown.get(i)?;
+            let labels = legal_labels.get(i)?;
+            let frame = ((shown_at - timeline_start) * f64::from(fps)).round();
+            let expected = first_frame(labels[0]);
+            (!labels.iter().any(|label| first_frame(*label) == frame)).then(|| {
+                format!(
+                    "{i} at frame {frame} instead of {expected} (display pts {:.3} s)",
+                    t - layout.display.start
+                )
+            })
+        })
+        .collect();
+    if !off_contract.is_empty() {
+        case.measure("export-timing", "late-pct", pct(off_contract.len()));
+        case.problem(
+            "export-timing",
+            format!(
+                "export: {} screen pictures not on the export frame the decoder contract puts them on ({source_fps} fps source read {:.1} ms in), first {}",
+                off_contract.len(),
+                screen_offset * 1e3,
+                off_contract[..off_contract.len().min(5)].join(", ")
+            ),
+        );
+    }
+
+    if let Some(track) = layout.mic.as_ref().filter(|t| t.path.is_file())
+        && !rec.mic_truth.is_empty()
+    {
+        let (raw_mic, _) = mic_markers(&track.path, track.start)?;
+        let (export_mic, export_end) = mic_markers(&path, timeline_start)?;
+        let inside: Vec<(u32, f64)> = raw_mic
+            .iter()
+            .filter(|(_, t)| {
+                **t >= timeline_start + EDGE_SECS
+                    && **t + audio_code::MARKER_SECS <= export_end - EDGE_SECS
+            })
+            .map(|(i, t)| (*i, *t))
+            .collect();
+        let lost: Vec<u32> = inside
+            .iter()
+            .filter(|(i, _)| !export_mic.contains_key(i))
+            .map(|(i, _)| *i)
+            .collect();
+        if !lost.is_empty() {
+            case.measure("export-audio-missing", "missing", lost.len() as f64);
+            case.problem(
+                "export-audio-missing",
+                format!(
+                    "export: {} of {} microphone markers inside the export are not in its audio, first {:?}",
+                    lost.len(),
+                    inside.len(),
+                    &lost[..lost.len().min(8)]
+                ),
+            );
+        }
+        let offsets: Vec<f64> = inside
+            .iter()
+            .filter_map(|(i, t)| export_mic.get(i).map(|e| e - t))
+            .collect();
+        if let Some(worst) = offsets
+            .iter()
+            .copied()
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        {
+            let mut sorted = offsets.clone();
+            sorted.sort_by(f64::total_cmp);
+            case.note(format!(
+                "export: {} microphone markers, offsets min {:+.1} median {:+.1} max {:+.1} ms from the recorded time",
+                offsets.len(),
+                sorted[0] * 1e3,
+                sorted[sorted.len() / 2] * 1e3,
+                sorted[sorted.len() - 1] * 1e3
+            ));
+            if worst.abs() > MIC_TOLERANCE_SECS {
+                case.measure("export-sync-mic", "offset-ms", (worst * 1e4).round() / 10.0);
+                case.problem(
+                    "export-sync-mic",
+                    format!(
+                        "export: microphone markers play up to {:+.1} ms from their recorded time ({} compared)",
+                        worst * 1e3,
+                        offsets.len()
+                    ),
+                );
+            }
+        } else {
+            case.problem(
+                "export-sync-mic",
+                "export: no microphone marker matched the mic track",
+            );
+        }
+    }
+    let _ = std::fs::remove_file(&path);
     Ok(())
 }
 

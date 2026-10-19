@@ -275,6 +275,46 @@ fn damaged_codes_read_as_unreadable_never_as_another_frame() {
 }
 
 #[test]
+fn camera_crossfade_oracle_detects_the_wrong_incoming_frame_after_encode() {
+    let dir = tempfile::tempdir().unwrap();
+    let frames: Vec<_> = [76, 84]
+        .into_iter()
+        .map(|incoming| {
+            let mut outgoing = composite(8, 8, 320, 180, false);
+            let incoming = composite(8, incoming, 320, 180, false);
+            for (a, b) in outgoing.data.iter_mut().zip(incoming.data) {
+                *a = (f64::from(*a) * 0.8 + f64::from(b) * 0.2).round() as u8;
+            }
+            outgoing
+        })
+        .collect();
+    let pictures = encode_decode(&frames, VideoCodec::H264, 1_728_000, dir.path()).unwrap();
+    assert_eq!(pictures.len(), 2);
+    let expected = vec![
+        StreamExpectation::Blend {
+            outgoing: (0, vec![8]),
+            incoming: (0, vec![76]),
+            progress: 0.2,
+        };
+        2
+    ];
+    let observed: Vec<_> = pictures
+        .iter()
+        .zip(&expected)
+        .map(|(picture, expectation)| {
+            oracle::read_expecting(&picture.view(), StreamKind::Camera, expectation)
+        })
+        .collect();
+    let report = oracle::check_stream(StreamKind::Camera, &expected, &observed, 30);
+    assert_eq!(report.mismatches.len(), 1, "{report:?}");
+    assert_eq!(report.ahead, 1);
+    assert_eq!(report.max_ahead, 8);
+    assert_eq!(report.mismatches[0].output_frame, 1);
+    assert_eq!(report.mismatches[0].expected, Some((0, 76)));
+    assert_eq!(report.mismatches[0].observed, Some((0, 84)));
+}
+
+#[test]
 fn sequence_oracle_flags_wrong_duplicated_and_missing_frames_after_encode() {
     let dir = tempfile::tempdir().unwrap();
     let expected: Vec<u32> = (0..60).collect();
