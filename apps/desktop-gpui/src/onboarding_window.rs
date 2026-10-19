@@ -287,7 +287,7 @@ impl OnboardingWindow {
                 .find(|permission| format!("{permission:?}").eq_ignore_ascii_case(&name))
         {
             cx.defer_in(window, move |this, window, cx| {
-                this.act(permission, window, cx)
+                this.act(*permission, window, cx)
             });
         }
         this
