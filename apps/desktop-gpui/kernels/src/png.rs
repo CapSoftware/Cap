@@ -279,9 +279,9 @@ unsafe fn apply_up_neon(previous: &[u8], current: &[u8], out: &mut [u8]) -> u64 
     let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, len) };
     let tail_p = unsafe { core::slice::from_raw_parts(p_ptr, len) };
     let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, len) };
-    for i in 0..len {
-        let diff = tail_c[i].wrapping_sub(tail_p[i]);
-        tail_o[i] = diff;
+    for ((c, p), o) in tail_c.iter().zip(tail_p).zip(tail_o) {
+        let diff = c.wrapping_sub(*p);
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     sum
@@ -350,9 +350,9 @@ unsafe fn apply_sub_neon(current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
     let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
     let tail_p = unsafe { core::slice::from_raw_parts(p_ptr, rem) };
     let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
-    for i in 0..rem {
-        let diff = tail_c[i].wrapping_sub(tail_p[i]);
-        tail_o[i] = diff;
+    for ((c, p), o) in tail_c.iter().zip(tail_p).zip(tail_o) {
+        let diff = c.wrapping_sub(*p);
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     sum
@@ -362,9 +362,13 @@ unsafe fn apply_sub_neon(current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
 unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
     use core::arch::aarch64::*;
     let mut sum = 0u64;
-    for i in 0..bpp {
-        let diff = current[i].wrapping_sub(previous[i] / 2);
-        out[i] = diff;
+    for ((&c, &p), o) in current[..bpp]
+        .iter()
+        .zip(&previous[..bpp])
+        .zip(&mut out[..bpp])
+    {
+        let diff = c.wrapping_sub(p / 2);
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     let len = current.len() - bpp;
@@ -419,7 +423,9 @@ unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut 
             let avg = vhaddq_u8(a, b);
             let d = vsubq_u8(c, avg);
             vst1q_u8(o_ptr, d);
-            sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(vreinterpretq_s8_u8(d)))));
+            sum += u64::from(vaddlvq_u8(vreinterpretq_u8_s8(vabsq_s8(
+                vreinterpretq_s8_u8(d),
+            ))));
             a_ptr = a_ptr.add(16);
             b_ptr = b_ptr.add(16);
             c_ptr = c_ptr.add(16);
@@ -431,27 +437,25 @@ unsafe fn apply_avg_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut 
     let tail_b = unsafe { core::slice::from_raw_parts(b_ptr, rem) };
     let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
     let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
-    for i in 0..rem {
-        let (a, b) = (tail_a[i], tail_b[i]);
-        let diff = tail_c[i].wrapping_sub((a & b) + ((a ^ b) >> 1));
-        tail_o[i] = diff;
+    for ((&a, &b), (&c, o)) in tail_a.iter().zip(tail_b).zip(tail_c.iter().zip(tail_o)) {
+        let diff = c.wrapping_sub((a & b) + ((a ^ b) >> 1));
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     sum
 }
 
 #[cfg(target_arch = "aarch64")]
-unsafe fn apply_paeth_neon(
-    previous: &[u8],
-    current: &[u8],
-    bpp: usize,
-    out: &mut [u8],
-) -> u64 {
+unsafe fn apply_paeth_neon(previous: &[u8], current: &[u8], bpp: usize, out: &mut [u8]) -> u64 {
     use core::arch::aarch64::*;
     let mut sum = 0u64;
-    for i in 0..bpp {
-        let diff = current[i].wrapping_sub(previous[i]);
-        out[i] = diff;
+    for ((&c, &p), o) in current[..bpp]
+        .iter()
+        .zip(&previous[..bpp])
+        .zip(&mut out[..bpp])
+    {
+        let diff = c.wrapping_sub(p);
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     let len = current.len() - bpp;
@@ -508,9 +512,14 @@ unsafe fn apply_paeth_neon(
     let tail_c = unsafe { core::slice::from_raw_parts(c_ptr, rem) };
     let tail_curr = unsafe { core::slice::from_raw_parts(curr_ptr, rem) };
     let tail_o = unsafe { core::slice::from_raw_parts_mut(o_ptr, rem) };
-    for i in 0..rem {
-        let diff = tail_curr[i].wrapping_sub(paeth(tail_a[i], tail_b[i], tail_c[i]));
-        tail_o[i] = diff;
+    for (((&a, &b), &c), (&curr, o)) in tail_a
+        .iter()
+        .zip(tail_b)
+        .zip(tail_c)
+        .zip(tail_curr.iter().zip(tail_o))
+    {
+        let diff = curr.wrapping_sub(paeth(a, b, c));
+        *o = diff;
         sum += u64::from((diff as i8).unsigned_abs());
     }
     sum
@@ -694,6 +703,18 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 mod tests {
     use super::*;
 
+    // Expected costs must not come from `sum_abs`: this PR gives it a NEON path
+    // built from the same `vabsq_s8`/`vaddlvq_u8` pair the filters use, so a wrong
+    // absolute-value or reduction would cancel out on both sides of the assert.
+    fn scalar_filter_cost(buf: &[u8]) -> u64 {
+        let mut total = 0u64;
+        for &b in buf {
+            let signed = i16::from(b as i8);
+            total += u64::from(signed.unsigned_abs());
+        }
+        total
+    }
+
     fn screen_like(width: u32, height: u32, channels: usize) -> Vec<u8> {
         let mut state = 0x2545_f491_u32;
         let mut data = Vec::with_capacity(width as usize * height as usize * channels);
@@ -832,14 +853,20 @@ mod tests {
             ] {
                 let mut prev = vec![0u8; len];
                 let mut curr = vec![0u8; len];
-                for i in 0..len {
-                    prev[i] = ((i * 17 + 3) % 256) as u8;
-                    curr[i] = ((i * 31 + 7) % 256) as u8;
+                for (i, (p, c)) in prev.iter_mut().zip(&mut curr).enumerate() {
+                    *p = ((i * 17 + 3) % 256) as u8;
+                    *c = ((i * 31 + 7) % 256) as u8;
+                }
+                if len >= 2 {
+                    prev[0] = 0x80;
+                    curr[0] = 0x00;
+                    prev[1] = 0x00;
+                    curr[1] = 0x80;
                 }
 
                 let mut ref_out = vec![0u8; len];
                 apply_filter(2, bpp, &prev, &curr, &mut ref_out);
-                let ref_cost = sum_abs(&ref_out);
+                let ref_cost = scalar_filter_cost(&ref_out);
                 let mut neon_out = vec![0u8; len];
                 let neon_cost = unsafe { apply_up_neon(&prev, &curr, &mut neon_out) };
                 assert_eq!(neon_out, ref_out);
@@ -847,7 +874,7 @@ mod tests {
 
                 let mut ref_out = vec![0u8; len];
                 apply_filter(1, bpp, &prev, &curr, &mut ref_out);
-                let ref_cost = sum_abs(&ref_out);
+                let ref_cost = scalar_filter_cost(&ref_out);
                 let mut neon_out = vec![0u8; len];
                 let neon_cost = unsafe { apply_sub_neon(&curr, bpp, &mut neon_out) };
                 assert_eq!(neon_out, ref_out);
@@ -855,7 +882,7 @@ mod tests {
 
                 let mut ref_out = vec![0u8; len];
                 apply_filter(3, bpp, &prev, &curr, &mut ref_out);
-                let ref_cost = sum_abs(&ref_out);
+                let ref_cost = scalar_filter_cost(&ref_out);
                 let mut neon_out = vec![0u8; len];
                 let neon_cost = unsafe { apply_avg_neon(&prev, &curr, bpp, &mut neon_out) };
                 assert_eq!(neon_out, ref_out);
@@ -863,7 +890,7 @@ mod tests {
 
                 let mut ref_out = vec![0u8; len];
                 apply_filter(4, bpp, &prev, &curr, &mut ref_out);
-                let ref_cost = sum_abs(&ref_out);
+                let ref_cost = scalar_filter_cost(&ref_out);
                 let mut neon_out = vec![0u8; len];
                 let neon_cost = unsafe { apply_paeth_neon(&prev, &curr, bpp, &mut neon_out) };
                 assert_eq!(neon_out, ref_out);
