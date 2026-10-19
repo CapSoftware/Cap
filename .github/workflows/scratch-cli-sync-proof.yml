@@ -1,0 +1,178 @@
+name: Scratch CLI A/V sync proof
+
+# One-off A/B for #2591 (CLI opens mic, camera and capture content
+# concurrently): record a flash/beep stimulus with `cap record start` on main
+# and on the PR, export, and measure the A/V offset with `cap selftest
+# analyze`. Runs only on pushes to this scratch branch.
+on:
+  push:
+    branches: [ci/sync-proof-2591]
+
+jobs:
+  sync:
+    name: sync (${{ matrix.side }})
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [main, pr]
+    runs-on: blacksmith-12vcpu-macos-15
+    timeout-minutes: 120
+    env:
+      ROUNDS: "4"
+      RECORD_SECS: "32"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.side == 'pr' && 'refs/pull/2591/head' || 'main' }}
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: aarch64-apple-darwin
+          prefix-key: v1-rust-sync-proof
+          save-cache: "true"
+
+      - uses: ./.github/actions/install-desktop-deps
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Native dependencies
+        env:
+          RUST_TARGET_TRIPLE: aarch64-apple-darwin
+        run: node scripts/setup.js
+
+      - name: Build cap CLI
+        run: |
+          cargo build --locked -p cap --profile abperf \
+            --config 'profile.abperf.inherits="release"' \
+            --config 'profile.abperf.lto=false' \
+            --config 'profile.abperf.codegen-units=16' \
+            --config 'profile.abperf.debug=0'
+          git log -1 --format='%h %s'
+
+      - name: Capture permissions, audio device and stimulus player
+        run: |
+          set -euo pipefail
+          sudo mdutil -a -i off || true
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          caffeinate -u -t 2
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          brew install --cask blackhole-2ch
+          brew install switchaudio-osx ffmpeg
+          sudo killall coreaudiod || true
+          for _ in $(seq 1 30); do
+            SwitchAudioSource -a -t output | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -s "BlackHole 2ch" -t output
+          SwitchAudioSource -s "BlackHole 2ch" -t input
+
+          {
+            echo "$PWD/target/abperf/cap"
+            command -v ffplay
+            command -v ffmpeg
+            p=$$
+            while [ "$p" -gt 1 ]; do
+              ps -o comm= -p "$p"
+              p=$(ps -o ppid= -p "$p" | tr -d ' ')
+            done
+          } > "$RUNNER_TEMP/capture-binaries"
+
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          user_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+          mkdir -p "$(dirname "$approvals")"
+          now=$(date +%s)
+          until=$(date -u -v+1y '+%a %b %d %H:%M:%S GMT %Y')
+          sort -u "$RUNNER_TEMP/capture-binaries" | grep '^/' | while read -r client; do
+            for service in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              row="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('$service','$client',1,2,4,1,'UNUSED',0,$now);"
+              sudo sqlite3 "$db" "$row"
+              sqlite3 "$user_db" "$row"
+            done
+            /usr/libexec/PlistBuddy -c "Add :$client date $until" "$approvals" >/dev/null 2>&1 || true
+            echo "granted $client"
+          done
+          killall tccd || true
+          sudo killall tccd || true
+          sleep 2
+          ./target/abperf/cap targets --json | tee "$RUNNER_TEMP/targets.json"
+
+      - name: Stimulus
+        run: |
+          set -euo pipefail
+          # Flashes and 1 kHz beeps at the same instants, 100 ms long, with a
+          # deterministic jitter so a whole-period shift cannot alias to zero.
+          python3 - <<'PY' > "$RUNNER_TEMP/times.txt"
+          t = 3.0
+          for k in range(40):
+              print(f"{t:.3f}")
+              t += 1.0 + ((k * 2654435761) % 601) / 1000.0
+          PY
+          enable=$(awk '{printf "%sbetween(t,%s,%.3f)", (NR>1?"+":""), $1, $1+0.1}' "$RUNNER_TEMP/times.txt")
+          ffmpeg -v error -y \
+            -f lavfi -i "color=black:s=1920x1200:r=60:d=60" \
+            -f lavfi -i "sine=f=1000:sample_rate=48000:d=60" \
+            -vf "drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='${enable}'" \
+            -af "volume=volume='if(${enable},1,0)':eval=frame" \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -shortest \
+            "$RUNNER_TEMP/stimulus.mp4"
+          ls -la "$RUNNER_TEMP/stimulus.mp4"
+
+      - name: Record, export and measure
+        run: |
+          set -uo pipefail
+          screen=$(python3 -c "import json;t=json.load(open('$RUNNER_TEMP/targets.json'));s=[x for x in t['screens'] if x.get('primary')] or t['screens'];print(s[0]['id'])")
+          mkdir -p sync-out
+          for r in $(seq 1 "$ROUNDS"); do
+            ffplay -fs -autoexit -loglevel error "$RUNNER_TEMP/stimulus.mp4" &
+            player=$!
+            sleep 1.5
+            start=$(python3 -c 'import time;print(time.time())')
+            ./target/abperf/cap record start --screen "$screen" --mic "BlackHole 2ch" \
+              --path "sync-out/r$r.cap" --duration "$RECORD_SECS" > "sync-out/r$r.record.log" 2>&1
+            echo "round $r record exit=$? wall=$(python3 -c "import time;print(round(time.time()-$start,2))")"
+            kill "$player" 2>/dev/null || true
+            wait "$player" 2>/dev/null || true
+            ./target/abperf/cap export "sync-out/r$r.cap" --output "sync-out/r$r.mp4" > "sync-out/r$r.export.log" 2>&1
+            echo "round $r export exit=$?"
+            ./target/abperf/cap selftest analyze "sync-out/r$r.mp4" > "sync-out/r$r.export.json" 2> "sync-out/r$r.export.err"
+            echo "round $r analyze exit=$?: $(cat sync-out/r$r.export.err)"
+            python3 - "sync-out/r$r.export.json" <<'PY'
+          import json, sys
+          try:
+              m = json.load(open(sys.argv[1]))
+              print(f"  export: offset {m['median_offset_ms']:+.1f} ms, mad {m['mad_ms']:.1f}, drift {m['total_drift_ms']:+.1f} ms, events {m['inlier_events']}/{m['paired_events']}")
+          except Exception as e:
+              print(f"  export: no measurement ({e})")
+          PY
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          python3 - "${{ matrix.side }}" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json, sys
+          print(f"### {sys.argv[1]}")
+          print("| round | offset ms | mad ms | drift ms | events |")
+          print("|---|---|---|---|---|")
+          for f in sorted(glob.glob("sync-out/r*.export.json")):
+              try:
+                  m = json.load(open(f))
+                  print(f"| {f.split('/')[-1].split('.')[0]} | {m['median_offset_ms']:+.1f} | {m['mad_ms']:.1f} | {m['total_drift_ms']:+.1f} | {m['inlier_events']}/{m['paired_events']} |")
+              except Exception as e:
+                  print(f"| {f} | error {e} | | | |")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sync-proof-${{ matrix.side }}
+          path: |
+            sync-out/*.json
+            sync-out/*.log
+            sync-out/*.err
+          if-no-files-found: ignore
