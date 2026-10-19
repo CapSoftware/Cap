@@ -551,6 +551,14 @@ impl EditorInstance {
             )?),
         };
 
+        cap_project::clamp_timeline_to_sources(
+            &mut project,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
         cap_project::synchronize_captions(
             &mut project,
@@ -1065,7 +1073,16 @@ impl EditorInstance {
                         break;
                     };
 
-                    let segment_medias = &self.segment_medias[segment.recording_clip as usize];
+                    let Some(segment_medias) =
+                        self.segment_medias.get(segment.recording_clip as usize)
+                    else {
+                        warn!(
+                            recording_segment = segment.recording_clip,
+                            available = self.segment_medias.len(),
+                            "Preview renderer: timeline uses a recording segment that does not exist"
+                        );
+                        break;
+                    };
                     let clip_config = project
                         .clips
                         .iter()
@@ -1126,9 +1143,10 @@ impl EditorInstance {
 
                             let outgoing_transition = if let Some((outgoing, kind, progress)) =
                                 transition_mapping
+                                && let Some(outgoing_media) = self
+                                    .segment_medias
+                                    .get(outgoing.segment.recording_clip as usize)
                             {
-                                let outgoing_media =
-                                    &self.segment_medias[outgoing.segment.recording_clip as usize];
                                 let outgoing_offsets = project
                                     .clips
                                     .iter()
