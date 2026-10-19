@@ -823,7 +823,6 @@ pub struct MainWindow {
     deep_link_start: Option<RecordingStartPermit>,
     microphone_warning: Option<MicrophoneWarning>,
     sign_in_prompt: Option<SignInPrompt>,
-    /// The error whose text was last copied, so the button can say so.
     copied_error: Option<String>,
     /// Header recordings / screenshots panel. Scanned only while that panel
     /// is open so a large library is not walked on every home paint.

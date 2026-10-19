@@ -730,8 +730,6 @@ struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
 impl Feeds {
-    /// A camera start is in flight -- which includes waiting on the macOS
-    /// camera prompt.
     pub fn camera_input_pending(&self) -> bool {
         self.camera_input_pending
     }
