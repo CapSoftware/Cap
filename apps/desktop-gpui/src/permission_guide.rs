@@ -87,6 +87,7 @@ pub struct PermissionGuide {
     theme: Theme,
     permission: OSPermission,
     shown_at: Instant,
+    hidden: bool,
     app: PathBuf,
     icon: Arc<gpui::Image>,
 }
@@ -130,6 +131,7 @@ pub fn start(permission: OSPermission, cx: &mut App) {
                     theme: Theme::for_window(window, cx, true),
                     permission,
                     shown_at: Instant::now(),
+                    hidden: true,
                     app,
                     icon: Arc::new(gpui::Image::from_bytes(
                         gpui::ImageFormat::Png,
@@ -207,6 +209,7 @@ pub fn start(permission: OSPermission, cx: &mut App) {
                             handle
                                 .update(cx, |guide, _, cx| {
                                     guide.shown_at = Instant::now();
+                                    guide.hidden = false;
                                     cx.notify();
                                 })
                                 .ok();
@@ -216,6 +219,12 @@ pub fn start(permission: OSPermission, cx: &mut App) {
                 None => {
                     if placed.take().is_some() {
                         platform::hide_native(&native);
+                        handle
+                            .update(cx, |guide, _, cx| {
+                                guide.hidden = true;
+                                cx.notify();
+                            })
+                            .ok();
                     }
                     let gone = match seen_at {
                         Some(at) => frame.is_none() && at.elapsed() > GIVE_UP_AFTER_CLOSE,
@@ -270,7 +279,7 @@ pub fn stop(cx: &mut App) {
 const FLOATING_LEVEL: isize = 3;
 
 fn granted(permission: OSPermission) -> bool {
-    let Some(raw) = crate::permissions_ui::sweep_raw() else {
+    let Some(raw) = crate::permissions_ui::sweep_raw_preflight() else {
         return false;
     };
     match permission {
@@ -311,7 +320,8 @@ impl Render for PermissionGuide {
         self.theme = Theme::for_window(window, cx, true);
         let paper = crate::onboarding_window::Paper::new(&self.theme);
         let palette = paper.palette();
-        let still = false;
+        // The arrow bobs forever; a hidden panel must not keep drawing.
+        let still = self.hidden;
         let pane = match self.permission {
             OSPermission::Accessibility => "Accessibility",
             _ => "Screen & System Audio Recording",
