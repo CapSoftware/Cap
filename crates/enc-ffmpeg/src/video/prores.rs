@@ -11,6 +11,35 @@ use ffmpeg::{
 use crate::base::EncoderBase;
 
 const MAX_FRAME_THREADS: usize = 8;
+// Each frame thread holds a whole frame and its packet: about 16 bytes per
+// output pixel at peak, measured on 4K exports (8 threads added 1.2 GB). The
+// threads may use at most a sixteenth of RAM, so an 8 GB Mac exporting 4K
+// gets 4 threads instead of swapping, and 16 GB or more gets all 8.
+const FRAME_THREAD_BYTES_PER_PIXEL: u64 = 16;
+const FRAME_THREAD_MEMORY_SHARE: u64 = 16;
+
+fn frame_thread_count(
+    cores: usize,
+    total_memory: Option<u64>,
+    output_width: u32,
+    output_height: u32,
+) -> usize {
+    let thread_bytes = u64::from(output_width)
+        .saturating_mul(u64::from(output_height))
+        .saturating_mul(FRAME_THREAD_BYTES_PER_PIXEL)
+        .max(1);
+    let by_memory = total_memory.map_or(1, |memory| {
+        usize::try_from(memory / FRAME_THREAD_MEMORY_SHARE / thread_bytes).unwrap_or(usize::MAX)
+    });
+    cores.min(MAX_FRAME_THREADS).min(by_memory).max(1)
+}
+
+fn total_memory_bytes() -> Option<u64> {
+    let system = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new().with_memory(sysinfo::MemoryRefreshKind::new().with_ram()),
+    );
+    Some(system.total_memory()).filter(|memory| *memory > 0)
+}
 
 pub struct ProResEncoderBuilder {
     input_config: VideoInfo,
@@ -79,13 +108,12 @@ impl ProResEncoderBuilder {
         };
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
-        // Each frame thread holds a whole frame and its packet, about 130 MB
-        // at 4K. A 4K export is as fast with 8 threads as with 16, and 1 GB
-        // smaller at peak.
-        let thread_count = thread::available_parallelism()
-            .map(|v| v.get())
-            .unwrap_or(1)
-            .min(MAX_FRAME_THREADS);
+        let thread_count = frame_thread_count(
+            thread::available_parallelism().map_or(1, |v| v.get()),
+            total_memory_bytes(),
+            output_width,
+            output_height,
+        );
         // `Config::count` leaves `thread_type` at 0, which libavcodec treats as
         // "no threading" for prores_ks. Frame threading keeps a reference to each
         // sent frame until a worker encodes it, so it is only safe when frames
@@ -205,3 +233,35 @@ impl ProResEncoder {
 }
 
 unsafe impl Send for ProResEncoder {}
+
+#[cfg(test)]
+mod frame_thread_tests {
+    use super::frame_thread_count;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn small_macs_get_fewer_threads_at_4k() {
+        assert_eq!(frame_thread_count(8, Some(8 * GB), 3840, 2160), 4);
+        assert_eq!(frame_thread_count(10, Some(16 * GB), 3840, 2160), 8);
+        assert_eq!(frame_thread_count(16, Some(128 * GB), 3840, 2160), 8);
+    }
+
+    #[test]
+    fn smaller_outputs_use_every_allowed_thread() {
+        assert_eq!(frame_thread_count(8, Some(8 * GB), 1920, 1080), 8);
+        assert_eq!(frame_thread_count(4, Some(8 * GB), 1920, 1080), 4);
+    }
+
+    #[test]
+    fn degenerate_inputs_still_encode_on_one_thread() {
+        assert_eq!(frame_thread_count(16, None, 3840, 2160), 1);
+        assert_eq!(frame_thread_count(0, Some(128 * GB), 3840, 2160), 1);
+        assert_eq!(frame_thread_count(16, Some(GB), 7680, 4320), 1);
+        assert_eq!(frame_thread_count(16, Some(128 * GB), 0, 0), 8);
+        assert_eq!(
+            frame_thread_count(16, Some(u64::MAX), u32::MAX, u32::MAX),
+            1
+        );
+    }
+}
