@@ -18,6 +18,8 @@ use crate::auth::{self, AuthApiError};
 #[cfg(test)]
 mod multipart_tests;
 pub(crate) mod queue;
+#[cfg(test)]
+mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
@@ -698,7 +700,7 @@ async fn upload_segments(
     let mut manifest = SegmentUploadManifest::default();
     let mut uploads = FuturesUnordered::new();
     let mut events_closed = false;
-    let mut last_manifest_upload: Option<Instant> = None;
+    let mut last_manifest_upload: Option<tokio::time::Instant> = None;
     let mut preparation = Preparation::default();
     let mut preparation_enabled = true;
     let mut preparation_batch = Vec::new();
@@ -853,7 +855,7 @@ async fn upload_segments(
                     if let Err(error) = uploaded {
                         tracing::warn!("Instant progress manifest upload failed; retrying at the next interval: {error}");
                     }
-                    last_manifest_upload = Some(Instant::now());
+                    last_manifest_upload = Some(tokio::time::Instant::now());
                 }
             }
             else => break,

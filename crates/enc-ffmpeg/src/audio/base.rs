@@ -11,6 +11,7 @@ pub struct AudioEncoderBase {
     inner: EncoderBase,
     encoder: encoder::Audio,
     resampler: BufferedResampler,
+    leading_trim: usize,
     input_end: Option<i64>,
 }
 
@@ -20,8 +21,18 @@ impl AudioEncoderBase {
             inner: EncoderBase::new(stream_index),
             encoder,
             resampler,
+            leading_trim: 0,
             input_end: None,
         }
+    }
+
+    pub fn with_leading_trim(mut self, samples: usize) -> Self {
+        self.leading_trim = samples;
+        self
+    }
+
+    pub fn codec_name(&self) -> Option<String> {
+        self.encoder.codec().map(|codec| codec.name().to_owned())
     }
 
     pub fn send_frame<S: PacketSink + ?Sized>(
@@ -38,6 +49,13 @@ impl AudioEncoderBase {
 
         self.resampler.add_frame(frame);
 
+        if self.leading_trim > 0 {
+            match self.resampler.get_frame(self.leading_trim) {
+                Some(_) => self.leading_trim = 0,
+                None => return Ok(()),
+            }
+        }
+
         while let Some(frame) = self.resampler.get_frame(self.encoder.frame_size() as usize) {
             self.track_input_end(&frame);
             self.inner.send_frame(&frame, output, &mut self.encoder)?;
@@ -47,6 +65,13 @@ impl AudioEncoderBase {
     }
 
     pub fn flush<S: PacketSink + ?Sized>(&mut self, output: &mut S) -> Result<(), ffmpeg::Error> {
+        while self.leading_trim > 0 {
+            match self.resampler.flush(self.leading_trim) {
+                Some(frame) => self.leading_trim -= frame.samples(),
+                None => break,
+            }
+        }
+
         let mut frames = Vec::new();
         while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
             self.track_input_end(&frame);
@@ -70,6 +95,7 @@ impl AudioEncoderBase {
             self.inner
                 .send_frame(frame, &mut output, &mut self.encoder)?;
         }
+
         self.inner.process_eof(&mut output, &mut self.encoder)
     }
 

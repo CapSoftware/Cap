@@ -25,6 +25,12 @@ pub enum AACEncoderError {
     Resampler(ffmpeg::Error),
 }
 
+#[derive(Clone, Copy)]
+enum Priming {
+    Keep,
+    TrimToFfmpegAac,
+}
+
 pub struct AACEncoder {
     base: AudioEncoderBase,
     stream_index: usize,
@@ -33,6 +39,7 @@ pub struct AACEncoder {
 impl AACEncoder {
     const OUTPUT_BITRATE: usize = 320 * 1000; // 128k
     const SAMPLE_FORMAT: Sample = Sample::F32(Type::Planar);
+    const FFMPEG_AAC_PRIMING: i32 = 1_024;
 
     pub fn factory(
         input_config: AudioInfo,
@@ -44,12 +51,58 @@ impl AACEncoder {
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, AACEncoderError> {
-        Self::init_with_codec("aac", ffmpeg::Dictionary::new(), input_config, output)
+        Self::init_with_codec(
+            "aac",
+            ffmpeg::Dictionary::new(),
+            Self::OUTPUT_BITRATE,
+            Priming::Keep,
+            input_config,
+            output,
+        )
     }
 
-    // A plain MP4's edit list trims AudioToolbox's 2112-sample encoder priming.
-    // Fragmented recording outputs keep priming in the timeline, so they stay on
-    // FFmpeg's encoder: AudioToolbox would start their audio ~23 ms later.
+    pub fn init_for_recording(
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        let prefer_audiotoolbox = cfg!(target_os = "macos")
+            && std::env::var_os("CAP_RECORDING_FFMPEG_AAC").is_none_or(|value| value.is_empty());
+        Self::init_for_recording_with(prefer_audiotoolbox, input_config, output)
+    }
+
+    pub(crate) fn init_for_recording_with(
+        prefer_audiotoolbox: bool,
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, AACEncoderError> {
+        if prefer_audiotoolbox {
+            let mut options = ffmpeg::Dictionary::new();
+            options.set("aac_at_mode", "abr");
+            let bit_rate = if input_config.channels == 1 {
+                192_000
+            } else {
+                256_000
+            };
+            match Self::init_with_codec(
+                "aac_at",
+                options,
+                bit_rate,
+                Priming::TrimToFfmpegAac,
+                input_config,
+                output,
+            ) {
+                Ok(encoder) => return Ok(encoder),
+                Err(error) => {
+                    tracing::warn!(%error, "AudioToolbox AAC encoder unavailable, using FFmpeg's");
+                }
+            }
+        }
+
+        Self::init(input_config, output)
+    }
+
+    // A plain MP4's edit list skips AudioToolbox's 2112-sample encoder priming,
+    // so exports keep every input sample instead of trimming like recordings.
     pub fn init_for_export(
         input_config: AudioInfo,
         output: &mut format::context::Output,
@@ -60,7 +113,14 @@ impl AACEncoder {
             // the full 320 kbps; average bitrate keeps silent stretches near-free.
             let mut options = ffmpeg::Dictionary::new();
             options.set("aac_at_mode", "abr");
-            match Self::init_with_codec("aac_at", options, input_config, output) {
+            match Self::init_with_codec(
+                "aac_at",
+                options,
+                Self::OUTPUT_BITRATE,
+                Priming::Keep,
+                input_config,
+                output,
+            ) {
                 Ok(encoder) => return Ok(encoder),
                 Err(error) => {
                     tracing::warn!(%error, "AudioToolbox AAC encoder unavailable, using FFmpeg's");
@@ -74,6 +134,8 @@ impl AACEncoder {
     fn init_with_codec(
         name: &str,
         options: ffmpeg::Dictionary,
+        bit_rate: usize,
+        priming: Priming,
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, AACEncoderError> {
@@ -114,9 +176,10 @@ impl AACEncoder {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
-            match formats.first() {
-                Some(&first) if !formats.contains(&Self::SAMPLE_FORMAT) => first,
-                _ => Self::SAMPLE_FORMAT,
+            if formats.contains(&Self::SAMPLE_FORMAT) {
+                Self::SAMPLE_FORMAT
+            } else {
+                formats.first().copied().unwrap_or(Self::SAMPLE_FORMAT)
             }
         };
 
@@ -127,7 +190,7 @@ impl AACEncoder {
         let resampler = BufferedResampler::new(input_config, output_config)
             .map_err(AACEncoderError::Resampler)?;
 
-        encoder.set_bit_rate(Self::OUTPUT_BITRATE);
+        encoder.set_bit_rate(bit_rate);
         encoder.set_rate(rate);
         encoder.set_format(output_config.sample_format);
         encoder.set_channel_layout(output_config.channel_layout());
@@ -135,19 +198,35 @@ impl AACEncoder {
 
         let encoder = encoder.open_with(options)?;
 
+        // Fragmented outputs keep encoder priming in the decoded timeline;
+        // dropping the priming a codec adds beyond FFmpeg's aac (e.g. 2112 vs
+        // 1024 samples for aac_at) keeps every content sample where the native
+        // encoder put it.
+        let leading_trim = match priming {
+            Priming::TrimToFfmpegAac => unsafe { (*encoder.as_ptr()).initial_padding }
+                .saturating_sub(Self::FFMPEG_AAC_PRIMING)
+                .max(0) as usize,
+            Priming::Keep => 0,
+        };
+
         let mut output_stream = output.add_stream(codec)?;
         output_stream.set_time_base(FFRational(1, output_config.rate()));
         output_stream.set_parameters(&encoder);
 
         let stream_index = output_stream.index();
         Ok(Self {
-            base: AudioEncoderBase::new(encoder, resampler, stream_index),
+            base: AudioEncoderBase::new(encoder, resampler, stream_index)
+                .with_leading_trim(leading_trim),
             stream_index,
         })
     }
 
     pub fn stream_index(&self) -> usize {
         self.stream_index
+    }
+
+    pub fn codec_name(&self) -> Option<String> {
+        self.base.codec_name()
     }
 
     pub fn send_frame(
@@ -335,7 +414,7 @@ mod tests {
         assert_eq!(encode_audio(true), encode_audio_through_queue());
     }
 
-    const CLICK_AT: usize = 24_000;
+    const CLICKS: [usize; 2] = [240, 24_000];
 
     fn click_frame(start: usize, samples: usize) -> frame::Audio {
         let mut audio =
@@ -347,7 +426,10 @@ mod tests {
             .enumerate()
         {
             let position = start + index;
-            let value = if (CLICK_AT..CLICK_AT + 48).contains(&position) {
+            let value = if CLICKS
+                .iter()
+                .any(|click| (*click..click + 48).contains(&position))
+            {
                 0.9_f32
             } else {
                 0.0
@@ -358,21 +440,13 @@ mod tests {
         audio
     }
 
-    fn encode_click_for_export(path: &std::path::Path) -> i32 {
+    fn encode_clicks_for_export(path: &std::path::Path) {
         let mut output = format::output(path).unwrap();
         let mut encoder = AACEncoder::init_for_export(
             AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
             &mut output,
         )
         .unwrap();
-        let initial_padding = unsafe {
-            (*output
-                .stream(encoder.stream_index())
-                .unwrap()
-                .parameters()
-                .as_ptr())
-            .initial_padding
-        };
         output.write_header().unwrap();
 
         let mut position = 0;
@@ -386,7 +460,6 @@ mod tests {
 
         encoder.flush(&mut output).unwrap();
         output.write_trailer().unwrap();
-        initial_padding
     }
 
     fn decode_first_channel(path: &std::path::Path) -> (Vec<f32>, i64) {
@@ -428,18 +501,22 @@ mod tests {
     #[test]
     fn export_encoder_keeps_audio_aligned_in_mp4() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("click.mp4");
-        encode_click_for_export(&path);
+        let path = directory.path().join("clicks.mp4");
+        encode_clicks_for_export(&path);
 
         let (samples, track_end) = decode_first_channel(&path);
-        let click = samples
-            .iter()
-            .position(|sample| sample.abs() > 0.3)
-            .expect("the encoded click was not found");
-        assert!(
-            click.abs_diff(CLICK_AT) < 64,
-            "click decoded at sample {click}, encoded at {CLICK_AT}"
-        );
+        for encoded in CLICKS {
+            let search_from = encoded.saturating_sub(64);
+            let decoded = samples[search_from..]
+                .iter()
+                .position(|sample| sample.abs() > 0.3)
+                .map(|offset| search_from + offset)
+                .expect("the encoded click was not found");
+            assert!(
+                decoded.abs_diff(encoded) < 64,
+                "click decoded at sample {decoded}, encoded at {encoded}"
+            );
+        }
         assert_eq!(track_end, 48_000);
     }
 
@@ -487,8 +564,13 @@ mod tests {
     #[test]
     fn export_encoder_uses_audiotoolbox_on_macos() {
         let directory = tempfile::tempdir().unwrap();
-        let initial_padding = encode_click_for_export(&directory.path().join("click.mp4"));
-        assert_eq!(initial_padding, 2112);
+        let mut output = format::output(&directory.path().join("audio.mp4")).unwrap();
+        let encoder = AACEncoder::init_for_export(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(encoder.codec_name().as_deref(), Some("aac_at"));
     }
 
     #[test]
