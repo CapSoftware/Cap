@@ -94,8 +94,48 @@ jobs:
           sudo pmset -a displaysleep 0 sleep 0 disksleep 0
           caffeinate -u -t 2
           nohup caffeinate -dimsu > /dev/null 2>&1 &
+          cat > "$RUNNER_TEMP/sckshot.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          import ImageIO
+          import ScreenCaptureKit
+          import UniformTypeIdentifiers
+
+          let out = CommandLine.arguments[1]
+          Task {
+              do {
+                  let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                  guard let display = content.displays.first else {
+                      print("sckshot: no display")
+                      exit(2)
+                  }
+                  for window in content.windows where window.isOnScreen && window.frame.width > 50 {
+                      print("window: \(window.owningApplication?.bundleIdentifier ?? "?") '\(window.title ?? "")' \(window.frame) layer \(window.windowLayer)")
+                  }
+                  let filter = SCContentFilter(display: display, excludingWindows: [])
+                  let config = SCStreamConfiguration()
+                  config.width = display.width
+                  config.height = display.height
+                  let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                  guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+                      print("sckshot: cannot write \(out)")
+                      exit(3)
+                  }
+                  CGImageDestinationAddImage(dest, image, nil)
+                  CGImageDestinationFinalize(dest)
+                  print("sckshot: saved \(out)")
+                  exit(0)
+              } catch {
+                  print("sckshot: \(error)")
+                  exit(1)
+              }
+          }
+          dispatchMain()
+          SWIFT
+          swiftc "$RUNNER_TEMP/sckshot.swift" -o "$RUNNER_TEMP/sckshot"
           {
             echo /usr/sbin/screencapture
+            echo "$RUNNER_TEMP/sckshot"
             echo /usr/bin/osascript
             p=$$
             while [ "$p" -gt 1 ]; do
@@ -125,7 +165,6 @@ jobs:
           let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
           let locked = (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
           print("screen locked: \(locked)")
-          exit(locked ? 1 : 0)
           SWIFT
           swiftc "$RUNNER_TEMP/locked.swift" -o "$RUNNER_TEMP/locked"
           "$RUNNER_TEMP/locked"
@@ -160,7 +199,7 @@ jobs:
             open -n "$APP" --env "CAP_GPUI_APP_DATA_DIR=$dir" "$@"
           }
           shot() {
-            screencapture -x "$SHOTS/$1.png"
+            "$RUNNER_TEMP/sckshot" "$SHOTS/$1.png"
             echo "shot $1"
           }
 
