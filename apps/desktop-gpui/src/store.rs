@@ -457,6 +457,24 @@ pub fn set_store_value(section: &str, value: Value) -> bool {
     })
 }
 
+/// Replace one top-level section only if `update` agrees, deciding from the
+/// section as it is on disk at write time rather than from a copy read before
+/// a network round trip.
+pub fn update_store_section(
+    section: &str,
+    update: impl FnOnce(&mut Map<String, Value>) -> bool,
+) -> bool {
+    update_store(|store| {
+        let mut current = match store.remove(section) {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let keep = update(&mut current);
+        store.insert(section.to_string(), Value::Object(current));
+        keep
+    })
+}
+
 /// Reads, mutates and rewrites the store as one step, so two writers cannot
 /// both start from the same snapshot and drop each other's changes. Returning
 /// false from `mutate` leaves the file untouched.
@@ -1994,6 +2012,29 @@ mod tests {
                 current[4]
             );
         }
+    }
+
+    #[test]
+    fn section_updates_merge_into_disk_state_and_can_decline() {
+        let store = TempStore::new(
+            "section-update",
+            Some(r#"{"auth":{"user_id":"a","plan":null},"general_settings":{"x":1}}"#),
+        );
+
+        assert!(update_store_section("auth", |auth| {
+            auth.insert("organizations".into(), serde_json::json!([]));
+            true
+        }));
+        let written = store.read();
+        assert_eq!(written["auth"]["user_id"], "a");
+        assert_eq!(written["auth"]["organizations"], serde_json::json!([]));
+        assert_eq!(written["general_settings"]["x"], 1);
+
+        assert!(!update_store_section("auth", |auth| {
+            auth.insert("user_id".into(), "b".into());
+            false
+        }));
+        assert_eq!(store.read()["auth"]["user_id"], "a");
     }
 
     #[test]
