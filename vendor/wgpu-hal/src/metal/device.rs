@@ -609,6 +609,7 @@ impl crate::Device for super::Device {
             shared: Arc::clone(&self.shared),
             raw_queue: Arc::clone(&desc.queue.raw),
             raw_cmd_buf: None,
+            pending_label: None,
             state: super::CommandState::default(),
             temp: super::Temp::default(),
             counters: Arc::clone(&self.counters),
