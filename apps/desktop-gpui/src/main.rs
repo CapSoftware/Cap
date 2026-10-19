@@ -264,6 +264,8 @@ fn main() {
         store::mark_handoff_session();
     }
 
+    #[cfg(target_os = "macos")]
+    platform::install_appkit_exception_guards();
     platform::install_url_scheme_handler();
     for argument in std::env::args().skip(1) {
         if argument.contains("token") || argument.contains("api_key") {
