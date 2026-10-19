@@ -20,6 +20,10 @@ name = "screenshot_blit"
 harness = false
 
 [[bench]]
+name = "overlay_image_inspection"
+harness = false
+
+[[bench]]
 name = "thumbnail_fit"
 harness = false
 
