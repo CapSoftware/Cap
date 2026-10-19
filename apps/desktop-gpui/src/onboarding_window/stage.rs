@@ -219,7 +219,12 @@ impl OnboardingWindow {
             if self.stage.waiting_on == Some(permission) {
                 self.stage.waiting_on = None;
             }
-            if self.current_stage() == Stage::Permission(permission) {
+            // The grant already moved `current_stage` on to the next missing
+            // permission, so the card the user was looking at is the shown one.
+            let on_screen = self.stage.shown.map(|(stage, _)| stage);
+            if on_screen == Some(Stage::Permission(permission))
+                || self.current_stage() == Stage::Permission(permission)
+            {
                 self.stage.focused = Some(permission);
                 self.stage.advance = Some(cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(ADVANCE_AFTER).await;
