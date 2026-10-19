@@ -264,6 +264,18 @@ def parse_export(lines):
     return metrics
 
 
+def export_problem(probe, expected_frames, resolution):
+    if not probe.get("out_frames"):
+        return "export has no readable video frames"
+    if expected_frames and probe["out_frames"] != expected_frames:
+        return f"export has {probe['out_frames']:.0f} frames, expected {expected_frames:.0f}"
+    max_width, max_height = (float(side) for side in resolution.split("x"))
+    width, height = probe.get("out_width", 0), probe.get("out_height", 0)
+    if not (0 < width <= max_width and 0 < height <= max_height):
+        return f"export is {width:.0f}x{height:.0f}, outside {resolution}"
+    return None
+
+
 def export_bench(fps, resolution, quality, extra=()):
     def argv(ctx, out_dir):
         return [
@@ -273,6 +285,9 @@ def export_bench(fps, resolution, quality, extra=()):
 
     def post(ctx, out_dir, metrics):
         probe = ffprobe_video(out_dir / "export.mp4")
+        problem = export_problem(probe, metrics.get("frames"), resolution)
+        if problem:
+            raise InvalidRun(problem)
         metrics.update(probe)
         if metrics.get("frames") and metrics.get("wall_s"):
             metrics["export_fps"] = metrics["frames"] / metrics["wall_s"]
