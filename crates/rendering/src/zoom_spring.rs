@@ -111,12 +111,14 @@ impl CursorCropMap {
     }
 }
 
+#[derive(PartialEq)]
 struct TimedCursorCropMap {
     start: f64,
     end: f64,
     crop: Option<CursorCropMap>,
 }
 
+#[derive(PartialEq)]
 struct CursorCropMaps {
     base: Option<CursorCropMap>,
     styles: Vec<TimedCursorCropMap>,
@@ -438,7 +440,7 @@ pub(crate) fn cluster_center_at_time(
 
 /// One entry of the timeline-time -> recording-time mapping derived from
 /// [`TimelineConfiguration::get_segment_time`]'s accumulation logic.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct TimeMapSegment {
     timeline_start: f64,
     timeline_end: f64,
@@ -831,6 +833,39 @@ impl ZoomTransformTimeline {
             held_center_target: initial.center,
         });
         timeline
+    }
+
+    /// Whether a project edit can keep zoom samples for unchanged recording
+    /// data, screen dimensions, clip selection, and explicit duration.
+    pub fn project_inputs_match(
+        before: &ProjectConfiguration,
+        after: &ProjectConfiguration,
+        screen_size: XY<u32>,
+    ) -> bool {
+        let before_timeline = before.timeline.as_ref();
+        let after_timeline = after.timeline.as_ref();
+        let before_zooms = before_timeline
+            .map(|timeline| timeline.zoom_segments.as_slice())
+            .unwrap_or_default();
+        let after_zooms = after_timeline
+            .map(|timeline| timeline.zoom_segments.as_slice())
+            .unwrap_or_default();
+        let had_outgoing = before_timeline.is_some_and(|timeline| !timeline.transitions.is_empty());
+        let needs_outgoing =
+            after_timeline.is_some_and(|timeline| !timeline.transitions.is_empty());
+        if before_zooms != after_zooms || had_outgoing != needs_outgoing {
+            return false;
+        }
+        if before_zooms.is_empty() {
+            return true;
+        }
+
+        before.screen_movement_spring == after.screen_movement_spring
+            && before_timeline.map(TimelineConfiguration::duration)
+                == after_timeline.map(TimelineConfiguration::duration)
+            && build_time_map(before_timeline) == build_time_map(after_timeline)
+            && CursorCropMaps::from_project(before, screen_size)
+                == CursorCropMaps::from_project(after, screen_size)
     }
 
     /// Convenience constructor pulling zoom segments, edit mapping, spring
@@ -1237,6 +1272,174 @@ mod tests {
     fn follow_center(focus: (f64, f64)) -> XY<f32> {
         let (x, y) = SegmentBounds::calculate_follow_center(focus, 0.25);
         XY::new(x as f32, y as f32)
+    }
+
+    fn project_for_zoom_reuse() -> ProjectConfiguration {
+        let mut project = project_with_crop_styles(
+            vec![auto_segment(0.5, 18.0, 2.0)],
+            vec![crop_style(3.0, 8.0, 0, None)],
+        );
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments = vec![
+            TimelineSegment {
+                end: 10.0,
+                timescale: 1.0,
+                ..Default::default()
+            },
+            TimelineSegment {
+                recording_clip: 1,
+                start: 5.0,
+                end: 15.0,
+                timescale: 1.0,
+                ..Default::default()
+            },
+        ];
+        timeline.transitions.push(ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 0.5,
+        });
+        timeline.text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 4.0, "end": 5.0, "layout": "fullscreen"
+            }))
+            .unwrap(),
+        );
+        project
+    }
+
+    #[test]
+    fn unrelated_project_edits_preserve_incoming_and_outgoing_zoom_samples() {
+        let project = project_for_zoom_reuse();
+        let mut edited = project.clone();
+        edited.background.padding = 24.0;
+        edited.camera.rounding = 0.75;
+        edited.cursor.size = 150;
+        let timeline = edited.timeline.as_mut().unwrap();
+        timeline.segments[0].name = Some("Intro".to_string());
+        timeline.segments[0].volume = Some(0.5);
+        timeline.text_segments[0].content = "Edited title".to_string();
+        timeline.style_segments[0]
+            .overrides
+            .background
+            .as_mut()
+            .unwrap()
+            .rounding = 12.0;
+        let screen = XY::new(1000, 1000);
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project, &edited, screen
+        ));
+
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.2, 0.8),
+                move_event(4000.0, 0.4, 0.3),
+                move_event(10000.0, 0.9, 0.7),
+                move_event(18000.0, 0.3, 0.2),
+            ],
+            clicks: vec![click_event(1000.0), click_event(7000.0)],
+        };
+        let duration = project.timeline.as_ref().unwrap().duration();
+        for recording_clip in [0, 1] {
+            for outgoing in [false, true] {
+                let build = |project| {
+                    ZoomTransformTimeline::from_project_for_recording_clip(
+                        project,
+                        &cursor,
+                        duration,
+                        screen,
+                        Some(recording_clip),
+                        outgoing,
+                    )
+                };
+                let mut retained = build(&project);
+                retained.ensure_precomputed_until(5.0);
+                let mut rebuilt = build(&edited);
+                for time in [9.0, 4.0, 0.0, 17.0, duration as f32] {
+                    retained.ensure_precomputed_until(time);
+                    rebuilt.ensure_precomputed_until(time);
+                    assert_samples_identical(&retained, &rebuilt);
+                    assert_eq!(retained.sample(time).bounds, rebuilt.sample(time).bounds);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_inputs_invalidate_when_framing_or_timing_changes() {
+        let project = project_for_zoom_reuse();
+        let changes: [fn(&mut ProjectConfiguration); 9] = [
+            |project| project.timeline.as_mut().unwrap().zoom_segments[0].amount = 3.0,
+            |project| project.screen_movement_spring.stiffness += 1.0,
+            |project| {
+                project.background.crop = Some(Crop {
+                    position: XY::new(100, 0),
+                    size: XY::new(500, 1000),
+                });
+            },
+            |project| {
+                project.timeline.as_mut().unwrap().style_segments[0]
+                    .overrides
+                    .background
+                    .as_mut()
+                    .unwrap()
+                    .crop = Some(Crop {
+                    position: XY::new(0, 100),
+                    size: XY::new(1000, 500),
+                });
+            },
+            |project| {
+                let segment = &mut project.timeline.as_mut().unwrap().segments[0];
+                segment.start += 1.0;
+                segment.end += 1.0;
+            },
+            |project| project.timeline.as_mut().unwrap().segments[0].timescale = 2.0,
+            |project| project.timeline.as_mut().unwrap().segments[0].recording_clip = 1,
+            |project| project.timeline.as_mut().unwrap().transitions[0].duration = 0.75,
+            |project| {
+                project.timeline.as_mut().unwrap().text_segments.push(
+                    serde_json::from_value(serde_json::json!({
+                        "start": 50.0, "end": 52.0, "layout": "fullscreen"
+                    }))
+                    .unwrap(),
+                );
+            },
+        ];
+        for (index, change) in changes.into_iter().enumerate() {
+            let mut edited = project.clone();
+            change(&mut edited);
+            assert!(
+                !ZoomTransformTimeline::project_inputs_match(
+                    &project,
+                    &edited,
+                    XY::new(1000, 1000)
+                ),
+                "change {index} reused stale zoom samples"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_zoom_tracks_still_refresh_outgoing_timeline_availability() {
+        let mut before = project_for_zoom_reuse();
+        before.timeline.as_mut().unwrap().zoom_segments.clear();
+        let mut after = before.clone();
+        after.timeline.as_mut().unwrap().transitions.clear();
+        let screen = XY::new(1000, 1000);
+
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &before, &after, screen
+        ));
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &after, &before, screen
+        ));
+        let no_transitions = after.clone();
+        after.background.padding = 24.0;
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &no_transitions,
+            &after,
+            screen
+        ));
     }
 
     #[test]
