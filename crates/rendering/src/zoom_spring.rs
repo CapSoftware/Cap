@@ -1873,7 +1873,10 @@ mod tests {
         };
         for ordered in [false, true] {
             let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
-            assert_eq!(ClusterCenters::new(clusters).center_at(2000.0), Some((0.1, 0.1)));
+            assert_eq!(
+                ClusterCenters::new(clusters).center_at(2000.0),
+                Some((0.1, 0.1))
+            );
         }
     }
 
