@@ -875,8 +875,10 @@ function CutTranscriptWord(props: {
 	return (
 		<span
 			class={cx(
-				"transition-colors duration-100 rounded-xs relative line-through decoration-red-9/70 text-gray-7",
-				props.isSelected ? "bg-red-4/40 text-gray-10" : "hover:text-gray-10",
+				"transition-colors duration-100 rounded-xs relative line-through decoration-red-9/70",
+				props.isSelected
+					? "bg-red-4/40 text-red-11"
+					: "text-red-9 hover:text-red-11",
 			)}
 			title="Cut from the video. Right-click to adjust the cut."
 			onClick={(e) => props.onClick(e)}
@@ -932,7 +934,7 @@ function PauseBadge(props: {
 			class={cx(
 				"group relative inline-flex items-center gap-0.5 self-center rounded border border-dashed px-1 text-[10px] leading-4 tabular-nums select-none",
 				props.cut
-					? "border-gray-4 text-gray-7 line-through decoration-red-9/70"
+					? "border-gray-4 text-red-9 line-through decoration-red-9/70"
 					: "border-gray-6 text-gray-9",
 			)}
 			title={
