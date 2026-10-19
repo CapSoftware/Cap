@@ -696,58 +696,38 @@ impl EditorWindow {
 
     // -- Thumbnails ------------------------------------------------------------
 
-    /// Queue background decodes for every card without a picture, at most
-    /// [`MAX_THUMBNAIL_LOADS`] in flight -- each completion notifies, which
-    /// re-runs this and pulls the next one off the "queue".
-    fn request_clip_thumbnails(&mut self, cx: &mut Context<Self>) {
-        let wanted: Vec<(ThumbKey, f64)> = self
-            .clip_segments()
-            .iter()
-            .map(|segment| {
-                (
-                    (
-                        segment.recording_clip,
-                        (segment.start * 1000.0).round() as i64,
-                    ),
-                    segment.start,
-                )
-            })
-            .collect();
-        for (key, start) in wanted {
-            if self.clips.thumbs_inflight >= MAX_THUMBNAIL_LOADS {
-                break;
-            }
-            if self.clips.thumbs.contains_key(&key) {
-                continue;
-            }
-            self.clips.thumbs.insert(key, ClipThumb::Loading);
-            self.clips.thumbs_inflight += 1;
-            let project_path = self.project_path.clone();
-            cx.spawn(async move |this, cx| {
-                let decoded = cx
-                    .background_executor()
-                    .spawn(async move { decode_clip_thumbnail(&project_path, key.0, start) })
-                    .await;
-                this.update(cx, |this, cx| {
-                    this.clips.thumbs_inflight = this.clips.thumbs_inflight.saturating_sub(1);
-                    let entry = match decoded {
-                        Ok(image) => ClipThumb::Ready(image),
-                        Err(error) => {
-                            tracing::warn!(
-                                segment = key.0,
-                                start_ms = key.1,
-                                "clip thumbnail decode failed: {error}"
-                            );
-                            ClipThumb::Failed
-                        }
-                    };
-                    this.clips.thumbs.insert(key, entry);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
+    fn request_clip_thumbnail(&mut self, key: ThumbKey, start: f64, cx: &mut Context<Self>) {
+        if self.clips.thumbs_inflight >= MAX_THUMBNAIL_LOADS || self.clips.thumbs.contains_key(&key)
+        {
+            return;
         }
+        self.clips.thumbs.insert(key, ClipThumb::Loading);
+        self.clips.thumbs_inflight += 1;
+        let project_path = self.project_path.clone();
+        cx.spawn(async move |this, cx| {
+            let decoded = cx
+                .background_executor()
+                .spawn(async move { decode_clip_thumbnail(&project_path, key.0, start) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.clips.thumbs_inflight = this.clips.thumbs_inflight.saturating_sub(1);
+                let entry = match decoded {
+                    Ok(image) => ClipThumb::Ready(image),
+                    Err(error) => {
+                        tracing::warn!(
+                            segment = key.0,
+                            start_ms = key.1,
+                            "clip thumbnail decode failed: {error}"
+                        );
+                        ClipThumb::Failed
+                    }
+                };
+                this.clips.thumbs.insert(key, entry);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- The sidebar ------------------------------------------------------------
@@ -756,8 +736,6 @@ impl EditorWindow {
     /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
     /// the same card.
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.request_clip_thumbnails(cx);
-
         div()
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
             .flex_none()
@@ -1022,11 +1000,20 @@ impl EditorWindow {
         let group: SharedString = SharedString::from(format!("clip-card-{index}"));
         let probe = {
             let cell = self.clips.card_bounds.clone();
+            let editor = cx.weak_entity();
+            let start = segment.start;
             gpui::canvas(
-                move |bounds, _window, _cx| {
+                move |bounds, window, cx| {
                     let mut slots = cell.borrow_mut();
                     if index < slots.len() {
                         slots[index] = Some(bounds);
+                    }
+                    if bounds.intersects(&window.content_mask().bounds) {
+                        editor
+                            .update(cx, |editor, cx| {
+                                editor.request_clip_thumbnail(thumb_key, start, cx);
+                            })
+                            .ok();
                     }
                 },
                 |_, _, _, _| {},
