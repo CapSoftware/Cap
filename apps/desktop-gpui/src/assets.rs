@@ -136,8 +136,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
-    // The onboarding permissions surface's header badge.
-    "shield.svg",
     "stop-circle.svg",
     "search.svg",
     "settings.svg",

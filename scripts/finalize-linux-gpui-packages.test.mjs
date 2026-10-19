@@ -250,7 +250,7 @@ for (const [name, listing, expected] of [
 					await mkdir(path.join(args[2], "DEBIAN"), { recursive: true });
 					await writeFile(
 						path.join(args[2], "DEBIAN/control"),
-						"Package: cap\nDepends: libva2, libwebkit2gtk-4.1-0, libgtk-3-0\n",
+						"Package: cap\nDepends: libc6 (>= 2.39), libva2, libwebkit2gtk-4.1-0, libgtk-3-0\n",
 					);
 				} else if (command === "dpkg-deb" && args[0] === "--contents") {
 					return {
@@ -267,7 +267,7 @@ for (const [name, listing, expected] of [
 					]);
 					assert.equal(
 						await readFile(path.join(args[3], "DEBIAN/control"), "utf8"),
-						"Package: cap\nDepends: libva2\n",
+						"Package: cap\nDepends: libc6 (>= 2.39), libva2\n",
 					);
 					await writeFile(args[4], "uncompressed");
 				} else if (command === "ar" && args[0] === "t") {
@@ -448,7 +448,7 @@ test(
 				"Architecture: amd64",
 				"Maintainer: cap",
 				"Installed-Size: 12",
-				"Depends: libva2, libasound2t64 | libasound2, libwebkit2gtk-4.1-0, libgtk-3-0",
+				"Depends: libc6 (>= 2.39), libva2, libasound2t64 | libasound2, libwebkit2gtk-4.1-0, libgtk-3-0",
 				"Description: Beautiful screen recordings, owned by you.",
 				"",
 			].join("\n"),
@@ -459,7 +459,7 @@ test(
 		await finalizeGpuiDeb(deb, { unsigned: true });
 		assert.equal(
 			capture("dpkg-deb", ["--field", deb, "Depends"]).trim(),
-			"libva2, libasound2t64 | libasound2",
+			"libc6 (>= 2.39), libva2, libasound2t64 | libasound2",
 		);
 		assert.equal(
 			capture("dpkg-deb", ["--field", deb, "Package"]).trim(),
@@ -602,3 +602,78 @@ test(
 		assert.match(capture("rpm", ["-Kv", rpm]), /Payload SHA256 digest: OK/);
 	},
 );
+
+for (const payload of ["usr/bin/Cap", "usr/lib/cap/libmedia.so"]) {
+	test(
+		`deb finalization checks glibc requirements in ${payload}`,
+		{
+			skip:
+				!available("dpkg-deb") || !available("gcc") || !available("readelf"),
+		},
+		async (t) => {
+			const root = await workspace(t);
+			const tree = path.join(root, "tree");
+			await mkdir(path.join(tree, "DEBIAN"), { recursive: true });
+			await mkdir(path.dirname(path.join(tree, payload)), { recursive: true });
+			const source = path.join(root, "payload.c");
+			await writeFile(
+				source,
+				'#include <stdio.h>\nint main(void) { return puts("cap"); }\n',
+			);
+			capture("gcc", [
+				...(payload.endsWith(".so") ? ["-shared", "-fPIC"] : []),
+				source,
+				"-o",
+				path.join(tree, payload),
+			]);
+			const config = JSON.parse(
+				await readFile(
+					new URL("../apps/desktop-gpui/tauri.conf.json", import.meta.url),
+					"utf8",
+				),
+			);
+			const declared = config.bundle.linux.deb.depends.find((dependency) =>
+				dependency.startsWith("libc6"),
+			);
+			assert.equal(declared, "libc6 (>= 2.39)");
+			const deb = path.join(root, "cap.deb");
+			for (const dependency of ["", "libc6", "libc6 (>= 2.0)", declared]) {
+				await writeFile(
+					path.join(tree, "DEBIAN/control"),
+					[
+						"Package: cap",
+						"Version: 0.6.1",
+						"Architecture: all",
+						"Maintainer: cap",
+						...(dependency ? [`Depends: ${dependency}`] : []),
+						"Description: glibc packaging fixture",
+						"",
+					].join("\n"),
+				);
+				capture("dpkg-deb", [
+					"--root-owner-group",
+					"-Zgzip",
+					"--build",
+					tree,
+					deb,
+				]);
+				const original = await readFile(deb);
+				if (dependency !== declared) {
+					await assert.rejects(
+						finalizeGpuiDeb(deb, { unsigned: true }),
+						dependency.includes("2.0")
+							? /requires GLIBC_.*exceeding/
+							: /versioned libc6/,
+					);
+					assert.deepEqual(await readFile(deb), original);
+				} else {
+					await finalizeGpuiDeb(deb, { unsigned: true });
+					assert.equal(
+						capture("dpkg-deb", ["--field", deb, "Depends"]).trim(),
+						declared,
+					);
+				}
+			}
+		},
+	);
+}
