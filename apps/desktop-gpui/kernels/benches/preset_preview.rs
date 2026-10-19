@@ -2,14 +2,8 @@ use cap_gpui_kernels::texture as candidate;
 use image::RgbaImage;
 use std::{hint::black_box, time::Instant};
 
-type Preview = fn(
-    &[candidate::Filter],
-    Option<candidate::Overlay>,
-    f32,
-    f32,
-    u32,
-    u32,
-) -> RgbaImage;
+type Preview =
+    fn(&[candidate::Filter], Option<candidate::Overlay>, f32, f32, u32, u32) -> RgbaImage;
 
 const SAMPLES: usize = 35;
 

@@ -436,8 +436,12 @@ fn grain_octave_row(yf: f32, freq: f32, seed: u32) -> GrainOctavePlan {
     let sy = fy * fy * (3. - 2. * fy);
     let y0 = y0 as i32;
     let seed_term = seed.wrapping_mul(2_246_822_519);
-    let y_hash0 = (y0 as u32).wrapping_mul(668_265_263).wrapping_add(seed_term);
-    let y_hash1 = ((y0 + 1) as u32).wrapping_mul(668_265_263).wrapping_add(seed_term);
+    let y_hash0 = (y0 as u32)
+        .wrapping_mul(668_265_263)
+        .wrapping_add(seed_term);
+    let y_hash1 = ((y0 + 1) as u32)
+        .wrapping_mul(668_265_263)
+        .wrapping_add(seed_term);
     GrainOctavePlan {
         sy,
         y_hash0,
@@ -479,8 +483,11 @@ pub fn preset_preview_bgra(
     let overlay_plan = overlay.map(|o| OverlayPlan::new(wf, hf, o));
     let vignette_plan = VignettePlan::new(wf, hf, vignette);
 
-    let prepared_filters: Vec<PreparedFilter> =
-        filter.iter().copied().map(PreparedFilter::from_filter).collect();
+    let prepared_filters: Vec<PreparedFilter> = filter
+        .iter()
+        .copied()
+        .map(PreparedFilter::from_filter)
+        .collect();
 
     let mut scene_dx_sin = Vec::with_capacity(w as usize);
     for x in 0..w {
