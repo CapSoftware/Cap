@@ -20,6 +20,7 @@ use crate::{
 use crate::ui;
 
 mod stage;
+mod welcome_script;
 
 pub use stage::Paper;
 
@@ -29,7 +30,81 @@ pub const ONBOARDING_HEADER_HEIGHT: f32 = 36.;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REQUEST_GRACE: Duration = Duration::from_secs(2);
-const WELCOME_EXIT: Duration = Duration::from_millis(600);
+const WELCOME_EXIT: Duration = Duration::from_millis(1100);
+const WELCOME_REVEAL_DELAY: Duration = Duration::from_millis(450);
+struct Cloud {
+    art: &'static str,
+    aspect: f32,
+    top: f32,
+    width: f32,
+    phase: f32,
+}
+
+struct CloudLayer {
+    scale: f32,
+    pace: f32,
+    opacity: f32,
+    clouds: &'static [Cloud],
+}
+
+const fn cloud(art: (&'static str, f32), top: f32, width: f32, phase: f32) -> Cloud {
+    Cloud {
+        art: art.0,
+        aspect: art.1,
+        top,
+        width,
+        phase,
+    }
+}
+
+const CUMULUS_A: (&str, f32) = ("onboarding/clouds/cumulus-a.webp", 387. / 896.);
+const CUMULUS_B: (&str, f32) = ("onboarding/clouds/cumulus-b.webp", 360. / 760.);
+const TUFT: (&str, f32) = ("onboarding/clouds/tuft-a.webp", 300. / 600.);
+const BANK: (&str, f32) = ("onboarding/clouds/bank-a.webp", 241. / 864.);
+const WISP: (&str, f32) = ("onboarding/clouds/wisp-a.webp", 203. / 860.);
+/// The landing page's cloud art (`HomeTwo/HeroSky.tsx`) at three depths, far
+/// to near. `pace` is in points per second and stays brisk enough that pixel
+/// snapping never shows as stepping.
+const WELCOME_CLOUD_LAYERS: [CloudLayer; 3] = [
+    CloudLayer {
+        scale: 0.6,
+        pace: 7.,
+        opacity: 0.45,
+        clouds: &[
+            cloud(CUMULUS_B, 0.06, 380., 0.1),
+            cloud(WISP, 0.15, 420., 0.45),
+            cloud(TUFT, 0.28, 300., 0.7),
+            cloud(BANK, 0.38, 400., 0.25),
+            cloud(CUMULUS_A, 0.47, 450., 0.85),
+            cloud(WISP, 0.02, 360., 0.6),
+        ],
+    },
+    CloudLayer {
+        scale: 0.9,
+        pace: 12.,
+        opacity: 0.75,
+        clouds: &[
+            cloud(CUMULUS_A, 0.12, 520., 0.3),
+            cloud(BANK, 0.34, 480., 0.75),
+            cloud(TUFT, 0.5, 320., 0.05),
+            cloud(CUMULUS_B, 0.58, 440., 0.55),
+            cloud(WISP, 0.24, 380., 0.95),
+        ],
+    },
+    CloudLayer {
+        scale: 1.5,
+        pace: 20.,
+        opacity: 0.85,
+        clouds: &[
+            cloud(CUMULUS_A, 0.74, 620., 0.2),
+            cloud(BANK, 0.82, 600., 0.7),
+            cloud(CUMULUS_B, -0.2, 520., 0.45),
+        ],
+    },
+];
+/// The entrance's length; frames are requested until it ends even while the
+/// window is inactive, so it never freezes half-faded.
+const WELCOME_ENTRANCE_SECS: f32 = 3.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
@@ -187,9 +262,13 @@ pub struct OnboardingWindow {
     welcome: bool,
     welcome_exiting: bool,
     welcome_exit: Option<gpui::Task<()>>,
+    /// The welcome choreography's clocks; `welcome_at` stays `None` under
+    /// Reduce Motion, which renders the settled frame instead.
+    welcome_at: Option<std::time::Instant>,
+    welcome_exit_at: Option<std::time::Instant>,
+    step_delay: Duration,
     audio: Option<OnboardingAudio>,
     muted: bool,
-    bounce: usize,
     demo_task: Option<gpui::Task<()>>,
     demo_phase: usize,
     demo_cycle: usize,
@@ -236,9 +315,11 @@ impl OnboardingWindow {
             welcome,
             welcome_exiting: false,
             welcome_exit: None,
+            welcome_at: None,
+            welcome_exit_at: None,
+            step_delay: Duration::ZERO,
             audio: welcome.then(|| OnboardingAudio::new(muted, cx)),
             muted,
-            bounce: 0,
             demo_task: None,
             demo_phase: 0,
             demo_cycle: 0,
@@ -420,14 +501,19 @@ impl OnboardingWindow {
             return;
         }
         self.welcome_exiting = true;
+        self.welcome_exit_at = Some(std::time::Instant::now());
+        self.step_at = std::time::Instant::now();
+        self.step_revision = self.step_revision.wrapping_add(1);
+        self.step_delay = WELCOME_REVEAL_DELAY;
+        self.transition_direction = 1.;
+        cx.notify();
         self.welcome_exit = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(WELCOME_EXIT).await;
             this.update_in(cx, |this, window, cx| {
                 this.welcome = false;
                 this.welcome_exiting = false;
-                this.step_at = std::time::Instant::now();
+                this.welcome_exit_at = None;
                 this.audio = None;
-                this.step_revision = this.step_revision.wrapping_add(1);
                 this.focus_root(window, cx);
                 if this.permissions_visible() {
                     this.refresh_permissions(window, cx);
@@ -453,6 +539,7 @@ impl OnboardingWindow {
         self.step = step;
         self.step_at = std::time::Instant::now();
         self.step_revision = self.step_revision.wrapping_add(1);
+        self.step_delay = Duration::ZERO;
         self.poll = None;
         self.verify = None;
         self.refresh = None;
@@ -731,6 +818,101 @@ fn ease(value: f32) -> f32 {
     value * value * (3. - 2. * value)
 }
 
+fn ease_in_out(value: f32) -> f32 {
+    if value < 0.5 {
+        4. * value.powi(3)
+    } else {
+        1. - (-2. * value + 2.).powi(3) / 2.
+    }
+}
+
+fn welcome_script(written: f32, opacity: f32) -> impl IntoElement {
+    const FEATHER: f32 = 0.16;
+    const EDGE: f32 = 2.4;
+    const SHADOW_DROP: f32 = 2.;
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if opacity <= 0. || written <= 0. {
+                return;
+            }
+            let script = &welcome_script::WELCOME;
+            let Some((origin, scale)) = script.fit(bounds) else {
+                return;
+            };
+            let shadow_origin = (origin.0, origin.1 + SHADOW_DROP);
+            let (Some(fill), Some(edge), Some(shadow)) = (
+                script.path(origin, scale),
+                script.stroke(origin, scale, EDGE),
+                script.stroke(shadow_origin, scale, EDGE),
+            ) else {
+                return;
+            };
+            // Shadow, then the edge, then the white over it: the fill hides
+            // the inner half of every stroke, joins included.
+            let layers = [
+                (shadow, Hsla::from(rgba(0x3f5a821f))),
+                (edge, Hsla::from(rgba(0x5f7fae73))),
+                (fill.clone(), Hsla::from(rgba(0xfffffff2))),
+            ];
+            let left = f32::from(fill.bounds.left()) - EDGE;
+            let width = f32::from(fill.bounds.size.width) + 2. * EDGE;
+            let top = fill.bounds.top() - px(EDGE);
+            let height = fill.bounds.size.height + px(2. * EDGE + SHADOW_DROP);
+            let mask = |from: f32, to: f32| gpui::ContentMask {
+                bounds: gpui::Bounds {
+                    origin: gpui::point(px(left + from * width), top),
+                    size: gpui::size(px((to - from) * width), height),
+                },
+            };
+            let reach = written * (1. + FEATHER);
+            let solid = (reach - FEATHER).clamp(0., 1.);
+            let (start, end) = (solid, reach.min(1.));
+            for (path, color) in layers {
+                let color = color.opacity(opacity);
+                if solid > 0. {
+                    window.with_content_mask(Some(mask(0., solid)), |window| {
+                        window.paint_path(path.clone(), color);
+                    });
+                }
+                // Path gradients span the path's bounds clipped to the
+                // content mask, so the feather's stops run across its strip.
+                if end > start {
+                    let fade = (1. - (end - start) / FEATHER).max(0.);
+                    window.with_content_mask(Some(mask(start, end)), |window| {
+                        window.paint_path(
+                            path,
+                            linear_gradient(
+                                90.,
+                                linear_color_stop(color, 0.),
+                                linear_color_stop(color.opacity(fade), 1.),
+                            ),
+                        );
+                    });
+                }
+            }
+        },
+    )
+    .size_full()
+}
+
+fn ease_out(value: f32) -> f32 {
+    1. - (1. - value).powi(3)
+}
+
+fn beat(elapsed: f32, delay: f32, duration: f32) -> f32 {
+    ((elapsed - delay) / duration).clamp(0., 1.)
+}
+
+#[derive(Clone, Copy)]
+struct WelcomeMotion {
+    t: f32,
+    exit: f32,
+    /// 0 under Reduce Motion: fades only.
+    travel: f32,
+    idle: f32,
+}
+
 impl OnboardingWindow {
     fn card(&self) -> Div {
         div()
@@ -782,190 +964,293 @@ impl OnboardingWindow {
             )
     }
 
-    fn ambient(&self, width: f32, height: f32, welcome: bool) -> AnyElement {
-        let cloud_width = width * 0.8;
-        let exiting = welcome && self.welcome_exiting;
-        let first = div()
-            .absolute()
-            .top_0()
-            .right(px(-160.))
-            .opacity(0.7)
-            .child(
-                img("onboarding/cloud-1.png")
-                    .w(px(cloud_width))
-                    .h(px(cloud_width * 1138. / 1657.)),
-            );
-        let second = div().absolute().top_0().left(px(-160.)).opacity(0.7).child(
-            img("onboarding/cloud-2.png")
-                .w(px(cloud_width))
-                .h(px(cloud_width * 892. / 1923.)),
-        );
-        let third_width = width;
-        let third = div()
-            .absolute()
-            .left_0()
-            .bottom(px(-height * 0.15))
-            .opacity(0.7)
-            .child(
-                img("onboarding/cloud-3.png")
-                    .w(px(third_width))
-                    .h(px(third_width * 703. / 3007.)),
-            );
-        let clouds = if !self.animated {
-            div().size_full().child(first).child(second).child(third)
-        } else if exiting {
-            div()
-                .size_full()
-                .child(first.with_animation(
-                    "welcome-cloud-one-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| {
-                        el.right(px(-160. + 200. * t))
-                            .top(px(-150. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
-                .child(second.with_animation(
-                    "welcome-cloud-two-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| {
-                        el.left(px(-160. + 200. * t))
-                            .top(px(-150. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
-                .child(third.with_animation(
-                    "welcome-cloud-three-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    move |el, t| {
-                        el.bottom(px(-height * 0.15 - 200. * t))
-                            .opacity(0.7 * (1. - t))
-                    },
-                ))
-        } else {
-            div()
-                .size_full()
-                .child(first.with_animation(
-                    if welcome {
-                        "welcome-cloud-one"
-                    } else {
-                        "ambient-cloud-one"
-                    },
-                    Animation::new(Duration::from_secs(30)).repeat(),
-                    |el, t| {
-                        let amount = 1. - (2. * t - 1.).abs();
-                        el.right(px(-160. + 20. * amount)).top(px(10. * amount))
-                    },
-                ))
-                .child(second.with_animation(
-                    if welcome {
-                        "welcome-cloud-two"
-                    } else {
-                        "ambient-cloud-two"
-                    },
-                    Animation::new(Duration::from_secs(35)).repeat(),
-                    |el, t| {
-                        let amount = 1. - (2. * t - 1.).abs();
-                        el.left(px(-160. + 20. * amount)).top(px(10. * amount))
-                    },
-                ))
-                .child(third.with_animation(
-                    if welcome {
-                        "welcome-cloud-three"
-                    } else {
-                        "ambient-cloud-three"
-                    },
-                    if welcome {
-                        Animation::new(Duration::from_secs(60)).with_easing(ease)
-                    } else {
-                        Animation::new(Duration::from_secs(120)).repeat()
-                    },
-                    move |el, t| {
-                        let t = if welcome { t } else { 1. - (2. * t - 1.).abs() };
-                        let (x, y) = if t < 0.5 {
-                            (width * 0.04 * t, 20. * (1. - t * 2.))
-                        } else {
-                            (width * 0.04 * (1. - t), 0.)
-                        };
-                        el.left(px(x)).bottom(px(-height * 0.15 - y))
-                    },
-                ))
+    fn tick_welcome(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let reduce_motion = cx.reduce_motion();
+        if self.welcome_at.is_none() && !reduce_motion {
+            self.welcome_at = Some(std::time::Instant::now());
+        }
+        let entering = self
+            .welcome_at
+            .is_some_and(|at| at.elapsed().as_secs_f32() < WELCOME_ENTRANCE_SECS);
+        if self.welcome_exit_at.is_some() || entering || (self.animated && !reduce_motion) {
+            window.request_animation_frame();
+        }
+    }
+
+    fn welcome_motion(&self) -> WelcomeMotion {
+        let moving = self.welcome_at.is_some();
+        WelcomeMotion {
+            t: self
+                .welcome_at
+                .map_or(WELCOME_ENTRANCE_SECS, |at| at.elapsed().as_secs_f32()),
+            exit: self.welcome_exit_at.map_or(0., |at| {
+                (at.elapsed().as_secs_f32() / WELCOME_EXIT.as_secs_f32()).clamp(0., 1.)
+            }),
+            travel: if moving { 1. } else { 0. },
+            idle: if moving && self.animated { 1. } else { 0. },
+        }
+    }
+
+    fn welcome_sky(&self, width: f32, height: f32, m: WelcomeMotion) -> AnyElement {
+        let travel = m.travel;
+        let gone = ease(m.exit);
+        let unit = width / 1100.;
+        let clouds_in = ease(beat(m.t, 0.4, 2.2));
+        // Constant pace, never eased: images snap to device pixels, so an even
+        // speed is what keeps the steps invisible.
+        let layer = |depth: usize| {
+            let CloudLayer {
+                scale,
+                pace,
+                opacity,
+                clouds,
+            } = WELCOME_CLOUD_LAYERS[depth];
+            let lift = (120. + 140. * depth as f32) * gone * travel;
+            clouds.iter().map(move |cloud| {
+                let Cloud {
+                    art,
+                    aspect,
+                    top,
+                    width: cloud_width,
+                    phase,
+                } = *cloud;
+                let cloud_width = cloud_width * scale * unit * (1. + 0.25 * gone * travel);
+                let span = width + cloud_width;
+                let x = (phase * span + m.t * pace * travel).rem_euclid(span) - cloud_width;
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(top * height - lift))
+                    .opacity(opacity * clouds_in * (1. - gone))
+                    .child(img(art).w(px(cloud_width)).h(px(cloud_width * aspect)))
+            })
         };
+        let mist = img("onboarding/mist.svg")
+            .absolute()
+            .left(px(-width * 0.1 + 20. * (m.idle * m.t / 7.).sin() * travel))
+            .top(px(-200. * gone * travel))
+            .w(px(width * 1.2))
+            .h(px(height * 1.5))
+            .object_fit(ObjectFit::Fill)
+            .opacity(clouds_in * (1. - gone));
+        let wave =
+            |period: f32, phase: f32| (m.idle * std::f32::consts::TAU * m.t / period + phase).sin();
+        let light_in = ease(beat(m.t, 0.6, 3.)) * (1. - gone);
+        // Twice the window's width so the sheet's edges stay off screen.
+        let sun_size = width * 2.;
+        let sun = img("onboarding/sun.svg")
+            .absolute()
+            .left(px(width * 0.84 - sun_size / 2.))
+            .top(px(-height * 0.06 - sun_size / 2.))
+            .size(px(sun_size))
+            .object_fit(ObjectFit::Fill)
+            .opacity(light_in * (0.85 + 0.15 * wave(9., 0.)));
+        const RAY_BLEED: f32 = 40.;
+        let rays = |art: &'static str, sway: f32, period: f32, phase: f32, strength: f32| {
+            img(art)
+                .absolute()
+                .top_0()
+                .left(px(-RAY_BLEED + sway * wave(period * 1.6, phase) * travel))
+                .w(px(width + 2. * RAY_BLEED))
+                .h(px(height))
+                .object_fit(ObjectFit::Fill)
+                .opacity(light_in * strength * (0.62 + 0.38 * wave(period, phase)))
+        };
+
+        const GRAIN_JITTER: f32 = 200.;
+        let film_frame = if m.idle > 0. { (m.t * 24.) as u32 } else { 0 };
+        let shift = |salt: u32| ((film_frame.wrapping_mul(salt) >> 7) % 200) as f32;
+        let grain = img("onboarding/grain.svg")
+            .absolute()
+            .left(px(-shift(2_654_435_761)))
+            .top(px(-shift(2_246_822_519)))
+            .w(px(width + GRAIN_JITTER))
+            .h(px(height + GRAIN_JITTER))
+            .object_fit(ObjectFit::Cover);
+        let wash = (std::f32::consts::PI * beat(m.exit, 0.1, 0.75)).sin();
+        let fill =
+            |color: Hsla, opacity: f32| div().absolute().inset_0().bg(color).opacity(opacity);
+
         div()
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .bg(linear_gradient(
-                180.,
-                linear_color_stop(rgb(0x3b82f6), 0.),
-                linear_color_stop(rgb(0x2563eb), 1.),
-            ))
-            .opacity(if welcome { 1. } else { 0.1 })
-            .child(clouds)
+            .bg(rgb(0xedf1f6))
             .child(
-                img("onboarding/grain.svg")
+                img("onboarding/sky.svg")
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Fill),
+            )
+            .child(rays("onboarding/rays-far.svg", 14., 10., 0., 0.9))
+            .children(layer(0))
+            .child(mist)
+            .children(layer(1))
+            .children(layer(2))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(relative(0.4))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(gpui::hsla(0.59, 0.36, 0.95, 0.), 0.),
+                        linear_color_stop(gpui::hsla(0.59, 0.36, 0.95, 0.55), 1.),
+                    )),
+            )
+            .child(
+                img("onboarding/vignette.svg")
                     .absolute()
                     .inset_0()
                     .size_full()
                     .object_fit(ObjectFit::Fill)
-                    .opacity(0.14),
+                    .opacity(1. - gone),
             )
+            // Over the vignette, which otherwise darkens the sun's corner.
+            .child(sun)
+            .child(rays("onboarding/rays-near.svg", -18., 13., 2.1, 0.85))
+            .child(fill(gpui::white(), 0.6 * wash))
+            .child(grain)
+            .child(fill(rgb(0xf6f8fb).into(), 1. - ease(beat(m.t, 0.1, 2.4))))
             .into_any_element()
     }
 
+    /// Drawn over the whole window, header included, so no strip of the page
+    /// shows above the sky as it fades. `height` is the full window's.
     fn render_welcome(&self, width: f32, height: f32, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let glass = theme
-            .material
-            .filter(|material| material.kind == crate::platform::MaterialKind::LiquidGlass);
-        let button_fill = glass
-            .map(|material| Hsla::from(material.control_fill))
-            .unwrap_or_else(gpui::white);
-        let button_hover = glass
-            .map(|material| Hsla::from(material.control_hover))
-            .unwrap_or_else(|| rgba(0xfffffff2).into());
-        let button_text = glass
-            .map(|material| Hsla::from(material.text))
-            .unwrap_or_else(|| rgb(0x161b26).into());
-        // The hint under the label tracks the label: on the Liquid Glass
-        // control that text is light, so the white button's navy would vanish.
-        let hint_text = button_text.opacity(0.58);
-        let (kbd_text, kbd_border, kbd_fill) = match glass {
-            Some(_) => (
-                button_text,
-                button_text.opacity(0.3),
-                gpui::transparent_black(),
-            ),
-            None => (
-                Hsla::from(theme.gray_11),
-                Hsla::from(theme.gray_6),
-                if theme.is_dark() {
-                    Hsla::from(theme.body_fill(3))
-                } else {
-                    gpui::white()
-                },
-            ),
+        let m = self.welcome_motion();
+        let travel = m.travel;
+        let ink = Hsla::from(rgb(0x1e2a40));
+
+        let rise = |delay: f32, exit_delay: f32| {
+            let arrive = ease_out(beat(m.t, delay, 1.3));
+            let leave = ease(beat(m.exit, exit_delay, 0.4));
+            let offset = (10. * (1. - arrive) - 24. * leave) * travel;
+            (offset, ease(beat(m.t, delay, 1.2)) * (1. - leave))
         };
-        let logo = img("onboarding/logo.svg")
-            .w(px(80.))
-            .h(px(96.))
-            .object_fit(ObjectFit::Contain);
-        let logo = if self.bounce == 0 || !self.animated {
-            logo.into_any_element()
+        let (title_y, title_opacity) = rise(1.0, 0.06);
+        let written = if travel > 0. {
+            ease_in_out(beat(m.t, 1.0, 1.8))
         } else {
-            div()
-                .relative()
-                .child(logo)
-                .with_animation(
-                    ("onboarding-logo", self.bounce),
-                    Animation::new(Duration::from_secs(1)),
-                    |el, t| el.top(px(-20. * (std::f32::consts::PI * t).sin())),
-                )
-                .into_any_element()
+            1.
         };
+        let (subtitle_y, subtitle_opacity) = rise(1.35, 0.03);
+        let (button_y, button_opacity) = rise(1.8, 0.);
+        let logo_leave = ease(beat(m.exit, 0.09, 0.4));
+        let logo_y = -24. * logo_leave * travel;
+        let logo_opacity = ease(beat(m.t, 0.6, 1.2)) * (1. - logo_leave);
+
+        let logo = img("onboarding/wordmark.svg")
+            .w(px(120.))
+            .h(px(40.))
+            .object_fit(ObjectFit::Contain);
+
+        let shadow = |color: u32, y: f32, blur: f32, spread: f32, inset: bool| gpui::BoxShadow {
+            color: rgba(color).into(),
+            offset: gpui::point(px(0.), px(y)),
+            blur_radius: px(blur),
+            spread_radius: px(spread),
+            inset,
+        };
+        let button_shadow = move |lift: bool| {
+            vec![
+                shadow(0xffffffcc, 2., 3., -1., true),
+                shadow(0x3d77c233, -1., 1., 0., true),
+                shadow(
+                    if lift { 0x3d77c238 } else { 0x3d77c233 },
+                    if lift { 2. } else { 1. },
+                    if lift { 4. } else { 2. },
+                    0.,
+                    false,
+                ),
+                shadow(
+                    if lift { 0x78b2f0a6 } else { 0x78b2f08c },
+                    if lift { 14. } else { 10. },
+                    if lift { 30. } else { 24. },
+                    -10.,
+                    false,
+                ),
+            ]
+        };
+        let button = div()
+            .id("onboarding-get-started")
+            .tab_index(0)
+            .cursor_pointer()
+            .relative()
+            .top(px(button_y))
+            .opacity(button_opacity)
+            .mt(px(52.))
+            .w(px(274.))
+            .h(px(58.))
+            .rounded(px(14.))
+            .border_1()
+            .border_color(rgba(0x3f7fcda6))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(rgb(0xf5fafe), 0.),
+                linear_color_stop(rgb(0xcfe2f6), 1.),
+            ))
+            .shadow(button_shadow(false))
+            .hover(move |el| {
+                el.border_color(rgba(0x3474c4c7))
+                    .shadow(button_shadow(true))
+            })
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .on_click(cx.listener(|this, _, window, cx| this.continue_from_welcome(window, cx)))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .left(px(3.))
+                    .right(px(3.))
+                    .h(relative(0.44))
+                    .rounded_t(px(11.))
+                    .bg(linear_gradient(
+                        180.,
+                        linear_color_stop(rgba(0xffffff59), 0.),
+                        linear_color_stop(rgba(0xffffff00), 1.),
+                    )),
+            )
+            .child(
+                copy("Get Started", 16., ink)
+                    .line_height(px(20.))
+                    .font_weight(FontWeight::MEDIUM),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(4.))
+                    .child(
+                        copy("Click here, or press", 11., ink.opacity(0.55))
+                            .font_weight(FontWeight::NORMAL)
+                            .line_height(px(14.)),
+                    )
+                    .child(
+                        copy("Space", 10., ink.opacity(0.7))
+                            .font_weight(FontWeight::MEDIUM)
+                            .line_height(px(14.))
+                            .px(px(4.))
+                            .py(px(1.))
+                            .rounded(px(3.))
+                            .border_1()
+                            .border_color(rgba(0x3f7fcd40))
+                            .bg(rgba(0xffffffcc)),
+                    ),
+            );
+
         let content = div()
             .relative()
             .size_full()
+            .pt(px(ONBOARDING_HEADER_HEIGHT))
             .flex()
             .flex_col()
             .items_center()
@@ -973,95 +1258,44 @@ impl OnboardingWindow {
             .px(px(16.))
             .child(
                 div()
-                    .id("onboarding-logo")
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.bounce = this.bounce.wrapping_add(1);
-                        cx.notify();
-                    }))
+                    .relative()
+                    .top(px(logo_y))
+                    .opacity(logo_opacity)
                     .child(logo),
             )
             .child(
-                copy("Welcome to Cap", 48., gpui::white())
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(48.))
-                    .mt(px(40.))
-                    .mb(px(16.)),
+                div()
+                    .relative()
+                    .top(px(title_y))
+                    .mt(px(30.))
+                    .mb(px(18.))
+                    .w(px(380.))
+                    .h(px(96.))
+                    .child(welcome_script(written, title_opacity)),
             )
             .child(
                 copy(
-                    "Beautiful screen recordings, owned by you.",
-                    24.,
-                    gpui::white(),
+                    "The open source screen sharing app for everyone.",
+                    22.,
+                    ink.opacity(0.75),
                 )
+                .relative()
+                .top(px(subtitle_y))
+                .opacity(subtitle_opacity)
+                .font_family("Source Serif 4")
+                .font_weight(FontWeight::LIGHT)
                 .line_height(px(32.))
-                .opacity(0.8)
                 .whitespace_nowrap(),
             )
-            .child(
-                div()
-                    .id("onboarding-get-started")
-                    .tab_index(0)
-                    .cursor_pointer()
-                    .mt(px(56.))
-                    .w(px(274.))
-                    .h(px(60.))
-                    .px(px(64.))
-                    .py(px(8.))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(if glass.is_some() {
-                        gpui::transparent_black()
-                    } else {
-                        rgba(0xffffff4d).into()
-                    })
-                    .bg(button_fill)
-                    .hover(move |el| el.bg(button_hover))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(2.))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.continue_from_welcome(window, cx)),
-                    )
-                    .child(
-                        copy("Get Started", 14., button_text)
-                            .line_height(px(20.))
-                            .font_weight(FontWeight::MEDIUM),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.))
-                            .child(
-                                copy("Click here, or press", 11., hint_text)
-                                    .font_weight(FontWeight::NORMAL)
-                                    .line_height(px(14.)),
-                            )
-                            .child(
-                                copy("Space", 10., kbd_text)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .line_height(px(14.))
-                                    .px(px(4.))
-                                    .py(px(1.))
-                                    .rounded(px(3.))
-                                    .border_1()
-                                    .border_color(kbd_border)
-                                    .bg(kbd_fill),
-                            ),
-                    ),
-            )
+            .child(button)
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., gpui::white()).mt(px(12.)))
+                el.child(copy(error, 12., ink).mt(px(12.)))
             });
         let mute = div()
             .id("onboarding-mute")
             .tab_index(0)
             .absolute()
-            .top(px(12.))
+            .top(px(ONBOARDING_HEADER_HEIGHT + 12.))
             .p(px(4.))
             .when(cfg!(target_os = "macos"), |el| el.right(px(16.)))
             .when(!cfg!(target_os = "macos"), |el| el.left(px(16.)))
@@ -1075,26 +1309,19 @@ impl OnboardingWindow {
                     "onboarding/volume-2.svg"
                 },
                 24.,
-                gpui::white(),
+                ink.opacity(0.55),
             ));
-        let overlay = div()
+        let dissolve = ease(beat(m.exit, 0.45, 0.55));
+        div()
+            .id("onboarding-welcome")
             .absolute()
             .inset_0()
             .overflow_hidden()
-            .child(self.ambient(width, height, true))
+            .opacity(1. - dissolve)
+            .child(self.welcome_sky(width, height, m))
             .child(content)
-            .when(!self.welcome_exiting, |el| el.child(mute));
-        if self.welcome_exiting && self.animated {
-            overlay
-                .with_animation(
-                    "onboarding-welcome-exit",
-                    Animation::new(WELCOME_EXIT).with_easing(ease),
-                    |el, t| el.opacity(1. - t),
-                )
-                .into_any_element()
-        } else {
-            overlay.into_any_element()
-        }
+            .when(!self.welcome_exiting, |el| el.child(mute))
+            .into_any_element()
     }
 
     fn render_overview(&self) -> AnyElement {
@@ -2391,11 +2618,13 @@ impl Render for OnboardingWindow {
         if self.permissions_visible() {
             self.sync_stage(window, cx);
         }
+        if self.welcome {
+            self.tick_welcome(window, cx);
+        }
         let theme = self.theme;
         let paper = stage::Paper::new(&theme);
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width);
-        let height = (f32::from(viewport.height) - ONBOARDING_HEADER_HEIGHT).max(0.);
         let content = match self.step {
             Step::Permissions => self.render_permissions(cx),
             Step::Overview => self.render_overview(),
@@ -2407,13 +2636,18 @@ impl Render for OnboardingWindow {
             Step::Faq => self.render_faq(cx),
         };
         let content = div().relative().min_h_full().w_full().child(content);
-        let content = if self.animated && !self.welcome {
+        let step_visible = !self.welcome || self.welcome_exiting;
+        let content = if self.animated && step_visible {
             let direction = self.transition_direction;
+            let delay = self.step_delay.as_secs_f32();
             content
                 .with_animation(
                     ("onboarding-step", self.step_revision),
-                    Animation::new(Duration::from_millis(500)).with_easing(ease),
-                    move |el, t| el.left(px(direction * 24. * (1. - t))).opacity(t),
+                    Animation::new(Duration::from_secs_f32(0.5 + delay)),
+                    move |el, t| {
+                        let t = ease(((t * (0.5 + delay) - delay) / 0.5).clamp(0., 1.));
+                        el.left(px(direction * 24. * (1. - t))).opacity(t)
+                    },
                 )
                 .into_any_element()
         } else {
@@ -2427,11 +2661,7 @@ impl Render for OnboardingWindow {
             .flex()
             .items_center()
             .justify_between()
-            .bg(if self.welcome {
-                rgb(0x3b82f6).into()
-            } else {
-                paper.bg
-            })
+            .when(!self.welcome, |el| el.bg(paper.bg))
             .window_control_area(gpui::WindowControlArea::Drag);
         #[cfg(target_os = "windows")]
         let header = header.justify_end().child(ui::windows_caption_controls(
@@ -2471,52 +2701,60 @@ impl Render for OnboardingWindow {
                             .group_hover("onboarding-close", |el| el.visible()),
                     ),
             );
-        div()
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .when(step_visible, |el| {
+                el.bg(paper.bg).child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id("onboarding-scroll")
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .overflow_y_scroll()
+                                .child(content),
+                        )
+                        .child(self.render_navigation(cx)),
+                )
+            });
+        let root = div()
             .id("onboarding")
             .track_focus(&self.focus)
             .key_context("OnboardingWindow")
             .capture_key_down(cx.listener(Self::on_key))
+            .relative()
             .size_full()
-            .flex()
-            .flex_col()
             .overflow_hidden()
             .rounded(px(16.))
             .bg(theme.shell_bg())
             .font_family(crate::theme::UI_FONT)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.body_text())
-            .child(header)
-            .child(
+            .text_color(theme.body_text());
+        if self.welcome {
+            let full_height = f32::from(viewport.height);
+            root.child(
                 div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_hidden()
-                    .when(!self.welcome, |el| el.bg(paper.bg))
-                    .when(!self.welcome, |el| {
-                        el.child(
-                            div()
-                                .relative()
-                                .size_full()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .id("onboarding-scroll")
-                                        .flex_1()
-                                        .min_h_0()
-                                        .w_full()
-                                        .overflow_y_scroll()
-                                        .child(content),
-                                )
-                                .child(self.render_navigation(cx)),
-                        )
-                    })
-                    .when(self.welcome, |el| {
-                        el.child(self.render_welcome(width, height, cx))
-                    }),
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .bg(paper.bg)
+                    .child(div().h(px(ONBOARDING_HEADER_HEIGHT)).flex_shrink_0())
+                    .child(body),
             )
+            .child(self.render_welcome(width, full_height, cx))
+            .child(header.absolute().top_0().left_0().right_0())
+        } else {
+            root.flex().flex_col().child(header).child(body)
+        }
     }
 }
 
