@@ -260,9 +260,12 @@ fn bundled_dxc_compiler() -> wgpu::Dx12Compiler {
 fn bundled_dxc_paths() -> Option<(PathBuf, PathBuf)> {
     let executable = std::env::current_exe().ok()?;
     let executable_dir = executable.parent()?;
-    let profile_dir = (executable_dir.file_name()? == "deps")
-        .then(|| executable_dir.parent())
-        .flatten();
+    let profile_dir = matches!(
+        executable_dir.file_name()?.to_str(),
+        Some("deps" | "examples")
+    )
+    .then(|| executable_dir.parent())
+    .flatten();
 
     [Some(executable_dir), profile_dir]
         .into_iter()
