@@ -20,6 +20,7 @@ mod deeplink;
 mod dev_restore;
 mod devices;
 mod diagnostics;
+mod doodle;
 mod editor_audio;
 mod editor_canvas;
 mod editor_clips;
@@ -41,10 +42,13 @@ mod import;
 mod installer;
 mod library;
 mod main_window;
+mod media_access;
 mod menus;
 mod mode_select_window;
 mod onboarding_audio;
+mod onboarding_doodles;
 mod onboarding_window;
+mod permission_guide;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
@@ -62,7 +66,10 @@ mod screenshot_export;
 mod session;
 mod settings_pages;
 mod settings_window;
+mod sign_in;
 mod single_instance;
+#[cfg(debug_assertions)]
+mod snapshot;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -310,7 +317,9 @@ fn main() {
         crate::theme::init(cx);
 
         let session = RecordingSession::init(cx);
+        crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
+        crate::media_access::MediaAccess::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -589,6 +598,8 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        #[cfg(debug_assertions)]
+        snapshot::arm_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
