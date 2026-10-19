@@ -28,6 +28,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { formatPlayerTime } from "@/lib/player-time";
 import type { SharePageBranding } from "@/lib/share-branding";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
@@ -37,14 +38,6 @@ declare global {
 		MSStream: unknown;
 	}
 }
-
-const formatTime = (time: number) => {
-	const minutes = Math.floor(time / 60);
-	const seconds = Math.floor(time % 60);
-	return `${minutes.toString().padStart(2, "0")}:${seconds
-		.toString()
-		.padStart(2, "0")}`;
-};
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -347,7 +340,7 @@ export const EmbedVideo = forwardRef<
 													<>
 														<span className="text-xs text-gray-400">•</span>
 														<p className="text-xs text-gray-300 sm:text-sm">
-															{formatTime(longestDuration)}
+															{formatPlayerTime(longestDuration)}
 														</p>
 													</>
 												)}

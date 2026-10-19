@@ -834,6 +834,12 @@ fn h264_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
     (area * frame_rate_multiplier * 0.3) as usize
 }
 
+fn frame_duration_ticks(time_base: ffmpeg::Rational, fps: u32) -> i64 {
+    let ticks = f64::from(time_base.denominator())
+        / (f64::from(time_base.numerator().max(1)) * f64::from(fps.max(1)));
+    (ticks.round() as i64).max(1)
+}
+
 fn import_decode_threads() -> usize {
     std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
 }
@@ -1301,6 +1307,7 @@ struct H264Output {
     stream_index: usize,
     pixel_format: avformat::Pixel,
     packet: ffmpeg::Packet,
+    frame_duration: i64,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
@@ -1364,12 +1371,14 @@ fn open_h264_encoder(
                     fps,
                     "import H264 encoder ready"
                 );
+                let frame_duration = frame_duration_ticks(encoder.time_base(), fps);
                 return Ok(H264Output {
                     strict: false,
                     encoder,
                     stream_index,
                     pixel_format,
                     packet: ffmpeg::Packet::empty(),
+                    frame_duration,
                     first_pts: None,
                     last_frame_pts: None,
                     last_written_dts: None,
@@ -1493,6 +1502,12 @@ impl H264Output {
             "Video encode",
         )? {
             self.packet.set_stream(self.stream_index);
+            // Encoders leave this at 0, and the mp4 muxer then gives the last
+            // sample no duration, so the edit list ends one frame early and
+            // players discard the final frame.
+            if self.packet.duration() <= 0 {
+                self.packet.set_duration(self.frame_duration);
+            }
             self.packet.rescale_ts(
                 self.encoder.time_base(),
                 output.stream(self.stream_index).unwrap().time_base(),
@@ -2109,6 +2124,32 @@ mod tests {
             .count()
     }
 
+    fn decoded_video_frames(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut frames = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    frames += 1;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            frames += 1;
+        }
+        frames
+    }
+
     fn decoded_audio_seconds(path: &Path) -> f64 {
         let mut input = avformat::input(path).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
@@ -2156,6 +2197,9 @@ mod tests {
         assert!(sample_rate.is_some());
         assert_eq!(count_video_packets(&source), 25);
         assert_eq!(count_video_packets(&output), 25);
+        assert_eq!(decoded_video_frames(&output), 25);
+        let duration = media_duration(&output).unwrap().as_secs_f64();
+        assert!((duration - 1.0).abs() < 0.01, "{duration}");
         let audio_seconds = decoded_audio_seconds(&audio);
         assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
         std::fs::remove_dir_all(root).unwrap();

@@ -1,0 +1,41 @@
+# cargo-nextest settings. The engine verification suite (scripts/verify/run.sh)
+# runs with the `default` profile locally and `ci` in engine-verify.yml.
+
+[profile.default]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s" }
+
+# The decoder model fuzzers run 3 to 4 worker threads each.
+[[profile.default.overrides]]
+filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
+threads-required = 3
+
+[profile.ci]
+# No retries: a flaky case is a bug. run.sh reruns failures once afterwards
+# only to label them flaky in the job summary; the job still fails.
+retries = 0
+fail-fast = false
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "pass"
+final-status-level = "slow"
+slow-timeout = { period = "60s", terminate-after = 15 }
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[[profile.ci.overrides]]
+filter = 'binary_id(cap-rendering) and test(/^decoder::model::/)'
+threads-required = 3
+
+
+# The FULL-tier seek storms (3000 seeks per decoder) are the slowest tests:
+# on the macos-15 runner one storm fixture takes 240 to 570 s per decoder,
+# up to about 900 s for both decoders on one shard. Twice that, so a real
+# hang still fails.
+[[profile.ci.overrides]]
+filter = 'binary_id(cap-verify::seek) and test(/^storm_/)'
+slow-timeout = { period = "60s", terminate-after = 30 }
