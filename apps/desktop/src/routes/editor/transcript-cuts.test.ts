@@ -621,6 +621,48 @@ describe("transcript cut padding", () => {
 		]);
 		expect(liveWords(p)).toEqual(["hello", "world", "again"]);
 	});
+
+	it("drops the pause between cut words once their padding takes the silence", () => {
+		const recs = recordings(10);
+		const p = project(
+			[
+				["hello", 1.0, 1.4],
+				["um", 1.6, 1.9],
+				["uh", 2.6, 2.8],
+				["world", 3.0, 3.4],
+			],
+			[clip(0, 10)],
+		);
+		const pauses = () =>
+			context(p, recs).items.flatMap((item) =>
+				item.type === "pause"
+					? [[Number(item.start.toFixed(6)), Number(item.end.toFixed(6))]]
+					: [],
+			);
+		cut(p, recs, "um");
+		cut(p, recs, "uh");
+		expect(pauses()).toEqual([
+			[0, 1],
+			[1.9, 2.6],
+		]);
+
+		commitTranscriptCutEdit(
+			p,
+			{
+				padding: [
+					{ id: cutRecord(p, "um").id, bufferStart: 0, bufferEnd: 0.3 },
+					{ id: cutRecord(p, "uh").id, bufferStart: 0.3, bufferEnd: 0 },
+				],
+			},
+			recs,
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.6],
+			[2.2, 2.3],
+			[2.8, 10],
+		]);
+		expect(pauses()).toEqual([[0, 1]]);
+	});
 });
 
 describe("transcript pauses", () => {
