@@ -1417,6 +1417,7 @@ pub fn open_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_finished(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
         handle
             .update(cx, |_, window, _| window.remove_window())
@@ -1436,6 +1437,7 @@ pub fn close_onboarding(cx: &mut App) {
 }
 
 pub fn onboarding_closed(cx: &mut App) {
+    crate::permission_guide::stop(cx);
     cx.global_mut::<AppWindows>().onboarding.take();
     crate::tray::refresh_menu(cx);
     if !crate::store::should_show_onboarding() {
@@ -2289,6 +2291,17 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         })
         .filter_map(|number| number.to_string().parse().ok())
         .collect()
+}
+
+/// The overlay's "Sign In To Use": close the picker and put the sign-in
+/// prompt on the main window, brought forward even when the picker was opened
+/// from the tray with the main window closed.
+pub fn show_instant_sign_in(kind: crate::main_window::TargetType, cx: &mut App) {
+    dismiss_target_overlays(cx);
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| view.show_sign_in_prompt(kind, cx))
+        .ok();
+    show_main_window(cx);
 }
 
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {

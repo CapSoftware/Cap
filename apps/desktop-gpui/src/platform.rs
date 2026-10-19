@@ -1388,6 +1388,222 @@ mod mac {
         rerun_occlusion_handler_after_show(&native.0);
     }
 
+    /// Start an AppKit file drag of `path` from the mouse-down being handled
+    /// right now (`NSApp.currentEvent`): what Finder hands System Settings,
+    /// which adds a dropped `.app` to a privacy list. Called from a gpui
+    /// mouse-down listener; the session runs from the event loop afterwards.
+    pub fn begin_file_drag(window: &Window, path: &std::path::Path) -> bool {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+        let Some(ns) = ns_window(window) else {
+            return false;
+        };
+        let source = file_drag_source();
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let event: *mut AnyObject = msg_send![app, currentEvent];
+            let view: *mut AnyObject = msg_send![&*ns, contentView];
+            if event.is_null() || view.is_null() || source.is_null() {
+                return false;
+            }
+            let path = NSString::from_str(&path.to_string_lossy());
+            let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*path];
+            if url.is_null() {
+                return false;
+            }
+            let item: *mut AnyObject = msg_send![class!(NSDraggingItem), alloc];
+            let item: *mut AnyObject = msg_send![item, initWithPasteboardWriter: url];
+            if item.is_null() {
+                return false;
+            }
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*path];
+            let _: () = msg_send![icon, setSize: NSSize::new(64., 64.)];
+            let location: NSPoint = msg_send![event, locationInWindow];
+            let point: NSPoint = msg_send![view, convertPoint: location, fromView: std::ptr::null_mut::<AnyObject>()];
+            let frame = NSRect::new(
+                NSPoint::new(point.x - 32., point.y - 32.),
+                NSSize::new(64., 64.),
+            );
+            let _: () = msg_send![item, setDraggingFrame: frame, contents: icon];
+            let items: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: item];
+            let _: () = msg_send![item, release];
+            let session: *mut AnyObject = msg_send![
+                view,
+                beginDraggingSessionWithItems: items,
+                event: event,
+                source: source
+            ];
+            if session.is_null() {
+                return false;
+            }
+            let _: () = msg_send![session, setAnimatesToStartingPositionsOnCancelOrFail: true];
+            true
+        }
+    }
+
+    /// The `NSDraggingSource` for [`begin_file_drag`]: copy/link/generic when
+    /// the drag leaves the app, nothing inside it. One instance, never freed.
+    fn file_drag_source() -> *mut AnyObject {
+        use std::sync::OnceLock;
+
+        use objc2::runtime::{AnyProtocol, ClassBuilder, NSObject};
+        use objc2::{ClassType, msg_send, sel};
+
+        unsafe extern "C" fn operation_mask(
+            _receiver: *mut AnyObject,
+            _selector: Sel,
+            _session: *mut AnyObject,
+            context: isize,
+        ) -> usize {
+            const OUTSIDE_APPLICATION: isize = 0;
+            const COPY_LINK_GENERIC: usize = 1 | 2 | 4;
+            if context == OUTSIDE_APPLICATION {
+                COPY_LINK_GENERIC
+            } else {
+                0
+            }
+        }
+
+        static SOURCE: OnceLock<usize> = OnceLock::new();
+        *SOURCE.get_or_init(|| {
+            let Some(mut builder) = ClassBuilder::new("CapFileDragSource", NSObject::class())
+            else {
+                return 0;
+            };
+            unsafe {
+                builder.add_method(
+                    sel!(draggingSession:sourceOperationMaskForDraggingContext:),
+                    operation_mask
+                        as unsafe extern "C" fn(
+                            *mut AnyObject,
+                            Sel,
+                            *mut AnyObject,
+                            isize,
+                        ) -> usize,
+                );
+            }
+            if let Some(protocol) = AnyProtocol::get("NSDraggingSource") {
+                builder.add_protocol(protocol);
+            }
+            let class = builder.register();
+            let instance: *mut AnyObject = unsafe { msg_send![class, new] };
+            instance as usize
+        }) as *mut AnyObject
+    }
+
+    /// System Settings' main window in CoreGraphics coordinates (global,
+    /// top-left origin) -- bounds and owner pid are readable without Screen
+    /// Recording, titles are not, so the window is found by pid and size.
+    pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+        use core_foundation::array::{CFArray, CFArrayRef};
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::{CFString, CFStringRef};
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+            static kCGWindowOwnerPID: CFStringRef;
+            static kCGWindowLayer: CFStringRef;
+            static kCGWindowBounds: CFStringRef;
+        }
+        const ON_SCREEN_ONLY: u32 = 1 << 0;
+        const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+
+        let pid: i32 = unsafe {
+            let bundle = NSString::from_str("com.apple.systempreferences");
+            let apps: *mut AnyObject = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationsWithBundleIdentifier: &*bundle
+            ];
+            if apps.is_null() {
+                return None;
+            }
+            let app: *mut AnyObject = msg_send![apps, firstObject];
+            if app.is_null() {
+                return None;
+            }
+            msg_send![app, processIdentifier]
+        };
+
+        let list = unsafe {
+            let raw = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS, 0);
+            if raw.is_null() {
+                return None;
+            }
+            CFArray::<CFDictionary<CFString, CFType>>::wrap_under_create_rule(raw)
+        };
+        let number = |dict: &CFDictionary<CFString, CFType>, key: &CFString| -> Option<f64> {
+            dict.find(key)?.downcast::<CFNumber>()?.to_f64()
+        };
+        let (owner_key, layer_key, bounds_key) = unsafe {
+            (
+                CFString::wrap_under_get_rule(kCGWindowOwnerPID),
+                CFString::wrap_under_get_rule(kCGWindowLayer),
+                CFString::wrap_under_get_rule(kCGWindowBounds),
+            )
+        };
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        for window in list.iter() {
+            if number(&window, &owner_key) != Some(pid as f64)
+                || number(&window, &layer_key) != Some(0.)
+            {
+                continue;
+            }
+            let Some(bounds) = window
+                .find(&bounds_key)
+                .and_then(|value| value.downcast::<CFDictionary>())
+            else {
+                continue;
+            };
+            let bounds: CFDictionary<CFString, CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
+            let field = |name: &'static str| number(&bounds, &CFString::from_static_string(name));
+            let (Some(x), Some(y), Some(w), Some(h)) =
+                (field("X"), field("Y"), field("Width"), field("Height"))
+            else {
+                continue;
+            };
+            if w < 320. || h < 240. {
+                continue;
+            }
+            if best.is_none_or(|(_, _, bw, bh)| w * h > bw * bh) {
+                best = Some((x, y, w, h));
+            }
+        }
+        best
+    }
+
+    /// Whether the user is in System Settings or one of the authentication
+    /// sheets a privacy-list change raises.
+    pub fn system_settings_frontmost() -> bool {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+            if app.is_null() {
+                return false;
+            }
+            let bundle: *mut NSString = msg_send![app, bundleIdentifier];
+            let Some(bundle) = bundle.as_ref() else {
+                return false;
+            };
+            matches!(
+                bundle.to_string().as_str(),
+                "com.apple.systempreferences"
+                    | "com.apple.SecurityAgent"
+                    | "com.apple.LocalAuthentication.UIAgent"
+            )
+        }
+    }
+
     /// Close the window the way the red traffic light does: ask the
     /// delegate's `windowShouldClose:` (gpui's `on_window_should_close`,
     /// where every window's close bookkeeping lives), then `close`.
@@ -1712,6 +1928,19 @@ mod mac {
     /// window. A plain getter, so it is safe inside a gpui update.
     pub fn window_is_visible(window: &Window) -> bool {
         ns_window(window).is_some_and(|ns| ns.isVisible())
+    }
+
+    /// Whether the window has a close button (`NSWindowStyleMaskClosable`):
+    /// the windows ⌘W may close. gpui only sets it with a titlebar, so the
+    /// main window, camera bubble, controls bar and target overlays never
+    /// have it. A plain getter, so it is safe inside a gpui update.
+    pub fn window_is_closable(window: &Window) -> bool {
+        use objc2::msg_send;
+        const CLOSABLE: usize = 1 << 1;
+        ns_window(window).is_some_and(|ns| {
+            let mask: usize = unsafe { msg_send![&*ns, styleMask] };
+            mask & CLOSABLE != 0
+        })
     }
 
     /// Show without stealing key status -- `orderFrontRegardless`, what the
@@ -2401,6 +2630,15 @@ mod stub {
         let _ = conn.flush();
     }
     pub fn hide_native(_native: &NativeWindow) {}
+    pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
+        false
+    }
+    pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+        None
+    }
+    pub fn system_settings_frontmost() -> bool {
+        false
+    }
     pub fn show_native(_native: &NativeWindow) {}
 
     #[cfg(target_os = "linux")]
@@ -2470,6 +2708,9 @@ mod stub {
     pub fn zoom_native(_native: &NativeWindow) {}
     pub fn toggle_fullscreen_native(_native: &NativeWindow) {}
     pub fn window_is_visible(_window: &Window) -> bool {
+        false
+    }
+    pub fn window_is_closable(_window: &Window) -> bool {
         false
     }
     pub fn show_window_without_focus(_window: &Window) {}
