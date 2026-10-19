@@ -101,29 +101,41 @@ jobs:
           import ScreenCaptureKit
           import UniformTypeIdentifiers
 
+          // sckshot <out.png>: the display, plus one PNG per window of interest
+          // (<out>-<bundle>-<n>.png). Window captures show the window's own pixels even
+          // when the session is locked.
           let out = CommandLine.arguments[1]
+          let interesting = ["so.cap", "com.apple.UserNotificationCenter", "com.apple.systempreferences", "com.apple.Settings", "ffplay"]
+
+          func save(_ image: CGImage, _ path: String) {
+              guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
+              CGImageDestinationAddImage(dest, image, nil)
+              CGImageDestinationFinalize(dest)
+              print("sckshot: saved \(path)")
+          }
+
           Task {
               do {
                   let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                  guard let display = content.displays.first else {
-                      print("sckshot: no display")
-                      exit(2)
-                  }
-                  for window in content.windows where window.isOnScreen && window.frame.width > 50 {
-                      print("window: \(window.owningApplication?.bundleIdentifier ?? "?") '\(window.title ?? "")' \(window.frame) layer \(window.windowLayer)")
-                  }
-                  let filter = SCContentFilter(display: display, excludingWindows: [])
+                  guard let display = content.displays.first else { print("sckshot: no display"); exit(2) }
                   let config = SCStreamConfiguration()
                   config.width = display.width
                   config.height = display.height
-                  let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                  guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, UTType.png.identifier as CFString, 1, nil) else {
-                      print("sckshot: cannot write \(out)")
-                      exit(3)
+                  let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
+                  save(image, out)
+                  var index = 0
+                  for window in content.windows where window.isOnScreen && window.frame.width > 50 {
+                      let owner = window.owningApplication?.bundleIdentifier ?? ""
+                      let title = window.title ?? ""
+                      print("window: \(owner) '\(title)' \(window.frame) layer \(window.windowLayer)")
+                      guard interesting.contains(where: { owner.hasPrefix($0) || title.lowercased().contains($0) }) else { continue }
+                      let wconfig = SCStreamConfiguration()
+                      wconfig.width = Int(window.frame.width)
+                      wconfig.height = Int(window.frame.height)
+                      let shot = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: wconfig)
+                      index += 1
+                      save(shot, out.replacingOccurrences(of: ".png", with: "-\(owner.isEmpty ? "window" : owner)-\(index).png"))
                   }
-                  CGImageDestinationAddImage(dest, image, nil)
-                  CGImageDestinationFinalize(dest)
-                  print("sckshot: saved \(out)")
                   exit(0)
               } catch {
                   print("sckshot: \(error)")
