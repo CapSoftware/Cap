@@ -588,6 +588,9 @@ pub struct PanelBehavior {
 pub use mac::*;
 
 #[cfg(target_os = "macos")]
+mod macos_exception_guard;
+
+#[cfg(target_os = "macos")]
 mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
@@ -613,6 +616,11 @@ mod mac {
                 .get()
                 .is_some_and(|requests| requests.request()),
         )
+    }
+
+    /// Must run on the main thread before the run loop starts.
+    pub fn install_appkit_exception_guards() {
+        super::macos_exception_guard::install();
     }
 
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
