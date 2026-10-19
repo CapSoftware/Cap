@@ -14,8 +14,14 @@ use crate::{
     permissions_ui::{PermissionsState, RowAction},
     store,
     theme::Theme,
-    ui,
 };
+
+#[cfg(target_os = "windows")]
+use crate::ui;
+
+mod stage;
+
+pub use stage::Paper;
 
 pub const ONBOARDING_WIDTH: f32 = 860.;
 pub const ONBOARDING_HEIGHT: f32 = 690.;
@@ -24,11 +30,6 @@ pub const ONBOARDING_HEADER_HEIGHT: f32 = 36.;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REQUEST_GRACE: Duration = Duration::from_secs(2);
 const WELCOME_EXIT: Duration = Duration::from_millis(600);
-const CARD_W: f32 = 440.;
-const ROW_PAD_X: f32 = 16.;
-const ROW_GAP: f32 = 16.;
-const ROW_ACTION_W: f32 = 112.;
-const ROW_TEXT_W: f32 = CARD_W - 2. * ROW_PAD_X - ROW_GAP - ROW_ACTION_W;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
@@ -41,6 +42,10 @@ enum Step {
     Toggle,
     Shortcuts,
     Faq,
+}
+
+fn guided_permission(permission: OSPermission) -> bool {
+    permission.required() && crate::permission_guide::eligible(permission)
 }
 
 impl Step {
@@ -174,6 +179,7 @@ pub struct OnboardingWindow {
     permissions_only: bool,
     state: PermissionsState,
     pending: Option<OSPermission>,
+    media_request_pending: bool,
     poll: Option<gpui::Task<()>>,
     verify: Option<gpui::Task<()>>,
     refresh: Option<gpui::Task<()>>,
@@ -193,6 +199,8 @@ pub struct OnboardingWindow {
     faq_open: [bool; FAQ.len()],
     error: Option<String>,
     focus: FocusHandle,
+    stage: stage::StageState,
+    step_at: std::time::Instant,
 }
 
 impl OnboardingWindow {
@@ -212,6 +220,7 @@ impl OnboardingWindow {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         crate::theme::bind_window(window, cx);
+        let granted = std::array::from_fn(|i| state.status(OSPermission::ALL[i]).permitted());
         let mut this = Self {
             theme: Theme::for_window(window, cx, true),
             step: first_step,
@@ -219,6 +228,7 @@ impl OnboardingWindow {
             permissions_only,
             state,
             pending: None,
+            media_request_pending: false,
             poll: None,
             verify: None,
             refresh: None,
@@ -238,6 +248,8 @@ impl OnboardingWindow {
             faq_open: [false; FAQ.len()],
             error: None,
             focus: cx.focus_handle(),
+            stage: stage::StageState::new(granted),
+            step_at: std::time::Instant::now(),
         };
         cx.observe_window_activation(window, |this: &mut Self, window, cx| {
             this.animated = window.is_window_active();
@@ -256,6 +268,16 @@ impl OnboardingWindow {
             cx.notify();
         })
         .detach();
+        #[cfg(debug_assertions)]
+        if !this.welcome
+            && !this.permissions_only
+            && let Ok(name) = std::env::var("CAP_GPUI_ONBOARDING_STEP")
+            && let Some(step) = Step::ALL
+                .into_iter()
+                .find(|step| format!("{step:?}").eq_ignore_ascii_case(&name))
+        {
+            this.step = step;
+        }
         this.arm_poll(window, cx);
         this.arm_demo(window, cx);
         this
@@ -303,6 +325,11 @@ impl OnboardingWindow {
                         }
                         if this.state.apply_raw(raw) {
                             this.grants_changed();
+                            cx.notify();
+                        }
+                        let media_request_pending = permissions::media_request_pending();
+                        if media_request_pending != this.media_request_pending {
+                            this.media_request_pending = media_request_pending;
                             cx.notify();
                         }
                         this.state.all_shown_granted()
@@ -374,6 +401,12 @@ impl OnboardingWindow {
         self.refresh = None;
         self.demo_task = None;
         self.audio = None;
+        // A Screen Recording grant made in this session only takes effect in a
+        // new process, however onboarding was left (Skip the tour included).
+        if self.needs_relaunch() {
+            permissions::relaunch(cx);
+            return;
+        }
         cx.defer(crate::app_windows::onboarding_finished);
     }
 
@@ -392,6 +425,7 @@ impl OnboardingWindow {
             this.update_in(cx, |this, window, cx| {
                 this.welcome = false;
                 this.welcome_exiting = false;
+                this.step_at = std::time::Instant::now();
                 this.audio = None;
                 this.step_revision = this.step_revision.wrapping_add(1);
                 this.focus_root(window, cx);
@@ -417,6 +451,7 @@ impl OnboardingWindow {
             -1.
         };
         self.step = step;
+        self.step_at = std::time::Instant::now();
         self.step_revision = self.step_revision.wrapping_add(1);
         self.poll = None;
         self.verify = None;
@@ -437,6 +472,10 @@ impl OnboardingWindow {
 
     fn next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.welcome || (self.step == Step::Permissions && !self.state.necessary_granted()) {
+            return;
+        }
+        if self.step == Step::Permissions && self.needs_relaunch() {
+            permissions::relaunch(cx);
             return;
         }
         if self.permissions_only || self.step == Step::Faq {
@@ -560,6 +599,7 @@ impl OnboardingWindow {
             return;
         }
         self.pending = Some(permission);
+        self.stage.waiting_on = Some(permission);
         self.verify = Some(cx.spawn_in(window, async move |this, cx| {
             let raw = cx
                 .background_executor()
@@ -575,6 +615,15 @@ impl OnboardingWindow {
                     match action {
                         None => {
                             this.pending = None;
+                            cx.notify();
+                            false
+                        }
+                        Some(RowAction::OpenSettings) if guided_permission(permission) => {
+                            this.pending = None;
+                            this.state.note_settings_opened(permission);
+                            permissions::open_permission_settings(permission);
+                            cx.defer(move |cx| crate::permission_guide::start(permission, cx));
+                            this.arm_poll(window, cx);
                             cx.notify();
                             false
                         }
@@ -609,8 +658,17 @@ impl OnboardingWindow {
                 }
                 this.state.apply_raw(raw);
                 this.pending = None;
+                this.media_request_pending = permissions::media_request_pending();
                 if permission.required() && !this.state.status(permission).permitted() {
                     this.state.note_request_failed(permission);
+                    // The request has added Cap to the pane's list (the way
+                    // the Tauri app always asked first); if the alert did not
+                    // end in a grant, the pane opens with the drag guide.
+                    if guided_permission(permission) {
+                        this.state.note_settings_opened(permission);
+                        permissions::open_permission_settings(permission);
+                        cx.defer(move |cx| crate::permission_guide::start(permission, cx));
+                    }
                 }
                 if this.state.all_shown_granted() {
                     this.poll = None;
@@ -637,125 +695,13 @@ impl OnboardingWindow {
             )
         }
     }
+}
 
-    fn render_permission_row(
-        &self,
-        permission: OSPermission,
-        status: OSPermissionStatus,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let (success_bg, success_border, success_fg) = self.success_palette();
-        let granted = status == OSPermissionStatus::Granted;
-        let busy = self.pending.is_some();
-
-        let action: gpui::AnyElement = if granted {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .px(px(12.))
-                .h(px(28.))
-                .rounded(px(8.))
-                .bg(success_bg)
-                .border_1()
-                .border_color(success_border)
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(success_fg)
-                .child(
-                    svg()
-                        .path("icons/check.svg")
-                        .size(px(12.))
-                        .text_color(success_fg),
-                )
-                .child("Granted")
-                .into_any_element()
-        } else {
-            let label = match self.state.action(permission) {
-                Some(RowAction::OpenSettings) => "Open Settings",
-                _ => "Grant",
-            };
-            ui::Button::plain(
-                &theme,
-                SharedString::from(format!("perm-action-{}", permission.label())),
-                ui::ButtonVariant::Gray,
-                ui::ButtonSize::Sm,
-            )
-            .radius(px(8.))
-            .label(label)
-            .disabled(busy)
-            .on_click(cx.listener(move |this, _, window, cx| this.act(permission, window, cx)))
-            .into_any_element()
-        };
-
-        div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(ROW_GAP))
-            .w(px(CARD_W))
-            .px(px(ROW_PAD_X))
-            .py(px(12.))
-            .rounded(px(12.))
-            .border_1()
-            .border_color(theme.body_border(4))
-            .bg(if theme.is_dark() {
-                theme.body_fill(2)
-            } else {
-                gpui::white()
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_none()
-                    .w(px(ROW_TEXT_W))
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_12))
-                                    .child(permission.label()),
-                            )
-                            .when(!permission.required(), |this| {
-                                this.child(
-                                    div()
-                                        .text_size(px(10.))
-                                        .px(px(6.))
-                                        .py(px(2.))
-                                        .rounded_full()
-                                        .bg(Hsla::from(theme.gray_3))
-                                        .text_color(Hsla::from(theme.gray_10))
-                                        .child("Optional"),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .line_height(px(15.))
-                            .text_color(Hsla::from(theme.gray_10))
-                            .child(permission.blurb()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .w(px(ROW_ACTION_W))
-                    .justify_end()
-                    .child(action),
-            )
+fn mode_doodle(mode: Mode) -> &'static crate::doodle::Doodle {
+    match mode {
+        Mode::Instant => &crate::onboarding_doodles::UPLOAD,
+        Mode::Studio => &crate::onboarding_doodles::TRACKS,
+        Mode::Screenshot => &crate::onboarding_doodles::SNAP,
     }
 }
 
@@ -798,37 +744,42 @@ impl OnboardingWindow {
             })
     }
 
-    fn heading(
-        &self,
-        title: &'static str,
-        subtitle: &'static str,
-        icon: Option<&'static str>,
-    ) -> Div {
-        let theme = self.theme;
+    fn paper_card(&self) -> Div {
+        let paper = stage::Paper::new(&self.theme);
+        div()
+            .rounded(px(20.))
+            .border(px(1.5))
+            .border_color(paper.track)
+            .bg(paper.card)
+    }
+
+    fn heading(&self, title: &'static str, subtitle: &'static str) -> Div {
+        let paper = stage::Paper::new(&self.theme);
         div()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(12.))
-            .max_w(px(480.))
+            .max_w(px(500.))
             .text_center()
-            .when_some(icon, |el, path| {
-                el.child(
-                    self.card()
-                        .size(px(48.))
-                        .rounded(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(glyph(path, 20., theme.gray_11)),
-                )
-            })
             .child(
-                copy(title, 24., theme.gray_12)
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(px(30.)),
+                copy(title, 28., paper.ink)
+                    .font_weight(FontWeight::MEDIUM)
+                    .line_height(px(34.)),
             )
-            .child(copy(subtitle, 14., theme.gray_10).line_height(px(21.)))
+            .child(div().mt(px(4.)).child(crate::doodle::doodle(
+                &crate::onboarding_doodles::UNDERLINE,
+                paper.palette(),
+                self.step_at,
+                !self.animated,
+                132.,
+                12.,
+            )))
+            .child(
+                copy(subtitle, 15., paper.soft)
+                    .mt(px(10.))
+                    .font_weight(FontWeight::NORMAL)
+                    .line_height(px(22.)),
+            )
     }
 
     fn ambient(&self, width: f32, height: f32, welcome: bool) -> AnyElement {
@@ -976,6 +927,25 @@ impl OnboardingWindow {
         let button_text = glass
             .map(|material| Hsla::from(material.text))
             .unwrap_or_else(|| rgb(0x161b26).into());
+        // The hint under the label tracks the label: on the Liquid Glass
+        // control that text is light, so the white button's navy would vanish.
+        let hint_text = button_text.opacity(0.58);
+        let (kbd_text, kbd_border, kbd_fill) = match glass {
+            Some(_) => (
+                button_text,
+                button_text.opacity(0.3),
+                gpui::transparent_black(),
+            ),
+            None => (
+                Hsla::from(theme.gray_11),
+                Hsla::from(theme.gray_6),
+                if theme.is_dark() {
+                    Hsla::from(theme.body_fill(3))
+                } else {
+                    gpui::white()
+                },
+            ),
+        };
         let logo = img("onboarding/logo.svg")
             .w(px(80.))
             .h(px(96.))
@@ -1067,24 +1037,20 @@ impl OnboardingWindow {
                             .justify_center()
                             .gap(px(4.))
                             .child(
-                                copy("Click here, or press", 11., rgba(0x161b2694))
+                                copy("Click here, or press", 11., hint_text)
                                     .font_weight(FontWeight::NORMAL)
                                     .line_height(px(14.)),
                             )
                             .child(
-                                copy("Space", 10., theme.gray_11)
+                                copy("Space", 10., kbd_text)
                                     .font_weight(FontWeight::MEDIUM)
                                     .line_height(px(14.))
                                     .px(px(4.))
                                     .py(px(1.))
                                     .rounded(px(3.))
                                     .border_1()
-                                    .border_color(theme.gray_6)
-                                    .bg(if theme.is_dark() {
-                                        theme.body_fill(3)
-                                    } else {
-                                        gpui::white()
-                                    }),
+                                    .border_color(kbd_border)
+                                    .bg(kbd_fill),
                             ),
                     ),
             )
@@ -1131,77 +1097,16 @@ impl OnboardingWindow {
         }
     }
 
-    fn render_permissions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .min_h_full()
-            .px(px(48.))
-            .py(px(24.))
-            .gap(px(24.))
-            .child(self.heading(
-                "Permissions Required",
-                "Cap needs a few permissions to record your screen and capture audio.",
-                Some("icons/shield.svg"),
-            ))
-            .child(div().flex().flex_col().w(px(CARD_W)).gap(px(8.)).children(
-                self.state.shown().map(|(permission, status)| {
-                    self.render_permission_row(permission, status, cx)
-                        .into_any_element()
-                }),
-            ))
-            .when(self.state.relaunch_hint(), |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .w(px(CARD_W))
-                        .p(px(12.))
-                        .rounded(px(12.))
-                        .bg(theme.amber_3)
-                        .border_1()
-                        .border_color(theme.amber_6)
-                        .child(glyph("icons/triangle-alert.svg", 16., theme.amber_11))
-                        .child(
-                            copy(
-                                "Granted it in System Settings? Relaunch Cap to apply.",
-                                11.,
-                                theme.amber_11,
-                            )
-                            .flex_1()
-                            .min_w_0(),
-                        )
-                        .child(
-                            ui::Button::plain(
-                                &theme,
-                                "perm-relaunch",
-                                ui::ButtonVariant::White,
-                                ui::ButtonSize::Sm,
-                            )
-                            .radius(px(8.))
-                            .icon("icons/rotate-ccw.svg")
-                            .label("Relaunch Cap")
-                            .on_click(cx.listener(|_, _, _, cx| permissions::relaunch(cx))),
-                        ),
-                )
-            })
-            .into_any_element()
-    }
-
     fn render_overview(&self) -> AnyElement {
         let theme = self.theme;
         div().flex().flex_col().items_center().justify_center().min_h_full().px(px(40.)).gap(px(32.))
-            .child(self.heading("One app, every workflow", "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it.", None))
+            .child(self.heading("One app, every workflow", "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it."))
             .child(div().flex().gap(px(16.)).w_full().max_w(px(540.)).children(MODES.iter().enumerate().map(|(index, mode)| {
-                let card = self.card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(12.)).p(px(20.)).rounded(px(16.))
-                    .child(self.card().size(px(48.)).rounded(px(16.)).flex().items_center().justify_center()
-                        .child(glyph(mode.icon, 20., theme.gray_12)))
-                    .child(copy(mode.title, 14., theme.gray_12).font_weight(FontWeight::BOLD).text_center())
-                    .child(copy(mode.tagline, 11., theme.gray_9).line_height(px(15.)).text_center());
+                let paper = stage::Paper::new(&theme);
+                let card = self.paper_card().flex_1().min_w_0().flex().flex_col().items_center().gap(px(10.)).px(px(20.)).pt(px(22.)).pb(px(24.))
+                    .child(crate::doodle::doodle(mode_doodle(mode.mode), paper.palette(), self.step_at + Duration::from_millis(index as u64 * 180), !self.animated, 96., 84.))
+                    .child(copy(mode.title, 15., paper.ink).font_weight(FontWeight::MEDIUM).text_center().mt(px(4.)))
+                    .child(copy(mode.tagline, 12., paper.soft).font_weight(FontWeight::NORMAL).line_height(px(16.)).text_center());
                 if !self.animated { return card.into_any_element(); }
                 card.with_animation(("overview-card", index), Animation::new(Duration::from_millis(700 + index as u64 * 100)),
                         |el, t| el.relative().top(px(16. * (1. - ease(t)))).opacity(ease(t))).into_any_element()
@@ -1209,7 +1114,7 @@ impl OnboardingWindow {
     }
 
     fn render_detail(&self, index: usize) -> AnyElement {
-        let theme = self.theme;
+        let paper = stage::Paper::new(&self.theme);
         let mode = &MODES[index];
         div()
             .flex()
@@ -1230,54 +1135,56 @@ impl OnboardingWindow {
                             .flex()
                             .items_center()
                             .gap(px(12.))
-                            .child(
-                                self.card()
-                                    .size(px(44.))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(glyph(mode.icon, 20., theme.gray_12)),
-                            )
+                            .child(crate::doodle::doodle(
+                                mode_doodle(mode.mode),
+                                paper.palette(),
+                                self.step_at,
+                                !self.animated,
+                                58.,
+                                50.,
+                            ))
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
                                     .gap(px(3.))
                                     .child(
-                                        copy(mode.title, 18., theme.gray_12)
-                                            .font_weight(FontWeight::BOLD),
+                                        copy(mode.title, 20., paper.ink)
+                                            .font_weight(FontWeight::MEDIUM),
                                     )
                                     .child(
-                                        copy(mode.tagline, 11., theme.gray_9)
-                                            .font_weight(FontWeight::MEDIUM),
+                                        copy(mode.tagline, 12., paper.soft)
+                                            .font_weight(FontWeight::NORMAL),
                                     ),
                             ),
                     )
-                    .child(copy(mode.description, 13., theme.gray_10).line_height(px(20.)))
+                    .child(
+                        copy(mode.description, 13., paper.soft)
+                            .font_weight(FontWeight::NORMAL)
+                            .line_height(px(20.)),
+                    )
                     .child(div().flex().flex_col().gap(px(10.)).children(
-                        mode.features.iter().map(|feature| {
+                        mode.features.iter().enumerate().map(|(i, feature)| {
                             div()
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
+                                .child(crate::doodle::doodle(
+                                    &crate::onboarding_doodles::TICK,
+                                    paper.palette(),
+                                    self.step_at + Duration::from_millis(400 + i as u64 * 140),
+                                    !self.animated,
+                                    18.,
+                                    18.,
+                                ))
                                 .child(
-                                    div()
-                                        .size(px(20.))
-                                        .rounded_full()
-                                        .bg(theme.blue_9)
-                                        .flex_shrink_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(glyph("icons/check.svg", 10., gpui::white())),
+                                    copy(*feature, 13., paper.ink).font_weight(FontWeight::NORMAL),
                                 )
-                                .child(copy(*feature, 12., theme.gray_11))
                         }),
                     )),
             )
             .child(
-                self.card()
+                self.paper_card()
                     .flex_1()
                     .min_w_0()
                     .h(px(if index == 1 { 300. } else { 288. }))
@@ -1313,7 +1220,6 @@ impl OnboardingWindow {
             .child(self.heading(
                 "Switch modes anytime",
                 "Toggle between modes with a single click from the main Cap window.",
-                None,
             ))
             .child(
                 div()
@@ -1322,7 +1228,7 @@ impl OnboardingWindow {
                     .items_center()
                     .gap(px(20.))
                     .child(
-                        self.card()
+                        self.paper_card()
                             .rounded_full()
                             .flex()
                             .gap(px(24.))
@@ -1392,14 +1298,14 @@ impl OnboardingWindow {
     fn render_shortcuts(&self) -> AnyElement {
         let theme = self.theme;
         div().flex().flex_col().items_center().justify_center().min_h_full().px(px(48.)).gap(px(24.))
-            .child(self.heading("Make Cap yours", "Customize everything from keyboard shortcuts to storage. Cap adapts to your workflow.", Some("icons/settings.svg")))
+            .child(self.heading("Make Cap yours", "Customize everything from keyboard shortcuts to storage. Cap adapts to your workflow."))
             .child(div().flex().flex_col().w_full().max_w(px(420.)).gap(px(8.)).children([
                 ("Keyboard Shortcuts", "Global hotkeys for recording, screenshots, and switching modes"),
                 ("Custom S3 Storage", "Connect your own S3-compatible bucket for full control over your recordings"),
                 ("Custom Domain", "Use your own domain for shareable links instead of cap.so"),
                 ("Recording Preferences", "FPS, quality, countdown timer, cursor effects, and more"),
             ].into_iter().map(|(title, description)| {
-                self.card().px(px(16.)).py(px(12.)).flex().flex_col().gap(px(4.))
+                self.paper_card().rounded(px(16.)).px(px(18.)).py(px(13.)).flex().flex_col().gap(px(4.))
                     .child(copy(title, 13., theme.gray_12).font_weight(FontWeight::MEDIUM))
                     .child(copy(description, 11., theme.gray_10).line_height(px(15.)))
             })))
@@ -1421,10 +1327,9 @@ impl OnboardingWindow {
             .child(self.heading(
                 "Frequently Asked Questions",
                 "Everything you need to know to get started.",
-                None,
             ))
             .child(
-                self.card()
+                self.paper_card()
                     .w_full()
                     .max_w(px(480.))
                     .overflow_hidden()
@@ -1496,7 +1401,7 @@ impl OnboardingWindow {
     }
 
     fn render_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
+        let paper = stage::Paper::new(&self.theme);
         let first = self.first_step as usize;
         let current = self.step as usize - first;
         let total = if self.permissions_only {
@@ -1506,7 +1411,10 @@ impl OnboardingWindow {
         };
         let disabled = self.step == Step::Permissions && !self.state.necessary_granted();
         let last = self.permissions_only || self.step == Step::Faq;
-        let label = if self.permissions_only {
+        let relaunch = self.step == Step::Permissions && !disabled && self.needs_relaunch();
+        let label = if relaunch {
+            "Relaunch Cap"
+        } else if self.permissions_only {
             "Continue to Cap"
         } else if last {
             "Start Using Cap"
@@ -1517,9 +1425,9 @@ impl OnboardingWindow {
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(8.))
-            .px(px(32.))
-            .pb(px(20.))
+            .gap(px(10.))
+            .px(px(36.))
+            .pb(px(18.))
             .pt(px(8.))
             .flex_shrink_0()
             .child(
@@ -1530,10 +1438,10 @@ impl OnboardingWindow {
                     .w_full()
                     .child(div().flex_1().when(current > 0, |el| {
                         el.child(
-                            copy("←  Back", 13., theme.gray_10)
+                            copy("←  Back", 13., paper.soft)
                                 .id("onboarding-back")
                                 .cursor_pointer()
-                                .hover(move |el| el.text_color(theme.gray_12))
+                                .hover(move |el| el.text_color(paper.ink))
                                 .on_click(cx.listener(|this, _, window, cx| this.back(window, cx))),
                         )
                     }))
@@ -1541,95 +1449,101 @@ impl OnboardingWindow {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.))
-                            .children((0..total).map(|index| {
-                                div()
-                                    .h(px(6.))
-                                    .w(px(if current == index { 20. } else { 6. }))
-                                    .rounded_full()
-                                    .bg(if current == index {
-                                        theme.gray_12
-                                    } else if current > index {
-                                        theme.gray_8
-                                    } else {
-                                        theme.gray_5
-                                    })
-                            })),
+                            .gap(px(5.))
+                            .when(total > 1, |el| {
+                                el.children((0..total).map(|index| {
+                                    div()
+                                        .h(px(6.))
+                                        .w(px(if current == index { 22. } else { 6. }))
+                                        .rounded_full()
+                                        .bg(if current == index {
+                                            paper.ink
+                                        } else if current > index {
+                                            paper.soft
+                                        } else {
+                                            paper.track
+                                        })
+                                }))
+                            }),
                     )
                     .child(
                         div().flex_1().flex().justify_end().child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(
-                                    div()
-                                        .id("onboarding-continue")
-                                        .tab_index(0)
-                                        .min_w(px(152.))
-                                        .min_h(px(48.))
-                                        .px(px(40.))
-                                        .py(px(12.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap(px(8.))
-                                        .bg(if disabled {
-                                            theme.gray_6
-                                        } else {
-                                            theme.gray_12
-                                        })
-                                        .text_color(if disabled {
-                                            theme.gray_9
-                                        } else {
-                                            theme.gray_1
-                                        })
-                                        .when(!disabled, |el| {
-                                            el.cursor_pointer().on_click(cx.listener(
-                                                |this, _, window, cx| this.next(window, cx),
-                                            ))
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(15.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .child(label),
+                            div().flex().flex_col().items_end().gap(px(8.)).child(
+                                div()
+                                    .id("onboarding-continue")
+                                    .tab_index(0)
+                                    .h(px(46.))
+                                    .px(px(26.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap(px(8.))
+                                    .border(px(1.5))
+                                    .border_color(if disabled { paper.track } else { paper.ink })
+                                    .bg(if disabled {
+                                        gpui::transparent_black()
+                                    } else {
+                                        paper.ink
+                                    })
+                                    .text_color(if disabled { paper.soft } else { paper.bg })
+                                    .when(!disabled, |el| {
+                                        el.cursor_pointer().hover(|el| el.opacity(0.88)).on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.next(window, cx)
+                                            }),
                                         )
-                                        .child(glyph(
-                                            if last {
-                                                "icons/check.svg"
-                                            } else {
-                                                "icons/move-right.svg"
-                                            },
-                                            16.,
-                                            if disabled { theme.gray_9 } else { theme.gray_1 },
-                                        )),
-                                )
-                                .when(
-                                    self.state.necessary_granted() && !self.permissions_only,
-                                    |el| {
-                                        el.child(
-                                            copy("Skip onboarding", 11., theme.gray_9)
-                                                .id("onboarding-skip")
-                                                .cursor_pointer()
-                                                .on_click(
-                                                    cx.listener(|this, _, _, cx| this.finish(cx)),
-                                                ),
-                                        )
-                                    },
-                                ),
+                                    })
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(label),
+                                    )
+                                    .child(glyph(
+                                        if relaunch {
+                                            "icons/rotate-ccw.svg"
+                                        } else if last {
+                                            "icons/check.svg"
+                                        } else {
+                                            "icons/move-right.svg"
+                                        },
+                                        15.,
+                                        if disabled { paper.soft } else { paper.bg },
+                                    )),
+                            ),
                         ),
                     ),
             )
-            .child(copy(
-                "Press Enter ↵ or use ← → arrow keys",
-                10.,
-                theme.gray_8,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(copy(
+                        if disabled {
+                            "Allow the required permissions to continue"
+                        } else {
+                            "Press Enter ↵ or use ← → arrow keys"
+                        },
+                        11.,
+                        paper.soft,
+                    ))
+                    .when(
+                        self.state.necessary_granted() && !self.permissions_only && !last,
+                        |el| {
+                            el.child(
+                                copy("Skip the tour", 11., paper.soft)
+                                    .id("onboarding-skip")
+                                    .cursor_pointer()
+                                    .hover(move |el| el.text_color(paper.ink))
+                                    .on_click(cx.listener(|this, _, _, cx| this.finish(cx))),
+                            )
+                        },
+                    ),
+            )
             .when_some(self.error.clone(), |el, error| {
-                el.child(copy(error, 12., theme.gray_12))
+                el.child(copy(error, 12., paper.red))
             })
             .into_any_element()
     }
@@ -2474,7 +2388,11 @@ impl OnboardingWindow {
 impl Render for OnboardingWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.theme = Theme::for_window(window, cx, true);
+        if self.permissions_visible() {
+            self.sync_stage(window, cx);
+        }
         let theme = self.theme;
+        let paper = stage::Paper::new(&theme);
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width);
         let height = (f32::from(viewport.height) - ONBOARDING_HEADER_HEIGHT).max(0.);
@@ -2509,9 +2427,11 @@ impl Render for OnboardingWindow {
             .flex()
             .items_center()
             .justify_between()
-            .bg(theme.header_bg())
-            .border_b_1()
-            .border_color(theme.header_border())
+            .bg(if self.welcome {
+                rgb(0x3b82f6).into()
+            } else {
+                paper.bg
+            })
             .window_control_area(gpui::WindowControlArea::Drag);
         #[cfg(target_os = "windows")]
         let header = header.justify_end().child(ui::windows_caption_controls(
@@ -2573,9 +2493,7 @@ impl Render for OnboardingWindow {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .when(!self.welcome, |el| {
-                        el.child(self.ambient(width, height, false))
-                    })
+                    .when(!self.welcome, |el| el.bg(paper.bg))
                     .when(!self.welcome, |el| {
                         el.child(
                             div()
