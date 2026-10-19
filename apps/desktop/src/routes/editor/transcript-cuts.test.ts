@@ -1524,6 +1524,36 @@ describe("exact restore", () => {
 		expect(spans(p.timeline?.zoomSegments)).toEqual([[2.5, 5.5]]);
 	});
 
+	it("restores a cut that another cut overlaps by a sliver on a sped-up clip", () => {
+		const recs = recordings(10);
+		const p = project(
+			[
+				["intro", 0.2, 0.6],
+				["outro", 9.2, 9.6],
+			],
+			[clip(0, 10, { timescale: 2 })],
+			{ zoomSegments: [zoom(1.75, 2.25)] },
+		);
+		commitTranscriptCutEdit(p, { add: [pause("second", 3, 5)] }, recs);
+		commitTranscriptCutEdit(p, { add: [pause("first", 2, 3.0015)] }, recs);
+		expect(clips(p)).toEqual([
+			[0, 2],
+			[5, 10],
+		]);
+
+		expect(restore(p, recs, "second")).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 2],
+			[3, 10],
+		]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[1.25, 1.75]]);
+		expect(p.captions?.transcriptRemoved).toEqual([{ start: 2, end: 3 }]);
+
+		expect(restore(p, recs, "first")).toBe("applied");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[1.75, 2.25]]);
+	});
+
 	it("returns a word cut across a speed change to the clips it came from", () => {
 		const recs = recordings(10);
 		const p = project(

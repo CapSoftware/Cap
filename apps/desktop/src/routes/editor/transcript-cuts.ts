@@ -1221,12 +1221,23 @@ export function applyTranscriptCutEdit(
 				coverage,
 				timelineSourceCoverage(timeline.segments, recordingSegments),
 			);
+			// What a cut leaves behind is measured on the timeline, as the cut
+			// itself skips ranges too short there to remove. In source time a
+			// sliver on a sped-up clip would count as a cut that failed.
+			const left = subtractSourceRanges(present, cutOut);
 			if (
-				sourceRangesDuration(subtractSourceRanges(present, cutOut)) >
-				MIN_TIMELINE_CUT
+				editedRangesForSource(
+					timeline,
+					left,
+					recordingSegments,
+					clipTimelineOffsets(timeline.segments, timeline.transitions ?? []),
+				).length > 0
 			)
 				return "failed";
-			nextRemoved = mergeSourceRanges([...nextRemoved, ...cutOut]);
+			nextRemoved = subtractSourceRanges(
+				mergeSourceRanges([...nextRemoved, ...cutOut]),
+				left,
+			);
 			for (const { owner, piece } of pieces) {
 				removedPieces.set(owner, [...(removedPieces.get(owner) ?? []), piece]);
 			}
