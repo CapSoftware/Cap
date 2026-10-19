@@ -1,0 +1,81 @@
+name: Scratch unlock probe
+
+# Can a Blacksmith macOS runner's locked GUI session be unlocked, so UI tests
+# can click real buttons and see real system prompts? Runs only on pushes to
+# this scratch branch.
+on:
+  push:
+    branches: [ci/unlock-probe]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-15, blacksmith-6vcpu-macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Session state
+        run: |
+          cat > "$RUNNER_TEMP/locked.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let s = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+          print("locked=\(s["CGSSessionScreenIsLocked"] as? Bool ?? false) onConsole=\(s["kCGSSessionOnConsoleKey"] as? Bool ?? false) user=\(s["kCGSSessionUserNameKey"] ?? "?")")
+          SWIFT
+          swiftc "$RUNNER_TEMP/locked.swift" -o "$RUNNER_TEMP/locked"
+          "$RUNNER_TEMP/locked"
+          sw_vers
+          whoami; id
+          defaults read /Library/Preferences/com.apple.loginwindow 2>/dev/null | head -20 || true
+          sudo ls -la /etc/kcpassword 2>/dev/null || echo "no kcpassword"
+          sysadminctl -screenLock status 2>&1 || true
+          pmset -g | head -20
+
+      - name: Try to unlock
+        run: |
+          set +e
+          cat > "$RUNNER_TEMP/type.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          // type <text>: synthetic key events, then Return.
+          let text = CommandLine.arguments[1]
+          let src = CGEventSource(stateID: .hidSystemState)
+          func key(_ code: CGKeyCode, _ down: Bool) { CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down)?.post(tap: .cghidEventTap) }
+          // wake / focus the password field
+          key(49, true); key(49, false); usleep(300_000)
+          for ch in text.utf16 {
+              var c = ch
+              let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true)!
+              e.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+              e.post(tap: .cghidEventTap)
+              let u = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)!
+              u.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+              u.post(tap: .cghidEventTap)
+              usleep(40_000)
+          }
+          key(36, true); key(36, false)
+          print("typed \(text.count) chars")
+          SWIFT
+          swiftc "$RUNNER_TEMP/type.swift" -o "$RUNNER_TEMP/type"
+
+          echo "== A: screensaver password off"
+          defaults -currentHost write com.apple.screensaver askForPassword -int 0
+          sudo defaults write /Library/Preferences/com.apple.screensaver askForPassword -int 0
+          caffeinate -u -t 2
+          sleep 2; "$RUNNER_TEMP/locked"
+
+          echo "== B: known password + synthetic keystrokes (user tool)"
+          sudo dscl . -passwd /Users/runner "CapCi-Unlock-1"
+          echo "dscl exit $?"
+          "$RUNNER_TEMP/type" "CapCi-Unlock-1"
+          sleep 4; "$RUNNER_TEMP/locked"
+
+          echo "== C: same as root"
+          sudo "$RUNNER_TEMP/type" "CapCi-Unlock-1"
+          sleep 4; "$RUNNER_TEMP/locked"
+
+          echo "== D: osascript keystroke"
+          osascript -e 'tell application "System Events" to keystroke "CapCi-Unlock-1"' -e 'tell application "System Events" to key code 36'
+          sleep 4; "$RUNNER_TEMP/locked"
