@@ -2003,6 +2003,97 @@ impl Message<Unlock> for CameraFeed {
     }
 }
 
+/// Test-only camera feeds driven by a synthetic device instead of hardware,
+/// so recording tests exercise the real feed, lock and pipeline paths.
+#[cfg(feature = "test-utils")]
+pub mod synthetic {
+    use super::*;
+
+    impl Message<crate::feeds::Stall> for CameraFeed {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            msg: crate::feeds::Stall,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            tokio::time::sleep(msg.0).await;
+        }
+    }
+
+    pub struct SyntheticCamera {
+        feed: ActorRef<CameraFeed>,
+        _done_rx: std::sync::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl SyntheticCamera {
+        pub fn spawn(name: &str, video_info: VideoInfo) -> Self {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let id = DeviceOrModelID::DeviceID(name.to_string());
+            let camera_info = serde_json::from_value(serde_json::json!({
+                "device_id": name,
+                "model_id": null,
+                "display_name": name
+            }))
+            .expect("synthetic camera info");
+            let attached = AttachedState::new(
+                id.clone(),
+                InputConnected {
+                    generation: 0,
+                    id,
+                    done_tx,
+                    camera_info,
+                    video_info,
+                    settings: None,
+                },
+            );
+            let feed = CameraFeed::spawn(CameraFeed {
+                state: State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(attached),
+                }),
+                ..CameraFeed::default()
+            });
+            Self {
+                feed,
+                _done_rx: std::sync::Mutex::new(done_rx),
+            }
+        }
+
+        pub async fn lock(&self) -> anyhow::Result<CameraFeedLock> {
+            self.feed
+                .ask(Lock)
+                .await
+                .map_err(|error| anyhow::anyhow!("synthetic camera lock: {error}"))
+        }
+
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
+        pub async fn push_native(&self, frame: NativeCameraFrame) {
+            let _ = self.feed.tell(NewNativeFrame(frame)).await;
+        }
+
+        /// Hands a frame over the way the macOS capture callback does
+        /// (`try_send`, never waiting for mailbox capacity).
+        pub fn try_push_native(&self, frame: NativeCameraFrame) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(NewNativeFrame(frame)).try_send())
+        }
+
+        /// Blocks the feed actor for `duration` (scripted slow consumer).
+        pub fn stall(&self, duration: Duration) -> crate::feeds::Admission {
+            crate::feeds::Admission::of(self.feed.tell(crate::feeds::Stall(duration)).try_send())
+        }
+
+        pub async fn push(&self, frame: FFmpegVideoFrame) {
+            let _ = self.feed.tell(NewFrame(frame)).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

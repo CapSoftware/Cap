@@ -378,18 +378,19 @@ pub(crate) fn build_clusters(
         .filter(|m| m.time_ms >= start_ms && m.time_ms <= end_ms)
         .collect();
 
+    let previous = moves_until_start
+        .iter()
+        .filter(finite)
+        .rev()
+        .find(|m| m.time_ms <= start_ms);
+
     if events_in_range.is_empty() {
-        let fallback = moves_until_start
-            .iter()
-            .filter(finite)
-            .rev()
-            .find(|m| m.time_ms <= start_ms)
-            .or_else(|| {
-                moves_from_start
-                    .iter()
-                    .filter(finite)
-                    .find(|m| m.time_ms >= start_ms)
-            });
+        let fallback = previous.or_else(|| {
+            moves_from_start
+                .iter()
+                .filter(finite)
+                .find(|m| m.time_ms >= start_ms)
+        });
 
         if let Some(evt) = fallback {
             let (x, y) = map_uv(evt.x, evt.y);
@@ -398,12 +399,16 @@ pub(crate) fn build_clusters(
         return vec![];
     }
 
+    let mut events = previous
+        .filter(|_| events_in_range[0].time_ms > start_ms)
+        .into_iter()
+        .chain(events_in_range);
     let mut clusters = Vec::new();
-    let first = events_in_range[0];
+    let first = events.next().unwrap();
     let (first_x, first_y) = map_uv(first.x, first.y);
     let mut current = ClickCluster::new(first_x, first_y, first.time_ms);
 
-    for evt in &events_in_range[1..] {
+    for evt in events {
         let (x, y) = map_uv(evt.x, evt.y);
         if current.can_add(x, y, cluster_w, cluster_h) {
             current.add(x, y, evt.time_ms);
@@ -765,7 +770,7 @@ impl ZoomTransformTimeline {
         };
         // One sample per step across the duration, plus one trailing sample so
         // a lookup right at the end always has a lerp partner.
-        let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
+        let total_samples = ((duration_secs * 1000.0 / STEP_MS).ceil() as usize).saturating_add(2);
         if zoom_segments.is_empty() {
             return Self {
                 samples: Vec::new(),
@@ -918,7 +923,9 @@ impl ZoomTransformTimeline {
         }
         let need_ms = (f64::from(timeline_secs).max(0.0)) * 1000.0;
         // +2: floor index plus its lerp partner.
-        let need_samples = ((need_ms / STEP_MS).ceil() as usize + 2).min(self.total_samples);
+        let need_samples = ((need_ms / STEP_MS).ceil() as usize)
+            .saturating_add(2)
+            .min(self.total_samples);
         while self.samples.len() < need_samples && self.state.is_some() {
             self.advance_one_step();
         }
@@ -1834,6 +1841,65 @@ mod tests {
             -zoom.bounds.top_left.y / amount,
             1.0 / amount,
         )
+    }
+
+    #[test]
+    fn auto_zoom_uses_position_at_segment_start_over_earlier_movement() {
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.9, 0.9),
+                move_event(2000.0, 0.1, 0.1),
+                move_event(6000.0, 0.9, 0.9),
+            ],
+            clicks: Vec::new(),
+        };
+        for ordered in [false, true] {
+            let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
+            assert_eq!(cluster_center_at_time(&clusters, 2000.0), Some((0.1, 0.1)));
+        }
+    }
+
+    #[test]
+    fn auto_zoom_keeps_idle_cursor_visible_until_movement_resumes() {
+        for (recording_start, timescale) in [(0.0, 1.0), (10.0, 2.0)] {
+            let segment = auto_segment(2.0, 10.0, 2.0);
+            let mut project = project_with_crop_styles(vec![segment], Vec::new());
+            project.timeline.as_mut().unwrap().segments = vec![TimelineSegment {
+                recording_clip: 0,
+                start: recording_start,
+                end: recording_start + 12.0 * timescale,
+                timescale,
+                name: None,
+                speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
+            }];
+            let cursor = CursorEvents {
+                moves: vec![
+                    move_event(recording_start * 1000.0, 0.1, 0.1),
+                    move_event((recording_start + 6.0 * timescale) * 1000.0, 0.9, 0.9),
+                ],
+                clicks: Vec::new(),
+            };
+            let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                &project,
+                &cursor,
+                12.0,
+                XY::new(1920, 1080),
+                0,
+            );
+            timeline.precompute();
+
+            for (time, position) in [(4.0, 0.1), (8.0, 0.9)] {
+                let zoom = timeline.sample(time);
+                let (left, top, size) = visible_viewport(&zoom);
+                assert!(
+                    (left..=left + size).contains(&position)
+                        && (top..=top + size).contains(&position),
+                    "cursor {position} outside viewport at {time}s: {zoom:?}, source start={recording_start}, speed={timescale}"
+                );
+            }
+        }
     }
 
     #[test]
