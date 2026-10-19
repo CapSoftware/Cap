@@ -152,6 +152,7 @@ jobs:
           sudo killall tccd || true
           sleep 2
           ./target/abperf/cap targets --json | tee "$RUNNER_TEMP/targets.json"
+          python3 -c "import json;t=json.load(open('$RUNNER_TEMP/targets.json'));print('window keys:', sorted(t['windows'][0].keys()) if t.get('windows') else 'no windows')"
 
           cat > "$RUNNER_TEMP/locked.swift" <<'SWIFT'
           import CoreGraphics
@@ -198,7 +199,14 @@ jobs:
             sleep 1.5
             ( sleep 4; "$RUNNER_TEMP/sckshot" "sync-out/r$r.screen.png" > "sync-out/r$r.sckshot.log" 2>&1 ) &
             start=$(python3 -c 'import time;print(time.time())')
-            ./target/abperf/cap record start --screen "$screen" --mic "BlackHole 2ch" \
+            window=""
+            for _ in $(seq 1 20); do
+              window=$(./target/abperf/cap targets --json 2>/dev/null | python3 -c "import json,sys;t=json.load(sys.stdin);w=[x for x in t.get('windows',[]) if 'stimulus' in (x.get('name','')+x.get('title','')+x.get('ownerName','')+x.get('owner','')).lower() or 'ffplay' in json.dumps(x).lower()];print(w[0]['id'] if w else '')")
+              [ -n "$window" ] && break
+              sleep 0.5
+            done
+            echo "round $r stimulus window: ${window:-not found}"
+            ./target/abperf/cap record start ${window:+--window "$window"} ${window:---screen "$screen"} --mic "BlackHole 2ch" \
               --path "sync-out/r$r.cap" --duration "$RECORD_SECS" > "sync-out/r$r.record.log" 2>&1
             echo "round $r record exit=$? wall=$(python3 -c "import time;print(round(time.time()-$start,2))")"
             kill "$player" 2>/dev/null || true
