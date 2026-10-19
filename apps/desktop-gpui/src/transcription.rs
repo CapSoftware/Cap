@@ -18,7 +18,7 @@
 //!   bundle's per-segment mic/system audio to 16kHz mono WAV via ffmpeg, then
 //!   run whisper-rs or parakeet-rs with word timestamps and chunk the words
 //!   into caption segments. `apply_caption_result` is
-//!   `applyCaptionResultToProject` (`captions.ts:469-527`) plus the
+//!   `applyCaptionResultToProject` (`captions.ts:524-591`) plus the
 //!   `deriveCaptionTrackSegments` projection (`captions.ts:323-366`) that the
 //!   Tauri app runs in TypeScript.
 
@@ -2182,9 +2182,10 @@ pub fn write_caption_edit_to_source(
     );
 }
 
-/// `applyCaptionResultToProject` (`captions.ts:469-527`): set the captions
+/// `applyCaptionResultToProject` (`captions.ts:524-591`): set the captions
 /// block (enabled, preserving existing style settings), mark it source-timed,
-/// and re-derive the rendered track through the current edit list.
+/// keep the transcript editor's cuts cut, and re-derive the rendered track
+/// through the current edit list.
 pub fn apply_caption_result(
     project: &mut ProjectConfiguration,
     segments: Vec<CaptionSegment>,
@@ -2225,19 +2226,19 @@ pub fn apply_caption_result(
             image_segments: Vec::new(),
         });
     }
+    let captions = project.captions.get_or_insert_with(CaptionsData::default);
+    captions.segments = segments;
+    captions.settings = settings;
+    captions.source_timed = true;
+    cap_project::reconcile_transcript_cuts(captions);
+
     let timeline = project
         .timeline
         .as_mut()
         .expect("timeline was just created");
 
     timeline.caption_segments =
-        derive_caption_track_segments(&segments, timeline, recording_durations);
-
-    project.captions = Some(CaptionsData {
-        segments,
-        settings,
-        source_timed: true,
-    });
+        derive_caption_track_segments(&captions.segments, timeline, recording_durations);
 }
 
 /// `getCaptionGenerationErrorMessage` (`captions.ts:634-662`).
@@ -2694,6 +2695,7 @@ mod tests {
                 ..CaptionSettings::default()
             },
             source_timed: false,
+            ..Default::default()
         });
 
         apply_caption_result(
@@ -2714,6 +2716,45 @@ mod tests {
         assert_eq!(track.len(), 1);
         assert_eq!(track[0].id, "segment-0-0");
         assert_eq!(track[0].text, "hello");
+    }
+
+    #[test]
+    fn apply_caption_result_keeps_transcript_cuts() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 1.6 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 1.9, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            },
+            "captions": {
+                "segments": [],
+                "settings": {},
+                "transcriptCuts": [
+                    { "id": "cut", "kind": "word", "text": "um", "start": 1.6, "end": 1.9 }
+                ],
+                "transcriptRemoved": [{ "start": 1.6, "end": 1.9 }]
+            }
+        }))
+        .unwrap();
+
+        apply_caption_result(
+            &mut project,
+            vec![caption(
+                "segment-0-0",
+                1.0,
+                2.5,
+                &[("hello", 1.0, 1.4), ("um", 1.6, 1.9), ("world", 2.0, 2.5)],
+            )],
+            &[10.0],
+            10.0,
+        );
+
+        let captions = project.captions.as_ref().unwrap();
+        assert_eq!(captions.segments[0].text, "hello world");
+        assert_eq!(captions.transcript_cuts.len(), 1);
+        assert_eq!(captions.transcript_removed.len(), 1);
     }
 
     #[test]

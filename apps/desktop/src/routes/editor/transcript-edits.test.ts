@@ -5,6 +5,11 @@ import { deriveCaptionTrackSegments } from "./captions";
 import { clipTimelineDuration } from "./clip-transitions";
 import type { EditorProjectConfiguration } from "./context";
 import {
+	commitTranscriptCutEdit,
+	planWordCuts,
+	transcriptPlanContext,
+} from "./transcript-cuts";
+import {
 	deleteTranscriptWords,
 	type FlatWord,
 	transcriptKeyAction,
@@ -60,6 +65,24 @@ function fixture() {
 	return project;
 }
 
+function cutVideo(
+	project: Pick<EditorProjectConfiguration, "captions" | "timeline">,
+	words: FlatWord[],
+) {
+	const context = transcriptPlanContext(project, recordings);
+	const keys = new Set(words.map((w) => `${w.segmentIndex}:${w.wordIndex}`));
+	const edit = planWordCuts(
+		context,
+		context.items.flatMap((item) =>
+			item.type === "word" &&
+			keys.has(`${item.word.segmentIndex}:${item.word.wordIndex}`)
+				? [item.token]
+				: [],
+		),
+	);
+	return edit ? commitTranscriptCutEdit(project, edit, recordings) : "empty";
+}
+
 function word(
 	project: ReturnType<typeof fixture>,
 	segmentIndex: number,
@@ -80,9 +103,9 @@ describe("transcript word deletion", () => {
 			project.captions.segments[0].words[0],
 			project.captions.segments[0].words[2],
 		];
-		expect(
-			deleteTranscriptWords(project, [word(project, 0, 1)], recordings),
-		).toBe("deleted");
+		expect(deleteTranscriptWords(project, [word(project, 0, 1)])).toBe(
+			"deleted",
+		);
 		expect(project.timeline).toEqual(timeline);
 		expect(clipTimelineDuration(project.timeline.segments, [])).toBe(9);
 		expect(project.captions.segments[0].text).toBe("keep caption");
@@ -103,11 +126,11 @@ describe("transcript word deletion", () => {
 	it("handles multiple words and removes empty captions without deleting unrelated manual captions", () => {
 		const project = fixture();
 		const timeline = structuredClone(project.timeline);
-		deleteTranscriptWords(
-			project,
-			[word(project, 0, 0), word(project, 1, 0), word(project, 0, 2)],
-			recordings,
-		);
+		deleteTranscriptWords(project, [
+			word(project, 0, 0),
+			word(project, 1, 0),
+			word(project, 0, 2),
+		]);
 		expect(project.timeline).toEqual(timeline);
 		expect(project.captions.segments.map((segment) => segment.text)).toEqual([
 			"this",
@@ -118,7 +141,7 @@ describe("transcript word deletion", () => {
 
 	it("keeps ripple deletion available only through the explicit video action", () => {
 		const project = fixture();
-		deleteTranscriptWords(project, [word(project, 0, 1)], recordings, "video");
+		cutVideo(project, [word(project, 0, 1)]);
 		expect(clipTimelineDuration(project.timeline.segments, [])).toBe(8);
 		expect(project.timeline.segments).toHaveLength(3);
 		expect(project.timeline.zoomSegments[0]).toMatchObject({
@@ -143,13 +166,9 @@ describe("transcript word deletion", () => {
 			wordIndex: 2,
 		};
 		const before = structuredClone(project);
-		expect(
-			deleteTranscriptWords(project, [selected], recordings, "video"),
-		).toBe("transition");
+		expect(cutVideo(project, [selected])).toBe("transition");
 		expect(project).toEqual(before);
-		expect(deleteTranscriptWords(project, [selected], recordings)).toBe(
-			"deleted",
-		);
+		expect(deleteTranscriptWords(project, [selected])).toBe("deleted");
 		expect(project.timeline).toEqual(before.timeline);
 	});
 });

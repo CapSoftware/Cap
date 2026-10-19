@@ -432,6 +432,7 @@ fn set_captions(
         segments: captions,
         settings: caption_settings(),
         source_timed,
+        ..Default::default()
     });
 }
 
@@ -934,6 +935,7 @@ fn round_trip_on_disk() {
             segments: random_captions(&mut rng, durations.iter().sum()),
             settings: styled_settings(&mut rng),
             source_timed: true,
+            ..Default::default()
         });
         cap_project::synchronize_captions(&mut config, &durations);
         random_overrides(&mut rng, &mut config, true);
@@ -981,6 +983,7 @@ fn round_trip_on_disk() {
         segments: random_captions(&mut rng, 5.0),
         settings: styled_settings(&mut rng),
         source_timed: false,
+        ..Default::default()
     };
     std::fs::write(
         copy.join("captions.json"),
@@ -1487,6 +1490,7 @@ fn templates(
         segments: captions,
         settings: render_settings(),
         source_timed: true,
+        ..Default::default()
     });
     // Projected here so the templates do not depend on the export's own
     // projection (which `render_*` checks).
@@ -1548,6 +1552,7 @@ fn render_case(
         segments: captions.clone(),
         settings: render_settings(),
         source_timed: true,
+        ..Default::default()
     });
     cap_project::synchronize_captions(&mut config, &durations);
     if edit.stale_track {
@@ -1856,6 +1861,7 @@ fn editor_open() {
                         segments: legacy,
                         settings: caption_settings(),
                         source_timed: false,
+                        ..Default::default()
                     };
                     (migrated, Some(sidecar))
                 }

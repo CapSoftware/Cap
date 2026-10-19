@@ -899,7 +899,25 @@ export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettin
  * projects (false) stored segments in already-edited output time and are
  * migrated to source time on first load.
  */
-sourceTimed?: boolean }
+sourceTimed?: boolean;
+/**
+ * Words and pauses cut out of the video from the transcript editor. A cut
+ * word leaves `segments`, so it can never reach a rendered caption, and is
+ * kept here so the editor can restore it or change its padding.
+ */
+transcriptCuts?: TranscriptCut[];
+/**
+ * Source-time ranges the transcript editor actually removed from the edit
+ * list. Restoring a cut only re-inserts footage listed here, so footage
+ * trimmed out some other way stays out.
+ */
+transcriptRemoved?: TranscriptRange[];
+/**
+ * Source-time ranges of words deleted from the captions only. Their
+ * speech stays in the video, so the transcript editor never offers them
+ * as pauses to cut.
+ */
+transcriptHidden?: TranscriptRange[] }
 export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
 export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
 export type CaptureTargetKind = "display" | "window" | "area"
@@ -1355,6 +1373,49 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
 layoutTransition?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null; volume?: number | null; hideCursor?: boolean | null }
+export type TranscriptCut = { id: string; kind: TranscriptCutKind; text?: string; start: number; end: number; bufferStart?: number; bufferEnd?: number; segmentId?: string | null;
+/**
+ * Footage this cut took out of the timeline, one piece per clip it cut
+ * into, so restoring the cut can put back exactly what it removed.
+ */
+removed?: TranscriptCutPiece[];
+/**
+ * Live words this cut shortened because its claim started inside them.
+ */
+trimmedWords?: TranscriptTrimmedWord[] }
+export type TranscriptCutKind = "word" | "pause"
+/**
+ * An overlay segment as it was before a transcript cut and, when it
+ * survived the cut, as the cut left it.
+ */
+export type TranscriptCutOverlay<T> = { before: T; after?: T | null }
+export type TranscriptCutPiece = {
+/**
+ * Grows with every removal across all cuts, so restoring several pieces
+ * undoes the newest removal first.
+ */
+sequence: number;
+/**
+ * The clip the footage came from, as it was before the removal.
+ */
+clip: TimelineSegment;
+/**
+ * The removed footage, in `clip`'s recording time.
+ */
+start: number; end: number;
+/**
+ * Output time that left with the footage because fullscreen text holds
+ * sat inside it.
+ */
+held?: number;
+/**
+ * Overlay segments the removal deleted or trimmed, timed from the cut
+ * point in output time.
+ */
+overlays?: TranscriptCutTracks }
+export type TranscriptCutTracks = { zoomSegments?: TranscriptCutOverlay<ZoomSegment>[]; sceneSegments?: TranscriptCutOverlay<SceneSegment>[]; maskSegments?: TranscriptCutOverlay<MaskSegment>[]; textSegments?: TranscriptCutOverlay<TextSegment>[]; keyboardSegments?: TranscriptCutOverlay<KeyboardTrackSegment>[]; audioSegments?: TranscriptCutOverlay<AudioTrackSegment>[]; styleSegments?: TranscriptCutOverlay<StyleSegment>[]; imageSegments?: TranscriptCutOverlay<ImageSegment>[]; camera3dSegments?: TranscriptCutOverlay<Camera3DSegment>[] }
+export type TranscriptRange = { start: number; end: number }
+export type TranscriptTrimmedWord = { start: number; end: number; trimmedEnd: number }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
 export type UpdateChannel = "stable" | "nightly"

@@ -2390,6 +2390,120 @@ pub struct CaptionsData {
     /// migrated to source time on first load.
     #[serde(default)]
     pub source_timed: bool,
+    /// Words and pauses cut out of the video from the transcript editor. A cut
+    /// word leaves `segments`, so it can never reach a rendered caption, and is
+    /// kept here so the editor can restore it or change its padding.
+    #[serde(default)]
+    pub transcript_cuts: Vec<TranscriptCut>,
+    /// Source-time ranges the transcript editor actually removed from the edit
+    /// list. Restoring a cut only re-inserts footage listed here, so footage
+    /// trimmed out some other way stays out.
+    #[serde(default)]
+    pub transcript_removed: Vec<TranscriptRange>,
+    /// Source-time ranges of words deleted from the captions only. Their
+    /// speech stays in the video, so the transcript editor never offers them
+    /// as pauses to cut.
+    #[serde(default)]
+    pub transcript_hidden: Vec<TranscriptRange>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptCutKind {
+    #[default]
+    Word,
+    Pause,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCut {
+    pub id: String,
+    pub kind: TranscriptCutKind,
+    #[serde(default)]
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub buffer_start: f64,
+    #[serde(default)]
+    pub buffer_end: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<String>,
+    /// Footage this cut took out of the timeline, one piece per clip it cut
+    /// into, so restoring the cut can put back exactly what it removed.
+    #[serde(default)]
+    pub removed: Vec<TranscriptCutPiece>,
+    /// Live words this cut shortened because its claim started inside them.
+    #[serde(default)]
+    pub trimmed_words: Vec<TranscriptTrimmedWord>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCutPiece {
+    /// Grows with every removal across all cuts, so restoring several pieces
+    /// undoes the newest removal first.
+    pub sequence: u32,
+    /// The clip the footage came from, as it was before the removal.
+    pub clip: TimelineSegment,
+    /// The removed footage, in `clip`'s recording time.
+    pub start: f64,
+    pub end: f64,
+    /// Output time that left with the footage because fullscreen text holds
+    /// sat inside it.
+    #[serde(default)]
+    pub held: f64,
+    /// Overlay segments the removal deleted or trimmed, timed from the cut
+    /// point in output time.
+    #[serde(default)]
+    pub overlays: TranscriptCutTracks,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCutTracks {
+    #[serde(default)]
+    pub zoom_segments: Vec<TranscriptCutOverlay<ZoomSegment>>,
+    #[serde(default)]
+    pub scene_segments: Vec<TranscriptCutOverlay<SceneSegment>>,
+    #[serde(default)]
+    pub mask_segments: Vec<TranscriptCutOverlay<MaskSegment>>,
+    #[serde(default)]
+    pub text_segments: Vec<TranscriptCutOverlay<TextSegment>>,
+    #[serde(default)]
+    pub keyboard_segments: Vec<TranscriptCutOverlay<crate::KeyboardTrackSegment>>,
+    #[serde(default)]
+    pub audio_segments: Vec<TranscriptCutOverlay<AudioTrackSegment>>,
+    #[serde(default)]
+    pub style_segments: Vec<TranscriptCutOverlay<StyleSegment>>,
+    #[serde(default)]
+    pub image_segments: Vec<TranscriptCutOverlay<ImageSegment>>,
+    #[serde(default, rename = "camera3dSegments")]
+    pub camera3d_segments: Vec<TranscriptCutOverlay<Camera3DSegment>>,
+}
+
+/// An overlay segment as it was before a transcript cut and, when it
+/// survived the cut, as the cut left it.
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+pub struct TranscriptCutOverlay<T> {
+    pub before: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<T>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptTrimmedWord {
+    pub start: f64,
+    pub end: f64,
+    pub trimmed_end: f64,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct TranscriptRange {
+    pub start: f64,
+    pub end: f64,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -3077,6 +3191,106 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn transcript_cuts_default_for_old_captions_and_round_trip() {
+        let legacy: CaptionsData =
+            serde_json::from_str(r#"{"segments":[],"settings":{}}"#).unwrap();
+        assert!(legacy.transcript_cuts.is_empty());
+        assert!(legacy.transcript_removed.is_empty());
+        assert!(legacy.transcript_hidden.is_empty());
+
+        let edited: CaptionsData = serde_json::from_value(serde_json::json!({
+            "segments": [],
+            "settings": {},
+            "sourceTimed": true,
+            "transcriptCuts": [
+                {
+                    "id": "cut-1",
+                    "kind": "word",
+                    "text": "um",
+                    "start": 1.6,
+                    "end": 1.9,
+                    "bufferStart": 0.2,
+                    "bufferEnd": -0.05,
+                    "segmentId": "caption"
+                },
+                { "id": "cut-2", "kind": "pause", "start": 4.2, "end": 5.0 }
+            ],
+            "transcriptRemoved": [{ "start": 1.4, "end": 1.85 }, { "start": 4.2, "end": 5.0 }],
+            "transcriptHidden": [{ "start": 6.0, "end": 6.4 }]
+        }))
+        .unwrap();
+        assert_eq!(edited.transcript_cuts[1].kind, TranscriptCutKind::Pause);
+        assert_eq!(edited.transcript_cuts[1].buffer_start, 0.0);
+        assert_eq!(edited.transcript_cuts[1].segment_id, None);
+
+        let json = serde_json::to_value(&edited).unwrap();
+        assert_eq!(json["transcriptCuts"][0]["bufferEnd"], -0.05);
+        assert_eq!(json["transcriptCuts"][0]["segmentId"], "caption");
+        assert_eq!(json["transcriptRemoved"][1]["end"], 5.0);
+        assert_eq!(json["transcriptHidden"][0]["start"], 6.0);
+        let reparsed: CaptionsData = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&reparsed).unwrap(), json);
+    }
+
+    #[test]
+    fn transcript_cut_snapshots_default_for_old_cuts_and_round_trip() {
+        let legacy: TranscriptCut = serde_json::from_value(serde_json::json!({
+            "id": "cut-1", "kind": "word", "start": 1.6, "end": 1.9
+        }))
+        .unwrap();
+        assert!(legacy.removed.is_empty());
+        assert!(legacy.trimmed_words.is_empty());
+
+        let cut: TranscriptCut = serde_json::from_value(serde_json::json!({
+            "id": "cut-2",
+            "kind": "pause",
+            "start": 1.4,
+            "end": 6.0,
+            "removed": [{
+                "sequence": 3,
+                "clip": { "recordingSegment": 1, "timescale": 2.0, "start": 0.0, "end": 20.0 },
+                "start": 1.4,
+                "end": 6.0,
+                "overlays": {
+                    "zoomSegments": [
+                        { "before": { "start": 0.6, "end": 1.6, "amount": 2.0, "mode": "auto" } },
+                        {
+                            "before": { "start": 3.1, "end": 5.6, "amount": 1.5, "mode": "auto" },
+                            "after": { "start": 0.0, "end": 1.0, "amount": 1.5, "mode": "auto" }
+                        }
+                    ]
+                }
+            }],
+            "trimmedWords": [{ "start": 1.0, "end": 1.9, "trimmedEnd": 1.4 }]
+        }))
+        .unwrap();
+        let piece = &cut.removed[0];
+        assert_eq!(piece.sequence, 3);
+        assert_eq!(piece.clip.recording_clip, 1);
+        assert_eq!(piece.held, 0.0);
+        assert!(piece.overlays.zoom_segments[0].after.is_none());
+        assert_eq!(
+            piece.overlays.zoom_segments[1]
+                .after
+                .as_ref()
+                .map(|zoom| zoom.end),
+            Some(1.0)
+        );
+        assert!(piece.overlays.keyboard_segments.is_empty());
+        assert_eq!(cut.trimmed_words[0].trimmed_end, 1.4);
+
+        let json = serde_json::to_value(&cut).unwrap();
+        assert!(
+            json["removed"][0]["overlays"]["zoomSegments"][0]
+                .get("after")
+                .is_none()
+        );
+        assert_eq!(json["trimmedWords"][0]["trimmedEnd"], 1.4);
+        let reparsed: TranscriptCut = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&reparsed).unwrap(), json);
+    }
 
     #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {

@@ -5,10 +5,14 @@ import {
 	clipTimelineDuration,
 	clipTimelineOffsets,
 	getClipTransition,
+	rippleTimelineTrack,
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
-import { rippleDeleteKeyboardTrack } from "./keyboard-timing";
+import {
+	rippleDeleteKeyboardTrack,
+	rippleKeyboardTrack,
+} from "./keyboard-timing";
 import {
 	CAMERA3D_TRACK_KEYS,
 	type Camera3DTracks,
@@ -474,6 +478,97 @@ export function rippleDeleteAllTracks(
 			overlayShift,
 		);
 	}
+}
+
+function rippleInsertMaskTrack(
+	segments: RippleMaskSegment[],
+	boundary: number,
+	shift: number,
+) {
+	for (const segment of segments) {
+		if (segment.start >= boundary) {
+			segment.start += shift;
+			segment.end += shift;
+			continue;
+		}
+		if (segment.end <= boundary) continue;
+		const local = boundary - segment.start;
+		segment.end += shift;
+		if (!segment.keyframes) continue;
+		const shiftAfter = <T extends { time: number }>(
+			keyframes: T[] | undefined,
+		) =>
+			keyframes?.map((keyframe) =>
+				keyframe.time >= local
+					? { ...keyframe, time: keyframe.time + shift }
+					: keyframe,
+			);
+		segment.keyframes.position = shiftAfter(segment.keyframes.position);
+		segment.keyframes.size = shiftAfter(segment.keyframes.size);
+		segment.keyframes.intensity = shiftAfter(segment.keyframes.intensity);
+	}
+}
+
+function rippleInsertCamera3DTrack(
+	segments: RippleCamera3DSegment[],
+	boundary: number,
+	shift: number,
+) {
+	for (const segment of segments) {
+		if (segment.start >= boundary) {
+			segment.start += shift;
+			segment.end += shift;
+			continue;
+		}
+		if (segment.end <= boundary) continue;
+		const local = boundary - segment.start;
+		segment.end += shift;
+		for (const trackKey of CAMERA3D_TRACK_KEYS) {
+			const keyframes = segment.tracks[trackKey];
+			if (!keyframes?.length) continue;
+			segment.tracks[trackKey] = keyframes.map((keyframe) =>
+				keyframe.time >= local
+					? { ...keyframe, time: keyframe.time + shift }
+					: keyframe,
+			);
+		}
+	}
+}
+
+export function rippleInsertAllTracks(
+	timeline: {
+		styleSegments?: Array<{ start: number; end: number }> | null;
+		imageSegments?: Array<{ start: number; end: number }> | null;
+		zoomSegments?: Array<{ start: number; end: number }> | null;
+		sceneSegments?: Array<{ start: number; end: number }> | null;
+		maskSegments?: RippleMaskSegment[] | null;
+		textSegments?: Array<{ start: number; end: number }> | null;
+		captionSegments?: Array<{ start: number; end: number }> | null;
+		keyboardSegments?: KeyboardTrackSegment[] | null;
+		audioSegments?: Array<{ start: number; end: number }> | null;
+		camera3dSegments?: RippleCamera3DSegment[] | null;
+	},
+	boundary: number,
+	shift: number,
+) {
+	if (shift <= 0) return;
+	for (const track of [
+		timeline.styleSegments,
+		timeline.imageSegments,
+		timeline.zoomSegments,
+		timeline.sceneSegments,
+		timeline.textSegments,
+		timeline.captionSegments,
+		timeline.audioSegments,
+	]) {
+		if (track) rippleTimelineTrack(track, boundary, shift);
+	}
+	if (timeline.maskSegments)
+		rippleInsertMaskTrack(timeline.maskSegments, boundary, shift);
+	if (timeline.keyboardSegments)
+		rippleKeyboardTrack(timeline.keyboardSegments, boundary, shift);
+	if (timeline.camera3dSegments)
+		rippleInsertCamera3DTrack(timeline.camera3dSegments, boundary, shift);
 }
 
 export function deleteClipAndRippleAllTracks(

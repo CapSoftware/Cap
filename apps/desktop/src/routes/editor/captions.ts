@@ -10,6 +10,8 @@ import {
 	commands,
 	type SegmentRecordings,
 	type TimelineSegment,
+	type TranscriptCut,
+	type TranscriptRange,
 } from "~/utils/tauri";
 import { type ClipTransition, clipTimelineOffsets } from "./clip-transitions";
 import type { TextSegment } from "./text";
@@ -466,6 +468,59 @@ export function mapEditedTimeToSource(
 	return fallback;
 }
 
+// A fresh transcription covers the whole recording again, including words
+// whose footage the transcript editor already cut. Those words go back to
+// being cut words instead of reappearing as captions for footage that is gone.
+function reconcileTranscriptCuts(captions: {
+	segments: CaptionSegment[];
+	transcriptCuts?: TranscriptCut[];
+	transcriptRemoved?: TranscriptRange[];
+}) {
+	const removed = captions.transcriptRemoved ?? [];
+	if (removed.length === 0) return;
+	const cuts = captions.transcriptCuts ?? [];
+	const added: TranscriptCut[] = [];
+	captions.segments = captions.segments.flatMap((segment) => {
+		const words = segment.words ?? [];
+		const kept = words.filter((word) => {
+			const midpoint = (word.start + word.end) / 2;
+			if (
+				!removed.some((range) => midpoint > range.start && midpoint < range.end)
+			)
+				return true;
+			const alreadyCut = [...cuts, ...added].some(
+				(cut) =>
+					cut.kind === "word" && cut.start < word.end && word.start < cut.end,
+			);
+			if (!alreadyCut) {
+				added.push({
+					id: `cut-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+					kind: "word",
+					text: word.text,
+					start: word.start,
+					end: word.end,
+					bufferStart: 0,
+					bufferEnd: 0,
+					segmentId: segment.id,
+				});
+			}
+			return false;
+		});
+		if (kept.length === words.length) return [segment];
+		if (kept.length === 0) return [];
+		return [
+			{
+				...segment,
+				words: kept,
+				text: getCaptionTextFromWords(kept),
+				start: kept[0].start,
+				end: kept[kept.length - 1].end,
+			},
+		];
+	});
+	if (added.length > 0) captions.transcriptCuts = [...cuts, ...added];
+}
+
 export function applyCaptionResultToProject<
 	T extends {
 		captions?:
@@ -518,8 +573,15 @@ export function applyCaptionResultToProject<
 
 	captions.segments = rawSegments;
 	captions.sourceTimed = true;
+	reconcileTranscriptCuts(
+		captions as {
+			segments: CaptionSegment[];
+			transcriptCuts?: TranscriptCut[];
+			transcriptRemoved?: TranscriptRange[];
+		},
+	);
 	timeline.captionSegments = deriveCaptionTrackSegments(
-		rawSegments,
+		captions.segments,
 		timeline.segments,
 		recordingSegments,
 		timeline.captionSegments ?? [],

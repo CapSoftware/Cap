@@ -7,14 +7,17 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
-	For,
+	Index,
+	Match,
 	on,
 	Show,
+	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { Portal } from "solid-js/web";
 import toast from "solid-toast";
 import { defaultCaptionSettings } from "~/store/captions";
-import { commands } from "~/utils/tauri";
+import { commands, type TranscriptCut } from "~/utils/tauri";
 import {
 	getCaptionTextFromWords,
 	mapEditedTimeToSource,
@@ -30,6 +33,23 @@ import {
 import { FPS, useEditorContext } from "./context";
 import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import {
+	AUTO_CLEAN_SILENCE_THRESHOLD,
+	commitTranscriptCutEdit,
+	cutClaim,
+	cutPaddingLimits,
+	cutPaddingRoom,
+	fillerTokens,
+	flattenCaptionWords,
+	type PaddingRoom,
+	planAutoClean,
+	planPauseCut,
+	planWordCuts,
+	type SourceRange,
+	type TranscriptCutEdit,
+	type TranscriptItem,
+	transcriptPlanContext,
+} from "./transcript-cuts";
+import {
 	deleteTranscriptWords,
 	type FlatWord,
 	transcriptKeyAction,
@@ -43,17 +63,19 @@ function formatTimePrecise(secs: number) {
 	return `${minutes}:${whole.toString().padStart(2, "0")}.${hundredths.toString().padStart(2, "0")}`;
 }
 
-interface TranscriptSegmentGroup {
-	segmentIndex: number;
-	words: FlatWord[];
-}
-
 const TEXT_SIZES = [
 	{ label: "S", value: "text-xs leading-normal" },
 	{ label: "M", value: "text-sm leading-normal" },
 	{ label: "L", value: "text-base leading-snug" },
 	{ label: "XL", value: "text-lg leading-snug" },
 ] as const;
+
+const MIN_SILENCE_THRESHOLD = 0.5;
+const MAX_SILENCE_THRESHOLD = 5;
+
+function plural(count: number, word: string) {
+	return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
 
 export function TranscriptPanel() {
 	const {
@@ -74,6 +96,16 @@ export function TranscriptPanel() {
 	const [textSizeIndex, setTextSizeIndex] = makePersisted(createSignal(1), {
 		name: "editorTranscriptTextSize",
 	});
+	const [storedSilenceThreshold, setSilenceThreshold] = makePersisted(
+		createSignal(AUTO_CLEAN_SILENCE_THRESHOLD),
+		{ name: "editorAutoCleanThreshold" },
+	);
+	const silenceThreshold = () => {
+		const value = storedSilenceThreshold();
+		return Number.isFinite(value)
+			? Math.min(MAX_SILENCE_THRESHOLD, Math.max(MIN_SILENCE_THRESHOLD, value))
+			: AUTO_CLEAN_SILENCE_THRESHOLD;
+	};
 	const [exportingFormat, setExportingFormat] =
 		createSignal<CaptionExportFormat | null>(null);
 
@@ -87,38 +119,50 @@ export function TranscriptPanel() {
 		),
 	);
 
-	const allWords = createMemo((): FlatWord[] => {
-		const segments = project.captions?.segments ?? [];
-		const result: FlatWord[] = [];
-		for (let segIdx = 0; segIdx < segments.length; segIdx++) {
-			const seg = segments[segIdx];
-			const words = seg.words ?? [];
-			for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
-				const w = words[wordIdx];
-				result.push({
-					text: w.text,
-					start: w.start,
-					end: w.end,
-					segmentIndex: segIdx,
-					wordIndex: wordIdx,
-				});
-			}
-		}
-		return result;
-	});
+	const allWords = createMemo((): FlatWord[] =>
+		flattenCaptionWords(project.captions?.segments ?? []),
+	);
 
-	const segmentGroups = createMemo((): TranscriptSegmentGroup[] => {
-		const flatWords = allWords();
-		return (project.captions?.segments ?? []).map((_segment, segmentIndex) => ({
-			segmentIndex,
-			words: flatWords.filter((word) => word.segmentIndex === segmentIndex),
-		}));
-	});
+	const transcript = createMemo(() =>
+		transcriptPlanContext(project, recordingSegments(), allWords()),
+	);
 
-	const updateWordText = (flatIndex: number, rawText: string) => {
-		const target = allWords()[flatIndex];
-		if (!target) return;
+	const transcriptItems = () => transcript().items;
 
+	const tokenCount = createMemo(
+		() =>
+			transcriptItems().filter(
+				(item) => item.type === "word" || item.type === "cut-word",
+			).length,
+	);
+
+	const fillers = createMemo(() => fillerTokens(transcriptItems()));
+
+	const fillerCount = () => fillers().size;
+
+	const longPauseCount = createMemo(
+		() =>
+			transcriptItems().filter(
+				(item) =>
+					item.type === "pause" && item.end - item.start >= silenceThreshold(),
+			).length,
+	);
+
+	const canAutoClean = () => fillerCount() > 0 || longPauseCount() > 0;
+
+	const autoCleanSummary = () => {
+		const parts = [
+			fillerCount() > 0 ? plural(fillerCount(), "filler word") : null,
+			longPauseCount() > 0
+				? `${plural(longPauseCount(), "pause")} over ${silenceThreshold().toFixed(1)}s`
+				: null,
+		].filter(Boolean);
+		return parts.length > 0
+			? `Cuts ${parts.join(" and ")}`
+			: "Nothing to clean";
+	};
+
+	const updateWordText = (target: FlatWord, rawText: string) => {
 		const tokens = rawText
 			.trim()
 			.split(/\s+/)
@@ -127,15 +171,18 @@ export function TranscriptPanel() {
 
 		setProject(
 			produce((p) => {
+				if (tokens.length === 0) {
+					deleteTranscriptWords(p, [target]);
+					return;
+				}
+
 				const segment = p.captions?.segments?.[target.segmentIndex];
 				if (!segment?.words) return;
 
 				const existing = segment.words[target.wordIndex];
 				if (!existing) return;
 
-				if (tokens.length === 0) {
-					segment.words.splice(target.wordIndex, 1);
-				} else if (tokens.length === 1) {
+				if (tokens.length === 1) {
 					existing.text = tokens[0];
 				} else {
 					const start = existing.start;
@@ -149,13 +196,9 @@ export function TranscriptPanel() {
 					segment.words.splice(target.wordIndex, 1, ...replacements);
 				}
 
-				if (segment.words.length === 0) {
-					p.captions?.segments.splice(target.segmentIndex, 1);
-				} else {
-					segment.text = getCaptionTextFromWords(segment.words);
-					segment.start = segment.words[0].start;
-					segment.end = segment.words[segment.words.length - 1].end;
-				}
+				segment.text = getCaptionTextFromWords(segment.words);
+				segment.start = segment.words[0].start;
+				segment.end = segment.words[segment.words.length - 1].end;
 			}),
 		);
 		setEditorState("captions", "isStale", false);
@@ -250,12 +293,9 @@ export function TranscriptPanel() {
 		}
 	};
 
-	const activeWordIndex = createMemo(() => {
-		const words = allWords();
-		if (words.length === 0) return -1;
-
-		const sourceTime = mapEditedTimeToSource(
-			editorState.playbackTime,
+	const outputToSource = (outputTime: number) =>
+		mapEditedTimeToSource(
+			outputTime,
 			project.timeline?.segments ?? [],
 			recordingSegments(),
 			project.timeline?.transitions ?? [],
@@ -263,7 +303,22 @@ export function TranscriptPanel() {
 			"incoming",
 			project.timeline?.textSegments,
 		);
-		if (sourceTime === null) return -1;
+
+	const sourceToOutput = (sourceTime: number) =>
+		mapSourceTimeToEdited(
+			sourceTime,
+			project.timeline?.segments ?? [],
+			recordingSegments(),
+			project.timeline?.transitions ?? [],
+			project.timeline?.textSegments,
+		);
+
+	const activeWord = createMemo(() => {
+		const words = allWords();
+		if (words.length === 0) return null;
+
+		const sourceTime = outputToSource(editorState.playbackTime);
+		if (sourceTime === null) return null;
 
 		let lo = 0;
 		let hi = words.length - 1;
@@ -274,22 +329,14 @@ export function TranscriptPanel() {
 			} else if (sourceTime < words[mid].start) {
 				hi = mid - 1;
 			} else {
-				return mid;
+				return words[mid];
 			}
 		}
-		return -1;
+		return null;
 	});
 
-	const handleWordClick = async (word: FlatWord) => {
+	const seekToOutputTime = async (outputTime: number) => {
 		try {
-			const outputTime = mapSourceTimeToEdited(
-				word.start,
-				project.timeline?.segments ?? [],
-				recordingSegments(),
-				project.timeline?.transitions ?? [],
-				project.timeline?.textSegments,
-			);
-			if (outputTime === null) return;
 			const accepted = await routeEditorPlaybackIntent(
 				requestHandoffPlayback,
 				{ playing: false, seconds: outputTime },
@@ -319,45 +366,121 @@ export function TranscriptPanel() {
 		}
 	};
 
-	const applyWordDeletions = (
-		flatIndices: number[],
-		mode: "captions" | "video" = "captions",
+	const seekToItem = (item: TranscriptItem) => {
+		let outputTime: number | null = null;
+		if (item.type === "word") {
+			outputTime = sourceToOutput(item.word.start);
+		} else if (item.type === "cut-word" || item.type === "cut-pause") {
+			const claim = cutClaim(item.cut);
+			outputTime =
+				(claim && (sourceToOutput(claim.end) ?? sourceToOutput(claim.start))) ??
+				null;
+		}
+		if (outputTime !== null) void seekToOutputTime(outputTime);
+	};
+
+	const keepPlayheadOnContent = (sourceTime: number | null) => {
+		if (editorState.playing) return;
+		const total = totalDuration();
+		const mapped = sourceTime === null ? null : sourceToOutput(sourceTime);
+		const target = Math.min(
+			mapped ?? editorState.playbackTime,
+			Math.max(total - 0.01, 0),
+		);
+		if (Math.abs(target - editorState.playbackTime) > 1 / FPS) {
+			void seekToOutputTime(target);
+		}
+	};
+
+	const commitCutEdit = (
+		edit: TranscriptCutEdit | null,
+		action: "cut" | "restore" | "adjust",
 	) => {
-		const words = allWords();
-		const wordsToDelete = [...new Set(flatIndices)]
-			.map((idx) => words[idx])
-			.filter((word): word is FlatWord => !!word);
-		const outcome: { result: ReturnType<typeof deleteTranscriptWords> } = {
-			result: "empty",
+		if (!edit) return false;
+		const playheadSource = editorState.playing
+			? null
+			: outputToSource(editorState.playbackTime);
+		const outcome = {
+			result: "empty" as ReturnType<typeof commitTranscriptCutEdit>,
 		};
 		setProject(
 			produce((p) => {
-				outcome.result = deleteTranscriptWords(
-					p,
-					wordsToDelete,
-					recordingSegments(),
-					mode,
-				);
+				outcome.result = commitTranscriptCutEdit(p, edit, recordingSegments());
 			}),
 		);
+
 		if (outcome.result === "transition") {
 			toast.error(
-				"Remove the nearby transition before cutting this transcript range.",
+				action === "restore"
+					? "Remove the nearby transition before restoring this transcript range."
+					: "Remove the nearby transition before cutting this transcript range.",
 			);
-			return;
+			return false;
 		}
-		if (outcome.result !== "deleted") return;
-		if (
-			mode === "video" ||
-			editorState.timeline.selection?.type === "caption"
-		) {
+		if (outcome.result === "failed") {
+			toast.error("That cut would remove the whole video.");
+			return false;
+		}
+		if (outcome.result !== "applied") return false;
+
+		batch(() => {
+			setEditorState("styleEditIndex", null);
+			setEditorState("timeline", "selection", null);
+			setEditorState("captions", "isStale", false);
+		});
+		keepPlayheadOnContent(playheadSource);
+		return true;
+	};
+
+	const deleteWordsFromCaptions = (words: FlatWord[]) => {
+		if (words.length === 0) return;
+		setProject(
+			produce((p) => {
+				deleteTranscriptWords(p, words);
+			}),
+		);
+		if (editorState.timeline.selection?.type === "caption") {
 			setEditorState("styleEditIndex", null);
 			setEditorState("timeline", "selection", null);
 		}
 		setEditorState("captions", "isStale", false);
-		if (mode === "video" && editorState.playbackTime > totalDuration()) {
-			setEditorState("playbackTime", Math.max(totalDuration() - 0.01, 0));
+	};
+
+	const cutTokens = (tokens: number[]) =>
+		commitCutEdit(planWordCuts(transcript(), tokens), "cut");
+
+	const restoreCuts = (ids: string[]) =>
+		commitCutEdit(ids.length > 0 ? { restore: ids } : null, "restore");
+
+	const cutPause = (pause: SourceRange) =>
+		commitCutEdit(planPauseCut(transcript(), pause), "cut");
+
+	const adjustCutPadding = (
+		cut: TranscriptCut,
+		bufferStart: number,
+		bufferEnd: number,
+	) =>
+		commitCutEdit(
+			{ padding: [{ id: cut.id, bufferStart, bufferEnd }] },
+			"adjust",
+		);
+
+	const autoClean = () => {
+		const { edit, skipped } = planAutoClean(transcript(), silenceThreshold());
+		if (!edit) {
+			if (skipped > 0)
+				toast.error(
+					"Everything Auto Clean found sits next to a clip transition.",
+				);
+			return false;
 		}
+		const applied = commitCutEdit(edit, "cut");
+		if (applied && skipped > 0) {
+			toast(
+				`Left ${plural(skipped, "cut")} next to clip transitions untouched.`,
+			);
+		}
+		return applied;
 	};
 
 	const isAtEnd = () => {
@@ -424,11 +547,89 @@ export function TranscriptPanel() {
 		handlePlayPause();
 	});
 
+	const [autoCleanOpen, setAutoCleanOpen] = createSignal(false);
+	let autoCleanRef: HTMLDivElement | undefined;
+
+	createEventListener(document, "mousedown", (e) => {
+		if (
+			autoCleanOpen() &&
+			autoCleanRef &&
+			!autoCleanRef.contains(e.target as Node)
+		) {
+			setAutoCleanOpen(false);
+		}
+	});
+
+	createEventListener(window, "keydown", (e) => {
+		if (autoCleanOpen() && e.key === "Escape") setAutoCleanOpen(false);
+	});
+
 	return (
 		<div class="flex overflow-hidden flex-col min-h-0 h-full rounded-xl">
-			<div class="px-3 py-2 border-b border-ed-line flex items-center justify-between shrink-0">
+			<div class="px-3 py-2 border-b border-ed-line flex flex-wrap items-center justify-between gap-x-2 gap-y-1 shrink-0">
 				<span class="text-xs font-medium text-ed-text-1">Captions</span>
-				<div class="flex items-center gap-1">
+				<div class="flex flex-wrap items-center justify-end gap-1">
+					<div class="relative" ref={autoCleanRef}>
+						<div class="flex">
+							<button
+								type="button"
+								class="flex items-center gap-1 rounded-l-sm px-2 h-6 hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors text-xs disabled:opacity-30 disabled:pointer-events-none"
+								title={autoCleanSummary()}
+								disabled={!canAutoClean()}
+								onClick={() => autoClean()}
+							>
+								<IconLucideSparkles class="size-3" />
+								Auto Clean
+							</button>
+							<button
+								type="button"
+								class="flex items-center justify-center rounded-r-sm w-5 h-6 hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+								title="Auto Clean settings"
+								aria-expanded={autoCleanOpen()}
+								disabled={tokenCount() === 0}
+								onClick={() => setAutoCleanOpen(!autoCleanOpen())}
+							>
+								<IconLucideChevronDown class="size-3" />
+							</button>
+						</div>
+						<Show when={autoCleanOpen()}>
+							<div class="absolute left-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-4 bg-gray-2 p-3 shadow-lg">
+								<div class="flex items-center justify-between text-xs text-gray-11">
+									<span>Cut pauses longer than</span>
+									<span class="tabular-nums text-gray-12">
+										{silenceThreshold().toFixed(1)}s
+									</span>
+								</div>
+								<input
+									type="range"
+									min={MIN_SILENCE_THRESHOLD}
+									max={MAX_SILENCE_THRESHOLD}
+									step="0.1"
+									value={silenceThreshold()}
+									onInput={(e) =>
+										setSilenceThreshold(
+											Number.parseFloat(e.currentTarget.value),
+										)
+									}
+									class="mt-2 w-full h-1 accent-blue-9"
+								/>
+								<p class="mt-2 text-[11px] leading-snug text-gray-10">
+									{autoCleanSummary()}. Filler words are cut with the silence
+									around them.
+								</p>
+								<button
+									type="button"
+									class="mt-3 w-full rounded-md bg-blue-9 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-10 disabled:opacity-30 disabled:pointer-events-none"
+									disabled={!canAutoClean()}
+									onClick={() => {
+										if (autoClean()) setAutoCleanOpen(false);
+									}}
+								>
+									Clean now
+								</button>
+							</div>
+						</Show>
+					</div>
 					<button
 						type="button"
 						class="flex items-center gap-1 rounded-sm px-2 h-6 hover:bg-gray-3 text-gray-9 hover:text-gray-12 transition-colors text-xs"
@@ -482,15 +683,23 @@ export function TranscriptPanel() {
 				</div>
 			</div>
 			<TranscriptEditor
-				segmentGroups={segmentGroups()}
-				allWords={allWords()}
-				activeWordIndex={activeWordIndex()}
+				items={transcriptItems()}
+				hasContent={
+					(project.captions?.segments.length ?? 0) > 0 || tokenCount() > 0
+				}
+				tokenCount={tokenCount()}
+				fillers={fillers()}
+				activeWord={activeWord()}
 				textSizeClass={
 					TEXT_SIZES[textSizeIndex()]?.value ?? TEXT_SIZES[1].value
 				}
-				onWordClick={handleWordClick}
-				onDeleteWords={applyWordDeletions}
-				onCutWords={(indices) => applyWordDeletions(indices, "video")}
+				onSeek={seekToItem}
+				onDeleteWords={deleteWordsFromCaptions}
+				onCutTokens={cutTokens}
+				onRestoreCuts={restoreCuts}
+				onCutPause={cutPause}
+				onAdjustCut={adjustCutPadding}
+				paddingRoom={(cut) => cutPaddingRoom(project.captions, cut)}
 				onEditWord={updateWordText}
 				onAddCaption={addCaptionAtPlayhead}
 			/>
@@ -503,9 +712,9 @@ function TranscriptWord(props: {
 	isActive: boolean;
 	isSelected: boolean;
 	isEditing: boolean;
+	isFiller: boolean;
 	selectedCount: number;
 	textSizeClass: string;
-	ref: (el: HTMLSpanElement) => void;
 	onClick: (e: MouseEvent) => void;
 	onStartEdit: () => void;
 	onCommitEdit: (text: string) => void;
@@ -552,9 +761,10 @@ function TranscriptWord(props: {
 			when={props.isEditing}
 			fallback={
 				<span
-					ref={props.ref}
+					data-active-word={props.isActive || undefined}
 					class={cx(
 						"transition-colors duration-100 rounded-xs relative",
+						props.isFiller && "underline decoration-dotted decoration-amber-9",
 						props.isSelected && "bg-blue-4/50",
 						props.isActive
 							? "text-blue-11"
@@ -580,6 +790,9 @@ function TranscriptWord(props: {
 							<span class="text-xs tabular-nums text-gray-1">
 								{formatTimePrecise(props.word.start)}
 							</span>
+							<Show when={props.isFiller && !props.isSelected}>
+								<span class="text-xs text-amber-7">Filler</span>
+							</Show>
 							<Show when={props.isSelected}>
 								<button
 									type="button"
@@ -645,15 +858,284 @@ function TranscriptWord(props: {
 	);
 }
 
+function CutTranscriptWord(props: {
+	cut: TranscriptCut;
+	isSelected: boolean;
+	selectedCount: number;
+	onClick: (e: MouseEvent) => void;
+	onRestore: () => void;
+	onAdjust: (e: MouseEvent) => void;
+}) {
+	const [hovering, setHovering] = createSignal(false);
+	let hoverTimer: number | undefined;
+
+	const showTip = () =>
+		hovering() || (props.isSelected && props.selectedCount === 1);
+
+	return (
+		<span
+			class={cx(
+				"transition-colors duration-100 rounded-xs relative line-through decoration-red-9/70 text-gray-7",
+				props.isSelected ? "bg-red-4/40 text-gray-10" : "hover:text-gray-10",
+			)}
+			title="Cut from the video. Right-click to adjust the cut."
+			onClick={(e) => props.onClick(e)}
+			onContextMenu={(e) => {
+				e.preventDefault();
+				props.onAdjust(e);
+			}}
+			onMouseEnter={() => {
+				hoverTimer = window.setTimeout(() => setHovering(true), 350);
+			}}
+			onMouseLeave={() => {
+				clearTimeout(hoverTimer);
+				setHovering(false);
+			}}
+		>
+			{props.cut.text}
+			<Show when={showTip()}>
+				<span
+					class="absolute left-1/2 -translate-x-1/2 top-full mt-1 flex items-center gap-2 whitespace-nowrap border border-gray-3 bg-gray-12 rounded-lg shadow-lg animate-in fade-in slide-in-from-top-1 duration-100 z-50 px-2 py-1.5 no-underline"
+					style={{ "pointer-events": props.isSelected ? "auto" : "none" }}
+				>
+					<span class="text-xs tabular-nums text-gray-1">
+						{formatTimePrecise(props.cut.start)}
+					</span>
+					<Show when={props.isSelected}>
+						<button
+							type="button"
+							class="flex items-center justify-center gap-1 h-6 px-1.5 rounded-md bg-green-9 text-white hover:bg-green-10 transition-colors text-xs"
+							title="Restore this word and its video (Delete)"
+							onClick={(e) => {
+								e.stopPropagation();
+								props.onRestore();
+							}}
+						>
+							<IconLucideRotateCcw class="size-3" />
+							Restore
+						</button>
+					</Show>
+				</span>
+			</Show>
+		</span>
+	);
+}
+
+function PauseBadge(props: {
+	duration: number;
+	cut: boolean;
+	onToggle: () => void;
+	onAdjust?: (e: MouseEvent) => void;
+}) {
+	return (
+		<span
+			class={cx(
+				"group relative inline-flex items-center gap-0.5 self-center rounded border border-dashed px-1 text-[10px] leading-4 tabular-nums select-none",
+				props.cut
+					? "border-gray-4 text-gray-7 line-through decoration-red-9/70"
+					: "border-gray-6 text-gray-9",
+			)}
+			title={
+				props.cut
+					? "Pause cut from the video. Right-click to adjust the cut."
+					: "Pause"
+			}
+			onContextMenu={(e) => {
+				if (!props.onAdjust) return;
+				e.preventDefault();
+				props.onAdjust(e);
+			}}
+		>
+			<IconLucidePause class="size-2.5" />
+			{props.duration.toFixed(1)}s
+			<button
+				type="button"
+				class={cx(
+					"absolute -top-2 -right-2 z-10 hidden size-4 items-center justify-center rounded-full text-white shadow-sm transition-colors group-hover:flex",
+					props.cut
+						? "bg-green-9 hover:bg-green-10"
+						: "bg-gray-11 hover:bg-gray-10",
+				)}
+				title={props.cut ? "Restore pause" : "Cut pause from the video"}
+				aria-label={props.cut ? "Restore pause" : "Cut pause from the video"}
+				onClick={(e) => {
+					e.stopPropagation();
+					props.onToggle();
+				}}
+			>
+				<Show when={props.cut} fallback={<IconCapScissors class="size-2.5" />}>
+					<IconLucideRotateCcw class="size-2.5" />
+				</Show>
+			</button>
+		</span>
+	);
+}
+
+function CutPaddingPopover(props: {
+	cut: TranscriptCut;
+	room: PaddingRoom;
+	position: { x: number; y: number };
+	onClose: () => void;
+	onChange: (bufferStart: number, bufferEnd: number) => boolean;
+	onRestore: () => void;
+}) {
+	const [start, setStart] = createSignal(props.cut.bufferStart ?? 0);
+	const [end, setEnd] = createSignal(props.cut.bufferEnd ?? 0);
+	const room = createMemo(() => props.room);
+	const limits = () =>
+		cutPaddingLimits(
+			{ ...props.cut, bufferStart: start(), bufferEnd: end() },
+			room(),
+		);
+	let popoverRef: HTMLDivElement | undefined;
+
+	createEffect(
+		on(
+			() => [props.cut.bufferStart ?? 0, props.cut.bufferEnd ?? 0] as const,
+			([bufferStart, bufferEnd]) => {
+				setStart(bufferStart);
+				setEnd(bufferEnd);
+			},
+			{ defer: true },
+		),
+	);
+
+	createEventListener(document, "mousedown", (e) => {
+		if (popoverRef && !popoverRef.contains(e.target as Node)) props.onClose();
+	});
+
+	const commit = (bufferStart: number, bufferEnd: number) => {
+		if (props.onChange(bufferStart, bufferEnd)) return;
+		setStart(props.cut.bufferStart ?? 0);
+		setEnd(props.cut.bufferEnd ?? 0);
+	};
+
+	const slider = (
+		label: string,
+		value: () => number,
+		range: () => { min: number; max: number },
+		stored: () => number,
+		set: (value: number) => void,
+		onCommit: (value: number) => void,
+	) => {
+		const clampPadding = (input: number) =>
+			Math.max(range().min, Number.isFinite(input) ? input : 0);
+		return (
+			<div>
+				<div class="flex items-center justify-between text-xs text-gray-11">
+					<span>{label}</span>
+					<span class="tabular-nums text-gray-12">
+						{value() >= 0 ? "+" : ""}
+						{value().toFixed(2)}s
+					</span>
+				</div>
+				<input
+					type="range"
+					min={range().min}
+					max={Math.max(range().max, stored())}
+					step="0.01"
+					value={value()}
+					onInput={(e) =>
+						set(clampPadding(Number.parseFloat(e.currentTarget.value)))
+					}
+					onChange={(e) =>
+						onCommit(clampPadding(Number.parseFloat(e.currentTarget.value)))
+					}
+					class="mt-1 w-full h-1 accent-blue-9"
+				/>
+			</div>
+		);
+	};
+
+	return (
+		<div
+			ref={popoverRef}
+			class="fixed z-50 w-56 rounded-lg border border-gray-4 bg-gray-2 p-3 shadow-xl animate-in fade-in zoom-in-95 duration-100"
+			style={{
+				left: `${Math.max(8, Math.min(props.position.x, window.innerWidth - 232))}px`,
+				top: `${Math.max(8, Math.min(props.position.y, window.innerHeight - 220))}px`,
+			}}
+			onClick={(e) => e.stopPropagation()}
+			onKeyDown={(e) => {
+				e.stopPropagation();
+				if (e.key === "Escape") props.onClose();
+			}}
+		>
+			<div class="flex items-center justify-between">
+				<span class="text-xs font-medium text-gray-12">
+					{props.cut.kind === "pause" ? "Pause cut" : `Cut "${props.cut.text}"`}
+				</span>
+				<button
+					type="button"
+					class="flex items-center justify-center size-5 rounded-sm text-gray-9 hover:bg-gray-4 hover:text-gray-12"
+					aria-label="Close"
+					onClick={() => props.onClose()}
+				>
+					<IconLucideX class="size-3" />
+				</button>
+			</div>
+			<p class="mt-1 mb-3 text-[11px] leading-snug text-gray-10">
+				Extend the cut to remove breaths, or shrink it to keep the start or end
+				of the sound.
+			</p>
+			<div class="space-y-3">
+				{slider(
+					"Before",
+					start,
+					() => limits().before,
+					() => props.cut.bufferStart ?? 0,
+					setStart,
+					(value) => commit(value, end()),
+				)}
+				{slider(
+					"After",
+					end,
+					() => limits().after,
+					() => props.cut.bufferEnd ?? 0,
+					setEnd,
+					(value) => commit(start(), value),
+				)}
+			</div>
+			<button
+				type="button"
+				class="mt-3 flex w-full items-center justify-center gap-1 rounded-md bg-green-9 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-green-10"
+				onClick={() => props.onRestore()}
+			>
+				<IconLucideRotateCcw class="size-3" />
+				{props.cut.kind === "pause" ? "Restore pause" : "Restore word"}
+			</button>
+		</div>
+	);
+}
+
+function itemOfType<T extends TranscriptItem["type"]>(
+	item: TranscriptItem,
+	type: T,
+) {
+	return item.type === type
+		? (item as Extract<TranscriptItem, { type: T }>)
+		: undefined;
+}
+
 function TranscriptEditor(props: {
-	segmentGroups: TranscriptSegmentGroup[];
-	allWords: FlatWord[];
-	activeWordIndex: number;
+	items: readonly TranscriptItem[];
+	hasContent: boolean;
+	tokenCount: number;
+	fillers: ReadonlySet<number>;
+	activeWord: FlatWord | null;
 	textSizeClass: string;
-	onWordClick: (word: FlatWord) => void;
-	onDeleteWords: (flatIndices: number[]) => void;
-	onCutWords: (flatIndices: number[]) => void;
-	onEditWord: (flatIndex: number, text: string) => void;
+	onSeek: (item: TranscriptItem) => void;
+	onDeleteWords: (words: FlatWord[]) => void;
+	onCutTokens: (tokens: number[]) => boolean;
+	onRestoreCuts: (ids: string[]) => boolean;
+	onCutPause: (pause: SourceRange) => boolean;
+	onAdjustCut: (
+		cut: TranscriptCut,
+		bufferStart: number,
+		bufferEnd: number,
+	) => boolean;
+	paddingRoom: (cut: TranscriptCut) => PaddingRoom;
+	onEditWord: (word: FlatWord, text: string) => void;
 	onAddCaption: () => void;
 }) {
 	const [selectedIndices, setSelectedIndices] = createSignal<Set<number>>(
@@ -661,30 +1143,61 @@ function TranscriptEditor(props: {
 	);
 	const [anchorIndex, setAnchorIndex] = createSignal<number>(-1);
 	const [editingIndex, setEditingIndex] = createSignal<number>(-1);
+	const [padding, setPadding] = createSignal<{
+		id: string;
+		position: { x: number; y: number };
+	} | null>(null);
 	let scrollContainerRef: HTMLDivElement | undefined;
-	let activeWordRef: HTMLSpanElement | undefined;
 
-	const flatIndexMap = createMemo(() => {
-		const map = new Map<string, number>();
-		for (let i = 0; i < props.allWords.length; i++) {
-			const w = props.allWords[i];
-			map.set(`${w.segmentIndex}:${w.wordIndex}`, i);
+	const tokenItems = createMemo(() =>
+		props.items.flatMap((item) =>
+			item.type === "word" || item.type === "cut-word" ? [item] : [],
+		),
+	);
+
+	const paddingCut = createMemo(() => {
+		const open = padding();
+		if (!open) return null;
+		for (const item of props.items) {
+			if (
+				(item.type === "cut-word" || item.type === "cut-pause") &&
+				item.cut.id === open.id
+			)
+				return item.cut;
 		}
-		return map;
+		return null;
 	});
 
-	const flatIndexOf = (word: FlatWord) =>
-		flatIndexMap().get(`${word.segmentIndex}:${word.wordIndex}`) ?? -1;
+	createEffect(() => {
+		if (padding() && !paddingCut()) setPadding(null);
+	});
 
 	const selectedCount = () => selectedIndices().size;
 
+	const clearSelection = () => {
+		setSelectedIndices(new Set<number>());
+		setAnchorIndex(-1);
+	};
+
 	createEffect(
 		on(
-			() => props.activeWordIndex,
-			(idx) => {
-				if (idx >= 0 && activeWordRef && scrollContainerRef) {
+			() => props.tokenCount,
+			() => {
+				clearSelection();
+				setEditingIndex(-1);
+			},
+			{ defer: true },
+		),
+	);
+
+	createEffect(
+		on(
+			() => props.activeWord,
+			(word) => {
+				const el =
+					scrollContainerRef?.querySelector<HTMLElement>("[data-active-word]");
+				if (word && el && scrollContainerRef) {
 					const container = scrollContainerRef;
-					const el = activeWordRef;
 					const containerRect = container.getBoundingClientRect();
 					const elRect = el.getBoundingClientRect();
 
@@ -702,6 +1215,30 @@ function TranscriptEditor(props: {
 		),
 	);
 
+	const selectedTokens = () =>
+		[...selectedIndices()]
+			.sort((a, b) => a - b)
+			.flatMap((index) => {
+				const item = tokenItems()[index];
+				return item ? [item] : [];
+			});
+
+	const removeSelection = (mode: "captions" | "video") => {
+		const tokens = selectedTokens();
+		const live = tokens.flatMap((item) => (item.type === "word" ? [item] : []));
+		if (live.length > 0) {
+			if (mode === "video") props.onCutTokens(live.map((item) => item.token));
+			else props.onDeleteWords(live.map((item) => item.word));
+		} else {
+			props.onRestoreCuts(
+				tokens.flatMap((item) =>
+					item.type === "cut-word" ? [item.cut.id] : [],
+				),
+			);
+		}
+		clearSelection();
+	};
+
 	const handleKeyDown = (e: KeyboardEvent) => {
 		if (editingIndex() !== -1) return;
 		const selected = selectedIndices();
@@ -713,35 +1250,32 @@ function TranscriptEditor(props: {
 		if (!fromContainer) scrollContainerRef?.focus({ preventScroll: true });
 
 		if (action === "edit") {
-			const word = props.allWords[[...selected][0]];
-			if (word) startEditing(word);
+			const item = tokenItems()[[...selected][0]];
+			if (item?.type === "word") startEditing(item.token);
 		} else if (action === "delete" || action === "cut") {
-			if (action === "cut") props.onCutWords([...selected]);
-			else props.onDeleteWords([...selected]);
-			setSelectedIndices(new Set<number>());
-			setAnchorIndex(-1);
+			removeSelection(action === "cut" ? "video" : "captions");
 		} else {
 			const target =
 				action === "previous"
 					? Math.max(Math.min(...selected) - 1, 0)
-					: Math.min(Math.max(...selected) + 1, props.allWords.length - 1);
+					: Math.min(Math.max(...selected) + 1, tokenItems().length - 1);
 			setSelectedIndices(new Set([target]));
 			setAnchorIndex(target);
-			const word = props.allWords[target];
-			if (word) props.onWordClick(word);
+			const item = tokenItems()[target];
+			if (item) props.onSeek(item);
 		}
 	};
 
 	const handleContainerClick = (e: MouseEvent) => {
-		if (e.target === scrollContainerRef) {
-			setSelectedIndices(new Set<number>());
-			setAnchorIndex(-1);
-		}
+		if (e.target === scrollContainerRef) clearSelection();
 	};
 
-	const handleWordSelect = (word: FlatWord, e: MouseEvent) => {
+	const handleTokenSelect = (
+		item: TranscriptItem,
+		idx: number,
+		e: MouseEvent,
+	) => {
 		scrollContainerRef?.focus({ preventScroll: true });
-		const idx = flatIndexOf(word);
 		const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 		const isShift = e.shiftKey;
 
@@ -781,21 +1315,29 @@ function TranscriptEditor(props: {
 			setAnchorIndex(idx);
 		}
 
-		props.onWordClick(word);
+		props.onSeek(item);
 	};
 
-	const handleWordRemoval = (word: FlatWord, mode: "captions" | "video") => {
-		const selected = selectedIndices();
-		const indices = selected.size > 1 ? [...selected] : [flatIndexOf(word)];
-		if (mode === "video") props.onCutWords(indices);
-		else props.onDeleteWords(indices);
-		setSelectedIndices(new Set<number>());
-		setAnchorIndex(-1);
+	const removeToken = (idx: number, mode: "captions" | "video") => {
+		if (!selectedIndices().has(idx) || selectedIndices().size <= 1) {
+			setSelectedIndices(new Set([idx]));
+		}
+		removeSelection(mode);
 		scrollContainerRef?.focus({ preventScroll: true });
 	};
 
-	const startEditing = (word: FlatWord) => {
-		const idx = flatIndexOf(word);
+	const restoreToken = (idx: number) => {
+		const tokens = selectedIndices().has(idx)
+			? selectedTokens()
+			: tokenItems().filter((item) => item.token === idx);
+		props.onRestoreCuts(
+			tokens.flatMap((item) => (item.type === "cut-word" ? [item.cut.id] : [])),
+		);
+		clearSelection();
+		scrollContainerRef?.focus({ preventScroll: true });
+	};
+
+	const startEditing = (idx: number) => {
 		setSelectedIndices(new Set([idx]));
 		setAnchorIndex(idx);
 		setEditingIndex(idx);
@@ -804,11 +1346,15 @@ function TranscriptEditor(props: {
 	const commitEditing = (word: FlatWord, text: string) => {
 		if (editingIndex() === -1) return;
 		setEditingIndex(-1);
-		props.onEditWord(flatIndexOf(word), text);
+		props.onEditWord(word, text);
 	};
 
 	const cancelEditing = () => {
 		setEditingIndex(-1);
+	};
+
+	const openPadding = (cut: TranscriptCut, e: MouseEvent) => {
+		setPadding({ id: cut.id, position: { x: e.clientX, y: e.clientY } });
 	};
 
 	return (
@@ -820,7 +1366,7 @@ function TranscriptEditor(props: {
 			onClick={handleContainerClick}
 		>
 			<Show
-				when={props.segmentGroups.length > 0}
+				when={props.hasContent}
 				fallback={
 					<div class="flex flex-col items-center justify-center h-full text-gray-9">
 						<IconCapCaptions class="size-10 mb-3 text-gray-7" />
@@ -842,39 +1388,98 @@ function TranscriptEditor(props: {
 				<div
 					class={cx("flex flex-wrap gap-x-1 gap-y-0.5", props.textSizeClass)}
 				>
-					<For each={props.segmentGroups}>
-						{(group) => (
-							<For each={group.words}>
-								{(word) => {
-									const flatIdx = () => flatIndexOf(word);
-									const isActive = () => props.activeWordIndex === flatIdx();
-									const isSelected = () => selectedIndices().has(flatIdx());
-									const isEditing = () => editingIndex() === flatIdx();
-
-									return (
-										<TranscriptWord
-											word={word}
-											isActive={isActive()}
-											isSelected={isSelected()}
-											isEditing={isEditing()}
+					<Index each={props.items}>
+						{(item) => (
+							<Switch>
+								<Match when={itemOfType(item(), "word")}>
+									{(word) => {
+										const isActive = () => props.activeWord === word().word;
+										const isSelected = () =>
+											selectedIndices().has(word().token);
+										const isEditing = () => editingIndex() === word().token;
+										return (
+											<TranscriptWord
+												word={word().word}
+												isActive={isActive()}
+												isSelected={isSelected()}
+												isEditing={isEditing()}
+												isFiller={props.fillers.has(word().token)}
+												selectedCount={selectedCount()}
+												textSizeClass={props.textSizeClass}
+												onClick={(e: MouseEvent) =>
+													handleTokenSelect(word(), word().token, e)
+												}
+												onStartEdit={() => startEditing(word().token)}
+												onCommitEdit={(text: string) =>
+													commitEditing(word().word, text)
+												}
+												onCancelEdit={cancelEditing}
+												onDelete={() => removeToken(word().token, "captions")}
+												onCut={() => removeToken(word().token, "video")}
+											/>
+										);
+									}}
+								</Match>
+								<Match when={itemOfType(item(), "cut-word")}>
+									{(cut) => (
+										<CutTranscriptWord
+											cut={cut().cut}
+											isSelected={selectedIndices().has(cut().token)}
 											selectedCount={selectedCount()}
-											textSizeClass={props.textSizeClass}
-											ref={(el: HTMLSpanElement) => {
-												if (isActive()) activeWordRef = el;
-											}}
-											onClick={(e: MouseEvent) => handleWordSelect(word, e)}
-											onStartEdit={() => startEditing(word)}
-											onCommitEdit={(text: string) => commitEditing(word, text)}
-											onCancelEdit={cancelEditing}
-											onDelete={() => handleWordRemoval(word, "captions")}
-											onCut={() => handleWordRemoval(word, "video")}
+											onClick={(e: MouseEvent) =>
+												handleTokenSelect(cut(), cut().token, e)
+											}
+											onRestore={() => restoreToken(cut().token)}
+											onAdjust={(e: MouseEvent) => openPadding(cut().cut, e)}
 										/>
-									);
-								}}
-							</For>
+									)}
+								</Match>
+								<Match when={itemOfType(item(), "pause")}>
+									{(pause) => (
+										<PauseBadge
+											duration={pause().end - pause().start}
+											cut={false}
+											onToggle={() =>
+												props.onCutPause({
+													start: pause().start,
+													end: pause().end,
+												})
+											}
+										/>
+									)}
+								</Match>
+								<Match when={itemOfType(item(), "cut-pause")}>
+									{(pause) => (
+										<PauseBadge
+											duration={pause().cut.end - pause().cut.start}
+											cut
+											onToggle={() => props.onRestoreCuts([pause().cut.id])}
+											onAdjust={(e: MouseEvent) => openPadding(pause().cut, e)}
+										/>
+									)}
+								</Match>
+							</Switch>
 						)}
-					</For>
+					</Index>
 				</div>
+			</Show>
+			<Show when={padding() && paddingCut()}>
+				{(cut) => (
+					<Portal>
+						<CutPaddingPopover
+							cut={cut()}
+							room={props.paddingRoom(cut())}
+							position={padding()?.position ?? { x: 0, y: 0 }}
+							onClose={() => setPadding(null)}
+							onChange={(bufferStart, bufferEnd) =>
+								props.onAdjustCut(cut(), bufferStart, bufferEnd)
+							}
+							onRestore={() => {
+								if (props.onRestoreCuts([cut().id])) setPadding(null);
+							}}
+						/>
+					</Portal>
+				)}
 			</Show>
 		</div>
 	);

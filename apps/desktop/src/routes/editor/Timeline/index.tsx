@@ -62,6 +62,7 @@ import {
 	sortTrackSegments,
 	trackInsertionIndex,
 } from "../timelineTracks";
+import { hideCaptionSpeech } from "../transcript-cuts";
 import { formatTime } from "../utils";
 import { type AudioSegmentDragState, AudioTrack } from "./AudioTrack";
 import { type CaptionSegmentDragState, CaptionsTrack } from "./CaptionsTrack";
@@ -742,6 +743,12 @@ export function Timeline(props: {
 				setProject(
 					produce((project) => {
 						if (project.captions) {
+							hideCaptionSpeech(
+								project.captions,
+								project.captions.segments.flatMap((segment) =>
+									segment.words?.length ? segment.words : [segment],
+								),
+							);
 							project.captions.segments = [];
 							project.captions.settings = {
 								...defaultCaptionSettings,
