@@ -667,6 +667,9 @@ impl AVAssetReaderDecoder {
             if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
                 return Ok((width, height, YuvMatrix::default()));
             }
+            if let Some(dimensions) = crate::project_recordings::header_video_metadata(&path) {
+                return Ok(dimensions);
+            }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
                 .streams()
