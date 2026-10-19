@@ -1,7 +1,3 @@
-//! Exports a project to MP4 the way the GPUI export page does (`run_export` in
-//! `src/editor_export.rs`) and reports wall time, frames per second and process
-//! CPU time.
-//!
 //! Run: cargo run --release --example export-benchmark -- <project.cap> [WIDTH] [HEIGHT] [FPS] [RUNS]
 
 use std::{
@@ -54,11 +50,9 @@ fn cpu_secs() -> f64 {
 }
 
 async fn run(project_path: PathBuf, size: XY<u32>, fps: u32, runs: u32) -> anyhow::Result<()> {
-    let output_dir = std::env::temp_dir().join("cap-export-benchmark");
-    std::fs::create_dir_all(&output_dir)?;
+    let output_dir = tempfile::tempdir()?;
     for run in 0..runs {
-        let output_path = output_dir.join(format!("run-{run}.mp4"));
-        let _ = std::fs::remove_file(&output_path);
+        let output_path = output_dir.path().join(format!("run-{run}.mp4"));
         let cancel = Arc::new(AtomicBool::new(false));
         let started = Instant::now();
         let cpu_started = cpu_secs();

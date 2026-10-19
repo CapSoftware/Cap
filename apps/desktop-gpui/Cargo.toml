@@ -170,6 +170,7 @@ tauri-winres = "0.3.5"
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
 tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util"] }
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

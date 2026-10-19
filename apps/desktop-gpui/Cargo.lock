@@ -1584,6 +1584,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "tauri-winres",
+ "tempfile",
  "tiny-skia",
  "tokio",
  "tracing",
