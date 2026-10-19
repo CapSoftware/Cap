@@ -3176,6 +3176,30 @@ pub mod synthetic {
                 .await;
         }
 
+        /// Delivers one raw callback buffer as a device would, in any sample
+        /// format, rate and channel count, whatever the feed was opened with.
+        pub async fn push_raw(
+            &self,
+            data: Vec<u8>,
+            format: SampleFormat,
+            sample_rate: u32,
+            channels: u16,
+            timestamp: Timestamp,
+        ) {
+            let _ = self
+                .feed
+                .tell(MicrophoneSamples {
+                    stream_id: STREAM_ID,
+                    data,
+                    format,
+                    sample_rate,
+                    channels,
+                    info: zero_callback_info(),
+                    timestamp,
+                })
+                .await;
+        }
+
         /// Hands samples over the way the capture callback does
         /// (`enqueue_microphone_samples`: `try_send`, never waiting).
         pub fn try_push(&self, samples: &[f32], timestamp: Timestamp) -> crate::feeds::Admission {
