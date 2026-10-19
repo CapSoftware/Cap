@@ -73,6 +73,10 @@ impl SignIn {
         self.attempt.is_some()
     }
 
+    pub fn pending_origin(&self) -> Option<SignInOrigin> {
+        self.attempt.as_ref().map(|attempt| attempt.origin)
+    }
+
     /// Open the browser sign-in. A second call while an attempt is pending
     /// re-opens that attempt's page (the user may have closed the tab) and
     /// moves the attempt to the newer origin.

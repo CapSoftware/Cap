@@ -2868,8 +2868,13 @@ impl MainWindow {
         if self.sign_in_prompt.take().is_none() {
             return;
         }
+        // Only the attempt this prompt started; one from Settings or an
+        // editor keeps running.
         let sign_in = SignIn::global(cx);
-        if sign_in.read(cx).is_pending() {
+        if matches!(
+            sign_in.read(cx).pending_origin(),
+            Some(SignInOrigin::Overlay(_))
+        ) {
             sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
         }
         cx.notify();
