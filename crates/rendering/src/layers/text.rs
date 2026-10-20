@@ -1067,16 +1067,21 @@ mod gpu_tests {
             line_height: 1.25,
             ..text([4.0, 4.0, 60.0, 60.0], [0.0; 4])
         };
-        let edits: [Edit; 8] = [
-            ("font size", |text| {
-                text.font_size = 20.0;
-                text.line_height = 1.0;
-            }),
+        // Family, weight, and italic only change pixels when the host has a
+        // distinct face. The cache key still has to include them: a miss leaves
+        // the previous buffer unused.
+        let face_edits: [Edit; 3] = [
             ("font family", |text| {
                 text.font_family = "monospace".to_string()
             }),
             ("font weight", |text| text.font_weight = 800.0),
             ("italic", |text| text.italic = true),
+        ];
+        let layout_edits: [Edit; 5] = [
+            ("font size", |text| {
+                text.font_size = 20.0;
+                text.line_height = 1.0;
+            }),
             ("letter spacing", |text| text.letter_spacing = 3.0),
             ("alignment", |text| text.align = TextAlign::Right),
             ("line height", |text| text.line_height = 2.0),
@@ -1095,22 +1100,36 @@ mod gpu_tests {
         let base_pixels = render_fresh(&base);
         assert!(base_pixels.chunks_exact(4).any(|pixel| pixel != [255; 4]));
 
-        for (name, edit) in edits {
+        let check = |name: &str, edit: fn(&mut PreparedText), require_pixel_change: bool| {
             let mut edited = base.clone();
             edit(&mut edited);
             let expected = render_fresh(&edited);
-            assert!(
-                expected != base_pixels,
-                "{name} edit should change the output"
-            );
+            if require_pixel_change {
+                assert!(
+                    expected != base_pixels,
+                    "{name} edit should change the output"
+                );
+            }
 
             let mut reused = TextLayer::new(&device, &queue);
             reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[base.clone()]);
             reused.prepare(&device, &queue, (OUTPUT, OUTPUT), &[edited]);
-            assert!(
-                render_pixels(&device, &queue, &reused) == expected,
-                "{name} edit reused a stale layout"
+            assert_eq!(
+                reused.previous_buffers.len(),
+                1,
+                "{name} edit reused the previous layout"
             );
+            assert_eq!(
+                render_pixels(&device, &queue, &reused),
+                expected,
+                "{name} edit drew a stale layout"
+            );
+        };
+        for (name, edit) in face_edits {
+            check(name, edit, false);
+        }
+        for (name, edit) in layout_edits {
+            check(name, edit, true);
         }
     }
 
