@@ -980,7 +980,7 @@ fn extract_project_audio(
     studio: &StudioRecordingMeta,
     recording_durations: &[f64],
     range: Range<f64>,
-    output_path: &Path,
+    final_samples: &mut Vec<f32>,
 ) -> Result<bool, String> {
     let tracks: Vec<Vec<(&cap_project::AudioMeta, f64)>> = match studio {
         StudioRecordingMeta::SingleSegment { segment } => {
@@ -1007,7 +1007,7 @@ fn extract_project_audio(
     if tracks.len() != recording_durations.len() {
         return Err("Recording durations do not match the recording metadata".to_string());
     }
-    let mut final_samples = Vec::new();
+    let initial_len = final_samples.len();
     let mut any_audio = false;
     let mut take_start = 0.0;
     for (tracks, duration) in tracks.into_iter().zip(recording_durations) {
@@ -1038,20 +1038,13 @@ fn extract_project_audio(
             display_duration_secs: end - start,
             sources,
         };
-        append_transcription_audio(&mut final_samples, &take, DECODE_SAMPLE_RATE)
+        append_transcription_audio(final_samples, &take, DECODE_SAMPLE_RATE)
             .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
     }
     if !any_audio {
-        return Ok(false);
+        final_samples.truncate(initial_len);
     }
-
-    let gain = normalize_audio_for_transcription(&mut final_samples);
-    if (gain - 1.0).abs() > 0.01 {
-        tracing::info!("Applied transcription audio gain: {gain:.2}x");
-    }
-
-    write_wav_16k_mono(&final_samples, output_path)?;
-    Ok(true)
+    Ok(any_audio)
 }
 
 /// The WAV encode half of the recording-directory arm
@@ -1551,6 +1544,63 @@ fn process_with_parakeet(
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+struct TranscriptionAudioOffset {
+    concatenated_start: f64,
+    source_start: f64,
+    length: f64,
+}
+
+fn restore_source_timestamps(
+    segments: Vec<CaptionSegment>,
+    offsets: &[TranscriptionAudioOffset],
+) -> Vec<CaptionSegment> {
+    let map_times = |start: f32, end: f32| {
+        let start = f64::from(start);
+        let index = offsets
+            .partition_point(|offset| offset.concatenated_start <= start)
+            .checked_sub(1)?;
+        let offset = &offsets[index];
+        let local_start = start - offset.concatenated_start;
+        if local_start >= offset.length {
+            return None;
+        }
+        let local_end =
+            (f64::from(end) - offset.concatenated_start).clamp(local_start, offset.length);
+        Some((
+            (offset.source_start + local_start) as f32,
+            (offset.source_start + local_end) as f32,
+        ))
+    };
+    segments
+        .into_iter()
+        .filter_map(|mut segment| {
+            let word_count = segment.words.len();
+            segment.words = segment
+                .words
+                .into_iter()
+                .filter_map(|mut word| {
+                    (word.start, word.end) = map_times(word.start, word.end)?;
+                    Some(word)
+                })
+                .collect();
+            if word_count != segment.words.len() {
+                segment.text = caption_text_from_words(&segment.words);
+            }
+            (segment.start, segment.end) = match (segment.words.first(), segment.words.last()) {
+                (Some(first), Some(last)) => (first.start, last.end),
+                _ if word_count == 0 => map_times(segment.start, segment.end)?,
+                _ => return None,
+            };
+            Some(segment)
+        })
+        .enumerate()
+        .map(|(index, mut segment)| {
+            segment.id = format!("segment-{index}");
+            segment
+        })
+        .collect()
+}
+
 /// `transcribe_audio` (`captions.rs:1315-1439`), minus the Tauri command
 /// plumbing. Blocking -- run it on the tokio blocking pool.
 pub fn transcribe_blocking(
@@ -1601,7 +1651,7 @@ fn transcribe_project_with(
     project_path: &Path,
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
-    mut engine: impl FnMut(&Path) -> Result<Vec<CaptionSegment>, String>,
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
 ) -> Result<Vec<CaptionSegment>, String> {
     ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
     let meta = RecordingMeta::load_for_project(project_path)
@@ -1620,34 +1670,35 @@ fn transcribe_project_with(
     let audio_path = temp_dir.join("audio.wav");
 
     let result = (|| {
-        let mut segments = Vec::new();
-        let mut any_audio = false;
+        let mut samples = Vec::new();
+        let mut offsets = Vec::new();
         for range in cap_project::transcription_source_ranges(timeline, recording_durations) {
+            let start = samples.len();
             if !extract_project_audio(
                 &meta,
                 studio,
                 recording_durations,
                 range.clone(),
-                &audio_path,
+                &mut samples,
             )? {
                 continue;
             }
-            any_audio = true;
-            for mut segment in engine(&audio_path)? {
-                segment.id = format!("segment-{}", segments.len());
-                segment.start += range.start as f32;
-                segment.end += range.start as f32;
-                for word in &mut segment.words {
-                    word.start += range.start as f32;
-                    word.end += range.start as f32;
-                }
-                segments.push(segment);
-            }
+            offsets.push(TranscriptionAudioOffset {
+                concatenated_start: start as f64 / f64::from(DECODE_SAMPLE_RATE),
+                source_start: range.start,
+                length: (samples.len() - start) as f64 / f64::from(DECODE_SAMPLE_RATE),
+            });
         }
-        if !any_audio {
+        if offsets.is_empty() {
             return Err("No audio sources found in the selected timeline".to_string());
         }
-        Ok(segments)
+        let gain = normalize_audio_for_transcription(&mut samples);
+        if (gain - 1.0).abs() > 0.01 {
+            tracing::info!("Applied transcription audio gain: {gain:.2}x");
+        }
+        write_wav_16k_mono(&samples, &audio_path)?;
+        drop(samples);
+        Ok(restore_source_timestamps(engine(&audio_path)?, &offsets))
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
