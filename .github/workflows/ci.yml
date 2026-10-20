@@ -47,6 +47,7 @@ jobs:
               - 'Cargo.lock'
             gpui:
               - '.gitattributes'
+              - 'scripts/setup.js'
               - 'apps/desktop-gpui/**'
               - 'apps/desktop/src/assets/**'
               - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
@@ -339,6 +340,18 @@ jobs:
         run: node scripts/setup.js
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      # setup.js strips the local symbols from Microsoft's ONNX Runtime dylib
+      # before Cap bundles it; the C API ort loads through must still resolve
+      # and run a real inference.
+      - name: Test the prepared ONNX Runtime
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dylib=target/native-deps/onnxruntime/lib/libonnxruntime.dylib
+          nm -gU "$dylib" | grep -q OrtGetApiBase
+          cargo test --locked -p cap-camera-effects --lib segmentation::tests::inference_runs_from_a_caller_with_a_tiny_stack -- --ignored --exact
 
       # The test build compiles every line the binary build does (the app has
       # no cfg(not(test)) code), so a separate binary build only repeated the
