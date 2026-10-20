@@ -18,7 +18,7 @@
 //! time. Frames lost to a failure must be the newest ones and fit in the
 //! fragment being written: one GOP (`GOP_SECS` x fps frames, the encoder's
 //! keyframe interval, so the longest a segment can be when frames arrive at
-//! the nominal rate) plus `IN_FLIGHT` frames still inside the pipeline.
+//! the nominal rate) plus the writer's frames still inside the pipeline.
 
 mod common;
 
@@ -57,6 +57,13 @@ const GOP: u32 = (GOP_SECS as u32) * FPS;
 /// The emitter runs at the nominal rate on an idle encoder, so the channel
 /// holds at most one frame at a time.
 const IN_FLIGHT: u32 = 3;
+
+fn recorder_in_flight(arm: Arm) -> u32 {
+    // VideoToolbox can retain four frames before emitting their packets,
+    // in addition to the duration holder, active encode and channel slots.
+    // The OOP writer drains its received packets after recorder EOF.
+    IN_FLIGHT + u32::from(cfg!(target_os = "macos") && arm == Arm::InProcess) * 4
+}
 /// Recorded length of every case.
 const SECONDS: f64 = 8.0;
 /// Truth timestamps vs presentation times: the encoder time base and the
@@ -182,7 +189,10 @@ mod source {
             Arm::InProcess => {
                 builder
                     .build::<ObservedMuxer<MacOSFragmentedM4SMuxer>>(
-                        MacOSFragmentedM4SMuxerConfig::default(),
+                        MacOSFragmentedM4SMuxerConfig {
+                            timed_fragments: true,
+                            ..Default::default()
+                        },
                     )
                     .await
             }
@@ -245,6 +255,7 @@ mod source {
             // The Studio display config (capture_pipeline.rs, X11Capture):
             // 2 s segments.
             .build::<ObservedMuxer<SegmentedVideoMuxer>>(SegmentedVideoMuxerConfig {
+                timed_fragments: true,
                 segment_duration: Duration::from_secs(2),
                 ..Default::default()
             })
@@ -670,6 +681,49 @@ fn fragment_complete(path: &Path) -> bool {
     at == data.len() && moof && mdat
 }
 
+// A segment can contain several moof/mdat fragments and end mid-write.
+// This oracle deliberately does not use the recovery parser being tested.
+fn complete_fragment_ends(data: &[u8]) -> Vec<usize> {
+    let mut ends = Vec::new();
+    let mut at = 0usize;
+    let mut pending_moof = false;
+    while let Some(header) = data.get(at..).and_then(|tail| tail.get(..8)) {
+        let size32 = u32::from_be_bytes(header[..4].try_into().unwrap());
+        let (size, header_len) = match size32 {
+            0 => break,
+            1 => {
+                let Some(extended) = data.get(at..).and_then(|tail| tail.get(8..16)) else {
+                    break;
+                };
+                let Ok(size) = usize::try_from(u64::from_be_bytes(extended.try_into().unwrap()))
+                else {
+                    break;
+                };
+                (size, 16)
+            }
+            size => (size as usize, 8),
+        };
+        let Some(end) = at.checked_add(size).filter(|end| *end <= data.len()) else {
+            break;
+        };
+        if size < header_len {
+            break;
+        }
+        match &header[4..8] {
+            b"moof" if pending_moof => break,
+            b"moof" => pending_moof = true,
+            b"mdat" if pending_moof => {
+                ends.push(end);
+                pending_moof = false;
+            }
+            b"mdat" => break,
+            _ => {}
+        }
+        at = end;
+    }
+    ends
+}
+
 fn segment_index(name: &str) -> Option<u32> {
     name.strip_prefix("segment_")?
         .trim_end_matches(".tmp")
@@ -678,9 +732,8 @@ fn segment_index(name: &str) -> Option<u32> {
         .ok()
 }
 
-/// Physically complete fragments of one writer directory (finished
-/// `segment_NNN.m4s`, or a finished `.m4s.tmp` the writer had not renamed
-/// yet), in index order.
+/// Segments with at least one complete on-disk fragment, including a
+/// complete prefix of an interrupted `.m4s.tmp`, in index order.
 fn complete_fragments(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -694,7 +747,10 @@ fn complete_fragments(dir: &Path) -> Vec<PathBuf> {
         let Some(index) = segment_index(name) else {
             continue;
         };
-        if !fragment_complete(&path) {
+        if std::fs::read(&path)
+            .map(|data| complete_fragment_ends(&data).is_empty())
+            .unwrap_or(true)
+        {
             continue;
         }
         // Prefer the renamed file when both exist.
@@ -737,7 +793,10 @@ fn decode_fragments(
     }
     let mut joined = std::fs::read(dir.join("init.mp4")).context("init.mp4")?;
     for fragment in fragments {
-        joined.extend(std::fs::read(fragment)?);
+        let data = std::fs::read(fragment)?;
+        if let Some(&end) = complete_fragment_ends(&data).last() {
+            joined.extend_from_slice(&data[..end]);
+        }
     }
     let path = scratch.join(format!(
         "joined-{}.mp4",
@@ -772,11 +831,21 @@ fn fragments_on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<Vec<(
     let mut out = Vec::new();
     for dir in writer_dirs(display) {
         for fragment in complete_fragments(&dir) {
-            out.push(decode_fragments(
-                &dir,
-                std::slice::from_ref(&fragment),
-                scratch,
-            )?);
+            let data = std::fs::read(&fragment)?;
+            let init = std::fs::read(dir.join("init.mp4"))?;
+            let path = scratch.join("fragment-prefix.mp4");
+            let mut previous = Vec::new();
+            for end in complete_fragment_ends(&data) {
+                std::fs::write(&path, [&init[..], &data[..end]].concat())?;
+                let frames = decode_markers(&path)?;
+                anyhow::ensure!(
+                    frames.starts_with(&previous),
+                    "decoding a longer fragment prefix changed earlier frames"
+                );
+                out.push(frames[previous.len()..].to_vec());
+                previous = frames;
+            }
+            let _ = std::fs::remove_file(&path);
         }
     }
     Ok(out)
@@ -836,8 +905,8 @@ fn on_disk(display: &Path, scratch: &Path) -> anyhow::Result<Vec<(u32, f64)>> {
     Ok(fragments_on_disk(display, scratch)?.concat())
 }
 
-/// A fragment covers the capture time from its first frame to the first
-/// frame of the next one, and the encoders must start a new one once
+/// A timed fragment covers capture time from its first frame to the first
+/// frame of the next one, and the writer must flush a new one once
 /// `GOP_SECS` have passed: the span may exceed `GOP_SECS` only by the
 /// interval before the frame that closed it.
 fn check_fragment_spans(case: &mut Case, fragments: &[Vec<(u32, f64)>], handed: &[Handed]) {
@@ -976,6 +1045,7 @@ fn check_timeline(case: &mut Case, label: &str, frames: &[(u32, f64)], handed: &
 /// fragment being written plus the frames in flight, all at the end.
 fn check_recovery(
     case: &mut Case,
+    arm: Arm,
     recovered: &[(u32, f64)],
     physical: &[(u32, f64)],
     handed: &[Handed],
@@ -1044,7 +1114,8 @@ fn check_recovery(
             ),
         );
     }
-    let bound = GOP + IN_FLIGHT;
+    let in_flight = recorder_in_flight(arm);
+    let bound = GOP + in_flight;
     // In time: one fragment of capture time, plus the in-flight frames and
     // the frame that closes the fragment at the delivered interval (a static
     // screen delivers far fewer frames than the nominal rate).
@@ -1052,7 +1123,7 @@ fn check_recovery(
         .windows(2)
         .map(|w| w[1].secs - w[0].secs)
         .fold(1.0 / f64::from(FPS), f64::max);
-    let bound_secs = GOP_SECS + f64::from(IN_FLIGHT + 1) * interval;
+    let bound_secs = GOP_SECS + f64::from(in_flight + 1) * interval;
     case.note(format!(
         "handed {} frames, complete on disk up to {:?}, lost tail {lost_tail} frames / {lost_secs:.2}s (bound {bound} frames / {bound_secs:.2}s)",
         handed.len(),
@@ -1063,7 +1134,7 @@ fn check_recovery(
         case.problem(
             "loss",
             format!(
-                "the crash lost the last {lost_tail} handed frames, more than one fragment ({GOP}) plus {IN_FLIGHT} in flight"
+                "the crash lost the last {lost_tail} handed frames, more than one fragment ({GOP}) plus {in_flight} in flight"
             ),
         );
     }
@@ -1072,7 +1143,7 @@ fn check_recovery(
         case.problem(
             "loss-time",
             format!(
-                "the crash lost {lost_secs:.2}s of capture, more than one {GOP_SECS}s fragment plus {} frames in flight ({bound_secs:.2}s at the delivered interval)", IN_FLIGHT + 1
+                "the crash lost {lost_secs:.2}s of capture, more than one {GOP_SECS}s fragment plus {} frames in flight ({bound_secs:.2}s at the delivered interval)", in_flight + 1
             ),
         );
     }
@@ -1263,7 +1334,11 @@ fn recorder_kill(
         check_open_fragment(case, &display);
     }
     let fragments = fragments_on_disk(&display, &scratch)?;
-    check_fragment_spans(case, &fragments, &handed);
+    // Studio flushes timed fragments; the OOP writer instead drains its
+    // keyframe-delimited segment after the recorder exits (#2646, #2644).
+    if arm == Arm::InProcess {
+        check_fragment_spans(case, &fragments, &handed);
+    }
     let physical = fragments.concat();
     let pending = pending_fragment_frames(&display, &scratch)?;
     let recovered = match finalize(&display, &scratch.join("recovered.mp4")) {
@@ -1274,7 +1349,7 @@ fn recorder_kill(
         }
         Err(e) => return Err(e),
     };
-    check_recovery(case, &recovered, &physical, &handed, &pending);
+    check_recovery(case, arm, &recovered, &physical, &handed, &pending);
     if std::env::var_os("CAP_VERIFY_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&scratch);
     }
@@ -1575,8 +1650,7 @@ fn crash_safety() {
             }
             settle(case);
         }
-        // A mostly static screen: one frame every STATIC_STEP slots. A
-        // fragment must still close every GOP_SECS of capture time.
+        // A mostly static screen still has the same crash-loss budget.
         let id = format!("crash/recorder-kill/{}/static-screen", arm.label());
         if report::selected(&id) {
             let mut case = Case::new(&id);
@@ -1722,6 +1796,7 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
     let mut case = Case::new("pending-fragment-test");
     check_recovery(
         &mut case,
+        Arm::InProcess,
         &physical[..1],
         &physical,
         &handed,
@@ -1729,4 +1804,104 @@ fn pending_fragment_bound_rejects_other_complete_frame_loss() {
     );
     assert!(case.classes.contains("dropped-complete"));
     assert!(!case.classes.contains("loss"));
+}
+
+#[test]
+fn recorder_loss_budget_accounts_for_codec_buffering_without_hiding_excess_loss() {
+    let physical: Vec<_> = (0..120).map(|i| (i, f64::from(i) / 30.0)).collect();
+    for arm in [Arm::InProcess, Arm::OutOfProcess] {
+        for lost in [63, 64, 65, 67, 68, 69] {
+            let handed: Vec<_> = (0..120 + lost)
+                .map(|index| Handed {
+                    index,
+                    secs: f64::from(index) / 30.0,
+                })
+                .collect();
+            let mut case = Case::new("recorder-loss-budget");
+            check_recovery(
+                &mut case,
+                arm,
+                &physical,
+                &physical,
+                &handed,
+                &Default::default(),
+            );
+            let videotoolbox = cfg!(target_os = "macos") && arm == Arm::InProcess;
+            assert_eq!(
+                case.classes.contains("loss"),
+                if videotoolbox { lost >= 68 } else { lost >= 64 },
+                "{arm:?}, {lost} lost frames"
+            );
+            assert_eq!(
+                case.classes.contains("loss-time"),
+                if videotoolbox { lost >= 69 } else { lost >= 65 },
+                "{arm:?}, {lost} lost frames"
+            );
+            assert!(!case.classes.contains("dropped-complete"));
+        }
+    }
+}
+
+#[test]
+fn complete_prefix_keeps_whole_fragments_before_every_truncated_tail() {
+    let atom = |kind: &[u8; 4], payload: &[u8]| {
+        let mut bytes = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(kind);
+        bytes.extend_from_slice(payload);
+        bytes
+    };
+    let first = [atom(b"moof", &[1, 2]), atom(b"mdat", &[3, 4, 5])].concat();
+    let second = [atom(b"moof", &[6]), atom(b"mdat", &[7, 8, 9])].concat();
+    for cut in 0..first.len() {
+        assert!(complete_fragment_ends(&first[..cut]).is_empty(), "{cut}");
+    }
+    for cut in 0..second.len() {
+        let bytes = [&first[..], &second[..cut]].concat();
+        assert_eq!(complete_fragment_ends(&bytes), vec![first.len()], "{cut}");
+    }
+    let joined = [first.clone(), second].concat();
+    assert_eq!(
+        complete_fragment_ends(&joined),
+        vec![first.len(), joined.len()]
+    );
+    for tail in [
+        vec![0; 8],
+        [4u32.to_be_bytes().as_slice(), b"moof"].concat(),
+        [u32::MAX.to_be_bytes().as_slice(), b"moof"].concat(),
+        [atom(b"moof", &[]), atom(b"moof", &[]), atom(b"mdat", &[])].concat(),
+    ] {
+        assert_eq!(
+            complete_fragment_ends(&[first.clone(), tail].concat()),
+            vec![first.len()]
+        );
+    }
+    let extended = [
+        atom(b"moof", &[]),
+        [
+            1u32.to_be_bytes().as_slice(),
+            b"mdat",
+            19u64.to_be_bytes().as_slice(),
+            &[1, 2, 3],
+        ]
+        .concat(),
+    ]
+    .concat();
+    assert_eq!(complete_fragment_ends(&extended), vec![extended.len()]);
+}
+
+#[test]
+fn timed_fragment_span_still_rejects_a_delayed_flush() {
+    let handed: Vec<_> = (0..=120)
+        .step_by(10)
+        .map(|index| Handed {
+            index,
+            secs: f64::from(index) / f64::from(FPS),
+        })
+        .collect();
+    for (count, fails) in [(6, false), (12, true)] {
+        let fragment = handed[..count].iter().map(|h| (h.index, h.secs)).collect();
+        let mut case = Case::new("timed-fragment-test");
+        check_fragment_spans(&mut case, &[fragment], &handed);
+        assert_eq!(case.classes.contains("fragment-span"), fails);
+    }
 }
