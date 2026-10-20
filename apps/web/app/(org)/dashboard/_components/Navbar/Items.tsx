@@ -111,17 +111,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <ImportIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP
-			? [
-					{
-						name: "Loom Migration",
-						href: "/dashboard/migrations/loom",
-						adminOnly: true,
-						icon: <ImportIcon />,
-						subNav: [],
-					},
-				]
-			: []),
 		{
 			name: "Organization Settings",
 			href: `/dashboard/settings/organization`,

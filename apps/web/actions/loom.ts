@@ -1094,7 +1094,7 @@ async function importConciergeCsvRows({
 			migrationRequestId: requestId,
 			migrationLeaseToken: leaseToken,
 		});
-		revalidatePath("/dashboard/migrations/loom");
+		revalidatePath("/dashboard/import/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return result;
 	} finally {
@@ -1506,7 +1506,7 @@ async function startConciergeLoomFileProcessing({
 			processingMessage: "Processing Loom video...",
 			startFailureMessage: "Loom file processing could not start.",
 		});
-		revalidatePath("/dashboard/migrations/loom");
+		revalidatePath("/dashboard/import/loom");
 		revalidatePath("/dashboard/admin/loom-migrations");
 		return { status };
 	} finally {

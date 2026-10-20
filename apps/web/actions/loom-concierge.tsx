@@ -47,7 +47,7 @@ function affectedRows(result: unknown) {
 }
 
 function refreshMigrationPages() {
-	revalidatePath("/dashboard/migrations/loom");
+	revalidatePath("/dashboard/import/loom");
 	revalidatePath("/dashboard/admin/loom-migrations");
 }
 
@@ -370,7 +370,7 @@ async function saveMigrationStatus({
 						organizationName={organization?.name ?? "your Cap workspace"}
 						statusLabel={LOOM_MIGRATION_STATUS_LABELS[nextStatus]}
 						message={normalizedMessage || null}
-						dashboardUrl={`${serverEnv().WEB_URL}/dashboard/migrations/loom`}
+						dashboardUrl={`${serverEnv().WEB_URL}/dashboard/import/loom`}
 					/>
 				),
 				replyTo: SUPPORT_EMAIL,
