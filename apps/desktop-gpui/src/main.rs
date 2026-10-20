@@ -403,15 +403,6 @@ fn main() {
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
         upload::queue::init(cx);
-        if std::env::var("CAP_GPUI_SCREENSHOT_WARM_LAYERS").as_deref() == Ok("1") {
-            cx.spawn(async move |cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(500))
-                    .await;
-                cx.update(|cx| screenshot_editor::prewarm_screenshot_layers(cx));
-            })
-            .detach();
-        }
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu

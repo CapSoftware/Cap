@@ -202,69 +202,6 @@ pub enum ExportRequest {
     },
 }
 
-static WARM_SCREENSHOT_LAYERS: tokio::sync::Mutex<Option<(wgpu::Device, RendererLayers)>> =
-    tokio::sync::Mutex::const_new(None);
-
-fn warm_layers_enabled() -> bool {
-    std::env::var("CAP_GPUI_SCREENSHOT_WARM_LAYERS").as_deref() == Ok("1")
-}
-
-async fn prepare_warm_layers(device: wgpu::Device, queue: wgpu::Queue, software: bool) {
-    let mut slot = WARM_SCREENSHOT_LAYERS.lock().await;
-    if slot.as_ref().is_some_and(|(cached, _)| cached == &device) {
-        return;
-    }
-    *slot = None;
-    let builder_device = device.clone();
-    match tokio::task::spawn_blocking(move || {
-        RendererLayers::new_with_options(&builder_device, &queue, software)
-    })
-    .await
-    {
-        Ok(layers) => {
-            *slot = Some((device, layers));
-        }
-        Err(error) => tracing::warn!(%error, "screenshot renderer warmup failed"),
-    }
-}
-
-pub(crate) fn prewarm_screenshot_layers(cx: &App) {
-    if !warm_layers_enabled() {
-        return;
-    }
-    gpui_tokio::Tokio::spawn(cx, async {
-        if let Some(shared) = crate::app_windows::shared_wgpu_device().await {
-            prepare_warm_layers(shared.device, shared.queue, shared.is_software_adapter).await;
-        }
-    })
-    .detach();
-}
-
-async fn screenshot_layers(constants: &RenderVideoConstants) -> RendererLayers {
-    if warm_layers_enabled() {
-        prepare_warm_layers(
-            constants.device.clone(),
-            constants.queue.clone(),
-            constants.is_software_adapter,
-        )
-        .await;
-        let mut slot = WARM_SCREENSHOT_LAYERS.lock().await;
-        if slot
-            .as_ref()
-            .is_some_and(|(device, _)| device == &constants.device)
-            && let Some((_, layers)) = slot.take()
-        {
-            return layers;
-        }
-        *slot = None;
-    }
-    RendererLayers::new_with_options(
-        &constants.device,
-        &constants.queue,
-        constants.is_software_adapter,
-    )
-}
-
 /// The render loop, on the tokio runtime: build the GPU constants, then
 /// re-render the still whenever the config changes and serve export requests
 /// on the same device. Ends when the window goes away (both senders drop).
@@ -304,7 +241,11 @@ pub async fn run_still_renderer(
     let decoded = DecodedFrame::new_with_arc(source.rgba, source.width, source.height);
 
     let mut frame_renderer = FrameRenderer::new(&constants);
-    let mut layers = screenshot_layers(&constants).await;
+    let mut layers = RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    );
 
     let mut dirty = true;
     loop {
@@ -352,17 +293,6 @@ pub async fn run_still_renderer(
                 let _ = reply.send(result);
             }
         }
-    }
-    if warm_layers_enabled() {
-        drop(layers);
-        drop(frame_renderer);
-        drop(decoded);
-        prepare_warm_layers(
-            constants.device.clone(),
-            constants.queue.clone(),
-            constants.is_software_adapter,
-        )
-        .await;
     }
 }
 
