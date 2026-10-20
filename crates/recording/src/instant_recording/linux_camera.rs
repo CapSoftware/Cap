@@ -518,7 +518,7 @@ async fn prepare_camera_frames(
 ) -> anyhow::Result<(PreparedCameraFrames, cap_timestamp::Timestamps)> {
     presentation.validate(info.width, info.height)?;
     let first = receiver.first(&CancellationToken::new()).await?;
-    Compositor::new(info, presentation).camera_overlay(&first.inner)?;
+    Compositor::new(info, presentation).camera_overlay(&first.inner, 0)?;
     // Separate Instant audio is epoch-anchored; camera readiness must not become head silence.
     let timestamps = cap_timestamp::Timestamps::now();
     Ok((
@@ -705,6 +705,7 @@ fn compositor_thread(
     let result = futures::executor::block_on(async {
         let mut screen_rx = screen_rx.fuse();
         let mut latest_camera = first_camera;
+        let mut camera_generation = 0u64;
         let mut freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
         loop {
             enum Event {
@@ -732,17 +733,19 @@ fn compositor_thread(
                 Event::Stale => anyhow::bail!("Required camera stopped delivering fresh frames"),
                 Event::Camera(frame) => {
                     latest_camera = frame?;
+                    camera_generation += 1;
                     validate_camera_frame(&latest_camera, Instant::now())?;
                     freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
                 }
                 Event::Screen(Some(screen)) => {
                     if let Some(frame) = camera_rx.latest()? {
                         latest_camera = frame;
+                        camera_generation += 1;
                         freshness_anchor = camera_freshness_anchor(&latest_camera, Instant::now());
                     }
                     validate_camera_frame(&latest_camera, Instant::now())?;
                     let output = compositor
-                        .compose(&screen, &latest_camera)
+                        .compose(screen, &latest_camera, camera_generation)
                         .context("Required camera composition failed")?;
                     if stop_token.is_cancelled() {
                         break;
@@ -791,6 +794,8 @@ struct Compositor {
     screen_to_rgba: Option<RgbaConverter>,
     camera_to_rgba: Option<RgbaConverter>,
     rgba_to_screen: Option<RgbaConverter>,
+    camera_overlay: Option<(u64, ffmpeg::frame::Video)>,
+    camera_mask: Option<Vec<f64>>,
 }
 
 impl Compositor {
@@ -801,24 +806,62 @@ impl Compositor {
             screen_to_rgba: None,
             camera_to_rgba: None,
             rgba_to_screen: None,
+            camera_overlay: None,
+            camera_mask: None,
         }
     }
 
     fn compose(
         &mut self,
-        screen: &FFmpegVideoFrame,
+        mut screen: FFmpegVideoFrame,
         camera: &FFmpegVideoFrame,
+        camera_generation: u64,
     ) -> anyhow::Result<FFmpegVideoFrame> {
-        let screen_rgba = self.convert_screen(&screen.inner)?;
+        let Some(layout) = self.in_place_layout(&mut screen.inner) else {
+            return self.compose_converted(&screen, camera, camera_generation);
+        };
         self.presentation
             .validate(self.info.width, self.info.height)?;
-        let camera_overlay = self.camera_overlay(&camera.inner)?;
-        let mut composed = screen_rgba;
+        let rect = self.presentation.rect;
+        let camera_overlay = self.camera_overlay(&camera.inner, camera_generation)?;
+        blend_rgba_into_packed(
+            &mut screen.inner,
+            layout,
+            camera_overlay,
+            rect.x as usize,
+            rect.y as usize,
+        )?;
+        Ok(screen)
+    }
+
+    fn in_place_layout(&self, screen: &mut ffmpeg::frame::Video) -> Option<PackedRgbLayout> {
+        if screen.format() != self.info.pixel_format
+            || screen.width() != self.info.width
+            || screen.height() != self.info.height
+        {
+            return None;
+        }
+        let layout = PackedRgbLayout::of(screen.format())?;
+        let writable = unsafe { ffmpeg::sys::av_frame_make_writable(screen.as_mut_ptr()) };
+        (writable >= 0).then_some(layout)
+    }
+
+    fn compose_converted(
+        &mut self,
+        screen: &FFmpegVideoFrame,
+        camera: &FFmpegVideoFrame,
+        camera_generation: u64,
+    ) -> anyhow::Result<FFmpegVideoFrame> {
+        let mut composed = self.convert_screen(&screen.inner)?;
+        self.presentation
+            .validate(self.info.width, self.info.height)?;
+        let rect = self.presentation.rect;
+        let camera_overlay = self.camera_overlay(&camera.inner, camera_generation)?;
         blend_rgba(
             &mut composed,
-            &camera_overlay,
-            self.presentation.rect.x as usize,
-            self.presentation.rect.y as usize,
+            camera_overlay,
+            rect.x as usize,
+            rect.y as usize,
         )?;
         let mut output = self.convert_to_screen(&composed)?;
         output.set_pts(screen.inner.pts());
@@ -832,10 +875,28 @@ impl Compositor {
     fn camera_overlay(
         &mut self,
         input: &ffmpeg::frame::Video,
-    ) -> anyhow::Result<ffmpeg::frame::Video> {
-        let rect = self.presentation.rect;
-        let rgba = self.convert_camera(input, rect.width, rect.height)?;
-        crop_camera(&rgba, self.presentation)
+        camera_generation: u64,
+    ) -> anyhow::Result<&ffmpeg::frame::Video> {
+        let cached = self
+            .camera_overlay
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == camera_generation);
+        if !cached {
+            self.camera_overlay = None;
+            let rect = self.presentation.rect;
+            let rgba = self.convert_camera(input, rect.width, rect.height)?;
+            let presentation = self.presentation;
+            let mask = self
+                .camera_mask
+                .get_or_insert_with(|| camera_mask(presentation));
+            let overlay = crop_camera(&rgba, presentation, mask)?;
+            self.camera_overlay = Some((camera_generation, overlay));
+        }
+        Ok(&self
+            .camera_overlay
+            .as_ref()
+            .expect("camera overlay prepared")
+            .1)
     }
 
     fn convert_screen(
@@ -1021,9 +1082,29 @@ fn aspect_fill_dimensions(
     }
 }
 
+fn camera_mask(presentation: LinuxCameraPresentation) -> Vec<f64> {
+    let rect = presentation.rect;
+    let radius = presentation.radius();
+    if radius <= 0.0 {
+        return Vec::new();
+    }
+    let mut mask = Vec::with_capacity(rect.width as usize * rect.height as usize);
+    for y in 0..rect.height as usize {
+        for x in 0..rect.width as usize {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            let dx = px - px.clamp(radius, f64::from(rect.width) - radius);
+            let dy = py - py.clamp(radius, f64::from(rect.height) - radius);
+            mask.push((radius + 0.5 - dx.hypot(dy)).clamp(0.0, 1.0));
+        }
+    }
+    mask
+}
+
 fn crop_camera(
     source: &ffmpeg::frame::Video,
     presentation: LinuxCameraPresentation,
+    mask: &[f64],
 ) -> anyhow::Result<ffmpeg::frame::Video> {
     let rect = presentation.rect;
     if source.format() != Pixel::RGBA
@@ -1041,7 +1122,6 @@ fn crop_camera(
     let output_stride = output.stride(0);
     let source_data = source.data(0);
     let output_data = output.data_mut(0);
-    let radius = presentation.radius();
     for y in 0..rect.height as usize {
         for x in 0..rect.width as usize {
             let source_x = crop_x
@@ -1059,12 +1139,7 @@ fn crop_camera(
                 .get_mut(output_offset..output_offset + 4)
                 .context("RGBA camera output layout is smaller than dimensions")?;
             destination.copy_from_slice(source_pixel);
-            if radius > 0.0 {
-                let px = x as f64 + 0.5;
-                let py = y as f64 + 0.5;
-                let dx = px - px.clamp(radius, f64::from(rect.width) - radius);
-                let dy = py - py.clamp(radius, f64::from(rect.height) - radius);
-                let coverage = (radius + 0.5 - dx.hypot(dy)).clamp(0.0, 1.0);
+            if let Some(&coverage) = mask.get(y * rect.width as usize + x) {
                 destination[3] = (f64::from(destination[3]) * coverage).round() as u8;
             }
         }
@@ -1112,6 +1187,93 @@ fn blend_rgba(
                         / 255) as u8;
             }
             destination_data[destination_offset + 3] = 255;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PackedRgbLayout {
+    bytes_per_pixel: usize,
+    red: usize,
+    green: usize,
+    blue: usize,
+    opaque: Option<usize>,
+}
+
+impl PackedRgbLayout {
+    fn of(format: Pixel) -> Option<Self> {
+        let four = |red, green, blue, opaque| Self {
+            bytes_per_pixel: 4,
+            red,
+            green,
+            blue,
+            opaque: Some(opaque),
+        };
+        let three = |red, green, blue| Self {
+            bytes_per_pixel: 3,
+            red,
+            green,
+            blue,
+            opaque: None,
+        };
+        match format {
+            Pixel::RGBA | Pixel::RGBZ => Some(four(0, 1, 2, 3)),
+            Pixel::BGRA | Pixel::BGRZ => Some(four(2, 1, 0, 3)),
+            Pixel::ARGB | Pixel::ZRGB => Some(four(1, 2, 3, 0)),
+            Pixel::ABGR | Pixel::ZBGR => Some(four(3, 2, 1, 0)),
+            Pixel::RGB24 => Some(three(0, 1, 2)),
+            Pixel::BGR24 => Some(three(2, 1, 0)),
+            _ => None,
+        }
+    }
+}
+
+fn blend_rgba_into_packed(
+    destination: &mut ffmpeg::frame::Video,
+    layout: PackedRgbLayout,
+    source: &ffmpeg::frame::Video,
+    x: usize,
+    y: usize,
+) -> anyhow::Result<()> {
+    if source.format() != Pixel::RGBA {
+        return Err(anyhow!("camera overlay must be RGBA"));
+    }
+    let source_width = source.width() as usize;
+    let source_height = source.height() as usize;
+    if x.saturating_add(source_width) > destination.width() as usize
+        || y.saturating_add(source_height) > destination.height() as usize
+    {
+        return Err(anyhow!("camera overlay exceeds screen frame"));
+    }
+    let bytes_per_pixel = layout.bytes_per_pixel;
+    let source_stride = source.stride(0);
+    let destination_stride = destination.stride(0);
+    let source_data = source.data(0);
+    let destination_data = destination.data_mut(0);
+    for row in 0..source_height {
+        let source_row = &source_data[row * source_stride..][..source_width * 4];
+        let destination_row = &mut destination_data
+            [(y + row) * destination_stride + x * bytes_per_pixel..]
+            [..source_width * bytes_per_pixel];
+        for (source_pixel, destination_pixel) in source_row
+            .chunks_exact(4)
+            .zip(destination_row.chunks_exact_mut(bytes_per_pixel))
+        {
+            let alpha = u16::from(source_pixel[3]);
+            let inverse_alpha = 255 - alpha;
+            for (channel, offset) in [layout.red, layout.green, layout.blue]
+                .into_iter()
+                .enumerate()
+            {
+                destination_pixel[offset] = ((u16::from(source_pixel[channel]) * alpha
+                    + u16::from(destination_pixel[offset]) * inverse_alpha
+                    + 127)
+                    / 255) as u8;
+            }
+            if let Some(opaque) = layout.opaque {
+                destination_pixel[opaque] = 255;
+            }
         }
     }
     Ok(())
@@ -1318,7 +1480,7 @@ mod tests {
             VideoInfo::from_raw_ffmpeg(Pixel::RGBA, 2, 2, 30),
             presentation(2, 2),
         );
-        let overlay = compositor.camera_overlay(&converted.inner).unwrap();
+        let overlay = compositor.camera_overlay(&converted.inner, 0).unwrap();
         assert_eq!(overlay.format(), Pixel::RGBA);
         assert_eq!(&overlay.data(0)[..8], &[30, 20, 10, 255, 60, 50, 40, 255]);
         assert_eq!(
@@ -1684,7 +1846,7 @@ mod tests {
         let before = frame.data(0).to_vec();
         let mut request = presentation(4, 2);
         request.mirrored = true;
-        let output = crop_camera(&frame, request).unwrap();
+        let output = crop_camera(&frame, request, &camera_mask(request)).unwrap();
         assert_eq!(&output.data(0)[..4], &[3, 0, 3, 255]);
         assert_eq!(&output.data(0)[12..16], &[0, 0, 3, 255]);
         assert_eq!(frame.data(0), before);
@@ -1699,14 +1861,11 @@ mod tests {
             LinuxCameraShape::Round,
             LinuxCameraShape::RoundedRectangle { radius_pixels: 3 },
         ] {
-            let output = crop_camera(
-                &frame,
-                LinuxCameraPresentation {
-                    shape,
-                    ..presentation(8, 8)
-                },
-            )
-            .unwrap();
+            let request = LinuxCameraPresentation {
+                shape,
+                ..presentation(8, 8)
+            };
+            let output = crop_camera(&frame, request, &camera_mask(request)).unwrap();
             assert_eq!(output.data(0)[3], 0);
             assert_eq!(output.data(0)[output.stride(0) * 4 + 4 * 4 + 3], 255);
         }
@@ -1985,19 +2144,16 @@ mod tests {
         let stride = source.stride(0);
         let center = 2 * stride + 2 * 4;
         source.data_mut(0)[center..center + 4].copy_from_slice(&[1, 2, 3, 255]);
-        let cropped = crop_camera(
-            &source,
-            LinuxCameraPresentation {
-                rect: LinuxCameraRect {
-                    x: 0,
-                    y: 0,
-                    width: 2,
-                    height: 2,
-                },
-                ..LinuxCameraPresentation::default_for(2, 2)
+        let request = LinuxCameraPresentation {
+            rect: LinuxCameraRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
             },
-        )
-        .expect("crop succeeds");
+            ..LinuxCameraPresentation::default_for(2, 2)
+        };
+        let cropped = crop_camera(&source, request, &camera_mask(request)).expect("crop succeeds");
         assert_eq!(
             &cropped.data(0)[cropped.stride(0)..cropped.stride(0) + 4],
             &[1, 2, 3, 255]
@@ -2005,7 +2161,7 @@ mod tests {
     }
 
     #[test]
-    fn compositor_converts_nv12_camera_without_mutating_screen_and_preserves_pts() {
+    fn compositor_converts_nv12_camera_without_mutating_shared_screen_and_preserves_pts() {
         ffmpeg::init().expect("FFmpeg initializes");
         let timestamp = Timestamp::Instant(Instant::now());
         let info = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRA, 8, 8, 30);
@@ -2031,10 +2187,11 @@ mod tests {
             info,
             LinuxCameraPresentation::default_for(info.width, info.height),
         );
+        let shared = shared_ref(&screen_frame.inner);
         let output = compositor
-            .compose(&screen_frame, &camera_frame)
+            .compose(screen_frame, &camera_frame, 0)
             .expect("composition succeeds");
-        assert_eq!(screen_frame.inner.data(0), original.as_slice());
+        assert_eq!(shared.data(0), original.as_slice());
         assert_eq!(camera_frame.inner.data(0), camera_before.0.as_slice());
         assert_eq!(camera_frame.inner.data(1), camera_before.1.as_slice());
         assert_eq!(output.inner.pts(), Some(1234));
@@ -2074,10 +2231,11 @@ mod tests {
             info,
             LinuxCameraPresentation::default_for(info.width, info.height),
         );
+        let shared = shared_ref(&screen_frame.inner);
         let output = compositor
-            .compose(&screen_frame, &camera_frame)
+            .compose(screen_frame, &camera_frame, 0)
             .expect("composition succeeds");
-        assert_eq!(screen_frame.inner.data(0), original_y.as_slice());
+        assert_eq!(shared.data(0), original_y.as_slice());
         assert_eq!(output.inner.format(), Pixel::NV12);
         assert_eq!(output.inner.pts(), Some(4321));
         assert_ne!(output.inner.data(0)[output.inner.stride(0) * 7 + 7], 16);
@@ -2089,5 +2247,202 @@ mod tests {
         let mut destination = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 2, 2);
         let source = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 2, 2);
         assert!(blend_rgba(&mut destination, &source, 1, 0).is_err());
+    }
+
+    fn shared_ref(frame: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let mut shared = ffmpeg::frame::Video::empty();
+        let result = unsafe { ffmpeg::sys::av_frame_ref(shared.as_mut_ptr(), frame.as_ptr()) };
+        assert!(result >= 0);
+        shared
+    }
+
+    fn pattern_frame(format: Pixel, width: u32, height: u32, seed: u32) -> ffmpeg::frame::Video {
+        let mut frame = ffmpeg::frame::Video::new(format, width, height);
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        for plane in 0..frame.planes() {
+            for byte in frame.data_mut(plane) {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                *byte = (state >> 24) as u8;
+            }
+        }
+        frame
+    }
+
+    fn copy_frame(frame: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let mut copy = ffmpeg::frame::Video::new(frame.format(), frame.width(), frame.height());
+        for plane in 0..frame.planes() {
+            copy.data_mut(plane).copy_from_slice(frame.data(plane));
+        }
+        copy.set_pts(frame.pts());
+        copy
+    }
+
+    fn defined_bytes(frame: &ffmpeg::frame::Video) -> Vec<u8> {
+        let layout = PackedRgbLayout::of(frame.format()).unwrap();
+        let padding = match frame.format() {
+            Pixel::RGBZ | Pixel::BGRZ | Pixel::ZRGB | Pixel::ZBGR => layout.opaque,
+            _ => None,
+        };
+        let row_bytes = frame.width() as usize * layout.bytes_per_pixel;
+        frame
+            .data(0)
+            .chunks(frame.stride(0))
+            .take(frame.height() as usize)
+            .flat_map(|row| row[..row_bytes].chunks_exact(layout.bytes_per_pixel))
+            .flat_map(|pixel| {
+                pixel
+                    .iter()
+                    .enumerate()
+                    .map(move |(offset, &byte)| if Some(offset) == padding { 0 } else { byte })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn in_place_composition_matches_converted_composition_for_packed_formats() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let timestamp = Timestamp::Instant(Instant::now());
+        let (width, height) = (37, 23);
+        for format in [
+            Pixel::BGRZ,
+            Pixel::RGBZ,
+            Pixel::ZRGB,
+            Pixel::ZBGR,
+            Pixel::BGRA,
+            Pixel::RGBA,
+            Pixel::ARGB,
+            Pixel::ABGR,
+            Pixel::RGB24,
+            Pixel::BGR24,
+        ] {
+            for (shape, mirrored) in [
+                (LinuxCameraShape::Round, false),
+                (LinuxCameraShape::Round, true),
+                (
+                    LinuxCameraShape::RoundedRectangle { radius_pixels: 3 },
+                    false,
+                ),
+            ] {
+                let info = VideoInfo::from_raw_ffmpeg(format, width, height, 30);
+                let presentation = LinuxCameraPresentation {
+                    rect: LinuxCameraRect {
+                        x: 19,
+                        y: 6,
+                        width: 15,
+                        height: 15,
+                    },
+                    shape,
+                    mirrored,
+                    effect: LinuxCameraEffect::None,
+                };
+                let mut screen = pattern_frame(format, width, height, 7);
+                screen.set_pts(Some(99));
+                let camera = FFmpegVideoFrame {
+                    inner: pattern_frame(Pixel::YUV420P, 32, 18, 11),
+                    timestamp,
+                };
+                let expected = Compositor::new(info, presentation)
+                    .compose_converted(
+                        &FFmpegVideoFrame {
+                            inner: copy_frame(&screen),
+                            timestamp,
+                        },
+                        &camera,
+                        0,
+                    )
+                    .expect("converted composition succeeds");
+                let mut compositor = Compositor::new(info, presentation);
+                let mut probe = copy_frame(&screen);
+                assert!(compositor.in_place_layout(&mut probe).is_some());
+                let actual = compositor
+                    .compose(
+                        FFmpegVideoFrame {
+                            inner: screen,
+                            timestamp,
+                        },
+                        &camera,
+                        0,
+                    )
+                    .expect("in-place composition succeeds");
+                assert_eq!(
+                    defined_bytes(&actual.inner),
+                    defined_bytes(&expected.inner),
+                    "{format:?} {shape:?} mirrored={mirrored}"
+                );
+                assert_eq!(actual.inner.pts(), Some(99));
+            }
+        }
+    }
+
+    #[test]
+    fn camera_overlay_is_reused_until_a_new_camera_frame_arrives() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let timestamp = Timestamp::Instant(Instant::now());
+        let info = VideoInfo::from_raw_ffmpeg(Pixel::BGRZ, 16, 16, 30);
+        let mut compositor = Compositor::new(info, LinuxCameraPresentation::default_for(16, 16));
+        let camera = |seed| FFmpegVideoFrame {
+            inner: pattern_frame(Pixel::RGBA, 8, 8, seed),
+            timestamp,
+        };
+        let screen = || FFmpegVideoFrame {
+            inner: pattern_frame(Pixel::BGRZ, 16, 16, 3),
+            timestamp,
+        };
+        let first = compositor.compose(screen(), &camera(1), 1).unwrap();
+        let reused = compositor.compose(screen(), &camera(2), 1).unwrap();
+        let refreshed = compositor.compose(screen(), &camera(2), 2).unwrap();
+        assert_eq!(first.inner.data(0), reused.inner.data(0));
+        assert_ne!(first.inner.data(0), refreshed.inner.data(0));
+    }
+
+    #[test]
+    #[ignore = "timing benchmark; run with --release --ignored --nocapture"]
+    fn compose_timing_benchmark() {
+        ffmpeg::init().expect("FFmpeg initializes");
+        let timestamp = Timestamp::Instant(Instant::now());
+        let camera = FFmpegVideoFrame {
+            inner: pattern_frame(Pixel::YUV420P, 1280, 720, 5),
+            timestamp,
+        };
+        let frames = 240u64;
+        for (width, height) in [(1920, 1080), (2560, 1440), (3840, 2160)] {
+            let info = VideoInfo::from_raw_ffmpeg(Pixel::BGRZ, width, height, 60);
+            let presentation = LinuxCameraPresentation {
+                shape: LinuxCameraShape::Round,
+                ..LinuxCameraPresentation::default_for(width, height)
+            };
+            let template = pattern_frame(Pixel::BGRZ, width, height, 9);
+            let run = |label: &str, converted: bool, camera_every: u64| {
+                let mut compositor = Compositor::new(info, presentation);
+                let mut times = Vec::new();
+                for index in 0..frames {
+                    let screen = FFmpegVideoFrame {
+                        inner: copy_frame(&template),
+                        timestamp,
+                    };
+                    let generation = index / camera_every;
+                    let started = Instant::now();
+                    let output = if converted {
+                        compositor.compose_converted(&screen, &camera, generation)
+                    } else {
+                        compositor.compose(screen, &camera, generation)
+                    };
+                    times.push(started.elapsed().as_secs_f64() * 1000.0);
+                    drop(output.unwrap());
+                }
+                times.sort_by(f64::total_cmp);
+                let mean = times.iter().sum::<f64>() / times.len() as f64;
+                println!(
+                    "{width}x{height} {label:<34} mean {mean:6.2} ms  p50 {:6.2} ms  p95 {:6.2} ms",
+                    times[times.len() / 2],
+                    times[times.len() * 95 / 100],
+                );
+            };
+            run("converted, new camera every frame", true, 1);
+            run("in place, new camera every frame", false, 1);
+            run("in place, 30 fps camera / 60 fps", false, 2);
+        }
     }
 }
