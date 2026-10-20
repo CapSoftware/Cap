@@ -5,15 +5,18 @@ const mocks = vi.hoisted(() => ({
 	connect: vi.fn(),
 	execute: vi.fn(),
 	destroy: vi.fn(),
+	env: {
+		LICENSE_DATABASE_URL: "mysql://reader:example@database.example.com/license",
+	} as { LICENSE_DATABASE_URL?: string },
 }));
 vi.mock("mysql2/promise", () => ({ createConnection: mocks.connect }));
 vi.mock("@cap/env", () => ({
-	serverEnv: () => ({
-		LICENSE_DATABASE_URL: "mysql://reader:example@database.example.com/license",
-	}),
+	serverEnv: () => mocks.env,
 }));
 beforeEach(() => {
 	vi.useFakeTimers();
+	mocks.env.LICENSE_DATABASE_URL =
+		"mysql://reader:example@database.example.com/license";
 	mocks.connect.mockResolvedValue({
 		execute: mocks.execute,
 		destroy: mocks.destroy,
@@ -85,5 +88,13 @@ describe("license invoice database reader", () => {
 		await expect(getLicenseCustomerIds("owner@example.com")).resolves.toEqual([
 			"cus_license",
 		]);
+	});
+	it("rejects without connecting when the license database is not configured", async () => {
+		mocks.env.LICENSE_DATABASE_URL = undefined;
+		await expect(getLicenseCustomerIds("owner@example.com")).rejects.toThrow(
+			"License billing is unavailable.",
+		);
+		expect(mocks.connect).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 });
