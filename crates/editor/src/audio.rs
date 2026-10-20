@@ -1837,6 +1837,15 @@ mod memory_pressure {
     }
 }
 
+struct CachePlan {
+    key: ProgressiveRenderKey,
+    shift_from: usize,
+    shift: usize,
+    ready_at: usize,
+    rate: u32,
+    channels: usize,
+}
+
 struct CachedProgressiveRender {
     key: ProgressiveRenderKey,
     render: Arc<ProgressiveRender>,
@@ -2137,27 +2146,37 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         let estimated_memory_bytes = progressive_buffer_bytes(estimated_output_samples);
 
         let mode = if estimated_memory_bytes <= MAX_PROGRESSIVE_BUFFER_BYTES {
-            let sources = cache.is_some().then(|| (segments.clone(), music.clone()));
-            let fresh = ProgressiveAudioBuffer::new(
-                segments,
-                music,
-                project,
-                output_info,
-                duration_secs,
-                start_playhead_secs,
-                estimated_output_samples,
-            );
-            PrerenderedAudioBufferMode::Progressive(match (cache, sources) {
-                (Some(cache), Some((segments, music))) => fresh.reuse_or_retain(
-                    cache,
-                    segments,
+            let plan = cache.and_then(|_| {
+                ProgressiveAudioBuffer::<T>::cache_plan(
+                    segments.clone(),
                     &music,
                     project,
                     output_info,
                     duration_secs,
                     start_playhead_secs,
-                ),
-                _ => fresh,
+                    estimated_output_samples,
+                )
+            });
+            let cached = cache
+                .zip(plan.as_ref())
+                .and_then(|(cache, plan)| ProgressiveAudioBuffer::from_cache(cache, plan));
+            PrerenderedAudioBufferMode::Progressive(match cached {
+                Some(cached) => cached,
+                None => {
+                    let fresh = ProgressiveAudioBuffer::new(
+                        segments,
+                        music,
+                        project,
+                        output_info,
+                        duration_secs,
+                        start_playhead_secs,
+                        estimated_output_samples,
+                    );
+                    match cache {
+                        Some(cache) => fresh.retain_in_cache(cache, plan),
+                        None => fresh,
+                    }
+                }
             })
         } else {
             if let Some(cache) = cache {
@@ -2390,74 +2409,84 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     /// least what the fresh render would have by now; otherwise keeps the
     /// fresh render for later plays when its samples are origin independent.
     #[allow(clippy::too_many_arguments)]
-    fn reuse_or_retain(
-        self,
-        cache: &PlaybackAudioCache,
+    /// The cache key and sample offsets a render starting at
+    /// `start_playhead_secs` would use, when its output can be shared.
+    fn cache_plan(
         segments: Vec<AudioSegment>,
         music: &MusicTracks,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
         start_playhead_secs: f64,
-    ) -> Self {
+        len: usize,
+    ) -> Option<CachePlan> {
         let pass1_start_secs = Self::pass1_start_secs(start_playhead_secs, duration_secs);
-        let shift = origin_shift(pass1_start_secs);
+        let shift = origin_shift(pass1_start_secs)?;
         let key = render_is_origin_independent(project, output_info, duration_secs)
             .then(|| {
                 ProgressiveRenderKey::new(segments, music, project, duration_secs, output_info)
             })
-            .flatten();
-        let (Some(shift), Some(key)) = (shift, key) else {
+            .flatten()?;
+        let (rate, channels) = (output_info.sample_rate, output_info.channels);
+        Some(CachePlan {
+            key,
+            shift_from: output_sample_index(pass1_start_secs, rate, channels, len),
+            shift: shift * channels,
+            ready_at: output_sample_index(start_playhead_secs, rate, channels, len)
+                .saturating_add(Self::ready_window_samples(output_info)),
+            rate,
+            channels,
+        })
+    }
+
+    /// A reader over the cached render when it matches `plan` and already
+    /// covers the start window. Checked before a fresh render is built, so a
+    /// replay never allocates a second full-timeline buffer.
+    fn from_cache(cache: &PlaybackAudioCache, plan: &CachePlan) -> Option<Self> {
+        let entry = lock(&cache.entry);
+        let cached = entry.as_ref()?;
+        if cached.key != plan.key
+            || cached.render.timeline.stop.load(Ordering::Acquire)
+            || !cached.render.timeline.covers(
+                plan.shift_from + plan.shift,
+                plan.ready_at.saturating_add(plan.shift),
+            )
+        {
+            return None;
+        }
+        let render = cached.render.clone();
+        drop(entry);
+        render.timeline.attach_reader();
+        info!("Reusing rendered playback audio");
+        Some(Self {
+            render,
+            ready_rx: None,
+            shift_from: plan.shift_from,
+            shift: plan.shift,
+            read_position: 0,
+            sample_rate: plan.rate,
+            channels: plan.channels,
+            _format: std::marker::PhantomData,
+        })
+    }
+
+    fn retain_in_cache(self, cache: &PlaybackAudioCache, plan: Option<CachePlan>) -> Self {
+        let Some(plan) = plan else {
             let previous = lock(&cache.entry).take();
             self.render.timeline.retire(previous);
             return self;
         };
-
-        let (rate, channels) = (output_info.sample_rate, output_info.channels);
-        let len = self.render.timeline.samples.len();
-        let shift_from = output_sample_index(pass1_start_secs, rate, channels, len);
-        let ready_at = output_sample_index(start_playhead_secs, rate, channels, len)
-            .saturating_add(Self::ready_window_samples(output_info));
-        let shift = shift * channels;
-
         let mut entry = lock(&cache.entry);
-        if let Some(cached) = entry.as_ref()
-            && cached.key == key
-            && !cached.render.timeline.stop.load(Ordering::Acquire)
-            && cached
-                .render
-                .timeline
-                .covers(shift_from + shift, ready_at.saturating_add(shift))
-        {
-            let render = cached.render.clone();
-            drop(entry);
-            render.timeline.attach_reader();
-            info!(
-                start_playhead_secs = start_playhead_secs,
-                "Reusing rendered playback audio"
-            );
-            return Self {
-                render,
-                ready_rx: None,
-                shift_from,
-                shift,
-                read_position: 0,
-                sample_rate: rate,
-                channels,
-                _format: std::marker::PhantomData,
-            };
-        }
-
-        let previous = if shift == 0
+        let previous = if plan.shift == 0
             && self.render.timeline.retain(CacheRelease {
                 cache: Arc::downgrade(&cache.entry),
                 idle_release: cache.idle_release,
             }) {
             entry.replace(CachedProgressiveRender {
-                key,
+                key: plan.key,
                 render: self.render.clone(),
             })
-        } else if entry.as_ref().is_some_and(|cached| cached.key != key) {
+        } else if entry.as_ref().is_some_and(|cached| cached.key != plan.key) {
             entry.take()
         } else {
             None
@@ -2491,7 +2520,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     /// render can no longer produce them.
     #[cfg(feature = "test-hooks")]
     fn rendered(&self, samples: usize) -> Option<bool> {
-        let timeline = &self.timeline;
+        let timeline = &self.render.timeline;
         let start = self.read_position.min(timeline.samples.len());
         let end = (self.read_position + samples).min(timeline.samples.len());
         if start >= end || timeline.complete.load(Ordering::Acquire) {
