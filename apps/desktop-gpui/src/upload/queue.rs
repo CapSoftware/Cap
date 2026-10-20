@@ -944,10 +944,13 @@ impl MetaStamp {
     }
 }
 
-// Only "not a candidate" verdicts are cached: that verdict depends solely on
-// recording-meta.json, while candidates still go through the upload lock and
-// instant-upload.json (where auth changes apply) on every pass. Every writer
-// replaces the file by rename, so a save also changes the inode on unix.
+// Only "not a candidate" verdicts from a successfully loaded meta are cached:
+// that verdict depends solely on recording-meta.json, while candidates still
+// go through the upload lock and instant-upload.json (where auth changes
+// apply) on every pass. A failed load may be transient (sharing violation,
+// antivirus lock) and leaves the stamp unchanged, so it is retried every pass.
+// Every writer replaces the file by rename, so a save also changes the inode
+// on unix.
 #[derive(Default)]
 struct SkippedMeta {
     stamps: HashMap<OsString, (MetaStamp, u64)>,
@@ -972,9 +975,9 @@ impl SkippedMeta {
             *seen = self.pass;
             return false;
         }
-        let candidate = load(project).is_some_and(|meta| upload_candidate(&meta));
-        match stamp {
-            Some(stamp) if !candidate => {
+        let candidate = load(project).map(|meta| upload_candidate(&meta));
+        match (stamp, candidate) {
+            (Some(stamp), Some(false)) => {
                 self.stamps
                     .insert(project.as_os_str().to_os_string(), (stamp, self.pass));
             }
@@ -982,7 +985,7 @@ impl SkippedMeta {
                 self.stamps.remove(project.as_os_str());
             }
         }
-        candidate
+        candidate.unwrap_or(false)
     }
 
     fn finish_pass(&mut self) {
@@ -2475,6 +2478,43 @@ mod tests {
         parses.store(0, Ordering::Relaxed);
         scan_library(&mut skipped, &fixture.0, &parses);
         assert_eq!(parses.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn recordings_whose_meta_failed_to_load_are_retried() {
+        let fixture = Fixture::new();
+        let project = fixture.project();
+        let mut skipped = SkippedMeta::default();
+
+        skipped.begin_pass();
+        assert!(!skipped.is_candidate(&project, |_| None));
+        skipped.finish_pass();
+        assert!(!skipped.stamps.contains_key(project.as_os_str()));
+
+        skipped.begin_pass();
+        assert!(skipped.is_candidate(&project, |project| {
+            RecordingMeta::load_for_project(project).ok()
+        }));
+        skipped.finish_pass();
+        assert!(skipped.stamps.is_empty());
+    }
+
+    #[test]
+    fn unparsable_recording_meta_is_parsed_again_every_pass() {
+        let fixture = library_with_skipped_projects(2);
+        let mut skipped = SkippedMeta::default();
+        let parses = AtomicUsize::new(0);
+        let corrupt = fixture.0.join("skip-0.cap");
+        std::fs::write(corrupt.join("recording-meta.json"), b"{ not json").unwrap();
+
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert!(!skipped.stamps.contains_key(corrupt.as_os_str()));
+        assert_eq!(skipped.stamps.len(), 1);
+
+        parses.store(0, Ordering::Relaxed);
+        scan_library(&mut skipped, &fixture.0, &parses);
+        assert_eq!(parses.load(Ordering::Relaxed), 3);
+        assert!(!skipped.stamps.contains_key(corrupt.as_os_str()));
     }
 
     #[test]
