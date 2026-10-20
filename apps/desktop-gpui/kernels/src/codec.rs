@@ -28,24 +28,29 @@ pub fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
 }
 
 pub fn flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    let mut dst = vec![0u8; rgba.len() / 4 * 3];
+    let mut i = 0;
     for px in rgba.chunks_exact(4) {
         let alpha = px[3];
+        let out = &mut dst[i..i + 3];
         if alpha == 255 {
-            rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            out[0] = px[0];
+            out[1] = px[1];
+            out[2] = px[2];
         } else if alpha == 0 {
-            rgb.extend_from_slice(&[255, 255, 255]);
+            out[0] = 255;
+            out[1] = 255;
+            out[2] = 255;
         } else {
             let a = u32::from(alpha);
             let inv = 255 - a;
-            rgb.extend_from_slice(&[
-                ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8,
-                ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8,
-                ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8,
-            ]);
+            out[0] = ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8;
+            out[1] = ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8;
+            out[2] = ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8;
         }
+        i += 3;
     }
-    rgb
+    dst
 }
 
 pub fn encode_png_rgba(rgba: &[u8], width: u32, height: u32) -> image::ImageResult<Vec<u8>> {
@@ -244,6 +249,67 @@ mod tests {
             flatten_rgba_to_rgb_over_white(&trailing),
             rgba_to_rgb(&crate::screenshot::flatten_onto_white(&trailing))
         );
+    }
+
+    fn extend_flatten_rgba_to_rgb_over_white(rgba: &[u8]) -> Vec<u8> {
+        let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+        for px in rgba.chunks_exact(4) {
+            let alpha = px[3];
+            if alpha == 255 {
+                rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+            } else if alpha == 0 {
+                rgb.extend_from_slice(&[255, 255, 255]);
+            } else {
+                let a = u32::from(alpha);
+                let inv = 255 - a;
+                rgb.extend_from_slice(&[
+                    ((u32::from(px[0]) * a + 255 * inv + 127) / 255) as u8,
+                    ((u32::from(px[1]) * a + 255 * inv + 127) / 255) as u8,
+                    ((u32::from(px[2]) * a + 255 * inv + 127) / 255) as u8,
+                ]);
+            }
+        }
+        rgb
+    }
+
+    fn rgba_with_alpha(pixels: usize, alpha_of: impl Fn(usize) -> u8) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity(pixels * 4);
+        for i in 0..pixels {
+            rgba.extend_from_slice(&[
+                (i & 0xff) as u8,
+                ((i >> 4) & 0xff) as u8,
+                i.wrapping_mul(17) as u8,
+                alpha_of(i),
+            ]);
+        }
+        rgba
+    }
+
+    #[test]
+    fn flatten_rgba_to_rgb_over_white_matches_extend_formula() {
+        assert_eq!(flatten_rgba_to_rgb_over_white(&[1, 2, 3, 255]), [1, 2, 3]);
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&[1, 2, 3, 0]),
+            [255, 255, 255]
+        );
+        assert_eq!(
+            flatten_rgba_to_rgb_over_white(&[10, 0, 255, 128]),
+            [132, 127, 255]
+        );
+
+        let opaque = rgba_with_alpha(256, |_| 255);
+        let transparent = rgba_with_alpha(256, |_| 0);
+        let mixed = rgba_with_alpha(256, |i| match i % 3 {
+            0 => 0,
+            1 => 255,
+            _ => (i * 17) as u8,
+        });
+        for rgba in [&opaque[..], &transparent[..], &mixed[..]] {
+            assert_eq!(
+                flatten_rgba_to_rgb_over_white(rgba),
+                extend_flatten_rgba_to_rgb_over_white(rgba)
+            );
+        }
     }
 
     #[test]
