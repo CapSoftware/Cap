@@ -11330,6 +11330,9 @@ impl Render for EditorWindow {
             }
         }
         let preview_only = self.preview_fullscreen.is_some();
+        if !preview_only {
+            self.seek_slider_drag = false;
+        }
 
         if self.export.is_some() {
             return div()
