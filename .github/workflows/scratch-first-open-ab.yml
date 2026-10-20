@@ -1,0 +1,29 @@
+name: Scratch editor first open A/B
+on:
+  push:
+    branches: [ci/editor-first-open-ab]
+jobs:
+  ab:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-6vcpu-macos-26]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: aarch64-apple-darwin
+          tier: fast
+      - name: Build
+        run: |
+          cargo build --release -p cap-verify --example first-open-fixture
+          cargo build --release -p cap-editor --example editor-startup-benchmark
+          [ -e target/release/Frameworks ] || ln -sfn "$PWD/target/Frameworks" target/release/Frameworks
+      - name: Fixture
+        run: target/release/examples/first-open-fixture "$RUNNER_TEMP/first-open.cap" && ls -R "$RUNNER_TEMP/first-open.cap" | head -40
+      - name: A/B
+        run: python3 .github/scripts/first-open-ab.py target/release/examples/editor-startup-benchmark "$RUNNER_TEMP/first-open.cap" 9
