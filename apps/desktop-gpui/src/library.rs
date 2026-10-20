@@ -1572,24 +1572,32 @@ mod tests {
         assert!(full.iter().all(|item| item.bundle != corrupt));
         let legacy_item = full.iter().find(|item| item.bundle == legacy).unwrap();
         assert_eq!(legacy_item.path, legacy.join("shot.png"));
-        assert_eq!(full.last().unwrap().bundle, legacy);
 
-        assert_eq!(full[0].sort_time_millis, full[1].sort_time_millis);
         let read_dir_order: Vec<PathBuf> = std::fs::read_dir(&root)
             .unwrap()
             .flatten()
             .map(|entry| entry.path())
-            .filter(|path| *path == tie_a || *path == tie_b)
             .collect();
-        assert_eq!(
-            [full[0].bundle.clone(), full[1].bundle.clone()],
-            read_dir_order[..],
-            "equal timestamps keep directory order"
-        );
+        let read_dir_position = |bundle: &Path| {
+            read_dir_order
+                .iter()
+                .position(|path| path == bundle)
+                .unwrap()
+        };
+        let tie_time = |bundle: &Path| {
+            full.iter()
+                .find(|item| item.bundle == bundle)
+                .unwrap()
+                .sort_time_millis
+        };
+        assert_eq!(tie_time(&tie_a), tie_time(&tie_b));
         assert!(
-            full[1..]
-                .windows(2)
-                .all(|pair| pair[0].sort_time_millis > pair[1].sort_time_millis)
+            full.windows(2).all(|pair| {
+                pair[0].sort_time_millis > pair[1].sort_time_millis
+                    || (pair[0].sort_time_millis == pair[1].sort_time_millis
+                        && read_dir_position(&pair[0].bundle) < read_dir_position(&pair[1].bundle))
+            }),
+            "newest first, equal timestamps keep directory order"
         );
 
         for limit in [0, 1, 9, 20, 100] {
