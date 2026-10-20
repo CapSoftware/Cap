@@ -4746,10 +4746,20 @@ mod tests {
         };
         let moved = translated_path(waveform_path(&relative).unwrap(), offset);
         let built = waveform_path(&absolute).unwrap();
-        let (moved, built) = (waveform_vertices(&moved), waveform_vertices(&built));
+        // The tessellator may emit the same triangles in another order once
+        // float rounding differs, so compare the vertex sets.
+        let sorted = |path: &gpui::Path<Pixels>| {
+            let mut vertices = waveform_vertices(path);
+            vertices.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            vertices
+        };
+        let (moved, built) = (sorted(&moved), sorted(&built));
         assert_eq!(moved.len(), built.len());
         for ((mx, my), (bx, by)) in moved.iter().zip(&built) {
-            assert!((mx - bx).abs() < 0.01 && (my - by).abs() < 0.01);
+            assert!(
+                (mx - bx).abs() < 0.01 && (my - by).abs() < 0.01,
+                "({mx}, {my}) vs ({bx}, {by})"
+            );
         }
     }
 
