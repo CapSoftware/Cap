@@ -43,6 +43,9 @@ vi.mock("server-only", () => ({}));
 import { AiUnavailableError } from "@/lib/ai/run";
 import {
 	callAiApi,
+	chunkTranscriptWithTimestamps,
+	estimateTokens,
+	getTranscriptChunkTokenBudget,
 	parseAiResponse,
 	parseChunkAnalysis,
 	parseFinalSummary,
@@ -184,5 +187,43 @@ describe("map-reduce output parsers", () => {
 		expect(() => parseFinalSummary('{"title":"Only a title"}')).toThrow();
 		expect(() => parseFinalSummary('{"summary":"Only a summary"}')).toThrow();
 		expect(() => parseFinalSummary('{"title":"","summary":""}')).toThrow();
+	});
+});
+
+describe("transcript chunk budget", () => {
+	it("uses a 4k-context-safe budget when openai-compatible is in the chain", () => {
+		getAiProviderChainMock.mockReturnValue([makeSelection("groq")]);
+		const hostedBudget = getTranscriptChunkTokenBudget();
+
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection("groq"),
+			makeSelection("openai-compatible"),
+		]);
+		const localBudget = getTranscriptChunkTokenBudget();
+
+		expect(hostedBudget).toBe(6000);
+		expect(localBudget).toBeLessThan(hostedBudget);
+		expect(localBudget).toBeLessThanOrEqual(2000);
+	});
+
+	it("estimates one token per non-ASCII character", () => {
+		expect(estimateTokens("abcdefgh")).toBe(2);
+		expect(estimateTokens("会議の要約")).toBe(5);
+	});
+
+	it("splits a transcript so no chunk exceeds the token budget", () => {
+		const segments = Array.from({ length: 300 }, (_, i) => ({
+			start: i * 4,
+			text: "We reviewed the search console numbers for the client today.",
+		}));
+
+		const chunks = chunkTranscriptWithTimestamps(segments, 1800);
+
+		expect(chunks.length).toBeGreaterThan(1);
+		for (const chunk of chunks) {
+			expect(estimateTokens(chunk.text)).toBeLessThanOrEqual(1800);
+		}
+		expect(chunks[0]?.startTime).toBe(0);
+		expect(chunks[chunks.length - 1]?.endTime).toBe(299 * 4);
 	});
 });
