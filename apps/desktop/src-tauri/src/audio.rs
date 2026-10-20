@@ -53,7 +53,7 @@ impl AppSounds {
 }
 
 pub fn get_waveform(audio: &DecodedAudio) -> Vec<f32> {
-    cap_audio::waveform_peaks(audio.sample_slices().flatten(), audio.channels())
+    cap_audio::waveform_peaks(audio.sample_slices(), audio.channels())
 }
 
 const WAVEFORM_PEAKS_PER_SECOND: f64 = 10.0;
