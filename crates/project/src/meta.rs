@@ -323,7 +323,7 @@ impl RecordingMeta {
     fn normalize_paths(&mut self) {
         let normalize_video = |meta: &mut VideoMeta| normalize_relative_path(&mut meta.path);
         let normalize_audio = |meta: &mut AudioMeta| normalize_relative_path(&mut meta.path);
-        let normalize_cursor = |path: &mut Option<RelativePathBuf>| {
+        let normalize_optional_path = |path: &mut Option<RelativePathBuf>| {
             if let Some(path) = path {
                 normalize_relative_path(path);
             }
@@ -339,7 +339,7 @@ impl RecordingMeta {
                     if let Some(audio) = &mut segment.audio {
                         normalize_audio(audio);
                     }
-                    normalize_cursor(&mut segment.cursor);
+                    normalize_optional_path(&mut segment.cursor);
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     for segment in &mut inner.segments {
@@ -353,7 +353,8 @@ impl RecordingMeta {
                         if let Some(system_audio) = &mut segment.system_audio {
                             normalize_audio(system_audio);
                         }
-                        normalize_cursor(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.keyboard);
                     }
 
                     if let Cursors::Correct(cursors) = &mut inner.cursors {
@@ -369,6 +370,12 @@ impl RecordingMeta {
 }
 
 fn normalize_relative_path(path: &mut RelativePathBuf) {
+    // No real file name holds a NUL, and every media opener (FFmpeg, AVFoundation)
+    // converts the path to a C string, which a NUL makes fail or panic. Dropping
+    // it turns a damaged meta into an ordinary missing file.
+    if path.as_str().contains('\0') {
+        *path = RelativePathBuf::from(path.as_str().replace('\0', ""));
+    }
     let original = path.as_str();
     let normalized = original.replace('\\', "/");
 
@@ -376,6 +383,7 @@ fn normalize_relative_path(path: &mut RelativePathBuf) {
         || normalized.starts_with("screenshots/")
         || normalized.starts_with("output/")
     {
+        *path = RelativePathBuf::from(normalized);
         return;
     }
 
@@ -1517,5 +1525,17 @@ mod ordinary_media_access_tests {
                 .is_err()
         );
         assert!(diagnostics.is_dir());
+    }
+}
+
+#[cfg(test)]
+mod nul_path_tests {
+    use super::*;
+
+    #[test]
+    fn a_nul_in_a_media_path_is_dropped() {
+        let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
+        normalize_relative_path(&mut path);
+        assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
     }
 }

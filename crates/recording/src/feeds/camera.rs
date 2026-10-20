@@ -2067,6 +2067,12 @@ pub mod synthetic {
                 .map_err(|error| anyhow::anyhow!("synthetic camera lock: {error}"))
         }
 
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
         pub async fn push_native(&self, frame: NativeCameraFrame) {
             let _ = self.feed.tell(NewNativeFrame(frame)).await;
         }

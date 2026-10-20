@@ -14,6 +14,14 @@ import { buildEnv, serverEnv } from "@cap/env";
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
 
+	// Exit, not throw: Next.js catches a throwing register() and serves 500s.
+	try {
+		serverEnv();
+	} catch {
+		console.error("🚨 Environment validation failed, exiting");
+		process.exit(1);
+	}
+
 	console.log("Waiting 5 seconds to run migrations");
 	// Function to trigger migrations with retry logic
 	const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {

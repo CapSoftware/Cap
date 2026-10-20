@@ -567,7 +567,7 @@ fn list_microphone_names() -> Vec<MicrophoneOption> {
 fn list_microphones() -> Vec<MicrophoneOption> {
     // CPAL's configuration lookup opens an input AudioUnit and can prompt for consent.
     #[cfg(target_os = "macos")]
-    if !crate::permissions::check_raw().is_some_and(|permissions| {
+    if !crate::permissions::check_raw_preflight().is_some_and(|permissions| {
         permissions.microphone == crate::permissions::MediaAuthorization::Authorized
     }) {
         return list_microphone_names();

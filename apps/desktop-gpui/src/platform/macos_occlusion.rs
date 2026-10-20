@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use objc2::{
     ffi::class_addMethod,
+    msg_send,
     runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
     sel,
 };
@@ -61,8 +62,60 @@ impl OcclusionShim {
             return 0;
         };
         let raw = unsafe { original(receiver, selector) };
-        if raw != 0 { raw | 0x2 } else { raw }
+        reported_state(raw, ordered_out_windows_keep_raw_state(), || unsafe {
+            is_visible(receiver)
+        })
     }
+}
+
+/// macOS 27 also reports the undocumented bit for ordered-out windows, so
+/// lending it the visible bit would keep a hidden window's display link
+/// waking the main thread every vsync. `is_visible` is only asked when the
+/// answer matters.
+fn reported_state(
+    raw: usize,
+    ordered_out_keeps_raw_state: bool,
+    is_visible: impl FnOnce() -> bool,
+) -> usize {
+    if raw != 0 && (!ordered_out_keeps_raw_state || is_visible()) {
+        raw | 0x2
+    } else {
+        raw
+    }
+}
+
+pub(super) fn ordered_out_windows_keep_raw_state() -> bool {
+    static KEEP_RAW: OnceLock<bool> = OnceLock::new();
+    *KEEP_RAW.get_or_init(|| macos_major_version().is_some_and(|major| major >= 27))
+}
+
+fn macos_major_version() -> Option<u32> {
+    let mut buffer = [0u8; 32];
+    let mut len = buffer.len();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return None;
+    }
+    let version = std::str::from_utf8(buffer.get(..len)?).ok()?;
+    version
+        .trim_end_matches('\0')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+unsafe fn is_visible(receiver: *mut AnyObject) -> bool {
+    let visible: Bool = unsafe { msg_send![receiver, isVisible] };
+    visible.as_bool()
 }
 
 static WINDOW_SHIM: OcclusionShim = OcclusionShim::new();
@@ -105,7 +158,7 @@ mod tests {
     use std::cell::Cell;
 
     use objc2::{
-        ClassType, msg_send, msg_send_id,
+        ClassType, msg_send_id,
         rc::Id,
         runtime::{ClassBuilder, NSObject},
     };
@@ -114,6 +167,7 @@ mod tests {
 
     thread_local! {
         static RAW_STATE: Cell<usize> = const { Cell::new(0) };
+        static VISIBLE: Cell<bool> = const { Cell::new(true) };
         static WINDOW_CALLS: Cell<usize> = const { Cell::new(0) };
         static PANEL_CALLS: Cell<usize> = const { Cell::new(0) };
     }
@@ -130,6 +184,10 @@ mod tests {
     unsafe extern "C" fn native_window_state(_receiver: *mut AnyObject, _selector: Sel) -> usize {
         WINDOW_CALLS.set(WINDOW_CALLS.get() + 1);
         RAW_STATE.get()
+    }
+
+    unsafe extern "C" fn native_is_visible(_receiver: *mut AnyObject, _selector: Sel) -> Bool {
+        Bool::new(VISIBLE.get())
     }
 
     unsafe extern "C" fn native_panel_state(_receiver: *mut AnyObject, _selector: Sel) -> usize {
@@ -165,11 +223,21 @@ mod tests {
     fn classes() -> &'static Classes {
         static CLASSES: OnceLock<Classes> = OnceLock::new();
         CLASSES.get_or_init(|| {
-            let native_window = with_method(
-                "CapOcclusionTestNativeWindow",
-                NSObject::class(),
-                native_window_state,
-            );
+            let native_window = {
+                let mut builder =
+                    ClassBuilder::new("CapOcclusionTestNativeWindow", NSObject::class()).unwrap();
+                unsafe {
+                    builder.add_method(
+                        sel!(occlusionState),
+                        native_window_state as OcclusionStateFn,
+                    );
+                    builder.add_method(
+                        sel!(isVisible),
+                        native_is_visible as unsafe extern "C" fn(_, _) -> _,
+                    );
+                }
+                builder.register()
+            };
             let native_panel = with_method(
                 "CapOcclusionTestNativePanel",
                 native_window,
@@ -218,15 +286,50 @@ mod tests {
 
     fn verify_states(class: &AnyClass, expected_window_calls: usize, expected_panel_calls: usize) {
         let instance: Id<NSObject> = unsafe { msg_send_id![class, new] };
-        for raw in [0, 0x2, 0x2000, 0x2002] {
-            RAW_STATE.set(raw);
-            WINDOW_CALLS.set(0);
-            PANEL_CALLS.set(0);
-            let state: usize = unsafe { msg_send![&*instance, occlusionState] };
-            assert_eq!(state, if raw != 0 { raw | 0x2 } else { raw });
-            assert_eq!(WINDOW_CALLS.get(), expected_window_calls);
-            assert_eq!(PANEL_CALLS.get(), expected_panel_calls);
+        for visible in [true, false] {
+            VISIBLE.set(visible);
+            for raw in [0, 0x2, 0x2000, 0x2002] {
+                RAW_STATE.set(raw);
+                WINDOW_CALLS.set(0);
+                PANEL_CALLS.set(0);
+                let state: usize = unsafe { msg_send![&*instance, occlusionState] };
+                let expected =
+                    reported_state(raw, ordered_out_windows_keep_raw_state(), || visible);
+                assert_eq!(state, expected);
+                assert_eq!(WINDOW_CALLS.get(), expected_window_calls);
+                assert_eq!(PANEL_CALLS.get(), expected_panel_calls);
+            }
         }
+        VISIBLE.set(true);
+    }
+
+    #[test]
+    fn an_ordered_out_window_keeps_the_raw_state_only_under_the_macos_27_policy() {
+        for raw in [0x2, 0x2000, 0x2002] {
+            assert_eq!(reported_state(raw, true, || false), raw);
+            assert_eq!(reported_state(raw, true, || true), raw | 0x2);
+            assert_eq!(reported_state(raw, false, || false), raw | 0x2);
+            assert_eq!(reported_state(raw, false, || true), raw | 0x2);
+        }
+        for keep_raw in [true, false] {
+            for visible in [true, false] {
+                assert_eq!(reported_state(0, keep_raw, || visible), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn visibility_is_only_queried_under_the_macos_27_policy() {
+        let asked = Cell::new(0);
+        let ask = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        reported_state(0x2000, false, ask);
+        reported_state(0, true, ask);
+        assert_eq!(asked.get(), 0);
+        reported_state(0x2000, true, ask);
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
