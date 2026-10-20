@@ -1077,6 +1077,13 @@ impl EditorInstance {
                         zoom_timelines.clear();
                         outgoing_zoom_timelines.clear();
                     }
+                    let total_duration = project
+                        .timeline
+                        .as_ref()
+                        .map(|timeline| timeline.duration())
+                        .unwrap_or(0.0);
+                    let total_frames = (total_duration * f64::from(fps)).ceil() as u32;
+                    let frame_number = frame_number.min(total_frames.saturating_sub(1));
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {
@@ -1141,12 +1148,6 @@ impl EditorInstance {
                                 warn!("Preview renderer: no frames returned for frame {}", frame_number);
                                 break;
                             }
-
-                            let total_duration = project
-                                .timeline
-                                .as_ref()
-                                .map(|t| t.duration())
-                                .unwrap_or(0.0);
 
                             // Scrub renders sample the same precomputed spring
                             // timeline playback and export use (the old focus
