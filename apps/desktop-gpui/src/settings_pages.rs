@@ -1333,6 +1333,10 @@ impl SettingsWindow {
         self.pages.listening.is_some()
     }
 
+    pub(crate) fn switch_back_running(&self) -> bool {
+        self.pages.switch_back.is_some()
+    }
+
     /// Leave recording mode without touching the binding. Safe to call when
     /// nothing is recording; every exit path (Escape, a click elsewhere,
     /// another page, the window losing focus or closing) lands here.

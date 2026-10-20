@@ -145,6 +145,12 @@ impl RenderOnce for Toggle {
                 keyboard_nav::active(window, cx) && !disabled,
                 keyboard_nav::stop,
             )
+            .role(gpui::Role::Switch)
+            .aria_toggled(if checked {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .w(width)
             .h(height)
             .p(padding)

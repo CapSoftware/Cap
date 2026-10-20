@@ -14,8 +14,8 @@
 use std::collections::HashSet;
 
 use gpui::{
-    App, BoxShadow, Context, Global, InteractiveElement, Keystroke, Styled, Subscription, Window,
-    WindowId, point, px, rgb,
+    App, BoxShadow, Context, DispatchPhase, Global, InteractiveElement, IntoElement, Keystroke,
+    MouseDownEvent, Styled, Subscription, Window, WindowId, canvas, point, px, rgb,
 };
 
 use crate::{theme::Theme, ui::text_input::text_input_is_composing};
@@ -57,11 +57,29 @@ pub fn active(window: &Window, cx: &App) -> bool {
         .is_some_and(|windows| windows.0.contains(&window.window_handle().window_id()))
 }
 
-pub fn pointer_used(window: &mut Window, cx: &mut App) {
+pub fn leave(window: &mut Window, cx: &mut App) {
     let id = window.window_handle().window_id();
     if cx.has_global::<KeyboardWindows>() && cx.global_mut::<KeyboardWindows>().0.remove(&id) {
         window.refresh();
     }
+}
+
+/// Leaves keyboard mode on any mouse press in the window. A window-level
+/// listener, because `.occlude()` hitboxes (menus, modals, the Windows header)
+/// hide the root from element mouse listeners.
+pub fn pointer_watcher() -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        |_, (), window, _| {
+            window.on_mouse_event(|_: &MouseDownEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture {
+                    leave(window, cx);
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// Route Tab in `window` to focus navigation. `blocked` lets the owner keep
@@ -110,7 +128,11 @@ fn navigate(direction: Direction, window: &mut Window, cx: &mut App) {
     // before that frame draws, so the move waits one frame more.
     window.refresh();
     window.on_next_frame(move |window, _| {
-        window.on_next_frame(move |window, cx| move_focus(direction, window, cx));
+        window.on_next_frame(move |window, cx| {
+            if active(window, cx) {
+                move_focus(direction, window, cx);
+            }
+        });
     });
 }
 

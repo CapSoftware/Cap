@@ -148,9 +148,13 @@ impl RenderOnce for Select {
             on_open,
         } = self;
 
+        let interactive = !disabled && (on_click.is_some() || on_open.is_some());
         div()
             .id(id)
-            .when(keyboard_nav::active(window, cx), keyboard_nav::ring)
+            .when(
+                interactive && keyboard_nav::active(window, cx),
+                keyboard_nav::stop,
+            )
             .flex()
             .flex_row()
             .items_center()

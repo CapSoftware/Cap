@@ -250,7 +250,7 @@ impl Render for ModeSelectWindow {
 
         let shell = div()
             .track_focus(&self.focus)
-            .capture_any_mouse_down(|_, window, cx| keyboard_nav::pointer_used(window, cx))
+            .child(keyboard_nav::pointer_watcher())
             // `flex flex-col relative justify-center items-center min-h-screen
             //  bg-gray-1`
             .size_full()

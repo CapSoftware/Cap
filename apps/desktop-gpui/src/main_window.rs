@@ -2709,6 +2709,9 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.keyboard_nav_blocked(cx) {
+            ui::keyboard_nav::leave(window, cx);
+        }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         let meter_active = self.panel.is_none()
@@ -2777,7 +2780,7 @@ impl Render for MainWindow {
                     cx.stop_propagation();
                 }
             }))
-            .capture_any_mouse_down(|_, window, cx| ui::keyboard_nav::pointer_used(window, cx))
+            .child(ui::keyboard_nav::pointer_watcher())
     }
 }
 

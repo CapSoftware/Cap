@@ -752,7 +752,7 @@ impl SettingsWindow {
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
         let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
-            this.menu.is_some() || this.shortcut_listening()
+            this.menu.is_some() || this.shortcut_listening() || this.switch_back_running()
         });
 
         Self {
@@ -1560,6 +1560,9 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        if self.switch_back_running() {
+            ui::keyboard_nav::leave(window, cx);
+        }
         self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
@@ -1575,7 +1578,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
-            .capture_any_mouse_down(|_, window, cx| ui::keyboard_nav::pointer_used(window, cx))
+            .child(ui::keyboard_nav::pointer_watcher())
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.

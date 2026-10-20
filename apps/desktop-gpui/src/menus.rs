@@ -110,7 +110,12 @@ pub fn init(cx: &mut App) {
         // Deferred: the keystroke arrives inside the key window's dispatch, and
         // `open_settings` updates the settings window, which may be that one.
         cx.defer(|cx: &mut App| {
-            app_windows::open_settings(Page::General, cx);
+            let page = cx
+                .try_global::<AppWindows>()
+                .and_then(|windows| windows.settings)
+                .and_then(|settings| settings.read(cx).ok().map(|settings| settings.page))
+                .unwrap_or(Page::General);
+            app_windows::open_settings(page, cx);
             cx.activate(true);
         });
     });
