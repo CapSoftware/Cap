@@ -264,7 +264,7 @@ index 393e517..e5850bf 100644
  mod tests {
      use crate::{
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f5b2c1a..1d8d41b 100644
+index f5b2c1a..e3e4b34 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -499,6 +499,7 @@ struct MacWindowState {
@@ -293,7 +293,7 @@ index f5b2c1a..1d8d41b 100644
                  event_callback: None,
                  activate_callback: None,
                  resize_callback: None,
-@@ -1670,6 +1675,38 @@ impl PlatformWindow for MacWindow {
+@@ -1670,6 +1675,48 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
  
@@ -310,6 +310,16 @@ index f5b2c1a..1d8d41b 100644
 +                return;
 +            }
 +            lock.start_display_link();
++            // A hidden window draws nothing until it is shown again, when the
++            // occlusion handler restarts its display link.
++            let visible = unsafe {
++                lock.native_window
++                    .occlusionState()
++                    .contains(NSWindowOcclusionState::NSWindowOcclusionStateVisible)
++            };
++            if !visible {
++                return;
++            }
 +            // A restarted display link first fires a refresh or two later, so
 +            // draw the frame that woke the window right away instead.
 +            let window_state = Arc::downgrade(&window_state);
