@@ -530,6 +530,7 @@ pub fn spawn_cursor_recorder(
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
         let mut last_cursor_image = None;
+        let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -572,18 +573,44 @@ pub fn spawn_cursor_recorder(
                 last_window_position = window_position;
             }
 
-            let cursor_id = if let Some(data) = get_cursor_data() {
-                let cursor_id = cursor_id_for_image(
-                    data,
-                    &mut response,
-                    &cursors_dir,
-                    writer.as_ref(),
-                    &mut last_cursor_image,
-                );
-                last_cursor_id = Some(cursor_id.clone());
-                Some(cursor_id)
-            } else {
+            // The cursor image only labels this tick's move and click events,
+            // and reading it builds a full TIFF of every representation
+            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
+            // record neither.
+            let buttons_changed = buttons_changed(
+                &last_mouse_state.button_pressed,
+                &mouse_state.button_pressed,
+            );
+            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
                 last_cursor_id.clone()
+            } else {
+                // While the pointer moves the shape rarely changes, so compare
+                // the raw bitmap first and build the TIFF only for a new shape.
+                let known = last_cursor_id
+                    .is_some()
+                    .then_some(last_cursor_fingerprint.as_ref())
+                    .flatten();
+                match sample_cursor(known) {
+                    CursorSample::Unchanged => last_cursor_id.clone(),
+                    CursorSample::Read {
+                        fingerprint,
+                        data: Some(data),
+                    } => {
+                        let cursor_id = cursor_id_for_image(
+                            data,
+                            &mut response,
+                            &cursors_dir,
+                            writer.as_ref(),
+                            &mut last_cursor_image,
+                        );
+                        last_cursor_id = Some(cursor_id.clone());
+                        // Only a registered image may short-circuit later ticks;
+                        // a failed decode or save keeps retrying.
+                        last_cursor_fingerprint = last_cursor_image.as_ref().and(fingerprint);
+                        Some(cursor_id)
+                    }
+                    CursorSample::Read { data: None, .. } => last_cursor_id.clone(),
+                }
             };
 
             let Some(cursor_id) = cursor_id else {
@@ -703,6 +730,15 @@ pub fn spawn_cursor_recorder(
     }
 }
 
+/// Whether any button present in both samples changed state: the same pairs
+/// the click events below are generated from.
+fn buttons_changed(previous: &[bool], current: &[bool]) -> bool {
+    previous
+        .iter()
+        .zip(current)
+        .any(|(previous, current)| previous != current)
+}
+
 fn cursor_id_for_image(
     data: CursorData,
     response: &mut CursorActorResponse,
@@ -770,7 +806,7 @@ fn cursor_id_for_image(
     cursor_id
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
@@ -778,21 +814,108 @@ struct CursorData {
     shape: Option<CursorShape>,
 }
 
+/// Cheap enough to take every tick (~0.1 ms against ~0.4 ms for the TIFF),
+/// and changes whenever the TIFF would, since both come from the same image.
 #[cfg(target_os = "macos")]
-fn get_cursor_data() -> Option<CursorData> {
+#[derive(PartialEq)]
+struct CursorFingerprint {
+    pixels: Vec<u8>,
+    bitmap: (usize, usize, usize),
+    size: (u64, u64),
+    hotspot: (u64, u64),
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(PartialEq)]
+struct CursorFingerprint;
+
+enum CursorSample {
+    /// The cursor still matches the fingerprint of the last registered image.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Unchanged,
+    Read {
+        fingerprint: Option<CursorFingerprint>,
+        data: Option<CursorData>,
+    },
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sample_cursor(_known: Option<&CursorFingerprint>) -> CursorSample {
+    CursorSample::Read {
+        fingerprint: None,
+        data: get_cursor_data(),
+    }
+}
+
+/// One read of the current cursor per tick: its fingerprint, and its encoded
+/// image only when that fingerprint differs from `known`, both from the same
+/// `NSCursor` so a shape change between two reads can't pair them wrongly.
+#[cfg(target_os = "macos")]
+fn sample_cursor(known: Option<&CursorFingerprint>) -> CursorSample {
     use objc::rc::autoreleasepool;
     use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+        let Some(cursor) = NSCursor::currentSystemCursor().or_else(|| {
             let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
             cursor
-        })?;
-
-        macos_cursor_data(&cursor)
+        }) else {
+            return CursorSample::Read {
+                fingerprint: None,
+                data: None,
+            };
+        };
+        let fingerprint = macos_cursor_fingerprint(&cursor);
+        if fingerprint.is_some() && fingerprint.as_ref() == known {
+            return CursorSample::Unchanged;
+        }
+        CursorSample::Read {
+            data: macos_cursor_data(&cursor),
+            fingerprint,
+        }
     })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_fingerprint(cursor: &objc2_app_kit::NSCursor) -> Option<CursorFingerprint> {
+    use core_graphics::image::CGImageRef;
+    use foreign_types_shared::ForeignTypeRef;
+    use objc::{sel, sel_impl};
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSImage;
+
+    unsafe {
+        let image: Option<Retained<NSImage>> = msg_send![cursor, image];
+        let image = image?;
+        let size = image.size();
+        let hotspot = cursor.hotSpot();
+        let image_ptr = Retained::as_ptr(&image) as *mut objc::runtime::Object;
+        let nil = std::ptr::null_mut::<objc::runtime::Object>();
+        // `CGImageForProposedRect:context:hints:` returns an autoreleased
+        // CGImageRef, valid for the caller's autorelease pool.
+        let cg_image: *mut std::ffi::c_void = objc::msg_send![
+            image_ptr,
+            CGImageForProposedRect: std::ptr::null_mut::<std::ffi::c_void>()
+            context: nil
+            hints: nil
+        ];
+        if cg_image.is_null() {
+            return None;
+        }
+        let cg_image = CGImageRef::from_ptr(cg_image.cast());
+        Some(CursorFingerprint {
+            pixels: cg_image.data().bytes().to_vec(),
+            bitmap: (
+                cg_image.width(),
+                cg_image.height(),
+                cg_image.bytes_per_row(),
+            ),
+            size: (size.width.to_bits(), size.height.to_bits()),
+            hotspot: (hotspot.x.to_bits(), hotspot.y.to_bits()),
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -828,7 +951,7 @@ fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_cursor_tests {
-    use super::macos_cursor_data;
+    use super::{macos_cursor_data, macos_cursor_fingerprint};
     use objc2::{AllocAnyThread, class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_app_kit::{NSCursor, NSImage};
 
@@ -843,6 +966,35 @@ mod macos_cursor_tests {
         let image = unsafe { NSImage::initWithSize(NSImage::alloc(), Default::default()) };
         let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
         assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    fn cursor_with(color: [u8; 4]) -> Retained<NSCursor> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let data: Retained<AnyObject> = unsafe {
+            msg_send![class!(NSData), dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(), length: png.len()]
+        };
+        let image: Retained<NSImage> = unsafe { msg_send![NSImage::alloc(), initWithData: &*data] };
+        NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default())
+    }
+
+    #[test]
+    fn the_fingerprint_tells_cursor_shapes_apart_without_encoding_them() {
+        let arrow = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let same = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let recolored = macos_cursor_fingerprint(&cursor_with([200, 40, 80, 255])).unwrap();
+        assert!(arrow == same);
+        assert!(arrow != recolored);
+        assert!(!arrow.pixels.is_empty());
+    }
+
+    #[test]
+    fn a_cursor_without_an_image_has_no_fingerprint() {
+        let cursor = unsafe { NSCursor::new() };
+        assert!(macos_cursor_fingerprint(&cursor).is_none());
     }
 
     #[test]
@@ -877,50 +1029,112 @@ mod macos_cursor_tests {
 
 #[cfg(target_os = "linux")]
 fn get_cursor_data() -> Option<CursorData> {
-    get_x11_cursor_data().or_else(fallback_cursor_data)
+    thread_local! {
+        static X11_CURSOR: std::cell::RefCell<X11CursorSource> = std::cell::RefCell::default();
+    }
+
+    X11_CURSOR
+        .with_borrow_mut(X11CursorSource::cursor_data)
+        .or_else(fallback_cursor_data)
 }
 
 #[cfg(target_os = "linux")]
-fn get_x11_cursor_data() -> Option<CursorData> {
-    use x11rb::protocol::xfixes::ConnectionExt as _;
+#[derive(Default)]
+struct X11CursorSource {
+    connection: Option<x11rb::rust_connection::RustConnection>,
+    last_image: Option<X11CursorImage>,
+}
 
-    let (conn, _) = x11rb::connect(None).ok()?;
-    conn.xfixes_query_version(5, 0).ok()?.reply().ok()?;
-    let cursor = conn.xfixes_get_cursor_image().ok()?.reply().ok()?;
+#[cfg(target_os = "linux")]
+struct X11CursorImage {
+    width: u16,
+    height: u16,
+    pixels: Vec<u32>,
+    png: Vec<u8>,
+}
 
-    let width = u32::from(cursor.width);
-    let height = u32::from(cursor.height);
-    if width == 0 || height == 0 {
-        return None;
+#[cfg(target_os = "linux")]
+impl X11CursorSource {
+    fn cursor_data(&mut self) -> Option<CursorData> {
+        let cursor = self.cursor_image()?;
+
+        let width = u32::from(cursor.width);
+        let height = u32::from(cursor.height);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(CursorData {
+            image: self.png(cursor.width, cursor.height, cursor.cursor_image)?,
+            hotspot: XY::new(
+                f64::from(cursor.xhot) / f64::from(width),
+                f64::from(cursor.yhot) / f64::from(height),
+            ),
+            shape: None,
+        })
     }
 
-    let pixel_count = usize::from(cursor.width).checked_mul(usize::from(cursor.height))?;
-    if cursor.cursor_image.len() != pixel_count {
+    fn cursor_image(&mut self) -> Option<x11rb::protocol::xfixes::GetCursorImageReply> {
+        use x11rb::protocol::xfixes::ConnectionExt as _;
+
+        if let Some(connection) = self.connection.take()
+            && let Some(cursor) = connection
+                .xfixes_get_cursor_image()
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+        {
+            self.connection = Some(connection);
+            return Some(cursor);
+        }
+
+        let (connection, _) = x11rb::connect(None).ok()?;
+        connection.xfixes_query_version(5, 0).ok()?.reply().ok()?;
+        let cursor = connection.xfixes_get_cursor_image().ok()?.reply().ok()?;
+        self.connection = Some(connection);
+        Some(cursor)
+    }
+
+    fn png(&mut self, width: u16, height: u16, pixels: Vec<u32>) -> Option<Vec<u8>> {
+        if let Some(last) = &self.last_image
+            && last.width == width
+            && last.height == height
+            && last.pixels == pixels
+        {
+            return Some(last.png.clone());
+        }
+
+        let png = x11_cursor_png(width, height, &pixels)?;
+        self.last_image = Some(X11CursorImage {
+            width,
+            height,
+            pixels,
+            png: png.clone(),
+        });
+        Some(png)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_cursor_png(width: u16, height: u16, pixels: &[u32]) -> Option<Vec<u8>> {
+    let pixel_count = usize::from(width).checked_mul(usize::from(height))?;
+    if pixels.len() != pixel_count {
         return None;
     }
 
     let mut rgba = Vec::with_capacity(pixel_count.checked_mul(4)?);
-    for pixel in cursor.cursor_image {
+    for &pixel in pixels {
         rgba.push(((pixel >> 16) & 0xff) as u8);
         rgba.push(((pixel >> 8) & 0xff) as u8);
         rgba.push((pixel & 0xff) as u8);
         rgba.push(((pixel >> 24) & 0xff) as u8);
     }
 
-    let image = image::RgbaImage::from_raw(width, height, rgba)?;
+    let image = image::RgbaImage::from_raw(u32::from(width), u32::from(height), rgba)?;
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image)
         .write_to(&mut bytes, image::ImageFormat::Png)
         .ok()?;
-
-    Some(CursorData {
-        image: bytes.into_inner(),
-        hotspot: XY::new(
-            f64::from(cursor.xhot) / f64::from(width),
-            f64::from(cursor.yhot) / f64::from(height),
-        ),
-        shape: None,
-    })
+    Some(bytes.into_inner())
 }
 
 #[cfg(target_os = "linux")]
@@ -965,6 +1179,44 @@ fn linux_cursor_png() -> Vec<u8> {
     bytes.into_inner()
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod x11_cursor_tests {
+    use super::{X11CursorSource, x11_cursor_png};
+
+    #[test]
+    fn cached_cursor_pngs_match_a_fresh_encode() {
+        let mut source = X11CursorSource::default();
+        let arrow = vec![0xff00_0000; 6];
+        let hand = vec![0x80ff_ffff; 6];
+
+        for (width, height, pixels) in [
+            (2, 3, &arrow),
+            (2, 3, &arrow),
+            (2, 3, &hand),
+            (3, 2, &hand),
+            (2, 3, &arrow),
+        ] {
+            assert_eq!(
+                source.png(width, height, pixels.clone()),
+                x11_cursor_png(width, height, pixels)
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_pixels_are_encoded_as_rgba() {
+        let png = x11_cursor_png(1, 1, &[0x8011_2233]).unwrap();
+        let image = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0x80]);
+    }
+
+    #[test]
+    fn cursor_with_mismatched_pixel_count_is_skipped() {
+        let mut source = X11CursorSource::default();
+        assert_eq!(source.png(2, 2, vec![0; 3]), None);
+    }
+}
+
 #[cfg(windows)]
 fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
@@ -990,6 +1242,23 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if cursor_info.hCursor.is_invalid() {
             return None;
+        }
+
+        // Rendering, trimming and PNG-encoding the cursor every tick only to hash it is wasted
+        // while the shape is unchanged. Keyed on the handle, so a cursor scheme change that keeps
+        // the system cursor handles shows the old image until the shape changes; key on the
+        // bitmap contents instead if that ever matters.
+        thread_local! {
+            static LAST_CURSOR: std::cell::RefCell<Option<(usize, CursorData)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let handle = cursor_info.hCursor.0 as usize;
+        if let Some(cached) = LAST_CURSOR.with_borrow(|last| {
+            last.as_ref()
+                .filter(|(last_handle, _)| *last_handle == handle)
+                .map(|(_, data)| data.clone())
+        }) {
+            return Some(cached);
         }
 
         // Get icon info
@@ -1265,11 +1534,13 @@ fn get_cursor_data() -> Option<CursorData> {
             )
             .ok()?;
 
-        Some(CursorData {
+        let data = CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
-        })
+        };
+        LAST_CURSOR.set(Some((handle, data.clone())));
+        Some(data)
     }
 }
 
@@ -1513,6 +1784,19 @@ mod cursor_image_tests {
             clicks: vec![],
             keyboard_presses: vec![],
         }
+    }
+
+    #[test]
+    fn button_changes_match_the_pairs_clicks_are_built_from() {
+        assert!(!buttons_changed(
+            &[false, false, false],
+            &[false, false, false]
+        ));
+        assert!(buttons_changed(&[false, false], &[false, true]));
+        assert!(buttons_changed(&[true], &[false]));
+        // Clicks only compare buttons present in both samples.
+        assert!(!buttons_changed(&[false], &[false, true]));
+        assert!(!buttons_changed(&[], &[true]));
     }
 
     #[test]

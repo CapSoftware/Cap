@@ -3158,6 +3158,12 @@ pub mod synthetic {
                 .map_err(|error| anyhow::anyhow!("synthetic microphone lock: {error}"))
         }
 
+        /// Takes the device away the way the app does when it disappears or
+        /// is deselected (`RemoveInput`); a locked feed defers it.
+        pub async fn remove_input(&self) {
+            let _ = self.feed.ask(RemoveInput).await;
+        }
+
         /// Delivers interleaved f32 samples whose first frame was captured at
         /// `timestamp`.
         pub async fn push(&self, samples: &[f32], timestamp: Timestamp) {
@@ -3170,6 +3176,30 @@ pub mod synthetic {
                     format: SampleFormat::F32,
                     sample_rate: self.sample_rate,
                     channels: self.channels,
+                    info: zero_callback_info(),
+                    timestamp,
+                })
+                .await;
+        }
+
+        /// Delivers one raw callback buffer as a device would, in any sample
+        /// format, rate and channel count, whatever the feed was opened with.
+        pub async fn push_raw(
+            &self,
+            data: Vec<u8>,
+            format: SampleFormat,
+            sample_rate: u32,
+            channels: u16,
+            timestamp: Timestamp,
+        ) {
+            let _ = self
+                .feed
+                .tell(MicrophoneSamples {
+                    stream_id: STREAM_ID,
+                    data,
+                    format,
+                    sample_rate,
+                    channels,
                     info: zero_callback_info(),
                     timestamp,
                 })

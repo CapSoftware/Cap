@@ -19,6 +19,7 @@ The suites are listed in `scripts/verify/suites.json`:
 | `seek` | random, keyframe and scrub seeks | linux, macos | all |
 | `audio` | export and offline playback audio against sample-accurate markers | linux, macos, windows | all |
 | `editing` | random edit sequences exported and checked frame by frame | linux | linux |
+| `chaos` | hostile device data, files, projects and settings: no panic, abort, signal, Objective-C exception, hang or wrong success | macos | macos |
 | `captions` | fake-transcriber captions: segments and rendered captions on the right frames | linux | linux |
 | `decoder-model-ffmpeg` | FFmpeg decoder decisions on scripted media (`cap-rendering` `decoder::model`) | linux | linux |
 | `decoder-model-avf` | AVAssetReader decoder decisions on scripted media | macos | macos |
@@ -41,6 +42,44 @@ Media Foundation, Direct3D and WASAPI on Windows. When you run the suite
 locally, the platform-independent suites run on every OS.
 
 `CAP_VERIFY_TIER=full` (the FULL tier) uses longer fixtures and more seeds.
+
+## Chaos suite
+
+`crates/verify/tests/chaos.rs` tries to crash the engines. Every probe feeds one
+hostile input to a product entry point and runs in its own child process (the
+test binary re-run with `CAP_VERIFY_CHAOS_CHILD`), so an abort, a fatal signal,
+an Objective-C exception or a hang ends the child, not the run. A panic hook in
+the child records every panic on any thread. Outcomes:
+
+- `pass`: the engine returned an error, or it succeeded and its output checks
+  out (readable media with packets when the input had usable frames).
+- `panic`, `abort` (fatal signal or unexpected exit), `objc-exception`,
+  `hang` (no verdict before the probe's timeout, reproduced once more) and
+  `wrong-success` (success reported for an empty or unreadable output).
+
+Areas, one test per area (`chaos_recording`, `chaos_files`, `chaos_export`,
+`chaos_editor`, `chaos_fragments`, `chaos_fuzz`):
+
+- `chaos/record/`: synthetic frames, audio buffers and control sequences
+  through `OutputPipeline` with the Studio and Instant muxers (in-process and
+  out-of-process on macOS), the microphone feed and source, the macOS camera
+  conversion, and the Studio and Instant recording actors in camera-only mode
+  with synthetic camera and microphone feeds, finalized like the app.
+- `chaos/files/`, `chaos/export/`, `chaos/editor/`: a generated project with
+  one damaged file, metadata or configuration field, opened like the editor's
+  preflight, in `EditorInstance` (preview, playback, seeks) and exported;
+  hostile export settings; non-finite values pushed in memory.
+- `chaos/fragments/`: damaged fragmented recordings through crash recovery and
+  Instant finalization.
+- `chaos/fuzz/`: seeded fuzzing (structure-aware JSON, box-aware MP4 bytes).
+  Each seed runs in a batch child; a crash or hang is pinned to its seed, and
+  a failing seed is shrunk by dropping mutations while it fails the same way.
+  The failure prints `CAP_VERIFY_CHAOS_SEED` and `CAP_VERIFY_CHAOS_KEEP` for
+  its repro.
+
+`CAP_VERIFY_CHAOS_JOBS` sets the children run at once per test (default a
+quarter of the cores, at most 3). `CAP_VERIFY_CHAOS_KEEP_SCRATCH=1` keeps
+each probe's scratch directory, child log and stderr.
 
 ## Running locally
 

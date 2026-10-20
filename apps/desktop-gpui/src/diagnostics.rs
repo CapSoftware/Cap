@@ -816,12 +816,16 @@ pub fn write_report(report: &Value) -> Result<PathBuf, String> {
 /// [`write_report`] with the directory lifted into a parameter, so the naming
 /// and pruning are testable without writing into the real store.
 fn write_report_into(dir: &Path, report: &Value) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs())
         .unwrap_or(0);
+    write_report_at(dir, report, stamp)
+}
+
+fn write_report_at(dir: &Path, report: &Value, stamp: u64) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     // A run with no sidecar finishes in well under a second, so two of them
     // would otherwise write the same name and the second would overwrite the
     // first. The prefix and suffix stay exactly as the pruning filter expects.
@@ -1194,8 +1198,9 @@ mod tests {
     #[test]
     fn reports_in_the_same_second_do_not_collide() {
         let dir = temp_dir("collide");
-        let first = write_report_into(&dir, &json!({ "first": true })).unwrap();
-        let second = write_report_into(&dir, &json!({ "second": true })).unwrap();
+        let at = 1_792_431_796;
+        let first = write_report_at(&dir, &json!({ "first": true }), at).unwrap();
+        let second = write_report_at(&dir, &json!({ "second": true }), at).unwrap();
 
         assert_ne!(first, second);
         assert!(first.exists() && second.exists());
@@ -1206,8 +1211,8 @@ mod tests {
         // Both parse back to the same second, so pruning still orders by time
         // first and falls back to the name.
         let stamp = |path: &Path| report_file_stamp(path.file_name().unwrap().to_str().unwrap());
-        assert_eq!(stamp(&first), stamp(&second));
-        assert!(stamp(&first).is_some_and(|secs| secs > 0));
+        assert_eq!(stamp(&first), Some(at));
+        assert_eq!(stamp(&second), Some(at));
 
         std::fs::remove_dir_all(&dir).ok();
     }
