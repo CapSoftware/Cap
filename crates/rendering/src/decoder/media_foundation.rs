@@ -249,7 +249,8 @@ impl MFDecoder {
                 sender: oneshot::Sender<DecodedFrame>,
             }
 
-            while let Ok(r) = rx.recv() {
+            let mut carried: Option<VideoDecoderMessage> = None;
+            while let Some(r) = carried.take().or_else(|| rx.recv().ok()) {
                 let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
 
                 let mut push_request =
@@ -315,8 +316,8 @@ impl MFDecoder {
                     );
                 }
 
-                let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+                let mut cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                let mut cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
                 let needs_seek = last_decoded_frame
                     .map(|last| {
@@ -355,7 +356,8 @@ impl MFDecoder {
                 } else {
                     Duration::from_millis(800)
                 };
-                let batch_start = Instant::now();
+                let mut batch_start = Instant::now();
+                let mut readahead_target = requested_frame + readahead_frames;
 
                 loop {
                     if sender.as_ref().is_some_and(|s| s.is_closed()) {
@@ -365,6 +367,34 @@ impl MFDecoder {
 
                     if sender.is_none() && batch_start.elapsed() > max_batch_duration {
                         break;
+                    }
+
+                    // Serve requests that arrive during readahead between samples and slide the
+                    // window with them; otherwise a sequential reader waits out the whole batch
+                    // and then finds the decoder idle while it consumes the cached frames.
+                    if sender.is_none() && deferred_requests.is_empty() {
+                        match rx.try_recv() {
+                            Ok(VideoDecoderMessage::GetFrame(time, distance, reply)) => {
+                                let frame = super::request_frame(time, fps);
+                                if let Some(cached) =
+                                    cached_frame_for(&cache, last_decoded_frame, frame)
+                                {
+                                    let _ =
+                                        reply.send(cached.to_decoded_frame().with_matrix(matrix));
+                                    readahead_target =
+                                        readahead_target.max(frame + readahead_frames);
+                                    cache_min = frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                                    cache_max = frame + FRAME_CACHE_SIZE as u32 / 2;
+                                    batch_start = Instant::now();
+                                    continue;
+                                }
+                                carried =
+                                    Some(VideoDecoderMessage::GetFrame(time, distance, reply));
+                                break;
+                            }
+                            Err(mpsc::TryRecvError::Empty) => {}
+                            Err(mpsc::TryRecvError::Disconnected) => break,
+                        }
                     }
 
                     let decode_start = Instant::now();
@@ -451,18 +481,14 @@ impl MFDecoder {
                                 last_valid_frame = Some(cached);
                             }
 
-                            if frame_number >= requested_frame {
-                                let frame_to_send = if frame_number == requested_frame {
-                                    cache.get(&requested_frame)
-                                } else {
-                                    last_valid_frame.as_ref().or_else(|| {
-                                        cache
-                                            .range(..=requested_frame)
-                                            .next_back()
-                                            .map(|(_, f)| f)
-                                            .or_else(|| cache.get(&frame_number))
-                                    })
-                                };
+                            if frame_number > requested_frame {
+                                let frame_to_send = last_valid_frame.as_ref().or_else(|| {
+                                    cache
+                                        .range(..=requested_frame)
+                                        .next_back()
+                                        .map(|(_, f)| f)
+                                        .or_else(|| cache.get(&frame_number))
+                                });
 
                                 if let Some(frame) = frame_to_send
                                     && let Some(s) = sender.take()
@@ -471,7 +497,6 @@ impl MFDecoder {
                                 }
                             }
 
-                            let readahead_target = requested_frame + readahead_frames;
                             if frame_number >= readahead_target || frame_number > cache_max {
                                 break;
                             }
@@ -549,21 +574,22 @@ fn pts_100ns_to_frame(pts_100ns: i64, fps: u32) -> u32 {
     super::pts_to_frame(pts_100ns, ::ffmpeg::Rational::new(1, 10_000_000), fps)
 }
 
-// A frame the decoder has not reached yet has to be decoded; answering with
-// the cached frame before it shows a stale image at every readahead boundary.
-// Once the decoder is past a missing frame, the stream has no frame there, and
-// the latest earlier one is the hold the video really shows.
+// A frame the decoder has not moved past yet has to be decoded: answering with
+// the cached frame before it shows a stale image at every readahead boundary,
+// and a VFR stream can still have a later sample rounding to the same frame
+// (which replaces it in the cache), so answering early would make the choice
+// depend on request timing. Once the decoder is past a missing frame, the
+// stream has no frame there, and the latest earlier one is the hold the video
+// really shows.
 fn cached_frame_for<T>(
     cache: &BTreeMap<u32, T>,
     last_decoded: Option<u32>,
     frame: u32,
 ) -> Option<&T> {
-    cache.get(&frame).or_else(|| {
-        last_decoded
-            .is_some_and(|last| last > frame)
-            .then(|| cache.range(..=frame).next_back().map(|(_, cached)| cached))
-            .flatten()
-    })
+    last_decoded
+        .is_some_and(|last| last > frame)
+        .then(|| cache.range(..=frame).next_back().map(|(_, cached)| cached))
+        .flatten()
 }
 
 #[cfg(test)]
@@ -581,9 +607,16 @@ mod tests {
     #[test]
     fn an_undecoded_frame_is_not_answered_with_the_one_before_it() {
         let cache = BTreeMap::from([(14, 'a'), (15, 'b')]);
-        assert_eq!(cached_frame_for(&cache, Some(15), 15), Some(&'b'));
         assert_eq!(cached_frame_for(&cache, Some(15), 16), None);
         assert_eq!(cached_frame_for(&cache, Some(15), 17), None);
+    }
+
+    #[test]
+    fn the_newest_decoded_frame_waits_for_a_later_sample() {
+        let cache = BTreeMap::from([(14, 'a'), (15, 'b')]);
+        assert_eq!(cached_frame_for(&cache, Some(15), 14), Some(&'a'));
+        assert_eq!(cached_frame_for(&cache, Some(15), 15), None);
+        assert_eq!(cached_frame_for(&cache, Some(16), 15), Some(&'b'));
     }
 
     #[test]

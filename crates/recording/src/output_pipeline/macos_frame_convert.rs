@@ -8,17 +8,30 @@ pub(crate) fn copy_plane_data(
     src_stride: usize,
     dest_stride: usize,
 ) {
+    // A source that grew mid-recording (the pool frame keeps the size the
+    // encoder was opened with) is cropped to the frame instead of copied
+    // past it; anything that fits copies exactly as before.
     if src_stride == row_width && dest_stride == row_width {
-        let total_bytes = height * row_width;
+        let total_bytes = height
+            .saturating_mul(row_width)
+            .min(src.len())
+            .min(dest.len());
         dest[..total_bytes].copy_from_slice(&src[..total_bytes]);
     } else if src_stride == dest_stride {
-        let total_bytes = height * src_stride;
+        let total_bytes = height
+            .saturating_mul(src_stride)
+            .min(src.len())
+            .min(dest.len());
         dest[..total_bytes].copy_from_slice(&src[..total_bytes]);
     } else {
-        for y in 0..height {
-            let src_row = &src[y * src_stride..y * src_stride + row_width];
-            let dest_row = &mut dest[y * dest_stride..y * dest_stride + row_width];
-            dest_row.copy_from_slice(src_row);
+        let row_width = row_width.min(src_stride).min(dest_stride);
+        for (src_row, dest_row) in src
+            .chunks(src_stride.max(1))
+            .zip(dest.chunks_mut(dest_stride.max(1)))
+            .take(height)
+        {
+            let len = row_width.min(src_row.len()).min(dest_row.len());
+            dest_row[..len].copy_from_slice(&src_row[..len]);
         }
     }
 }
@@ -64,6 +77,10 @@ pub(crate) enum SampleBufConversionError {
     UnsupportedFormat(cv::PixelFormat),
     BaseAddrLock(cidre::os::Error),
     NoImageBuffer,
+    FormatMismatch {
+        source: cv::PixelFormat,
+        frame: ffmpeg::format::Pixel,
+    },
 }
 
 struct BaseAddrLockGuard<'a>(&'a mut cv::ImageBuf, LockFlags);
@@ -101,6 +118,19 @@ pub(crate) fn fill_frame_from_sample_buf(
     let pixel_format = image_buf.pixel_format();
     let plane0_stride = image_buf.plane_bytes_per_row(0);
     let plane1_stride = image_buf.plane_bytes_per_row(1);
+
+    let expected_format = match pixel_format {
+        cv::PixelFormat::_420V => ffmpeg::format::Pixel::NV12,
+        cv::PixelFormat::_32_BGRA => ffmpeg::format::Pixel::BGRA,
+        cv::PixelFormat::_2VUY => ffmpeg::format::Pixel::UYVY422,
+        format => return Err(SampleBufConversionError::UnsupportedFormat(format)),
+    };
+    if frame.format() != expected_format {
+        return Err(SampleBufConversionError::FormatMismatch {
+            source: pixel_format,
+            frame: frame.format(),
+        });
+    }
 
     let bytes_lock = BaseAddrLockGuard::lock(image_buf.as_mut(), LockFlags::READ_ONLY)
         .map_err(SampleBufConversionError::BaseAddrLock)?;
@@ -166,5 +196,56 @@ pub(crate) fn ffmpeg_pixel_format_for_cap(
         cap_media_info::Pixel::BGRA => ffmpeg::format::Pixel::BGRA,
         cap_media_info::Pixel::UYVY422 => ffmpeg::format::Pixel::UYVY422,
         _ => ffmpeg::format::Pixel::NV12,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_plane_data;
+
+    fn plane(rows: usize, stride: usize) -> Vec<u8> {
+        (0..rows * stride).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn fitting_planes_copy_every_layout_byte_for_byte() {
+        for (src_stride, dest_stride) in [(64, 64), (80, 64), (64, 96)] {
+            let src = plane(10, src_stride);
+            let mut dest = vec![0; 10 * dest_stride];
+            copy_plane_data(&src, &mut dest, 10, 64, src_stride, dest_stride);
+            for y in 0..10 {
+                assert_eq!(
+                    dest[y * dest_stride..y * dest_stride + 64],
+                    src[y * src_stride..y * src_stride + 64]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_larger_than_the_frame_is_cropped_not_overrun() {
+        for (src_stride, dest_stride, row_width) in [
+            (128, 128, 128),
+            (160, 160, 128),
+            (192, 64, 160),
+            (64, 64, 200),
+        ] {
+            let src = plane(40, src_stride);
+            let mut dest = vec![0; 10 * dest_stride];
+            copy_plane_data(&src, &mut dest, 40, row_width, src_stride, dest_stride);
+            let width = row_width.min(src_stride).min(dest_stride);
+            assert_eq!(dest[..width], src[..width]);
+        }
+    }
+
+    #[test]
+    fn empty_and_degenerate_planes_do_not_panic() {
+        let mut dest = vec![0; 64];
+        copy_plane_data(&[], &mut dest, 8, 8, 8, 8);
+        copy_plane_data(&plane(8, 8), &mut [], 8, 8, 8, 8);
+        copy_plane_data(&plane(8, 8), &mut dest, 8, 8, 0, 16);
+        copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 8, 9, 16);
+        copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 8, 8, 8);
+        copy_plane_data(&plane(8, 8), &mut dest, usize::MAX / 2, 4, 8, 8);
     }
 }
