@@ -1376,9 +1376,13 @@ fn mix_music(
             };
 
             let out_index = ((out_sample - frame_start) as usize) * 2;
-            out[out_index] = (out[out_index] + l * g).clamp(-1.0, 1.0);
-            out[out_index + 1] = (out[out_index + 1] + r * g).clamp(-1.0, 1.0);
+            out[out_index] += l * g;
+            out[out_index + 1] += r * g;
         }
+    }
+
+    for sample in &mut out[..samples * 2] {
+        *sample = sample.clamp(-1.0, 1.0);
     }
 }
 
@@ -3673,6 +3677,55 @@ mod tests {
                 ..Default::default()
             }],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn overlapping_music_clips_only_after_all_tracks_are_mixed() {
+        let music: MusicTracks = [
+            ("a.wav", vec![0.75, -0.75, 0.75, -0.75]),
+            ("b.wav", vec![0.75, -0.75, 0.75, -0.75]),
+            ("c.wav", vec![-0.75, 0.75, 0.75, -0.75]),
+        ]
+        .into_iter()
+        .map(|(path, samples)| {
+            (
+                path.to_string(),
+                Arc::new(AudioData::from_raw_f32(samples, 2)),
+            )
+        })
+        .collect();
+        for paths in [
+            ["a.wav", "b.wav", "c.wav"],
+            ["a.wav", "c.wav", "b.wav"],
+            ["c.wav", "a.wav", "b.wav"],
+        ] {
+            let project = music_project(
+                paths
+                    .map(|path| music_track_segment(path, 0.0, 3.0, 0.0, 0.0))
+                    .to_vec(),
+            );
+            for block in [1, 2] {
+                let recording = AudioSegment {
+                    tracks: vec![AudioSegmentTrack::new(
+                        Arc::new(AudioData::from_raw_f32(
+                            vec![0.125, -0.125, 0.125, -0.125],
+                            2,
+                        )),
+                        gain,
+                        stereo,
+                        no_offset,
+                    )],
+                };
+                let mut renderer = AudioRenderer::new(vec![recording]).with_music(music.clone());
+                let mut output = Vec::new();
+                for _ in 0..2 / block {
+                    let (written, chunk) = renderer.render_frame_raw(block, &project).unwrap();
+                    assert_eq!(written, block);
+                    output.extend(chunk);
+                }
+                assert_eq!(output, [0.875, -0.875, 1.0, -1.0], "{paths:?}, {block}");
+            }
         }
     }
 
