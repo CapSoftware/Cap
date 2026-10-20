@@ -252,6 +252,17 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    // `Contents/MacOS/cap-cli` re-executes this binary as `Cap --cap-cli <args>`: run the CLI
+    // before anything of the app starts.
+    #[cfg(target_os = "macos")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--cap-cli")) {
+        let mut args = std::env::args_os();
+        let program = args.next();
+        args.next();
+        cap::run_embedded(program.into_iter().chain(args));
+        return;
+    }
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.

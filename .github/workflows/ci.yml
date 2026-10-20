@@ -47,7 +47,9 @@ jobs:
               - 'Cargo.lock'
             gpui:
               - '.gitattributes'
+              - 'apps/cli/**'
               - 'apps/desktop-gpui/**'
+              - 'crates/cli-launcher/**'
               - 'apps/desktop/src/assets/**'
               - 'apps/desktop/src-tauri/src/recording_start_sound.rs'
               - 'apps/media-server/src/__tests__/fixtures/**'
@@ -279,7 +281,7 @@ jobs:
       - name: Test desktop regressions
         run: |
           cargo test --locked -p cap-utils -p cap-cli-install --lib
-          cargo test --locked -p cap --bin cap record::tests
+          cargo test --locked -p cap --lib record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
@@ -369,6 +371,49 @@ jobs:
             cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
           fi
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} -p cap-gpui-kernels
+
+      # On macOS the app binary is also the CLI: Contents/MacOS/cap-cli is a launcher that
+      # re-executes `Cap --cap-cli`. Run real commands through that path, laid out as in Cap.app.
+      - name: Test the macOS CLI launcher
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=${{ matrix.settings.target }}
+          cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target "$target" --bin cap-gpui
+          cargo build --locked -p cap-cli-launcher --target "$target"
+          app="$RUNNER_TEMP/Cap.app/Contents"
+          mkdir -p "$app/MacOS" "$app/Frameworks"
+          cp "apps/desktop-gpui/target/$target/debug/cap-gpui" "$app/MacOS/Cap"
+          cp "target/$target/debug/cap-cli-launcher" "$app/MacOS/cap-cli"
+          ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$app/Frameworks/Spacedrive.framework"
+          run() {
+            "$@" > "$RUNNER_TEMP/out.txt" 2>&1 &
+            local pid=$!
+            for _ in $(seq 1 60); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                wait "$pid"
+                cat "$RUNNER_TEMP/out.txt"
+                return
+              fi
+              sleep 1
+            done
+            kill "$pid"
+            cat "$RUNNER_TEMP/out.txt"
+            echo "::error::'$*' did not exit within 60 s (the app binary may have started its GUI)"
+            exit 1
+          }
+          run "$app/MacOS/cap-cli" --version | tee "$RUNNER_TEMP/version.txt"
+          grep -q '^cap ' "$RUNNER_TEMP/version.txt"
+          run "$app/MacOS/cap-cli" project --help > /dev/null
+          home="$RUNNER_TEMP/home"
+          mkdir -p "$home"
+          touch "$home/.zshrc"
+          HOME="$home" SHELL=/bin/zsh run "$app/MacOS/cap-cli" desktop install-cli
+          [[ "$(readlink "$home/.cap/bin/cap")" == "$app/MacOS/cap-cli" ]]
+          HOME="$home" run "$home/.cap/bin/cap" --version | grep -q '^cap '
+          HOME="$home" SHELL=/bin/zsh run "$home/.cap/bin/cap" desktop status | tee "$RUNNER_TEMP/status.txt"
+          grep -q 'installed: true' "$RUNNER_TEMP/status.txt"
 
   tauri-plugins:
     name: Verify Tauri plugin versions
