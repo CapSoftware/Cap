@@ -1,6 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
@@ -18,9 +17,7 @@ import { defaultCaptionSettings } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import {
 	getCaptionTextFromWords,
-	type MappedTimeRange,
 	mapEditedTimeToSource,
-	mapSourceRangeToEdited,
 	mapSourceTimeToEdited,
 	syncCaptionWordsWithText,
 } from "./captions";
@@ -30,26 +27,20 @@ import {
 	createCaptionExportCues,
 	formatCaptionCues,
 } from "./captions-export";
-import {
-	clipCutPreservesTransitionGeometry,
-	rangeIntersectsClipTransition,
-} from "./clip-transitions";
 import { FPS, useEditorContext } from "./context";
-import { rippleDeleteAllTracks } from "./timeline-utils";
+import { routeEditorPlaybackIntent } from "./playback-intent-routing";
+import {
+	deleteTranscriptWords,
+	type FlatWord,
+	transcriptKeyAction,
+	transcriptSeekPosition,
+} from "./transcript-edits";
 
 function formatTimePrecise(secs: number) {
 	const minutes = Math.floor(secs / 60);
 	const whole = Math.floor(secs % 60);
 	const hundredths = Math.floor((secs % 1) * 100);
 	return `${minutes}:${whole.toString().padStart(2, "0")}.${hundredths.toString().padStart(2, "0")}`;
-}
-
-interface FlatWord {
-	text: string;
-	start: number;
-	end: number;
-	segmentIndex: number;
-	wordIndex: number;
 }
 
 interface TranscriptSegmentGroup {
@@ -74,6 +65,8 @@ export function TranscriptPanel() {
 		meta,
 		totalDuration,
 		previewResolutionBase,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const recordingSegments = () => editorInstance.recordings.segments;
@@ -156,16 +149,12 @@ export function TranscriptPanel() {
 					segment.words.splice(target.wordIndex, 1, ...replacements);
 				}
 
-				if (!p.captions?.segments) return;
-				for (let i = p.captions.segments.length - 1; i >= 0; i--) {
-					const seg = p.captions.segments[i];
-					if (!seg.words || seg.words.length === 0) {
-						p.captions.segments.splice(i, 1);
-					} else {
-						seg.text = getCaptionTextFromWords(seg.words);
-						seg.start = seg.words[0].start;
-						seg.end = seg.words[seg.words.length - 1].end;
-					}
+				if (segment.words.length === 0) {
+					p.captions?.segments.splice(target.segmentIndex, 1);
+				} else {
+					segment.text = getCaptionTextFromWords(segment.words);
+					segment.start = segment.words[0].start;
+					segment.end = segment.words[segment.words.length - 1].end;
 				}
 			}),
 		);
@@ -214,6 +203,8 @@ export function TranscriptPanel() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
 					camera3dSegments: [],
@@ -243,15 +234,10 @@ export function TranscriptPanel() {
 
 		setExportingFormat(format);
 		try {
-			const path = await save({
-				defaultPath: captionExportDefaultPath(meta().prettyName, format),
-				filters: [
-					{
-						name: format === "srt" ? "SubRip Subtitle" : "WebVTT",
-						extensions: [format],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				captionExportDefaultPath(meta().prettyName, format),
+				format,
+			);
 			if (!path) return;
 
 			await writeTextFile(path, formatCaptionCues(cues, format));
@@ -304,17 +290,28 @@ export function TranscriptPanel() {
 				project.timeline?.textSegments,
 			);
 			if (outputTime === null) return;
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			}
-			const frame = Math.max(Math.floor(outputTime * FPS), 0);
-			await commands.seekTo(frame);
+			const accepted = await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false, seconds: outputTime },
+				async () => {
+					if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					}
+					const frame = Math.max(Math.floor(outputTime * FPS), 0);
+					await commands.seekTo(frame);
+				},
+			);
+			if (!accepted) return;
 			batch(() => {
 				setEditorState("previewTime", null);
 				setEditorState("playbackTime", outputTime);
 				editorState.timeline.transform.setPosition(
-					outputTime - editorState.timeline.transform.zoom / 2,
+					transcriptSeekPosition(
+						outputTime,
+						editorState.timeline.transform.position,
+						editorState.timeline.transform.zoom,
+					),
 				);
 			});
 		} catch (error) {
@@ -322,138 +319,45 @@ export function TranscriptPanel() {
 		}
 	};
 
-	const applyWordDeletions = (flatIndices: number[]) => {
+	const applyWordDeletions = (
+		flatIndices: number[],
+		mode: "captions" | "video" = "captions",
+	) => {
 		const words = allWords();
-		const wordsToDelete = flatIndices
+		const wordsToDelete = [...new Set(flatIndices)]
 			.map((idx) => words[idx])
-			.filter((w): w is FlatWord => !!w);
-
-		if (wordsToDelete.length === 0) return;
-
-		const sorted = [...wordsToDelete].sort((a, b) => {
-			if (a.segmentIndex !== b.segmentIndex)
-				return b.segmentIndex - a.segmentIndex;
-			return b.wordIndex - a.wordIndex;
-		});
-
-		const sourceRanges = wordsToDelete
-			.map((w) => ({ start: w.start, end: w.end }))
-			.sort((a, b) => a.start - b.start);
-
-		const mergedSourceRanges: { start: number; end: number }[] = [];
-		for (const range of sourceRanges) {
-			const last = mergedSourceRanges[mergedSourceRanges.length - 1];
-			if (last && range.start <= last.end) {
-				last.end = Math.max(last.end, range.end);
-			} else {
-				mergedSourceRanges.push({ ...range });
-			}
-		}
-
-		const outputRanges = mergedSourceRanges
-			.flatMap((range) =>
-				mapSourceRangeToEdited(
-					range.start,
-					range.end,
-					project.timeline?.segments ?? [],
+			.filter((word): word is FlatWord => !!word);
+		const outcome: { result: ReturnType<typeof deleteTranscriptWords> } = {
+			result: "empty",
+		};
+		setProject(
+			produce((p) => {
+				outcome.result = deleteTranscriptWords(
+					p,
+					wordsToDelete,
 					recordingSegments(),
-					project.timeline?.transitions ?? [],
-				),
-			)
-			.sort((a, b) => a.start - b.start || a.segmentIndex - b.segmentIndex);
-
-		const mergedOutputRanges: MappedTimeRange[] = [];
-		for (const range of outputRanges) {
-			const last = mergedOutputRanges[mergedOutputRanges.length - 1];
-			if (
-				last &&
-				last.segmentIndex === range.segmentIndex &&
-				range.start <= last.end + 0.0001
-			) {
-				last.end = Math.max(last.end, range.end);
-			} else {
-				mergedOutputRanges.push({ ...range });
-			}
-		}
-
-		const timeline = project.timeline;
-		if (
-			timeline &&
-			mergedOutputRanges.some(
-				(range) =>
-					rangeIntersectsClipTransition(
-						timeline.segments,
-						timeline.transitions ?? [],
-						range.start,
-						range.end,
-					) ||
-					!clipCutPreservesTransitionGeometry(
-						timeline.segments,
-						timeline.transitions ?? [],
-						range.segmentIndex,
-						range.start,
-						range.end,
-					),
-			)
-		) {
+					mode,
+				);
+			}),
+		);
+		if (outcome.result === "transition") {
 			toast.error(
-				"Remove the nearby transition before deleting this transcript range.",
+				"Remove the nearby transition before cutting this transcript range.",
 			);
 			return;
 		}
-
-		setProject(
-			produce((p) => {
-				if (!p.captions?.segments) return;
-
-				for (const word of sorted) {
-					const seg = p.captions.segments[word.segmentIndex];
-					if (!seg?.words) continue;
-					if (word.wordIndex < seg.words.length) {
-						seg.words.splice(word.wordIndex, 1);
-					}
-				}
-
-				for (let i = p.captions.segments.length - 1; i >= 0; i--) {
-					const seg = p.captions.segments[i];
-					if (!seg.words || seg.words.length === 0) {
-						p.captions.segments.splice(i, 1);
-					} else {
-						seg.text = getCaptionTextFromWords(seg.words);
-						seg.start = seg.words[0].start;
-						seg.end = seg.words[seg.words.length - 1].end;
-					}
-				}
-
-				if (p.timeline) {
-					for (const range of [...mergedOutputRanges].reverse()) {
-						if (range.end - range.start <= 0.001) continue;
-						rippleDeleteAllTracks(
-							p.timeline,
-							range.start,
-							range.end,
-							range.segmentIndex,
-						);
-					}
-				}
-			}),
-		);
-		setEditorState("timeline", "selection", null);
-
-		setEditorState("captions", "isStale", false);
-
-		const newDuration = totalDuration();
-		if (editorState.playbackTime > newDuration) {
-			setEditorState("playbackTime", Math.max(newDuration - 0.01, 0));
+		if (outcome.result !== "deleted") return;
+		if (
+			mode === "video" ||
+			editorState.timeline.selection?.type === "caption"
+		) {
+			setEditorState("styleEditIndex", null);
+			setEditorState("timeline", "selection", null);
 		}
-	};
-
-	const handleDeleteWord = (flatIndex: number) => {
-		applyWordDeletions([flatIndex]);
-	};
-
-	const handleDeleteWords = (flatIndices: number[]) => {
-		applyWordDeletions(flatIndices);
+		setEditorState("captions", "isStale", false);
+		if (mode === "video" && editorState.playbackTime > totalDuration()) {
+			setEditorState("playbackTime", Math.max(totalDuration() - 0.01, 0));
+		}
 	};
 
 	const isAtEnd = () => {
@@ -463,21 +367,30 @@ export function TranscriptPanel() {
 
 	const handlePlayPause = async () => {
 		try {
-			if (isAtEnd()) {
-				await commands.stopPlayback();
-				setEditorState("playbackTime", 0);
-				await commands.seekTo(0);
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			} else if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			} else {
-				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			}
-			if (editorState.playing) setEditorState("previewTime", null);
+			await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{
+					playing: isAtEnd() || !playbackIntent(),
+					seconds: isAtEnd() ? 0 : editorState.playbackTime,
+				},
+				async () => {
+					if (isAtEnd()) {
+						await commands.stopPlayback();
+						setEditorState("playbackTime", 0);
+						await commands.seekTo(0);
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					} else if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					} else {
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					}
+					if (editorState.playing) setEditorState("previewTime", null);
+				},
+			);
 		} catch (error) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
@@ -485,21 +398,23 @@ export function TranscriptPanel() {
 	};
 
 	createEffect(() => {
-		if (isAtEnd() && editorState.playing) {
-			void commands
-				.stopPlayback()
-				.then(() => {
+		if (isAtEnd() && playbackIntent()) {
+			void routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false },
+				async () => {
+					await commands.stopPlayback();
 					setEditorState("playing", false);
-				})
-				.catch((error) => {
-					console.error("Error stopping playback:", error);
-					setEditorState("playing", false);
-				});
+				},
+			).catch((error) => {
+				console.error("Error stopping playback:", error);
+				setEditorState("playing", false);
+			});
 		}
 	});
 
 	createEventListener(window, "keydown", (e) => {
-		if (e.code !== "Space") return;
+		if (e.defaultPrevented || e.code !== "Space") return;
 		const el = document.activeElement;
 		if (el) {
 			const tag = el.tagName.toLowerCase();
@@ -510,9 +425,9 @@ export function TranscriptPanel() {
 	});
 
 	return (
-		<div class="flex flex-col min-h-0 h-full">
-			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-gray-12">Captions</span>
+		<div class="flex overflow-hidden flex-col min-h-0 h-full rounded-xl">
+			<div class="px-3 py-2 border-b border-ed-line flex items-center justify-between shrink-0">
+				<span class="text-xs font-medium text-ed-text-1">Captions</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"
@@ -574,8 +489,8 @@ export function TranscriptPanel() {
 					TEXT_SIZES[textSizeIndex()]?.value ?? TEXT_SIZES[1].value
 				}
 				onWordClick={handleWordClick}
-				onDeleteWord={handleDeleteWord}
-				onDeleteWords={handleDeleteWords}
+				onDeleteWords={applyWordDeletions}
+				onCutWords={(indices) => applyWordDeletions(indices, "video")}
 				onEditWord={updateWordText}
 				onAddCaption={addCaptionAtPlayhead}
 			/>
@@ -596,6 +511,7 @@ function TranscriptWord(props: {
 	onCommitEdit: (text: string) => void;
 	onCancelEdit: () => void;
 	onDelete: () => void;
+	onCut: () => void;
 }) {
 	const [hovering, setHovering] = createSignal(false);
 	let hoverTimer: number | undefined;
@@ -678,12 +594,26 @@ function TranscriptWord(props: {
 								<button
 									type="button"
 									class="flex items-center justify-center size-6 rounded-md bg-red-9 text-white hover:bg-red-10 transition-colors"
+									title="Delete from captions"
+									aria-label="Delete from captions"
 									onClick={(e) => {
 										e.stopPropagation();
 										props.onDelete();
 									}}
 								>
 									<IconCapTrash class="size-3.5" />
+								</button>
+								<button
+									type="button"
+									class="flex items-center justify-center gap-1 h-6 px-1.5 rounded-md bg-gray-11 text-white hover:bg-gray-10 transition-colors text-xs"
+									title="Cut selected words and their video from the timeline (Shift+Delete)"
+									aria-keyshortcuts="Shift+Delete Shift+Backspace"
+									onClick={(e) => {
+										e.stopPropagation();
+										props.onCut();
+									}}
+								>
+									Cut video
 								</button>
 							</Show>
 						</span>
@@ -721,8 +651,8 @@ function TranscriptEditor(props: {
 	activeWordIndex: number;
 	textSizeClass: string;
 	onWordClick: (word: FlatWord) => void;
-	onDeleteWord: (flatIndex: number) => void;
 	onDeleteWords: (flatIndices: number[]) => void;
+	onCutWords: (flatIndices: number[]) => void;
 	onEditWord: (flatIndex: number, text: string) => void;
 	onAddCaption: () => void;
 }) {
@@ -773,38 +703,31 @@ function TranscriptEditor(props: {
 	);
 
 	const handleKeyDown = (e: KeyboardEvent) => {
+		if (editingIndex() !== -1) return;
 		const selected = selectedIndices();
-		if (selected.size === 0) return;
+		const fromContainer = e.target === scrollContainerRef;
+		const action = transcriptKeyAction(e, selected.size, fromContainer);
+		if (!action) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (!fromContainer) scrollContainerRef?.focus({ preventScroll: true });
 
-		if (e.key === "Enter" && selected.size === 1 && editingIndex() === -1) {
-			e.preventDefault();
+		if (action === "edit") {
 			const word = props.allWords[[...selected][0]];
 			if (word) startEditing(word);
-		} else if (e.key === "Backspace" || e.key === "Delete") {
-			e.preventDefault();
-			const indices = [...selected];
-			if (indices.length === 1) {
-				props.onDeleteWord(indices[0]);
-			} else {
-				props.onDeleteWords(indices);
-			}
+		} else if (action === "delete" || action === "cut") {
+			if (action === "cut") props.onCutWords([...selected]);
+			else props.onDeleteWords([...selected]);
 			setSelectedIndices(new Set<number>());
 			setAnchorIndex(-1);
-		} else if (e.key === "ArrowLeft") {
-			e.preventDefault();
-			const minIdx = Math.min(...selected);
-			const prev = Math.max(minIdx - 1, 0);
-			setSelectedIndices(new Set([prev]));
-			setAnchorIndex(prev);
-			const word = props.allWords[prev];
-			if (word) props.onWordClick(word);
-		} else if (e.key === "ArrowRight") {
-			e.preventDefault();
-			const maxIdx = Math.max(...selected);
-			const next = Math.min(maxIdx + 1, props.allWords.length - 1);
-			setSelectedIndices(new Set([next]));
-			setAnchorIndex(next);
-			const word = props.allWords[next];
+		} else {
+			const target =
+				action === "previous"
+					? Math.max(Math.min(...selected) - 1, 0)
+					: Math.min(Math.max(...selected) + 1, props.allWords.length - 1);
+			setSelectedIndices(new Set([target]));
+			setAnchorIndex(target);
+			const word = props.allWords[target];
 			if (word) props.onWordClick(word);
 		}
 	};
@@ -817,6 +740,7 @@ function TranscriptEditor(props: {
 	};
 
 	const handleWordSelect = (word: FlatWord, e: MouseEvent) => {
+		scrollContainerRef?.focus({ preventScroll: true });
 		const idx = flatIndexOf(word);
 		const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 		const isShift = e.shiftKey;
@@ -860,15 +784,14 @@ function TranscriptEditor(props: {
 		props.onWordClick(word);
 	};
 
-	const handleWordDelete = (word: FlatWord) => {
+	const handleWordRemoval = (word: FlatWord, mode: "captions" | "video") => {
 		const selected = selectedIndices();
-		if (selected.size > 1) {
-			props.onDeleteWords([...selected]);
-		} else {
-			props.onDeleteWord(flatIndexOf(word));
-		}
+		const indices = selected.size > 1 ? [...selected] : [flatIndexOf(word)];
+		if (mode === "video") props.onCutWords(indices);
+		else props.onDeleteWords(indices);
 		setSelectedIndices(new Set<number>());
 		setAnchorIndex(-1);
+		scrollContainerRef?.focus({ preventScroll: true });
 	};
 
 	const startEditing = (word: FlatWord) => {
@@ -943,7 +866,8 @@ function TranscriptEditor(props: {
 											onStartEdit={() => startEditing(word)}
 											onCommitEdit={(text: string) => commitEditing(word, text)}
 											onCancelEdit={cancelEditing}
-											onDelete={() => handleWordDelete(word)}
+											onDelete={() => handleWordRemoval(word, "captions")}
+											onCut={() => handleWordRemoval(word, "video")}
 										/>
 									);
 								}}

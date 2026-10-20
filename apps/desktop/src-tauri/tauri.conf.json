@@ -4,9 +4,9 @@
 	"identifier": "so.cap.desktop.dev",
 	"mainBinaryName": "Cap - Development",
 	"build": {
-		"beforeDevCommand": "pnpm localdev",
+		"beforeDevCommand": "bun run localdev",
 		"devUrl": "http://localhost:3002",
-		"beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
+		"beforeBuildCommand": "bun run turbo build --filter @cap/desktop",
 		"frontendDist": "../.output/public"
 	},
 	"app": {
@@ -67,6 +67,7 @@
 			"../src/assets/music/*.mp3": "assets/music/"
 		},
 		"macOS": {
+			"minimumSystemVersion": "12.3",
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"appPosition": {

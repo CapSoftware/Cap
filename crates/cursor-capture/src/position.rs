@@ -10,13 +10,11 @@ pub struct RawCursorPosition {
 
 impl RawCursorPosition {
     pub fn get() -> Self {
-        let device_state = DeviceState::new();
-        let position = device_state.get_mouse().coords;
+        Self::from_coords(DeviceState::new().get_mouse().coords)
+    }
 
-        Self {
-            x: position.0,
-            y: position.1,
-        }
+    pub fn from_coords((x, y): (i32, i32)) -> Self {
+        Self { x, y }
     }
 
     pub fn relative_to_display(&self, display: Display) -> Option<RelativeCursorPosition> {

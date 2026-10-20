@@ -9,8 +9,8 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run src",
 		"test:e2e:install": "playwright install chromium",
-		"test:e2e": "pnpm build && playwright test",
-		"test:e2e:headed": "pnpm build && playwright test --headed"
+		"test:e2e": "bun run build && playwright test",
+		"test:e2e:headed": "bun run build && playwright test --headed"
 	},
 	"dependencies": {
 		"@cap/recorder-core": "workspace:*",
@@ -26,6 +26,7 @@
 		"tailwind-merge": "^2.6.0"
 	},
 	"devDependencies": {
+		"@cap/ui": "workspace:*",
 		"@playwright/test": "^1.51.1",
 		"@types/chrome": "^0.0.323",
 		"@types/react": "19.2.14",

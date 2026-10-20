@@ -337,7 +337,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
-    // Screen Studio semantics: the user amount is baked into the LENGTH of
+    // Length-based semantics: the user amount is baked into the LENGTH of
     // the kernel (velocity vector / zoom ray) on the CPU side, and the output
     // is the fully blurred result — never a crossfade with the sharp frame
     // (a sharp copy mixed over a smear reads as ghosting, not motion). Alpha
@@ -444,6 +444,34 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         let center_sample = textureSample(frame_texture, frame_sampler, cropped_uv);
         let center_color = center_sample.rgb;
         let out_alpha = select(1.0, center_sample.a, uniforms.preserve_source_alpha > 0.5);
+
+        if uniforms.preserve_source_alpha > 0.5 && center_sample.a < 0.999 {
+            if !is_downscaling {
+                return center_sample;
+            }
+
+            let footprint = scale_ratio / uniforms.frame_size * 0.5;
+            let left = textureSampleLevel(
+                frame_texture, frame_sampler,
+                clamp(cropped_uv - vec2<f32>(footprint.x, 0.0), safe_min, safe_max), 0.0
+            );
+            let right = textureSampleLevel(
+                frame_texture, frame_sampler,
+                clamp(cropped_uv + vec2<f32>(footprint.x, 0.0), safe_min, safe_max), 0.0
+            );
+            let top = textureSampleLevel(
+                frame_texture, frame_sampler,
+                clamp(cropped_uv - vec2<f32>(0.0, footprint.y), safe_min, safe_max), 0.0
+            );
+            let bottom = textureSampleLevel(
+                frame_texture, frame_sampler,
+                clamp(cropped_uv + vec2<f32>(0.0, footprint.y), safe_min, safe_max), 0.0
+            );
+            let alpha_sum = center_sample.a * 4.0 + left.a + right.a + top.a + bottom.a;
+            let color_sum = center_sample.rgb * center_sample.a * 4.0
+                + left.rgb * left.a + right.rgb * right.a + top.rgb * top.a + bottom.rgb * bottom.a;
+            return vec4<f32>(color_sum / max(alpha_sum, 0.0001), alpha_sum * 0.125);
+        }
 
         if is_downscaling {
             let texel_size = 1.0 / uniforms.frame_size;

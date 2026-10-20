@@ -10,11 +10,16 @@ COPY apps/media-server/package.json apps/media-server/bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/src ./src
+COPY apps/media-server/capcodec.md ./capcodec.md
 
-RUN bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts \
+RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
+	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \
+	&& bun test src/__tests__/lib/audio-levels.integration.test.ts \
+	&& bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts \
 	&& bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts \
+	&& bun test src/__tests__/lib/media-audio.integration.test.ts \
 	&& bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
-	&& bun test src/__tests__/lib/media-transfer.test.ts \
+	&& bun test src/__tests__/lib/media-transfer.test.ts src/__tests__/lib/capcodec-encoder.test.ts \
 	&& bun test src/__tests__/routes/recording-verification.test.ts \
 	&& bun test src/__tests__/routes/video.test.ts \
 	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \

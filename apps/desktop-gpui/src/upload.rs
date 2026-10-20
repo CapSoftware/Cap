@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use cap_enc_ffmpeg::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
 use cap_project::{RecordingMeta, S3UploadMeta, SharingMeta, UploadMeta, VideoUploadInfo};
+use cap_recording::upload_preparation::{Preparation, Segment};
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -14,14 +15,24 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+#[cfg(test)]
+mod multipart_tests;
 pub(crate) mod queue;
+#[cfg(test)]
+mod verify_tests;
 
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
 const MAX_SEGMENT_UPLOADS: usize = 6;
 const SEGMENT_URL_PREFETCH: u32 = 20;
 const SEGMENT_UPLOAD_ATTEMPTS: u32 = 3;
+const SEGMENT_RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
+const SEGMENT_RETRY_MIN_DELAY: Duration = Duration::from_secs(2);
+const SEGMENT_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 const MANIFEST_UPLOAD_INTERVAL: Duration = Duration::from_secs(1);
+const UPLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const UPLOAD_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
+const UPLOAD_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
 struct SignedUploadTarget {
@@ -46,6 +57,7 @@ pub struct InstantUpload {
     completion_control: Option<CompletionControl>,
     bridge: Option<std::thread::JoinHandle<()>>,
     ownership: Option<cap_recording::upload_resume::UploadLock>,
+    prior_attempts: u32,
     request_context: Option<auth::UploadRequestContext>,
     reads: Arc<UploadReads>,
 }
@@ -273,10 +285,12 @@ pub(crate) fn start_instant_upload(
         metadata_lock,
         authorization,
         ownership,
+        state.attempt_count(),
         Some(request_context),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_instant_upload_with_ownership(
     video: VideoUploadInfo,
     project_path: PathBuf,
@@ -284,6 +298,7 @@ fn start_instant_upload_with_ownership(
     metadata_lock: Arc<Mutex<()>>,
     authorization: Option<CompletionAuthorization>,
     ownership: cap_recording::upload_resume::UploadLock,
+    prior_attempts: u32,
     request_context: Option<auth::UploadRequestContext>,
 ) -> Result<InstantUpload, String> {
     let (completion_permit, required, completion_control) = match authorization {
@@ -306,6 +321,7 @@ fn start_instant_upload_with_ownership(
         bridge = Some(
             std::thread::Builder::new()
                 .name("gpui-instant-segments".to_string())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || {
                     while !bridge_cancel.load(Ordering::Acquire) && !events_tx.is_disconnected() {
                         match segment_rx.recv_timeout(Duration::from_millis(20)) {
@@ -355,6 +371,7 @@ fn start_instant_upload_with_ownership(
         completion_control,
         bridge,
         ownership: Some(ownership),
+        prior_attempts,
         request_context,
         reads,
     })
@@ -516,7 +533,67 @@ async fn run_segment_upload(
     result
 }
 
+#[derive(Debug)]
+enum SegmentUploadError {
+    Fatal(String),
+    Retryable {
+        event: SegmentCompletedEvent,
+        error: String,
+    },
+}
+
+impl From<String> for SegmentUploadError {
+    fn from(error: String) -> Self {
+        Self::Fatal(error)
+    }
+}
+
+fn segment_error_is_retryable(error: &AuthApiError) -> bool {
+    match error {
+        AuthApiError::InvalidAuthentication | AuthApiError::UpgradeRequired => false,
+        AuthApiError::Status(status, _) => {
+            !status.is_client_error()
+                || matches!(
+                    *status,
+                    StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+                )
+        }
+        AuthApiError::Timeout | AuthApiError::Other(_) => true,
+    }
+}
+
+fn exhausted_segment_error(
+    event: SegmentCompletedEvent,
+    error: AuthApiError,
+) -> SegmentUploadError {
+    let message = format!(
+        "Failed to upload instant segment {}: {error}",
+        segment_subpath(&event)
+    );
+    if segment_error_is_retryable(&error) {
+        SegmentUploadError::Retryable {
+            event,
+            error: message,
+        }
+    } else {
+        SegmentUploadError::Fatal(message)
+    }
+}
+
+fn segment_retry_backoff(round: u32) -> Duration {
+    SEGMENT_RETRY_MIN_DELAY
+        .saturating_mul(1 << round.min(8))
+        .min(SEGMENT_RETRY_MAX_DELAY)
+}
+
 trait SegmentTransport: Send + Sync {
+    fn prepare(
+        &self,
+        _video_id: &str,
+        _segments: Vec<Segment>,
+    ) -> impl Future<Output = Result<Option<Vec<Segment>>, String>> + Send {
+        std::future::ready(Ok(None))
+    }
     fn prefetch(
         &self,
         video_id: &str,
@@ -529,7 +606,7 @@ trait SegmentTransport: Send + Sync {
         event: SegmentCompletedEvent,
         signed_urls: Arc<Mutex<HashMap<String, String>>>,
         cancel: Arc<AtomicBool>,
-    ) -> impl Future<Output = Result<SegmentCompletedEvent, String>> + Send;
+    ) -> impl Future<Output = Result<SegmentCompletedEvent, SegmentUploadError>> + Send;
     fn manifest(
         &self,
         video_id: &str,
@@ -545,6 +622,41 @@ trait SegmentTransport: Send + Sync {
 
 struct LiveSegmentTransport;
 impl SegmentTransport for LiveSegmentTransport {
+    async fn prepare(
+        &self,
+        video_id: &str,
+        segments: Vec<Segment>,
+    ) -> Result<Option<Vec<Segment>>, String> {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            #[derive(Deserialize)]
+            struct Response {
+                version: u32,
+                prepared: Vec<Segment>,
+            }
+            let response = auth::authed_request(
+                reqwest::Method::POST,
+                "/api/recording/prepare",
+                Some(json!({ "videoId": video_id, "segments": segments })),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let status = response.status();
+            if status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED {
+                return Ok(None);
+            }
+            if !status.is_success() {
+                return Err(format!("Recording preparation returned {status}"));
+            }
+            let response = response
+                .json::<Response>()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok((response.version == 1 && response.prepared.len() <= 32)
+                .then_some(response.prepared))
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
     async fn prefetch(
         &self,
         video_id: &str,
@@ -561,7 +673,7 @@ impl SegmentTransport for LiveSegmentTransport {
         event: SegmentCompletedEvent,
         signed_urls: Arc<Mutex<HashMap<String, String>>>,
         cancel: Arc<AtomicBool>,
-    ) -> Result<SegmentCompletedEvent, String> {
+    ) -> Result<SegmentCompletedEvent, SegmentUploadError> {
         upload_segment_with_retry(video_id, event, signed_urls, cancel).await
     }
     async fn manifest(
@@ -588,8 +700,19 @@ async fn upload_segments(
     let mut manifest = SegmentUploadManifest::default();
     let mut uploads = FuturesUnordered::new();
     let mut events_closed = false;
-    let mut last_manifest_upload: Option<Instant> = None;
+    let mut last_manifest_upload: Option<tokio::time::Instant> = None;
+    let mut preparation = Preparation::default();
+    let mut preparation_enabled = true;
+    let mut preparation_batch = Vec::new();
+    let mut preparation_interval = tokio::time::interval(Duration::from_secs(30));
+    preparation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut preparation_request = None;
+    let mut next_preparation_request = tokio::time::Instant::now();
     let mut next_prefetch = SEGMENT_URL_PREFETCH + 1;
+    let mut deferred = VecDeque::new();
+    let mut first_failures: HashMap<String, (tokio::time::Instant, String)> = HashMap::new();
+    let mut retry_round = 0u32;
+    let mut retry_at = tokio::time::Instant::now();
     let prefetched = checked_segment_step(&cancel, || async {
         Ok(transport.prefetch(video_id, 1, SEGMENT_URL_PREFETCH).await)
     })
@@ -603,15 +726,38 @@ async fn upload_segments(
         if cancel.load(Ordering::Acquire) {
             return Err("Instant recording upload cancelled".into());
         }
-        if events_closed && uploads.is_empty() && authorized {
+        if events_closed && uploads.is_empty() && deferred.is_empty() && authorized {
             break;
         }
+        let retry_deadline = first_failures
+            .values()
+            .map(|(first_failure, _)| *first_failure + SEGMENT_RETRY_WINDOW)
+            .min();
         let guarded = authorization.is_some();
         let (permission, denial) = match authorization.as_mut() {
             Some(required) => (Some(&mut required.permission), Some(&mut required.denied)),
             None => (None, None),
         };
         tokio::select! {
+            _ = preparation_interval.tick(), if preparation_enabled && preparation_request.is_none() => {
+                if tokio::time::Instant::now() < next_preparation_request { continue; }
+                preparation_batch = preparation.next_batch(manifest.video_segments.iter().map(|segment| segment.index), manifest.audio_segments.iter().map(|segment| segment.index));
+                if !preparation_batch.is_empty() {
+                    preparation_request = Some(Box::pin(transport.prepare(video_id, preparation_batch.clone())));
+                }
+            }
+            response = async { preparation_request.as_mut().unwrap().await }, if preparation_request.is_some() => {
+                preparation_request = None;
+                match response {
+                    Ok(Some(prepared)) => preparation.acknowledge(&preparation_batch, &prepared),
+                    Ok(None) => preparation_enabled = false,
+                    Err(error) => {
+                        preparation.request_failed();
+                        tracing::debug!(%error, "Optional recording preparation unavailable");
+                    }
+                }
+                next_preparation_request = tokio::time::Instant::now() + preparation.retry_delay();
+            }
             permission = async { permission.unwrap().await }, if !authorized => {
                 permission.map_err(|_| "Instant completion was not authorized".to_string())?;
                 authorized = true;
@@ -652,21 +798,71 @@ async fn upload_segments(
                     Err(_) => events_closed = true,
                 }
             }
+            _ = async { tokio::time::sleep_until(retry_deadline.unwrap()).await }, if retry_deadline.is_some() => {
+                let error = first_failures
+                    .values()
+                    .min_by_key(|(first_failure, _)| *first_failure)
+                    .map(|(_, error)| error.clone())
+                    .unwrap_or_default();
+                return Err(error);
+            }
+            _ = tokio::time::sleep_until(retry_at), if !deferred.is_empty() && uploads.len() < MAX_SEGMENT_UPLOADS => {
+                while uploads.len() < MAX_SEGMENT_UPLOADS {
+                    let Some(event) = deferred.pop_front() else { break };
+                    uploads.push(transport.segment(
+                        video_id.to_string(),
+                        event,
+                        signed_urls.clone(),
+                        cancel.clone(),
+                    ));
+                }
+            }
             Some(upload) = uploads.next(), if !uploads.is_empty() => {
                 check_segment_cancelled(&cancel)?;
-                let event = upload?;
+                let event = match upload {
+                    Ok(event) => event,
+                    Err(SegmentUploadError::Fatal(error)) => return Err(error),
+                    Err(SegmentUploadError::Retryable { event, error }) => {
+                        let now = tokio::time::Instant::now();
+                        let (first_failure, last_error) = first_failures
+                            .entry(segment_subpath(&event))
+                            .or_insert_with(|| (now, String::new()));
+                        if now.duration_since(*first_failure) >= SEGMENT_RETRY_WINDOW {
+                            return Err(error);
+                        }
+                        last_error.clone_from(&error);
+                        if retry_at <= now {
+                            retry_at = now + segment_retry_backoff(retry_round);
+                            retry_round = retry_round.saturating_add(1);
+                        }
+                        tracing::warn!(deferred = deferred.len() + 1, "Instant segment upload deferred for retry: {error}");
+                        deferred.push_back(event);
+                        continue;
+                    }
+                };
+                if !first_failures.is_empty() {
+                    first_failures.remove(&segment_subpath(&event));
+                    retry_round = 0;
+                    retry_at = tokio::time::Instant::now();
+                }
                 manifest.record(&event);
                 if manifest.has_video_content()
                     && last_manifest_upload.is_none_or(|last| last.elapsed() >= MANIFEST_UPLOAD_INTERVAL)
                 {
-                    checked_segment_step(&cancel, || transport.manifest(video_id, &manifest, &cancel)).await?;
-                    last_manifest_upload = Some(Instant::now());
+                    check_segment_cancelled(&cancel)?;
+                    let uploaded = transport.manifest(video_id, &manifest, &cancel).await;
+                    check_segment_cancelled(&cancel)?;
+                    if let Err(error) = uploaded {
+                        tracing::warn!("Instant progress manifest upload failed; retrying at the next interval: {error}");
+                    }
+                    last_manifest_upload = Some(tokio::time::Instant::now());
                 }
             }
             else => break,
         }
     }
 
+    drop(preparation_request);
     if cancel.load(Ordering::Acquire) {
         return Err("Instant recording upload cancelled".to_string());
     }
@@ -777,7 +973,7 @@ async fn upload_segment_with_retry(
     event: SegmentCompletedEvent,
     signed_urls: Arc<Mutex<HashMap<String, String>>>,
     cancel: Arc<AtomicBool>,
-) -> Result<SegmentCompletedEvent, String> {
+) -> Result<SegmentCompletedEvent, SegmentUploadError> {
     let subpath = segment_subpath(&event);
     let bytes = read_completed_segment(&event, &subpath, &cancel).await?;
     let mut cached_url = signed_urls
@@ -787,7 +983,7 @@ async fn upload_segment_with_retry(
 
     for attempt in 0..SEGMENT_UPLOAD_ATTEMPTS {
         if cancel.load(Ordering::Acquire) {
-            return Err("Instant recording upload cancelled".to_string());
+            return Err("Instant recording upload cancelled".to_string().into());
         }
         if attempt > 0 {
             segment_retry_delay(&cancel, Duration::from_millis(250u64 << attempt)).await?;
@@ -813,12 +1009,12 @@ async fn upload_segment_with_retry(
         match result {
             Ok(()) => return Ok(event),
             Err(AuthApiError::InvalidAuthentication) => {
-                return Err("Authentication expired while uploading the instant recording".into());
+                return Err(SegmentUploadError::Fatal(
+                    "Authentication expired while uploading the instant recording".into(),
+                ));
             }
             Err(error) if attempt + 1 == SEGMENT_UPLOAD_ATTEMPTS => {
-                return Err(format!(
-                    "Failed to upload instant segment {subpath}: {error}"
-                ));
+                return Err(exhausted_segment_error(event, error));
             }
             Err(error) => tracing::warn!(
                 subpath,
@@ -828,7 +1024,9 @@ async fn upload_segment_with_retry(
         }
     }
 
-    Err(format!("Failed to upload instant segment {subpath}"))
+    Err(SegmentUploadError::Fatal(format!(
+        "Failed to upload instant segment {subpath}"
+    )))
 }
 
 async fn read_completed_segment(
@@ -1033,6 +1231,9 @@ async fn upload_exported_video_inner(
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     let file_path = meta.output_path();
     if !file_path.exists() {
+        if !defer_completion {
+            crate::app_sounds::play_notification();
+        }
         return Err("Failed to upload video: Rendered video not found".into());
     }
 
@@ -1113,11 +1314,23 @@ async fn upload_exported_video_inner(
         .map_err(|error| format!("Failed to persist upload state: {error}"))?;
 
     match checked_upload_step(&cancel, || {
-        upload_video(&s3_config.id, &file_path, &metadata, progress, &cancel)
+        upload_video(
+            &s3_config.id,
+            &file_path,
+            &metadata,
+            progress,
+            &cancel,
+            meta.sharing.is_some(),
+        )
     })
     .await
     {
         Ok((link, object_identity)) => {
+            let link = meta
+                .sharing
+                .as_ref()
+                .map(|sharing| sharing.link.clone())
+                .unwrap_or(link);
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
@@ -1145,7 +1358,12 @@ async fn upload_exported_video_inner(
         }
         Err(AuthApiError::UpgradeRequired) => Ok((UploadResult::UpgradeRequired, None)),
         Err(AuthApiError::InvalidAuthentication) => Ok((UploadResult::NotAuthenticated, None)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => {
+            if !defer_completion && !cancel.load(Ordering::Relaxed) {
+                crate::app_sounds::play_notification();
+            }
+            Err(error.to_string())
+        }
     }
 }
 
@@ -1257,45 +1475,258 @@ async fn create_or_get_video_with_mode(
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
 }
 
+#[derive(Debug)]
+enum ReplacementUploadAttempt<T, S = ()> {
+    Completed(T),
+    RestartRequired(S),
+}
+
+async fn retry_replacement_upload<T, S, F, Fut>(
+    replace_existing: bool,
+    cancel: &AtomicBool,
+    mut state: S,
+    mut attempt: F,
+) -> Result<T, AuthApiError>
+where
+    F: FnMut(S) -> Fut,
+    Fut: Future<Output = Result<ReplacementUploadAttempt<T, S>, AuthApiError>>,
+{
+    for attempt_index in 0..2 {
+        match checked_upload_step(cancel, || attempt(state)).await? {
+            ReplacementUploadAttempt::Completed(value) => return Ok(value),
+            ReplacementUploadAttempt::RestartRequired(next)
+                if replace_existing && attempt_index == 0 =>
+            {
+                // Aborting a legacy Drive session can delete the published mapping.
+                state = next;
+            }
+            ReplacementUploadAttempt::RestartRequired(_) => break,
+        }
+    }
+    Err(replacement_restart_error())
+}
+
+fn replacement_restart_error() -> AuthApiError {
+    AuthApiError::Other("api/upload_multipart_complete/409/REPLACEMENT_RESTART_REQUIRED".into())
+}
+
+fn is_legacy_replacement_upload(replace_existing: bool, upload_id: &str) -> bool {
+    replace_existing && !upload_id.starts_with("cap-reupload.")
+}
+
+fn validate_replacement_restart_session(
+    restarted: bool,
+    upload_id: &str,
+) -> Result<(), AuthApiError> {
+    if restarted && !upload_id.starts_with("cap-reupload.") {
+        return Err(replacement_restart_error());
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReplacementUploadFile {
+    path: PathBuf,
+    size: u64,
+    modified: std::time::SystemTime,
+}
+
+impl ReplacementUploadFile {
+    fn read(path: &Path) -> Result<Self, AuthApiError> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            AuthApiError::Other(format!("Failed to inspect replacement export: {error}"))
+        })?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err(replacement_source_changed());
+        }
+        Ok(Self {
+            path: path.canonicalize().map_err(|error| {
+                AuthApiError::Other(format!("Failed to resolve replacement export: {error}"))
+            })?,
+            size: metadata.len(),
+            modified: metadata.modified().map_err(|error| {
+                AuthApiError::Other(format!(
+                    "Failed to inspect replacement export time: {error}"
+                ))
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReplacementUploadChunk {
+    offset: u64,
+    size: usize,
+    md5: String,
+}
+
+#[derive(Debug)]
+struct ReplacementUploadSource {
+    file: ReplacementUploadFile,
+    chunks: Vec<ReplacementUploadChunk>,
+    sealed: bool,
+}
+
+fn replacement_source_changed() -> AuthApiError {
+    AuthApiError::Other("Rendered video changed during replacement upload".into())
+}
+
+impl ReplacementUploadSource {
+    fn new(path: &Path) -> Result<Self, AuthApiError> {
+        Ok(Self {
+            file: ReplacementUploadFile::read(path)?,
+            chunks: Vec::new(),
+            sealed: false,
+        })
+    }
+
+    fn validate_file(&self, path: &Path) -> Result<(), AuthApiError> {
+        if ReplacementUploadFile::read(path)? != self.file {
+            return Err(replacement_source_changed());
+        }
+        Ok(())
+    }
+
+    fn check_chunk(
+        &mut self,
+        part_number: u32,
+        offset: u64,
+        bytes: &[u8],
+        file_size: u64,
+    ) -> Result<(), AuthApiError> {
+        let index = usize::try_from(part_number)
+            .ok()
+            .and_then(|part| part.checked_sub(1))
+            .ok_or_else(replacement_source_changed)?;
+        if file_size != self.file.size || bytes.is_empty() {
+            return Err(replacement_source_changed());
+        }
+        let chunk = ReplacementUploadChunk {
+            offset,
+            size: bytes.len(),
+            md5: md5_base64(bytes),
+        };
+        if self.sealed {
+            if self.chunks.get(index) != Some(&chunk) {
+                return Err(replacement_source_changed());
+            }
+        } else {
+            let expected_offset = self
+                .chunks
+                .last()
+                .map(|previous| previous.offset.saturating_add(previous.size as u64))
+                .unwrap_or(0);
+            if index != self.chunks.len() || offset != expected_offset {
+                return Err(replacement_source_changed());
+            }
+            self.chunks.push(chunk);
+        }
+        Ok(())
+    }
+
+    fn seal_parts(&mut self, parts: &[UploadedPart]) -> Result<(), AuthApiError> {
+        if parts.len() != self.chunks.len() || parts.is_empty() {
+            return Err(replacement_source_changed());
+        }
+        let mut size = 0u64;
+        for (index, (part, chunk)) in parts.iter().zip(&self.chunks).enumerate() {
+            if usize::try_from(part.part_number).ok() != Some(index + 1)
+                || part.size != chunk.size
+                || chunk.offset != size
+            {
+                return Err(replacement_source_changed());
+            }
+            size = size
+                .checked_add(chunk.size as u64)
+                .ok_or_else(replacement_source_changed)?;
+        }
+        if size != self.file.size {
+            return Err(replacement_source_changed());
+        }
+        self.sealed = true;
+        Ok(())
+    }
+}
+
 async fn upload_video(
     video_id: &str,
     file_path: &Path,
     metadata: &VideoMeta,
     progress: impl Fn(f64),
     cancel: &AtomicBool,
+    replace_existing: bool,
 ) -> Result<(String, Option<String>), AuthApiError> {
-    let initiate = checked_upload_step(cancel, || multipart_initiate(video_id)).await?;
-    let is_drive = is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
-    let parts = upload_parts(
-        video_id,
-        &initiate.upload_id,
-        file_path,
-        is_drive,
-        &progress,
+    let progress = &progress;
+    let result = retry_replacement_upload(
+        replace_existing,
         cancel,
+        None,
+        |mut source: Option<ReplacementUploadSource>| async move {
+            if let Some(source) = &source {
+                source.validate_file(file_path)?;
+            }
+            let initiate =
+                checked_upload_step(cancel, || multipart_initiate(video_id, replace_existing))
+                    .await?;
+            validate_replacement_restart_session(source.is_some(), &initiate.upload_id)?;
+            if source.is_none()
+                && is_legacy_replacement_upload(replace_existing, &initiate.upload_id)
+            {
+                source = Some(ReplacementUploadSource::new(file_path)?);
+            }
+            let is_drive =
+                is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
+            let parts = upload_parts(
+                video_id,
+                &initiate.upload_id,
+                file_path,
+                is_drive,
+                progress,
+                cancel,
+                source.as_mut(),
+            )
+            .await?;
+            check_export_cancelled(cancel)?;
+            if let Some(source) = &mut source {
+                source.validate_file(file_path)?;
+                source.seal_parts(&parts)?;
+            }
+            let completed_identity = checked_upload_step(cancel, || {
+                multipart_complete(
+                    video_id,
+                    &initiate.upload_id,
+                    &parts,
+                    Some(metadata),
+                    replace_existing,
+                )
+            })
+            .await?;
+            let completed_identity = match completed_identity {
+                ReplacementUploadAttempt::Completed(identity) => identity,
+                ReplacementUploadAttempt::RestartRequired(()) => {
+                    if source.is_none() {
+                        return Err(replacement_restart_error());
+                    }
+                    return Ok(ReplacementUploadAttempt::RestartRequired(source));
+                }
+            };
+            let object_identity = if is_drive {
+                parts
+                    .iter()
+                    .rev()
+                    .find_map(|part| part.object_identity.clone())
+            } else {
+                completed_identity
+            };
+            Ok(ReplacementUploadAttempt::Completed((
+                format!("{}/s/{video_id}", auth::server_url()),
+                object_identity,
+            )))
+        },
     )
     .await?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err(AuthApiError::Other("Export cancelled".into()));
-    }
-    let completed_identity = checked_upload_step(cancel, || {
-        multipart_complete(video_id, &initiate.upload_id, &parts, Some(metadata))
-    })
-    .await?;
     progress(1.0);
-
-    let object_identity = if is_drive {
-        parts
-            .iter()
-            .rev()
-            .find_map(|part| part.object_identity.clone())
-    } else {
-        completed_identity
-    };
-    Ok((
-        format!("{}/s/{video_id}", auth::server_url()),
-        object_identity,
-    ))
+    Ok(result)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1305,13 +1736,17 @@ struct InitiateResponse {
     provider: Option<String>,
 }
 
-async fn multipart_initiate(video_id: &str) -> Result<InitiateResponse, AuthApiError> {
+async fn multipart_initiate(
+    video_id: &str,
+    replace_existing: bool,
+) -> Result<InitiateResponse, AuthApiError> {
     let response = auth::authed_request(
         reqwest::Method::POST,
         "/api/upload/multipart/initiate",
         Some(json!({
             "videoId": video_id,
-            "contentType": "video/mp4"
+            "contentType": "video/mp4",
+            "replaceExisting": replace_existing
         })),
     )
     .await
@@ -1330,6 +1765,7 @@ async fn multipart_initiate(video_id: &str) -> Result<InitiateResponse, AuthApiE
 }
 
 async fn multipart_presign(
+    client: &reqwest::Client,
     video_id: &str,
     upload_id: &str,
     part_number: u32,
@@ -1350,7 +1786,8 @@ async fn multipart_presign(
         body.insert("md5Sum".into(), json!(md5_sum));
     }
 
-    let response = auth::authed_request(
+    let response = auth::authed_request_with(
+        client,
         reqwest::Method::POST,
         "/api/upload/multipart/presign-part",
         Some(Value::Object(body)),
@@ -1383,11 +1820,13 @@ async fn multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<&VideoMeta>,
-) -> Result<Option<String>, AuthApiError> {
+    replace_existing: bool,
+) -> Result<ReplacementUploadAttempt<Option<String>>, AuthApiError> {
     let mut body = json!({
         "videoId": video_id,
         "uploadId": upload_id,
         "parts": parts,
+        "replaceExisting": replace_existing,
     });
     if let Some(meta) = meta
         && let Value::Object(object) = &mut body
@@ -1405,17 +1844,31 @@ async fn multipart_complete(
     .map_err(|error| {
         AuthApiError::Other(format!("api/upload_multipart_complete/request: {error}"))
     })?;
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
+    let status = response.status();
+    if !status.is_success() {
+        if status == StatusCode::CONFLICT {
+            let body = response.json::<Value>().await.unwrap_or(Value::Null);
+            if replacement_restart_required(status, &body) {
+                return Ok(ReplacementUploadAttempt::RestartRequired(()));
+            }
+        }
         return Err(AuthApiError::Other(format!(
-            "api/upload_multipart_complete/{status}"
+            "api/upload_multipart_complete/{}",
+            status.as_u16()
         )));
     }
     let response = response.json::<Value>().await.unwrap_or(Value::Null);
-    Ok(response
-        .get("objectIdentity")
-        .and_then(Value::as_str)
-        .map(str::to_string))
+    Ok(ReplacementUploadAttempt::Completed(
+        response
+            .get("objectIdentity")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    ))
+}
+
+fn replacement_restart_required(status: StatusCode, body: &Value) -> bool {
+    status == StatusCode::CONFLICT
+        && body.get("code").and_then(Value::as_str) == Some("REPLACEMENT_RESTART_REQUIRED")
 }
 
 async fn upload_parts(
@@ -1425,6 +1878,7 @@ async fn upload_parts(
     is_drive: bool,
     progress: &impl Fn(f64),
     cancel: &AtomicBool,
+    replacement_source: Option<&mut ReplacementUploadSource>,
 ) -> Result<Vec<UploadedPart>, AuthApiError> {
     let file_size = std::fs::metadata(file_path)
         .map_err(|error| AuthApiError::Other(format!("Failed to read export size: {error}")))?
@@ -1432,12 +1886,144 @@ async fn upload_parts(
     if file_size == 0 {
         return Err(AuthApiError::Other("Rendered video is empty".into()));
     }
-    let chunk_size = chunk_size_for(file_size);
+    let transport = LivePartTransport {
+        video_id,
+        upload_id,
+        is_drive,
+        use_md5: auth::is_server_url_custom(),
+        api: auth::api_client()?,
+        storage: reqwest::Client::new(),
+    };
+    upload_file_parts(
+        &transport,
+        file_path,
+        file_size,
+        chunk_size_for(file_size),
+        progress,
+        cancel,
+        replacement_source,
+    )
+    .await
+}
+
+struct PartChunk {
+    part_number: u32,
+    offset: u64,
+    bytes: bytes::Bytes,
+}
+
+struct PresignedPart {
+    url: String,
+    md5: Option<String>,
+}
+
+trait PartTransport: Sync {
+    fn presign(
+        &self,
+        chunk: &PartChunk,
+        cancel: &AtomicBool,
+    ) -> impl Future<Output = Result<PresignedPart, AuthApiError>> + Send;
+    fn put(
+        &self,
+        presigned: &PresignedPart,
+        chunk: &PartChunk,
+        total_size: u64,
+        cancel: &AtomicBool,
+    ) -> impl Future<Output = Result<UploadedPart, AuthApiError>> + Send;
+}
+
+/// Every part of one upload goes through the same two clients, so parts after
+/// the first reuse the open API and storage connections. The clients live only
+/// as long as the upload, so a later upload never starts on a pooled
+/// connection from an earlier network.
+struct LivePartTransport<'a> {
+    video_id: &'a str,
+    upload_id: &'a str,
+    is_drive: bool,
+    use_md5: bool,
+    api: reqwest::Client,
+    storage: reqwest::Client,
+}
+
+impl PartTransport for LivePartTransport<'_> {
+    async fn presign(
+        &self,
+        chunk: &PartChunk,
+        cancel: &AtomicBool,
+    ) -> Result<PresignedPart, AuthApiError> {
+        let md5 = self.use_md5.then(|| md5_base64(&chunk.bytes));
+        let url = checked_upload_step(cancel, || {
+            multipart_presign(
+                &self.api,
+                self.video_id,
+                self.upload_id,
+                chunk.part_number,
+                md5.as_deref(),
+            )
+        })
+        .await?;
+        Ok(PresignedPart { url, md5 })
+    }
+
+    async fn put(
+        &self,
+        presigned: &PresignedPart,
+        chunk: &PartChunk,
+        total_size: u64,
+        cancel: &AtomicBool,
+    ) -> Result<UploadedPart, AuthApiError> {
+        put_presigned_part(
+            &self.storage,
+            &presigned.url,
+            chunk,
+            total_size,
+            self.is_drive,
+            presigned.md5.as_deref(),
+            cancel,
+        )
+        .await
+    }
+}
+
+/// Part requests only observe cancellation between requests, so this races
+/// them against the cancel flag to drop an in-flight part promptly.
+async fn upload_part_chunk(
+    transport: &impl PartTransport,
+    chunk: &PartChunk,
+    total_size: u64,
+    cancel: &AtomicBool,
+) -> Result<UploadedPart, AuthApiError> {
+    tokio::select! {
+        biased;
+        () = wait_for_export_cancel(cancel) => Err(AuthApiError::Other("Export cancelled".into())),
+        result = async {
+            let presigned = transport.presign(chunk, cancel).await?;
+            transport.put(&presigned, chunk, total_size, cancel).await
+        } => result,
+    }
+}
+
+async fn wait_for_export_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::Acquire) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Parts go strictly one at a time, so an interrupted connection only ever
+/// loses the one part that was in flight.
+async fn upload_file_parts(
+    transport: &impl PartTransport,
+    file_path: &Path,
+    file_size: u64,
+    chunk_size: u64,
+    progress: &impl Fn(f64),
+    cancel: &AtomicBool,
+    mut replacement_source: Option<&mut ReplacementUploadSource>,
+) -> Result<Vec<UploadedPart>, AuthApiError> {
     let mut parts = Vec::new();
     let mut failed = Vec::new();
     let mut offset = 0u64;
     let mut part_number = 1u32;
-    let use_md5 = auth::is_server_url_custom();
 
     while offset < file_size {
         if cancel.load(Ordering::Relaxed) {
@@ -1445,24 +2031,20 @@ async fn upload_parts(
         }
         let size = (file_size - offset).min(chunk_size) as usize;
         let chunk = read_chunk(file_path, offset, size)?;
-        match put_part(
-            video_id,
-            upload_id,
+        if let Some(source) = &mut replacement_source {
+            source.check_chunk(part_number, offset, &chunk, file_size)?;
+        }
+        let chunk = PartChunk {
             part_number,
             offset,
-            file_size,
-            &chunk,
-            is_drive,
-            use_md5,
-            cancel,
-        )
-        .await
-        {
+            bytes: chunk.into(),
+        };
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(error) => {
                 check_export_cancelled(cancel)?;
                 tracing::warn!(part_number, error = %error, "chunk upload failed; will retry");
-                failed.push((part_number, offset, chunk, error));
+                failed.push((chunk, error));
             }
         }
         offset += size as u64;
@@ -1470,23 +2052,11 @@ async fn upload_parts(
         progress((offset as f64 / file_size as f64).min(0.99));
     }
 
-    for (part_number, offset, chunk, first_error) in failed {
+    for (chunk, first_error) in failed {
         if cancel.load(Ordering::Relaxed) {
             return Err(AuthApiError::Other("Export cancelled".into()));
         }
-        match put_part(
-            video_id,
-            upload_id,
-            part_number,
-            offset,
-            file_size,
-            &chunk,
-            is_drive,
-            use_md5,
-            cancel,
-        )
-        .await
-        {
+        match upload_part_chunk(transport, &chunk, file_size, cancel).await {
             Ok(part) => parts.push(part),
             Err(_) => {
                 check_export_cancelled(cancel)?;
@@ -1505,39 +2075,35 @@ async fn upload_parts(
     Ok(parts)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn put_part(
-    video_id: &str,
-    upload_id: &str,
-    part_number: u32,
-    offset: u64,
+async fn put_presigned_part(
+    client: &reqwest::Client,
+    url: &str,
+    chunk: &PartChunk,
     total_size: u64,
-    chunk: &[u8],
     is_drive: bool,
-    use_md5: bool,
+    md5_sum: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<UploadedPart, AuthApiError> {
-    let md5_sum = use_md5.then(|| md5_base64(chunk));
-    let url = checked_upload_step(cancel, || {
-        multipart_presign(video_id, upload_id, part_number, md5_sum.as_deref())
-    })
-    .await?;
-    let client = reqwest::Client::new();
+    let PartChunk {
+        part_number,
+        offset,
+        ref bytes,
+    } = *chunk;
     let mut attempt = 0u32;
     loop {
         let mut request = client
-            .put(&url)
-            .header("Content-Length", chunk.len())
+            .put(url)
+            .header("Content-Length", bytes.len())
             .timeout(Duration::from_secs(5 * 60))
-            .body(chunk.to_vec());
-        if is_drive || is_google_drive_resumable_url(&url) {
-            let end = offset.saturating_add(chunk.len() as u64).saturating_sub(1);
+            .body(bytes.clone());
+        if is_drive || is_google_drive_resumable_url(url) {
+            let end = offset.saturating_add(bytes.len() as u64).saturating_sub(1);
             request = request.header(
                 "Content-Range",
                 format!("bytes {offset}-{end}/{total_size}"),
             );
         }
-        if let Some(md5_sum) = &md5_sum {
+        if let Some(md5_sum) = md5_sum {
             request = request.header("Content-MD5", md5_sum);
         }
         let response =
@@ -1546,10 +2112,10 @@ async fn put_part(
         match response {
             Ok(response) => {
                 if !upload_status_ok(
-                    &url,
+                    url,
                     response.status(),
                     offset,
-                    chunk.len() as u64,
+                    bytes.len() as u64,
                     total_size,
                 ) {
                     let status = response.status();
@@ -1564,7 +2130,7 @@ async fn put_part(
                     .unwrap_or("")
                     .trim_matches('"')
                     .to_string();
-                let object_identity = if (is_drive || is_google_drive_resumable_url(&url))
+                let object_identity = if (is_drive || is_google_drive_resumable_url(url))
                     && response.status().is_success()
                 {
                     response.json::<Value>().await.ok().and_then(|value| {
@@ -1578,7 +2144,7 @@ async fn put_part(
                 return Ok(UploadedPart {
                     part_number,
                     etag,
-                    size: chunk.len(),
+                    size: bytes.len(),
                     object_identity,
                 });
             }
@@ -1676,9 +2242,12 @@ async fn presigned_put_bytes_inner(
         )
     })
     .await?;
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        return Err(AuthApiError::Other(format!("api/upload_signed/{status}")));
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AuthApiError::Status(
+            status,
+            format!("api/upload_signed/{}", status.as_u16()),
+        ));
     }
     let target = response
         .json::<Response>()
@@ -1698,7 +2267,7 @@ async fn upload_signed_bytes_inner(
 
     let length = bytes.len() as u64;
     let mut request = CLIENT
-        .get_or_init(reqwest::Client::new)
+        .get_or_init(upload_client)
         .put(&target.url)
         .header("Content-Length", length)
         .header("Content-Type", upload_content_type(subpath))
@@ -1723,13 +2292,26 @@ async fn upload_signed_bytes_inner(
         })
     })
     .await?;
-    if !response.status().is_success() {
-        return Err(AuthApiError::Other(format!(
-            "upload failed: {}",
-            response.status()
-        )));
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AuthApiError::Status(
+            status,
+            format!("upload failed: {status}"),
+        ));
     }
     Ok(())
+}
+
+fn upload_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(UPLOAD_CONNECT_TIMEOUT)
+        .tcp_keepalive(UPLOAD_TCP_KEEPALIVE)
+        .pool_idle_timeout(UPLOAD_POOL_IDLE_TIMEOUT)
+        .build()
+        .unwrap_or_else(|error| {
+            tracing::warn!("Falling back to the default upload client: {error}");
+            reqwest::Client::new()
+        })
 }
 
 async fn send_upload_request(
@@ -1826,26 +2408,7 @@ async fn upload_screenshot_bytes(
 }
 
 fn compress_image(path: &Path) -> Result<Vec<u8>, AuthApiError> {
-    let img = image::ImageReader::open(path)
-        .map_err(|error| AuthApiError::Other(format!("Failed to open image: {error}")))?
-        .decode()
-        .map_err(|error| AuthApiError::Other(format!("Failed to decode image: {error}")))?;
-    let resized = img.resize(
-        img.width() / 2,
-        img.height() / 2,
-        image::imageops::FilterType::Nearest,
-    );
-    let mut buffer = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 30);
-    encoder
-        .encode(
-            resized.as_bytes(),
-            resized.width(),
-            resized.height(),
-            resized.color().into(),
-        )
-        .map_err(|error| AuthApiError::Other(format!("Failed to compress image: {error}")))?;
-    Ok(buffer)
+    cap_gpui_kernels::codec::compress_image_jpeg(path).map_err(AuthApiError::Other)
 }
 
 fn build_video_meta(path: &Path) -> Result<VideoMeta, String> {
@@ -1888,8 +2451,7 @@ fn chunk_size_for(file_size: u64) -> u64 {
 }
 
 fn md5_base64(bytes: &[u8]) -> String {
-    use md5::{Digest, Md5};
-    let digest = Md5::digest(bytes);
+    let digest = cap_gpui_kernels::codec::md5(bytes);
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, digest)
 }
 
@@ -2017,6 +2579,7 @@ mod tests {
                     completion_control: None,
                     bridge: None,
                     ownership: None,
+                    prior_attempts: 0,
                     request_context: None,
                     reads: Arc::new(UploadReads::default()),
                 };
@@ -2061,6 +2624,7 @@ mod tests {
             completion_control: control,
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         }
@@ -2354,10 +2918,23 @@ mod tests {
     }
     #[derive(Default)]
     struct FakeSegmentTransport {
+        delay_preparation: AtomicBool,
+        preparation_started: tokio::sync::Notify,
+        preparation_dropped: AtomicBool,
         manifests: Mutex<Vec<bool>>,
         completed: std::sync::atomic::AtomicUsize,
         uploaded: std::sync::atomic::AtomicUsize,
         fail_segment: AtomicBool,
+        fatal_segment: AtomicBool,
+        status_failure: Mutex<Option<StatusCode>>,
+        retryable_failures: std::sync::atomic::AtomicUsize,
+        stall_retries: AtomicBool,
+        segment_calls: std::sync::atomic::AtomicUsize,
+        segment_call_limit: std::sync::atomic::AtomicUsize,
+        segment_failed: tokio::sync::Notify,
+        manifest_failures: std::sync::atomic::AtomicUsize,
+        manifest_attempts: std::sync::atomic::AtomicUsize,
+        last_manifest: Mutex<Option<SegmentUploadManifest>>,
         delay_complete: AtomicBool,
         complete_started: tokio::sync::Notify,
         complete_response: tokio::sync::Notify,
@@ -2367,6 +2944,20 @@ mod tests {
         prefetch_response: tokio::sync::Notify,
     }
     impl SegmentTransport for FakeSegmentTransport {
+        async fn prepare(&self, _: &str, _: Vec<Segment>) -> Result<Option<Vec<Segment>>, String> {
+            if !self.delay_preparation.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            struct Finish<'a>(&'a AtomicBool);
+            impl Drop for Finish<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::Release);
+                }
+            }
+            let _finish = Finish(&self.preparation_dropped);
+            self.preparation_started.notify_one();
+            std::future::pending().await
+        }
         async fn prefetch(
             &self,
             _: &str,
@@ -2386,13 +2977,45 @@ mod tests {
             event: SegmentCompletedEvent,
             _: Arc<Mutex<HashMap<String, String>>>,
             _: Arc<AtomicBool>,
-        ) -> Result<SegmentCompletedEvent, String> {
-            if self.fail_segment.load(Ordering::Acquire) {
-                Err("segment upload failed".into())
-            } else {
-                self.uploaded.fetch_add(1, Ordering::AcqRel);
-                Ok(event)
+        ) -> Result<SegmentCompletedEvent, SegmentUploadError> {
+            let calls = self.segment_calls.fetch_add(1, Ordering::AcqRel) + 1;
+            let limit = self.segment_call_limit.load(Ordering::Acquire);
+            if limit > 0 && calls > limit {
+                return Err(SegmentUploadError::Fatal(
+                    "segment call limit exceeded".into(),
+                ));
             }
+            if self.fatal_segment.load(Ordering::Acquire) {
+                return Err(SegmentUploadError::Fatal(
+                    "Authentication expired while uploading the instant recording".into(),
+                ));
+            }
+            let retry = self.fail_segment.load(Ordering::Acquire)
+                || self
+                    .retryable_failures
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+            if let Some(status) = *self.status_failure.lock().unwrap() {
+                return Err(exhausted_segment_error(
+                    event,
+                    AuthApiError::Status(status, format!("upload failed: {status}")),
+                ));
+            }
+            if retry {
+                self.segment_failed.notify_one();
+                return Err(exhausted_segment_error(
+                    event,
+                    AuthApiError::Other("segment upload failed".into()),
+                ));
+            }
+            if self.stall_retries.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_secs(5 * 60) * SEGMENT_UPLOAD_ATTEMPTS).await;
+                return Err(exhausted_segment_error(event, AuthApiError::Timeout));
+            }
+            self.uploaded.fetch_add(1, Ordering::AcqRel);
+            Ok(event)
         }
         async fn manifest(
             &self,
@@ -2400,7 +3023,19 @@ mod tests {
             manifest: &SegmentUploadManifest,
             _: &Arc<AtomicBool>,
         ) -> Result<(), String> {
+            self.manifest_attempts.fetch_add(1, Ordering::AcqRel);
+            if !manifest.is_complete
+                && self
+                    .manifest_failures
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok()
+            {
+                return Err("manifest upload failed".into());
+            }
             self.manifests.lock().unwrap().push(manifest.is_complete);
+            *self.last_manifest.lock().unwrap() = Some(manifest.clone());
             Ok(())
         }
         async fn complete(&self, _: &str, _: &Arc<AtomicBool>) -> Result<(), String> {
@@ -2412,6 +3047,40 @@ mod tests {
             Ok(())
         }
     }
+    #[tokio::test]
+    async fn stopped_upload_drops_optional_preparation_without_waiting_for_it() {
+        let transport = FakeSegmentTransport::default();
+        transport.delay_preparation.store(true, Ordering::Release);
+        let (sender, events) = flume::unbounded();
+        sender
+            .send(segment_event(0, 0.0, true, SegmentMediaType::Video))
+            .unwrap();
+        sender
+            .send(segment_event(1, 1.0, false, SegmentMediaType::Video))
+            .unwrap();
+        let upload = upload_segments(
+            &transport,
+            "preparation",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        tokio::pin!(upload);
+        tokio::select! {
+            _ = transport.preparation_started.notified() => {}
+            result = &mut upload => panic!("Upload ended before preparation: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(35)) => panic!("Preparation did not start"),
+        }
+        drop(sender);
+        tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(transport.preparation_dropped.load(Ordering::Acquire));
+        assert_eq!(transport.completed.load(Ordering::Acquire), 1);
+        assert_eq!(transport.manifests.lock().unwrap().last(), Some(&true));
+    }
+
     fn closed_segment_events() -> flume::Receiver<SegmentCompletedEvent> {
         let (sender, receiver) = flume::unbounded();
         sender
@@ -2553,6 +3222,7 @@ mod tests {
             completion_control: Some(control.clone()),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };
@@ -2658,7 +3328,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn cancelled_or_failed_upload_cannot_complete_with_a_queued_permission() {
         for fail_segment in [false, true] {
             let transport = FakeSegmentTransport::default();
@@ -2748,6 +3418,7 @@ mod tests {
             completion_control: Some(authorization.control),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };
@@ -2821,6 +3492,336 @@ mod tests {
             );
         }
     }
+    fn audio_video_segment_events() -> (
+        flume::Receiver<SegmentCompletedEvent>,
+        SegmentUploadManifest,
+    ) {
+        let (sender, receiver) = flume::unbounded();
+        let mut expected = SegmentUploadManifest::default();
+        for media_type in [SegmentMediaType::Video, SegmentMediaType::Audio] {
+            for index in 0..3 {
+                let event = segment_event(index, f64::from(index), index == 0, media_type);
+                expected.record(&event);
+                sender.send(event).unwrap();
+            }
+        }
+        expected.is_complete = true;
+        (receiver, expected)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn segment_failing_past_its_attempts_is_retried_into_the_final_manifest() {
+        let transport = FakeSegmentTransport::default();
+        transport.retryable_failures.store(4, Ordering::Release);
+        let authorization = CompletionAuthorization::new();
+        let (events, expected) = audio_video_segment_events();
+        *authorization.control.expected_manifest.lock().unwrap() = Some(expected.clone());
+        authorization.permit.send(()).unwrap();
+        let started = tokio::time::Instant::now();
+        upload_segments(
+            &transport,
+            "flaky-network",
+            events,
+            authorization.control.cancel.clone(),
+            Some(authorization.required),
+        )
+        .await
+        .unwrap();
+        assert!(started.elapsed() < SEGMENT_RETRY_WINDOW);
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), 10);
+        assert_eq!(transport.uploaded.load(Ordering::Acquire), 6);
+        assert_eq!(
+            transport.last_manifest.lock().unwrap().as_ref(),
+            Some(&expected)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn successful_upload_retries_deferred_segments_without_waiting_for_backoff() {
+        let transport = FakeSegmentTransport::default();
+        transport.retryable_failures.store(1, Ordering::Release);
+        let (sender, events) = flume::unbounded();
+        sender
+            .send(segment_event(0, 0.0, true, SegmentMediaType::Video))
+            .unwrap();
+        let future = upload_segments(
+            &transport,
+            "recovered-network",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        tokio::pin!(future);
+        tokio::select! {
+            _ = transport.segment_failed.notified() => {}
+            result = &mut future => panic!("Upload ended before the init segment failed: {result:?}"),
+        }
+        let started = tokio::time::Instant::now();
+        sender
+            .send(segment_event(1, 1.0, false, SegmentMediaType::Video))
+            .unwrap();
+        drop(sender);
+        future.await.unwrap();
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), 3);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 1);
+        let manifest = transport.last_manifest.lock().unwrap().clone().unwrap();
+        assert!(manifest.is_complete && manifest.video_init_uploaded);
+        assert_eq!(manifest.video_segments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn progress_manifest_failure_does_not_end_the_live_upload() {
+        let transport = FakeSegmentTransport::default();
+        transport
+            .manifest_failures
+            .store(usize::MAX, Ordering::Release);
+        upload_segments(
+            &transport,
+            "manifest-blip",
+            closed_segment_events(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(transport.manifest_attempts.load(Ordering::Acquire), 2);
+        assert_eq!(*transport.manifests.lock().unwrap(), vec![true]);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn segment_that_never_uploads_fails_the_run_after_the_retry_window() {
+        let transport = FakeSegmentTransport::default();
+        transport.fail_segment.store(true, Ordering::Release);
+        let authorization = CompletionAuthorization::new();
+        authorization.permit.send(()).unwrap();
+        let started = tokio::time::Instant::now();
+        let error = upload_segments(
+            &transport,
+            "offline",
+            closed_segment_events(),
+            authorization.control.cancel.clone(),
+            Some(authorization.required),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("segment upload failed"));
+        assert_eq!(started.elapsed(), SEGMENT_RETRY_WINDOW);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+        assert!(transport.manifests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_retry_cannot_outlive_the_retry_window() {
+        let transport = FakeSegmentTransport::default();
+        transport.retryable_failures.store(1, Ordering::Release);
+        transport.stall_retries.store(true, Ordering::Release);
+        let (sender, events) = flume::unbounded();
+        sender
+            .send(segment_event(0, 0.0, true, SegmentMediaType::Video))
+            .unwrap();
+        drop(sender);
+        let started = tokio::time::Instant::now();
+        let error = upload_segments(
+            &transport,
+            "stalled-retry",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("segment upload failed"), "{error}");
+        assert_eq!(started.elapsed(), SEGMENT_RETRY_WINDOW);
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), 2);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deferred_segments_beyond_the_upload_limit_still_back_off() {
+        let transport = FakeSegmentTransport::default();
+        transport.fail_segment.store(true, Ordering::Release);
+        let segments = 2 * MAX_SEGMENT_UPLOADS as u32;
+        let (sender, events) = flume::unbounded();
+        for index in 0..segments {
+            sender
+                .send(segment_event(
+                    index,
+                    f64::from(index),
+                    index == 0,
+                    SegmentMediaType::Video,
+                ))
+                .unwrap();
+        }
+        drop(sender);
+        let mut rounds = 1;
+        let mut elapsed = Duration::ZERO;
+        for round in 0.. {
+            elapsed += segment_retry_backoff(round);
+            if elapsed >= SEGMENT_RETRY_WINDOW {
+                break;
+            }
+            rounds += 1;
+        }
+        transport
+            .segment_call_limit
+            .store(segments as usize * rounds, Ordering::Release);
+        let error = upload_segments(
+            &transport,
+            "long-outage",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("segment upload failed"), "{error}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_while_a_segment_waits_for_retry_aborts_promptly() {
+        let transport = FakeSegmentTransport::default();
+        transport.fail_segment.store(true, Ordering::Release);
+        let authorization = CompletionAuthorization::new();
+        authorization.permit.send(()).unwrap();
+        let future = upload_segments(
+            &transport,
+            "revoked-during-retry",
+            closed_segment_events(),
+            authorization.control.cancel.clone(),
+            Some(authorization.required),
+        );
+        tokio::pin!(future);
+        tokio::select! {
+            _ = transport.segment_failed.notified() => {}
+            result = &mut future => panic!("Upload ended before a segment failed: {result:?}"),
+        }
+        let calls = transport.segment_calls.load(Ordering::Acquire);
+        authorization.control.deny();
+        let result = tokio::time::timeout(Duration::from_millis(1), future)
+            .await
+            .expect("revocation waited for the segment retry backoff");
+        assert!(result.is_err());
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), calls);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+        assert!(transport.manifests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn authentication_failure_still_ends_the_live_upload_immediately() {
+        let transport = FakeSegmentTransport::default();
+        transport.fatal_segment.store(true, Ordering::Release);
+        let authorization = CompletionAuthorization::new();
+        authorization.permit.send(()).unwrap();
+        let started = tokio::time::Instant::now();
+        let error = upload_segments(
+            &transport,
+            "signed-out",
+            closed_segment_events(),
+            authorization.control.cancel.clone(),
+            Some(authorization.required),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Authentication expired"));
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert_eq!(transport.segment_calls.load(Ordering::Acquire), 1);
+        assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn permanent_http_failure_ends_the_live_upload_without_deferral() {
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::FORBIDDEN,
+            StatusCode::GONE,
+        ] {
+            let transport = FakeSegmentTransport::default();
+            *transport.status_failure.lock().unwrap() = Some(status);
+            let authorization = CompletionAuthorization::new();
+            authorization.permit.send(()).unwrap();
+            let started = tokio::time::Instant::now();
+            let error = upload_segments(
+                &transport,
+                "deleted-video",
+                closed_segment_events(),
+                authorization.control.cancel.clone(),
+                Some(authorization.required),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains(status.as_str()), "{error}");
+            assert_eq!(started.elapsed(), Duration::ZERO);
+            assert_eq!(transport.segment_calls.load(Ordering::Acquire), 1);
+            assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+            assert!(transport.manifests.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_http_failure_is_deferred_until_it_uploads() {
+        let transport = FakeSegmentTransport::default();
+        *transport.status_failure.lock().unwrap() = Some(StatusCode::SERVICE_UNAVAILABLE);
+        let future = upload_segments(
+            &transport,
+            "server-blip",
+            closed_segment_events(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        tokio::pin!(future);
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+            result = &mut future => panic!("A 503 ended the live upload: {result:?}"),
+        }
+        assert!(transport.segment_calls.load(Ordering::Acquire) > 2);
+        *transport.status_failure.lock().unwrap() = None;
+        future.await.unwrap();
+        assert_eq!(transport.completed.load(Ordering::Acquire), 1);
+        assert_eq!(transport.manifests.lock().unwrap().last(), Some(&true));
+    }
+
+    #[test]
+    fn only_transient_failures_are_deferred_for_retry() {
+        let status = |code: u16| {
+            segment_error_is_retryable(&AuthApiError::Status(
+                StatusCode::from_u16(code).unwrap(),
+                format!("upload failed: {code}"),
+            ))
+        };
+        assert!(!segment_error_is_retryable(
+            &AuthApiError::InvalidAuthentication
+        ));
+        assert!(!segment_error_is_retryable(&AuthApiError::UpgradeRequired));
+        for permanent in [400, 401, 402, 403, 404, 410, 413, 422] {
+            assert!(!status(permanent), "{permanent} must not be deferred");
+        }
+        for transient in [408, 429, 500, 502, 503, 504] {
+            assert!(status(transient), "{transient} must be deferred");
+        }
+        assert!(segment_error_is_retryable(&AuthApiError::Timeout));
+        assert!(segment_error_is_retryable(&AuthApiError::Other(
+            "error sending request".into()
+        )));
+    }
+
+    #[test]
+    fn status_failures_keep_their_previous_messages() {
+        assert_eq!(
+            AuthApiError::Status(StatusCode::NOT_FOUND, "api/upload_signed/404".into()).to_string(),
+            "api/upload_signed/404"
+        );
+    }
+
+    #[test]
+    fn deferred_segment_backoff_doubles_up_to_its_cap() {
+        let delays: Vec<_> = [0, 1, 2, 3, 4, 40]
+            .map(|round| segment_retry_backoff(round).as_secs())
+            .into();
+        assert_eq!(delays, vec![2, 4, 8, 16, 30, 30]);
+    }
+
     #[tokio::test]
     async fn cancelling_upload_waits_for_its_blocking_file_read() {
         let reads = Arc::new(UploadReads::default());
@@ -2846,6 +3847,327 @@ mod tests {
             .unwrap();
         assert!(still_reading);
         assert_eq!(reads.active.load(Ordering::Acquire), 0);
+    }
+}
+
+#[cfg(test)]
+mod replacement_upload_restart_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn only_legacy_replacements_capture_a_restart_source() {
+        assert!(is_legacy_replacement_upload(true, "raw-s3-upload"));
+        assert!(is_legacy_replacement_upload(
+            true,
+            "https://googleapis.com/upload/legacy"
+        ));
+        assert!(!is_legacy_replacement_upload(false, "raw-s3-upload"));
+        assert!(!is_legacy_replacement_upload(
+            true,
+            "cap-reupload.signed-token"
+        ));
+        assert!(!is_legacy_replacement_upload(true, "cap-reupload."));
+    }
+
+    #[test]
+    fn only_the_exact_conflict_code_requests_a_restart() {
+        let body = json!({ "code": "REPLACEMENT_RESTART_REQUIRED" });
+        assert!(replacement_restart_required(StatusCode::CONFLICT, &body));
+        for status in [
+            StatusCode::OK,
+            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(!replacement_restart_required(status, &body));
+        }
+        for body in [
+            Value::Null,
+            json!({}),
+            json!({ "error": "REPLACEMENT_RESTART_REQUIRED" }),
+            json!({ "code": "OTHER_CONFLICT" }),
+            json!({ "code": "replacement_restart_required" }),
+            json!({ "code": ["REPLACEMENT_RESTART_REQUIRED"] }),
+            json!({ "code": "REPLACEMENT_RESTART_REQUIRED extra" }),
+        ] {
+            assert!(!replacement_restart_required(StatusCode::CONFLICT, &body));
+        }
+    }
+
+    #[tokio::test]
+    async fn restarts_the_whole_replacement_once_and_returns_only_the_second_identity() {
+        let cancel = AtomicBool::new(false);
+        let events = Mutex::new(Vec::new());
+        let cancel = &cancel;
+        let events = &events;
+        let result = retry_replacement_upload(true, cancel, 0usize, |attempt| async move {
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "initiate"));
+                Ok(())
+            })
+            .await?;
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "parts"));
+                Ok(())
+            })
+            .await?;
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "complete"));
+                Ok(if attempt == 0 {
+                    ReplacementUploadAttempt::RestartRequired(1)
+                } else {
+                    ReplacementUploadAttempt::Completed("new-object-identity")
+                })
+            })
+            .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, "new-object-identity");
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                (0, "initiate"),
+                (0, "parts"),
+                (0, "complete"),
+                (1, "initiate"),
+                (1, "parts"),
+                (1, "complete"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_requires_a_signed_session_before_any_further_upload_work() {
+        for upload_id in ["legacy-again", "cap-reupload.signed"] {
+            let uploads = AtomicUsize::new(0);
+            let uploads = &uploads;
+            let result = retry_replacement_upload(
+                true,
+                &AtomicBool::new(false),
+                false,
+                |restarted| async move {
+                    validate_replacement_restart_session(
+                        restarted,
+                        if restarted { upload_id } else { "legacy-first" },
+                    )?;
+                    uploads.fetch_add(1, Ordering::AcqRel);
+                    Ok(if restarted {
+                        ReplacementUploadAttempt::Completed(())
+                    } else {
+                        ReplacementUploadAttempt::RestartRequired(true)
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), upload_id.starts_with("cap-reupload."));
+            assert_eq!(
+                uploads.load(Ordering::Acquire),
+                if result.is_ok() { 2 } else { 1 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_restart_requests_fail_after_two_attempts() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<(), _> =
+            retry_replacement_upload(true, &AtomicBool::new(false), (), |()| async {
+                attempts.fetch_add(1, Ordering::AcqRel);
+                Ok(ReplacementUploadAttempt::RestartRequired(()))
+            })
+            .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("REPLACEMENT_RESTART_REQUIRED")
+        );
+        assert_eq!(attempts.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn first_uploads_and_other_errors_do_not_restart() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<(), _> =
+            retry_replacement_upload(false, &AtomicBool::new(false), (), |()| async {
+                attempts.fetch_add(1, Ordering::AcqRel);
+                Ok(ReplacementUploadAttempt::RestartRequired(()))
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+        for message in [
+            "api/upload_multipart_complete/409",
+            "api/upload_multipart_complete/500",
+            "Failed to read export chunk",
+        ] {
+            attempts.store(0, Ordering::Release);
+            let result: Result<(), _> =
+                retry_replacement_upload(true, &AtomicBool::new(false), (), |()| async {
+                    attempts.fetch_add(1, Ordering::AcqRel);
+                    Err(AuthApiError::Other(message.into()))
+                })
+                .await;
+            assert_eq!(result.unwrap_err().to_string(), message);
+            assert_eq!(attempts.load(Ordering::Acquire), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_upload_prevents_both_attempts() {
+        let result: Result<(), _> =
+            retry_replacement_upload(true, &AtomicBool::new(true), (), |()| async {
+                panic!("Cancelled upload must not initiate")
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Export cancelled"));
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_the_conflict_response_prevents_restart() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let worker_cancel = cancel.clone();
+        let worker_attempts = attempts.clone();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let mut entered = Some(entered);
+            let mut released = Some(released);
+            retry_replacement_upload(true, &worker_cancel, (), |()| {
+                worker_attempts.fetch_add(1, Ordering::AcqRel);
+                let entered = entered.take().unwrap();
+                let released = released.take().unwrap();
+                async move {
+                    entered.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok(ReplacementUploadAttempt::<(), _>::RestartRequired(()))
+                }
+            })
+            .await
+        });
+        entered_rx.await.unwrap();
+        cancel.store(true, Ordering::Release);
+        release.send(()).unwrap();
+        assert!(
+            worker
+                .await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("Export cancelled")
+        );
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_restarted_parts_prevents_completion() {
+        let cancel = AtomicBool::new(false);
+        let completed = AtomicUsize::new(0);
+        let cancel = &cancel;
+        let completed = &completed;
+        let result: Result<(), _> =
+            retry_replacement_upload(true, cancel, 0, |attempt| async move {
+                if attempt == 0 {
+                    return Ok(ReplacementUploadAttempt::RestartRequired(1));
+                }
+                checked_upload_step(cancel, || async {
+                    cancel.store(true, Ordering::Release);
+                    Ok(())
+                })
+                .await?;
+                checked_upload_step(cancel, || async {
+                    completed.fetch_add(1, Ordering::AcqRel);
+                    Ok(ReplacementUploadAttempt::Completed(()))
+                })
+                .await
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Export cancelled"));
+        assert_eq!(completed.load(Ordering::Acquire), 0);
+    }
+
+    fn source() -> ReplacementUploadSource {
+        ReplacementUploadSource {
+            file: ReplacementUploadFile {
+                path: PathBuf::from("export.mp4"),
+                size: 6,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            },
+            chunks: Vec::new(),
+            sealed: false,
+        }
+    }
+
+    fn parts() -> Vec<UploadedPart> {
+        (1..=2)
+            .map(|part_number| UploadedPart {
+                part_number,
+                etag: format!("part-{part_number}"),
+                size: 3,
+                object_identity: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restarted_reads_match_the_original_bytes_offsets_and_total() {
+        let mut source = source();
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        source.seal_parts(&parts()).unwrap();
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        assert!(source.check_chunk(1, 0, b"abd", 6).is_err());
+        assert!(source.check_chunk(1, 1, b"abc", 6).is_err());
+        assert!(source.check_chunk(1, 0, b"abc", 7).is_err());
+        assert!(source.check_chunk(3, 6, b"ghi", 6).is_err());
+        assert!(source.check_chunk(0, 0, b"abc", 6).is_err());
+        assert!(source.check_chunk(1, 0, b"", 6).is_err());
+    }
+
+    #[test]
+    fn completion_requires_the_full_contiguous_original_part_inventory() {
+        let mut source = source();
+        assert!(source.check_chunk(2, 0, b"abc", 6).is_err());
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        assert!(source.seal_parts(&parts()[..1]).is_err());
+        assert!(source.check_chunk(2, 4, b"def", 6).is_err());
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        let mut wrong_parts = parts();
+        wrong_parts[1].part_number = 1;
+        assert!(source.seal_parts(&wrong_parts).is_err());
+        wrong_parts[1].part_number = 2;
+        wrong_parts[1].size = 2;
+        assert!(source.seal_parts(&wrong_parts).is_err());
+        source.seal_parts(&parts()).unwrap();
+    }
+
+    #[test]
+    fn changed_file_metadata_is_rejected_before_a_fresh_initiation() {
+        static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "cap-gpui-replacement-{}-{}-{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT_FILE.fetch_add(1, Ordering::AcqRel),
+        ));
+        std::fs::write(&path, b"abcdef").unwrap();
+        let source = ReplacementUploadSource::new(&path).unwrap();
+        source.validate_file(&path).unwrap();
+        std::fs::write(&path, b"changed-file").unwrap();
+        let changed = source.validate_file(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            changed
+                .unwrap_err()
+                .to_string()
+                .contains("Rendered video changed")
+        );
     }
 }
 
@@ -2954,6 +4276,7 @@ mod exported_upload_cancellation_tests {
             completion_control: Some(authorization.control),
             bridge: None,
             ownership: None,
+            prior_attempts: 0,
             request_context: None,
             reads: Arc::new(UploadReads::default()),
         };

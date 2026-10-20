@@ -3,7 +3,7 @@
 Build release packages on Linux with the desktop dependencies installed:
 
 ```sh
-pnpm with-env node scripts/build-linux-packages.mjs x86_64-unknown-linux-gnu --config src-tauri/tauri.prod.conf.json
+bun run with-env node scripts/build-linux-packages.mjs x86_64-unknown-linux-gnu --config src-tauri/tauri.prod.conf.json
 ```
 
 The wrapper builds the CLI, GPUI, Tauri, DEB, RPM, and AppImage artifacts. It requires `TAURI_SIGNING_PRIVATE_KEY` and optionally `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Release CI supplies these through secrets; use a disposable key and matching updater public-key configuration for sandbox tests.

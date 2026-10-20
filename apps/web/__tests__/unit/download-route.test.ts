@@ -47,6 +47,34 @@ describe("desktop download route", () => {
 		expect(response.headers.get("location")).toBe("https://github.com/cap.dmg");
 		vi.unstubAllGlobals();
 	});
+
+	it.each([
+		["linux-appimage", "https://github.com/cap.AppImage"],
+		["linux-rpm", "https://github.com/cap.rpm"],
+		["linux-pacman", "https://github.com/cap.pkg.tar.zst"],
+	])("keeps the %s download format in the fallback", async (platform, url) => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Unavailable")));
+		vi.mocked(getGitHubReleases).mockResolvedValue([
+			{
+				version: "0.6.0",
+				tagName: "cap-v0.6.0",
+				publishedAt: "2026-09-15T13:10:21Z",
+				body: "",
+				htmlUrl: "https://github.com/CapSoftware/Cap/releases/tag/cap-v0.6.0",
+				downloads: {
+					"linux-appimage": "https://github.com/cap.AppImage",
+					"linux-rpm": "https://github.com/cap.rpm",
+					"linux-pacman": "https://github.com/cap.pkg.tar.zst",
+				},
+			},
+		]);
+		const response = await GET(request, {
+			params: Promise.resolve({ platform }),
+		});
+		expect(response.headers.get("location")).toBe(url);
+		vi.unstubAllGlobals();
+	});
+
 	it("preserves a successful redirect when probe cancellation fails", async () => {
 		vi.stubGlobal(
 			"fetch",

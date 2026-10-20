@@ -83,12 +83,19 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 	const { createElement, useEffect, useState } = await import("react");
 	const DeferredVideoPlayer = ({
 		videoRef,
+		defaultPlaybackSpeed,
 	}: {
 		videoRef: Ref<HTMLVideoElement>;
+		defaultPlaybackSpeed?: number;
 	}) => {
 		const [isMounted, setIsMounted] = useState(false);
 		useEffect(() => setIsMounted(true), []);
-		return isMounted ? createElement("video", { ref: videoRef }) : null;
+		return isMounted
+			? createElement("video", {
+					ref: videoRef,
+					"data-default-speed": defaultPlaybackSpeed,
+				})
+			: null;
 	};
 	return { CapVideoPlayer: DeferredVideoPlayer };
 });
@@ -96,8 +103,17 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 vi.mock("@/app/s/[videoId]/_components/HLSVideoPlayer", async () => {
 	const { createElement } = await import("react");
 	return {
-		HLSVideoPlayer: ({ videoRef }: { videoRef: Ref<HTMLVideoElement> }) =>
-			createElement("video", { ref: videoRef }),
+		HLSVideoPlayer: ({
+			videoRef,
+			defaultPlaybackSpeed,
+		}: {
+			videoRef: Ref<HTMLVideoElement>;
+			defaultPlaybackSpeed?: number;
+		}) =>
+			createElement("video", {
+				ref: videoRef,
+				"data-default-speed": defaultPlaybackSpeed,
+			}),
 	};
 });
 
@@ -172,6 +188,40 @@ describe("EmbedVideo playback chrome", () => {
 	afterAll(() => {
 		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
 	});
+
+	it.each(
+		["desktopMP4", "webMP4", "MediaConvert", "desktopSegments"].flatMap(
+			(type) =>
+				[false, true].flatMap((minimal) =>
+					[1, 1.5].map((speed) => ({ type, minimal, speed })),
+				),
+		),
+	)(
+		"passes $speed× to $type playback with minimal=$minimal",
+		async ({ type, minimal, speed }) => {
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			const props = createProps({
+				type,
+			} as EmbedVideoProps["data"]["source"]);
+
+			await act(async () => {
+				root.render(
+					createElement(EmbedVideo, {
+						...props,
+						minimal,
+						defaultPlaybackSpeed: speed,
+					}),
+				);
+			});
+			expect(container.querySelector("video")?.dataset.defaultSpeed).toBe(
+				String(speed),
+			);
+
+			await act(async () => root.unmount());
+		},
+	);
 
 	it.each([
 		["an asynchronously mounted MP4", { type: "desktopMP4" } as const],

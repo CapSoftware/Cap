@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typewriter - Wikipedia</title>
+<link rel="stylesheet" href="common/wiki.css">
+<script src="common/cap.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+	<defs>
+		<filter id="grain" x="0" y="0" width="100%" height="100%">
+			<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4" result="n"/>
+			<feColorMatrix in="n" type="matrix" values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0.55 0" result="g"/>
+			<feComposite in="g" in2="SourceGraphic" operator="in" result="gi"/>
+			<feBlend in="SourceGraphic" in2="gi" mode="overlay"/>
+		</filter>
+		<filter id="soft"><feGaussianBlur stdDeviation="1.2"/></filter>
+		<linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a4a4a"/><stop offset="0.45" stop-color="#1d1d1d"/><stop offset="1" stop-color="#0c0c0c"/></linearGradient>
+		<linearGradient id="platen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#555"/><stop offset="0.5" stop-color="#111"/><stop offset="1" stop-color="#333"/></linearGradient>
+		<radialGradient id="key" cx="0.4" cy="0.35" r="0.7"><stop offset="0" stop-color="#f4f1e8"/><stop offset="0.7" stop-color="#cfc9b8"/><stop offset="1" stop-color="#6d6758"/></radialGradient>
+		<radialGradient id="vign" cx="0.5" cy="0.45" r="0.75"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.55"/></radialGradient>
+		<linearGradient id="desk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a4b2a"/><stop offset="0.5" stop-color="#5b3519"/><stop offset="1" stop-color="#3b220f"/></linearGradient>
+		<linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9cbb0"/><stop offset="1" stop-color="#b9a685"/></linearGradient>
+		<linearGradient id="sepia" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e7d8b8"/><stop offset="1" stop-color="#a88d63"/></linearGradient>
+	</defs>
+</svg>
+<header id="hdr">
+	<div class="hl">
+		<span class="burger">☰</span>
+		<span class="logo"><svg viewBox="0 0 50 50" width="50" height="50"><circle cx="25" cy="25" r="22" fill="url(#key)" stroke="#888" stroke-width="1"/><path d="M8 18q17-8 34 0M5 27q20-6 40 0M9 36q16 6 32 0M25 3v44M15 6q-6 19 0 38M35 6q6 19 0 38" stroke="#555" stroke-width="1.1" fill="none"/><text x="25" y="31" text-anchor="middle" font-family="Liberation Serif" font-size="15" fill="#222">W</text></svg>
+		<span class="wm"><span class="wm1">Wikipedia</span><span class="wm2">The Free Encyclopedia</span></span></span>
+	</div>
+	<div class="search"><span class="sbox"><svg viewBox="0 0 20 20" width="18" height="18"><circle cx="8" cy="8" r="5.5" stroke="#202122" stroke-width="2" fill="none"/><path d="M12 12l5 5" stroke="#202122" stroke-width="2"/></svg><span class="ph">Search Wikipedia</span></span><span class="sbtn">Search</span></div>
+	<div class="hr"><span>Donate</span><span>Create account</span><span>Log in</span><span class="dots">⋯</span></div>
+</header>
+<div id="container">
+	<nav id="toc">
+		<div class="toch">Contents <span class="hide">hide</span></div>
+		<ol id="toclist"></ol>
+	</nav>
+	<main id="main">
+		<div class="titlebar">
+			<h1 id="firstHeading">Typewriter</h1>
+			<span class="lang">文A 96 languages ⌄</span>
+		</div>
+		<div class="tabs">
+			<span class="tab sel">Article</span><span class="tab">Talk</span>
+			<span class="sp"></span>
+			<span class="tab sel">Read</span><span class="tab">Edit</span><span class="tab">View history</span><span class="tab">Tools ⌄</span>
+		</div>
+		<div id="content">
+			<div class="from">From Wikipedia, the free encyclopedia</div>
+			<div class="hatnote">This article is about the mechanical or electromechanical writing machine. For other uses, see <a>Typewriter (disambiguation)</a>.</div>
+			<table class="infobox">
+				<tr><th colspan="2" class="ibt">Typewriter</th></tr>
+				<tr><td colspan="2" class="ibimg"><svg viewBox="0 0 280 200" width="280" height="200" filter="url(#grain)">
+					<rect width="280" height="200" fill="url(#wall)"/>
+					<rect y="150" width="280" height="50" fill="url(#desk)"/>
+					<rect x="88" y="18" width="104" height="70" fill="#f6f3ea" transform="skewX(-4)"/>
+					<path d="M100 30h70M100 38h66M100 46h72M100 54h40" stroke="#555" stroke-width="1.5" opacity=".6"/>
+					<rect x="52" y="74" width="176" height="22" rx="11" fill="url(#platen)"/>
+					<circle cx="46" cy="85" r="9" fill="#222"/><circle cx="234" cy="85" r="9" fill="#222"/>
+					<path d="M44 96h192l26 64H18z" fill="url(#metal)"/>
+					<path d="M90 98q50-20 100 0" fill="none" stroke="#bfae7a" stroke-width="2"/>
+					<g id="keys"></g>
+					<rect x="18" y="160" width="244" height="8" fill="#0a0a0a"/>
+					<rect width="280" height="200" fill="url(#vign)"/>
+				</svg></td></tr>
+				<tr><td colspan="2" class="ibcap">An Underwood No. 5 typewriter from the 1920s, one of the best-selling models of its era</td></tr>
+				<tr><th>Classification</th><td>Writing machine</td></tr>
+				<tr><th>Industry</th><td>Office equipment</td></tr>
+				<tr><th>Inventor</th><td><a>Christopher Latham Sholes</a>, <a>Carlos Glidden</a>, <a>Samuel W. Soule</a></td></tr>
+				<tr><th>Invented</th><td>1868 (patented)</td></tr>
+				<tr><th>Manufacturer</th><td><a>E. Remington and Sons</a> (first commercial model)</td></tr>
+				<tr><th>Peak production</th><td>c. 1920–1975</td></tr>
+				<tr><th>Successor</th><td><a>Word processor</a>, <a>personal computer</a></td></tr>
+			</table>
+			<div id="article"></div>
+		</div>
+	</main>
+	<aside id="tools">
+		<div class="th">Appearance <span class="hide">hide</span></div>
+		<div class="tg"><div class="tl">Text</div><label><span class="rb"></span>Small</label><label><span class="rb on"></span>Standard</label><label><span class="rb"></span>Large</label></div>
+		<div class="tg"><div class="tl">Width</div><label><span class="rb on"></span>Standard</label><label><span class="rb"></span>Wide</label></div>
+		<div class="tg"><div class="tl">Color <span class="beta">(beta)</span></div><label><span class="rb on"></span>Automatic</label><label><span class="rb"></span>Light</label><label><span class="rb"></span>Dark</label></div>
+	</aside>
+</div>
+<div id="preview"></div>
+<script src="data/article_text.js"></script>
+<script src="common/wiki.js"></script>
+<script>
+capSetReady();
+</script>
+</body>
+</html>

@@ -110,6 +110,38 @@ export async function GET(
 			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/deb-x86_64",
 			fallback: "linux-deb",
 		},
+		"linux-appimage": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
+			fallback: "linux-appimage",
+		},
+		appimage: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/appimage-x86_64",
+			fallback: "linux-appimage",
+		},
+		"linux-rpm": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
+		},
+		rpm: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
+		},
+		fedora: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/rpm-x86_64",
+			fallback: "linux-rpm",
+		},
+		"linux-pacman": {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/pacman-x86_64",
+			fallback: "linux-pacman",
+		},
+		pacman: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/pacman-x86_64",
+			fallback: "linux-pacman",
+		},
+		arch: {
+			url: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/pacman-x86_64",
+			fallback: "linux-pacman",
+		},
 	};
 
 	const download = downloadUrls[platform];

@@ -15,7 +15,6 @@ use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
-#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
@@ -619,42 +618,14 @@ pub(crate) fn open_video_encoder_with_flags(
     )
 }
 
-fn is_rgb(format: format::Pixel) -> bool {
-    format.descriptor().is_some_and(|descriptor| unsafe {
-        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
-    })
-}
-
 fn configure_rgb_converter(
     converter: &mut ffmpeg::software::scaling::Context,
     input: format::Pixel,
     output: format::Pixel,
 ) -> Result<(), H264EncoderError> {
-    if !is_rgb(input) || is_rgb(output) {
-        return Ok(());
-    }
-
-    // swscale defaults to BT.601 even though the encoder declares BT.709.
-    // RGB input is full range; the encoded YUV contract below is limited range.
-    let result = unsafe {
-        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
-        ffmpeg::ffi::sws_setColorspaceDetails(
-            converter.as_mut_ptr(),
-            coefficients,
-            1,
-            coefficients,
-            0,
-            0,
-            1 << 16,
-            1 << 16,
-        )
-    };
-    if result < 0 {
-        return Err(H264EncoderError::ColorConversion(ffmpeg::Error::from(
-            result,
-        )));
-    }
-    Ok(())
+    // The encoded YUV contract below is limited range.
+    super::colour::use_bt709_for_rgb_input(converter, input, output)
+        .map_err(H264EncoderError::ColorConversion)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1010,6 +981,10 @@ impl H264Encoder {
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
     }
+
+    pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
+        self.base.set_packet_stats(stats);
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1258,6 +1233,7 @@ fn get_codec_and_options(
                     options.set("realtime", "false");
                     options.set("profile", "main");
                     options.set("allow_sw", "0");
+                    options.set("g", &keyframe_interval_str);
                 } else {
                     options.set("realtime", "true");
                     options.set("prio_speed", "true");
@@ -1651,8 +1627,12 @@ fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     let area = (width as f64) * (height as f64);
     let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp as f64) as usize
+    // 1 Gbit/s is far past any real H.264 stream; the cap keeps a hostile
+    // bpp from overflowing the max-bitrate math below.
+    ((pixels_per_second * bpp as f64) as usize).min(MAX_BITRATE)
 }
+
+const MAX_BITRATE: usize = 1_000_000_000;
 
 #[cfg(test)]
 mod self_test_tests {
@@ -1686,6 +1666,36 @@ mod self_test_tests {
         let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
         hardware_encoder_self_test(codec, options, &config, 160, 120, 0.3, None)
             .expect("healthy encoder passes the round trip");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn videotoolbox_export_uses_the_default_keyframe_interval() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().ok();
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, 60);
+        let videotoolbox_options = |is_export| {
+            get_codec_and_options(
+                &config,
+                H264Preset::Medium,
+                Some(&["h264_videotoolbox"]),
+                is_export,
+                None,
+            )
+            .into_iter()
+            .find(|(codec, _)| codec.name() == "h264_videotoolbox")
+            .expect("VideoToolbox encoder is available on macOS")
+            .1
+        };
+
+        let export = videotoolbox_options(true);
+        let expected = (DEFAULT_KEYFRAME_INTERVAL_SECS * 60).to_string();
+        assert_eq!(export.get("g"), Some(expected.as_str()));
+
+        let realtime = videotoolbox_options(false);
+        assert_eq!(realtime.get("g"), None);
     }
 
     #[cfg(target_os = "linux")]
@@ -1764,6 +1774,7 @@ mod self_test_tests {
 
 #[cfg(test)]
 mod rgb_color_tests {
+    use super::super::colour::is_rgb;
     use super::*;
 
     const COLORS: [[u8; 3]; 6] = [

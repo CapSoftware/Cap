@@ -1,0 +1,36 @@
+export function clip255(v: int): int {
+  return v < 0 ? 0 : v > 255 ? 255 : v
+}
+
+export function copyPadded(dst: Uint8Array, dstStride: int, dstH: int, src: Uint8Array, srcOff: int, srcStride: int, w: int, h: int) {
+  for (let y = 0; y < dstH; y++) {
+    const sy = y < h ? y : h - 1
+    const so = srcOff + sy * srcStride
+    const d = y * dstStride
+    for (let x = 0; x < w; x++) dst[d + x] = src[so + x]!
+    const last = src[so + w - 1]!
+    for (let x = w; x < dstStride; x++) dst[d + x] = last
+  }
+}
+
+export function residual(inout blk: int[], bo: int, n: int, src: Uint8Array, so: int, sstride: int, pred: Uint8Array, po: int, pstride: int) {
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      blk[bo + y * n + x] = int(src[so + y * sstride + x]!) - int(pred[po + y * pstride + x]!)
+    }
+  }
+}
+
+export function reconAdd(rec: Uint8Array, ro: int, rstride: int, n: int, blk: int[], bo: int, pred: Uint8Array, po: int, pstride: int) {
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      rec[ro + y * rstride + x] = clip255(int(pred[po + y * pstride + x]!) + blk[bo + y * n + x]!)
+    }
+  }
+}
+
+export function copyBlock(dst: Uint8Array, dO: int, ds: int, src: Uint8Array, so: int, ss: int, w: int, h: int) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) dst[dO + y * ds + x] = src[so + y * ss + x]!
+  }
+}

@@ -141,6 +141,12 @@ export function createPermissionsQuery() {
 	}));
 }
 
+export const getEditorRecordingTarget = queryOptions({
+	queryKey: ["editorRecordingTarget"] as const,
+	queryFn: () => commands.getEditorRecordingTarget(),
+	staleTime: Number.POSITIVE_INFINITY,
+});
+
 export const isSystemAudioSupported = queryOptions({
 	queryKey: ["systemAudioSupported"] as const,
 	queryFn: () => commands.isSystemAudioCaptureSupported(),
@@ -149,7 +155,7 @@ export const isSystemAudioSupported = queryOptions({
 
 type CameraCaptureTarget = ScreenCaptureTarget | { variant: "cameraOnly" };
 type ExtendedRecordingTargetMode = RecordingTargetMode | "camera" | null;
-type RecordingTargetModeSource = "main" | "editor" | "editorRecording" | null;
+type RecordingTargetModeSource = "main" | null;
 /**
  * Why the target picker was last dismissed. Written in the same `setOptions`
  * call that sets `targetMode: null`, so it reaches other webviews atomically
@@ -298,7 +304,7 @@ export function createOptionsQuery() {
 			return Reflect.apply(target, thisArg, args);
 		},
 	});
-	return { rawOptions: state, setOptions };
+	return { rawOptions: state, setOptions, getCameraRevision: () => cameraRevision };
 }
 
 export function createCleanCaptureQuery() {
@@ -332,7 +338,8 @@ export function createLicenseQuery() {
 			const settings = await generalSettingsStore.get();
 			const auth = await authStore.get();
 
-			if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
+			if (auth?.plan?.upgraded || auth?.plan?.manual)
+				return { type: "pro" as const, ...auth.plan };
 			if (settings?.commercialLicense)
 				return {
 					type: "commercial" as const,

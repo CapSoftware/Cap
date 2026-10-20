@@ -3,6 +3,9 @@ export interface ReleaseDownloads {
 	"macos-x64"?: string;
 	windows?: string;
 	"linux-deb"?: string;
+	"linux-appimage"?: string;
+	"linux-rpm"?: string;
+	"linux-pacman"?: string;
 }
 
 export const releasesRevalidateSeconds = 60;
@@ -15,6 +18,9 @@ export const releaseDownloadKeys = [
 	"macos-x64",
 	"windows",
 	"linux-deb",
+	"linux-appimage",
+	"linux-rpm",
+	"linux-pacman",
 ] satisfies ReleaseDownloadKey[];
 
 export interface Release {

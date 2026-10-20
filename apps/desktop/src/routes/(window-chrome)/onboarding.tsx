@@ -1075,7 +1075,7 @@ function FaqStep(props: { active: boolean }) {
 						out our{" "}
 						<button
 							type="button"
-							onClick={() => shell.open("https://cap.so/pricing")}
+							onClick={() => shell.open("https://cap.so/pricing?ref=desktop")}
 							class="text-blue-10 hover:text-blue-11 underline underline-offset-2"
 						>
 							pricing plans
@@ -1115,7 +1115,7 @@ function FaqStep(props: { active: boolean }) {
 
 			<button
 				type="button"
-				onClick={() => shell.open("https://cap.so/pricing")}
+				onClick={() => shell.open("https://cap.so/pricing?ref=desktop")}
 				class={cx(
 					"flex items-center gap-1.5 text-[13px] text-blue-10 hover:text-blue-11 transition-all duration-500 delay-200",
 					visible() ? "opacity-100" : "opacity-0",

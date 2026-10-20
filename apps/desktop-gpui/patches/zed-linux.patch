@@ -1,5 +1,57 @@
+diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -29,7 +29,7 @@
+ bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
+ inspector = ["gpui_macros/inspector"]
+ leak-detection = ["backtrace"]
+-wayland = []
++wayland = ["dep:wayland-client"]
+ x11 = [
+     "scap?/x11",
+ ]
+@@ -110,6 +110,9 @@
+ uuid = { workspace = true, features = ["js"] }
+
+
++[target.'cfg(target_os = "linux")'.dependencies]
++wayland-client = { version = "0.31.11", optional = true }
++
+ [target.'cfg(target_os = "macos")'.dependencies]
+ block = "0.1"
+ cocoa.workspace = true
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -795,6 +795,10 @@
+
+ #[expect(missing_docs)]
+ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
++    #[cfg(all(target_os = "linux", feature = "wayland"))]
++    fn wayland_surface(&self) -> Option<wayland_client::protocol::wl_surface::WlSurface> {
++        None
++    }
+     fn bounds(&self) -> Bounds<Pixels>;
+     fn is_maximized(&self) -> bool;
+     fn window_bounds(&self) -> WindowBounds;
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1931,6 +1931,13 @@
+         self.handle
+     }
+
++    /// Returns the native Wayland proxy, which tracks destruction without borrowing a raw pointer.
++    #[cfg(all(target_os = "linux", feature = "wayland"))]
++    pub fn wayland_surface(&self) -> Option<wayland_client::protocol::wl_surface::WlSurface> {
++        self.platform_window.wayland_surface()
++    }
++
++
+     /// Mark the window as dirty, scheduling it to be redrawn on the next frame.
+     pub fn refresh(&mut self) {
+         if self.invalidator.not_drawing() {
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
-index 876f931663fa..062af4e8c9b9 100644
 --- a/crates/gpui_linux/src/linux/platform.rs
 +++ b/crates/gpui_linux/src/linux/platform.rs
 @@ -87,6 +87,9 @@
@@ -12,22 +64,46 @@ index 876f931663fa..062af4e8c9b9 100644
      fn read_from_primary(&self) -> Option<ClipboardItem>;
      fn read_from_clipboard(&self) -> Option<ClipboardItem>;
      fn active_window(&self) -> Option<AnyWindowHandle>;
-@@ -735,6 +738,10 @@
-         self.inner.write_to_clipboard(item)
-     }
+@@ -733,6 +736,10 @@
 
-+    fn try_write_to_clipboard(&self, item: ClipboardItem) -> anyhow::Result<()> {
-+        self.inner.try_write_to_clipboard(item)
+     fn write_to_clipboard(&self, item: ClipboardItem) {
+         self.inner.write_to_clipboard(item)
 +    }
 +
-     fn read_from_primary(&self) -> Option<ClipboardItem> {
-         self.inner.read_from_primary()
++    fn try_write_to_clipboard(&self, item: ClipboardItem) -> anyhow::Result<()> {
++        self.inner.try_write_to_clipboard(item)
      }
+
+     fn read_from_primary(&self) -> Option<ClipboardItem> {
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index fdc40a3de87e..c41fa8d6aebb 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
-@@ -1121,6 +1121,30 @@
+@@ -200,6 +200,7 @@
+
+ #[derive(Clone)]
+ pub struct Globals {
++    pub registry: wl_registry::WlRegistry,
+     pub qh: QueueHandle<WaylandClientStatePtr>,
+     pub activation: Option<xdg_activation_v1::XdgActivationV1>,
+     pub compositor: wl_compositor::WlCompositor,
+@@ -232,6 +233,7 @@
+     ) -> Self {
+         let dialog_v = XdgWmDialogV1::interface().version;
+         Globals {
++            registry: globals.registry().clone(),
+             activation: globals.bind(&qh, 1..=1, ()).ok(),
+             compositor: globals
+                 .bind(
+@@ -662,7 +664,7 @@
+                             global.name,
+                             wl_output_version(global.version),
+                             &qh,
+-                            (),
++                            global.name,
+                         );
+                         in_progress_outputs.insert(output.id(), InProgressOutput::default());
+                         wl_outputs.insert(output.id(), output);
+@@ -1121,6 +1123,30 @@
          }
      }
 
@@ -58,7 +134,16 @@ index fdc40a3de87e..c41fa8d6aebb 100644
      fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
          self.0.borrow_mut().clipboard.read_primary()
      }
-@@ -1301,6 +1325,25 @@
+@@ -1262,7 +1288,7 @@
+                         name,
+                         wl_output_version(version),
+                         qh,
+-                        (),
++                        name,
+                     );
+
+                     state
+@@ -1301,6 +1327,25 @@
  delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
  delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
 
@@ -84,8 +169,22 @@ index fdc40a3de87e..c41fa8d6aebb 100644
  impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
      fn event(
          state: &mut WaylandClientStatePtr,
+@@ -1353,12 +1398,12 @@
+     }
+ }
+
+-impl Dispatch<wl_output::WlOutput, ()> for WaylandClientStatePtr {
++impl Dispatch<wl_output::WlOutput, u32> for WaylandClientStatePtr {
+     fn event(
+         this: &mut Self,
+         output: &wl_output::WlOutput,
+         event: <wl_output::WlOutput as Proxy>::Event,
+-        _: &(),
++        _: &u32,
+         _: &Connection,
+         _: &QueueHandle<Self>,
+     ) {
 diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
-index dfedf53f6dfa..fb40a8b391f1 100644
 --- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
 +++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
 @@ -1,6 +1,6 @@
@@ -117,6 +216,17 @@ index dfedf53f6dfa..fb40a8b391f1 100644
 -    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
 -        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
 -            self.send_internal(fd, text.as_bytes().to_owned());
+-        }
+-    }
+-
+-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self
+-            .primary_contents
+-            .as_ref()
+-            .and_then(|contents| contents.text())
+-        {
+-            self.send_internal(fd, text.as_bytes().to_owned());
+-        }
 +    pub(crate) fn mime_types(&self, item: &ClipboardItem) -> anyhow::Result<Vec<String>> {
 +        let has_text = item
 +            .entries()
@@ -182,16 +292,9 @@ index dfedf53f6dfa..fb40a8b391f1 100644
 +            Err(error) => {
 +                log::error!("Failed to prepare primary clipboard MIME type {mime_type}: {error}")
 +            }
-         }
-     }
-
--    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
--        if let Some(text) = self
--            .primary_contents
--            .as_ref()
--            .and_then(|contents| contents.text())
--        {
--            self.send_internal(fd, text.as_bytes().to_owned());
++        }
++    }
++
 +    fn bytes_for_mime(item: &ClipboardItem, mime_type: &str) -> anyhow::Result<Option<Vec<u8>>> {
 +        if TEXT_MIME_TYPES.contains(&mime_type) {
 +            return Ok(text_bytes(item));
@@ -203,7 +306,7 @@ index dfedf53f6dfa..fb40a8b391f1 100644
 +            return Ok(Some(
 +                format!("copy\n{}", file_uris(item)?.join("\n")).into_bytes(),
 +            ));
-         }
++        }
 +        for entry in item.entries() {
 +            if let ClipboardEntry::Image(image) = entry
 +                && image.format().mime_type() == mime_type
@@ -378,28 +481,38 @@ index dfedf53f6dfa..fb40a8b391f1 100644
 +                    .unwrap()
              )
 -            .unwrap();
+-    }
+-}
 +            .unwrap(),
 +            "copy\nfile:///tmp/one.txt\nfile:///tmp/two.txt"
 +        );
-     }
- }
++    }
++}
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 993b2ff3fadc..e8916c11025f 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
-@@ -7,7 +7,7 @@
+@@ -7,15 +7,15 @@
  };
- 
+
  use collections::{FxHashMap, HashMap};
 -use futures::channel::oneshot::Receiver;
 +use futures::{FutureExt, channel::oneshot::Receiver};
- 
+
  use raw_window_handle as rwh;
  use wayland_backend::client::ObjectId;
+-use wayland_client::WEnum;
+ use wayland_client::{
+     Proxy,
+     protocol::{wl_output, wl_seat, wl_surface},
+ };
++use wayland_client::{WEnum, globals::GlobalListContents};
+ use wayland_protocols::wp::viewporter::client::wp_viewport;
+ use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
+ use wayland_protocols::xdg::shell::client::xdg_popup;
 @@ -93,7 +93,126 @@
      tiling: Tiling,
  }
- 
+
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +enum VisibilityPhase {
 +    Visible,
@@ -523,7 +636,11 @@ index 993b2ff3fadc..e8916c11025f 100644
      surface_state: WaylandSurfaceState,
      acknowledged_first_configure: bool,
      parent: Option<WaylandWindowStatePtr>,
-@@ -110,6 +229,8 @@
+@@ -107,9 +226,12 @@
+     viewport: Option<wp_viewport::WpViewport>,
+     outputs: HashMap<ObjectId, Output>,
+     display: Option<(ObjectId, Output)>,
++    preferred_output: Option<wl_output::WlOutput>,
      globals: Globals,
      renderer: WgpuRenderer,
      bounds: Bounds<Pixels>,
@@ -532,9 +649,44 @@ index 993b2ff3fadc..e8916c11025f 100644
      scale: f32,
      input_handler: Option<PlatformInputHandler>,
      decorations: WindowDecorations,
-@@ -575,7 +696,11 @@
+@@ -539,6 +661,26 @@
+ }
+
+ impl WaylandWindowState {
++    fn fullscreen_output(&self) -> Option<&wl_output::WlOutput> {
++        self.preferred_output.as_ref().filter(|output| {
++            let Some(global_name) = output.data::<u32>() else {
++                return false;
++            };
++            output.is_alive()
++                && self
++                    .globals
++                    .registry
++                    .data::<GlobalListContents>()
++                    .is_some_and(|globals| {
++                        globals.with_list(|list| {
++                            list.iter().any(|global| {
++                                global.name == *global_name && global.interface == "wl_output"
++                            })
++                        })
++                    })
++        })
++    }
++
+     pub(crate) fn new(
+         handle: AnyWindowHandle,
+         surface: wl_surface::WlSurface,
+@@ -551,6 +693,7 @@
+         compositor_gpu: Option<CompositorGpuHint>,
+         options: WindowParams,
+         parent: Option<WaylandWindowStatePtr>,
++        preferred_output: Option<wl_output::WlOutput>,
+     ) -> anyhow::Result<Self> {
+         let renderer = {
+             let raw_window = RawWindow {
+@@ -575,7 +718,11 @@
          };
- 
+
          if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
 -            if let Some(title) = options.titlebar.and_then(|titlebar| titlebar.title) {
 +            if let Some(title) = options
@@ -544,11 +696,11 @@ index 993b2ff3fadc..e8916c11025f 100644
 +            {
                  xdg_state.toplevel.set_title(title.to_string());
              }
- 
-@@ -591,7 +716,16 @@
+
+@@ -591,7 +738,16 @@
                  .set_max_size(max_texture_size, max_texture_size);
          }
- 
+
 -        Ok(Self {
 +        let mut state = Self {
 +            visibility: RetainedVisibility::default(),
@@ -563,8 +715,11 @@ index 993b2ff3fadc..e8916c11025f 100644
              surface_state,
              acknowledged_first_configure: false,
              parent,
-@@ -605,6 +739,8 @@
+@@ -603,8 +759,11 @@
+             globals,
+             outputs: HashMap::default(),
              display: None,
++            preferred_output,
              renderer,
              bounds: options.bounds,
 +            fixed_outer_size: (!options.is_resizable).then_some(options.bounds.size),
@@ -572,7 +727,7 @@ index 993b2ff3fadc..e8916c11025f 100644
              scale: 1.0,
              input_handler: None,
              decorations: WindowDecorations::Client,
-@@ -626,7 +762,30 @@
+@@ -626,7 +785,30 @@
              window_controls: WindowControls::default(),
              client_inset: None,
              accesskit_adapter: None,
@@ -602,9 +757,9 @@ index 993b2ff3fadc..e8916c11025f 100644
 +            self.fixed_geometry_size = Some(geometry_size);
 +        }
      }
- 
+
      pub fn is_transparent(&self) -> bool {
-@@ -680,6 +839,34 @@
+@@ -680,6 +862,34 @@
  impl Drop for WaylandWindow {
      fn drop(&mut self) {
          let mut state = self.0.state.borrow_mut();
@@ -639,19 +794,36 @@ index 993b2ff3fadc..e8916c11025f 100644
          let surface_id = state.surface.id();
          if let Some(parent) = state.parent.as_ref() {
              parent.state.borrow_mut().children.remove(&surface_id);
-@@ -713,7 +900,7 @@
+@@ -713,7 +923,7 @@
          // The wl_surface itself should always be destroyed last.
          state.surface.destroy();
- 
+
 -        let state_ptr = self.0.clone();
 +        let state_ptr = self.clone();
          state
              .globals
              .executor
-@@ -838,8 +1025,153 @@
+@@ -754,7 +964,7 @@
+             &params,
+             parent.clone(),
+             popup_grab,
+-            target_output,
++            target_output.clone(),
+         )?;
+
+         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
+@@ -779,6 +989,7 @@
+                 compositor_gpu,
+                 params,
+                 parent,
++                target_output,
+             )?)),
+             callbacks: Rc::new(RefCell::new(Callbacks::default())),
+         });
+@@ -838,8 +1049,153 @@
          state.children.values().any(|&blocking| blocking)
      }
- 
+
 +    fn visibility_supported(&self) -> bool {
 +        let state = self.state.borrow();
 +        matches!(&state.surface_state, WaylandSurfaceState::Xdg(xdg) if xdg.dialog.is_none())
@@ -761,7 +933,7 @@ index 993b2ff3fadc..e8916c11025f 100644
 +                        xdg.toplevel.set_maximized();
 +                    }
 +                    if state.fullscreen {
-+                        xdg.toplevel.set_fullscreen(None);
++                        xdg.toplevel.set_fullscreen(state.fullscreen_output());
 +                    }
 +                    if let Some(decoration) = &xdg.decoration {
 +                        decoration.set_mode(state.decorations.to_xdg());
@@ -802,7 +974,7 @@ index 993b2ff3fadc..e8916c11025f 100644
          state.surface.frame(&state.globals.qh, state.surface.id());
          state.resize_throttle = false;
          let force_render = state.force_render_after_recovery;
-@@ -882,6 +1214,17 @@
+@@ -882,6 +1238,17 @@
      pub fn handle_xdg_surface_event(&self, event: xdg_surface::Event) {
          if let xdg_surface::Event::Configure { serial } = event {
              {
@@ -820,7 +992,7 @@ index 993b2ff3fadc..e8916c11025f 100644
                  let mut state = self.state.borrow_mut();
                  if let Some(window_controls) = state.in_progress_window_controls.take() {
                      state.window_controls = window_controls;
-@@ -901,6 +1244,7 @@
+@@ -901,6 +1268,7 @@
                      state.fullscreen = configure.fullscreen;
                      state.maximized = configure.maximized;
                      state.tiling = configure.tiling;
@@ -828,10 +1000,10 @@ index 993b2ff3fadc..e8916c11025f 100644
                      // Limit interactive resizes to once per vblank
                      if configure.resizing && state.resize_throttle {
                          state.surface_state.ack_configure(serial);
-@@ -945,6 +1289,43 @@
+@@ -945,6 +1313,43 @@
                  window_geometry.size.height,
              );
- 
+
 +            if matches!(state.visibility.phase, VisibilityPhase::Configuring(_))
 +                && !state.acknowledged_first_configure
 +            {
@@ -872,7 +1044,7 @@ index 993b2ff3fadc..e8916c11025f 100644
              let request_frame_callback = !state.acknowledged_first_configure;
              if request_frame_callback {
                  state.acknowledged_first_configure = true;
-@@ -958,7 +1339,11 @@
+@@ -958,7 +1363,11 @@
          if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
              match mode {
                  WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => {
@@ -885,7 +1057,7 @@ index 993b2ff3fadc..e8916c11025f 100644
                      let callback = self.callbacks.borrow_mut().appearance_changed.take();
                      if let Some(mut fun) = callback {
                          fun();
-@@ -966,7 +1351,11 @@
+@@ -966,7 +1375,11 @@
                      }
                  }
                  WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ClientSide) => {
@@ -898,7 +1070,7 @@ index 993b2ff3fadc..e8916c11025f 100644
                      // Update background to be transparent
                      let callback = self.callbacks.borrow_mut().appearance_changed.take();
                      if let Some(mut fun) = callback {
-@@ -1271,6 +1660,7 @@
+@@ -1271,6 +1684,7 @@
              }
              if let Some(scale) = scale {
                  state.scale = scale;
@@ -906,19 +1078,30 @@ index 993b2ff3fadc..e8916c11025f 100644
              }
              let device_bounds = state.bounds.to_device_pixels(state.scale);
              state.renderer.update_drawable_size(device_bounds.size);
-@@ -1466,7 +1856,7 @@
+@@ -1428,6 +1842,10 @@
+ }
+
+ impl PlatformWindow for WaylandWindow {
++    fn wayland_surface(&self) -> Option<wl_surface::WlSurface> {
++        Some(self.0.surface())
++    }
++
+     fn bounds(&self) -> Bounds<Pixels> {
+         self.borrow().bounds
      }
- 
+@@ -1466,7 +1884,7 @@
+     }
+
      fn resize(&mut self, size: Size<Pixels>) {
 -        let state = self.borrow();
 +        let mut state = self.borrow_mut();
          let state_ptr = self.0.clone();
- 
+
          // A popup's placement is the compositor's, so a resize re-runs the positioner and the
-@@ -1486,6 +1876,11 @@
+@@ -1486,6 +1904,11 @@
              return;
          }
- 
+
 +        if state.fixed_outer_size.is_some() {
 +            state.fixed_outer_size = Some(size);
 +            state.update_size_constraints();
@@ -927,7 +1110,7 @@ index 993b2ff3fadc..e8916c11025f 100644
          // Keep window geometry consistent with configure handling. On Wayland, window geometry is
          // surface-local: resizing should not attempt to translate the window; the compositor
          // controls placement. We also account for client-side decoration insets and tiling.
-@@ -1566,6 +1961,20 @@
+@@ -1566,6 +1989,20 @@
          _answers: &[PromptButton],
      ) -> Option<Receiver<usize>> {
          None
@@ -946,11 +1129,11 @@ index 993b2ff3fadc..e8916c11025f 100644
 +    ) -> anyhow::Result<Receiver<anyhow::Result<(u64, bool)>>> {
 +        self.0.request_visibility(visible)
      }
- 
+
      fn activate(&self) {
-@@ -1596,7 +2005,9 @@
+@@ -1596,7 +2033,9 @@
      }
- 
+
      fn set_title(&mut self, title: &str) {
 -        if let Some(toplevel) = self.borrow().surface_state.toplevel() {
 +        let mut state = self.borrow_mut();
@@ -959,8 +1142,17 @@ index 993b2ff3fadc..e8916c11025f 100644
              toplevel.set_title(title.to_string());
          }
      }
-@@ -1706,6 +2117,13 @@
- 
+@@ -1650,7 +2089,7 @@
+         let state = self.borrow();
+         if let Some(toplevel) = state.surface_state.toplevel() {
+             if !state.fullscreen {
+-                toplevel.set_fullscreen(None);
++                toplevel.set_fullscreen(state.fullscreen_output());
+             } else {
+                 toplevel.unset_fullscreen();
+             }
+@@ -1706,6 +2145,13 @@
+
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
 +        if !state
@@ -970,12 +1162,12 @@ index 993b2ff3fadc..e8916c11025f 100644
 +        {
 +            return;
 +        }
- 
+
          if state.renderer.device_lost() {
              let raw_window = RawWindow {
-@@ -1730,6 +2148,12 @@
+@@ -1730,6 +2176,12 @@
          }
- 
+
          state.renderer_presented = state.renderer.draw(scene);
 +        if state.renderer_presented
 +            && let VisibilityPhase::Configuring(transition) = state.visibility.phase
@@ -983,11 +1175,11 @@ index 993b2ff3fadc..e8916c11025f 100644
 +            state.visibility.phase = VisibilityPhase::Remapping(transition);
 +            WaylandWindowStatePtr::visibility_sync(&state, transition, true);
 +        }
- 
+
          if state.renderer.needs_redraw() {
              state.force_render_after_recovery = true;
-@@ -1738,6 +2162,13 @@
- 
+@@ -1738,6 +2190,13 @@
+
      fn completed_frame(&self) {
          let mut state = self.borrow_mut();
 +        if !state
@@ -997,11 +1189,11 @@ index 993b2ff3fadc..e8916c11025f 100644
 +        {
 +            return;
 +        }
- 
+
          // Work around a bug in old versions of wlroots where committing without a buffer attached
          // can cause invalid synchronization that leads to graphical corruption.
-@@ -1776,6 +2207,9 @@
- 
+@@ -1776,6 +2235,9 @@
+
      fn start_window_resize(&self, edge: gpui::ResizeEdge) {
          let state = self.borrow();
 +        if state.fixed_outer_size.is_some() {
@@ -1010,7 +1202,7 @@ index 993b2ff3fadc..e8916c11025f 100644
          if let Some(toplevel) = state.surface_state.toplevel() {
              toplevel.resize(
                  &state.globals.seat,
-@@ -1835,7 +2269,13 @@
+@@ -1835,7 +2297,13 @@
          // Commit so the new input region applies immediately. Otherwise it
          // waits for the next frame, which could be the very click we want to
          // allow passing through.
@@ -1023,9 +1215,9 @@ index 993b2ff3fadc..e8916c11025f 100644
 +            state.surface.commit();
 +        }
      }
- 
+
      fn window_decorations(&self) -> Decorations {
-@@ -1854,6 +2294,7 @@
+@@ -1854,6 +2322,7 @@
              Some(decoration) => {
                  decoration.set_mode(decorations.to_xdg());
                  state.decorations = decorations;
@@ -1033,7 +1225,7 @@ index 993b2ff3fadc..e8916c11025f 100644
                  update_window(state);
              }
              None => {
-@@ -1863,6 +2304,7 @@
+@@ -1863,6 +2332,7 @@
                      );
                  }
                  state.decorations = WindowDecorations::Client;
@@ -1041,7 +1233,7 @@ index 993b2ff3fadc..e8916c11025f 100644
                  update_window(state);
              }
          }
-@@ -1876,6 +2318,7 @@
+@@ -1876,6 +2346,7 @@
          let mut state = self.borrow_mut();
          if Some(inset) != state.client_inset {
              state.client_inset = Some(inset);
@@ -1049,8 +1241,8 @@ index 993b2ff3fadc..e8916c11025f 100644
              update_window(state);
          }
      }
-@@ -2082,3 +2525,337 @@
- 
+@@ -2082,3 +2553,337 @@
+
      bounds
  }
 +
@@ -1388,7 +1580,6 @@ index 993b2ff3fadc..e8916c11025f 100644
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index 0c8c9b4e20b8..701ae28fe440 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -811,11 +811,12 @@
@@ -1454,7 +1645,6 @@ index 0c8c9b4e20b8..701ae28fe440 100644
 
      fn active_window(&self) -> Option<AnyWindowHandle> {
 diff --git a/crates/gpui_linux/src/linux/x11/clipboard.rs b/crates/gpui_linux/src/linux/x11/clipboard.rs
-index 706e7b096588..591535333fa2 100644
 --- a/crates/gpui_linux/src/linux/x11/clipboard.rs
 +++ b/crates/gpui_linux/src/linux/x11/clipboard.rs
 @@ -22,6 +22,7 @@
@@ -1545,10 +1735,12 @@ index 706e7b096588..591535333fa2 100644
          }];
          self.inner.write(data, selection, wait)
      }
-@@ -1138,6 +1182,66 @@
+@@ -1136,6 +1180,66 @@
+     Error::Unknown {
+         description: error.to_string(),
      }
- }
-
++}
++
 +fn file_uri_list_to_clipboard_data(paths: &[PathBuf], atoms: Atoms) -> Result<Vec<ClipboardData>> {
 +    if paths.is_empty() {
 +        return Err(Error::unknown("clipboard file list is empty"));
@@ -1607,28 +1799,167 @@ index 706e7b096588..591535333fa2 100644
 +            format: atoms.NAUTILUS_FILE_LIST,
 +        },
 +    ])
-+}
-+
+ }
+
  /// Clipboard selection
- ///
- /// Linux has a concept of clipboard "selections" which tend to be used in different contexts. This
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
-@@ -1013,2 +1013,2 @@
+@@ -1010,10 +1010,14 @@
+
+ impl X11WindowStatePtr {
+     pub fn should_close(&self) -> bool {
 -        let mut cb = self.callbacks.borrow_mut();
 -        if let Some(mut should_close) = cb.should_close.take() {
 +        let should_close = self.callbacks.borrow_mut().should_close.take();
 +        if let Some(mut should_close) = should_close {
-@@ -1016 +1016,5 @@
+             let result = (should_close)();
 -            cb.should_close = Some(should_close);
 +            let mut callbacks = self.callbacks.borrow_mut();
 +            if callbacks.should_close.is_none() {
 +                callbacks.should_close = Some(should_close);
 +            }
 +            drop(callbacks);
-@@ -1131,2 +1135,2 @@
+             result
+         } else {
+             true
+@@ -1128,8 +1132,8 @@
+             }
+         }
+
 -        let mut callbacks = self.callbacks.borrow_mut();
 -        if let Some(fun) = callbacks.close.take() {
 +        let close = self.callbacks.borrow_mut().close.take();
 +        if let Some(fun) = close {
+             fun()
+         }
+     }
+diff --git a/crates/gpui_wgpu/src/gpui_wgpu.rs b/crates/gpui_wgpu/src/gpui_wgpu.rs
+--- a/crates/gpui_wgpu/src/gpui_wgpu.rs
++++ b/crates/gpui_wgpu/src/gpui_wgpu.rs
+@@ -1,4 +1,5 @@
+ mod cosmic_text_system;
++mod surface_frame;
+ mod wgpu_atlas;
+ mod wgpu_context;
+ mod wgpu_renderer;
+diff --git a/crates/gpui_wgpu/src/surface_frame.rs b/crates/gpui_wgpu/src/surface_frame.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/gpui_wgpu/src/surface_frame.rs
+@@ -0,0 +1,34 @@
++pub(super) struct SurfaceFrame {
++    frame: Option<wgpu::SurfaceTexture>,
++    texture: TextureCleanup,
++}
++
++impl SurfaceFrame {
++    pub(super) fn new(frame: wgpu::SurfaceTexture) -> Self {
++        Self {
++            texture: TextureCleanup(frame.texture.clone()),
++            frame: Some(frame),
++        }
++    }
++
++    pub(super) fn texture(&self) -> &wgpu::Texture {
++        &self.texture.0
++    }
++
++    pub(super) fn present(mut self) {
++        if let Some(frame) = self.frame.take() {
++            frame.present();
++        }
++    }
++}
++
++struct TextureCleanup(wgpu::Texture);
++
++impl Drop for TextureCleanup {
++    fn drop(&mut self) {
++        // wgpu 29 can retain an acquired texture after device loss. Release its raw
++        // resources after present/discard, before the owning surface is destroyed.
++        // https://github.com/gfx-rs/wgpu/issues/9277
++        self.0.destroy();
++    }
++}
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1,3 +1,4 @@
++use crate::surface_frame::SurfaceFrame;
+ use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
+ use bytemuck::{Pod, Zeroable};
+ use gpui::{
+@@ -1118,24 +1119,15 @@
+
+         self.atlas.before_frame();
+
+-        let frame = match self
++        let (frame, suboptimal) = match self
+             .resources()
+             .surface
+             .as_ref()
+             .expect("Configured surface missing")
+             .get_current_texture()
+         {
+-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+-                // Textures must be destroyed before the surface can be reconfigured.
+-                drop(frame);
+-                let surface_config = self.surface_config.clone();
+-                let resources = self.resources_mut();
+-                if let Some(surface) = &resources.surface {
+-                    surface.configure(&resources.device, &surface_config);
+-                }
+-                return false;
+-            }
++            wgpu::CurrentSurfaceTexture::Success(frame) => (SurfaceFrame::new(frame), false),
++            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => (SurfaceFrame::new(frame), true),
+             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                 let surface_config = self.surface_config.clone();
+                 let resources = self.resources_mut();
+@@ -1158,7 +1150,7 @@
+         self.ensure_intermediate_textures();
+
+         let frame_view = frame
+-            .texture
++            .texture()
+             .create_view(&wgpu::TextureViewDescriptor::default());
+
+         let gamma_params = GammaParams {
+@@ -1330,8 +1322,7 @@
+                         "instance buffer size grew too large: {}",
+                         self.instance_buffer_capacity
+                     );
+-                    frame.present();
+-                    return true;
++                    return self.present_frame(frame, suboptimal);
+                 }
+                 self.grow_instance_buffer();
+                 continue;
+@@ -1340,9 +1331,22 @@
+             self.resources()
+                 .queue
+                 .submit(std::iter::once(encoder.finish()));
+-            frame.present();
+-            return true;
+-        }
++            return self.present_frame(frame, suboptimal);
++        }
++    }
++
++    fn present_frame(&mut self, frame: SurfaceFrame, suboptimal: bool) -> bool {
++        frame.present();
++        if self.device_lost() {
++            return false;
++        }
++        if suboptimal {
++            let resources = self.resources();
++            if let Some(surface) = &resources.surface {
++                surface.configure(&resources.device, &self.surface_config);
++            }
++        }
++        true
+     }
+
+     fn draw_quads(

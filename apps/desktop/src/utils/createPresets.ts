@@ -31,6 +31,7 @@ export function createPresets() {
 			const config = {
 				...preset.config,
 				timeline: null,
+				overlayOrder: [],
 				clips: [],
 			};
 
@@ -51,7 +52,7 @@ export function createPresets() {
 					store.default = store.default - 1;
 				}
 			}),
-		setDefault: (index: number) =>
+		setDefault: (index: number | null) =>
 			updatePresets((store) => {
 				store.default = index;
 			}),
@@ -67,6 +68,7 @@ export function createPresets() {
 				store.presets[index].config = {
 					...config,
 					timeline: null,
+					overlayOrder: [],
 					clips: [],
 				};
 			}),

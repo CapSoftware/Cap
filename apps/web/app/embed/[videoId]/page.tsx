@@ -27,8 +27,10 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { parseShareCallToAction } from "@/lib/share-call-to-action";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -350,10 +352,20 @@ async function EmbedContent({
 	const videoOwner = await db()
 		.select({
 			name: users.name,
+			image: users.image,
 		})
 		.from(users)
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
+
+	const ownerImageUrl = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
+			Option.map(imageUploads.resolveImageUrl),
+			Effect.transposeOption,
+			Effect.map(Option.getOrNull),
+		);
+	}).pipe(EffectRuntime.runPromise);
 
 	const branding = await Effect.gen(function* () {
 		const brandingInput = {
@@ -389,11 +401,21 @@ async function EmbedContent({
 				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
 			}
 			ownerName={videoOwner[0]?.name || null}
+			ownerImageUrl={ownerImageUrl}
 			autoplay={autoplay}
 			startTime={startTime}
 			minimal={minimal}
+			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+				video.settings?.defaultPlaybackSpeed,
+				video.orgSettings?.defaultPlaybackSpeed,
+			)}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
+			callToAction={
+				ownerIsProUser && !minimal
+					? parseShareCallToAction(video.settings)
+					: null
+			}
 		/>
 	);
 }

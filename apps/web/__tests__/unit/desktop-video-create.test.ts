@@ -12,6 +12,9 @@ const deletion = vi.hoisted(() => ({
 	deleteVideo: vi.fn(),
 	principal: vi.fn(),
 }));
+const defaultSharing = vi.hoisted(() => ({
+	getNewVideoPublic: vi.fn(),
+}));
 
 const schema = {
 	organizations: { table: "organizations" },
@@ -42,6 +45,7 @@ const mockDb = {
 vi.mock("@cap/database", () => ({
 	db: () => mockDb,
 }));
+vi.mock("@cap/database/video-sharing-default", () => defaultSharing);
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),
@@ -400,6 +404,7 @@ describe("GET /create", () => {
 		vi.clearAllMocks();
 		resetMockDb();
 		stubStorage();
+		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
 		const mod = await import("@/app/api/desktop/[...route]/video");
 		app = mod.app;
 	});
@@ -474,6 +479,31 @@ describe("GET /create", () => {
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
 			ownerId: "user-1",
+		});
+	});
+
+	it("creates a private recording when the organization default resolves to private", async () => {
+		defaultSharing.getNewVideoPublic.mockResolvedValue(false);
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request("https://cap.test/create");
+
+		expect(response.status).toBe(200);
+		expect(defaultSharing.getNewVideoPublic).toHaveBeenCalledWith("org-1");
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-1",
+			public: false,
 		});
 	});
 

@@ -1,0 +1,53 @@
+---
+title: GPUI App Preview, Redesigned Editor, New Tracks & Studio Sound
+app: Cap Desktop
+publishedAt: "2026-08-31"
+version: 0.6.0
+image:
+---
+
+Cap Desktop 0.6.0 brings the GPUI preview, redesigned editor, new tracks and Studio Sound.
+
+## Features
+
+- **GPUI app preview** - Try the optional native app in Settings → Experimental; recordings and settings carry over, and you can switch back while more tools are added.
+- **Redesigned editor** - New crop and inspector controls, text and 3D panels, track picker and export screen.
+- **Style tracks** - Change backgrounds, camera and cursor for just part of a video.
+- **Image tracks** - Add logos or images; resize, rotate, fade and trim them.
+- **3D tracks** - Create automatic or custom camera shots with timeline previews, perspective, easing and focus blur.
+- **Clip right-click menu** - Set speed/volume, mute or hide the cursor, choose sped-up audio behavior; split, merge, rename or delete.
+- **Studio Sound** - Reduce mic noise with Light, Balanced or Strong isolation; set a default for new recordings.
+- **Record into a project** - Add another recording straight to an open editor project.
+- **Camera backgrounds** - Blur or remove camera backgrounds on macOS, in previews and exports.
+- **Color correction** - Tune screen and camera colors separately with presets and grading controls.
+- **Animated text and cards** - Use installed fonts, presets, gradients and animations; full-screen cards pause the recording.
+- **Moving backgrounds** - Create animated gradients with editable colors and presets.
+- **Cursor effects** - Choose macOS, Tahoe, Windows or circle cursors, with shape changes and click ripples.
+- **Timeline controls** - Scrub the ruler, navigate with the minimap, snap cuts, multi-select zooms and follow playback.
+- **Draw on screenshots** - Draw freehand before copying or saving screenshots. Press **D**.
+- **Frames and zoom** - Add macOS, Windows, browser or MacBook frames in the native editor; choose a default zoom strength.
+- **Export estimates** - See measured file size and time estimates before saving.
+- **Native app feedback** - Guided onboarding and completion sounds for screenshots, clipboard actions and uploads.
+- **Desktop diagnostics** - Run A/V sync checks in Settings → Feedback and review reports before sending.
+
+## Fixes
+
+- **Recording recovery** - Recover complete fragments after interruptions; preserve footage through failed saves.
+- **Low storage** - Warn and leave room to finish recording; guard exports against low disk space or memory.
+- **Device reconnection** - Restore selected mic/camera after reconnection and keep camera placement.
+- **Recording start** - Capture begins as soon as the start sound ends in both apps.
+- **Playback and audio** - Sound starts with video; muted clips and clip volume carry through export.
+- **Edits stay aligned** - Captions, keyboard overlays, zooms, titles and cursors stay aligned after cuts and in exports.
+- **Static recordings** - Still captures retain their full duration through the moment you stop.
+- **Imports and thumbnails** - Keep clips and audio in place; refresh thumbnails after edits.
+- **App switching** - Safer updates, relaunches and app switching during active work.
+- **macOS capture** - Fixed picker freezes and improved capture and permission recovery.
+- **Windows** - Fixed black native export previews, window controls, virtual cameras and capture cards.
+- **Linux** - Wayland/X11 capture the right target; mic and system audio stay separate. Added DEB, RPM, AppImage and Arch packages.
+- **Camera effects** - Cleaner background blur and cutout edges.
+
+## Performance
+
+- **Faster editing** - Quicker pickers and recording finish; smoother playback and scrubbing.
+- **Lighter media work** - Frame reuse reduces memory and temporary files during imports, camera effects and exports.
+- **Platform speed** - Faster Windows graphics startup; Linux NVIDIA encoding with fallback.

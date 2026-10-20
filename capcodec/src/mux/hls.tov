@@ -1,0 +1,45 @@
+export function segmentName(i: int): string {
+  let s = `${i}`
+  while (s.byteLength < 5) s = "0" + s
+  return `seg_${s}.m4s`
+}
+
+export function mediaPlaylist(durations: f64[], initName: string): string {
+  let target = 1
+  for (const d of durations) {
+    const c = Math.ceil(d)
+    if (c > target) target = c
+  }
+  let lines: string[] = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    `#EXT-X-TARGETDURATION:${target}`,
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXT-X-MAP:URI="${initName}"`,
+  ]
+  for (let i = 0; i < durations.length; i++) {
+    lines.push(`#EXTINF:${durations[i]!.toFixed(5)},`)
+    lines.push(segmentName(i + 1))
+  }
+  lines.push("#EXT-X-ENDLIST")
+  return lines.join("\n") + "\n"
+}
+
+export function masterPlaylist(media: string, bandwidth: int, codecs: string, width: int, height: int, fps: f64): string {
+  return [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},CODECS="${codecs}",RESOLUTION=${width}x${height},FRAME-RATE=${fps.toFixed(3)}`,
+    media,
+  ].join("\n") + "\n"
+}
+
+test("playlist lists segments with rounded-up target duration", () => {
+  const p = mediaPlaylist([2.0, 2.0, 1.4], "init.mp4")
+  expect(p.includes("#EXT-X-TARGETDURATION:2")).toBe(true)
+  expect(p.includes("seg_00003.m4s")).toBe(true)
+  expect(p.includes("#EXT-X-ENDLIST")).toBe(true)
+})

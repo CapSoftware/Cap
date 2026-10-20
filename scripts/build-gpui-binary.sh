@@ -35,6 +35,11 @@ else
 fi
 
 extension=""
+if [[ "$target" == *-apple-darwin ]]; then
+	MACOSX_DEPLOYMENT_TARGET="$(node "$repo_root/scripts/build-macos-packages.mjs" --deployment-target)"
+	export MACOSX_DEPLOYMENT_TARGET
+fi
+
 if [[ "$target" == *windows* ]]; then
 	extension=".exe"
 fi
@@ -60,6 +65,10 @@ staged_binary="$binaries_dir/cap-gpui-$target$extension"
 if [[ ! -f "$source_binary" ]]; then
 	echo "error: built GPUI binary not found at $source_binary" >&2
 	exit 1
+fi
+
+if [[ "$target" == *windows-msvc ]]; then
+	node "$repo_root/scripts/verify-windows-stack.mjs" "$source_binary"
 fi
 
 if [[ "$target" == *linux* ]]; then

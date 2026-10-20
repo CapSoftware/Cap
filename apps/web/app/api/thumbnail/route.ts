@@ -6,6 +6,7 @@ import {
 	Storage,
 	VideosPolicy,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
@@ -71,12 +72,14 @@ export async function GET(request: NextRequest) {
 	try {
 		const [bucket] = await Storage.getAccessForVideo(video).pipe(runPromise);
 
-		const listResponse = await bucket
-			.listObjects({ prefix: prefix })
-			.pipe(runPromise);
-		const contents = listResponse.Contents || [];
-
-		const thumbnailKey = findScreenshotObjectKey(contents);
+		let thumbnailKey = getPublishedRecordingThumbnailKey(video);
+		if (!thumbnailKey) {
+			const listResponse = await bucket
+				.listObjects({ prefix })
+				.pipe(runPromise);
+			thumbnailKey =
+				findScreenshotObjectKey(listResponse.Contents || []) ?? undefined;
+		}
 
 		if (!thumbnailKey)
 			return new Response(

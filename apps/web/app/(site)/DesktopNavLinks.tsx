@@ -13,6 +13,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { LoomMark } from "@/components/icons/LoomMark";
 
 interface NavDropdownItem {
 	label: string;
@@ -57,6 +58,12 @@ const Links: NavItem[] = [
 				href: "/download",
 			},
 			{
+				label: "Migrate from Loom",
+				sub: "Bring your Loom library into Cap",
+				href: "/migrate-from-loom",
+				icon: <LoomMark size={16} />,
+			},
+			{
 				label: "Open Source",
 				sub: "Cap is open source and available on GitHub",
 				href: "https://github.com/CapSoftware/Cap",
@@ -71,11 +78,20 @@ const Links: NavItem[] = [
 				sub: "Join the Cap community on Discord",
 				href: "https://cap.link/discord",
 			},
+			{
+				label: "Free tools",
+				sub: "Loom downloader, converters and more",
+				href: "/tools",
+			},
 		],
 	},
 	{
 		label: "Download",
 		href: "/download",
+	},
+	{
+		label: "Agents",
+		href: "/agents",
 	},
 	{
 		label: "Testimonials",

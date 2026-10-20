@@ -1,36 +1,10 @@
-//! Detection of desktops that are only viewable through a capture-based
-//! stream (cloud PCs like Shadow, RDP sessions, VMs, virtual display
-//! adapters).
-//!
-//! On these systems `WDA_EXCLUDEFROMCAPTURE` does not just hide a window from
-//! recordings — the streamer itself sees the desktop through the capture
-//! APIs, so an excluded window becomes invisible to the user and DRM
-//! detectors flag it as protected content (e.g. Shadow error S:102).
-
 use winreg::RegKey;
 use winreg::enums::HKEY_LOCAL_MACHINE;
 
-/// Environment override (case-insensitive): `off`/`never`/`0` forces
-/// exclusion off, `on`/`always`/`1` forces it on (skips detection),
-/// anything else = auto.
 const ENV_OVERRIDE: &str = "CAP_WINDOW_CAPTURE_EXCLUSION";
 
-const SMBIOS_MARKERS: &[&str] = &[
-    "qemu",
-    "kvm",
-    "vmware",
-    "virtualbox",
-    "innotek",
-    "xen",
-    "bochs",
-    "parallels",
-    "virtual machine",
-    "hvm domu",
-    "amazon ec2",
-    "google compute engine",
-    "openstack",
-    "shadow",
-];
+// Shadow reports S:102 for protected windows; EC2/DCV still displays excluded windows.
+const SMBIOS_MARKERS: &[&str] = &["shadow"];
 
 const VIRTUAL_DISPLAY_MARKERS: &[&str] = &[
     "parsec",
@@ -42,38 +16,41 @@ const VIRTUAL_DISPLAY_MARKERS: &[&str] = &[
     "shadow",
 ];
 
-/// Returns `Some(reason)` when this desktop is being viewed through a
-/// capture-based stream and window capture exclusion would hide Cap's
-/// windows from the user themselves.
 pub fn capture_streamed_display_reason() -> Option<String> {
-    let override_value = std::env::var(ENV_OVERRIDE)
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase());
-    match override_value.as_deref() {
-        Some("on" | "always" | "1") => return None,
-        Some("off" | "never" | "0") => {
-            return Some(format!("{ENV_OVERRIDE} env override"));
-        }
-        _ => {}
-    }
+    streamed_display_reason_with(
+        std::env::var(ENV_OVERRIDE).ok().as_deref(),
+        remote_session_active,
+        streamed_computer_marker,
+        virtual_display_adapter,
+    )
+}
 
-    if remote_session_active() {
+fn exclusion_override(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "always" | "1" => Some(true),
+        "off" | "never" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn streamed_display_reason_with(
+    override_value: Option<&str>,
+    remote_session: impl FnOnce() -> bool,
+    streamed_computer: impl FnOnce() -> Option<String>,
+    virtual_display: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match override_value.and_then(exclusion_override) {
+        Some(true) => return None,
+        Some(false) => return Some(format!("{ENV_OVERRIDE} env override")),
+        None => {}
+    }
+    if remote_session() {
         return Some("remote desktop session (SM_REMOTESESSION)".to_string());
     }
-
-    if let Some(vendor) = hypervisor_guest() {
-        return Some(format!("hypervisor guest ({vendor})"));
+    if let Some(marker) = streamed_computer() {
+        return Some(format!("streamed computer SMBIOS ({marker})"));
     }
-
-    if let Some(marker) = smbios_virtual_machine_marker() {
-        return Some(format!("virtual machine SMBIOS ({marker})"));
-    }
-
-    if let Some(device) = virtual_display_adapter() {
-        return Some(format!("virtual display adapter ({device})"));
-    }
-
-    None
+    virtual_display().map(|device| format!("virtual display adapter ({device})"))
 }
 
 fn remote_session_active() -> bool {
@@ -81,46 +58,7 @@ fn remote_session_active() -> bool {
     unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
 }
 
-#[cfg(target_arch = "x86_64")]
-fn hypervisor_guest() -> Option<String> {
-    use std::arch::x86_64::__cpuid;
-
-    if unsafe { __cpuid(1) }.ecx & (1 << 31) == 0 {
-        return None;
-    }
-
-    let hv = unsafe { __cpuid(0x4000_0000) };
-    let mut vendor = [0u8; 12];
-    vendor[0..4].copy_from_slice(&hv.ebx.to_le_bytes());
-    vendor[4..8].copy_from_slice(&hv.ecx.to_le_bytes());
-    vendor[8..12].copy_from_slice(&hv.edx.to_le_bytes());
-
-    // Hyper-V hosts the desktop OS itself when VBS / WSL2 / Hyper-V is
-    // enabled. The root partition (CreatePartitions privilege, leaf
-    // 0x40000003 EBX bit 0) is the physical machine, not a guest.
-    if &vendor == b"Microsoft Hv"
-        && hv.eax >= 0x4000_0003
-        && unsafe { __cpuid(0x4000_0003) }.ebx & 1 != 0
-    {
-        return None;
-    }
-
-    let vendor = String::from_utf8_lossy(&vendor)
-        .trim_matches([char::from(0), ' '])
-        .to_string();
-    Some(if vendor.is_empty() {
-        "unknown hypervisor".to_string()
-    } else {
-        vendor
-    })
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn hypervisor_guest() -> Option<String> {
-    None
-}
-
-fn smbios_virtual_machine_marker() -> Option<String> {
+fn streamed_computer_marker() -> Option<String> {
     let key = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey("HARDWARE\\DESCRIPTION\\System\\BIOS")
         .ok()?;
@@ -184,24 +122,121 @@ mod tests {
     use super::*;
 
     #[test]
-    fn markers_match_known_environments() {
+    fn overrides_preserve_auto_and_explicit_choices() {
+        for value in ["on", " ALWAYS ", "1"] {
+            assert_eq!(exclusion_override(value), Some(true));
+        }
+        for value in ["off", " NEVER ", "0"] {
+            assert_eq!(exclusion_override(value), Some(false));
+        }
+        for value in ["", "auto", "unknown"] {
+            assert_eq!(exclusion_override(value), None);
+        }
+    }
+
+    #[test]
+    fn explicit_override_does_not_probe_the_environment() {
+        for (value, expected) in [
+            ("on", None),
+            ("off", Some(format!("{ENV_OVERRIDE} env override"))),
+        ] {
+            assert_eq!(
+                streamed_display_reason_with(
+                    Some(value),
+                    || panic!("override must skip remote-session detection"),
+                    || panic!("override must skip SMBIOS detection"),
+                    || panic!("override must skip display detection"),
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn remote_session_keeps_its_compatibility_exception() {
         assert_eq!(
-            find_marker("QEMU Standard PC (Q35 + ICH9, 2009)", SMBIOS_MARKERS),
-            Some("qemu")
-        );
-        assert_eq!(
-            find_marker("Virtual Machine", SMBIOS_MARKERS),
-            Some("virtual machine")
-        );
-        assert_eq!(
-            find_marker("Parsec Virtual Display Adapter", VIRTUAL_DISPLAY_MARKERS),
-            Some("parsec")
+            streamed_display_reason_with(
+                None,
+                || true,
+                || panic!("remote session must skip SMBIOS detection"),
+                || panic!("remote session must skip display detection"),
+            ),
+            Some("remote desktop session (SM_REMOTESESSION)".to_string())
         );
     }
 
     #[test]
-    fn markers_ignore_physical_hardware() {
-        for text in [
+    fn shadow_keeps_its_compatibility_exception() {
+        for computer in ["Shadow", "SHADOW COMPUTER"] {
+            assert_eq!(
+                streamed_display_reason_with(
+                    None,
+                    || false,
+                    || find_marker(computer, SMBIOS_MARKERS).map(str::to_string),
+                    || panic!("Shadow must skip display detection"),
+                ),
+                Some("streamed computer SMBIOS (shadow)".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn existing_streamed_adapters_keep_their_compatibility_exception() {
+        for adapter in [
+            "Parsec Virtual Display Adapter",
+            "spacedesk",
+            "IddSampleDriver",
+            "Virtual Display",
+            "usbmmidd",
+            "Amyuni",
+            "Shadow",
+        ] {
+            assert!(
+                streamed_display_reason_with(
+                    None,
+                    || false,
+                    || None,
+                    || find_marker(adapter, VIRTUAL_DISPLAY_MARKERS).map(str::to_string),
+                )
+                .is_some(),
+                "{adapter}"
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_machine_hardware_keeps_capture_exclusion() {
+        for computer in [
+            "Amazon EC2",
+            "QEMU Standard PC (Q35 + ICH9, 2009)",
+            "KVM",
+            "VMware",
+            "VirtualBox",
+            "innotek",
+            "Xen",
+            "Bochs",
+            "Parallels",
+            "Microsoft Corporation Virtual Machine",
+            "HVM domU",
+            "Google Compute Engine",
+            "OpenStack",
+        ] {
+            assert_eq!(
+                streamed_display_reason_with(
+                    None,
+                    || false,
+                    || find_marker(computer, SMBIOS_MARKERS).map(str::to_string),
+                    || None,
+                ),
+                None,
+                "{computer}"
+            );
+        }
+    }
+
+    #[test]
+    fn physical_hardware_keeps_capture_exclusion() {
+        for name in [
             "Dell Inc.",
             "ASUSTeK COMPUTER INC.",
             "NVIDIA GeForce RTX 3080",
@@ -210,8 +245,14 @@ mod tests {
             "LENOVO",
             "Micro-Star International Co., Ltd.",
         ] {
-            assert_eq!(find_marker(text, SMBIOS_MARKERS), None, "{text}");
-            assert_eq!(find_marker(text, VIRTUAL_DISPLAY_MARKERS), None, "{text}");
+            assert_eq!(find_marker(name, SMBIOS_MARKERS), None, "{name}");
+            assert_eq!(find_marker(name, VIRTUAL_DISPLAY_MARKERS), None, "{name}");
+        }
+        for override_value in [None, Some("auto"), Some("unknown")] {
+            assert_eq!(
+                streamed_display_reason_with(override_value, || false, || None, || None),
+                None
+            );
         }
     }
 }

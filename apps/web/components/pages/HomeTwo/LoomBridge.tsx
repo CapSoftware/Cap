@@ -1,15 +1,13 @@
+"use client";
+
 import { classNames } from "@cap/utils/helpers";
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { trackEvent } from "@/app/utils/analytics";
+import { LoomMark } from "@/components/icons/LoomMark";
+import { MigratePromoBadge } from "@/components/MigratePromoBadge";
 import { Eyebrow } from "./Eyebrow";
-import {
-	BAND,
-	BODY_TEXT,
-	BTN_PRIMARY,
-	EYEBROW,
-	grainBg,
-	MODE_THEME,
-} from "./theme";
+import { BAND, BODY_TEXT, BTN_PRIMARY, grainBg, MODE_THEME } from "./theme";
 
 export const LoomBridge = () => (
 	<section className="px-5 pb-4 pt-2">
@@ -27,24 +25,28 @@ export const LoomBridge = () => (
 				<p
 					className={`${BODY_TEXT} mt-4 max-w-[500px] text-[16px] leading-[1.5] text-[rgba(17,17,17,0.78)]`}
 				>
-					Import every video in one click and pick up where you left off. Your
-					recordings land in storage you own, on a plan that stays free.
+					Paste a Loom link or upload a CSV of your library and Cap re-hosts
+					every video with its title, a transcript and chapters. Your recordings
+					land in storage you own, on a plan that stays free.
 				</p>
 			</div>
 
 			<div className="flex flex-col items-start gap-3 lg:items-end">
-				<Link href="/tools/loom-downloader" className={BTN_PRIMARY}>
-					Import from Loom
-					<ArrowRight className="ml-2 size-4" />
-				</Link>
-				<p
-					className={classNames(
-						EYEBROW,
-						"text-[11px] text-[rgba(17,17,17,0.5)]",
-					)}
+				<Link
+					href="/migrate-from-loom"
+					onClick={() =>
+						trackEvent("loom_import_cta_clicked", {
+							source_page: "home_loom_bridge",
+							cta_location: "primary",
+						})
+					}
+					className={classNames(BTN_PRIMARY, "gap-2.5")}
 				>
-					MIGRATE20 · 20% off Pro, forever
-				</p>
+					<LoomMark size={16} />
+					Import from Loom
+					<ArrowRight className="size-4" />
+				</Link>
+				<MigratePromoBadge sourcePage="home_loom_bridge" />
 			</div>
 		</div>
 	</section>

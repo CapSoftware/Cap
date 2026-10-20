@@ -22,6 +22,10 @@ function createServerEnv() {
 			DATABASE_ENCRYPTION_KEY: z
 				.string()
 				.optional()
+				.refine(
+					(key) => !key || [16, 32].includes(Buffer.from(key, "hex").length),
+					"Must be 32 or 64 hex characters, e.g. from `openssl rand -hex 32`",
+				)
 				.describe(
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
@@ -87,6 +91,12 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("Comma-separated list of permitted signup domains"),
+			CAP_BLOCKED_SIGNUP_DOMAINS: z
+				.string()
+				.optional()
+				.describe(
+					"Comma-separated domains or full email addresses refused at sign-in",
+				),
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
@@ -185,8 +195,6 @@ function createServerEnv() {
 
 			/// Ignore
 			NODE_ENV: z.string(),
-			WORKFLOWS_RPC_URL: z.string().optional(),
-			WORKFLOWS_RPC_SECRET: z.string().optional(),
 		},
 		experimental__runtimeEnv: {
 			S3_PUBLIC_ENDPOINT: process.env.CAP_AWS_ENDPOINT,

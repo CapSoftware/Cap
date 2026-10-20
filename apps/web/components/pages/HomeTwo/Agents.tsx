@@ -237,10 +237,10 @@ export const Agents = () => {
 							{active.note}
 						</p>
 						<Link
-							href="/docs/agents"
+							href="/agents"
 							className={classNames(BTN_SECONDARY, "self-start")}
 						>
-							Read the agent docs
+							Explore Cap for Agents
 						</Link>
 					</div>
 				</div>

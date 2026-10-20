@@ -8,6 +8,15 @@ use std::{ops::Range, path::Path};
 
 use crate::cast_bytes_to_f32_slice;
 
+pub fn high_quality_resampler_options() -> ffmpeg::Dictionary<'static> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("filter_size", "128");
+    // FFmpeg parses option values with strtod, which honours LC_NUMERIC. GTK applies the
+    // user's locale on Linux, so "0.97" fails with EINVAL under comma-decimal locales (#2359).
+    options.set("cutoff", "97/100");
+    options
+}
+
 // F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
@@ -61,10 +70,6 @@ impl AudioData {
 
         let target_channels = target_channels_for_source(source_channels);
         let target_channel_layout = ChannelLayout::default(target_channels as i32);
-        let mut options = ffmpeg::Dictionary::new();
-        options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
-
         let mut resampler = resampling::Context::get_with(
             decoder.format(),
             decoder.channel_layout(),
@@ -72,7 +77,7 @@ impl AudioData {
             AudioData::SAMPLE_FORMAT,
             target_channel_layout,
             AudioData::SAMPLE_RATE,
-            options,
+            high_quality_resampler_options(),
         )
         .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -98,6 +103,7 @@ impl AudioData {
         }
 
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
+        let mut resampler_output = ResamplerOutput::new();
         let mut samples = Vec::new();
         let mut resampled_samples = Vec::new();
         let mut next_source_sample = if sought { None } else { Some(0usize) };
@@ -117,7 +123,12 @@ impl AudioData {
 
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
                 if range.is_none() {
-                    run_resampler(&mut resampler, &decoded_frame, &mut samples)?;
+                    run_resampler(
+                        &mut resampler,
+                        &decoded_frame,
+                        &mut resampler_output,
+                        &mut samples,
+                    )?;
                     continue;
                 }
 
@@ -138,7 +149,12 @@ impl AudioData {
                 }
 
                 resampled_samples.clear();
-                run_resampler(&mut resampler, &decoded_frame, &mut resampled_samples)?;
+                run_resampler(
+                    &mut resampler,
+                    &decoded_frame,
+                    &mut resampler_output,
+                    &mut resampled_samples,
+                )?;
                 complete = append_sample_window(
                     &mut samples,
                     &resampled_samples,
@@ -158,12 +174,22 @@ impl AudioData {
 
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
                 if range.is_none() {
-                    run_resampler(&mut resampler, &decoded_frame, &mut samples)?;
+                    run_resampler(
+                        &mut resampler,
+                        &decoded_frame,
+                        &mut resampler_output,
+                        &mut samples,
+                    )?;
                     continue;
                 }
 
                 resampled_samples.clear();
-                run_resampler(&mut resampler, &decoded_frame, &mut resampled_samples)?;
+                run_resampler(
+                    &mut resampler,
+                    &decoded_frame,
+                    &mut resampler_output,
+                    &mut resampled_samples,
+                )?;
                 complete = append_sample_window(
                     &mut samples,
                     &resampled_samples,
@@ -180,7 +206,11 @@ impl AudioData {
             if !complete {
                 if range.is_some() {
                     resampled_samples.clear();
-                    flush_resampler(&mut resampler, &mut resampled_samples)?;
+                    flush_resampler(
+                        &mut resampler,
+                        &mut resampler_output,
+                        &mut resampled_samples,
+                    )?;
                     append_sample_window(
                         &mut samples,
                         &resampled_samples,
@@ -190,7 +220,7 @@ impl AudioData {
                         covered_source_end_sample,
                     );
                 } else {
-                    flush_resampler(&mut resampler, &mut samples)?;
+                    flush_resampler(&mut resampler, &mut resampler_output, &mut samples)?;
                 }
             }
         }
@@ -228,8 +258,20 @@ impl AudioData {
             && source_end_sample <= self.covered_source_end_sample
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
+    /// Interleaved 48 kHz samples starting at source sample 0. Used to
+    /// assemble a track from decoded windows (zero elsewhere) when only parts
+    /// of a long recording are needed.
+    pub fn from_samples(samples: Vec<f32>, channels: u16) -> Self {
+        Self {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
         Self {
             samples,
             channels,
@@ -267,43 +309,95 @@ fn target_channels_for_source(channels: u16) -> u16 {
     if channels <= 1 { 1 } else { 2 }
 }
 
+pub(crate) struct ResamplerOutput {
+    frame: FFAudio,
+    capacity: usize,
+}
+
+impl ResamplerOutput {
+    pub(crate) fn new() -> Self {
+        Self {
+            frame: FFAudio::empty(),
+            capacity: 0,
+        }
+    }
+
+    pub(crate) fn prepare(
+        &mut self,
+        resampler: &resampling::Context,
+        capacity: usize,
+    ) -> &mut FFAudio {
+        if capacity > self.capacity {
+            let target = resampler.output();
+            self.frame = FFAudio::new(target.format, capacity, target.channel_layout);
+            self.capacity = capacity;
+        }
+        self.frame.set_samples(capacity);
+        &mut self.frame
+    }
+
+    pub(crate) fn run(
+        &mut self,
+        resampler: &mut resampling::Context,
+        decoded_frame: &FFAudio,
+    ) -> Result<(), String> {
+        let capacity = resample_capacity(resampler, decoded_frame.samples());
+        let frame = self.prepare(resampler, capacity);
+        resampler
+            .run(decoded_frame, frame)
+            .map_err(|error| format!("Run Resampler / {error}"))
+            .map(|_| ())
+    }
+
+    pub(crate) fn samples(&self) -> Result<&[f32], String> {
+        if self.frame.samples() == 0 {
+            return Ok(&[]);
+        }
+        let byte_len = self
+            .frame
+            .samples()
+            .saturating_mul(self.frame.channels() as usize)
+            .saturating_mul(std::mem::size_of::<f32>());
+        self.frame
+            .data(0)
+            .get(..byte_len)
+            .map(|bytes| unsafe { cast_bytes_to_f32_slice(bytes) })
+            .ok_or_else(|| "Resampled frame data shorter than expected".to_string())
+    }
+}
+
 fn run_resampler(
     resampler: &mut resampling::Context,
     decoded_frame: &FFAudio,
+    output: &mut ResamplerOutput,
     samples: &mut Vec<f32>,
 ) -> Result<(), String> {
-    let target = *resampler.output();
-    let capacity = resample_capacity(resampler, decoded_frame.samples());
-    let mut resampled_frame = FFAudio::new(target.format, capacity, target.channel_layout);
-
-    resampler
-        .run(decoded_frame, &mut resampled_frame)
-        .map_err(|e| format!("Run Resampler / {e}"))?;
-
-    append_resampled_frame(samples, &resampled_frame)
+    output.run(resampler, decoded_frame)?;
+    samples.extend(output.samples()?);
+    Ok(())
 }
 
 fn flush_resampler(
     resampler: &mut resampling::Context,
+    output: &mut ResamplerOutput,
     samples: &mut Vec<f32>,
 ) -> Result<(), String> {
     for _ in 0..64 {
         let Some(delay) = resampler.delay() else {
             break;
         };
-        let target = *resampler.output();
         let capacity = delay
             .output
             .max(1)
             .saturating_add(16)
             .min(i64::from(i32::MAX)) as usize;
-        let mut resampled_frame = FFAudio::new(target.format, capacity, target.channel_layout);
+        let resampled_frame = output.prepare(resampler, capacity);
         let remaining = resampler
-            .flush(&mut resampled_frame)
+            .flush(resampled_frame)
             .map_err(|e| format!("Flush Resampler / {e}"))?;
 
         let output_samples = resampled_frame.samples();
-        append_resampled_frame(samples, &resampled_frame)?;
+        append_resampled_frame(samples, resampled_frame)?;
 
         if remaining.is_none() || output_samples == 0 {
             break;
@@ -352,6 +446,162 @@ fn append_resampled_frame(samples: &mut Vec<f32>, frame: &FFAudio) -> Result<(),
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[cfg(unix)]
+    struct CommaDecimalThreadLocale {
+        locale: libc::locale_t,
+        previous: libc::locale_t,
+    }
+
+    #[cfg(unix)]
+    impl CommaDecimalThreadLocale {
+        fn activate() -> Option<Self> {
+            for name in [
+                c"pt_BR.UTF-8",
+                c"pt_BR.utf8",
+                c"de_DE.UTF-8",
+                c"de_DE.utf8",
+                c"fr_FR.UTF-8",
+                c"fr_FR.utf8",
+            ] {
+                let locale = unsafe {
+                    libc::newlocale(libc::LC_NUMERIC_MASK, name.as_ptr(), std::ptr::null_mut())
+                };
+                if locale.is_null() {
+                    continue;
+                }
+                let previous = unsafe { libc::uselocale(locale) };
+                let parsed = unsafe { libc::strtod(c"0,5".as_ptr(), std::ptr::null_mut()) };
+                if (parsed - 0.5).abs() < f64::EPSILON {
+                    return Some(Self { locale, previous });
+                }
+                unsafe {
+                    libc::uselocale(previous);
+                    libc::freelocale(locale);
+                }
+            }
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for CommaDecimalThreadLocale {
+        fn drop(&mut self) {
+            unsafe {
+                libc::uselocale(self.previous);
+                libc::freelocale(self.locale);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn high_quality_resampler_options_parse_under_comma_decimal_locale() {
+        let Some(_locale) = CommaDecimalThreadLocale::activate() else {
+            eprintln!("skipping: no comma-decimal locale is installed");
+            return;
+        };
+
+        let resampler = resampling::Context::get_with(
+            avformat::Sample::F32(avformat::sample::Type::Planar),
+            ChannelLayout::STEREO,
+            44_100,
+            AudioData::SAMPLE_FORMAT,
+            ChannelLayout::STEREO,
+            AudioData::SAMPLE_RATE,
+            high_quality_resampler_options(),
+        )
+        .expect("resampler options must parse under a comma-decimal LC_NUMERIC");
+
+        let mut cutoff = 0.0;
+        let result = unsafe {
+            ffmpeg::ffi::av_opt_get_double(
+                resampler.as_ptr() as *mut std::ffi::c_void,
+                c"cutoff".as_ptr(),
+                0,
+                &mut cutoff,
+            )
+        };
+        assert_eq!(result, 0);
+        assert!((cutoff - 0.97).abs() < 1e-9, "cutoff was {cutoff}");
+    }
+
+    #[test]
+    fn reused_resampler_output_matches_fresh_buffers_for_variable_frames() {
+        for source_rate in [16_000, 44_100, 48_000, 96_000] {
+            for channels in [1, 2, 6] {
+                let source_format = avformat::Sample::F32(avformat::sample::Type::Planar);
+                let source_layout = ChannelLayout::default(channels);
+                let output_layout =
+                    ChannelLayout::default(i32::from(target_channels_for_source(channels as u16)));
+                let create_resampler = || {
+                    resampling::Context::get_with(
+                        source_format,
+                        source_layout,
+                        source_rate,
+                        AudioData::SAMPLE_FORMAT,
+                        output_layout,
+                        AudioData::SAMPLE_RATE,
+                        high_quality_resampler_options(),
+                    )
+                    .unwrap()
+                };
+                let mut reference_resampler = create_resampler();
+                let mut candidate_resampler = create_resampler();
+                let mut reference = Vec::new();
+                let mut candidate = Vec::new();
+                let mut output = ResamplerOutput::new();
+                for (index, count) in [1, 511, 1024, 2048, 37, 960, 3].into_iter().enumerate() {
+                    let mut input = FFAudio::new(source_format, count, source_layout);
+                    input.set_rate(source_rate);
+                    for channel in 0..channels as usize {
+                        for (sample_index, sample) in
+                            input.plane_mut::<f32>(channel).iter_mut().enumerate()
+                        {
+                            *sample = ((sample_index * 13 + index * 71 + channel * 3) % 101) as f32
+                                / 101.0
+                                - 0.5;
+                        }
+                    }
+                    let capacity = resample_capacity(&reference_resampler, count);
+                    let mut frame = FFAudio::new(AudioData::SAMPLE_FORMAT, capacity, output_layout);
+                    reference_resampler.run(&input, &mut frame).unwrap();
+                    append_resampled_frame(&mut reference, &frame).unwrap();
+                    run_resampler(
+                        &mut candidate_resampler,
+                        &input,
+                        &mut output,
+                        &mut candidate,
+                    )
+                    .unwrap();
+                }
+                for _ in 0..64 {
+                    let Some(delay) = reference_resampler.delay() else {
+                        break;
+                    };
+                    let mut frame = FFAudio::new(
+                        AudioData::SAMPLE_FORMAT,
+                        delay.output.max(1).saturating_add(16) as usize,
+                        output_layout,
+                    );
+                    let remaining = reference_resampler.flush(&mut frame).unwrap();
+                    append_resampled_frame(&mut reference, &frame).unwrap();
+                    if remaining.is_none() || frame.samples() == 0 {
+                        break;
+                    }
+                }
+                flush_resampler(&mut candidate_resampler, &mut output, &mut candidate).unwrap();
+                assert_eq!(candidate.len(), reference.len());
+                assert!(
+                    candidate
+                        .iter()
+                        .zip(&reference)
+                        .all(|(actual, expected)| actual.to_bits() == expected.to_bits()),
+                    "Resampler samples differ at {source_rate} Hz with {channels} channels"
+                );
+            }
+        }
+    }
 
     /// Writes an s16le PCM WAV where channel `c` of every frame carries the constant
     /// `amplitudes[c]` (DC). DC survives both resampling and downmix unchanged, so the

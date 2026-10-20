@@ -1,786 +1,573 @@
-"use client";
-
-import { Button } from "@cap/ui";
-import {
-	faArrowLeft,
-	faArrowRight,
-	faCheck,
-	faExclamation,
-	faFileCsv,
-	faInfo,
-	faLink,
-	faMinus,
-	faPlus,
-	faTimes,
-	faUpload,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
-import {
-	BadgeDollarSign,
-	Database,
-	FileDown,
-	ShieldCheck,
-	Sparkles,
-	Zap,
-} from "lucide-react";
-import { useRouter } from "next/navigation";
-import Script from "next/script";
-import { type JSX, useId, useState } from "react";
+import { classNames } from "@cap/utils/helpers";
+import { ArrowUpRight, Check, Link2, Minus, Play } from "lucide-react";
+import Link from "next/link";
 import { LoomMark } from "@/components/icons/LoomMark";
+import { MigratePromoBadge } from "@/components/MigratePromoBadge";
+import { Eyebrow } from "@/components/pages/HomeTwo/Eyebrow";
+import { htMono, htSans, htSerif } from "@/components/pages/HomeTwo/fonts";
+import {
+	BAND,
+	BODY_TEXT,
+	BTN_PRIMARY,
+	BTN_SECONDARY,
+	CREAM,
+	grainBg,
+	H_HERO,
+	H_SECTION,
+	MODE_THEME,
+	MONO,
+	meshStyle,
+	SHELL,
+} from "@/components/pages/HomeTwo/theme";
 import { PRICING } from "@/data/pricing";
+import { LoomImportLauncher, LoomImportLink } from "./LoomImportLauncher";
+import {
+	type ComparisonStatus,
+	comparisonRows,
+	importSteps,
+	includedOnImport,
+	LOOM_PURPLE,
+	migrateFaqs,
+	notIncludedOnImport,
+	proofPoints,
+} from "./migrate-from-loom-content";
 
-const IMPORT_HREF = "/dashboard/import/loom";
+const CHIP = `${MONO} rounded-full px-2 py-1 text-[10.5px] uppercase leading-none tracking-[0.05em]`;
 
-type ImportTab = "single" | "csv";
+const ImportPreview = () => (
+	<div aria-hidden="true" className="relative mx-auto w-full max-w-[520px]">
+		<div
+			className="rounded-[22px] p-3 shadow-[0_30px_60px_-40px_rgba(17,17,17,0.35)]"
+			style={meshStyle(MODE_THEME.instant)}
+		>
+			<div className="rounded-[14px] bg-white p-4 shadow-[0_1px_2px_rgba(17,17,17,0.06)]">
+				<div className="flex items-center gap-3 rounded-[10px] border border-[#E1E7EE] bg-[#F8FAFC] px-3 py-2.5">
+					<LoomMark size={16} />
+					<span
+						className={`${MONO} truncate text-[12.5px] text-[rgba(17,17,17,0.7)]`}
+					>
+						loom.com/share/7f3a9c2e14b0
+					</span>
+					<span
+						className={classNames(
+							CHIP,
+							"ml-auto shrink-0 bg-[#111111] text-white",
+						)}
+					>
+						Import
+					</span>
+				</div>
 
-type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
-type ComparisonCell = { text: string; status?: ComparisonStatus };
+				<div className="my-3 flex items-center gap-2 px-1">
+					<span className="h-px flex-1 bg-[#E1E7EE]" />
+					<span
+						className={`${MONO} text-[10.5px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.45)]`}
+					>
+						Fetched from Loom · Re-hosted on Cap
+					</span>
+					<span className="h-px flex-1 bg-[#E1E7EE]" />
+				</div>
 
-const comparisonTable: {
-	headers: string[];
-	rows: (string | ComparisonCell)[][];
-} = {
-	headers: ["Feature", "Cap", "Loom"],
-	rows: [
-		[
-			"Pricing",
-			{
-				text: `from $${PRICING.pro.annualPerMonth}/mo per user`,
-				status: "positive",
-			},
-			{ text: "$18/mo per user", status: "warning" },
-		],
-		[
-			"Open source",
-			{ text: "Yes", status: "positive" },
-			{ text: "No", status: "negative" },
-		],
-		[
-			"Free plan",
-			{ text: "Unlimited Studio Mode", status: "positive" },
-			{ text: "Limited features & time", status: "warning" },
-		],
-		[
-			"4K recording",
-			{ text: "Free & paid plans", status: "positive" },
-			{ text: "Paid plans only", status: "warning" },
-		],
-		[
-			"Bring your own storage",
-			{ text: "Connect your own S3 or Google Drive", status: "positive" },
-			{ text: "Not available", status: "negative" },
-		],
-		[
-			"Team members",
-			{
-				text: "Invite people to your organization for free",
-				status: "positive",
-			},
-			{ text: "Paid per seat", status: "warning" },
-		],
-		[
-			"Custom domain",
-			{ text: "Yes", status: "positive" },
-			{ text: "Enterprise plan only", status: "neutral" },
-		],
-		[
-			"Data ownership",
-			{ text: "100% with own storage", status: "positive" },
-			{ text: "Platform dependent", status: "neutral" },
-		],
-	],
-};
-
-const features = [
-	{
-		icon: FileDown,
-		title: "Built-in Loom importer",
-		description:
-			"Paste a Loom share link or upload a CSV of your whole library. Cap downloads and re-hosts every recording for you, with no manual downloads or re-uploads.",
-	},
-	{
-		icon: BadgeDollarSign,
-		title: "Half the price of Loom",
-		description: `Cap Pro starts at just $${PRICING.pro.annualPerMonth}/month per user versus Loom's $18. A genuinely generous free plan is included, with Studio mode free for personal use.`,
-	},
-	{
-		icon: ShieldCheck,
-		title: "Open source & private",
-		description:
-			"Cap is fully open source and privacy-first. Audit the code, self-host the whole stack, or password-protect sensitive shares. Your call.",
-	},
-	{
-		icon: Database,
-		title: "Your storage, your rules",
-		description:
-			"Connect your own S3 bucket or Google Drive, plus a custom domain, for 100% ownership of every recording. No vendor lock-in, ever.",
-	},
-	{
-		icon: Zap,
-		title: "Instant, Studio & Screenshot Modes",
-		description:
-			"Share in seconds with Instant Mode, edit pixel-perfect locally with Studio Mode, or grab and annotate a single frame, all in one native app.",
-	},
-	{
-		icon: Sparkles,
-		title: "Cap AI does the busywork",
-		description:
-			"Every recording gets an AI-generated title, summary, clickable chapters, and a searchable transcript, so the work after recording is already done.",
-	},
-];
-
-const steps = [
-	{
-		title: "Create your free Cap account",
-		description: "Sign up in seconds. No credit card required to get started.",
-	},
-	{
-		title: "Open Dashboard → Import → Loom",
-		description:
-			"Head to the import hub and choose Loom to bring your recordings across.",
-	},
-	{
-		title: "Paste a link or upload a CSV",
-		description:
-			"Migrate a single share link, or bulk import your entire library from a CSV, assigning videos to members and spaces.",
-	},
-	{
-		title: "We import everything in the background",
-		description:
-			"Cap re-hosts your videos and they appear in your caps, ready to share with links, comments and analytics.",
-	},
-];
-
-const faqs = [
-	{
-		question: "Can I import my existing Loom videos into Cap?",
-		answer:
-			"Yes. Cap Pro includes a built-in Loom video importer. Paste a Loom share link to bring a single video across, or upload a CSV to bulk import your whole library directly into Cap.",
-	},
-	{
-		question: "How does bulk migrating from Loom work?",
-		answer:
-			"Download our CSV template, add a row per video with the Loom URL, the user's email, and an optional space name, then upload it. Cap imports each recording for the matching organization member and places it in the right space, up to 500 videos at a time.",
-	},
-	{
-		question: "Do I need to download my Loom videos first?",
-		answer:
-			"No. Cap fetches each Loom recording directly from the share link and re-hosts it for you. There's no manual downloading or re-uploading involved.",
-	},
-	{
-		question: "Is migrating from Loom free?",
-		answer: `Creating a Cap account is free, and you can try Cap with no credit card. The built-in Loom importer is a Cap Pro feature, which starts at just $${PRICING.pro.annualPerMonth}/month per user, less than half the price of Loom.`,
-	},
-	{
-		question: "Will I keep ownership of my recordings?",
-		answer:
-			"Absolutely. Cap is open source, and you can connect your own S3 storage and custom domain for 100% ownership and control of your content. You're never locked into our platform.",
-	},
-	{
-		question: "How is Cap different from Loom?",
-		answer:
-			"Cap gives you the simplicity of Loom with the power of professional tools: open source, bring-your-own-storage, better pricing, and a native desktop app that works offline. Plus you actually own your content, and our importer makes switching effortless.",
-	},
-];
-
-const fadeUp = {
-	hidden: { opacity: 0, y: 24 },
-	visible: (custom: number) => ({
-		opacity: 1,
-		y: 0,
-		transition: { delay: custom * 0.08, duration: 0.5, ease: "easeOut" },
-	}),
-};
-
-const statusIcons: Record<ComparisonStatus, JSX.Element> = {
-	positive: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-blue-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faCheck} className="text-[11px] text-white" />
+				<div className="overflow-hidden rounded-[12px] border border-[#E1E7EE]">
+					<div
+						className="relative h-[150px]"
+						style={meshStyle(MODE_THEME.studio)}
+					>
+						<span className="absolute left-1/2 top-1/2 grid size-11 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-white/90 shadow-[0_6px_16px_-6px_rgba(17,17,17,0.4)]">
+							<Play className="ml-0.5 size-4 fill-[#111111] text-[#111111]" />
+						</span>
+						<span
+							className={`${MONO} absolute bottom-3 right-3 rounded-md bg-black/60 px-1.5 py-0.5 text-[10.5px] text-white`}
+						>
+							4:32
+						</span>
+					</div>
+					<div className="p-4">
+						<p className="text-[15px] font-medium leading-[1.3] text-[#111111]">
+							Q3 roadmap walkthrough
+						</p>
+						<div className="mt-2.5 flex flex-wrap gap-1.5">
+							{["Title", "Transcript", "Summary", "Chapters"].map((chip) => (
+								<span
+									key={chip}
+									className={classNames(
+										CHIP,
+										"bg-[#EDF1F6] text-[rgba(17,17,17,0.7)]",
+									)}
+								>
+									{chip}
+								</span>
+							))}
+						</div>
+						<div className="mt-3 flex items-center gap-2 rounded-[8px] bg-[#F8FAFC] px-3 py-2">
+							<Link2 className="size-3.5 shrink-0 text-[rgba(17,17,17,0.5)]" />
+							<span
+								className={`${MONO} truncate text-[12px] text-[rgba(17,17,17,0.75)]`}
+							>
+								cap.so/s/8k2m9x1p4qz7c
+							</span>
+							<span className="ml-auto shrink-0 rounded-full bg-[#DDF5E8] px-2 py-0.5 text-[10.5px] font-medium text-[#1B6E45]">
+								Copied
+							</span>
+						</div>
+					</div>
+				</div>
+			</div>
 		</div>
-	),
-	negative: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-red-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faTimes} className="text-[11px] text-white" />
-		</div>
-	),
-	warning: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-yellow-500 rounded-full size-5">
-			<FontAwesomeIcon
-				icon={faExclamation}
-				className="text-[11px] text-white"
-			/>
-		</div>
-	),
-	neutral: (
-		<div className="flex flex-shrink-0 justify-center items-center bg-gray-500 rounded-full size-5">
-			<FontAwesomeIcon icon={faInfo} className="text-[11px] text-white" />
-		</div>
-	),
-};
-
-const renderComparisonCell = (cell: string | ComparisonCell) => {
-	if (typeof cell === "string") {
-		return <span className="font-medium text-gray-12">{cell}</span>;
-	}
-	return (
-		<div className="flex gap-3 items-center">
-			{cell.status && statusIcons[cell.status]}
-			<span>{cell.text}</span>
-		</div>
-	);
-};
-
-const ImportDemoTab = ({
-	active,
-	icon,
-	label,
-	onClick,
-}: {
-	active: boolean;
-	icon: typeof faLink;
-	label: string;
-	onClick: () => void;
-}) => (
-	<button
-		type="button"
-		role="tab"
-		aria-selected={active}
-		onClick={onClick}
-		className={clsx(
-			"relative flex items-center gap-2 px-4 h-9 rounded-full text-sm font-medium transition-colors",
-			active
-				? "text-gray-12"
-				: "text-gray-10 hover:text-gray-12 cursor-pointer",
-		)}
-	>
-		{active && (
-			<motion.span
-				layoutId="migrate-loom-mode-indicator"
-				className="absolute inset-0 rounded-full border shadow-sm bg-gray-1 border-gray-4"
-				transition={{ type: "spring", stiffness: 500, damping: 35 }}
-			/>
-		)}
-		<FontAwesomeIcon icon={icon} className="relative size-3.5" />
-		<span className="relative">{label}</span>
-	</button>
+	</div>
 );
 
-const ImportDemo = () => {
-	const router = useRouter();
-	const [tab, setTab] = useState<ImportTab>("single");
+const Hero = ({ signedIn }: { signedIn: boolean }) => (
+	<section className="relative px-5 pb-16 pt-12 sm:pt-16 lg:pb-24 lg:pt-20">
+		<span
+			data-header-sentinel
+			aria-hidden="true"
+			className="pointer-events-none absolute bottom-0 left-0 size-px"
+		/>
+		<div className="mx-auto grid max-w-[1200px] items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,480px)] lg:gap-16">
+			<div className="flex flex-col items-start">
+				<Eyebrow accent={LOOM_PURPLE}>Switching from Loom</Eyebrow>
+				<h1
+					className={`${H_HERO} mt-6 max-w-[640px] text-balance text-[clamp(38px,5vw,66px)]`}
+				>
+					Import your Loom videos into Cap
+				</h1>
+				<p
+					className={`${BODY_TEXT} mt-6 max-w-[560px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[18.5px]`}
+				>
+					Paste a share link or upload a CSV of your whole library. Cap fetches
+					each recording, keeps the title, adds a transcript and chapters, and
+					stores it somewhere you own.
+				</p>
 
-	const goToImport = () => router.push(IMPORT_HREF);
+				<LoomImportLauncher signedIn={signedIn} />
 
-	return (
-		<div className="overflow-hidden mx-auto w-full max-w-4xl rounded-2xl border shadow-xl border-gray-4 bg-gray-2">
-			<div className="flex gap-3 items-center px-4 h-11 border-b border-gray-4 bg-gray-3">
-				<div className="flex gap-1.5">
-					<span className="rounded-full size-3 bg-gray-6" />
-					<span className="rounded-full size-3 bg-gray-6" />
-					<span className="rounded-full size-3 bg-gray-6" />
-				</div>
-				<div className="flex flex-1 gap-2 justify-center items-center text-xs text-gray-10">
-					<span className="hidden sm:inline">Dashboard</span>
-					<FontAwesomeIcon
-						className="hidden size-2 sm:inline text-gray-8"
-						icon={faArrowRight}
-					/>
-					<span className="hidden sm:inline">Import</span>
-					<FontAwesomeIcon
-						className="hidden size-2 sm:inline text-gray-8"
-						icon={faArrowRight}
-					/>
-					<span className="font-medium text-gray-12">Loom</span>
-				</div>
-				<div className="w-12" />
+				<MigratePromoBadge
+					sourcePage="migrate_from_loom_hero"
+					className="mt-6"
+				/>
+				<p className="mt-4 max-w-[560px] text-[13.5px] leading-[1.55] text-[rgba(17,17,17,0.55)]">
+					Free account, no credit card. Loom import is part of Cap Pro, from $
+					{PRICING.pro.annualPerMonth} per user per month. Enter the code at
+					checkout and the discount applies to every renewal.
+				</p>
 			</div>
 
-			<div className="p-6 text-left sm:p-8 bg-gray-1">
-				<button
-					type="button"
-					onClick={goToImport}
-					className="inline-flex gap-2 items-center mb-4 text-sm transition-colors cursor-pointer text-gray-10 hover:text-gray-12"
-				>
-					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
-					Back to Import
-				</button>
+			<ImportPreview />
+		</div>
+	</section>
+);
 
-				<div className="flex gap-4 items-start mb-8">
-					<div className="flex flex-shrink-0 justify-center items-center rounded-full size-12 bg-gray-3">
-						<LoomMark size={20} />
-					</div>
-					<div>
-						<h2 className="text-2xl font-medium text-gray-12">
-							Import from Loom
-						</h2>
-						<p className="mt-1 max-w-xl text-sm text-gray-10">
-							Bring a single Loom video into Cap, or bulk import your whole
-							library for organization members from a CSV.
-						</p>
-					</div>
-				</div>
-
-				<div className="flex flex-col gap-6 w-full">
-					<div
-						role="tablist"
-						aria-label="Loom import mode"
-						className="flex gap-1 p-1 rounded-full border w-fit border-gray-3 bg-gray-2"
+const Proof = () => (
+	<section className="px-5">
+		<div className="mx-auto grid max-w-[1200px] gap-8 border-y border-[#E1E7EE] py-10 sm:grid-cols-3 sm:gap-10">
+			{proofPoints.map((point) => (
+				<div key={point.title}>
+					<p className="text-[17px] font-medium leading-[1.25] tracking-[-0.02em] text-[#111111]">
+						{point.title}
+					</p>
+					<p
+						className={`${BODY_TEXT} mt-2 text-[14.5px] leading-[1.5] text-[rgba(17,17,17,0.65)]`}
 					>
-						<ImportDemoTab
-							active={tab === "single"}
-							icon={faLink}
-							label="Single Video"
-							onClick={() => setTab("single")}
-						/>
-						<ImportDemoTab
-							active={tab === "csv"}
-							icon={faFileCsv}
-							label="Bulk Import"
-							onClick={() => setTab("csv")}
-						/>
-					</div>
+						{point.body}
+					</p>
+				</div>
+			))}
+		</div>
+	</section>
+);
 
-					{tab === "single" ? (
-						<div className="flex overflow-hidden flex-col rounded-xl border bg-gray-1 border-gray-3">
-							<div className="flex flex-col gap-1 px-6 py-5 border-b border-gray-3">
-								<p className="text-sm font-medium text-gray-12">
-									Loom video URL
-								</p>
-								<p className="text-xs text-gray-10">
-									Paste any Loom share link. The video downloads and processes
-									in the background.
-								</p>
-							</div>
-							<div className="flex flex-col gap-4 p-6">
-								<button
-									type="button"
-									onClick={goToImport}
-									className="flex items-center px-3 w-full h-11 text-sm text-left rounded-xl border transition-colors cursor-pointer border-gray-4 bg-gray-1 text-gray-9 hover:border-gray-6"
-								>
-									https://www.loom.com/share/...
-								</button>
-								<div className="flex flex-col-reverse gap-3 justify-end sm:flex-row">
-									<Button
-										type="button"
-										size="sm"
-										variant="gray"
-										onClick={goToImport}
-									>
-										Cancel
-									</Button>
-									<Button
-										type="button"
-										size="sm"
-										variant="dark"
-										onClick={goToImport}
-									>
-										Import Loom
-									</Button>
-								</div>
-							</div>
-						</div>
-					) : (
-						<div className="flex flex-col gap-6">
-							<div className="flex flex-col gap-4 justify-between p-5 rounded-xl border sm:flex-row sm:items-center bg-gray-2 border-gray-3">
-								<div className="flex gap-4 items-start sm:items-center">
-									<div className="flex flex-shrink-0 justify-center items-center rounded-lg size-10 bg-gray-3 text-gray-11">
-										<FontAwesomeIcon className="size-4" icon={faFileCsv} />
-									</div>
-									<div className="flex flex-col gap-1.5">
-										<p className="text-sm font-medium text-gray-12">
-											First time? Start with our template
-										</p>
-										<p className="text-xs text-gray-10">
-											Two columns required:{" "}
-											<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-												loom_video_url
-											</code>{" "}
-											and{" "}
-											<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-												user_email
-											</code>
-											. Add{" "}
-											<code className="px-1.5 py-0.5 rounded bg-gray-3 text-gray-12 text-[11px] font-mono">
-												space_name
-											</code>{" "}
-											to place videos in spaces.
-										</p>
-									</div>
-								</div>
-								<Button
-									type="button"
-									variant="white"
-									size="sm"
-									onClick={goToImport}
-									className="flex-shrink-0"
-								>
-									<FontAwesomeIcon className="size-3.5" icon={faFileCsv} />
-									Download Template
-								</Button>
-							</div>
+const HowItWorks = () => (
+	<section className="px-5 py-20 lg:py-28">
+		<div className="mx-auto max-w-[1200px]">
+			<div className="max-w-[640px]">
+				<Eyebrow accent={MODE_THEME.instant.accent}>How it works</Eyebrow>
+				<h2
+					className={`${H_SECTION} mt-6 text-balance text-[clamp(34px,3.9vw,48px)]`}
+				>
+					From Loom link to Cap link in three steps
+				</h2>
+			</div>
+			<ol className="mt-12 grid gap-4 md:grid-cols-3">
+				{importSteps.map((step, index) => (
+					<li
+						key={step.name}
+						className="flex flex-col rounded-[20px] p-7"
+						style={grainBg(BAND)}
+					>
+						<span
+							className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
+						>
+							Step {index + 1}
+						</span>
+						<h3 className="mt-5 text-[21px] font-normal leading-[1.15] tracking-[-0.02em] text-[#111111]">
+							{step.name}
+						</h3>
+						<p
+							className={`${BODY_TEXT} mt-3 text-[15.5px] leading-[1.5] text-[rgba(17,17,17,0.72)]`}
+						>
+							{step.text}
+						</p>
+					</li>
+				))}
+			</ol>
+		</div>
+	</section>
+);
 
-							<button
-								type="button"
-								onClick={goToImport}
-								aria-label="Upload a CSV"
-								className="flex relative flex-col justify-center items-center px-8 w-full rounded-xl border-2 border-dashed transition-all duration-200 cursor-pointer py-14 border-gray-4 bg-gray-1 hover:border-gray-6 hover:bg-gray-2"
-							>
-								<div className="flex flex-col gap-4 items-center">
-									<div className="flex justify-center items-center rounded-full size-16 bg-gray-3 text-gray-10">
-										<FontAwesomeIcon className="size-6" icon={faUpload} />
-									</div>
-									<div className="flex flex-col gap-1 items-center text-center">
-										<p className="text-sm font-medium text-gray-12">
-											Drag and drop your CSV here
-										</p>
-										<p className="text-xs text-gray-10">
-											Or browse your computer to upload a file.
-										</p>
-									</div>
-									<span className="flex justify-center items-center px-5 mt-2 h-9 text-sm font-medium rounded-full bg-gray-12 text-gray-1">
-										Browse CSV
+const WhatComesAcross = () => (
+	<section className="px-5 pb-20 lg:pb-28">
+		<div className="mx-auto max-w-[1200px]">
+			<div className="max-w-[640px]">
+				<Eyebrow accent={MODE_THEME.studio.accent}>What comes across</Eyebrow>
+				<h2
+					className={`${H_SECTION} mt-6 text-balance text-[clamp(34px,3.9vw,48px)]`}
+				>
+					Everything that matters, and nothing you have to redo
+				</h2>
+			</div>
+			<div className="mt-12 grid gap-4 lg:grid-cols-2">
+				<div className="rounded-[20px] bg-white p-7 shadow-[0_0_0_1px_rgba(17,17,17,0.05)]">
+					<p
+						className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[#1B6E45]`}
+					>
+						Imported with every video
+					</p>
+					<ul className="mt-5 divide-y divide-[#E1E7EE]">
+						{includedOnImport.map((item) => (
+							<li key={item.title} className="flex gap-4 py-4 first:pt-0">
+								<span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-[#DDF5E8] text-[#1B6E45]">
+									<Check className="size-3.5" strokeWidth={2.5} />
+								</span>
+								<span>
+									<span className="block text-[16px] font-medium leading-[1.3] text-[#111111]">
+										{item.title}
 									</span>
-								</div>
-							</button>
-						</div>
-					)}
+									<span
+										className={`${BODY_TEXT} mt-1 block text-[14.5px] leading-[1.5] text-[rgba(17,17,17,0.65)]`}
+									>
+										{item.body}
+									</span>
+								</span>
+							</li>
+						))}
+					</ul>
+				</div>
+				<div className="rounded-[20px] p-7" style={grainBg(BAND)}>
+					<p
+						className={`${MONO} text-[12px] uppercase tracking-[0.05em] text-[rgba(17,17,17,0.55)]`}
+					>
+						Stays on Loom
+					</p>
+					<ul className="mt-5 divide-y divide-[rgba(17,17,17,0.08)]">
+						{notIncludedOnImport.map((item) => (
+							<li key={item.title} className="flex gap-4 py-4 first:pt-0">
+								<span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-white text-[rgba(17,17,17,0.5)]">
+									<Minus className="size-3.5" strokeWidth={2.5} />
+								</span>
+								<span>
+									<span className="block text-[16px] font-medium leading-[1.3] text-[#111111]">
+										{item.title}
+									</span>
+									<span
+										className={`${BODY_TEXT} mt-1 block text-[14.5px] leading-[1.5] text-[rgba(17,17,17,0.65)]`}
+									>
+										{item.body}
+									</span>
+								</span>
+							</li>
+						))}
+					</ul>
 				</div>
 			</div>
 		</div>
-	);
+	</section>
+);
+
+const CSV_LINES = [
+	"loom_video_url,user_email,space_name",
+	"https://www.loom.com/share/7f3a9c2e,ana@acme.com,Customer Success",
+	"https://www.loom.com/share/b81d04ff,sam@acme.com,Engineering",
+];
+
+const Teams = () => (
+	<section className="px-5 pb-20 lg:pb-28">
+		<div
+			className="mx-auto grid max-w-[1200px] gap-10 rounded-[24px] p-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,460px)] lg:items-center lg:p-12"
+			style={grainBg(BAND)}
+		>
+			<div>
+				<Eyebrow accent={MODE_THEME.share.accent}>Team migrations</Eyebrow>
+				<h2
+					className={`${H_SECTION} mt-6 max-w-[520px] text-balance text-[clamp(32px,3.6vw,46px)]`}
+				>
+					Moving a whole team off Loom?
+				</h2>
+				<p
+					className={`${BODY_TEXT} mt-6 max-w-[520px] text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)]`}
+				>
+					Upload a CSV of up to 500 Loom links mapped to teammate emails and
+					spaces, and Cap imports each video for the right owner. Bigger
+					libraries run in controlled batches through the Cap CLI or MCP server,
+					or we run the migration with you. We have moved organizations with
+					hundreds of users and tens of thousands of recordings.
+				</p>
+				<div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+					<Link href="/docs/migrating-to-cap" className={BTN_PRIMARY}>
+						Read the migration guide
+					</Link>
+					<a
+						href="mailto:hello@cap.so?subject=Loom%20team%20migration"
+						className={classNames(BTN_SECONDARY, "gap-2")}
+					>
+						Talk to us about a managed migration
+						<ArrowUpRight className="size-4 text-[rgba(17,17,17,0.45)]" />
+					</a>
+				</div>
+			</div>
+			<div className="rounded-[16px] bg-[#111111] p-5 shadow-[0_30px_60px_-40px_rgba(17,17,17,0.6)]">
+				<div className="flex items-center justify-between">
+					<span
+						className={`${MONO} text-[11px] uppercase tracking-[0.05em] text-[rgba(255,255,255,0.5)]`}
+					>
+						loom-library.csv
+					</span>
+					<span
+						className={`${MONO} text-[11px] uppercase tracking-[0.05em] text-[#8FDCBB]`}
+					>
+						Up to 500 rows
+					</span>
+				</div>
+				<pre
+					className={`${MONO} mt-4 overflow-x-auto whitespace-pre text-[12px] leading-[1.8] text-[#F8FAFC]`}
+				>
+					{CSV_LINES.join("\n")}
+				</pre>
+			</div>
+		</div>
+	</section>
+);
+
+const STATUS_STYLE: Record<ComparisonStatus, string> = {
+	positive: "bg-[#DDF5E8] text-[#1B6E45]",
+	negative: "bg-[#FBE3E3] text-[#B42318]",
+	warning: "bg-[#FCEEDB] text-[#B07430]",
+	neutral: "bg-[#EDF1F6] text-[rgba(17,17,17,0.6)]",
 };
 
-const createFaqStructuredData = () =>
-	JSON.stringify({
-		"@context": "https://schema.org",
-		"@type": "FAQPage",
-		mainEntity: faqs.map((faq) => ({
-			"@type": "Question",
-			name: faq.question,
-			acceptedAnswer: { "@type": "Answer", text: faq.answer },
-		})),
-	});
+const StatusDot = ({ status }: { status: ComparisonStatus }) => (
+	<span
+		aria-hidden="true"
+		className={classNames(
+			"grid size-5 shrink-0 place-items-center rounded-full",
+			STATUS_STYLE[status],
+		)}
+	>
+		{status === "positive" ? (
+			<Check className="size-3" strokeWidth={3} />
+		) : (
+			<Minus className="size-3" strokeWidth={3} />
+		)}
+	</span>
+);
 
-export const MigrateFromLoomPage = () => {
-	const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
-	const faqScriptId = useId();
-
-	return (
-		<>
-			<Script id={faqScriptId} type="application/ld+json">
-				{createFaqStructuredData()}
-			</Script>
-
-			<div className="overflow-hidden relative px-5 pt-[140px] md:pt-[200px]">
-				<div className="mx-auto text-center max-w-[820px]">
-					<motion.div
-						initial="hidden"
-						animate="visible"
-						custom={0}
-						variants={fadeUp}
-						className="flex justify-center mb-5"
-					>
-						<span className="inline-flex gap-2 items-center px-3 py-1 text-sm font-medium rounded-full border border-gray-4 bg-gray-2 text-gray-11">
-							<LoomMark size={14} />
-							Loom → Cap migration
-						</span>
-					</motion.div>
-
-					<motion.h1
-						initial="hidden"
-						animate="visible"
-						custom={1}
-						variants={fadeUp}
-						className="text-[2.25rem] leading-[2.5rem] md:text-[3.5rem] md:leading-[3.75rem] font-medium text-gray-12 text-balance"
-					>
-						Migrate from Loom to Cap in minutes
-					</motion.h1>
-
-					<motion.p
-						initial="hidden"
-						animate="visible"
-						custom={2}
-						variants={fadeUp}
-						className="mx-auto mt-6 max-w-2xl text-lg leading-7 text-gray-10"
-					>
-						Bring your existing Loom videos into Cap with the built-in importer.
-						Paste a single share link or bulk import your entire library from a
-						CSV. Open source, privacy-first, and half the price of Loom.
-					</motion.p>
-
-					<motion.div
-						initial="hidden"
-						animate="visible"
-						custom={3}
-						variants={fadeUp}
-						className="flex flex-col gap-3 justify-center items-center mt-9 sm:flex-row sm:gap-4"
-					>
-						<Button
-							variant="blue"
-							href={IMPORT_HREF}
-							size="lg"
-							className="w-full font-medium sm:w-auto"
-						>
-							Import your Loom videos
-						</Button>
-						<Button
-							variant="white"
-							href="/loom-alternative"
-							size="lg"
-							className="w-full font-medium sm:w-auto"
-						>
-							Compare Cap vs Loom
-						</Button>
-					</motion.div>
-
-					<motion.p
-						initial="hidden"
-						animate="visible"
-						custom={4}
-						variants={fadeUp}
-						className="mt-4 text-sm text-gray-9"
-					>
-						No credit card required. Free to get started.
-					</motion.p>
-				</div>
-
-				<motion.div
-					initial={{ opacity: 0, y: 40 }}
-					animate={{ opacity: 1, y: 0 }}
-					transition={{ delay: 0.35, duration: 0.6, ease: "easeOut" }}
-					className="mt-16 md:mt-20"
+const Comparison = () => (
+	<section className="px-5 pb-20 lg:pb-28">
+		<div className="mx-auto max-w-[1000px]">
+			<div className="max-w-[640px]">
+				<Eyebrow accent={MODE_THEME.screenshot.accent}>Cap vs Loom</Eyebrow>
+				<h2
+					className={`${H_SECTION} mt-6 text-balance text-[clamp(34px,3.9vw,48px)]`}
 				>
-					<ImportDemo />
-					<p className="mx-auto mt-4 text-sm text-center text-gray-9">
-						This is the Loom importer inside Cap.{" "}
-						<a
-							href={IMPORT_HREF}
-							className="font-medium text-blue-500 transition-colors hover:text-blue-600"
-						>
-							Open it in your dashboard to import your first video.
-						</a>
-					</p>
-					<p className="mx-auto mt-2 text-sm text-center text-gray-9">
-						Prefer to keep the original files? Use our{" "}
-						<a
-							href="/tools/loom-downloader"
-							className="font-medium text-blue-500 transition-colors hover:text-blue-600"
-						>
-							free Loom video downloader
-						</a>
-						.
-					</p>
-				</motion.div>
+					What changes when you switch
+				</h2>
 			</div>
-
-			<div className="px-5 mx-auto mt-32 max-w-[1250px] md:mt-44">
-				<div className="mx-auto mb-16 text-center max-w-[800px]">
-					<h2 className="mb-3 text-3xl font-medium md:text-4xl text-gray-12">
-						Everything you loved about Loom, without the lock-in
-					</h2>
-					<p className="text-xl leading-relaxed text-gray-10">
-						Cap is the open-source screen recorder built to be yours: your
-						storage, your platform, your workflow.
-					</p>
-				</div>
-				<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-					{features.map((feature, index) => {
-						const Icon = feature.icon;
-						return (
-							<motion.div
-								key={feature.title}
-								initial="hidden"
-								whileInView="visible"
-								viewport={{ once: true, margin: "-80px" }}
-								custom={index % 3}
-								variants={fadeUp}
-								className="p-8 rounded-2xl border shadow-sm transition-all duration-300 border-gray-4 bg-gray-1 hover:shadow-xl hover:-translate-y-1"
+			<div className="mt-10 overflow-x-auto rounded-[20px] bg-white shadow-[0_0_0_1px_rgba(17,17,17,0.05)]">
+				<table className="w-full min-w-[640px] border-collapse text-left">
+					<thead>
+						<tr className="border-b border-[#E1E7EE]">
+							<th
+								scope="col"
+								className={`${MONO} px-6 py-4 text-[12px] font-normal uppercase tracking-[0.05em] text-[rgba(17,17,17,0.5)]`}
 							>
-								<div className="flex justify-center items-center mb-5 rounded-xl size-11 bg-gray-3 text-gray-12">
-									<Icon className="size-5" strokeWidth={1.75} />
-								</div>
-								<h3 className="mb-3 text-xl font-semibold text-gray-12">
-									{feature.title}
-								</h3>
-								<p className="leading-relaxed text-gray-10">
-									{feature.description}
-								</p>
-							</motion.div>
-						);
-					})}
-				</div>
-			</div>
-
-			<div className="px-5 mx-auto mt-32 max-w-4xl md:mt-44">
-				<div className="mx-auto mb-12 text-center max-w-[800px]">
-					<h2 className="text-3xl font-medium md:text-4xl text-gray-12">
-						Cap vs Loom at a glance
-					</h2>
-				</div>
-				<div className="overflow-x-auto">
-					<table className="overflow-hidden mx-auto w-full rounded-2xl bg-gray-1">
-						<thead className="bg-gray-4">
-							<tr>
-								{comparisonTable.headers.map((header) => (
-									<th
-										key={header}
-										className="px-6 py-4 text-lg font-semibold text-left border-b border-gray-5 text-gray-12"
-									>
-										{header}
-									</th>
-								))}
+								Feature
+							</th>
+							<th
+								scope="col"
+								className="px-6 py-4 text-[15px] font-medium text-[#111111]"
+							>
+								Cap
+							</th>
+							<th
+								scope="col"
+								className="px-6 py-4 text-[15px] font-medium text-[#111111]"
+							>
+								Loom
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						{comparisonRows.map((row) => (
+							<tr
+								key={row.feature}
+								className="border-b border-[#E1E7EE] last:border-b-0"
+							>
+								<th
+									scope="row"
+									className="px-6 py-4 text-[15px] font-medium text-[#111111]"
+								>
+									{row.feature}
+								</th>
+								<td className="px-6 py-4 text-[15px] text-[rgba(17,17,17,0.8)]">
+									<span className="flex items-center gap-3">
+										<StatusDot status={row.cap.status} />
+										{row.cap.text}
+									</span>
+								</td>
+								<td className="px-6 py-4 text-[15px] text-[rgba(17,17,17,0.8)]">
+									<span className="flex items-center gap-3">
+										<StatusDot status={row.loom.status} />
+										{row.loom.text}
+									</span>
+								</td>
 							</tr>
-						</thead>
-						<tbody>
-							{comparisonTable.rows.map((row, rowIndex) => (
-								<tr
-									key={row[0] as string}
-									className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-2"}
-								>
-									{row.map((cell, cellIndex) => (
-										<td
-											key={cellIndex.toString()}
-											className={clsx(
-												"px-6 py-4 text-[15px] text-gray-10",
-												rowIndex === comparisonTable.rows.length - 1
-													? ""
-													: "border-b border-gray-5",
-											)}
-										>
-											{renderComparisonCell(cell)}
-										</td>
-									))}
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			</div>
-
-			<div className="px-5 mx-auto mt-32 max-w-3xl md:mt-44">
-				<div className="mx-auto mb-12 text-center max-w-[800px]">
-					<h2 className="text-3xl font-medium md:text-4xl text-gray-12">
-						How migrating from Loom works
-					</h2>
-				</div>
-				<div className="px-6 rounded-2xl border shadow-sm sm:px-8 border-gray-4 bg-gray-1">
-					<ol className="list-none">
-						{steps.map((step, index) => (
-							<li
-								key={step.title}
-								className="flex gap-4 items-start py-6 [&:not(:last-child)]:border-b border-gray-4"
-							>
-								<div className="flex flex-shrink-0 justify-center items-center text-sm font-medium rounded-full bg-gray-4 size-8 text-gray-12">
-									{index + 1}
-								</div>
-								<div>
-									<p className="font-medium text-gray-12">{step.title}</p>
-									<p className="mt-1 text-gray-10">{step.description}</p>
-								</div>
-							</li>
 						))}
-					</ol>
-				</div>
+					</tbody>
+				</table>
 			</div>
-
-			<div className="px-5 mx-auto mt-32 max-w-3xl md:mt-44">
-				<div className="mx-auto mb-12 text-center max-w-[800px]">
-					<h2 className="text-3xl font-medium md:text-4xl text-gray-12">
-						Frequently asked questions
-					</h2>
-				</div>
-				<div className="space-y-4">
-					{faqs.map((faq, index) => (
-						<div
-							key={faq.question}
-							className={clsx(
-								"rounded-xl overflow-hidden border border-gray-5 transition-colors duration-200",
-								openFaqIndex === index
-									? "bg-blue-500 text-white"
-									: "bg-gray-1 hover:bg-gray-3 text-gray-12",
-							)}
-						>
-							<button
-								type="button"
-								className="flex justify-between items-center px-6 py-4 w-full text-left"
-								onClick={() =>
-									setOpenFaqIndex(openFaqIndex === index ? null : index)
-								}
-							>
-								<p
-									className={clsx(
-										"text-lg font-medium",
-										openFaqIndex === index ? "text-gray-1" : "text-gray-12",
-									)}
-								>
-									{faq.question}
-								</p>
-								<FontAwesomeIcon
-									icon={openFaqIndex === index ? faMinus : faPlus}
-									className={clsx(
-										"flex-shrink-0 size-5",
-										openFaqIndex === index ? "text-gray-1" : "text-gray-12",
-									)}
-								/>
-							</button>
-							<AnimatePresence>
-								{openFaqIndex === index && (
-									<motion.div
-										initial={{ height: 0, opacity: 0 }}
-										animate={{ height: "auto", opacity: 1 }}
-										exit={{ height: 0, opacity: 0 }}
-										transition={{ duration: 0.3 }}
-										className="overflow-hidden"
-									>
-										<div className="px-6 pb-4">
-											<p className="text-gray-3">{faq.answer}</p>
-										</div>
-									</motion.div>
-								)}
-							</AnimatePresence>
-						</div>
-					))}
-				</div>
-			</div>
-
-			<div className="px-5 mx-auto mt-32 mb-32 max-w-[1000px] md:mt-44 md:mb-44">
-				<div
-					className="flex overflow-hidden relative flex-col justify-center items-center p-12 text-center rounded-3xl border border-gray-5 bg-white min-h-[300px]"
-					style={{
-						backgroundImage: "url('/illustrations/ctabg.svg')",
-						backgroundSize: "cover",
-						backgroundRepeat: "no-repeat",
-					}}
+			<p className="mt-4 text-[13.5px] text-[rgba(17,17,17,0.5)]">
+				Want the full breakdown?{" "}
+				<Link
+					href="/loom-alternative"
+					className="text-[#111111] underline decoration-[rgba(17,17,17,0.3)] underline-offset-[5px] transition-colors duration-200 hover:decoration-[#111111]"
 				>
-					<h2 className="mb-4 text-3xl font-medium md:text-4xl text-gray-12">
-						Ready to leave Loom behind?
-					</h2>
-					<p className="mb-8 max-w-xl text-xl text-gray-10">
-						Create your free account and bring your Loom library with you. It
-						takes minutes.
-					</p>
-					<div className="flex flex-col gap-3 justify-center items-center sm:flex-row sm:gap-4">
-						<Button
-							variant="blue"
-							href={IMPORT_HREF}
-							size="lg"
-							className="w-full font-medium sm:w-auto"
-						>
-							Import your Loom videos
-						</Button>
-						<Button
-							variant="white"
-							href="/pricing"
-							size="lg"
-							className="w-full font-medium sm:w-auto"
-						>
-							View pricing
-						</Button>
-					</div>
-				</div>
+					Read why Cap is the open source Loom alternative
+				</Link>
+				.
+			</p>
+		</div>
+	</section>
+);
+
+const Faq = () => (
+	<section className="px-5 pb-20 lg:pb-28">
+		<div className="mx-auto grid max-w-[1100px] gap-12 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-20">
+			<div className="lg:sticky lg:top-28 lg:self-start">
+				<Eyebrow accent={MODE_THEME.screenshot.accent}>FAQ</Eyebrow>
+				<h2
+					className={`${H_SECTION} mt-6 text-balance text-[clamp(34px,3.9vw,48px)]`}
+				>
+					Migrating from Loom, answered
+				</h2>
+				<p
+					className={`${BODY_TEXT} mt-5 max-w-[320px] text-[16px] leading-[1.5] text-[rgba(17,17,17,0.72)]`}
+				>
+					Something else? Mail{" "}
+					<a
+						href="mailto:hello@cap.so"
+						className="underline decoration-[rgba(17,17,17,0.3)] underline-offset-[5px] transition-colors duration-200 hover:decoration-[#111111]"
+					>
+						hello@cap.so
+					</a>{" "}
+					and a human answers.
+				</p>
 			</div>
-		</>
-	);
-};
+			<div>
+				{migrateFaqs.map((item) => (
+					<details
+						key={item.question}
+						className="group border-t border-[#E1E7EE] last:border-b"
+					>
+						<summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-6 text-left text-[17px] font-normal tracking-[-0.02em] text-[rgba(17,17,17,0.75)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] group-open:text-[#111111] lg:text-[19px] [&::-webkit-details-marker]:hidden">
+							{item.question}
+							<span
+								aria-hidden="true"
+								className="relative grid size-8 shrink-0 place-items-center rounded-full bg-[#E7EDF3] transition-colors duration-200 group-hover:bg-[#DCE4EC]"
+							>
+								<span className="absolute h-[1.5px] w-3 rounded-full bg-[#111111]" />
+								<span className="absolute h-3 w-[1.5px] rounded-full bg-[#111111] transition-transform duration-200 group-open:scale-y-0" />
+							</span>
+						</summary>
+						<p
+							className={`${BODY_TEXT} max-w-[640px] pb-7 pr-10 text-[15.5px] leading-[1.6] text-[rgba(17,17,17,0.72)]`}
+						>
+							{item.answer}
+						</p>
+					</details>
+				))}
+			</div>
+		</div>
+	</section>
+);
+
+const FinalCta = ({ signedIn }: { signedIn: boolean }) => (
+	<section className="px-5 pb-20 lg:pb-28">
+		<div
+			className="mx-auto flex max-w-[1200px] flex-col items-center rounded-[24px] px-6 py-16 text-center lg:py-20"
+			style={grainBg(BAND)}
+		>
+			<Eyebrow accent={LOOM_PURPLE}>Get started</Eyebrow>
+			<h2
+				className={`${H_HERO} mt-6 max-w-[720px] text-balance text-[clamp(36px,5vw,60px)]`}
+			>
+				Ready to leave Loom behind?
+			</h2>
+			<p
+				className={`${BODY_TEXT} mt-6 max-w-[520px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)]`}
+			>
+				Create a free account, paste your first Loom link, and your library
+				starts moving in minutes.
+			</p>
+			<div className="mt-9 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+				<LoomImportLink
+					signedIn={signedIn}
+					location="final_cta"
+					className={BTN_PRIMARY}
+				>
+					Import your Loom videos
+				</LoomImportLink>
+				<Link href="/loom-alternative" className={BTN_SECONDARY}>
+					Compare Cap vs Loom
+				</Link>
+			</div>
+			<MigratePromoBadge
+				sourcePage="migrate_from_loom_final"
+				className="mt-6"
+			/>
+			<p className="mt-5 text-[13.5px] text-[rgba(17,17,17,0.5)]">
+				Prefer to keep the original files? Use the{" "}
+				<Link
+					href="/tools/loom-downloader"
+					className="text-[#111111] underline decoration-[rgba(17,17,17,0.3)] underline-offset-[5px] transition-colors duration-200 hover:decoration-[#111111]"
+				>
+					free Loom video downloader
+				</Link>
+				.
+			</p>
+		</div>
+	</section>
+);
+
+export const MigrateFromLoomPage = ({ signedIn }: { signedIn: boolean }) => (
+	<div
+		data-header-flat
+		className={`${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
+		style={grainBg(SHELL)}
+	>
+		<div className="px-2.5 pb-2.5 pt-[68px] sm:px-4 sm:pb-4 lg:pt-[76px]">
+			<div
+				className="rounded-[24px] shadow-[0_0_0_1px_rgba(17,17,17,0.045)]"
+				style={grainBg(CREAM)}
+			>
+				<Hero signedIn={signedIn} />
+				<Proof />
+				<HowItWorks />
+				<WhatComesAcross />
+				<Teams />
+				<Comparison />
+				<Faq />
+				<FinalCta signedIn={signedIn} />
+			</div>
+		</div>
+	</div>
+);

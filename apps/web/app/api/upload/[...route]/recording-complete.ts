@@ -85,7 +85,7 @@ export const app = new Hono().post(
 			if (error instanceof SourceCommitPendingError) {
 				return c.json(
 					{ success: false, status: error.code, error: error.message },
-					503,
+					verification ? 202 : 503,
 				);
 			}
 			console.error("[recording-complete] Finalization unavailable:", error);

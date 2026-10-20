@@ -3,7 +3,7 @@
 //! Two halves, and they run very differently.
 //!
 //! The A/V sync self-test runs as a **subprocess** -- the `cap` CLI, shipped
-//! inside `Cap.app` as the `cap-exporter` sidecar. It cannot run in-process:
+//! inside `Cap.app` as the `cap-cli` sidecar. It cannot run in-process:
 //! `cap selftest av-sync` builds its own winit `EventLoop` for the flashing
 //! test pattern and needs the process main thread, which gpui owns for the
 //! whole life of the app. So this module resolves the binary, drives its
@@ -38,7 +38,6 @@ use crate::{permissions, store};
 pub const LOG_FILE_PREFIX: &str = "cap-gpui.log";
 
 /// `MAX_SIZE` in `src-tauri/src/logging.rs`.
-const MAX_LOG_UPLOAD_BYTES: usize = 1024 * 1024;
 
 /// How much of the self-test's stderr is kept for a failure message.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
@@ -92,70 +91,8 @@ pub fn logs_dir() -> PathBuf {
     }
 }
 
-/// `get_latest_log_file` in `src-tauri/src/logging.rs`: the daily appender
-/// names files `<prefix>.<date>`, so the newest by modification time is the
-/// one being written right now.
-fn latest_log_file(dir: &Path) -> Option<PathBuf> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if !path.is_file() || !path.file_name()?.to_str()?.contains(LOG_FILE_PREFIX) {
-                return None;
-            }
-            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some((path, modified))
-        })
-        .collect();
-    files.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
-    files.into_iter().next().map(|(path, _)| path)
-}
-
-/// The last ~1MB of the newest log file, with the Tauri app's truncation
-/// header. Split out from the IO so the byte arithmetic is testable.
-fn log_tail_from(content: &str, file_size: u64, max_bytes: usize) -> String {
-    if file_size as usize <= max_bytes {
-        return content.to_string();
-    }
-    let header =
-        format!("⚠️ Log file truncated (original size: {file_size} bytes, showing last ~1MB)\n\n");
-    let Some(max_content) = max_bytes.checked_sub(header.len()) else {
-        return header;
-    };
-    if content.len() <= max_content {
-        return content.to_string();
-    }
-
-    let mut start = content.len() - max_content;
-    // The cut lands at an arbitrary byte; walk forward to a char boundary
-    // before slicing, then forward again to the next line so the upload never
-    // opens mid-record.
-    while start < content.len() && !content.is_char_boundary(start) {
-        start += 1;
-    }
-    let start = match content[start..].find('\n') {
-        Some(offset) => start + offset + 1,
-        None => start,
-    };
-    format!("{header}{}", &content[start..])
-}
-
-/// The log text to upload. A missing log file is not an error: the upload is
-/// still worth making for its diagnostics, so a placeholder goes up instead.
-pub fn log_tail() -> String {
-    let dir = logs_dir();
-    let Some(path) = latest_log_file(&dir) else {
-        return format!(
-            "No log file was found in {}. This build may not have written one yet.",
-            dir.display()
-        );
-    };
-    let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => log_tail_from(&content, size, MAX_LOG_UPLOAD_BYTES),
-        Err(error) => format!("Failed to read {}: {error}", path.display()),
-    }
+pub fn log_tail() -> cap_utils::log_upload::LogBundle {
+    cap_utils::log_upload::collect(&logs_dir(), LOG_FILE_PREFIX)
 }
 
 // ---------------------------------------------------------------------------
@@ -164,9 +101,9 @@ pub fn log_tail() -> String {
 
 fn selftest_bin_name() -> &'static str {
     if cfg!(windows) {
-        "cap-exporter.exe"
+        "cap-cli.exe"
     } else {
-        "cap-exporter"
+        "cap-cli"
     }
 }
 
@@ -221,10 +158,7 @@ fn selftest_binary_candidates(
     let mut push_dir = |dir: &Path| {
         candidates.push(dir.join(selftest_bin_name()));
         if let Some(triple) = triple {
-            candidates.push(dir.join(format!(
-                "cap-exporter-{triple}{}",
-                std::env::consts::EXE_SUFFIX
-            )));
+            candidates.push(dir.join(format!("cap-cli-{triple}{}", std::env::consts::EXE_SUFFIX)));
         }
         candidates.push(dir.join(cap_bin_name()));
     };
@@ -882,12 +816,16 @@ pub fn write_report(report: &Value) -> Result<PathBuf, String> {
 /// [`write_report`] with the directory lifted into a parameter, so the naming
 /// and pruning are testable without writing into the real store.
 fn write_report_into(dir: &Path, report: &Value) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs())
         .unwrap_or(0);
+    write_report_at(dir, report, stamp)
+}
+
+fn write_report_at(dir: &Path, report: &Value, stamp: u64) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     // A run with no sidecar finishes in well under a second, so two of them
     // would otherwise write the same name and the second would overwrite the
     // first. The prefix and suffix stay exactly as the pruning filter expects.
@@ -917,25 +855,49 @@ fn write_report_into(dir: &Path, report: &Value) -> Result<PathBuf, String> {
 pub async fn upload_report(
     server_url: String,
     token: Option<String>,
-    log: String,
+    log: cap_utils::log_upload::LogBundle,
     report: Option<String>,
     diagnostics: Option<String>,
 ) -> Result<(), String> {
+    let context = serde_json::json!({
+        "schemaVersion": 1,
+        "app": {
+            "flavor": "gpui",
+            "version": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS,
+            "binaryArchitecture": std::env::consts::ARCH,
+            "debugBuild": cfg!(debug_assertions),
+            "sourceRevision": option_env!("CAP_BUILD_REVISION"),
+            "sourceDirty": option_env!("CAP_BUILD_DIRTY").and_then(|value| value.parse::<bool>().ok()),
+        },
+        "operations": cap_utils::operation_diagnostics::snapshot(),
+        "logCoverage": &log,
+        "environmentCollectedAt": "upload_time",
+        "mediaIncluded": false,
+    });
     // Everything leaving the machine goes through the redactor. Logs record
     // whole URLs on failure (reqwest's Display and Debug both append the URL),
     // and an upload failure logs a presigned S3 PUT, whose query string is a
     // live write credential for up to an hour.
     use cap_recording::log_redaction::scrub_log_text;
 
+    let upload = cap_utils::log_upload::prepare_upload(
+        log,
+        context,
+        diagnostics.as_deref(),
+        report.as_deref(),
+        scrub_log_text,
+    );
     let mut form = reqwest::multipart::Form::new()
-        .text("log", scrub_log_text(&log))
+        .text("log", upload.log)
         .text("os", std::env::consts::OS)
-        .text("version", env!("CARGO_PKG_VERSION"));
-    if let Some(report) = report {
-        form = form.text("report", scrub_log_text(&report));
+        .text("version", env!("CARGO_PKG_VERSION"))
+        .text("context", upload.context);
+    if let Some(report) = upload.report {
+        form = form.text("report", report);
     }
-    if let Some(diagnostics) = diagnostics {
-        form = form.text("diagnostics", scrub_log_text(&diagnostics));
+    if let Some(diagnostics) = upload.diagnostics {
+        form = form.text("diagnostics", diagnostics);
     }
 
     let mut request = reqwest::Client::new()
@@ -1127,7 +1089,7 @@ mod tests {
     }
 
     /// The order the run has to follow: the binary shipped next to this build,
-    /// then the installed app, then the dev checkout. `cap-exporter` beats a
+    /// then the installed app, then the dev checkout. `cap-cli` beats a
     /// bare `cap` inside the same directory.
     #[test]
     fn the_sidecar_probe_walks_from_this_build_outwards() {
@@ -1236,8 +1198,9 @@ mod tests {
     #[test]
     fn reports_in_the_same_second_do_not_collide() {
         let dir = temp_dir("collide");
-        let first = write_report_into(&dir, &json!({ "first": true })).unwrap();
-        let second = write_report_into(&dir, &json!({ "second": true })).unwrap();
+        let at = 1_792_431_796;
+        let first = write_report_at(&dir, &json!({ "first": true }), at).unwrap();
+        let second = write_report_at(&dir, &json!({ "second": true }), at).unwrap();
 
         assert_ne!(first, second);
         assert!(first.exists() && second.exists());
@@ -1248,8 +1211,8 @@ mod tests {
         // Both parse back to the same second, so pruning still orders by time
         // first and falls back to the name.
         let stamp = |path: &Path| report_file_stamp(path.file_name().unwrap().to_str().unwrap());
-        assert_eq!(stamp(&first), stamp(&second));
-        assert!(stamp(&first).is_some_and(|secs| secs > 0));
+        assert_eq!(stamp(&first), Some(at));
+        assert_eq!(stamp(&second), Some(at));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1283,37 +1246,6 @@ mod tests {
         assert!(foreign.exists(), "pruning deleted the other app's report");
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_short_log_is_uploaded_whole() {
-        let content = "line one\nline two\n";
-        assert_eq!(log_tail_from(content, content.len() as u64, 1024), content);
-    }
-
-    /// Over the cap, the tail keeps the header, stays under it, and opens on a
-    /// record boundary rather than mid-line.
-    #[test]
-    fn a_long_log_is_truncated_to_its_tail_on_a_line_boundary() {
-        let content: String = (0..500).map(|index| format!("line {index}\n")).collect();
-        let tail = log_tail_from(&content, content.len() as u64, 200);
-
-        assert!(tail.starts_with("⚠️ Log file truncated (original size:"));
-        assert!(tail.len() <= 200, "tail was {} bytes", tail.len());
-        assert!(tail.ends_with("line 499\n"));
-        let body = tail.split("\n\n").nth(1).unwrap();
-        assert!(
-            body.starts_with("line "),
-            "the tail opened mid-record: {body:?}"
-        );
-    }
-
-    /// A multi-byte character straddling the cut must not panic the slice.
-    #[test]
-    fn truncation_survives_a_cut_inside_a_character() {
-        let content: String = (0..200).map(|index| format!("café {index} ✅\n")).collect();
-        let tail = log_tail_from(&content, content.len() as u64, 300);
-        assert!(tail.ends_with("✅\n"));
     }
 
     #[test]

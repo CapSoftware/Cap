@@ -109,6 +109,8 @@ Core principles:
 
 Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, Cursor, OpenCode) and scripts.
 
+Start at https://cap.so/agents for the copyable setup prompt, per-agent install steps, and the safety rules; the full reference lives under https://cap.so/docs/agents.
+
 Install:
 - `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`)
 - or `cap desktop install-cli`, or via Cap Desktop → Settings → Command Line.
@@ -199,7 +201,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
 - Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
-- Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
+- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools
 

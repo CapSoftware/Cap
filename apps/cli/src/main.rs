@@ -484,6 +484,30 @@ fn main() {
         )
         .init();
 
+    let _diagnostic_guard = if std::env::var_os("CAP_DIAGNOSTIC_PARENT").is_some() {
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+        let queue_errors = writer.error_counter();
+        cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+            queue_errors.dropped_lines()
+        });
+        cap_utils::operation_diagnostics::install_sink(
+            cap_utils::operation_diagnostics::AppInfo {
+                flavor: "export_worker",
+                version: env!("CARGO_PKG_VERSION"),
+                source_revision: option_env!("CAP_BUILD_REVISION"),
+                debug_build: cfg!(debug_assertions),
+                source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+            },
+            move |bytes| {
+                use std::io::Write;
+                let _ = writer.clone().write_all(bytes);
+            },
+        );
+        Some(guard)
+    } else {
+        None
+    };
+
     let exit_after_success = cli.exit_after_success();
 
     // The self-test opens a window, which AppKit requires to live on the real
@@ -516,7 +540,11 @@ fn main() {
                 .build()
                 .map_err(|e| format!("Failed to build Tokio runtime: {e}"))?;
 
+            if _diagnostic_guard.is_some() {
+                drop(runtime.spawn(cap_utils::operation_diagnostics::run_checkpoints()));
+            }
             let result = runtime.block_on(run(cli));
+            drop(_diagnostic_guard);
             if exit_after_success && result.is_ok() {
                 // Successful export/preview workers have already written their output by here.
                 // Exiting directly avoids Windows GPU/MediaFoundation teardown crashes in the
