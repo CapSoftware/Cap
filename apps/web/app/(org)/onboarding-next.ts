@@ -1,7 +1,7 @@
 import Cookies from "js-cookie";
+import { ONBOARDING_NEXT_COOKIE as COOKIE_NAME } from "./onboarding/onboarding-flow";
 import { getSafeNextPath } from "./safe-next";
 
-const COOKIE_NAME = "cap_onboarding_next";
 const EXPIRES_DAYS = 1 / 24;
 
 export const rememberOnboardingNextPath = (path: string) => {

@@ -1,8 +1,6 @@
+import "../../onboarding/onboarding.css";
 import { db } from "@cap/database";
-import {
-	getCurrentUser,
-	type userSelectProps,
-} from "@cap/database/auth/session";
+import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	organizationInvites,
 	organizations,
@@ -10,8 +8,16 @@ import {
 } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
-import { InviteAccept } from ".//InviteAccept";
+import { PaperRoot } from "../../onboarding/components/PaperRoot";
+import {
+	maskEmail,
+	needsOnboarding,
+	onboardingThemeFromCookie,
+	THEME_COOKIE,
+} from "../../onboarding/onboarding-flow";
+import { InviteAccept } from "./InviteAccept";
 
 type Props = {
 	params: Promise<{ inviteId: string }>;
@@ -64,12 +70,25 @@ export default async function InvitePage(props: Props) {
 		return notFound();
 	}
 
+	const invitedEmail = inviteDetails.invite.invitedEmail;
+	const theme = onboardingThemeFromCookie(
+		(await cookies()).get(THEME_COOKIE)?.value,
+	);
+
 	return (
-		<InviteAccept
-			inviteId={inviteId}
-			organizationName={inviteDetails.organizationName}
-			inviterName={inviteDetails.inviterName}
-			user={user as typeof userSelectProps | null}
-		/>
+		<PaperRoot initialTheme={theme}>
+			<InviteAccept
+				inviteId={inviteId}
+				organizationName={inviteDetails.organizationName}
+				inviterName={inviteDetails.inviterName}
+				maskedEmail={maskEmail(invitedEmail)}
+				invitedInitial={invitedEmail.charAt(0).toUpperCase()}
+				signedInEmail={user?.email ?? null}
+				emailMatches={
+					user ? user.email.toLowerCase() === invitedEmail.toLowerCase() : false
+				}
+				needsOnboarding={user ? needsOnboarding(user) : false}
+			/>
+		</PaperRoot>
 	);
 }

@@ -9,6 +9,7 @@ import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
+import { needsOnboarding } from "../onboarding/onboarding-flow";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
@@ -52,9 +53,7 @@ export default async function DashboardLayout({
 	const pendingInviteId = await getPendingInviteIdForUser(user.email);
 	if (pendingInviteId) redirect(`/invite/${pendingInviteId}`);
 
-	if (!user.name || user.name.length === 0) {
-		redirect("/onboarding/welcome");
-	}
+	if (needsOnboarding(user)) redirect("/onboarding");
 
 	let organizationSelect: Organization[] = [];
 	let userCapsCount: number | null = 0;

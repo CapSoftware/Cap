@@ -108,19 +108,23 @@ function makeFixture(
 	const database = {
 		select: (columns?: Record<string, AnyMySqlColumn>) => ({
 			from: (table: MySqlTable) => ({
-				where: async (condition: SQL | undefined) =>
-					rowsFor(table)
-						.filter((row) => matchesRow(condition, row))
-						.map((row) =>
-							columns
-								? Object.fromEntries(
-										Object.entries(columns).map(([key, column]) => [
-											key,
-											row[column.name],
-										]),
-									)
-								: { ...row },
-						),
+				where: (condition: SQL | undefined) => {
+					const result = Promise.resolve(
+						rowsFor(table)
+							.filter((row) => matchesRow(condition, row))
+							.map((row) =>
+								columns
+									? Object.fromEntries(
+											Object.entries(columns).map(([key, column]) => [
+												key,
+												row[column.name],
+											]),
+										)
+									: { ...row },
+							),
+					);
+					return Object.assign(result, { for: () => result });
+				},
 			}),
 		}),
 		update: (table: MySqlTable) => ({
@@ -422,7 +426,92 @@ describe("onboarding organization authorization", () => {
 			expect(fixture.user.onboardingSteps).toMatchObject({
 				organizationSetup: true,
 				download: true,
+				getStarted: true,
 			});
 		},
 	);
+});
+
+describe("onboarding get started", () => {
+	it("finishes onboarding and personalizes an owner's default organization", async () => {
+		const fixture = makeFixture({
+			user: { name: "Jane", onboardingSteps: { getStarted: false } },
+			organization: { name: "My Organization", ownerId: USER_ID },
+		});
+
+		await fixture.run((service) => service.getStarted({ path: "loom" }));
+
+		expect(fixture.organization.name).toBe("Jane's Organization");
+		expect(fixture.organizations).toHaveLength(1);
+		expect(fixture.user).toMatchObject({
+			activeOrganizationId: ORGANIZATION_ID,
+			defaultOrgId: DEFAULT_ORGANIZATION_ID,
+			onboardingSteps: {
+				welcome: true,
+				organizationSetup: true,
+				customDomain: true,
+				inviteTeam: true,
+				download: true,
+				getStarted: true,
+			},
+		});
+		expect(fixture.user.onboarding_completed_at).toBeInstanceOf(Date);
+	});
+
+	it("leaves a team's organization untouched for members", async () => {
+		const fixture = makeFixture({
+			user: { onboardingSteps: { getStarted: false } },
+			organization: { name: "My Organization" },
+		});
+
+		await fixture.run((service) => service.getStarted({ path: "record" }));
+
+		expect(fixture.organization.name).toBe("My Organization");
+		expect(fixture.organizations).toHaveLength(1);
+		expect(fixture.memberships).toEqual([]);
+		expect(fixture.user).toMatchObject({
+			activeOrganizationId: ORGANIZATION_ID,
+			onboardingSteps: { getStarted: true },
+		});
+	});
+
+	it.each([
+		{ scenario: "no organization", organizationExists: false },
+		{ scenario: "a deleted organization", organizationExists: true },
+	])("creates an organization when the user has $scenario", async (input) => {
+		const fixture = makeFixture({
+			organizationExists: input.organizationExists,
+			organization: { ownerId: USER_ID, tombstoneAt: new Date() },
+			user: {
+				name: "Jane",
+				activeOrganizationId: input.organizationExists
+					? ORGANIZATION_ID
+					: Organisation.OrganisationId.make(""),
+				defaultOrgId: null,
+				onboardingSteps: { getStarted: false },
+			},
+		});
+
+		await fixture.run((service) => service.getStarted({ path: "upload" }));
+
+		const created = fixture.organizations.find(
+			(organization) => organization.id !== ORGANIZATION_ID,
+		);
+		expect(created).toMatchObject({
+			name: "Jane's Organization",
+			ownerId: USER_ID,
+		});
+		expect(fixture.memberships).toEqual([
+			expect.objectContaining({
+				organizationId: created?.id,
+				userId: USER_ID,
+				role: "owner",
+			}),
+		]);
+		expect(fixture.user).toMatchObject({
+			activeOrganizationId: created?.id,
+			defaultOrgId: created?.id,
+			onboardingSteps: { getStarted: true },
+		});
+	});
 });
