@@ -320,6 +320,80 @@ Wall time is neutral on this machine because the 4K export is GPU-render-bound, 
 
 **Stopping point**: The macOS export video path is IOSurface end to end: composite (GPU) -> NV12 convert (GPU) -> CVPixelBuffer (GPU copy) -> VideoToolbox (reads the IOSurface). Remaining CPU touches per frame are zero on the happy path.
 
+### Session 2026-10-15 (Encoder-Bound Exports; Per-Frame Command Buffers and Render Passes)
+
+**Goal**: Find what bounds macOS MP4 export and cut the renderer's fixed per-frame GPU work.
+
+**What was done**:
+1. Exported two real Studio recordings with the release `cap` CLI on an M4 Max: a 236 s, 2542x1226 recording with background blur, shadow, zoom and motion blur (5,616 output frames), and a 167 s, 1260x860 recording with captions and keyboard segments (2,712 frames).
+2. At 4K, turning off background blur, motion blur, shadow and rounding, together or one at a time, moved wall time by under 0.3% (56.21-56.44 s). Encoding the same frames standalone with `h264_videotoolbox` and the export options took 18.2 s at 1080p and 55.6 s at 4K, matching the exports (18.8 s, 56.3 s). 1080p and 4K exports are VideoToolbox-bound here, not GPU-bound as the 2026-08-18 note concluded; a Metal System Trace puts the GPU at about 12% busy. Two concurrent VideoToolbox sessions encode less in total than one, so splitting an export does not help.
+3. A Time Profiler trace of a 1080p export attributed 47% of process CPU to the Metal driver, 27% to kernel `IOGPUCommandQueueSubmitCommandBuffers`. A Metal System Trace counted 19.1 MTLCommandBuffers per frame: 7.7 empty "(wgpu internal) Pre Pass", 1.0 empty "Transit", 6.0 "Render Pass". wgpu-core gives each pass its own HAL command buffer plus one for barriers, which are no-ops on Metal (gfx-rs/wgpu#5738), and `RendererLayers::render` opened a pass per layer.
+4. `vendor/wgpu-hal` Metal: an MTLCommandBuffer is created when the first encoder starts, empty ones are never committed, and the fence signal goes on the last non-empty one.
+5. `RendererLayers::render`: consecutive layer draws into the same texture share one render pass. A pass still ends at a target switch, a clear, a mask, a blur-cache copy or a texture swap.
+6. The blurred static background cache, previously enabled only by the render farm, now runs everywhere: the blurred backdrop is copied instead of re-blurred while its background, blur amount and sizes are unchanged.
+
+**Verification**:
+- 1080p exports from a build of main and from this change decode to identical frames (`ffmpeg -f framemd5`): 5,616/5,616 for the blur recording, 2,712/2,712 for the captions recording, and 5,616/5,616 each for blurred image, wallpaper, gradient and colour backgrounds and for style segments that swap the background and change the blur mid-export.
+- New native test `cached_background_blur_matches_a_fresh_blur_and_follows_edits`; it fails if the cache ignores its key. cap-rendering, cap-editor, cap-export and cap-camera-effects tests pass.
+
+**Benchmark Results** (M4 Max, release, means of 3 interleaved runs; command buffers from Metal System Trace):
+
+| Metric | Before | After |
+|--------|--------|-------|
+| MTLCommandBuffers / frame, blur project 4K | 18.6 | 5.5 (-70%) |
+| MTLCommandBuffers / frame, no-blur project 1080p | 13.7 | 4.5 (-67%) |
+| Render passes / frame (blur / no blur) | 6 / 4 | 1 / 1 |
+| Export CPU, blur project 720p / 1080p / 4K | 6.77 / 9.26 / 18.93 s | 5.74 / 8.26 / 17.20 s (-15% / -11% / -9%) |
+| Export CPU, no-blur project 720p / 1080p / 4K | 3.03 / 4.37 / 7.97 s | 2.66 / 4.06 / 7.16 s (-12% / -7% / -10%) |
+
+Wall time is unchanged on this machine: 1080p and 4K are encoder-bound, and 720p waits on the NV12 surface poll's millisecond sleeps (#2464).
+
+The GPU-time rows first published here (4K 4,065 µs -> 1,656 µs; no-blur 1080p 330 µs -> 278 µs) came from single traces and did not reproduce on 2026-10-16, so they were removed; see that session.
+
+**Stopping point**: About five command buffers per frame remain: one per remaining pass, PendingWrites and copy segments. Folding them into one needs pass coalescing in wgpu-core (gfx-rs/wgpu#10506).
+
+### Session 2026-10-16 (Per-Change Attribution, CPU Profile, GPU Figures Rechecked)
+
+**Goal**: Attribute the 2026-10-15 savings to each change, find where the remaining export CPU goes, and recheck the GPU figures.
+
+**What was done**:
+1. Release `cap` builds of main (83237e994), the wgpu-hal change alone, wgpu-hal plus pass merging, and all three changes. Exported the blur recording at 1080p and 4K under Metal System Trace, 10 s windows, counting only the `cap` process.
+2. Five interleaved rounds of 1080p exports of both recordings, main against all three changes.
+3. Time Profiler on 10 s of the 1080p blur export, main against all three changes.
+
+**Results** (blur recording, 1080p; GPU busy is the union of the process's GPU intervals over seconds 2-9 of each trace):
+
+| Build | MTLCommandBuffers / frame | GPU encoders / frame | GPU busy / frame |
+|-------|---------------------------|----------------------|------------------|
+| main | 19.4 | 16.6 | 744-858 µs |
+| wgpu-hal change | 10.6 | 16.6 | 739 µs |
+| + pass merging | 7.6 | 10.7 | 736 µs |
+| + blur cache | 5.8 | 7.0 | 527-731 µs |
+
+- At 4K, wgpu-hal alone against wgpu-hal plus pass merging: 10.2 -> 7.2 command buffers and 16.9 -> 11.0 encoders per frame; GPU busy 2,379 and 2,443 µs against 2,348 and 2,410 µs, inside the 1,900-3,700 µs second-to-second swing of each trace.
+- Pass merging removes submission work, not GPU time. The attachment store and reload it avoids is not measurable on this GPU at 1080p or 4K. The GPU-time drop comes from the blur cache.
+- At about 20% GPU load, GPU busy per frame varies by a quarter between identical runs, so it is a range here. The 2026-10-15 GPU rows summed per-channel intervals from single traces. Their 4K baseline does not reproduce: the wgpu-hal change alone measures about 2,650 µs summed at 4K, and that change removes no GPU work.
+- Export CPU (user + sys), all three changes against main in each round: blur recording -16.1, -6.8, -10.9, -10.5, -23.1% (median -10.9%); no-blur recording -7.3, -11.1, -10.4, -18.0, -16.9% (median -11.1%). Absolute CPU drifts between rounds (6.2-9.4 s for main on the blur recording), so the per-round difference is the statistic. Wall time is unchanged and the decoded frames are identical.
+- Time Profiler, 10 s of the 1080p blur export, each sample assigned to the first matching group in this order:
+
+| Group | main | all three changes |
+|-------|------|-------------------|
+| Command-buffer submission (`IOGPUCommandQueueSubmitCommandBuffers`) | 905 ms (25.2%) | 630 ms (21.5%) |
+| Other Metal, AGX and IOGPU driver work | 658 ms | 468 ms |
+| wgpu-core and wgpu-hal | 231 ms | 198 ms |
+| VideoToolbox and CoreMedia | 712 ms | 705 ms (24.0%) |
+| FFmpeg | 247 ms | 228 ms |
+| Cap code | 348 ms | 305 ms |
+| Other | 488 ms | 403 ms |
+| Total | 3,589 ms | 2,937 ms (-18%) |
+
+- GIF at the 640x360 setting, 30 fps, blur recording, 15 interleaved rounds against main: CPU time (user + sys) was lower in all 15, median -1.9%. Wall time was shorter in 8 of 15 rounds, median -3.1%, per round -22.8% to +29.4%, too spread to show a change. GIF export is bound by gifski (about 10 fps at 720p in release, against about 290 fps for MP4 rendering; see Time Estimation), so the renderer's saving is a small share of it.
+- GIF goes through the RGBA readback wait (`finish_encoder_timed` and `PendingReadback::wait`), which MP4 does not, so it was measured again after that wait became a blocking wait on the frame's submission (PLAYBACK-FINDINGS 2026-10-16). Five interleaved rounds against main: CPU lower in all 5, median -1.5% (per round -1.4, -0.5, -1.7, -2.9, -1.5%), instructions -0.5%, and all ten outputs byte-identical (10,357,857 bytes). Wall time was shorter in all 5 (main 6.51-7.13 s, branch 6.14-6.36 s, median -6.4%); given the 15 inconclusive rounds above, no wall-time change is claimed.
+- The blurred-background cache now releases its texture on the first frame without blur. That exposed an older bug: `RendererLayers` refreshed the blur strength only while blur was above zero, so after blur was set to 0 the previous strength stayed in effect and the frame still had a cache key. The strength is now refreshed every frame. Its visible effect, the background staying blurred after blur is set to 0, is inferred from the code; the cache test's gradient background looks the same blurred and unblurred, so it checks the state instead.
+- ProRes MOV was not benchmarked. One export took 96.7 s wall on 97.5 s of user CPU, about one core on average even though `prores_ks` is given `available_parallelism()` threads (`crates/enc-ffmpeg/src/video/prores.rs`). The encoder paces that export, so renderer savings cannot shorten it.
+
+**Stopping point**: VideoToolbox is now the largest CPU cost of a 1080p export, followed by command-buffer submission, which is almost entirely `mach_msg2_trap`. Command buffers fell 70% while submission time fell 30%, so the remaining submission cost appears to follow the number of queue submissions per frame rather than the buffers in each; that is inferred from the profile and not measured. Xcode's `xctrace` leaves a kernel trace of 1-5 GB per recording in the system temporary directory and ignores `TMPDIR`; delete `$TMPDIR/instruments*.ktrace` after tracing.
+
 ### Template for new sessions:
 
 ```markdown
