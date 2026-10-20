@@ -1446,10 +1446,19 @@ impl Render for CameraToolbarView {
     }
 }
 
-/// A camera frame and the preview settings it is converted with.
 #[cfg(target_os = "macos")]
 struct ConvertJob {
     frame: cap_recording::NativeCameraFrame,
+    settings: ConvertSettings,
+}
+
+/// What a frame was converted for. A result whose settings no longer match
+/// the window's (another camera selected, blur or mirroring toggled while it
+/// converted) is dropped; the next frame arrives within a frame interval.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq)]
+struct ConvertSettings {
+    epoch: u64,
     blur_mode: Option<cap_camera_effects::BlurMode>,
     mirrored: bool,
     rebuilds: u64,
@@ -1467,10 +1476,7 @@ struct ConvertBridge {
 #[cfg(target_os = "macos")]
 fn run_preview_conversion(
     jobs: flume::Receiver<ConvertJob>,
-    converted: flume::Sender<(
-        Option<frame::Converted>,
-        Option<cap_camera_effects::BlurMode>,
-    )>,
+    converted: flume::Sender<(Option<frame::Converted>, ConvertSettings)>,
 ) {
     let mut converter = None;
     let mut rebuilds = None;
@@ -1479,19 +1485,20 @@ fn run_preview_conversion(
         while let Ok(newer) = jobs.try_recv() {
             job = newer;
         }
-        let force_rebuild = rebuilds.is_some_and(|rebuilds| rebuilds != job.rebuilds);
-        rebuilds = Some(job.rebuilds);
-        let max_dims = job.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
+        let settings = job.settings;
+        let force_rebuild = rebuilds.is_some_and(|rebuilds| rebuilds != settings.rebuilds);
+        rebuilds = Some(settings.rebuilds);
+        let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
         let result = frame::FrameConverter::convert(
             &mut converter,
             &job.frame,
             max_dims,
-            job.mirrored,
+            settings.mirrored,
             force_rebuild,
         );
         // Blocks while the main thread still holds the previous result, so the
         // ring never gets more than one frame ahead of what it painted.
-        if converted.send((result, job.blur_mode)).is_err() {
+        if converted.send((result, settings)).is_err() {
             return;
         }
     }
@@ -1835,9 +1842,9 @@ impl CameraWindow {
     ) {
         #[cfg(target_os = "macos")]
         {
-            if Feeds::global(cx).read(cx).camera_preview_epoch().is_none() {
+            let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
                 return;
-            }
+            };
             let failures_before = self.effect_failures;
             if self.state.background_blur != BlurMode::Off && camera_blur::is_low_spec_preview() {
                 self.effect_failures.blur = true;
@@ -1847,9 +1854,7 @@ impl CameraWindow {
             }
             let job = ConvertJob {
                 frame,
-                blur_mode: self.active_blur_mode(),
-                mirrored: self.state.mirrored,
-                rebuilds: self.convert_rebuilds,
+                settings: self.convert_settings(epoch),
             };
             match self.ensure_convert_bridge(window, cx).tx.try_send(job) {
                 // A full queue means the thread is mid-conversion; it picks up
@@ -1857,18 +1862,20 @@ impl CameraWindow {
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
                 Err(flume::TrySendError::Disconnected(job)) => {
                     // The thread could not start: convert here, as before.
-                    let max_dims = job.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
-                    let force_rebuild = self.fallback_rebuilds != Some(job.rebuilds)
-                        && self.fallback_rebuilds.is_some();
-                    self.fallback_rebuilds = Some(job.rebuilds);
+                    let settings = job.settings;
+                    let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
+                    let force_rebuild = self
+                        .fallback_rebuilds
+                        .is_some_and(|rebuilds| rebuilds != settings.rebuilds);
+                    self.fallback_rebuilds = Some(settings.rebuilds);
                     let converted = frame::FrameConverter::convert(
                         &mut self.fallback_converter,
                         &job.frame,
                         max_dims,
-                        job.mirrored,
+                        settings.mirrored,
                         force_rebuild,
                     );
-                    self.converted_arrived(converted, job.blur_mode, window, cx);
+                    self.converted_arrived(converted, settings, window, cx);
                 }
             }
         }
@@ -1938,26 +1945,35 @@ impl CameraWindow {
         }
     }
 
-    /// A frame came back from the conversion thread (or the inline fallback):
-    /// blur or paint it, and resize the window if its dimensions changed.
+    #[cfg(target_os = "macos")]
+    fn convert_settings(&self, epoch: u64) -> ConvertSettings {
+        ConvertSettings {
+            epoch,
+            blur_mode: self.active_blur_mode(),
+            mirrored: self.state.mirrored,
+            rebuilds: self.convert_rebuilds,
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn converted_arrived(
         &mut self,
         converted: Option<frame::Converted>,
-        blur_mode: Option<cap_camera_effects::BlurMode>,
+        settings: ConvertSettings,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
             return;
         };
+        if settings != self.convert_settings(epoch) {
+            return;
+        }
+        let blur_mode = settings.blur_mode;
         use core_foundation::base::TCFType as _;
         use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 
         let failures_before = self.effect_failures;
-        // The blur mode may have been switched off (or failed) while this
-        // frame was converting; follow the current state.
-        let blur_mode = blur_mode.filter(|_| self.active_blur_mode().is_some());
         if let Some(converted) = converted {
             self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
             let first_frame = self.frame_dims.is_none();
@@ -2032,10 +2048,10 @@ impl CameraWindow {
                 tracing::warn!("camera preview conversion thread failed to spawn: {error}");
             }
             let pump = cx.spawn_in(window, async move |this, cx| {
-                while let Ok((converted, blur_mode)) = out_rx.recv_async().await {
+                while let Ok((converted, settings)) = out_rx.recv_async().await {
                     if this
                         .update_in(cx, |this: &mut CameraWindow, window, cx| {
-                            this.converted_arrived(converted, blur_mode, window, cx)
+                            this.converted_arrived(converted, settings, window, cx)
                         })
                         .is_err()
                     {
