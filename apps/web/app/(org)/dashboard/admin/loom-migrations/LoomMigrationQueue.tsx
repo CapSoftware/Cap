@@ -403,9 +403,13 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 						<select
 							className="mt-2 w-full rounded-lg border border-gray-6 bg-gray-1 px-3 py-2 text-sm text-gray-12"
 							id={`loom-status-${request.id}`}
-							onChange={(event) =>
-								setNextStatus(event.target.value as LoomMigrationStatus)
-							}
+							onChange={(event) => {
+								const status = event.target.value as LoomMigrationStatus;
+								setNextStatus(status);
+								setMessage(
+									status === request.status ? (request.capMessage ?? "") : "",
+								);
+							}}
 							value={nextStatus}
 						>
 							<option value="pending">Pending</option>

@@ -21,10 +21,10 @@ import {
 } from "@/lib/loom-migration-state";
 
 const STATUS_STYLE: Record<LoomMigrationStatus, string> = {
-	pending: "bg-amber-3 text-amber-11",
+	pending: "bg-amber-500/10 text-amber-600",
 	in_progress: "bg-blue-3 text-blue-11",
-	needs_information: "bg-orange-3 text-orange-11",
-	completed: "bg-green-3 text-green-11",
+	needs_information: "bg-orange-500/10 text-orange-600",
+	completed: "bg-green-500/10 text-green-600",
 };
 
 function MigrationStatus({ request }: { request: LoomMigrationView }) {
@@ -58,7 +58,7 @@ function MigrationStatus({ request }: { request: LoomMigrationView }) {
 			)}
 			{request.status === "completed" && (
 				<div className="mt-4 flex items-start gap-3 text-sm text-gray-11">
-					<CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-11" />
+					<CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-600" />
 					<div>
 						<p>Your migration is complete.</p>
 						{request.expectedVideoCount !== null && (
@@ -251,14 +251,14 @@ export function LoomMigrationPage() {
 			)}
 			{activeRequest?.status === "needs_information" && (
 				<form
-					className="rounded-xl border border-orange-6 bg-orange-2 p-5"
+					className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-5"
 					onSubmit={(event) => {
 						event.preventDefault();
 						answerMutation.mutate({ requestId: activeRequest.id, answer });
 					}}
 				>
 					<div className="flex items-center gap-2 font-medium text-gray-12">
-						<CircleHelp className="size-5 text-orange-11" /> Cap needs a little
+						<CircleHelp className="size-5 text-orange-600" /> Cap needs a little
 						more information
 					</div>
 					<label className="mt-4 block text-sm text-gray-11" htmlFor={answerId}>
