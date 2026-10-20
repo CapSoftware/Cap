@@ -16,7 +16,7 @@ index 0294b7d..6fe853b 100644
      fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
      fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 393e517..e5850bf 100644
+index 393e517..18a4e73 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -120,6 +120,53 @@ struct WindowInvalidatorInner {
@@ -120,7 +120,7 @@ index 393e517..e5850bf 100644
          let active = Rc::new(Cell::new(platform_window.is_active()));
          let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
          let needs_present = Rc::new(Cell::new(false));
-@@ -1507,9 +1562,10 @@ impl Window {
+@@ -1507,12 +1562,17 @@ impl Window {
              let invalidator = invalidator.clone();
              let active = active.clone();
              let needs_present = needs_present.clone();
@@ -128,11 +128,21 @@ index 393e517..e5850bf 100644
 +            let pending_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
              move |request_frame_options| {
+-                let thermal_state = handle
+-                    .update(&mut cx, |_, _, cx| cx.thermal_state())
+-                    .log_err();
 +                let next_frame_callbacks = &pending_frame_callbacks;
-                 let thermal_state = handle
-                     .update(&mut cx, |_, _, cx| cx.thermal_state())
-                     .log_err();
-@@ -1551,8 +1607,11 @@ impl Window {
++                // A frame can still arrive for a window that was just closed
++                // (its display link or a pending wake); there is nothing to draw.
++                let Ok(thermal_state) = handle.update(&mut cx, |_, _, cx| cx.thermal_state())
++                else {
++                    return;
++                };
++                let thermal_state = Some(thermal_state);
+ 
+                 // Throttle frame rate based on conditions:
+                 // - Thermal pressure (Serious/Critical): cap to ~60fps
+@@ -1551,8 +1611,11 @@ impl Window {
                  }
                  last_frame_time.set(Some(now));
  
@@ -144,7 +154,7 @@ index 393e517..e5850bf 100644
                      handle
                          .update(&mut cx, |_, window, cx| {
                              for callback in next_frame_callbacks {
-@@ -1570,6 +1629,7 @@ impl Window {
+@@ -1570,6 +1633,7 @@ impl Window {
                      || (active.get() && input_rate_tracker.borrow_mut().is_high_rate());
  
                  if invalidator.is_dirty() || request_frame_options.force_render {
@@ -152,7 +162,7 @@ index 393e517..e5850bf 100644
                      measure("frame duration", || {
                          handle
                              .update(&mut cx, |_, window, cx| {
-@@ -1585,6 +1645,7 @@ impl Window {
+@@ -1585,6 +1649,7 @@ impl Window {
                              .log_err();
                      })
                  } else if needs_present {
@@ -160,7 +170,7 @@ index 393e517..e5850bf 100644
                      handle
                          .update(&mut cx, |_, window, _| window.present())
                          .log_err();
-@@ -1595,6 +1656,9 @@ impl Window {
+@@ -1595,6 +1660,9 @@ impl Window {
                          window.complete_frame();
                      })
                      .log_err();
@@ -170,7 +180,7 @@ index 393e517..e5850bf 100644
              }
          }));
          platform_window.on_resize(Box::new({
-@@ -2263,6 +2327,8 @@ impl Window {
+@@ -2263,6 +2331,8 @@ impl Window {
      /// Schedule the given closure to be run directly after the current frame is rendered.
      pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
          RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
@@ -179,7 +189,7 @@ index 393e517..e5850bf 100644
      }
  
      /// Schedule a frame to be drawn on the next animation frame.
-@@ -6807,6 +6873,83 @@ pub fn outline(
+@@ -6807,6 +6877,83 @@ pub fn outline(
      }
  }
  
