@@ -50,6 +50,10 @@ pub struct StartConfig {
     /// recording locks these instead of spawning its own -- the Tauri model.
     pub camera_feed: Option<ActorRef<CameraFeed>>,
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
+    /// The app's mic level meter. A recording that opens its own microphone
+    /// feed (the app feed is released while the main window is hidden) feeds
+    /// it too, or the recording bar's level would stay empty.
+    pub mic_meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
     /// When set, the pipeline is primed behind this gate and records nothing
@@ -2101,17 +2105,24 @@ async fn start_attempt_with_upload(
             }
             Err(error) => {
                 tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
-                let (feed, lock, error_rx) =
-                    setup_microphone(label, config.device_settings.microphone)
-                        .await
-                        .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+                let (feed, lock, error_rx) = setup_microphone(
+                    label,
+                    config.device_settings.microphone,
+                    config.mic_meter.clone(),
+                )
+                .await
+                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
                 (Some(feed), Some(lock), Some(error_rx))
             }
         },
         (None, Some(label)) => {
-            let (feed, lock, error_rx) = setup_microphone(label, config.device_settings.microphone)
-                .await
-                .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+            let (feed, lock, error_rx) = setup_microphone(
+                label,
+                config.device_settings.microphone,
+                config.mic_meter.clone(),
+            )
+            .await
+            .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
             (Some(feed), Some(lock), Some(error_rx))
         }
         _ => (None, None, None),
@@ -2431,6 +2442,7 @@ async fn setup_camera(
 async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
+    meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
 ) -> anyhow::Result<(
     Arc<RecordingOwnedFeed<MicrophoneFeed>>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
@@ -2439,6 +2451,11 @@ async fn setup_microphone(
     let (error_tx, error_rx) = flume::unbounded();
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
     let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
+    if let Some(meter) = meter {
+        feed.ask(microphone::AddSender(meter))
+            .await
+            .map_err(|e| anyhow!("meter: {e}"))?;
+    }
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),

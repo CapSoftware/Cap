@@ -708,7 +708,26 @@ fn overlay_metrics(size: f32) -> OverlayMetrics {
 /// `camera_preview_error_message` (`lib.rs:755-774`) plus the fixed title
 /// from `emit_camera_preview_error` (`lib.rs:776-784`). The error strings
 /// come from the same `cap-recording` camera errors the Tauri app matches on.
+/// The camera is waiting on the macOS prompt: asked through the pickers, or
+/// a start in flight while macOS has not decided yet.
+fn awaiting_camera_access(cx: &gpui::App) -> bool {
+    use crate::permissions::{OSPermission, OSPermissionStatus};
+    let access = crate::media_access::MediaAccess::global(cx);
+    let access = access.read(cx);
+    access.requesting(OSPermission::Camera)
+        || (access.status(OSPermission::Camera) == OSPermissionStatus::NotDetermined
+            && crate::feeds::Feeds::global(cx)
+                .read(cx)
+                .camera_input_pending())
+}
+
 fn camera_issue(error: &str) -> (&'static str, &'static str) {
+    if error.contains("access is unavailable") {
+        return (
+            "Camera access needed",
+            "Click to allow Cap to use your camera in System Settings.",
+        );
+    }
     let message = if error.contains("DeviceNotFound") {
         "This camera is no longer available. Check that it is connected and allowed by system permissions."
     } else if error.contains("CameraTimeout") {
@@ -995,7 +1014,9 @@ struct CameraPreviewView {
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
     effect_issue: Option<(&'static str, &'static str)>,
+    awaiting_access: bool,
     _feeds_subscription: Subscription,
+    _access_subscription: Subscription,
 }
 
 impl CameraPreviewView {
@@ -1039,7 +1060,21 @@ impl CameraPreviewView {
             .detach();
         }
         let retained = retained.map(|retained| retained.image);
+        let access = crate::media_access::MediaAccess::global(cx);
+        let awaiting_access = awaiting_camera_access(cx);
+        let access_subscription = cx.observe(&access, |this: &mut Self, _, cx| {
+            let awaiting = awaiting_camera_access(cx);
+            if this.awaiting_access != awaiting {
+                this.awaiting_access = awaiting;
+                cx.notify();
+            }
+        });
         let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
+            let awaiting = awaiting_camera_access(cx);
+            if this.awaiting_access != awaiting {
+                this.awaiting_access = awaiting;
+                cx.notify();
+            }
             let feeds = feeds.read(cx);
             let error = feeds.camera_error.clone();
             let camera = feeds.camera.clone();
@@ -1079,7 +1114,9 @@ impl CameraPreviewView {
             paints,
             camera_error,
             effect_issue: None,
+            awaiting_access,
             _feeds_subscription: feeds_subscription,
+            _access_subscription: access_subscription,
         }
     }
 
@@ -1168,7 +1205,9 @@ impl Render for CameraPreviewView {
         let radius = self.radius;
 
         let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
-        let has_issue = self.camera_error.is_some() || self.effect_issue.is_some();
+        let awaiting_access = self.awaiting_access && !showing_frame && self.camera_error.is_none();
+        let has_issue =
+            self.camera_error.is_some() || self.effect_issue.is_some() || awaiting_access;
 
         let loading = if !showing_frame {
             self.loading_fade_started = None;
@@ -1296,15 +1335,32 @@ impl Render for CameraPreviewView {
         // the preview with a centred, size-scaled title + message. The
         // `backdrop-blur-xs` behind it has no per-element hook in this gpui
         // rev (the recording overlay documents the same gap).
+        let access_issue = self
+            .camera_error
+            .as_deref()
+            .is_some_and(|error| error.contains("access is unavailable"));
         if let Some((title, message)) = self
             .camera_error
             .as_deref()
             .map(camera_issue)
             .or(self.effect_issue)
+            .or(awaiting_access.then_some((
+                "Waiting for camera access",
+                "Choose Allow in the macOS prompt.",
+            )))
         {
             let metrics = overlay_metrics(self.size);
             container = container.child(
                 div()
+                    .id("camera-issue")
+                    .when(access_issue, |overlay| {
+                        overlay.cursor_pointer().on_click(|_, _, cx| {
+                            let access = crate::media_access::MediaAccess::global(cx);
+                            access.update(cx, |access, cx| {
+                                access.request(crate::permissions::OSPermission::Camera, cx)
+                            });
+                        })
+                    })
                     .absolute()
                     .inset_0()
                     .flex()

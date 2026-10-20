@@ -102,10 +102,28 @@ fn upload_plane_with_stride(
 const MAX_TEXTURE_WIDTH: u32 = 7680;
 const MAX_TEXTURE_HEIGHT: u32 = 4320;
 
+// On macOS, IOSurface frames convert straight into the layer textures, so the
+// converter's own textures start minimal and only grow for a fallback path.
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_WIDTH: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(target_os = "macos")]
+const INITIAL_TEXTURE_HEIGHT: u32 = TEXTURE_SIZE_PADDING;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_WIDTH: u32 = 1920;
+#[cfg(not(target_os = "macos"))]
 const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
 
 const TEXTURE_SIZE_PADDING: u32 = 64;
+
+// The 2x2 block kernel was only measured as a win on Linux; Apple GPUs were slower and Windows is untested.
+#[cfg(target_os = "linux")]
+const YUV420P_ENTRY_POINT: &str = "main_block";
+#[cfg(target_os = "linux")]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 16;
+#[cfg(not(target_os = "linux"))]
+const YUV420P_ENTRY_POINT: &str = "main";
+#[cfg(not(target_os = "linux"))]
+const YUV420P_PIXELS_PER_WORKGROUP: u32 = 8;
 
 fn align_dimension(dim: u32) -> u32 {
     dim.div_ceil(TEXTURE_SIZE_PADDING) * TEXTURE_SIZE_PADDING
@@ -266,6 +284,7 @@ struct MatrixPipelines {
     label: &'static str,
     layout: wgpu::PipelineLayout,
     module: wgpu::ShaderModule,
+    entry_point: &'static str,
     bt601: std::sync::OnceLock<wgpu::ComputePipeline>,
     bt709: std::sync::OnceLock<wgpu::ComputePipeline>,
 }
@@ -276,12 +295,14 @@ impl MatrixPipelines {
         label: &'static str,
         layout: wgpu::PipelineLayout,
         module: wgpu::ShaderModule,
+        entry_point: &'static str,
     ) -> Self {
         Self {
             device: device.clone(),
             label,
             layout,
             module,
+            entry_point,
             bt601: std::sync::OnceLock::new(),
             bt709: std::sync::OnceLock::new(),
         }
@@ -299,7 +320,7 @@ impl MatrixPipelines {
                     label: Some(self.label),
                     layout: Some(&self.layout),
                     module: &self.module,
-                    entry_point: Some("main"),
+                    entry_point: Some(self.entry_point),
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &constants,
                         ..Default::default()
@@ -437,12 +458,14 @@ impl YuvConverterPipelines {
             "NV12 Converter Pipeline",
             nv12_pipeline_layout,
             nv12_shader,
+            "main",
         );
         let yuv420p = MatrixPipelines::new(
             device,
             "YUV420P Converter Pipeline",
             yuv420p_pipeline_layout,
             yuv420p_shader,
+            YUV420P_ENTRY_POINT,
         );
         tracing::info!("Shared YUV converter pipelines created successfully");
 
@@ -463,8 +486,27 @@ impl YuvConverterPipelines {
 const RETAINED_IOSURFACE_SOURCES: usize = 4;
 
 #[cfg(target_os = "macos")]
-struct RetainedImageBuf {
+#[must_use]
+pub struct RetainedImageBuf {
     _image_buf: cidre::arc::R<cv::ImageBuf>,
+}
+
+#[cfg(target_os = "macos")]
+impl RetainedImageBuf {
+    fn new(image_buf: &cv::ImageBuf) -> Self {
+        Self {
+            _image_buf: image_buf.retained(),
+        }
+    }
+
+    /// Stores `source` in `slot`. The work that sampled the buffer it replaces
+    /// has already been submitted, so that buffer is released once the queue
+    /// has finished it.
+    pub(crate) fn replace(queue: &wgpu::Queue, slot: &mut Option<Self>, source: Option<Self>) {
+        if let Some(previous) = std::mem::replace(slot, source) {
+            queue.on_submitted_work_done(move || drop(previous));
+        }
+    }
 }
 
 // SAFETY: the buffer is only retained and released, never read, and
@@ -1114,9 +1156,9 @@ impl YuvToRgbaConverter {
             return Err(IOSurfaceTextureError::NoMetalDevice.into());
         }
 
-        let io_surface = image_buf
-            .io_surf()
-            .ok_or(IOSurfaceTextureError::NoIOSurface)?;
+        if image_buf.io_surf().is_none() {
+            return Err(IOSurfaceTextureError::NoIOSurface.into());
+        }
 
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
@@ -1126,7 +1168,56 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        let cache = self.iosurface_cache.as_ref().unwrap();
+        self.encode_nv12_from_iosurface(device, encoder, image_buf, self.current_output_view())?;
+
+        // The Metal textures alias the IOSurface without retaining the pixel
+        // buffer, and the decoder recycles released buffers for new pictures.
+        // Hold the source until enough later conversions have started that
+        // the caller has waited for the GPU work that sampled it.
+        self.iosurface_sources[self.next_iosurface_source] = Some(RetainedImageBuf::new(image_buf));
+        self.next_iosurface_source = (self.next_iosurface_source + 1) % RETAINED_IOSURFACE_SOURCES;
+
+        Ok(self.current_output_view())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn convert_nv12_from_iosurface_into(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        image_buf: &cv::ImageBuf,
+        target: &wgpu::TextureView,
+    ) -> Result<RetainedImageBuf, YuvConversionError> {
+        validate_dimensions(
+            image_buf.width() as u32,
+            image_buf.height() as u32,
+            self.gpu_max_texture_size,
+        )?;
+
+        self.encode_nv12_from_iosurface(device, encoder, image_buf, target)?;
+
+        Ok(RetainedImageBuf::new(image_buf))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn encode_nv12_from_iosurface(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        image_buf: &cv::ImageBuf,
+        output_view: &wgpu::TextureView,
+    ) -> Result<(), YuvConversionError> {
+        let io_surface = image_buf
+            .io_surf()
+            .ok_or(IOSurfaceTextureError::NoIOSurface)?;
+
+        let width = image_buf.width() as u32;
+        let height = image_buf.height() as u32;
+
+        let cache = self
+            .iosurface_cache
+            .as_ref()
+            .ok_or(IOSurfaceTextureError::NoMetalDevice)?;
         let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
         let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
 
@@ -1165,7 +1256,7 @@ impl YuvToRgbaConverter {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
+                    resource: wgpu::BindingResource::TextureView(output_view),
                 },
             ],
         });
@@ -1180,16 +1271,7 @@ impl YuvToRgbaConverter {
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
-        // The Metal textures alias the IOSurface without retaining the pixel
-        // buffer, and the decoder recycles released buffers for new pictures.
-        // Hold the source until enough later conversions have started that
-        // the caller has waited for the GPU work that sampled it.
-        self.iosurface_sources[self.next_iosurface_source] = Some(RetainedImageBuf {
-            _image_buf: image_buf.retained(),
-        });
-        self.next_iosurface_source = (self.next_iosurface_source + 1) % RETAINED_IOSURFACE_SOURCES;
-
-        Ok(self.current_output_view())
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1258,7 +1340,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1329,7 +1415,11 @@ impl YuvToRgbaConverter {
             });
             compute_pass.set_pipeline(self.pipelines.yuv420p.get(self.matrix));
             compute_pass.set_bind_group(0, bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+            compute_pass.dispatch_workgroups(
+                width.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                height.div_ceil(YUV420P_PIXELS_PER_WORKGROUP),
+                1,
+            );
         }
 
         Ok(self.current_output_view())
@@ -1932,8 +2022,8 @@ mod colour_matrix_tests {
                 .await
                 .expect("conversion submission")
         );
-        queue.submit(std::iter::once(encoder.finish()));
-        converter.after_submit(&queue);
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(&queue, &submission);
         let frame = converter
             .take_pending()
             .expect("conversion pending")

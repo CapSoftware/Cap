@@ -9,13 +9,12 @@
 //! Every check here is a preflight API: `CGPreflightScreenCaptureAccess` for
 //! screen recording, `AXIsProcessTrusted` for accessibility, and
 //! `AVCaptureDevice.authorizationStatus(for:)` for camera / microphone. None
-//! of them prompt, and none of them materialise anything. The one API this
-//! module must never call is `SCShareableContent` -- the Tauri app polled it
-//! for permission state at 250ms and leaked the whole window/app/display
-//! graph per call (~137KB, issue #2023, the 82GB incident). Zed does the same
-//! thing from the other direction: its gpui fork touches `SCShareableContent`
-//! exactly once, at the moment the user actually starts a screen share, and
-//! has no permission poller at all.
+//! of them prompt, and none of them materialise anything. `SCShareableContent`
+//! must never be polled -- the Tauri app once polled it for permission state at
+//! 250ms and leaked the whole window/app/display graph per call (~137KB, issue
+//! #2023, the 82GB incident). It is only asked once a screen-recording
+//! preflight passes, to confirm the grant is real, and a success is cached
+//! (see [`screen_capture`]).
 //!
 //! ## Status model
 //!
@@ -51,19 +50,6 @@ impl OSPermission {
             Self::Accessibility => "Accessibility",
             Self::Microphone => "Microphone",
             Self::Camera => "Camera",
-        }
-    }
-
-    pub fn blurb(self) -> &'static str {
-        match self {
-            Self::ScreenRecording => {
-                "Click Grant to allow when macOS asks, or pick Cap in System Settings if needed. Restart the app after allowing screen recording."
-            }
-            Self::Accessibility => {
-                "During recording, Cap collects mouse activity locally to generate automatic zoom in segments."
-            }
-            Self::Microphone => "This permission is required to record audio in your Caps.",
-            Self::Camera => "This permission is required to record your camera in your Caps.",
         }
     }
 
@@ -225,6 +211,20 @@ pub fn check_raw() -> Option<RawPermissions> {
     }
 }
 
+/// [`check_raw`] without the ScreenCaptureKit confirmation of a screen
+/// recording grant, for pollers that only need camera / microphone status or
+/// watch for a grant to flip: it never queries `SCShareableContent`.
+pub fn check_raw_preflight() -> Option<RawPermissions> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(macos::check_raw_preflight())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// The startup / tray gate: screen recording + accessibility.
 pub fn necessary_granted() -> bool {
     match check_raw() {
@@ -291,6 +291,13 @@ async fn media_permission_result(
 #[cfg(target_os = "macos")]
 pub async fn ensure_capture_media_permission(permission: OSPermission) -> Result<(), String> {
     macos::ensure_capture_media_permission(permission).await
+}
+
+pub fn media_request_pending() -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::media_request_pending();
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 pub fn open_permission_settings(permission: OSPermission) {
@@ -383,6 +390,9 @@ fn spawn_relaunch(
 }
 
 #[cfg(target_os = "macos")]
+mod screen_capture;
+
+#[cfg(target_os = "macos")]
 mod macos {
     use super::{MediaAuthorization, OSPermission, RawPermissions};
 
@@ -405,6 +415,14 @@ mod macos {
     /// and AVFoundation's status query autoreleases temporaries (the same
     /// leak class `do_permissions_check` in the Tauri app plugs the same way).
     pub fn check_raw() -> RawPermissions {
+        let raw = check_raw_preflight();
+        RawPermissions {
+            screen_granted: super::screen_capture::available(raw.screen_granted),
+            ..raw
+        }
+    }
+
+    pub fn check_raw_preflight() -> RawPermissions {
         objc2::rc::autoreleasepool(|_| RawPermissions {
             screen_granted: unsafe { CGPreflightScreenCaptureAccess() },
             accessibility_granted: unsafe { AXIsProcessTrusted() },
@@ -466,6 +484,18 @@ mod macos {
         std::sync::Mutex::new(None);
     static MICROPHONE_REQUEST: std::sync::Mutex<Option<super::PendingMediaRequest>> =
         std::sync::Mutex::new(None);
+
+    pub fn media_request_pending() -> bool {
+        use futures_util::FutureExt as _;
+        [&CAMERA_REQUEST, &MICROPHONE_REQUEST]
+            .into_iter()
+            .any(|slot| {
+                slot.lock().is_ok_and(|slot| {
+                    slot.as_ref()
+                        .is_some_and(|pending| pending.clone().now_or_never().is_none())
+                })
+            })
+    }
 
     fn shared_media_request(camera: bool) -> Result<super::PendingMediaRequest, String> {
         use futures_util::FutureExt as _;

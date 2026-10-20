@@ -26,6 +26,7 @@ use crate::{
     devices::WindowOption,
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
     main_window::Mode,
+    sign_in::{SignIn, SignInEvent, SignInOrigin, SignInOutcome},
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
@@ -659,9 +660,7 @@ pub struct SettingsWindow {
     /// Key handling for Cmd-W lives on the root, which needs a focus handle of
     /// its own so the window has something focused when nothing else does.
     pub(crate) focus: FocusHandle,
-    sign_in_pending: bool,
-    sign_in_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    sign_in_task: Option<gpui::Task<()>>,
+    _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
 }
@@ -728,6 +727,26 @@ impl SettingsWindow {
             }),
         ];
 
+        let sign_in = SignIn::global(cx);
+        let sign_in_subscriptions = [
+            cx.observe_in(&sign_in, window, |_, _, window, cx| {
+                cx.notify();
+                window.refresh();
+            }),
+            cx.subscribe_in(&sign_in, window, |this, _, event, window, cx| match event {
+                SignInEvent::Finished {
+                    outcome: SignInOutcome::SignedIn,
+                    ..
+                } => this.refresh_user_profile(window, cx),
+                SignInEvent::AccountRefreshed => {
+                    this.has_cap_pro = store::auth_snapshot().is_upgraded();
+                    cx.notify();
+                    window.refresh();
+                }
+                SignInEvent::Finished { .. } => {}
+            }),
+        ];
+
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
 
@@ -762,9 +781,7 @@ impl SettingsWindow {
             slider_dragging: false,
             windows: Vec::new(),
             focus: cx.focus_handle(),
-            sign_in_pending: false,
-            sign_in_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            sign_in_task: None,
+            _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
         }
@@ -1892,7 +1909,7 @@ impl SettingsWindow {
             .child(update_links)
             .child({
                 let signed_in = store::auth_snapshot().signed_in();
-                let (variant, label) = if self.sign_in_pending {
+                let (variant, label) = if SignIn::global(cx).read(cx).is_pending() {
                     (ui::ButtonVariant::Gray, "Cancel Sign In")
                 } else if signed_in {
                     (ui::ButtonVariant::Gray, "Sign Out")
@@ -1913,53 +1930,16 @@ impl SettingsWindow {
     }
 
     fn toggle_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use std::sync::atomic::Ordering;
-
-        if self.sign_in_pending {
-            self.sign_in_cancel.store(true, Ordering::Relaxed);
-            self.sign_in_pending = false;
-            cx.notify();
+        let sign_in = SignIn::global(cx);
+        if sign_in.read(cx).is_pending() {
+            sign_in.update(cx, |sign_in, cx| sign_in.cancel(cx));
             return;
         }
         if store::auth_snapshot().signed_in() {
             self.clear_local_auth(window, cx);
             return;
         }
-
-        self.sign_in_cancel.store(false, Ordering::Relaxed);
-        let cancel = self.sign_in_cancel.clone();
-        let session = match crate::auth::begin_sign_in(cancel.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                tracing::error!("starting sign-in: {error}");
-                return;
-            }
-        };
-        cx.open_url(&session.url);
-        self.sign_in_pending = true;
-        self.sign_in_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let signed_in = cx
-                .background_executor()
-                .spawn(async move { session.complete() })
-                .await;
-            if matches!(signed_in, Ok(true))
-                && let Ok(plan) =
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).await
-                && let Err(error) = plan
-            {
-                tracing::warn!("updating auth plan after sign-in: {error}");
-            }
-            crate::platform::activate_app();
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.sign_in_pending = false;
-                if store::auth_snapshot().signed_in() {
-                    this.refresh_user_profile(window, cx);
-                }
-                cx.notify();
-                window.refresh();
-            });
-        }));
-        cx.notify();
+        sign_in.update(cx, |sign_in, cx| sign_in.start(SignInOrigin::Settings, cx));
     }
 
     pub(crate) fn refresh_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {

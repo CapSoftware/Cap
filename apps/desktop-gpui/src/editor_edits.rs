@@ -2403,6 +2403,40 @@ fn normalize_clip_transitions(timeline: &mut TimelineConfiguration) {
     timeline.transitions = next;
 }
 
+/// Adds a key wherever an animated interval crosses a bend in a piecewise
+/// time remap, valued as the renderer's linear interpolation had it, so
+/// retiming the keys leaves the animation on its original path.
+fn split_keyframes_at<K>(
+    keys: &mut Vec<K>,
+    bends: &[f64],
+    time: fn(&K) -> f64,
+    lerp: impl Fn(&K, &K, f64) -> K,
+) {
+    keys.sort_by(|a, b| time(a).total_cmp(&time(b)));
+    for &bend in bends {
+        let next = keys.partition_point(|key| time(key) <= bend);
+        if next == 0 || next == keys.len() || time(&keys[next - 1]) == bend {
+            continue;
+        }
+        let (prev, following) = (&keys[next - 1], &keys[next]);
+        let t = (bend - time(prev)) / (time(following) - time(prev));
+        let key = lerp(prev, following, t);
+        keys.insert(next, key);
+    }
+}
+
+fn lerp_vector_keyframe(
+    prev: &cap_project::MaskVectorKeyframe,
+    next: &cap_project::MaskVectorKeyframe,
+    t: f64,
+) -> cap_project::MaskVectorKeyframe {
+    cap_project::MaskVectorKeyframe {
+        time: prev.time + (next.time - prev.time) * t,
+        x: prev.x + (next.x - prev.x) * t,
+        y: prev.y + (next.y - prev.y) * t,
+    }
+}
+
 pub fn set_clip_segment_timescale(
     timeline: &mut TimelineConfiguration,
     index: usize,
@@ -2460,9 +2494,44 @@ pub fn set_clip_segment_timescale(
         segment.start += shift(segment.start);
         segment.end += shift(segment.end);
     }
+    let bends = [old_offsets[index], absolute_start, old_next_boundary];
     for segment in &mut timeline.mask_segments {
-        segment.start += shift(segment.start);
+        let old_start = segment.start;
+        let start_shift = shift(old_start);
+        segment.start += start_shift;
         segment.end += shift(segment.end);
+        let keyframes = &mut segment.keyframes;
+        let relative_bends = bends.map(|bend| bend - old_start);
+        split_keyframes_at(
+            &mut keyframes.position,
+            &relative_bends,
+            |key| key.time,
+            lerp_vector_keyframe,
+        );
+        split_keyframes_at(
+            &mut keyframes.size,
+            &relative_bends,
+            |key| key.time,
+            lerp_vector_keyframe,
+        );
+        split_keyframes_at(
+            &mut keyframes.intensity,
+            &relative_bends,
+            |key| key.time,
+            |prev, next, t| cap_project::MaskScalarKeyframe {
+                time: prev.time + (next.time - prev.time) * t,
+                value: prev.value + (next.value - prev.value) * t,
+            },
+        );
+        for time in keyframes
+            .position
+            .iter_mut()
+            .chain(&mut keyframes.size)
+            .map(|key| &mut key.time)
+            .chain(keyframes.intensity.iter_mut().map(|key| &mut key.time))
+        {
+            *time += shift(old_start + *time) - start_shift;
+        }
     }
     for segment in &mut timeline.text_segments {
         segment.start += shift(segment.start);
@@ -4153,6 +4222,95 @@ mod tests {
         assert_eq!(keyboard.keys[0].time_offset, 500.0);
         assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    fn clip_speed_changes_remap_mask_keyframes_in_absolute_time() {
+        for (timescale, expected) in [
+            (
+                0.5,
+                [
+                    (2.0, 14.0, [2.0, 6.0, 10.0], None),
+                    (16.0, 24.0, [2.0, 5.0, 7.0], Some(4.0)),
+                    (21.0, 27.0, [1.0, 3.0, 5.0], None),
+                ],
+            ),
+            (
+                2.0,
+                [
+                    (0.5, 3.5, [0.5, 1.5, 2.5], None),
+                    (4.0, 9.0, [0.5, 2.0, 4.0], Some(1.0)),
+                    (6.0, 12.0, [1.0, 3.0, 5.0], None),
+                ],
+            ),
+        ] {
+            let mut project = two_clip_config();
+            let timeline = project.timeline.as_mut().unwrap();
+            for (start, end) in [(1.0, 7.0), (8.0, 14.0), (11.0, 17.0)] {
+                let mut mask = default_mask_segment(start, end, 0);
+                mask.keyframes = serde_json::from_value(serde_json::json!({
+                    "position": [
+                        { "time": 1.0, "x": 0.2, "y": 0.3 },
+                        { "time": 3.0, "x": 0.5, "y": 0.6 },
+                        { "time": 5.0, "x": 0.8, "y": 0.9 }
+                    ],
+                    "size": [{ "time": 3.0, "x": 0.3, "y": 0.4 }],
+                    "intensity": [{ "time": 5.0, "value": 0.7 }]
+                }))
+                .unwrap();
+                timeline.mask_segments.push(mask);
+            }
+            let original = project.clone();
+            let mut history = ProjectHistory::new(original.clone());
+            assert!(set_clip_segment_timescale(
+                project.timeline.as_mut().unwrap(),
+                0,
+                timescale
+            ));
+            for ((before, after), (start, end, times, boundary_key)) in original
+                .timeline
+                .as_ref()
+                .unwrap()
+                .mask_segments
+                .iter()
+                .zip(&project.timeline.as_ref().unwrap().mask_segments)
+                .zip(expected)
+            {
+                let mut expected = before.clone();
+                expected.start = start;
+                expected.end = end;
+                for (key, time) in expected.keyframes.position.iter_mut().zip(times) {
+                    key.time = time;
+                }
+                expected.keyframes.size[0].time = times[1];
+                expected.keyframes.intensity[0].time = times[2];
+                if let Some(time) = boundary_key {
+                    expected.keyframes.position.insert(
+                        1,
+                        cap_project::MaskVectorKeyframe {
+                            time,
+                            x: 0.2 + (0.5 - 0.2) * 0.5,
+                            y: 0.3 + (0.6 - 0.3) * 0.5,
+                        },
+                    );
+                }
+                assert_eq!(
+                    serde_json::to_value(after).unwrap(),
+                    serde_json::to_value(&expected).unwrap(),
+                    "mask starting at {} at speed {timescale}",
+                    before.start
+                );
+            }
+            history.record(&project);
+            assert_eq!(
+                serde_json::to_value(history.undo().unwrap()).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(history.redo().unwrap()).unwrap(),
+                serde_json::to_value(&project).unwrap()
+            );
+        }
     }
 
     #[test]
