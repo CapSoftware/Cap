@@ -328,6 +328,33 @@ fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device
     }
 }
 
+fn create_copy_texture(
+    d3d_device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+) -> windows::core::Result<ID3D11Texture2D> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: pixel_format.as_dxgi(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+
+    let mut texture = None;
+    unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }?;
+    texture.ok_or_else(windows::core::Error::from_win32)
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Settings {
     pub is_border_required: Option<bool>,
@@ -336,6 +363,10 @@ pub struct Settings {
     pub pixel_format: PixelFormat,
     pub crop: Option<D3D11_BOX>,
     pub fps: Option<u32>,
+    /// Trim an odd-sized frame to the even size below it on the GPU, so a
+    /// consumer that encodes at even dimensions receives frames it can take as
+    /// they are. Ignored when `crop` is set.
+    pub even_dimensions: bool,
 }
 
 impl Settings {
@@ -506,13 +537,17 @@ impl Capturer {
             .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
             .unwrap_or(2);
 
+        let item_size = item.Size().map_err(NewCapturerError::ItemSize)?;
+
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             settings.pixel_format.as_directx(),
             frame_pool_size,
-            item.Size().map_err(NewCapturerError::ItemSize)?,
+            item_size,
         )
         .map_err(NewCapturerError::FramePool)?;
+
+        let pool_size = Arc::new(Mutex::new((item_size.Width, item_size.Height)));
 
         let session = frame_pool
             .CreateCaptureSession(&item)
@@ -539,33 +574,21 @@ impl Capturer {
         let crop_data = settings
             .crop
             .map(|crop| {
-                let desc = D3D11_TEXTURE2D_DESC {
-                    Width: (crop.right - crop.left),
-                    Height: (crop.bottom - crop.top),
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: settings.pixel_format.as_dxgi(),
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-                    CPUAccessFlags: 0,
-                    MiscFlags: 0,
-                };
-
-                let mut texture = None;
-                unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
-                    .map_err(NewCapturerError::CropTexture)?;
-
-                let texture = texture.ok_or_else(|| {
-                    NewCapturerError::CropTexture(windows::core::Error::from_win32())
-                })?;
+                let texture = create_copy_texture(
+                    &d3d_device,
+                    crop.right - crop.left,
+                    crop.bottom - crop.top,
+                    settings.pixel_format,
+                )
+                .map_err(NewCapturerError::CropTexture)?;
 
                 Ok::<_, NewCapturerError>((texture, crop))
             })
             .transpose()?;
+
+        // Allocated on the first odd-sized frame and again whenever that size
+        // changes, so an even-sized capture never pays for the copy.
+        let even_trim = Mutex::new(None::<(ID3D11Texture2D, u32, u32)>);
 
         let frame_arrived_token = frame_pool
             .FrameArrived(
@@ -575,6 +598,9 @@ impl Capturer {
                     let stop_flag = stop_flag.clone();
                     let staging_pool = staging_pool.clone();
                     let callback_activity = callback_activity.clone();
+                    let pixel_format = settings.pixel_format;
+                    let pool_size = pool_size.clone();
+                    let even_dimensions = settings.even_dimensions && settings.crop.is_none();
 
                     move |frame_pool, _| {
                         let _activity_guard = callback_activity.enter();
@@ -591,11 +617,51 @@ impl Capturer {
 
                         let size = frame.ContentSize()?;
 
+                        // The item can change size mid-capture (a recorded
+                        // window is resized, or the display's resolution
+                        // changes). The pool keeps handing out surfaces at its
+                        // creation size, so the frame's own ContentSize stops
+                        // describing its texture and every later frame reads
+                        // back as black. Recreate the pool for the new size and
+                        // skip this frame; the next one arrives correctly sized.
+                        {
+                            let mut pool_size = pool_size
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if (size.Width, size.Height) != *pool_size {
+                                drop(frame);
+                                // IDirect3DDevice is not Send, so it is rebuilt
+                                // here from the capture device rather than held
+                                // across the event handler.
+                                let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
+                                let direct3d_device =
+                                    unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?
+                                        .cast::<IDirect3DDevice>()?;
+                                frame_pool.Recreate(
+                                    &direct3d_device,
+                                    pixel_format.as_directx(),
+                                    frame_pool_size,
+                                    size,
+                                )?;
+                                *pool_size = (size.Width, size.Height);
+                                return Ok(());
+                            }
+                        }
+
                         let surface = frame.Surface()?;
                         let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
                         let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
 
                         let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                            // A shrunk item leaves the crop box hanging off the
+                            // edge of the source texture, which copies nothing
+                            // and would vend a stale surface as if it were live.
+                            if crop.right > size.Width.max(0) as u32
+                                || crop.bottom > size.Height.max(0) as u32
+                            {
+                                return Ok(());
+                            }
+
                             unsafe {
                                 d3d_context.CopySubresourceRegion(
                                     &cropped_texture,
@@ -615,6 +681,64 @@ impl Capturer {
                                 pixel_format: settings.pixel_format,
                                 inner: frame,
                                 texture: cropped_texture,
+                                d3d_context: d3d_context.clone(),
+                                d3d_device: d3d_device.clone(),
+                                staging_pool: staging_pool.clone(),
+                            }
+                        } else if even_dimensions && (size.Width % 2 != 0 || size.Height % 2 != 0) {
+                            let width = (size.Width.max(0) as u32) & !1;
+                            let height = (size.Height.max(0) as u32) & !1;
+                            if width == 0 || height == 0 {
+                                return Ok(());
+                            }
+
+                            let trimmed_texture = {
+                                let mut even_trim = even_trim
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                match even_trim.as_ref() {
+                                    Some((texture, w, h)) if (*w, *h) == (width, height) => {
+                                        texture.clone()
+                                    }
+                                    _ => {
+                                        let texture = create_copy_texture(
+                                            &d3d_device,
+                                            width,
+                                            height,
+                                            pixel_format,
+                                        )?;
+                                        *even_trim = Some((texture.clone(), width, height));
+                                        texture
+                                    }
+                                }
+                            };
+
+                            unsafe {
+                                d3d_context.CopySubresourceRegion(
+                                    &trimmed_texture,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    &texture,
+                                    0,
+                                    Some(&D3D11_BOX {
+                                        left: 0,
+                                        top: 0,
+                                        front: 0,
+                                        right: width,
+                                        bottom: height,
+                                        back: 1,
+                                    }),
+                                );
+                            }
+
+                            Frame {
+                                width,
+                                height,
+                                pixel_format: settings.pixel_format,
+                                inner: frame,
+                                texture: trimmed_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
                                 staging_pool: staging_pool.clone(),

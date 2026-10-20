@@ -47,7 +47,8 @@ use windows::{
                 GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow,
                 GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
                 GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic,
-                IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON, WS_CHILD,
+                IsWindow, IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON,
+                WS_CHILD,
                 WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
@@ -343,6 +344,16 @@ impl WindowImpl {
         }
 
         context.list
+    }
+
+    /// Resolve an id straight back to its HWND, without going through
+    /// `list()`. Enumeration deliberately skips minimized and cloaked
+    /// windows, so a window the user picked and then minimized is absent
+    /// from `list()` while still being a perfectly capturable target.
+    /// `IsWindow` is the only liveness question that matters here.
+    pub fn from_id_direct(id: &WindowIdImpl) -> Option<Self> {
+        let hwnd = HWND(id.0 as *mut std::ffi::c_void);
+        unsafe { IsWindow(Some(hwnd)) }.as_bool().then_some(Self(hwnd))
     }
 
     pub fn inner(&self) -> HWND {

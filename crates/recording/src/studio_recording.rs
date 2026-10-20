@@ -3406,6 +3406,8 @@ async fn create_segment_pipeline(
             max_capture_size,
             start_time.system_time(),
             base_inputs.capture_system_audio,
+            #[cfg(windows)]
+            capture_target.window(),
             #[cfg(target_os = "linux")]
             sources::screen_capture::LinuxCaptureSource::from_target(&capture_target),
             #[cfg(windows)]
@@ -3641,7 +3643,7 @@ async fn create_segment_pipeline(
                     crate::cursor::CursorCaptureTarget {
                         crop_bounds: cursor_crop_bounds,
                         display: cursor_display,
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", windows))]
                         window: base_inputs.capture_target.window(),
                     },
                     cursors_dir.to_path_buf(),
