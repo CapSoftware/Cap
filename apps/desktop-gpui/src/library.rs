@@ -808,9 +808,6 @@ pub fn recent_media() -> Vec<RecentItem> {
 const THUMBNAIL_WIDTH: u32 = 392;
 const THUMBNAIL_HEIGHT: u32 = 224;
 
-/// IDCT-scaled JPEG thumbnails are not the old full-decode pixels.
-const THUMBNAIL_CACHE_GENERATION: &str = "idct";
-
 /// Cached thumbnails re-encode at 80: `display.jpg` is itself a quality-75
 /// JPEG, and at a few hundred pixels wide the double re-encode stays clean
 /// while the biggest cache file lands around 25KB.
@@ -962,9 +959,9 @@ impl CacheSlot {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
                 prefix: if source.file_name().is_some_and(|name| name == "preview.jpg") {
-                    format!("preview-thumbnail-{THUMBNAIL_CACHE_GENERATION}")
+                    "preview-thumbnail".to_string()
                 } else {
-                    format!("thumbnail-{THUMBNAIL_CACHE_GENERATION}")
+                    "thumbnail".to_string()
                 },
                 mtime,
             });
@@ -972,7 +969,7 @@ impl CacheSlot {
         Some(Self {
             dir: thumbnail_cache_dir(),
             prefix: format!(
-                "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}-{THUMBNAIL_CACHE_GENERATION}",
+                "{:016x}-{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}",
                 fnv1a64(source.to_string_lossy().as_bytes())
             ),
             mtime,
@@ -1118,26 +1115,29 @@ pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
         (decoded, dimensions.0, dimensions.1)
     };
     let (width, height) = (width.max(1), height.max(1));
-    let (scale, target_width, target_height) =
+    let (_, target_width, target_height) =
         crate::jpeg_thumbnail::cover_target(width, height, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
     // Box sampling for the big ratios (one pass over a multi-megapixel
     // source, and at 8x down every output pixel averages a whole block);
     // Triangle when the sizes are close, where box would alias and costs
     // nothing to avoid.
-    let rgba = if scale <= 0.5 {
-        decoded
+    let rgba = match crate::jpeg_thumbnail::thumbnail_resize(
+        decoded.width(),
+        decoded.height(),
+        target_width,
+        target_height,
+    ) {
+        crate::jpeg_thumbnail::ThumbnailResize::Box => decoded
             .thumbnail_exact(target_width, target_height)
-            .into_rgba8()
-    } else if scale < 1.0 {
-        decoded
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Triangle => decoded
             .resize_exact(
                 target_width,
                 target_height,
                 image::imageops::FilterType::Triangle,
             )
-            .into_rgba8()
-    } else {
-        decoded.into_rgba8()
+            .into_rgba8(),
+        crate::jpeg_thumbnail::ThumbnailResize::Identity => decoded.into_rgba8(),
     };
 
     if let Some(cache) = &cache {
@@ -2193,11 +2193,7 @@ mod tests {
         let file = slot.file();
         assert_eq!(file.parent(), Some(screenshots.as_path()));
         let name = file.file_name().unwrap().to_str().unwrap();
-        assert!(
-            name.starts_with(&format!("thumbnail-{THUMBNAIL_CACHE_GENERATION}-"))
-                && name.ends_with(".jpg"),
-            "{name}"
-        );
+        assert!(name.starts_with("thumbnail-") && name.ends_with(".jpg"));
 
         let png = root.join("shot.png");
         std::fs::write(&png, b"png bytes").unwrap();
@@ -2210,11 +2206,8 @@ mod tests {
         assert!(
             shared
                 .prefix
-                .contains(&format!("{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}"))
-                && shared
-                    .prefix
-                    .ends_with(&format!("-{THUMBNAIL_CACHE_GENERATION}")),
-            "the target size and idct generation are part of the key"
+                .contains(&format!("{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}")),
+            "the target size is part of the key, so a size change re-decodes"
         );
 
         assert!(

@@ -33,6 +33,35 @@ pub fn decode_jpeg_thumbnail(
     Some((decoded, u32::from(info.width), u32::from(info.height)))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThumbnailResize {
+    Box,
+    Triangle,
+    Identity,
+}
+
+pub fn thumbnail_resize(
+    decoded_width: u32,
+    decoded_height: u32,
+    target_width: u32,
+    target_height: u32,
+) -> ThumbnailResize {
+    let decoded_width = decoded_width.max(1);
+    let decoded_height = decoded_height.max(1);
+    let target_width = target_width.max(1);
+    let target_height = target_height.max(1);
+    if decoded_width <= target_width && decoded_height <= target_height {
+        return ThumbnailResize::Identity;
+    }
+    let scale = (target_width as f32 / decoded_width as f32)
+        .min(target_height as f32 / decoded_height as f32);
+    if scale <= 0.5 {
+        ThumbnailResize::Box
+    } else {
+        ThumbnailResize::Triangle
+    }
+}
+
 pub fn cover_target(width: u32, height: u32, card_width: u32, card_height: u32) -> (f32, u32, u32) {
     let width = width.max(1);
     let height = height.max(1);
@@ -86,6 +115,24 @@ mod tests {
     }
 
     #[test]
+    fn resize_uses_the_decoded_buffer_not_the_original_scale() {
+        let (_, target_width, target_height) = cover_target(1920, 1080, CARD_WIDTH, CARD_HEIGHT);
+        assert_eq!((target_width, target_height), (398, 224));
+        assert_eq!(
+            thumbnail_resize(1920, 1080, target_width, target_height),
+            ThumbnailResize::Box
+        );
+        assert_eq!(
+            thumbnail_resize(480, 270, target_width, target_height),
+            ThumbnailResize::Triangle
+        );
+        assert_eq!(
+            thumbnail_resize(target_width, target_height, target_width, target_height),
+            ThumbnailResize::Identity
+        );
+    }
+
+    #[test]
     fn library_cover_idct_scales_1080p_to_a_quarter() {
         let encoded = encode_rgb(1920, 1080, [40, 120, 200]);
         let (decoded, width, height) = decode_jpeg_thumbnail(&encoded, |w, h| {
@@ -95,6 +142,16 @@ mod tests {
         .unwrap();
         assert_eq!((width, height), (1920, 1080));
         assert_eq!((decoded.width(), decoded.height()), (480, 270));
+        let (_, target_width, target_height) = cover_target(width, height, CARD_WIDTH, CARD_HEIGHT);
+        assert_eq!(
+            thumbnail_resize(
+                decoded.width(),
+                decoded.height(),
+                target_width,
+                target_height
+            ),
+            ThumbnailResize::Triangle
+        );
     }
 
     #[test]
