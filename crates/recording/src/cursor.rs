@@ -586,25 +586,30 @@ pub fn spawn_cursor_recorder(
             } else {
                 // While the pointer moves the shape rarely changes, so compare
                 // the raw bitmap first and build the TIFF only for a new shape.
-                let fingerprint = current_cursor_fingerprint();
-                if fingerprint.is_some()
-                    && fingerprint == last_cursor_fingerprint
-                    && last_cursor_id.is_some()
-                {
-                    last_cursor_id.clone()
-                } else if let Some(data) = get_cursor_data() {
-                    let cursor_id = cursor_id_for_image(
-                        data,
-                        &mut response,
-                        &cursors_dir,
-                        writer.as_ref(),
-                        &mut last_cursor_image,
-                    );
-                    last_cursor_id = Some(cursor_id.clone());
-                    last_cursor_fingerprint = fingerprint;
-                    Some(cursor_id)
-                } else {
-                    last_cursor_id.clone()
+                let known = last_cursor_id
+                    .is_some()
+                    .then_some(last_cursor_fingerprint.as_ref())
+                    .flatten();
+                match sample_cursor(known) {
+                    CursorSample::Unchanged => last_cursor_id.clone(),
+                    CursorSample::Read {
+                        fingerprint,
+                        data: Some(data),
+                    } => {
+                        let cursor_id = cursor_id_for_image(
+                            data,
+                            &mut response,
+                            &cursors_dir,
+                            writer.as_ref(),
+                            &mut last_cursor_image,
+                        );
+                        last_cursor_id = Some(cursor_id.clone());
+                        // Only a registered image may short-circuit later ticks;
+                        // a failed decode or save keeps retrying.
+                        last_cursor_fingerprint = last_cursor_image.as_ref().and(fingerprint);
+                        Some(cursor_id)
+                    }
+                    CursorSample::Read { data: None, .. } => last_cursor_id.clone(),
                 }
             };
 
@@ -809,23 +814,6 @@ struct CursorData {
     shape: Option<CursorShape>,
 }
 
-#[cfg(target_os = "macos")]
-fn get_cursor_data() -> Option<CursorData> {
-    use objc::rc::autoreleasepool;
-    use objc2::{ClassType, msg_send, rc::Retained};
-    use objc2_app_kit::NSCursor;
-
-    autoreleasepool(|| unsafe {
-        #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().or_else(|| {
-            let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
-            cursor
-        })?;
-
-        macos_cursor_data(&cursor)
-    })
-}
-
 /// What tells two cursor shapes apart without encoding them: the image's
 /// rendered pixels, its size and its hotspot.
 #[cfg(target_os = "macos")]
@@ -841,24 +829,51 @@ struct CursorFingerprint {
 #[derive(PartialEq)]
 struct CursorFingerprint;
 
-#[cfg(not(target_os = "macos"))]
-fn current_cursor_fingerprint() -> Option<CursorFingerprint> {
-    None
+enum CursorSample {
+    /// The cursor still matches the fingerprint of the last registered image.
+    Unchanged,
+    Read {
+        fingerprint: Option<CursorFingerprint>,
+        data: Option<CursorData>,
+    },
 }
 
+#[cfg(not(target_os = "macos"))]
+fn sample_cursor(_known: Option<&CursorFingerprint>) -> CursorSample {
+    CursorSample::Read {
+        fingerprint: None,
+        data: get_cursor_data(),
+    }
+}
+
+/// One read of the current cursor per tick: its fingerprint, and its encoded
+/// image only when that fingerprint differs from `known`, both from the same
+/// `NSCursor` so a shape change between two reads can't pair them wrongly.
 #[cfg(target_os = "macos")]
-fn current_cursor_fingerprint() -> Option<CursorFingerprint> {
+fn sample_cursor(known: Option<&CursorFingerprint>) -> CursorSample {
     use objc::rc::autoreleasepool;
     use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+        let Some(cursor) = NSCursor::currentSystemCursor().or_else(|| {
             let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
             cursor
-        })?;
-        macos_cursor_fingerprint(&cursor)
+        }) else {
+            return CursorSample::Read {
+                fingerprint: None,
+                data: None,
+            };
+        };
+        let fingerprint = macos_cursor_fingerprint(&cursor);
+        if fingerprint.is_some() && fingerprint.as_ref() == known {
+            return CursorSample::Unchanged;
+        }
+        CursorSample::Read {
+            data: macos_cursor_data(&cursor),
+            fingerprint,
+        }
     })
 }
 
