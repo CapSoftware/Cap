@@ -2063,6 +2063,72 @@ struct X11WindowCapture {
     id: u32,
     pixmap: u32,
     border_width: u16,
+    ancestors_watched: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct X11WindowChanges {
+    storage: bool,
+    placement: bool,
+    ancestors: bool,
+}
+
+impl X11WindowChanges {
+    fn record(&mut self, window: u32, event: &Event) -> anyhow::Result<()> {
+        match event {
+            Event::UnmapNotify(event) if event.window == window => {
+                bail!("Selected X11 window was unmapped");
+            }
+            Event::DestroyNotify(event) if event.window == window => {
+                bail!("Selected X11 window was closed");
+            }
+            Event::ConfigureNotify(event) if event.window == window => self.storage = true,
+            Event::MapNotify(event) if event.window == window => self.storage = true,
+            Event::ReparentNotify(event) if event.window == window => {
+                self.storage = true;
+                self.ancestors = true;
+            }
+            Event::ReparentNotify(_) => self.ancestors = true,
+            Event::ConfigureNotify(_)
+            | Event::GravityNotify(_)
+            | Event::MapNotify(_)
+            | Event::UnmapNotify(_)
+            | Event::DestroyNotify(_) => self.placement = true,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn any(&self) -> bool {
+        self.storage || self.placement || self.ancestors
+    }
+}
+
+fn watch_x11_ancestors(
+    conn: &RustConnection,
+    root: x11rb::protocol::xproto::Window,
+    window: x11rb::protocol::xproto::Window,
+) -> anyhow::Result<bool> {
+    let mut child = window;
+    loop {
+        let Ok(tree) = conn.query_tree(child)?.reply() else {
+            return Ok(false);
+        };
+        if tree.parent == root || tree.parent == x11rb::NONE {
+            return Ok(true);
+        }
+        if conn
+            .change_window_attributes(
+                tree.parent,
+                &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
+            )?
+            .check()
+            .is_err()
+        {
+            return Ok(false);
+        }
+        child = tree.parent;
+    }
 }
 
 impl X11Grabber {
@@ -2174,6 +2240,7 @@ impl X11Grabber {
                 id,
                 pixmap: 0,
                 border_width: 0,
+                ancestors_watched: false,
             })
         } else {
             None
@@ -2261,41 +2328,44 @@ impl X11Grabber {
         let Some(window) = self.window.as_mut() else {
             return Ok(());
         };
-        let mut storage_changed = false;
+        let mut changes = X11WindowChanges::default();
         while let Some(event) = self.conn.poll_for_event()? {
-            match event {
-                Event::UnmapNotify(event) if event.window == window.id => {
-                    bail!("Selected X11 window was unmapped");
-                }
-                Event::DestroyNotify(event) if event.window == window.id => {
-                    bail!("Selected X11 window was closed");
-                }
-                Event::ConfigureNotify(event) if event.window == window.id => {
-                    storage_changed = true
-                }
-                Event::ReparentNotify(event) if event.window == window.id => storage_changed = true,
-                Event::MapNotify(event) if event.window == window.id => storage_changed = true,
-                _ => {}
-            }
+            changes.record(window.id, &event)?;
         }
-        let attributes = self
-            .conn
-            .get_window_attributes(window.id)?
+        if changes.ancestors {
+            window.ancestors_watched = false;
+        }
+        if window.pixmap != 0 && window.ancestors_watched && !changes.any() {
+            return Ok(());
+        }
+        if !window.ancestors_watched {
+            window.ancestors_watched = watch_x11_ancestors(&self.conn, self.root, window.id)?;
+        }
+
+        let attributes = self.conn.get_window_attributes(window.id)?;
+        let geometry = self.conn.get_geometry(window.id)?;
+        let position = if self.show_cursor {
+            Some(
+                self.conn
+                    .translate_coordinates(window.id, self.root, 0, 0)?,
+            )
+        } else {
+            None
+        };
+        let attributes = attributes
             .reply()
             .context("selected X11 window is no longer available")?;
         if attributes.map_state != MapState::VIEWABLE {
             bail!("Selected X11 window is no longer viewable");
         }
-        let geometry = self
-            .conn
-            .get_geometry(window.id)?
+        let geometry = geometry
             .reply()
             .context("read selected X11 window geometry")?;
         if geometry.width == 0 || geometry.height == 0 {
             bail!("Selected X11 window has no content");
         }
 
-        if storage_changed
+        if changes.storage
             || window.pixmap == 0
             || self.width != geometry.width
             || self.height != geometry.height
@@ -2315,10 +2385,8 @@ impl X11Grabber {
             window.border_width = geometry.border_width;
         }
 
-        if self.show_cursor {
-            let position = self
-                .conn
-                .translate_coordinates(window.id, self.root, 0, 0)?
+        if let Some(position) = position {
+            let position = position
                 .reply()
                 .context("locate selected X11 window cursor")?;
             self.x = position.dst_x;
@@ -3097,5 +3165,132 @@ mod pipewire_frame_tests {
         assert_eq!(prepared.format(), ffmpeg::format::Pixel::BGRZ);
         assert_eq!((prepared.width(), prepared.height()), (8, 6));
         assert!(scaler.is_some());
+    }
+}
+
+#[cfg(test)]
+mod x11_window_change_tests {
+    use super::X11WindowChanges;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xproto::{
+        ConfigureNotifyEvent, DestroyNotifyEvent, GravityNotifyEvent, MapNotifyEvent,
+        PropertyNotifyEvent, ReparentNotifyEvent, UnmapNotifyEvent,
+    };
+
+    const WINDOW: u32 = 0x40_0001;
+    const FRAME: u32 = 0x20_0007;
+
+    fn changes(events: &[Event]) -> anyhow::Result<X11WindowChanges> {
+        let mut changes = X11WindowChanges::default();
+        for event in events {
+            changes.record(WINDOW, event)?;
+        }
+        Ok(changes)
+    }
+
+    #[test]
+    fn no_structure_events_keep_cached_window_state() {
+        let changes = changes(&[Event::PropertyNotify(PropertyNotifyEvent {
+            window: WINDOW,
+            ..Default::default()
+        })])
+        .unwrap();
+        assert!(!changes.any());
+    }
+
+    #[test]
+    fn own_configure_and_map_invalidate_window_storage() {
+        for event in [
+            Event::ConfigureNotify(ConfigureNotifyEvent {
+                event: WINDOW,
+                window: WINDOW,
+                ..Default::default()
+            }),
+            Event::MapNotify(MapNotifyEvent {
+                event: WINDOW,
+                window: WINDOW,
+                ..Default::default()
+            }),
+        ] {
+            let changes = changes(&[event]).unwrap();
+            assert!(changes.storage);
+            assert!(!changes.ancestors);
+        }
+    }
+
+    #[test]
+    fn own_reparent_rewatches_ancestors() {
+        let changes = changes(&[Event::ReparentNotify(ReparentNotifyEvent {
+            event: WINDOW,
+            window: WINDOW,
+            parent: FRAME,
+            ..Default::default()
+        })])
+        .unwrap();
+        assert!(changes.storage);
+        assert!(changes.ancestors);
+    }
+
+    #[test]
+    fn ancestor_changes_requery_placement_without_new_storage() {
+        for event in [
+            Event::ConfigureNotify(ConfigureNotifyEvent {
+                event: FRAME,
+                window: FRAME,
+                ..Default::default()
+            }),
+            Event::UnmapNotify(UnmapNotifyEvent {
+                event: FRAME,
+                window: FRAME,
+                ..Default::default()
+            }),
+            Event::MapNotify(MapNotifyEvent {
+                event: FRAME,
+                window: FRAME,
+                ..Default::default()
+            }),
+            Event::DestroyNotify(DestroyNotifyEvent {
+                event: FRAME,
+                window: FRAME,
+                ..Default::default()
+            }),
+            Event::GravityNotify(GravityNotifyEvent {
+                event: WINDOW,
+                window: WINDOW,
+                ..Default::default()
+            }),
+        ] {
+            let changes = changes(&[event]).unwrap();
+            assert!(changes.placement);
+            assert!(!changes.storage);
+        }
+
+        let reparented = changes(&[Event::ReparentNotify(ReparentNotifyEvent {
+            event: FRAME,
+            window: FRAME,
+            ..Default::default()
+        })])
+        .unwrap();
+        assert!(reparented.ancestors);
+        assert!(!reparented.storage);
+    }
+
+    #[test]
+    fn own_unmap_and_destroy_stop_capture() {
+        let unmapped = changes(&[Event::UnmapNotify(UnmapNotifyEvent {
+            event: WINDOW,
+            window: WINDOW,
+            ..Default::default()
+        })])
+        .unwrap_err();
+        assert_eq!(unmapped.to_string(), "Selected X11 window was unmapped");
+
+        let closed = changes(&[Event::DestroyNotify(DestroyNotifyEvent {
+            event: WINDOW,
+            window: WINDOW,
+            ..Default::default()
+        })])
+        .unwrap_err();
+        assert_eq!(closed.to_string(), "Selected X11 window was closed");
     }
 }
