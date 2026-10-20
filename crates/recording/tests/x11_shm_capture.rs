@@ -9,9 +9,12 @@ use std::{
 use cap_recording::screen_capture::{X11Grabber, X11InputConfig};
 use x11rb::{
     connection::Connection,
-    protocol::xproto::{
-        ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, ImageFormat, Window,
-        WindowClass,
+    protocol::{
+        xfixes::ConnectionExt as _,
+        xproto::{
+            ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, ImageFormat, Window,
+            WindowClass,
+        },
     },
     rust_connection::RustConnection,
     wrapper::ConnectionExt as _,
@@ -358,6 +361,166 @@ fn window_capture_uses_shm_and_survives_resize() {
         bgr_rows(&resized.grab().unwrap()),
         expected_bgr(0, 0, 90, 70)
     );
+}
+
+fn create_window(
+    conn: &RustConnection,
+    parent: Window,
+    x: i16,
+    y: i16,
+    width: u16,
+    height: u16,
+    background: u32,
+) -> Window {
+    let window = conn.generate_id().unwrap();
+    conn.create_window(
+        24,
+        window,
+        parent,
+        x,
+        y,
+        width,
+        height,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new().background_pixel(background),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    window
+}
+
+fn move_window(conn: &RustConnection, window: Window, x: i32, y: i32) {
+    conn.configure_window(window, &ConfigureWindowAux::new().x(x).y(y))
+        .unwrap()
+        .check()
+        .unwrap();
+}
+
+fn cursor_top_left(with: &mut X11Grabber, without: &mut X11Grabber) -> Option<(i32, i32)> {
+    let with = with.grab().unwrap();
+    let without = without.grab().unwrap();
+    let width = with.width() as usize;
+    bgr_rows(&with)
+        .chunks_exact(3)
+        .zip(bgr_rows(&without).chunks_exact(3))
+        .enumerate()
+        .filter(|(_, (cursor, plain))| cursor != plain)
+        .map(|(index, _)| ((index % width) as i32, (index / width) as i32))
+        .reduce(|(min_x, min_y), (x, y)| (min_x.min(x), min_y.min(y)))
+}
+
+#[test]
+fn window_capture_follows_moved_and_reparented_ancestors() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(640, 480, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    conn.xfixes_query_version(5, 0).unwrap().reply().unwrap();
+
+    let (child_x, child_y, width, height) = (5, 20, 240u16, 170u16);
+    let frame = create_window(&conn, root, 100, 80, width + 10, height + 25, 0x333333);
+    let window = create_window(&conn, frame, child_x, child_y, width, height, 0x00ff00);
+    conn.map_window(window).unwrap().check().unwrap();
+    conn.map_window(frame).unwrap().check().unwrap();
+    conn.sync().unwrap();
+
+    let config = |show_cursor| X11InputConfig {
+        window_id: Some(window),
+        show_cursor,
+        ..config(&server.display(), 0, 0, u32::from(width), u32::from(height))
+    };
+    let mut with = grabber(&config(true), true);
+    let mut without = grabber(&config(false), true);
+    for _ in 0..3 {
+        with.grab().unwrap();
+        without.grab().unwrap();
+    }
+
+    let cursor = conn.xfixes_get_cursor_image().unwrap().reply().unwrap();
+    let (cursor_width, cursor_height) = (cursor.width as usize, cursor.height as usize);
+    let opaque = |x: usize, y: usize| cursor.cursor_image[y * cursor_width + x] >> 24 != 0;
+    let opaque_x = (0..cursor_width)
+        .find(|&x| (0..cursor_height).any(|y| opaque(x, y)))
+        .unwrap() as i32;
+    let opaque_y = (0..cursor_height)
+        .find(|&y| (0..cursor_width).any(|x| opaque(x, y)))
+        .unwrap() as i32;
+    let offset = (
+        opaque_x - i32::from(cursor.xhot),
+        opaque_y - i32::from(cursor.yhot),
+    );
+
+    let mut assert_cursor = |origin: (i32, i32), local: (i32, i32), stage: &str| {
+        let pointer = (origin.0 + local.0, origin.1 + local.1);
+        conn.warp_pointer(
+            x11rb::NONE,
+            root,
+            0,
+            0,
+            0,
+            0,
+            pointer.0 as i16,
+            pointer.1 as i16,
+        )
+        .unwrap()
+        .check()
+        .unwrap();
+        conn.sync().unwrap();
+        assert_eq!(
+            cursor_top_left(&mut with, &mut without),
+            Some((local.0 + offset.0, local.1 + offset.1)),
+            "{stage}"
+        );
+    };
+
+    let child = (i32::from(child_x), i32::from(child_y));
+    assert_cursor((100 + child.0, 80 + child.1), (95, 50), "initial frame");
+
+    move_window(&conn, frame, 300, 250);
+    assert_cursor((300 + child.0, 250 + child.1), (55, 50), "frame moved");
+
+    let outer = create_window(&conn, root, 20, 30, 400, 300, 0x666666);
+    conn.map_window(outer).unwrap().check().unwrap();
+    conn.reparent_window(frame, outer, 40, 10)
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.sync().unwrap();
+    assert_cursor(
+        (20 + 40 + child.0, 30 + 10 + child.1),
+        (30, 40),
+        "frame reparented into a new outer frame",
+    );
+
+    move_window(&conn, outer, 150, 100);
+    assert_cursor(
+        (150 + 40 + child.0, 100 + 10 + child.1),
+        (70, 60),
+        "new outer frame moved",
+    );
+
+    let mut fresh = grabber(&config(false), true);
+    fresh.grab().unwrap();
+
+    conn.unmap_window(outer).unwrap().check().unwrap();
+    conn.sync().unwrap();
+    for (name, grabber) in [
+        ("show_cursor", &mut with),
+        ("no cursor", &mut without),
+        ("fresh no cursor", &mut fresh),
+    ] {
+        let Err(error) = grabber.grab() else {
+            panic!("{name}: grab succeeded after the outer frame was unmapped");
+        };
+        assert!(
+            format!("{error:#}").contains("no longer viewable"),
+            "{name}: {error:#}"
+        );
+    }
 }
 
 fn soak(frames: usize) {
