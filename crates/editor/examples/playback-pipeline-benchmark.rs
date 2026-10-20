@@ -849,6 +849,12 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
     let force_ffmpeg = args.iter().any(|arg| arg == "--force-ffmpeg");
+    // The editor holds a 1ms timer resolution while playing; this measures under the same condition.
+    let timer_1ms = args.iter().any(|arg| arg == "--timer-1ms");
+    #[cfg(target_os = "windows")]
+    if timer_1ms {
+        unsafe { windows::Win32::Media::timeBeginPeriod(1) };
+    }
 
     println!("{}", "=".repeat(60));
     println!("  CAP PLAYBACK PIPELINE BENCHMARK");
@@ -858,6 +864,7 @@ async fn main() {
     println!("Target FPS: {fps}");
     println!("Max frames: {frame_count}");
     println!("Force FFmpeg: {force_ffmpeg}");
+    println!("1ms timer: {timer_1ms}");
     println!();
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {

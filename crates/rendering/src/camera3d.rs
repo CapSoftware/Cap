@@ -190,12 +190,18 @@ pub fn sample_track(base: f64, keys: &[Camera3DKeyframe], time: f64) -> f64 {
         return base;
     }
 
-    let mut sorted = keys.to_vec();
-    sorted.sort_by(|a, b| {
-        a.time
-            .partial_cmp(&b.time)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let mut owned;
+    let sorted = if keys.is_sorted_by(|a, b| a.time <= b.time) {
+        keys
+    } else {
+        owned = keys.to_vec();
+        owned.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        &owned
+    };
 
     if time <= sorted[0].time {
         return sorted[0].value;
@@ -442,6 +448,142 @@ mod tests {
 
     const ASPECT: f64 = 16.0 / 9.0;
     const HY: f64 = 9.0 / 16.0;
+
+    fn baseline_sample_track(base: f64, keys: &[Camera3DKeyframe], time: f64) -> f64 {
+        if keys.is_empty() {
+            return base;
+        }
+        let mut sorted = keys.to_vec();
+        sorted.sort_by(|a, b| {
+            a.time
+                .partial_cmp(&b.time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        if time <= sorted[0].time {
+            return sorted[0].value;
+        }
+        for window in sorted.windows(2) {
+            let prev = &window[0];
+            let next = &window[1];
+            if time <= next.time {
+                let span = (next.time - prev.time).max(1e-6);
+                let progress = ((time - prev.time) / span).clamp(0.0, 1.0);
+                let p1 = prev.out_easing.unwrap_or(DEFAULT_OUT_EASING);
+                let p2 = next.in_easing.unwrap_or(DEFAULT_IN_EASING);
+                let eased = bezier_ease(p1, p2, progress);
+                return prev.value + (next.value - prev.value) * eased;
+            }
+        }
+        sorted.last().map(|k| k.value).unwrap_or(base)
+    }
+
+    fn track_keys(times: &[f64]) -> Vec<Camera3DKeyframe> {
+        times
+            .iter()
+            .enumerate()
+            .map(|(index, &time)| Camera3DKeyframe {
+                time,
+                value: index as f64 * 3.0 - 7.0,
+                out_easing: (index % 2 == 0).then_some([0.25, 0.1]),
+                in_easing: (index % 3 == 0).then_some([0.75, 0.9]),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn track_sampling_matches_sorting_baseline() {
+        for times in [
+            vec![],
+            vec![2.0],
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![3.0, 2.0, 1.0, 0.0],
+            vec![2.0, 0.0, 3.0, 1.0],
+            vec![0.0, 1.0, 1.0, 2.0],
+            vec![1.0, 1.0, 0.0, 2.0],
+            vec![1.0, 1.0, 1.0],
+            vec![-0.0, 0.0, 1.0],
+            vec![f64::NEG_INFINITY, 0.0, f64::INFINITY],
+            vec![0.0, f64::NAN, 2.0],
+            vec![f64::NAN],
+            (0..128).map(|index| (index / 3) as f64).collect(),
+            (0..128).rev().map(|index| (index / 3) as f64).collect(),
+        ] {
+            let keys = track_keys(&times);
+            for time in (-4..=176).map(|step| step as f64 / 4.0).chain([
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                f64::NAN,
+            ]) {
+                let expected = baseline_sample_track(42.0, &keys, time);
+                let actual = sample_track(42.0, &keys, time);
+                assert!(
+                    actual.to_bits() == expected.to_bits()
+                        || (actual.is_nan() && expected.is_nan()),
+                    "times={times:?}, query={time}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn track_sampling_preserves_duplicate_order() {
+        let keys = track_keys(&[0.0, 1.0, 1.0, 2.0]);
+        assert_eq!(sample_track(42.0, &keys, 1.0), keys[1].value);
+        assert_eq!(sample_track(42.0, &keys, 2.0), keys[3].value);
+        assert_eq!(sample_track(42.0, &track_keys(&[1.0, 1.0]), 1.0), -7.0);
+        assert_eq!(sample_track(42.0, &track_keys(&[1.0, 1.0]), 2.0), -4.0);
+    }
+
+    #[test]
+    #[ignore = "release-mode track sampling benchmark"]
+    fn benchmark_camera3d_track_sampling() {
+        use std::{hint::black_box, time::Instant};
+
+        fn measure(
+            sample: fn(f64, &[Camera3DKeyframe], f64) -> f64,
+            keys: &[Camera3DKeyframe],
+        ) -> f64 {
+            let duration = keys.iter().map(|key| key.time).fold(1.0, f64::max);
+            let start = Instant::now();
+            for frame in 0..20_000 {
+                let time = (frame % 1800) as f64 / 1800.0 * duration;
+                for _ in 0..16 {
+                    black_box(sample(black_box(42.0), black_box(keys), black_box(time)));
+                }
+            }
+            start.elapsed().as_secs_f64() * 1e9 / 20_000.0
+        }
+
+        for count in [0, 1, 2, 16, 128] {
+            for reversed in [false, true] {
+                let mut keys = track_keys(&(0..count).map(f64::from).collect::<Vec<_>>());
+                if reversed {
+                    keys.reverse();
+                }
+                black_box(measure(baseline_sample_track, &keys));
+                black_box(measure(sample_track, &keys));
+                let mut baseline = Vec::new();
+                let mut optimized = Vec::new();
+                for round in 0..7 {
+                    if round % 2 == 0 {
+                        baseline.push(measure(baseline_sample_track, &keys));
+                        optimized.push(measure(sample_track, &keys));
+                    } else {
+                        optimized.push(measure(sample_track, &keys));
+                        baseline.push(measure(baseline_sample_track, &keys));
+                    }
+                }
+                baseline.sort_by(f64::total_cmp);
+                optimized.sort_by(f64::total_cmp);
+                println!(
+                    "keys={count}, reversed={reversed}: baseline={:.1} ns/frame, optimized={:.1} ns/frame, speedup={:.2}x",
+                    baseline[3],
+                    optimized[3],
+                    baseline[3] / optimized[3]
+                );
+            }
+        }
+    }
 
     fn apply3(rows: &[[f32; 3]; 3], v: [f64; 3]) -> [f64; 3] {
         let mut out = [0.0; 3];

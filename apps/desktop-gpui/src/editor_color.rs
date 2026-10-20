@@ -37,6 +37,7 @@
 
 use std::sync::Arc;
 
+pub use cap_gpui_kernels::texture::{Filter, Overlay};
 use cap_project::{ColorCorrection, ProjectConfiguration};
 use gpui::{
     AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
@@ -99,27 +100,6 @@ pub const IDENTITY: GradeValues = GradeValues {
     vignette: 0.,
     grain: 0.,
 };
-
-/// One CSS shorthand filter function. The chain per preset is the source's
-/// `preview.filter` string, parsed here into its terms once and for all.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Filter {
-    Contrast(f32),
-    Saturate(f32),
-    Grayscale(f32),
-    Brightness(f32),
-    Sepia(f32),
-    HueRotate(f32),
-}
-
-/// `preview.overlay` -- a two-stop `linear-gradient` in rgba, painted at
-/// `mix-blend-mode: overlay`.
-#[derive(Debug, Clone, Copy)]
-pub struct Overlay {
-    pub angle: f32,
-    pub from: [f32; 4],
-    pub to: [f32; 4],
-}
 
 pub struct ColorPreset {
     pub id: &'static str,
@@ -425,225 +405,22 @@ impl GradeSlider {
 // The preview, computed
 // ---------------------------------------------------------------------------
 
-/// `COLOR_PREVIEW_SCENE`: `linear-gradient(160deg, #60a5fa 0%, #e2e8f0 35%,
-/// #fb923c 62%, #1e293b 100%)` (`colorCorrection.ts:53-54`).
-const SCENE_ANGLE: f32 = 160.;
-const SCENE_STOPS: [(f32, [f32; 3]); 4] = [
-    (
-        0.00,
-        [0x60 as f32 / 255., 0xa5 as f32 / 255., 0xfa as f32 / 255.],
-    ),
-    (
-        0.35,
-        [0xe2 as f32 / 255., 0xe8 as f32 / 255., 0xf0 as f32 / 255.],
-    ),
-    (
-        0.62,
-        [0xfb as f32 / 255., 0x92 as f32 / 255., 0x3c as f32 / 255.],
-    ),
-    (
-        1.00,
-        [0x1e as f32 / 255., 0x29 as f32 / 255., 0x3b as f32 / 255.],
-    ),
-];
-
 /// The tile: `aspect-video` inside a `grid-cols-3 gap-2` in the sidebar's
 /// 382px content column, each button `p-1.5` with a 1px border. Generated at
 /// 2x so it is sharp on a Retina panel.
 pub const PREVIEW_WIDTH: u32 = 216;
 pub const PREVIEW_HEIGHT: u32 = 122;
 
-/// Where a pixel sits along a CSS gradient line, in `[0, 1]`.
-///
-/// The line runs through the box centre at `angle` clockwise from "to top", so
-/// its direction in screen coordinates (y down) is `(sin a, -cos a)`, and its
-/// length is `|w sin a| + |h cos a|` -- the projection of the box onto it.
-pub fn gradient_position(x: f32, y: f32, width: f32, height: f32, angle: f32) -> f32 {
-    let radians = angle.to_radians();
-    let (sin, cos) = (radians.sin(), radians.cos());
-    let length = (width * sin).abs() + (height * cos).abs();
-    if length <= 0. {
-        return 0.;
-    }
-    let (dx, dy) = (x - width / 2., y - height / 2.);
-    (0.5 + (dx * sin - dy * cos) / length).clamp(0., 1.)
-}
-
-/// Linear interpolation between stops, in sRGB -- the default interpolation
-/// space for a CSS gradient with no `in <space>` clause.
-fn gradient_color(position: f32, stops: &[(f32, [f32; 3])]) -> [f32; 3] {
-    let mut previous = stops[0];
-    for stop in stops {
-        if position <= stop.0 {
-            if stop.0 <= previous.0 {
-                return stop.1;
-            }
-            let t = (position - previous.0) / (stop.0 - previous.0);
-            return [
-                previous.1[0] + t * (stop.1[0] - previous.1[0]),
-                previous.1[1] + t * (stop.1[1] - previous.1[1]),
-                previous.1[2] + t * (stop.1[2] - previous.1[2]),
-            ];
-        }
-        previous = *stop;
-    }
-    previous.1
-}
-
-/// One CSS filter function, in sRGB.
-///
-/// The Filter Effects spec defines the shorthand functions as SVG filter
-/// primitives with `color-interpolation-filters: sRGB`, so no linearisation
-/// happens -- which is why `brightness(1.1)` is a plain multiply here.
-/// Intermediate results clamp, as a browser's 8-bit filter chain does.
-pub fn apply_filter(color: [f32; 3], filter: Filter) -> [f32; 3] {
-    let clamp = |value: f32| value.clamp(0., 1.);
-    let [r, g, b] = color;
-    let out = match filter {
-        Filter::Brightness(amount) => [r * amount, g * amount, b * amount],
-        Filter::Contrast(amount) => [
-            (r - 0.5) * amount + 0.5,
-            (g - 0.5) * amount + 0.5,
-            (b - 0.5) * amount + 0.5,
-        ],
-        // `grayscale(a)` is defined as the saturate matrix at `1 - a`.
-        Filter::Saturate(amount) | Filter::Grayscale(amount) => {
-            let amount = if matches!(filter, Filter::Grayscale(_)) {
-                1. - amount
-            } else {
-                amount
-            };
-            [
-                (0.213 + 0.787 * amount) * r
-                    + (0.715 - 0.715 * amount) * g
-                    + (0.072 - 0.072 * amount) * b,
-                (0.213 - 0.213 * amount) * r
-                    + (0.715 + 0.285 * amount) * g
-                    + (0.072 - 0.072 * amount) * b,
-                (0.213 - 0.213 * amount) * r
-                    + (0.715 - 0.715 * amount) * g
-                    + (0.072 + 0.928 * amount) * b,
-            ]
-        }
-        // The sepia matrix, lerped against the identity by `amount`.
-        Filter::Sepia(amount) => {
-            let lerp = |identity: f32, sepia: f32| identity + amount * (sepia - identity);
-            [
-                lerp(1., 0.393) * r + lerp(0., 0.769) * g + lerp(0., 0.189) * b,
-                lerp(0., 0.349) * r + lerp(1., 0.686) * g + lerp(0., 0.168) * b,
-                lerp(0., 0.272) * r + lerp(0., 0.534) * g + lerp(1., 0.131) * b,
-            ]
-        }
-        Filter::HueRotate(degrees) => {
-            let radians = degrees.to_radians();
-            let (sin, cos) = (radians.sin(), radians.cos());
-            [
-                (0.213 + cos * 0.787 - sin * 0.213) * r
-                    + (0.715 - cos * 0.715 - sin * 0.715) * g
-                    + (0.072 - cos * 0.072 + sin * 0.928) * b,
-                (0.213 - cos * 0.213 + sin * 0.143) * r
-                    + (0.715 + cos * 0.285 + sin * 0.140) * g
-                    + (0.072 - cos * 0.072 - sin * 0.283) * b,
-                (0.213 - cos * 0.213 - sin * 0.787) * r
-                    + (0.715 - cos * 0.715 + sin * 0.715) * g
-                    + (0.072 + cos * 0.928 + sin * 0.072) * b,
-            ]
-        }
-    };
-    [clamp(out[0]), clamp(out[1]), clamp(out[2])]
-}
-
-pub fn apply_filters(color: [f32; 3], filters: &[Filter]) -> [f32; 3] {
-    filters
-        .iter()
-        .fold(color, |color, filter| apply_filter(color, *filter))
-}
-
-/// `mix-blend-mode: overlay` -- `HardLight(Cs, Cb)` with the operands swapped,
-/// which is the Compositing spec's definition.
-pub fn overlay_blend(backdrop: f32, source: f32) -> f32 {
-    if backdrop <= 0.5 {
-        2. * backdrop * source
-    } else {
-        1. - 2. * (1. - backdrop) * (1. - source)
-    }
-}
-
-/// Source-over of a blended layer whose own alpha is `alpha`, over an opaque
-/// backdrop: `Co = a * B(Cb, Cs) + (1 - a) * Cb`.
-fn composite_overlay(backdrop: [f32; 3], source: [f32; 4]) -> [f32; 3] {
-    let alpha = source[3];
-    [
-        alpha * overlay_blend(backdrop[0], source[0]) + (1. - alpha) * backdrop[0],
-        alpha * overlay_blend(backdrop[1], source[1]) + (1. - alpha) * backdrop[1],
-        alpha * overlay_blend(backdrop[2], source[2]) + (1. - alpha) * backdrop[2],
-    ]
-}
-
-/// `radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,v*0.75)
-/// 100%)` (`ColorCorrectionSection.tsx:57-63`).
-///
-/// The default radial size is `farthest-corner`, and for an `ellipse at center`
-/// that is the farthest-side ellipse scaled to pass through the corner, i.e.
-/// both radii multiplied by sqrt(2).
-pub fn vignette_alpha(x: f32, y: f32, width: f32, height: f32, vignette: f32) -> f32 {
-    if vignette <= 0. {
-        return 0.;
-    }
-    let (rx, ry) = (
-        width / 2. * std::f32::consts::SQRT_2,
-        height / 2. * std::f32::consts::SQRT_2,
-    );
-    let (dx, dy) = ((x - width / 2.) / rx, (y - height / 2.) / ry);
-    let distance = (dx * dx + dy * dy).sqrt();
-    // `toFixed(3)` on the stop's alpha, as the source writes it.
-    let peak = ((vignette * 0.75) * 1000.).round() / 1000.;
-    (((distance - 0.4) / 0.6).clamp(0., 1.)) * peak
-}
-
 /// One preset tile, rasterised.
 pub fn preset_preview(preset: &ColorPreset, width: u32, height: u32) -> Arc<RenderImage> {
-    let (w, h) = (width.max(1), height.max(1));
-    let (wf, hf) = (w as f32, h as f32);
-    let mut rgba = image::RgbaImage::new(w, h);
-    // `opacity: Math.min(1, grain * 1.2)` over a 64px tile at
-    // `baseFrequency 0.9`, `numOctaves 2` -- the source's `COLOR_PREVIEW_GRAIN`.
-    let grain_opacity = (preset.values.grain * 1.2).min(1.);
-
-    for (x, y, pixel) in rgba.enumerate_pixels_mut() {
-        let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
-        let scene = gradient_color(gradient_position(xf, yf, wf, hf, SCENE_ANGLE), &SCENE_STOPS);
-        let mut color = apply_filters(scene, preset.filter);
-
-        if let Some(overlay) = preset.overlay {
-            let position = gradient_position(xf, yf, wf, hf, overlay.angle);
-            let source = [
-                overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
-                overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
-                overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
-                overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
-            ];
-            color = composite_overlay(color, source);
-        }
-
-        let shade = 1. - vignette_alpha(xf, yf, wf, hf, preset.values.vignette);
-        color = [color[0] * shade, color[1] * shade, color[2] * shade];
-
-        if grain_opacity > 0. {
-            // The tile repeats every 64 device pixels in CSS; the preview is
-            // generated at 2x, so the tile is 128 pixels wide here.
-            let level =
-                crate::editor_sidebar::fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2)
-                    .clamp(0., 1.);
-            let grain = [level, level, level, grain_opacity];
-            color = composite_overlay(color, grain);
-        }
-
-        let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
-        // BGRA, gpui's atlas order.
-        *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
-    }
-
+    let rgba = cap_gpui_kernels::texture::preset_preview_bgra(
+        preset.filter,
+        preset.overlay,
+        preset.values.vignette,
+        preset.values.grain,
+        width,
+        height,
+    );
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         rgba
     )]))
@@ -897,6 +674,10 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_gpui_kernels::texture::{
+        SCENE_ANGLE, SCENE_STOPS, apply_filter, apply_filters, composite_overlay, gradient_color,
+        gradient_position, overlay_blend, vignette_alpha,
+    };
 
     #[test]
     fn the_catalogue_matches_the_source() {

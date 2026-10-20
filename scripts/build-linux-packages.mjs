@@ -1,11 +1,18 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gpuiDirectory } from "./bundle-gpui.mjs";
 import {
 	finalizeLinuxAppImage,
 	runCommand,
 } from "./finalize-linux-appimage.mjs";
+import {
+	finalizeGpuiDeb,
+	finalizeGpuiRpm,
+} from "./finalize-linux-gpui-packages.mjs";
 import { supportedLinuxBundles } from "./linux-bundle-config.mjs";
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const [target, ...args] = process.argv.slice(2);
 if (
@@ -14,7 +21,7 @@ if (
 	args.some((arg) => /^--(?:target|bundles|debug|profile)(?:=|$)/.test(arg))
 ) {
 	throw new Error(
-		"Run on Linux: node scripts/build-linux-packages.mjs <target> [tauri build options]",
+		"Run on Linux: node scripts/build-linux-packages.mjs <target> [--skip-build] [tauri bundle options]",
 	);
 }
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
@@ -23,46 +30,50 @@ if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
 	);
 }
 
-const desktopDirectory = fileURLToPath(
-	new URL("../apps/desktop/", import.meta.url),
-);
-const metadata = runCommand(
-	"cargo",
-	["metadata", "--no-deps", "--format-version", "1"],
-	{
-		cwd: path.join(desktopDirectory, "src-tauri"),
+const metadata = JSON.parse(
+	runCommand("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+		cwd: path.join(repoRoot, "apps", "desktop", "src-tauri"),
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "inherit"],
-	},
+	}).stdout,
 );
-const workspace = JSON.parse(metadata.stdout);
-const targetDirectory = workspace.target_directory;
-const version = workspace.packages.find(
+const version = metadata.packages.find(
 	(pkg) => pkg.name === "cap-desktop",
 )?.version;
 if (!version) throw new Error("Desktop version is missing from Cargo metadata");
-const bundles = supportedLinuxBundles(version).join(",");
 
 runCommand(
-	"bun",
-	["run", "build:tauri", "--target", target, "--bundles", bundles, ...args],
-	{
-		cwd: desktopDirectory,
-		env: { ...process.env, RUST_TARGET_TRIPLE: target },
-	},
+	"node",
+	[
+		path.join(repoRoot, "scripts", "bundle-gpui.mjs"),
+		target,
+		"--bundles",
+		supportedLinuxBundles(version).join(","),
+		...args,
+	],
+	{ env: { ...process.env, RUST_TARGET_TRIPLE: target } },
 );
 
-const bundleDirectory = path.join(
-	targetDirectory,
-	target,
-	"release/bundle/appimage",
-);
-const images = (await readdir(bundleDirectory)).filter((file) =>
-	file.endsWith(".AppImage"),
-);
+const bundleRoot = path.join(gpuiDirectory, "target", target, "release/bundle");
+
+async function bundledArtifacts(format, extension) {
+	const directory = path.join(bundleRoot, format);
+	const files = (await readdir(directory).catch(() => [])).filter((file) =>
+		file.endsWith(extension),
+	);
+	return files.map((file) => path.join(directory, file));
+}
+
+const images = await bundledArtifacts("appimage", ".AppImage");
 if (images.length !== 1) {
 	throw new Error(
-		`Expected one AppImage in ${bundleDirectory}, found ${images.length}`,
+		`Expected one AppImage in ${bundleRoot}/appimage, found ${images.length}`,
 	);
 }
-await finalizeLinuxAppImage(path.join(bundleDirectory, images[0]));
+for (const deb of await bundledArtifacts("deb", ".deb")) {
+	await finalizeGpuiDeb(deb);
+}
+for (const rpm of await bundledArtifacts("rpm", ".rpm")) {
+	await finalizeGpuiRpm(rpm);
+}
+await finalizeLinuxAppImage(images[0], { webview: false });
