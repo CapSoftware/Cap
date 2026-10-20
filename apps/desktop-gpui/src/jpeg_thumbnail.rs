@@ -1,7 +1,5 @@
 use image::DynamicImage;
 
-/// IDCT-scale a JPEG. `request` gets the file's pixel size and returns the size
-/// to decode toward; the size returned with the image is the file's.
 pub fn decode_jpeg_thumbnail(
     bytes: &[u8],
     request: impl FnOnce(u32, u32) -> (u32, u32),
@@ -9,6 +7,10 @@ pub fn decode_jpeg_thumbnail(
     let mut decoder = jpeg_decoder::Decoder::new(bytes);
     decoder.read_info().ok()?;
     let info = decoder.info()?;
+    match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 | jpeg_decoder::PixelFormat::L8 => {}
+        _ => return None,
+    }
     let (requested_width, requested_height) =
         request(u32::from(info.width), u32::from(info.height));
     let requested_width = requested_width.clamp(1, u32::from(u16::MAX)) as u16;
@@ -31,7 +33,6 @@ pub fn decode_jpeg_thumbnail(
     Some((decoded, u32::from(info.width), u32::from(info.height)))
 }
 
-/// Cover size for a card. Never upscales.
 pub fn cover_target(width: u32, height: u32, card_width: u32, card_height: u32) -> (f32, u32, u32) {
     let width = width.max(1);
     let height = height.max(1);
@@ -98,11 +99,51 @@ mod tests {
 
     #[test]
     fn cmyk_frame_returns_none() {
-        let bytes = [
-            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x14, 0x08, 0x00, 0x08, 0x00, 0x08, 0x04, 0x01, 0x11,
-            0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0x04, 0x11, 0x00,
-        ];
+        let bytes = cmyk_jpeg();
+        let mut decoder = jpeg_decoder::Decoder::new(bytes.as_slice());
+        let pixels = decoder.decode().expect("cmyk fixture decodes");
+        assert_eq!(
+            decoder.info().map(|info| info.pixel_format),
+            Some(jpeg_decoder::PixelFormat::CMYK32)
+        );
+        assert_eq!(pixels.len(), 8 * 8 * 4);
         assert!(decode_jpeg_thumbnail(&bytes, |w, h| (w, h)).is_none());
+    }
+
+    fn cmyk_jpeg() -> Vec<u8> {
+        fn marker(out: &mut Vec<u8>, tag: u8, payload: &[u8]) {
+            out.extend_from_slice(&[0xFF, tag]);
+            let len = u16::try_from(payload.len() + 2).unwrap();
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(payload);
+        }
+        fn huffman(class: u8) -> Vec<u8> {
+            let mut table = vec![class, 0x01];
+            table.extend(std::iter::repeat_n(0x00, 15));
+            table.push(0x00);
+            table
+        }
+        let mut quant = vec![0x00];
+        quant.extend(std::iter::repeat_n(0x01, 64));
+        let mut frame = vec![0x08, 0x00, 0x08, 0x00, 0x08, 0x04];
+        for id in 1..=4u8 {
+            frame.extend_from_slice(&[id, 0x11, 0x00]);
+        }
+        let mut scan = vec![0x04];
+        for id in 1..=4u8 {
+            scan.extend_from_slice(&[id, 0x00]);
+        }
+        scan.extend_from_slice(&[0x00, 0x3F, 0x00]);
+
+        let mut bytes = vec![0xFF, 0xD8];
+        marker(&mut bytes, 0xDB, &quant);
+        marker(&mut bytes, 0xC0, &frame);
+        marker(&mut bytes, 0xC4, &huffman(0x00));
+        marker(&mut bytes, 0xC4, &huffman(0x10));
+        marker(&mut bytes, 0xDA, &scan);
+        bytes.push(0x00);
+        bytes.extend_from_slice(&[0xFF, 0xD9]);
+        bytes
     }
 
     fn cover_dims(width: u32, height: u32) -> (u32, u32) {
