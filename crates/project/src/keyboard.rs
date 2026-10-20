@@ -867,6 +867,10 @@ pub fn group_key_events(
 
         if event.key == "Backspace" && !current_display.is_empty() {
             current_display.pop();
+            let _ = current_keys.pop();
+            if current_display.is_empty() {
+                current_group_start = None;
+            }
             last_key_time = event.time_ms;
             continue;
         }
@@ -1035,6 +1039,27 @@ mod tests {
     }
 
     #[test]
+    fn backspace_keeps_display_and_key_timing_aligned() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("h", 100.0),
+                key_down("e", 200.0),
+                key_down("Backspace", 300.0),
+                key_down("a", 400.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].display_text, "ha");
+        assert_eq!(segments[0].keys.len(), 2);
+        assert_eq!(segments[0].keys[0].key, "h");
+        assert_eq!(segments[0].keys[1].key, "a");
+        assert_eq!(segments[0].keys[1].time_offset, 300.0);
+        assert!(segments[0].split_at(0.35).is_some());
+    }
+
+    #[test]
     fn backspace_to_empty_does_not_emit_blank_segment() {
         let events = KeyboardEvents {
             presses: vec![
@@ -1050,6 +1075,25 @@ mod tests {
         let segments = group_key_events(&events, 300.0, 500.0, true, true);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].display_text, "x");
+    }
+
+    #[test]
+    fn backspace_to_empty_rebases_the_next_character() {
+        let events = KeyboardEvents {
+            presses: vec![
+                key_down("a", 100.0),
+                key_down("Backspace", 200.0),
+                key_down("x", 250.0),
+            ],
+        };
+
+        let segments = group_key_events(&events, 300.0, 500.0, true, true);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].start, 0.25);
+        assert_eq!(segments[0].display_text, "x");
+        assert_eq!(segments[0].keys.len(), 1);
+        assert_eq!(segments[0].keys[0].key, "x");
+        assert_eq!(segments[0].keys[0].time_offset, 0.0);
     }
 
     #[test]
