@@ -1,4 +1,5 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import * as Db from "@cap/database/schema";
 import {
 	CurrentUser,
@@ -80,24 +81,31 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 								)
 								.where(Dz.eq(Db.authApiKeys.id, authHeader)),
 						)
-						.pipe(Effect.map(([entry]) => Option.fromNullable(entry?.users)));
+						.pipe(
+							Effect.map(([entry]) =>
+								Option.fromNullable(entry?.users).pipe(
+									Option.filter((user) => !isBlockedAccountEmail(user.email)),
+								),
+							),
+						);
 				} else {
 					user = yield* getCurrentUser;
 				}
 
 				return yield* user.pipe(
 					Option.map(makeCurrentUser),
-					Effect.catchTag(
-						"NoSuchElementException",
-						() => new HttpApiError.Unauthorized(),
+					Effect.catchTag("NoSuchElementException", () =>
+						Effect.fail(new HttpApiError.Unauthorized()),
 					),
 				);
 			}).pipe(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
-					UnknownException: () => new HttpApiError.InternalServerError(),
-					DatabaseError: () => new HttpApiError.InternalServerError(),
-					ParseError: () => new HttpApiError.BadRequest(),
+					UnknownException: () =>
+						Effect.fail(new HttpApiError.InternalServerError()),
+					DatabaseError: () =>
+						Effect.fail(new HttpApiError.InternalServerError()),
+					ParseError: () => Effect.fail(new HttpApiError.BadRequest()),
 				}),
 			),
 		);

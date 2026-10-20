@@ -4,8 +4,8 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { videos, videoUploads } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub, userIsPro } from "@cap/utils";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
 	type Folder,
@@ -31,6 +31,7 @@ async function getVideoUploadPresignedUrl({
 	video,
 	userId,
 	organizationId,
+	videoTitle,
 }: {
 	fileKey: string;
 	duration?: string;
@@ -40,6 +41,7 @@ async function getVideoUploadPresignedUrl({
 	video?: Video.Video;
 	userId: User.UserId;
 	organizationId?: Organisation.OrganisationId;
+	videoTitle?: string;
 }) {
 	try {
 		const contentType = fileKey.endsWith(".aac")
@@ -48,11 +50,15 @@ async function getVideoUploadPresignedUrl({
 				? "audio/webm"
 				: fileKey.endsWith(".mp4")
 					? "video/mp4"
-					: fileKey.endsWith(".mp3")
-						? "audio/mpeg"
-						: fileKey.endsWith(".m3u8")
-							? "application/x-mpegURL"
-							: "video/mp2t";
+					: fileKey.endsWith(".jpg") || fileKey.endsWith(".jpeg")
+						? "image/jpeg"
+						: fileKey.endsWith(".png")
+							? "image/png"
+							: fileKey.endsWith(".mp3")
+								? "audio/mpeg"
+								: fileKey.endsWith(".m3u8")
+									? "application/x-mpegURL"
+									: "video/mp2t";
 
 		const Fields = {
 			"x-amz-meta-userid": userId,
@@ -85,6 +91,7 @@ async function getVideoUploadPresignedUrl({
 				{
 					contentType,
 					fields: Fields,
+					videoTitle,
 				},
 				organizationId,
 			);
@@ -115,6 +122,7 @@ export async function createVideoAndGetUploadUrl({
 	isUpload = false,
 	folderId,
 	orgId,
+	screenshotContentType,
 	supportsUploadProgress = false,
 }: {
 	videoId?: Video.VideoId;
@@ -126,6 +134,7 @@ export async function createVideoAndGetUploadUrl({
 	isUpload?: boolean;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
+	screenshotContentType?: string;
 	// TODO: Remove this once we are happy with it's stability
 	supportsUploadProgress?: boolean;
 }) {
@@ -161,8 +170,12 @@ export async function createVideoAndGetUploadUrl({
 					updatedAt: existingVideo.updatedAt.toISOString(),
 					metadata: existingVideo.metadata,
 				});
+				const screenshotExtension =
+					screenshotContentType?.toLowerCase() === "image/png" ? "png" : "jpg";
 				const fileKey = `${user.id}/${videoId}/${
-					isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
+					isScreenshot
+						? `screenshot/screen-capture.${screenshotExtension}`
+						: "result.mp4"
 				}`;
 				const { presignedPostData, upload } = await getVideoUploadPresignedUrl({
 					fileKey,
@@ -183,9 +196,16 @@ export async function createVideoAndGetUploadUrl({
 		}
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
+		const videoTitle = `Cap ${
+			isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
+		} - ${formattedDate}`;
 
+		const screenshotExtension =
+			screenshotContentType?.toLowerCase() === "image/png" ? "png" : "jpg";
 		const fileKey = `${user.id}/${idToUse}/${
-			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
+			isScreenshot
+				? `screenshot/screen-capture.${screenshotExtension}`
+				: "result.mp4"
 		}`;
 		const { presignedPostData, upload, bucketId, storageIntegrationId } =
 			await getVideoUploadPresignedUrl({
@@ -196,20 +216,19 @@ export async function createVideoAndGetUploadUrl({
 				audioCodec,
 				userId: user.id,
 				organizationId: orgId,
+				videoTitle,
 			});
 
 		const videoData = {
 			id: idToUse,
-			name: `Cap ${
-				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
-			} - ${formattedDate}`,
+			name: videoTitle,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },
 			isScreenshot,
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(folderId ? { folderId } : {}),
 		};
 
@@ -219,18 +238,6 @@ export async function createVideoAndGetUploadUrl({
 			await db().insert(videoUploads).values({
 				videoId: idToUse,
 			});
-
-		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-			await dub()
-				.links.create({
-					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
-					domain: "cap.link",
-					key: idToUse,
-				})
-				.catch((err) => {
-					console.error("Dub link create failed", err);
-				});
-		}
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");

@@ -6,6 +6,7 @@ import { organizations } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "./authorization";
 
 export async function updateOrganizationDetails({
 	organizationName,
@@ -31,9 +32,7 @@ export async function updateOrganizationDetails({
 		throw new Error("Organization not found");
 	}
 
-	if (organization[0]?.ownerId !== user.id) {
-		throw new Error("Only the owner can update organization details");
-	}
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	if (organizationName) {
 		await db()

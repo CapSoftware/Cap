@@ -1,8 +1,8 @@
-import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationMembers, organizations } from "@cap/database/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
 import { redirect } from "next/navigation";
+import { getOrganizationAccess } from "@/actions/organization/authorization";
+import { canViewOrganizationSettings } from "@/lib/permissions/roles";
 import { SettingsNav } from "./_components/SettingsNav";
 
 export default async function OrganizationSettingsLayout({
@@ -16,26 +16,28 @@ export default async function OrganizationSettingsLayout({
 		redirect("/auth/signin");
 	}
 
-	const [member] = await db()
-		.select({
-			role: organizationMembers.role,
-		})
-		.from(organizationMembers)
-		.leftJoin(
-			organizations,
-			eq(organizationMembers.organizationId, organizations.id),
-		)
-		.where(
-			and(
-				eq(organizationMembers.userId, user.id),
-				eq(organizations.id, user.activeOrganizationId),
-				isNull(organizations.tombstoneAt),
-			),
-		)
-		.limit(1);
-
-	if (!member || member.role !== "owner") {
+	if (!user.activeOrganizationId) {
 		redirect("/dashboard/caps");
+	}
+
+	const access = await getOrganizationAccess(
+		user.id,
+		user.activeOrganizationId,
+	);
+
+	if (!access || !canViewOrganizationSettings(access.role)) {
+		return (
+			<div className="flex flex-col gap-6">
+				<Card>
+					<CardHeader>
+						<CardTitle>Organization settings are restricted</CardTitle>
+						<CardDescription>
+							Ask an admin or owner to make the change.
+						</CardDescription>
+					</CardHeader>
+				</Card>
+			</div>
+		);
 	}
 
 	return (

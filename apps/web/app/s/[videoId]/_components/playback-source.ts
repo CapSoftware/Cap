@@ -11,8 +11,16 @@ type ProbeResult = {
 	response: Response;
 };
 
+type ProbeFailure = {
+	url: string;
+	reason: "network-error" | "unavailable";
+};
+
+type ProbeOutcome = ProbeFailure | ProbeResult;
+
 type ResolvePlaybackSourceInput = {
 	videoSrc: string;
+	initialUrl?: string | null;
 	rawFallbackSrc?: string;
 	enableCrossOrigin?: boolean;
 	fetchImpl?: typeof fetch;
@@ -31,6 +39,14 @@ function isPlayableProbeResponse(response: Response): boolean {
 	return response.ok || response.status === 206;
 }
 
+function isProbeResult(outcome: ProbeOutcome): outcome is ProbeResult {
+	return "response" in outcome;
+}
+
+function canUseUnprobedSource(url: string): boolean {
+	return url.startsWith("/") && !url.startsWith("//");
+}
+
 function isWebMContentType(contentType: string, url: string): boolean {
 	return (
 		contentType.toLowerCase().includes("video/webm") ||
@@ -42,16 +58,21 @@ async function probePlaybackSource(
 	url: string,
 	fetchImpl: typeof fetch,
 	now: () => number,
-): Promise<ProbeResult | null> {
-	const requestUrl = appendCacheBust(url, now());
+	cacheBust = true,
+): Promise<ProbeOutcome> {
+	const requestUrl = cacheBust ? appendCacheBust(url, now()) : url;
 
 	try {
 		const response = await fetchImpl(requestUrl, {
 			headers: { range: "bytes=0-0" },
 		});
+		void response.body?.cancel().catch(() => {});
 
 		if (!isPlayableProbeResponse(response)) {
-			return null;
+			return {
+				url: requestUrl,
+				reason: "unavailable",
+			};
 		}
 
 		return {
@@ -59,7 +80,10 @@ async function probePlaybackSource(
 			response,
 		};
 	} catch {
-		return null;
+		return {
+			url: requestUrl,
+			reason: "network-error",
+		};
 	}
 }
 
@@ -109,6 +133,7 @@ export function shouldFallbackToRawPlaybackSource(
 
 export async function resolvePlaybackSource({
 	videoSrc,
+	initialUrl,
 	rawFallbackSrc,
 	enableCrossOrigin = false,
 	fetchImpl = fetch,
@@ -123,7 +148,7 @@ export async function resolvePlaybackSource({
 
 		const rawResult = await probePlaybackSource(rawFallbackSrc, fetchImpl, now);
 
-		if (!rawResult) {
+		if (!isProbeResult(rawResult)) {
 			return null;
 		}
 
@@ -145,12 +170,38 @@ export async function resolvePlaybackSource({
 	};
 
 	if (preferredSource === "raw") {
-		return await resolveRaw();
+		const rawSource = await resolveRaw();
+		if (rawSource) return rawSource;
+	}
+	if (preferredSource === "mp4" && initialUrl) {
+		const initialResult = await probePlaybackSource(
+			initialUrl,
+			fetchImpl,
+			now,
+			false,
+		);
+		if (isProbeResult(initialResult)) {
+			return {
+				url: initialResult.url,
+				type: "mp4",
+				supportsCrossOrigin: enableCrossOrigin,
+			};
+		}
+		if (
+			initialResult.reason === "network-error" &&
+			canUseUnprobedSource(videoSrc)
+		) {
+			return {
+				url: appendCacheBust(videoSrc, now()),
+				type: "mp4",
+				supportsCrossOrigin: false,
+			};
+		}
 	}
 
 	const mp4Result = await probePlaybackSource(videoSrc, fetchImpl, now);
 
-	if (mp4Result) {
+	if (isProbeResult(mp4Result)) {
 		return {
 			url: mp4Result.url,
 			type: "mp4",
@@ -160,5 +211,13 @@ export async function resolvePlaybackSource({
 		};
 	}
 
-	return await resolveRaw();
+	if (mp4Result.reason === "network-error" && canUseUnprobedSource(videoSrc)) {
+		return {
+			url: mp4Result.url,
+			type: "mp4",
+			supportsCrossOrigin: false,
+		};
+	}
+
+	return preferredSource === "raw" ? null : await resolveRaw();
 }

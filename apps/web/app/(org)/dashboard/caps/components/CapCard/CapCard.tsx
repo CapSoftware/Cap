@@ -1,5 +1,6 @@
 "use client";
 
+import type { videos as videosSchema } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import {
@@ -10,7 +11,7 @@ import {
 } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
-import type { ImageUpload, Video } from "@cap/web-domain";
+import type { Folder, ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
 	faChartSimple,
@@ -19,8 +20,10 @@ import {
 	faDownload,
 	faEllipsis,
 	faGear,
+	faImage,
 	faLink,
 	faLock,
+	faScissors,
 	faShare,
 	faTrash,
 	faUnlock,
@@ -30,6 +33,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
+import { FolderInput } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
@@ -37,14 +41,20 @@ import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadProgress } from "@/app/s/[videoId]/_components/ProgressCircle";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import type { MoveLocation } from "@/lib/move-items";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import {
+	copyRichVideoLink,
+	videoPreviewImageUrl,
+} from "@/lib/video-share-clipboard";
 import { usePublicEnv } from "@/utils/public-env";
-
+import { MoveItemsDialog } from "../MoveItemsDialog";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -92,6 +102,8 @@ export interface CapCardProps extends PropsWithChildren {
 		}[];
 		ownerName: string | null;
 		metadata?: VideoMetadata;
+		source?: typeof videosSchema.$inferSelect.source;
+		isScreenshot?: boolean;
 		hasPassword?: boolean;
 		hasInheritedPassword?: boolean;
 		inheritedPasswordSources?: SpaceRuleSource[];
@@ -121,6 +133,10 @@ export interface CapCardProps extends PropsWithChildren {
 	isDeleting?: boolean;
 	onDragStart?: () => void;
 	onDragEnd?: () => void;
+	canMove?: boolean;
+	moveLocation?: MoveLocation;
+	moveRootLabel?: string;
+	currentFolderId?: Folder.FolderId | null;
 }
 
 export const CapCard = ({
@@ -136,6 +152,10 @@ export const CapCard = ({
 	onSelectToggle,
 	anyCapSelected = false,
 	isDeleting = false,
+	canMove = false,
+	moveLocation,
+	moveRootLabel,
+	currentFolderId = null,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
 	const customDomain = activeOrganization?.organization.customDomain;
@@ -154,7 +174,9 @@ export const CapCard = ({
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
 	const { user, setUpgradeModalOpen } = useDashboardContext();
+	const [editUpgradeModalOpen, setEditUpgradeModalOpen] = useState(false);
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -218,6 +240,7 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
@@ -273,7 +296,7 @@ export const CapCard = ({
 	};
 
 	const handleDragStart = (e: React.DragEvent<HTMLElement>) => {
-		if (anyCapSelected || !isOwner) return;
+		if (anyCapSelected || !moveEnabled) return;
 
 		// Set the data transfer
 		e.dataTransfer.setData(
@@ -307,7 +330,11 @@ export const CapCard = ({
 	};
 
 	const handleCopy = (text: string) => {
-		navigator.clipboard.writeText(text);
+		copyRichVideoLink({
+			url: text,
+			title: cap.name || "Cap Recording",
+			previewImageUrl: videoPreviewImageUrl(webUrl, cap.id),
+		});
 		setCopyPressed(true);
 		setTimeout(() => {
 			setCopyPressed(false);
@@ -343,14 +370,31 @@ export const CapCard = ({
 				? `${webUrl}/s/${cap.id}`
 				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
 					? `https://${customDomain}/s/${cap.id}`
-					: buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified
-						? `https://cap.link/${cap.id}`
-						: `${webUrl}/s/${cap.id}`,
+					: `${webUrl}/s/${cap.id}`,
 		);
+	};
+	const canEditVideo =
+		isOwner &&
+		!sharedCapCard &&
+		cap.isScreenshot !== true &&
+		!cap.hasActiveUpload &&
+		(cap.source?.type === "desktopMP4" || cap.source?.type === "webMP4") &&
+		Boolean(cap.duration && cap.duration > 0);
+	const handleEditVideo = () => {
+		if (!canEditVideo) return;
+		if (!user.isPro) {
+			setEditUpgradeModalOpen(true);
+			return;
+		}
+		router.push(`/s/${cap.id}/edit`);
 	};
 
 	return (
 		<>
+			<UpgradeModal
+				open={editUpgradeModalOpen}
+				onOpenChange={setEditUpgradeModalOpen}
+			/>
 			<SharingDialog
 				isOpen={isSharingDialogOpen}
 				onClose={() => setIsSharingDialogOpen(false)}
@@ -377,9 +421,22 @@ export const CapCard = ({
 				hasPassword={passwordProtected}
 				onPasswordUpdated={handlePasswordUpdated}
 			/>
+			{moveEnabled && moveLocation && moveRootLabel && (
+				<MoveItemsDialog
+					open={isMoveDialogOpen}
+					onOpenChange={setIsMoveDialogOpen}
+					location={moveLocation}
+					rootLabel={moveRootLabel}
+					item={{
+						type: "videos",
+						videoIds: [cap.id],
+						currentFolderId,
+					}}
+				/>
+			)}
 			<fieldset
 				aria-label={cap.name}
-				draggable={isOwner && !anyCapSelected}
+				draggable={moveEnabled && !anyCapSelected}
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
@@ -390,7 +447,9 @@ export const CapCard = ({
 							? "border-blue-10 hover:border-blue-10"
 							: "hover:border-blue-10",
 					isDragging && "opacity-50",
-					isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing",
+					moveEnabled &&
+						!anyCapSelected &&
+						"cursor-grab active:cursor-grabbing",
 				)}
 			>
 				{anyCapSelected && !sharedCapCard && (
@@ -518,6 +577,18 @@ export const CapCard = ({
 								<FontAwesomeIcon className="size-3" icon={faLink} />
 								<p className="text-sm text-gray-12">Copy link</p>
 							</DropdownMenuItem>
+							{moveEnabled && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										setIsMoveDialogOpen(true);
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FolderInput className="size-3" />
+									<p className="text-sm text-gray-12">Move</p>
+								</DropdownMenuItem>
+							)}
 							{isOwner && (
 								<>
 									<DropdownMenuItem
@@ -536,6 +607,18 @@ export const CapCard = ({
 										<FontAwesomeIcon className="size-3" icon={faCopy} />
 										<p className="text-sm text-gray-12">Duplicate</p>
 									</DropdownMenuItem>
+									{canEditVideo && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												handleEditVideo();
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faScissors} />
+											<p className="text-sm text-gray-12">Edit video</p>
+										</DropdownMenuItem>
+									)}
 									<DropdownMenuItem
 										onClick={() => {
 											if (!user.isPro) setUpgradeModalOpen(true);
@@ -717,7 +800,9 @@ export const CapCard = ({
 
 						<VideoThumbnail
 							videoDuration={
-								hasVisibleUploadProgress ? undefined : cap.duration
+								hasVisibleUploadProgress || cap.isScreenshot
+									? undefined
+									: cap.duration
 							}
 							imageClass={clsx(
 								anyCapSelected
@@ -732,6 +817,7 @@ export const CapCard = ({
 							alt={`${cap.name} Thumbnail`}
 							imageStatus={imageStatus}
 							setImageStatus={setImageStatus}
+							showPreview={cap.isScreenshot !== true}
 							hasActiveUpload={
 								uploadProgress !== null &&
 								uploadProgress.status !== "fetching" &&
@@ -739,6 +825,15 @@ export const CapCard = ({
 								uploadProgress.status !== "error"
 							}
 						/>
+						{cap.isScreenshot === true && !hasVisibleUploadProgress && (
+							<span
+								title="Screenshot"
+								className="absolute bottom-3 left-3 z-30 flex size-6 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm"
+							>
+								<FontAwesomeIcon icon={faImage} className="size-3" />
+								<span className="sr-only">Screenshot</span>
+							</span>
+						)}
 						{effectivePasswordProtected && (
 							<div
 								className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/70 text-white"

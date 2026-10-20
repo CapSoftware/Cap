@@ -1,19 +1,9 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { HomePage } from "@/components/pages/HomePage";
-import { getBootstrapData } from "@/utils/getBootstrapData";
+import type { Metadata } from "next";
+import { HomeTwoPage } from "@/components/pages/HomeTwo";
+import { homePageMetadata } from "@/components/pages/HomeTwo/metadata";
 
-export default async function Home() {
-	const cookieStore = await cookies();
-	const sessionCookie = cookieStore.get("next-auth.session-token");
-	const bootstrapData = await getBootstrapData();
+export const metadata: Metadata = homePageMetadata;
 
-	const homepageCopyVariant =
-		(bootstrapData.featureFlags["homepage-copy"] as string) || "";
-
-	if (sessionCookie) {
-		redirect("/dashboard/caps");
-	}
-
-	return <HomePage serverHomepageCopyVariant={homepageCopyVariant} />;
+export default function Home() {
+	return <HomeTwoPage />;
 }

@@ -8,8 +8,8 @@ use ffmpeg::{
     frame::{self, Video},
     sys::{
         AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX, AVBufferRef, AVCodecContext, AVCodecHWConfig,
-        AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create,
-        av_hwframe_transfer_data, avcodec_get_hw_config,
+        AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_dict_free, av_dict_set,
+        av_hwdevice_ctx_create, av_hwframe_transfer_data, avcodec_get_hw_config,
     },
 };
 
@@ -45,14 +45,33 @@ pub struct HwDevice {
     ctx: *mut AVBufferRef,
 }
 
+fn linux_gpu_frames() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("CAP_LINUX_GPU_FRAMES").as_deref() == Ok("1"))
+}
+
 impl HwDevice {
     pub fn get_hwframe(&self, src: &Video) -> Option<Video> {
+        // Linux GPU render hosts keep CUDA frames on the device; the renderer
+        // copies them device-to-device instead of via system memory.
+        if self.device_type == AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA && linux_gpu_frames() {
+            return None;
+        }
         unsafe {
             if src.format() == HW_PIX_FMT.get().into() {
                 let mut sw_frame = frame::Video::empty();
 
                 if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
                     sw_frame.set_pts(src.pts());
+                    // The transfer copies pixels only. Keep the colour tags so
+                    // consumers convert hardware-decoded frames with the same
+                    // matrix as software-decoded ones.
+                    let (dst, src) = (&mut *sw_frame.as_mut_ptr(), &*src.as_ptr());
+                    dst.color_range = src.color_range;
+                    dst.color_primaries = src.color_primaries;
+                    dst.color_trc = src.color_trc;
+                    dst.colorspace = src.colorspace;
+                    dst.chroma_location = src.chroma_location;
                     return Some(sw_frame);
                 };
             }
@@ -88,8 +107,25 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
 
             let mut hw_device_ctx = null_mut();
 
-            if av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), null_mut(), 0) < 0 {
+            let gpu_frames =
+                device_type == AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA && linux_gpu_frames();
+            let mut options = null_mut();
+            if gpu_frames {
+                // Share the device's primary CUDA context with the renderer's
+                // Vulkan interop and NVENC, so device pointers work across all.
+                av_dict_set(&mut options, c"primary_ctx".as_ptr(), c"1".as_ptr(), 0);
+            }
+            let created =
+                av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), options, 0);
+            av_dict_free(&mut options);
+            if created < 0 {
                 return Err("failed to create hw device context");
+            }
+            if gpu_frames {
+                // Decoded surfaces now live in the frame cache instead of being
+                // downloaded at once, so NVDEC's pool needs headroom. NVDEC
+                // caps a decoder at 32 surfaces including the DPB (~16).
+                (*self.as_mut_ptr()).extra_hw_frames = 12;
             }
 
             HW_PIX_FMT.set((*hw_config).pix_fmt);

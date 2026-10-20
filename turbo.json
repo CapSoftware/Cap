@@ -8,6 +8,29 @@
 			"dependsOn": ["^build"],
 			"outputs": [".next/**", "!.next/cache/**", "dist/**"]
 		},
+		"@cap/desktop#build": {
+			"dependsOn": ["^build"],
+			"outputs": [".output/**"]
+		},
+		"@cap/chrome-extension#build": {
+			"inputs": [
+				"**/*.ts",
+				"**/*.tsx",
+				"**/*.css",
+				"*.html",
+				"public/**",
+				"vite.config.ts",
+				"vite.content.config.ts",
+				"vite.content-overlay.config.ts",
+				"tailwind.config.cjs",
+				"postcss.config.cjs",
+				"!node_modules/**",
+				"!dist/**",
+				"!test-results/**"
+			],
+			"dependsOn": ["^build"],
+			"outputs": ["dist/**"]
+		},
 		"build:web:docker": {
 			"inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
 			"dependsOn": ["^build"],

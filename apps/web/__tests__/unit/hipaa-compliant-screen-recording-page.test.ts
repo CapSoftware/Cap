@@ -40,8 +40,9 @@ describe("HipaaCompliantScreenRecordingPage metadata", () => {
 		expect(pageSource).toContain('locale: "en_US"');
 	});
 
-	it("contains full OG image URL", () => {
-		expect(pageSource).toContain('"https://cap.so/og.png"');
+	it("uses the dynamic OG image", () => {
+		expect(pageSource).toContain("ogImageUrl(");
+		expect(pageSource).not.toContain("https://cap.so/og.png");
 	});
 
 	it("title targets hipaa-compliant-screen-recording keyword", () => {

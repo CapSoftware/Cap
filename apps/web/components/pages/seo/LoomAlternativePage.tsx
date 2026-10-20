@@ -2,6 +2,7 @@
 
 import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -24,12 +25,11 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Enhanced Privacy & Security",
 			description:
-				"Cap prioritizes your privacy with GDPR compliance and the option to use your own S3 storage, ensuring your data remains under your control. Connect your own custom domain for a branded experience while maintaining 100% ownership of your data.",
+				"Cap prioritizes your privacy with GDPR compliance and the option to use your own Google Drive or S3 storage, ensuring your data remains under your control. Connect your own custom domain for a branded experience while maintaining 100% ownership of your data.",
 		},
 		{
 			title: "Half the Price of Loom",
-			description:
-				"Cap stars from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
+			description: `Cap starts from just $${PRICING.pro.annualPerMonth}/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.`,
 		},
 		{
 			title: "High-Quality Recordings",
@@ -49,7 +49,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Built-In Loom Video Importer",
 			description:
-				"Already using Loom? Cap's built-in video importer lets you seamlessly transfer your existing Loom recordings into Cap. No need to start from scratch — bring all your content with you when you switch.",
+				"Already using Loom? Cap's built-in video importer lets you <a href='/migrate-from-loom'>import your Loom videos into Cap</a> from a single share link or a CSV of your whole library. No need to start from scratch — bring all your content with you when you switch. Just need the raw files? Our <a href='/tools/loom-downloader'>free Loom video downloader</a> saves any public Loom as an MP4 in one click.",
 		},
 	],
 
@@ -92,7 +92,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Complete Data Ownership",
 			description:
-				"Cap lets you connect your own S3 storage and custom domain, giving you 100% ownership and control over your content. No more being locked into proprietary platforms.",
+				"Cap lets you connect your own Google Drive or S3 storage and custom domain, giving you 100% ownership and control over your content. No more being locked into proprietary platforms.",
 		},
 		{
 			title: "Community-Driven Development",
@@ -125,13 +125,12 @@ export const loomAlternativeContent: SeoPageContent = {
 		},
 		{
 			question: "How does Cap compare in pricing with Loom?",
-			answer:
-				"Cap is significantly more affordable at just $8.16/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
+			answer: `Cap is significantly more affordable at just $${PRICING.pro.annualPerMonth}/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.`,
 		},
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
 			answer:
-				"Absolutely! Cap allows you to connect your own S3 storage and custom domain, giving you 100% ownership and control of your content. Your data remains yours, and you're never locked into our platform.",
+				"Absolutely! Cap allows you to connect your own Google Drive or S3 storage and custom domain, giving you 100% ownership and control of your content. Your data remains yours, and you're never locked into our platform.",
 		},
 		{
 			question: "Does Cap support collaboration features?",
@@ -141,7 +140,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			question: "Can I import my existing Loom videos into Cap?",
 			answer:
-				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content.",
+				"Yes! Cap Pro includes a built-in Loom video importer. Simply paste your Loom video links and Cap will import them directly into your library. It's the easiest way to migrate from Loom without losing any of your existing content. If you'd rather keep local copies, our <a href='/tools/loom-downloader'>Loom video downloader</a> exports any public Loom to MP4, and our <a href='/migrate-from-loom'>migrate from Loom</a> guide covers the full switch.",
 		},
 	],
 
@@ -156,7 +155,10 @@ export const loomAlternativeContent: SeoPageContent = {
 			],
 			[
 				"Pricing",
-				{ text: "from $8.16/month per user", status: "positive" },
+				{
+					text: `from $${PRICING.pro.annualPerMonth}/month per user`,
+					status: "positive",
+				},
 				{ text: "$18/month per user", status: "warning" },
 			],
 			[
@@ -181,7 +183,7 @@ export const loomAlternativeContent: SeoPageContent = {
 			],
 			[
 				"Own Storage Integration",
-				{ text: "Connect your own S3", status: "positive" },
+				{ text: "Connect your own S3 or Google Drive", status: "positive" },
 				{ text: "Not available", status: "negative" },
 			],
 			[
@@ -209,14 +211,15 @@ export const loomAlternativeContent: SeoPageContent = {
 			"Import your existing Loom videos using Cap's built-in Loom video importer",
 			"Start recording using either Instant Mode or Studio Mode",
 			"Share your recordings easily with Cap's built-in sharing features",
-			"Optional: Connect your own S3 storage and custom domain for complete data ownership",
+			"Optional: Connect your own Google Drive or S3 storage and custom domain for complete data ownership",
 		],
 	},
 
 	video: {
-		url: "/videos/cap-vs-loom-comparison.mp4",
-		thumbnail: "/videos/cap-vs-loom-thumbnail.png",
-		alt: "Cap screen recorder demo showing privacy features and interface",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {

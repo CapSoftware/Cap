@@ -35,6 +35,7 @@ export default function CameraSelect(props: {
 	value: CameraInfo | null;
 	selectedLabel?: string | null;
 	isSelected?: boolean;
+	disconnected?: boolean;
 	onChange: (camera: CameraInfo | null) => void;
 	permissions?: OSPermissionsCheck;
 	hidePreviewButton?: boolean;
@@ -93,6 +94,8 @@ export default function CameraSelect(props: {
 		props.permissions.camera === "granted" ||
 		props.permissions.camera === "notNeeded";
 
+	const notConnected = () => !!props.disconnected && permissionGranted();
+
 	const hasSelection = () => props.isSelected ?? props.value !== null;
 
 	const label = () =>
@@ -104,15 +107,19 @@ export default function CameraSelect(props: {
 		props.value !== null &&
 		permissionGranted() &&
 		!cameraWindowOpen() &&
-		!props.hidePreviewButton;
+		!props.hidePreviewButton &&
+		!notConnected();
 
 	const showSettingsShortcut = () =>
-		hasSelection() && permissionGranted() && !!props.onOpenSettings;
+		hasSelection() &&
+		permissionGranted() &&
+		!!props.onOpenSettings &&
+		!notConnected();
 
 	const isDisabled = () => !!currentRecording.data || props.disabled;
 
 	return (
-		<div class="flex flex-col items-stretch text-[--text-primary]">
+		<div class="flex flex-col items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={isDisabled()}
@@ -127,7 +134,12 @@ export default function CameraSelect(props: {
 				aria-haspopup="menu"
 			>
 				<IconCapCamera class={DEVICE_ROW_ICON_CLASS} />
-				<p class={DEVICE_ROW_LABEL_CLASS}>{label()}</p>
+				<p
+					class={cx(DEVICE_ROW_LABEL_CLASS, notConnected() && "text-gray-10")}
+					title={notConnected() ? "Not connected" : undefined}
+				>
+					{label()}
+				</p>
 				<div class={DEVICE_ROW_TRAILING_CLASS}>
 					<Show when={showHiddenIndicator()}>
 						<button
@@ -160,6 +172,7 @@ export default function CameraSelect(props: {
 					<TargetSelectInfoPill
 						PillComponent={InfoPill}
 						value={hasSelection() ? true : null}
+						disconnected={notConnected()}
 						permissionGranted={permissionGranted()}
 						requestPermission={() =>
 							requestPermission("camera", props.permissions?.camera)
@@ -262,7 +275,7 @@ export function CameraSelectBase(props: {
 		!props.hidePreviewButton;
 
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col gap-1 items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={!!currentRecording.data || props.disabled}

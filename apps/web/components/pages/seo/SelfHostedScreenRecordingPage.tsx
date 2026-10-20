@@ -1,5 +1,3 @@
-"use client";
-
 import { Clapperboard, Zap } from "lucide-react";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
@@ -20,7 +18,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			title: "Connect Any S3-Compatible Storage",
 			description:
-				"Cap supports AWS S3, Cloudflare R2, Backblaze B2, MinIO, Wasabi, and any other S3-compatible object storage. Configure your bucket credentials once in Cap's settings and every recording uploads directly to your infrastructure — not Cap's cloud.",
+				"Cap supports AWS S3, Cloudflare R2, Backblaze B2, MinIO, Wasabi, and any other S3-compatible object storage. Configure your bucket credentials once in Cap's settings and every recording uploads directly to your infrastructure, not Cap's cloud. Prefer a consumer cloud? Cap also connects to your own <a href='/google-drive-screen-recorder'>Google Drive</a>.",
 		},
 		{
 			title: "Recordings Never Touch Third-Party Servers",
@@ -257,7 +255,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			question: "Is self-hosted Cap suitable for HIPAA compliance?",
 			answer:
-				"Cap with self-hosted AWS S3 storage (covered under your AWS BAA) can support HIPAA-compliant recording workflows. With self-hosted storage, no recording content passes through Cap's servers, keeping PHI within your HIPAA-covered infrastructure. AI auto-captions can be disabled if your policies restrict external audio transcription. See our dedicated HIPAA-compliant screen recording guide for full details.",
+				"Yes. Cap is HIPAA compliant, and self-hosting adds an extra layer of control. With self-hosted AWS S3 storage (covered under your AWS BAA), no recording content passes through Cap's servers, keeping PHI within your HIPAA-covered infrastructure. AI auto-captions can be disabled if your policies restrict external audio transcription. See our dedicated HIPAA-compliant screen recording guide for full details.",
 		},
 		{
 			question:
@@ -273,9 +271,11 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap self-hosted screen recording demo showing S3 storage configuration and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title:
+				"Cap self-hosted screen recording demo showing S3 storage configuration and instant sharing",
+		},
 	},
 
 	cta: {

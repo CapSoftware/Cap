@@ -1,6 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { createSignal, Match, onCleanup, onMount, Switch } from "solid-js";
+import Titlebar from "~/components/titlebar/Titlebar";
 import {
 	events,
 	type VideoImportProgress as VideoImportProgressEvent,
@@ -66,74 +68,77 @@ export function ImportProgress(props: ImportProgressProps) {
 	};
 
 	return (
-		<div class="flex flex-col items-center justify-center h-full gap-6">
-			<Switch>
-				<Match when={failed()}>
-					{(errorMessage) => (
-						<div class="w-80 text-center">
+		<div class="flex flex-col flex-1 min-h-0">
+			{ostype() === "windows" && <Titlebar />}
+			<div class="flex flex-col flex-1 min-h-0 items-center justify-center gap-6">
+				<Switch>
+					<Match when={failed()}>
+						{(errorMessage) => (
+							<div class="w-80 text-center">
+								<div class="flex items-center justify-center mb-6">
+									<div class="w-16 h-16 rounded-full bg-red-3 flex items-center justify-center">
+										<IconLucideAlertCircle class="w-8 h-8 text-red-9" />
+									</div>
+								</div>
+
+								<h2 class="text-lg font-medium text-gray-12 mb-2">
+									Import Failed
+								</h2>
+								<p class="text-sm text-gray-11 mb-6">{errorMessage()}</p>
+
+								<Button variant="gray" onClick={handleClose}>
+									Close
+								</Button>
+							</div>
+						)}
+					</Match>
+					<Match when={!failed()}>
+						<div class="w-72 text-center">
 							<div class="flex items-center justify-center mb-6">
-								<div class="w-16 h-16 rounded-full bg-red-3 flex items-center justify-center">
-									<IconLucideAlertCircle class="w-8 h-8 text-red-9" />
+								<div class="relative">
+									<svg
+										class="w-20 h-20 animate-spin-slow"
+										viewBox="0 0 64 64"
+										fill="none"
+									>
+										<circle
+											cx="32"
+											cy="32"
+											r="28"
+											stroke="currentColor"
+											stroke-width="4"
+											class="text-gray-3"
+										/>
+										<circle
+											cx="32"
+											cy="32"
+											r="28"
+											stroke="currentColor"
+											stroke-width="4"
+											stroke-dasharray={`${progressPercent() * 1.76} 176`}
+											stroke-linecap="round"
+											class="text-blue-9 transition-all duration-300"
+											transform="rotate(-90 32 32)"
+										/>
+									</svg>
+									<div class="absolute inset-0 flex items-center justify-center">
+										<span class="text-lg font-semibold text-gray-12">
+											{progressPercent()}%
+										</span>
+									</div>
 								</div>
 							</div>
 
 							<h2 class="text-lg font-medium text-gray-12 mb-2">
-								Import Failed
+								Importing Video
 							</h2>
-							<p class="text-sm text-gray-11 mb-6">{errorMessage()}</p>
-
-							<Button variant="gray" onClick={handleClose}>
-								Close
-							</Button>
+							<p class="text-sm text-gray-11 animate-pulse h-5 animate-pulse-slow">
+								{funMessages[messageIndex()]}
+							</p>
 						</div>
-					)}
-				</Match>
-				<Match when={!failed()}>
-					<div class="w-72 text-center">
-						<div class="flex items-center justify-center mb-6">
-							<div class="relative">
-								<svg
-									class="w-20 h-20 animate-spin-slow"
-									viewBox="0 0 64 64"
-									fill="none"
-								>
-									<circle
-										cx="32"
-										cy="32"
-										r="28"
-										stroke="currentColor"
-										stroke-width="4"
-										class="text-gray-3"
-									/>
-									<circle
-										cx="32"
-										cy="32"
-										r="28"
-										stroke="currentColor"
-										stroke-width="4"
-										stroke-dasharray={`${progressPercent() * 1.76} 176`}
-										stroke-linecap="round"
-										class="text-blue-9 transition-all duration-300"
-										transform="rotate(-90 32 32)"
-									/>
-								</svg>
-								<div class="absolute inset-0 flex items-center justify-center">
-									<span class="text-lg font-semibold text-gray-12">
-										{progressPercent()}%
-									</span>
-								</div>
-							</div>
-						</div>
-
-						<h2 class="text-lg font-medium text-gray-12 mb-2">
-							Importing Video
-						</h2>
-						<p class="text-sm text-gray-11 animate-pulse h-5 animate-pulse-slow">
-							{funMessages[messageIndex()]}
-						</p>
-					</div>
-				</Match>
-			</Switch>
+					</Match>
+				</Switch>
+			</div>
 		</div>
 	);
 }

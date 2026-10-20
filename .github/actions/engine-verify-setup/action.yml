@@ -1,0 +1,168 @@
+name: Engine verify setup
+description: Toolchain, cargo-nextest, Rust cache, native deps and fixture cache for the engine verification suite
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+  tier:
+    description: fast or full (fixture cache key)
+    required: true
+  rust-cache:
+    description: Restore the Rust build cache (build jobs only)
+    default: "true"
+outputs:
+  build-cache-key:
+    description: Key to save the build cache under
+    value: ${{ steps.build-key.outputs.key }}
+  build-cache-hit:
+    description: Whether the build cache was restored exactly
+    value: ${{ steps.build-cache.outputs.cache-hit }}
+  fixtures-hit:
+    description: Whether the fixture cache was restored exactly
+    value: ${{ steps.fixtures.outputs.cache-hit }}
+  fixtures-key:
+    description: Fixture cache key
+    value: ${{ steps.fixtures.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    # Only what the suite's dependency closure links against (no webkit/gtk),
+    # plus lavapipe for software Vulkan rendering.
+    - name: Linux packages
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends \
+          libasound2-dev libasound2-plugins libpipewire-0.3-dev libspa-0.2-dev libclang-dev \
+          libx11-dev libxrandr-dev libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev \
+          libxcb-xfixes0-dev libxfixes-dev libwayland-dev libxkbcommon-dev \
+          libdbus-1-dev libudev-dev libva-dev mesa-vulkan-drivers libvulkan1 >/dev/null
+
+    - name: Rust toolchain
+      if: inputs.rust-cache == 'true'
+      uses: dtolnay/rust-toolchain@1.88.0
+      with:
+        targets: ${{ inputs.target }}
+
+    - name: cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest@0.9.148
+
+    # One cache entry per OS per day (saved by main, nightly and the CI dev
+    # branches), restored by PRs. Unlike swatinem/rust-cache it includes the
+    # workspace crates and is refreshed daily even when Cargo.lock is
+    # unchanged, so a PR only rebuilds what changed since the last save. The
+    # chain restarts every ISO week so stale artifacts cannot pile up.
+    - name: Build cache key
+      id: build-key
+      if: inputs.rust-cache == 'true'
+      shell: bash
+      run: |
+        # runner.environment separates GitHub-hosted from self-hosted
+        # (Blacksmith) builds: their paths and toolchains differ, so one's
+        # target directory would only force a rebuild on the other.
+        # A new week starts a new chain, seeded from last week's newest cache
+        # of the same provider so the first build of the week stays warm.
+        py="$(command -v python3 || command -v python)"
+        week="$("$py" -c 'import datetime as d; y, w, _ = d.datetime.now(d.timezone.utc).isocalendar(); print(f"{y}-W{w:02d}")')"
+        last_week="$("$py" -c 'import datetime as d; y, w, _ = (d.datetime.now(d.timezone.utc) - d.timedelta(days=7)).isocalendar(); print(f"{y}-W{w:02d}")')"
+        provider="verify-build-v3-${{ inputs.target }}-${{ runner.environment }}"
+        base="$provider-$week"
+        echo "base=$base" >> "$GITHUB_OUTPUT"
+        echo "previous=$provider-$last_week" >> "$GITHUB_OUTPUT"
+        echo "key=$base-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore build cache
+      id: build-cache
+      if: inputs.rust-cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/ci-verify/
+        key: ${{ steps.build-key.outputs.key }}
+        restore-keys: |
+          ${{ steps.build-key.outputs.base }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml') }}-
+          ${{ steps.build-key.outputs.base }}-
+          ${{ steps.build-key.outputs.previous }}-
+
+    # Unchanged workspace crates are reused from the cache instead of being
+    # rebuilt because the checkout touched every file (scripts/verify/mtime.py).
+    - name: Reuse unchanged workspace crates
+      if: inputs.rust-cache == 'true'
+      shell: bash
+      run: |
+        "$(command -v python3 || command -v python)" scripts/verify/mtime.py apply target/ci-verify/verify-src-manifest.txt
+
+    - name: Native dependencies
+      shell: bash
+      env:
+        RUST_TARGET_TRIPLE: ${{ inputs.target }}
+      run: node scripts/setup.js
+
+    - name: FFmpeg libraries on the loader path (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: echo "LD_LIBRARY_PATH=${{ github.workspace }}/target/native-deps/lib" >> "$GITHUB_ENV"
+
+    # The app ships DXC next to its executable and cap-rendering looks for it
+    # next to the test binary or in its profile dir; setup.js only fills
+    # target/debug and target/release. Without it wgpu falls back to FXC.
+    - name: DXC for the ci-verify profile (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        mkdir -p target/ci-verify
+        cp target/native-deps/dxc/dxcompiler.dll target/native-deps/dxc/dxil.dll target/ci-verify/
+
+    # Debug builds of wgpu (the ci-verify profile keeps debug assertions)
+    # enable the D3D12 debug layer whenever d3d12SDKLayers.dll exists. When
+    # that DLL comes from an unserviced Graphics Tools feature older than the
+    # D3D12 runtime (blacksmith-8vcpu-windows-2025: layers 10.0.26100.1591,
+    # runtime 10.0.26100.33296), D3D12CreateDevice fails with E_INVALIDARG on
+    # every adapter, WARP included, and every case fails "No GPU adapter
+    # found". Hiding the mismatched layer makes D3D12GetDebugInterface report
+    # DXGI_ERROR_SDK_COMPONENT_MISSING, which wgpu treats as "no debug layer".
+    - name: Hide a D3D12 debug layer that does not match the runtime (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $sys = Join-Path $env:WINDIR 'System32'
+        $layers = Join-Path $sys 'd3d12SDKLayers.dll'
+        $core = Join-Path $sys 'D3D12Core.dll'
+        if (-not (Test-Path $layers)) { Write-Host 'no D3D12 debug layer installed'; exit 0 }
+        $lv = (Get-Item $layers).VersionInfo
+        $cv = (Get-Item $core).VersionInfo
+        $lver = "$($lv.FileMajorPart).$($lv.FileMinorPart).$($lv.FileBuildPart).$($lv.FilePrivatePart)"
+        $cver = "$($cv.FileMajorPart).$($cv.FileMinorPart).$($cv.FileBuildPart).$($cv.FilePrivatePart)"
+        Write-Host "D3D12 debug layer $lver, runtime $cver"
+        if ($lver -eq $cver) { exit 0 }
+        takeown /f $layers | Out-Null
+        icacls $layers /grant "*S-1-5-32-544:F" | Out-Null
+        Rename-Item $layers 'd3d12SDKLayers.dll.mismatched'
+        Write-Host "hid the mismatched debug layer"
+
+    - name: FFmpeg DLLs on PATH (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\target\ffmpeg\bin"
+
+    - name: Fixture location
+      shell: bash
+      run: echo "CAP_VERIFY_FIXTURE_DIR=${{ runner.temp }}/verify-fixtures" >> "$GITHUB_ENV"
+
+    # Fixtures are generated by code (including the real-pipeline Studio and
+    # Instant recordings, ~1 min of real-time capture); the key is every
+    # crate's source and build script, the vendored crates (wgpu-hal, tao),
+    # the workspace manifest, lockfile and toolchain, plus the native deps. Exact key only: a fixture made
+    # by an older generator is never reused.
+    - name: Restore fixtures
+      id: fixtures
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/verify-fixtures
+        key: verify-fixtures-v1-${{ runner.os }}-${{ runner.environment }}-${{ inputs.tier }}-${{ hashFiles('crates/**/src/**', 'crates/**/build.rs', 'crates/**/Cargo.toml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'vendor/**', 'scripts/setup.js') }}

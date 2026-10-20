@@ -11,7 +11,7 @@ export const SpaceMemberId = Schema.String.pipe(Schema.brand("SpaceMemberId"));
 export type SpaceMemberId = typeof SpaceMemberId.Type;
 
 export const SpaceMemberRole = Schema.Union(
-	Schema.Literal("Admin"),
+	Schema.Literal("admin"),
 	Schema.Literal("member"),
 );
 export type SpaceMemberRole = typeof SpaceMemberRole.Type;

@@ -6,6 +6,7 @@ import { Input } from "~/routes/editor/ui";
 import { createSelectedOrganization } from "~/utils/organization-branding";
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { Section, SectionCard, SettingsPageContent } from "../Setting";
 import { IntegrationConfigHeader } from "./config-header";
 
 interface S3Config {
@@ -134,7 +135,7 @@ export default function S3ConfigPage() {
 		<div class="space-y-2">
 			<label class="text-[13px] text-gray-12">{label}</label>
 			<Input
-				class="!bg-gray-3"
+				class="bg-gray-3!"
 				type={type}
 				value={s3Config()[key] ?? ""}
 				disabled={!!managedByOrganization()}
@@ -154,133 +155,143 @@ export default function S3ConfigPage() {
 	);
 
 	return (
-		<div class="flex flex-col p-4 h-full">
-			<IntegrationConfigHeader title="S3 Config" />
-			<div class="rounded-xl border bg-gray-2 border-gray-4 custom-scroll">
-				<div class="flex-1">
-					<Suspense
-						fallback={
-							<div class="flex justify-center items-center w-full h-screen">
-								<IconCapLogo class="animate-spin size-16" />
-							</div>
-						}
-					>
-						<div class="p-4 space-y-4 animate-in fade-in">
-							<div class="pb-4 border-b border-gray-3">
-								<p class="text-sm text-gray-11">
-									It should take under 10 minutes to set up and connect your
-									storage bucket to Cap. View the{" "}
-									<a
-										href="https://cap.so/docs/s3-config"
-										target="_blank"
-										class="underline text-gray-12"
-										rel="noopener"
-									>
-										Storage Config Guide
-									</a>{" "}
-									to get started.
-								</p>
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
+				<IntegrationConfigHeader title="S3 Config" />
+				<Section
+					title="Configuration"
+					description={
+						<>
+							It should take under 10 minutes to set up and connect your storage
+							bucket to Cap. View the{" "}
+							<a
+								href="https://cap.so/docs/s3-config"
+								target="_blank"
+								class="underline text-gray-12"
+								rel="noopener"
+							>
+								Storage Config Guide
+							</a>{" "}
+							to get started.
+						</>
+					}
+				>
+					<SectionCard padded class="custom-scroll">
+						<Suspense
+							fallback={
+								<div class="flex justify-center items-center w-full h-screen">
+									<IconCapLogo class="animate-spin size-16" />
+								</div>
+							}
+						>
+							<div class="space-y-4 animate-in fade-in">
 								<Show when={managedByOrganization()}>
 									{(organization) => (
-										<p class="mt-3 text-sm font-medium text-gray-12">
+										<p class="text-xs leading-relaxed text-gray-10">
 											Managed by your organization: {organization().name}
 										</p>
 									)}
 								</Show>
-							</div>
 
-							<div class="space-y-2">
-								<label class="text-[13px] text-gray-12">Storage Provider</label>
-								<div class="relative">
-									<select
-										value={s3Config().provider}
-										disabled={!!managedByOrganization()}
-										onChange={(e) =>
-											setS3Config((c) => ({
-												...c,
-												provider: e.currentTarget.value,
-											}))
-										}
-										class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-none bg-gray-3 focus:border-gray-8"
-									>
-										<option value="aws">AWS S3</option>
-										<option value="cloudflare">Cloudflare R2</option>
-										<option value="supabase">Supabase</option>
-										<option value="minio">MinIO</option>
-										<option value="other">Other S3-Compatible</option>
-									</select>
-									<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
-										<svg
-											class="w-4 h-4 text-gray-11"
-											xmlns="http://www.w3.org/2000/svg"
-											viewBox="0 0 20 20"
-											fill="currentColor"
+								<div class="space-y-2">
+									<label class="text-[13px] text-gray-12">
+										Storage Provider
+									</label>
+									<div class="relative">
+										<select
+											value={s3Config().provider}
+											disabled={!!managedByOrganization()}
+											onChange={(e) =>
+												setS3Config((c) => ({
+													...c,
+													provider: e.currentTarget.value,
+												}))
+											}
+											class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-hidden bg-gray-3 focus:border-gray-8"
 										>
-											<path
-												fill-rule="evenodd"
-												d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
-												clip-rule="evenodd"
-											/>
-										</svg>
+											<option value="aws">AWS S3</option>
+											<option value="cloudflare">Cloudflare R2</option>
+											<option value="supabase">Supabase</option>
+											<option value="minio">MinIO</option>
+											<option value="other">Other S3-Compatible</option>
+										</select>
+										<div class="flex absolute inset-y-0 right-0 items-center px-2 pointer-events-none">
+											<svg
+												class="w-4 h-4 text-gray-11"
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 20 20"
+												fill="currentColor"
+											>
+												<path
+													fill-rule="evenodd"
+													d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+													clip-rule="evenodd"
+												/>
+											</svg>
+										</div>
 									</div>
 								</div>
-							</div>
 
-							{renderInput(
-								"Access Key ID",
-								"accessKeyId",
-								"PL31OADSQNK",
-								"password",
-							)}
-							{renderInput(
-								"Secret Access Key",
-								"secretAccessKey",
-								"PL31OADSQNK",
-								"password",
-							)}
-							{renderInput("Endpoint", "endpoint", "https://s3.amazonaws.com")}
-							{renderInput("Bucket Name", "bucketName", "my-bucket")}
-							{renderInput("Region", "region", "us-east-1")}
-						</div>
-					</Suspense>
-				</div>
-			</div>
-			<div class="flex-shrink-0 mt-5">
-				<fieldset
-					class="flex justify-between items-center"
-					disabled={
-						_s3Config.loading ||
-						saveConfig.isPending ||
-						deleteConfig.isPending ||
-						testConfig.isPending ||
-						!!managedByOrganization()
-					}
-				>
-					<div class="flex gap-2">
-						{!_s3Config.loading && hasConfig() && (
-							<Button
-								variant="destructive"
-								onClick={() => deleteConfig.mutate()}
-							>
-								{deleteConfig.isPending ? "Removing..." : "Remove Config"}
-							</Button>
-						)}
-						<Button
-							variant="gray"
-							onClick={() => testConfig.mutate(s3Config())}
-						>
-							{testConfig.isPending ? "Testing..." : "Test Connection"}
-						</Button>
-					</div>
-					<Button
-						class="min-w-[72px]"
-						variant="primary"
-						onClick={() => saveConfig.mutate(s3Config())}
+								{renderInput(
+									"Access Key ID",
+									"accessKeyId",
+									"PL31OADSQNK",
+									"password",
+								)}
+								{renderInput(
+									"Secret Access Key",
+									"secretAccessKey",
+									"PL31OADSQNK",
+									"password",
+								)}
+								{renderInput(
+									"Endpoint",
+									"endpoint",
+									"https://s3.amazonaws.com",
+								)}
+								{renderInput("Bucket Name", "bucketName", "my-bucket")}
+								{renderInput("Region", "region", "us-east-1")}
+							</div>
+						</Suspense>
+					</SectionCard>
+				</Section>
+				<div class="shrink-0">
+					<fieldset
+						class="flex justify-between items-center"
+						disabled={
+							_s3Config.loading ||
+							saveConfig.isPending ||
+							deleteConfig.isPending ||
+							testConfig.isPending ||
+							!!managedByOrganization()
+						}
 					>
-						{saveConfig.isPending ? "Saving..." : "Save"}
-					</Button>
-				</fieldset>
-			</div>
+						<div class="flex gap-2">
+							{!_s3Config.loading && hasConfig() && (
+								<Button
+									variant="destructive"
+									onClick={() => deleteConfig.mutate()}
+								>
+									{deleteConfig.isPending ? "Removing..." : "Remove Config"}
+								</Button>
+							)}
+							<Button
+								variant="gray"
+								onClick={() => testConfig.mutate(s3Config())}
+							>
+								{testConfig.isPending ? "Testing..." : "Test Connection"}
+							</Button>
+						</div>
+						<Button
+							class="min-w-[72px]"
+							variant="primary"
+							onClick={() => saveConfig.mutate(s3Config())}
+						>
+							{saveConfig.isPending ? "Saving..." : "Save"}
+						</Button>
+					</fieldset>
+				</div>
+			</SettingsPageContent>
 		</div>
 	);
 }

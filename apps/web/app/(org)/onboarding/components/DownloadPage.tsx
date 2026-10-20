@@ -9,6 +9,7 @@ import {
 	getDownloadUrl,
 	getPlatformIcon,
 } from "@/utils/platform";
+import { consumeOnboardingNextPath } from "../../onboarding-next";
 
 const recordingModes = [
 	{
@@ -76,7 +77,9 @@ export function DownloadPage() {
 					{getDownloadButtonText(platform, loading, isIntel)}
 				</Button>
 				<Button
-					onClick={() => router.push("/dashboard/caps")}
+					onClick={() =>
+						router.push(consumeOnboardingNextPath("/dashboard/caps"))
+					}
 					className="min-w-[120px]"
 					variant="dark"
 					size="lg"

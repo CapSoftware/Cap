@@ -13,7 +13,11 @@ const MIN_RANGE_DAYS = 1;
 const MAX_RANGE_DAYS = 90;
 const DEFAULT_RANGE_DAYS = MAX_RANGE_DAYS;
 
-const escapeLiteral = (value: string) => value.replace(/'/g, "''");
+// Escape backslashes BEFORE quotes: ClickHouse honors C-style `\'` inside
+// single-quoted literals, so doubling quotes alone lets a trailing backslash
+// neutralise the doubled quote and break out of the string (SQL injection).
+const escapeLiteral = (value: string) =>
+	value.replace(/\\/g, "\\\\").replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) =>
 	date.toISOString().slice(0, 19).replace("T", " ");

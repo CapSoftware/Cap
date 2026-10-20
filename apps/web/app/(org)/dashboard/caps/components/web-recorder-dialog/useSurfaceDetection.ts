@@ -1,8 +1,8 @@
+import { detectRecordingModeFromTrack } from "@cap/recorder-core/recorder-utils";
 import { useCallback, useRef } from "react";
 import type { RecordingMode } from "./RecordingModeSelector";
 import type { DetectedDisplayRecordingMode } from "./web-recorder-constants";
 import { DETECTION_RETRY_DELAYS } from "./web-recorder-constants";
-import { detectRecordingModeFromTrack } from "./web-recorder-utils";
 
 export const useSurfaceDetection = (
 	onRecordingSurfaceDetected?: (mode: DetectedDisplayRecordingMode) => void,

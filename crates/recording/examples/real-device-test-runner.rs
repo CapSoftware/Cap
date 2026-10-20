@@ -68,6 +68,14 @@ struct Cli {
         help = "Screen recording frame rate (e.g., 30 or 60)"
     )]
     fps: u32,
+
+    #[arg(
+        long,
+        global = true,
+        default_value = "5",
+        help = "Baseline scenario recording duration in seconds"
+    )]
+    duration: u64,
 }
 
 #[derive(Subcommand)]
@@ -147,10 +155,10 @@ struct TestScenario {
 }
 
 impl TestScenario {
-    fn baseline() -> Self {
+    fn baseline(duration: Duration) -> Self {
         Self {
             name: "Baseline".to_string(),
-            actions: vec![TestAction::Record(Duration::from_secs(5))],
+            actions: vec![TestAction::Record(duration)],
             expected_segments: 1,
         }
     }
@@ -1954,14 +1962,12 @@ fn report_to_markdown(report: &TestReport) -> String {
         }
         if !seg.jitter_ok {
             md.push_str(&format!(
-                "| | ⚠️ | Jitter exceeds {}ms |\n",
-                JITTER_TOLERANCE_MS
+                "| | ⚠️ | Jitter exceeds {JITTER_TOLERANCE_MS}ms |\n"
             ));
         }
         if !seg.dropped_ok {
             md.push_str(&format!(
-                "| | ⚠️ | Dropped frames exceed {}% |\n",
-                MAX_DROPPED_FRAME_PERCENT
+                "| | ⚠️ | Dropped frames exceed {MAX_DROPPED_FRAME_PERCENT}% |\n"
             ));
         }
     }
@@ -2056,8 +2062,8 @@ fn generate_benchmark_markdown(
     let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let local_timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    md.push_str(&format!("### Benchmark Run: {}\n\n", timestamp));
-    md.push_str(&format!("*Local time: {}*\n\n", local_timestamp));
+    md.push_str(&format!("### Benchmark Run: {timestamp}\n\n"));
+    md.push_str(&format!("*Local time: {local_timestamp}*\n\n"));
 
     let passed = reports.iter().filter(|r| r.passed).count();
     let total = reports.len();
@@ -2068,15 +2074,14 @@ fn generate_benchmark_markdown(
     };
 
     md.push_str(&format!(
-        "**Overall Result:** {} ({}/{})\n\n",
-        overall_status, passed, total
+        "**Overall Result:** {overall_status} ({passed}/{total})\n\n"
     ));
 
     if let Some(notes_text) = notes {
-        md.push_str(&format!("**Notes:** {}\n\n", notes_text));
+        md.push_str(&format!("**Notes:** {notes_text}\n\n"));
     }
 
-    md.push_str(&format!("**Command:** `{}`\n\n", command));
+    md.push_str(&format!("**Command:** `{command}`\n\n"));
 
     md.push_str("<details>\n<summary>System Information</summary>\n\n");
     let sys_info = SystemInfo::collect(devices);
@@ -2195,11 +2200,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let scenarios: Vec<TestScenario> = match cli.command {
-        Some(Commands::Baseline) => vec![TestScenario::baseline()],
+        Some(Commands::Baseline) => vec![TestScenario::baseline(Duration::from_secs(cli.duration))],
         Some(Commands::SinglePause) => vec![TestScenario::single_pause()],
         Some(Commands::MultiplePauses) => vec![TestScenario::multiple_pauses()],
         Some(Commands::Full) | None => vec![
-            TestScenario::baseline(),
+            TestScenario::baseline(Duration::from_secs(cli.duration)),
             TestScenario::single_pause(),
             TestScenario::multiple_pauses(),
         ],
@@ -2283,7 +2288,7 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.benchmark_output {
         let command = format!(
-            "cargo run -p cap-recording --example real-device-test-runner -- {} {}{}{}{}--fps {}",
+            "cargo run -p cap-recording --example real-device-test-runner -- {} {}{}{}{}--fps {} --duration {}",
             match cli.command {
                 Some(Commands::Baseline) => "baseline",
                 Some(Commands::SinglePause) => "single-pause",
@@ -2304,6 +2309,7 @@ async fn main() -> anyhow::Result<()> {
             },
             if cli.mp4_only { "--mp4-only " } else { "" },
             cli.fps,
+            cli.duration,
         );
 
         let benchmark_md =

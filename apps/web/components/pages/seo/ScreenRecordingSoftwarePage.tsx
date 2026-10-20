@@ -2,6 +2,7 @@
 
 import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -90,8 +91,7 @@ export const screenRecordingSoftwareContent: SeoPageContent = {
 	comparison: [
 		{
 			title: "Cap vs Loom",
-			description:
-				"Cap starts at $8.16/month compared to Loom's $18/month. Cap is open-source, lets you connect your own S3 storage for full data ownership, and offers a more generous free plan with Studio Mode included. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
+			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month compared to Loom's $18/month. Cap is open-source, lets you connect your own S3 storage for full data ownership, and offers a more generous free plan with Studio Mode included. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
 		},
 		{
 			title: "Cap vs OBS Studio",
@@ -183,9 +183,10 @@ export const screenRecordingSoftwareContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-screen-recording-software-demo.mp4",
-		thumbnail: "/videos/cap-screen-recording-software-thumbnail.png",
-		alt: "Cap screen recording software demo showing HD capture and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title: "Cap screen recording demo",
+		},
 	},
 
 	cta: {

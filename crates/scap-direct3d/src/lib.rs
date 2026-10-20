@@ -180,7 +180,10 @@ impl StagingTexturePool {
         width: u32,
         height: u32,
     ) -> windows::core::Result<ID3D11Texture2D> {
-        let mut textures = self.textures.lock().unwrap();
+        let mut textures = self
+            .textures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let index = self.next_index.fetch_add(1, Ordering::Relaxed) % STAGING_POOL_SIZE;
 
@@ -213,7 +216,7 @@ impl StagingTexturePool {
                 .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
         };
 
-        let texture = texture.unwrap();
+        let texture = texture.ok_or_else(windows::core::Error::from_win32)?;
 
         if index < textures.len() {
             textures[index] = PooledStagingTexture {
@@ -260,18 +263,66 @@ fn create_d3d_device_with_type(
     }
 }
 
+fn create_d3d_device_on_pinned_adapter(
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    device: *mut Option<ID3D11Device>,
+) -> Result<String, String> {
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+
+    let selected = cap_d3d_adapter::select_capture_adapter(None)?;
+
+    unsafe {
+        D3D11CreateDevice(
+            Some(&selected.adapter),
+            D3D_DRIVER_TYPE_UNKNOWN,
+            HMODULE::default(),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(device),
+            None,
+            None,
+        )
+        .map_err(|e| {
+            format!(
+                "D3D11CreateDevice failed on '{}': {e:?}",
+                selected.description
+            )
+        })?;
+    }
+
+    Ok(selected.description)
+}
+
 fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
     let mut device = None;
     let flags = D3D11_CREATE_DEVICE_FLAG::default();
 
+    match create_d3d_device_on_pinned_adapter(flags, &mut device) {
+        Ok(description) => {
+            tracing::info!(
+                adapter = %description,
+                "scap-direct3d: D3D11 device created on pinned hardware adapter"
+            );
+            let device = device.ok_or_else(windows::core::Error::from_win32)?;
+            return Ok((device, false));
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "scap-direct3d: pinned-adapter device creation failed, attempting default-hardware path"
+            );
+        }
+    }
+
     let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
 
     match result {
-        Ok(()) => Ok((device.unwrap(), false)),
+        Ok(()) => Ok((device.ok_or_else(windows::core::Error::from_win32)?, false)),
         Err(e) if e.code() == DXGI_ERROR_UNSUPPORTED => {
             tracing::info!("Hardware D3D11 device unavailable, attempting WARP fallback");
             create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device)?;
-            Ok((device.unwrap(), true))
+            Ok((device.ok_or_else(windows::core::Error::from_win32)?, true))
         }
         Err(e) => Err(e),
     }
@@ -468,19 +519,21 @@ impl Capturer {
             .map_err(NewCapturerError::CaptureSession)?;
 
         if let Some(border_required) = settings.is_border_required {
-            session.SetIsBorderRequired(border_required).unwrap();
+            session
+                .SetIsBorderRequired(border_required)
+                .map_err(NewCapturerError::Other)?;
         }
 
         if let Some(cursor_capture_enabled) = settings.is_cursor_capture_enabled {
             session
                 .SetIsCursorCaptureEnabled(cursor_capture_enabled)
-                .unwrap();
+                .map_err(NewCapturerError::Other)?;
         }
 
         if let Some(min_update_interval) = settings.min_update_interval {
             session
                 .SetMinUpdateInterval(min_update_interval.into())
-                .unwrap();
+                .map_err(NewCapturerError::Other)?;
         }
 
         let crop_data = settings
@@ -506,7 +559,11 @@ impl Capturer {
                 unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
                     .map_err(NewCapturerError::CropTexture)?;
 
-                Ok::<_, NewCapturerError>((texture.unwrap(), crop))
+                let texture = texture.ok_or_else(|| {
+                    NewCapturerError::CropTexture(windows::core::Error::from_win32())
+                })?;
+
+                Ok::<_, NewCapturerError>((texture, crop))
             })
             .transpose()?;
 
@@ -526,10 +583,11 @@ impl Capturer {
                             return Ok(());
                         }
 
-                        let frame = frame_pool
-                            .as_ref()
-                            .expect("FrameArrived parameter was None")
-                            .TryGetNextFrame()?;
+                        let Some(frame_pool) = frame_pool.as_ref() else {
+                            return Ok(());
+                        };
+
+                        let frame = frame_pool.TryGetNextFrame()?;
 
                         let size = frame.ContentSize()?;
 

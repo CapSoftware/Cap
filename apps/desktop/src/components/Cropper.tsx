@@ -14,6 +14,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
@@ -23,6 +24,8 @@ import { Transition } from "solid-transition-group";
 import { createKeyDownSignal } from "~/utils/events";
 
 import { commands } from "~/utils/tauri";
+import { alignCrop, type CropGuides } from "./crop-alignment";
+import "./cropper.css";
 export interface CropBounds {
 	x: number;
 	y: number;
@@ -246,6 +249,8 @@ export function Cropper(
 		snapToRatioEnabled?: boolean;
 		useBackdropFilter?: boolean;
 		allowLightMode?: boolean;
+		appearance?: "editor";
+		snapToAlignmentEnabled?: boolean;
 	}>,
 ) {
 	let containerRef: HTMLDivElement | undefined;
@@ -283,6 +288,11 @@ export function Cropper(
 			| { drag: "handle"; cursor: string }
 		) & { hoveringHandle: HandleSide | null }
 	>({ drag: null, hoveringHandle: null });
+
+	const [alignmentGuides, setAlignmentGuides] = createSignal<CropGuides>({
+		x: null,
+		y: null,
+	});
 
 	const resizing = () =>
 		mouseState.drag === "handle" || mouseState.drag === "overlay";
@@ -436,6 +446,9 @@ export function Cropper(
 			target.width === start.width &&
 			target.height === start.height
 		) {
+			animationFrameId = null;
+			setIsAnimating(false);
+			setDisplayRawBounds(target);
 			return;
 		}
 
@@ -470,6 +483,7 @@ export function Cropper(
 		durationMs = 240,
 	) {
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		animationFrameId = null;
 		setIsAnimating(true);
 		setRawBoundsConstraining(bounds, origin);
 		animateToRawBounds(rawBounds(), durationMs);
@@ -638,6 +652,8 @@ export function Cropper(
 	function onRegionPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
 
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		stopAnimation();
 		e.stopPropagation();
 		setMouseState({ drag: "region" });
@@ -648,25 +664,119 @@ export function Cropper(
 			y: e.clientY - containerRect.top - currentBounds.y,
 		};
 
-		createRoot((dispose) =>
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => {
+				let newX = e.clientX - containerRect.left - startOffset.x;
+				let newY = e.clientY - containerRect.top - startOffset.y;
+
+				newX = clamp(newX, 0, containerRect.width - currentBounds.width);
+				newY = clamp(newY, 0, containerRect.height - currentBounds.height);
+
+				currentBounds = moveBounds(currentBounds, newX, newY);
+				const aligned =
+					props.snapToAlignmentEnabled && !e.shiftKey
+						? alignCrop(currentBounds, containerSize())
+						: { bounds: currentBounds, guides: { x: null, y: null } };
+				currentBounds = aligned.bounds;
+				setAlignmentGuides(aligned.guides);
+				setRawBounds(currentBounds);
+
+				if (!isAnimating()) setDisplayRawBounds(currentBounds);
+			},
+			() => {
+				setMouseState({ drag: null });
+			},
+		);
+	}
+
+	let activePointerSessionDispose: (() => void) | undefined;
+
+	function disposeActivePointerSession() {
+		activePointerSessionDispose?.();
+		activePointerSessionDispose = undefined;
+	}
+
+	function trackPointerSession(
+		target: HTMLElement,
+		pointerId: number,
+		onMove: (event: PointerEvent) => void,
+		onEnd: () => void,
+	) {
+		target.setPointerCapture?.(pointerId);
+
+		createRoot((dispose) => {
+			let ended = false;
+			const finish = () => {
+				if (ended) return;
+				ended = true;
+				if (target.hasPointerCapture?.(pointerId)) {
+					target.releasePointerCapture(pointerId);
+				}
+				setAlignmentGuides({ x: null, y: null });
+				onEnd();
+				activePointerSessionDispose = undefined;
+				dispose();
+			};
+			const finishForPointer = (event: PointerEvent) => {
+				if (event.pointerId === pointerId) finish();
+			};
+
 			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					dispose();
+				pointermove: (event) => {
+					if (event.pointerId === pointerId) onMove(event);
 				},
-				pointermove: (e) => {
-					let newX = e.clientX - containerRect.left - startOffset.x;
-					let newY = e.clientY - containerRect.top - startOffset.y;
-
-					newX = clamp(newX, 0, containerRect.width - currentBounds.width);
-					newY = clamp(newY, 0, containerRect.height - currentBounds.height);
-
-					currentBounds = moveBounds(currentBounds, newX, newY);
-					setRawBounds(currentBounds);
-
-					if (!isAnimating()) setDisplayRawBounds(currentBounds);
+				pointerup: finishForPointer,
+				pointercancel: finishForPointer,
+				// While pointer capture is held the drag is still ours even if the window
+				// loses focus (e.g. another overlay or the camera window grabs it on
+				// Windows). Real pointer loss arrives via pointercancel/lostpointercapture.
+				// Defer the capture check by one microtask so setPointerCapture has time
+				// to finalize before we decide the session is orphaned.
+				blur: () => {
+					queueMicrotask(() => {
+						if (!target.hasPointerCapture?.(pointerId)) finish();
+					});
 				},
-			}),
+			});
+			createEventListenerMap(target, {
+				lostpointercapture: finishForPointer,
+			});
+
+			activePointerSessionDispose = finish;
+		});
+	}
+
+	onCleanup(() => {
+		disposeActivePointerSession();
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+	});
+
+	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
+		e.stopPropagation();
+
+		stopAnimation();
+		setMouseState({ drag: "handle", cursor: handle.cursor });
+
+		const context: ResizeSessionState = {
+			containerRect: containerRef.getBoundingClientRect(),
+			startBounds: rawBounds(),
+			isAltMode: e.altKey,
+			activeHandle: { ...handle },
+			originalHandle: handle,
+		};
+
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+			},
 		);
 	}
 
@@ -705,6 +815,7 @@ export function Cropper(
 		e: PointerEvent,
 		context: ResizeSessionState,
 	) {
+		const previousSnappedRatio = aspectState.snapped;
 		const pointX = e.clientX - context.containerRect.left;
 		const pointY = e.clientY - context.containerRect.top;
 
@@ -757,9 +868,6 @@ export function Cropper(
 				options,
 			);
 			nextBounds = bounds;
-			if (snappedRatio && !aspectState.snapped) {
-				triggerHaptic();
-			}
 			setAspectState("snapped", snappedRatio);
 		}
 
@@ -769,36 +877,39 @@ export function Cropper(
 			containerSize().y,
 		);
 
-		setRawBounds(finalBounds);
-		if (!isAnimating()) setDisplayRawBounds(finalBounds);
-	}
-
-	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
-		if (!containerRef || e.button !== 0) return;
-		e.stopPropagation();
-
-		stopAnimation();
-		setMouseState({ drag: "handle", cursor: handle.cursor });
-
-		const context: ResizeSessionState = {
-			containerRect: containerRef.getBoundingClientRect(),
-			startBounds: rawBounds(),
-			isAltMode: e.altKey,
-			activeHandle: { ...handle },
-			originalHandle: handle,
-		};
-
-		createRoot((dispose) =>
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					// Note: may need to be added back
-					// setAspectState("snapped", null);
-					dispose();
+		let alignedBounds = finalBounds;
+		setAlignmentGuides({ x: null, y: null });
+		if (props.snapToAlignmentEnabled && !e.shiftKey) {
+			const { movable } = context.activeHandle;
+			const start = context.startBounds;
+			const centered = context.isAltMode && ratioValue === null;
+			const aligned = alignCrop(finalBounds, containerSize(), {
+				origin: {
+					x: centered
+						? 0.5
+						: pointX < start.x + (movable.left ? start.width : 0)
+							? 1
+							: 0,
+					y: centered
+						? 0.5
+						: pointY < start.y + (movable.top ? start.height : 0)
+							? 1
+							: 0,
 				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			}),
-		);
+				axes: {
+					x: movable.left || movable.right,
+					y: movable.top || movable.bottom,
+				},
+				ratio: ratioValue,
+			});
+			alignedBounds = aligned.bounds;
+			setAlignmentGuides(aligned.guides);
+			if (aligned.guides.x !== null || aligned.guides.y !== null)
+				setAspectState("snapped", null);
+		}
+		if (aspectState.snapped && !previousSnappedRatio) triggerHaptic();
+		setRawBounds(alignedBounds);
+		if (!isAnimating()) setDisplayRawBounds(alignedBounds);
 	}
 
 	function onHandleDoubleClick(handle: HandleSide, e: MouseEvent) {
@@ -828,8 +939,11 @@ export function Cropper(
 
 	function onOverlayPointerDown(e: PointerEvent) {
 		if (!containerRef || e.button !== 0) return;
+		const target = e.currentTarget as HTMLElement;
+		disposeActivePointerSession();
 		e.preventDefault();
 		e.stopPropagation();
+		stopAnimation();
 
 		const initialBounds = { ...rawBounds() };
 		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
@@ -858,20 +972,19 @@ export function Cropper(
 			originalHandle: handle,
 		};
 
-		createRoot((dispose) => {
-			createEventListenerMap(window, {
-				pointerup: () => {
-					setMouseState({ drag: null });
-					const bounds = rawBounds();
-					if (bounds.width < 5 || bounds.height < 5) {
-						setRawBounds(initialBounds);
-						if (!isAnimating()) setDisplayRawBounds(initialBounds);
-					}
-					dispose();
-				},
-				pointermove: (e) => handleResizePointerMove(e, context),
-			});
-		});
+		trackPointerSession(
+			target,
+			e.pointerId,
+			(e) => handleResizePointerMove(e, context),
+			() => {
+				setMouseState({ drag: null });
+				const bounds = rawBounds();
+				if (bounds.width < 5 || bounds.height < 5) {
+					setRawBounds(initialBounds);
+					if (!isAnimating()) setDisplayRawBounds(initialBounds);
+				}
+			},
+		);
 	}
 
 	const KEY_MAPPINGS = new Map([
@@ -1018,7 +1131,8 @@ export function Cropper(
 	return (
 		<div
 			ref={containerRef}
-			class="relative w-full h-full select-none overscroll-contain focus:outline-none touch-none"
+			class="relative w-full h-full select-none overscroll-contain focus:outline-hidden touch-none"
+			classList={{ "cropper-editor": props.appearance === "editor" }}
 			style={{
 				cursor: cursorStyle() ?? (props.aspectRatio ? "default" : "crosshair"),
 			}}
@@ -1031,11 +1145,11 @@ export function Cropper(
 			<Transition
 				appear
 				enterActiveClass="transition-opacity duration-300 ease-in-out"
-				enterClass="opacity-0 blur-sm"
+				enterClass="opacity-0 blur-xs"
 				enterToClass="opacity-100 blur-none"
 				exitActiveClass="transition-opacity duration-300 ease-in-out"
 				exitClass="opacity-100 blur-none"
-				exitToClass="opacity-0 blur-sm"
+				exitToClass="opacity-0 blur-xs"
 			>
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
@@ -1064,11 +1178,30 @@ export function Cropper(
 				<div ref={occBottomRef} class="bottom-0" />
 			</div>
 
+			<For each={["x", "y"] as const}>
+				{(axis) => (
+					<Show
+						when={mouseState.drag !== null && alignmentGuides()[axis] !== null}
+					>
+						<div
+							aria-hidden="true"
+							class="cropper-alignment-guide"
+							data-axis={axis}
+							style={
+								axis === "x"
+									? { left: `${alignmentGuides().x}px` }
+									: { top: `${alignmentGuides().y}px` }
+							}
+						/>
+					</Show>
+				)}
+			</For>
+
 			{/* Crop region container */}
 			<div class="size-full">
 				<div
 					ref={regionRef}
-					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
+					class="cropper-region absolute top-0 left-0 z-30 size-36 border border-white/50"
 					style={{
 						cursor: cursorStyle() ?? "grab",
 					}}
@@ -1098,7 +1231,7 @@ export function Cropper(
 						exitToClass="opacity-0"
 					>
 						<Show when={mouseState.drag !== null}>
-							<div class="pointer-events-none *:absolute *:border-white/40">
+							<div class="cropper-thirds pointer-events-none *:absolute *:border-white/40">
 								<div class="left-0 w-full border-t border-b pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
 								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
 							</div>
@@ -1110,7 +1243,7 @@ export function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-none"
+									class="cropper-corner fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-hidden"
 									tabIndex={-1}
 									classList={{ "opacity-0": mouseState.drag === "overlay" }}
 									style={{
@@ -1136,7 +1269,7 @@ export function Cropper(
 								>
 									<svg
 										aria-hidden="true"
-										class="absolute pointer-events-none drop-shadow-sm shadow-black"
+										class="absolute pointer-events-none drop-shadow-xs shadow-black"
 										classList={{
 											"size-1": boundsTooSmall(),
 											"size-6": !boundsTooSmall(),
@@ -1153,7 +1286,10 @@ export function Cropper(
 											...(handle.y === "t"
 												? { top: "9px" }
 												: { bottom: "9px" }),
-											filter: `drop-shadow(${handle.x === "l" ? "-3px" : "3px"} ${handle.y === "t" ? "-3px" : "3px"} 5px rgba(0, 0, 0, 0.3))`,
+											filter:
+												props.appearance === "editor"
+													? undefined
+													: `drop-shadow(${handle.x === "l" ? "-3px" : "3px"} ${handle.y === "t" ? "-3px" : "3px"} 5px rgba(0, 0, 0, 0.3))`,
 										}}
 									>
 										<path
@@ -1172,7 +1308,8 @@ export function Cropper(
 							) : (
 								<button
 									type="button"
-									class="absolute focus:outline-none focus:ring-0 outline-none"
+									class="cropper-edge absolute focus:outline-hidden focus:ring-0 outline-hidden"
+									data-direction={handle.direction}
 									tabIndex={-1}
 									style={{
 										visibility:
@@ -1183,7 +1320,8 @@ export function Cropper(
 										...(handle.x === "l"
 											? {
 													left: "-1px",
-													width: "10px",
+													width:
+														props.appearance === "editor" ? "18px" : "10px",
 													top: "10px",
 													bottom: "10px",
 													transform: "translateX(-50%)",
@@ -1191,7 +1329,8 @@ export function Cropper(
 											: handle.x === "r"
 												? {
 														right: "-1px",
-														width: "10px",
+														width:
+															props.appearance === "editor" ? "18px" : "10px",
 														top: "10px",
 														bottom: "10px",
 														transform: "translateX(50%)",
@@ -1199,14 +1338,16 @@ export function Cropper(
 												: handle.y === "t"
 													? {
 															top: "-1px",
-															height: "10px",
+															height:
+																props.appearance === "editor" ? "18px" : "10px",
 															left: "10px",
 															right: "10px",
 															transform: "translateY(-50%)",
 														}
 													: {
 															bottom: "-1px",
-															height: "10px",
+															height:
+																props.appearance === "editor" ? "18px" : "10px",
 															left: "10px",
 															right: "10px",
 															transform: "translateY(50%)",
@@ -1219,7 +1360,11 @@ export function Cropper(
 									onPointerDown={[onHandlePointerDown, handle]}
 									aria-label={`Resize ${handle.direction}`}
 									aria-describedby="cropper-aspect"
-								/>
+								>
+									<Show when={props.appearance === "editor"}>
+										<span class="cropper-edge-grip" />
+									</Show>
+								</button>
 							)
 						}
 					</For>
@@ -1239,9 +1384,9 @@ export function Cropper(
 								aria-live="polite"
 							>
 								<div
-									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline outline-black/80"
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline-solid outline-black/80"
 									classList={{
-										"backdrop-blur-sm bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
+										"backdrop-blur-xs bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
 											props.useBackdropFilter,
 										"bg-gray-3 opacity-80": !props.useBackdropFilter,
 									}}
@@ -1506,7 +1651,8 @@ export function createCropOptionsMenuItems(options: {
 			(ratio) =>
 				({
 					text: `${ratio[0]}:${ratio[1]}`,
-					checked: options.aspect === ratio,
+					checked:
+						options.aspect?.[0] === ratio[0] && options.aspect[1] === ratio[1],
 					action: () => options.onAspectSet(ratio),
 				}) satisfies CheckMenuItemOptions,
 		),

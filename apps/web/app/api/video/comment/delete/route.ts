@@ -41,13 +41,18 @@ export async function DELETE(request: NextRequest) {
 			);
 		}
 
-		// Delete the comment and all its replies
+		// Delete the comment and only the replies authored by the same user.
+		// Replies written by other users are preserved (never delete others'
+		// content), even though that can leave them visually orphaned.
 		await db()
 			.delete(comments)
 			.where(
-				or(
-					eq(comments.id, commentId.value),
-					eq(comments.parentCommentId, commentId.value),
+				and(
+					eq(comments.authorId, user.id),
+					or(
+						eq(comments.id, commentId.value),
+						eq(comments.parentCommentId, commentId.value),
+					),
 				),
 			);
 

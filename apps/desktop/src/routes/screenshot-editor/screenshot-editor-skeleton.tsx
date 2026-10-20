@@ -1,11 +1,15 @@
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapLogo from "~icons/cap/logo";
 
 function SkeletonPulse(props: { class?: string }) {
 	return (
 		<div
-			class={cx("animate-pulse rounded bg-gray-3 dark:bg-gray-4", props.class)}
+			class={cx(
+				"animate-pulse rounded-sm bg-gray-3 dark:bg-gray-4",
+				props.class,
+			)}
 		/>
 	);
 }
@@ -47,7 +51,7 @@ function HeaderSkeleton() {
 
 			<div
 				class={cx(
-					"flex flex-row items-center gap-2",
+					"flex flex-row items-center gap-2 h-full",
 					ostype() !== "windows" && "pr-2",
 				)}
 			>
@@ -55,6 +59,7 @@ function HeaderSkeleton() {
 				<SkeletonButton />
 				<SkeletonButton />
 				<SkeletonButton />
+				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 		</div>
 	);
@@ -64,7 +69,7 @@ function PreviewSkeleton() {
 	return (
 		<div class="flex flex-col flex-1 overflow-hidden bg-gray-1 dark:bg-gray-2">
 			<div class="flex-1 relative flex items-center justify-center overflow-hidden bg-gray-2 dark:bg-gray-3">
-				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
+				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-xs p-1 border border-gray-4">
 					<SkeletonButton />
 					<SkeletonPulse class="w-20 h-2 rounded-full" />
 					<SkeletonButton />

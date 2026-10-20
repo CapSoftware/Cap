@@ -1,13 +1,51 @@
 import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
-import type { GeneralSettingsStore } from "~/utils/general-settings";
+import type { AutomationsStore } from "~/utils/automations";
+import {
+	type GeneralSettingsStore,
+	RECORDING_START_SAFETY_DEFAULTS,
+	type RecordingStartSafetySettings,
+} from "~/utils/general-settings";
+import { createSerializedStore } from "~/utils/serialized-store";
 import type {
+	AnimatedGradientLibrary,
 	AuthStore,
 	HotkeysStore,
 	PresetsStore,
 	RecordingSettingsStore,
+	VoiceIsolation,
 } from "~/utils/tauri";
+
+export type TeleprompterStore = {
+	script: string;
+	fontSize: number;
+	wordsPerMinute: number;
+	lineHeight: number;
+	showCueMarkers: boolean;
+	mirror: boolean;
+	windowOpacityPercent: number;
+};
+
+export const teleprompterDefaults: TeleprompterStore = {
+	script: "",
+	fontSize: 30,
+	wordsPerMinute: 150,
+	lineHeight: 1.5,
+	showCueMarkers: true,
+	mirror: false,
+	windowOpacityPercent: 92,
+};
+
+export type UserProfileStore = {
+	userId: string | null;
+	profile: {
+		name: string | null;
+		email: string | null;
+		imageUrl: string | null;
+	};
+	updatedAt: number;
+};
 
 let _store: Promise<Store> | undefined;
 const store = () => {
@@ -18,10 +56,17 @@ const store = () => {
 	return _store;
 };
 
-function declareStore<T extends object>(name: string) {
-	const get = () => store().then((s) => s.get<T>(name));
+function declareStore<T extends object>(name: string, defaults?: T) {
+	const withDefaults = (value?: T) =>
+		defaults ? { ...defaults, ...(value ?? {}) } : value;
+	const get = async () => {
+		const s = await store();
+		return withDefaults(await s.get<T>(name));
+	};
 	const listen = (fn: (data?: T | undefined) => void) =>
-		store().then((s) => s.onKeyChange<T>(name, fn));
+		store().then((s) =>
+			s.onKeyChange<T>(name, (data) => fn(withDefaults(data))),
+		);
 
 	return {
 		get,
@@ -54,10 +99,53 @@ function declareStore<T extends object>(name: string) {
 	};
 }
 
+export const audioEnhancementStore = declareStore<{
+	enabledByDefault: boolean;
+	isolation: VoiceIsolation;
+}>("audio_enhancement", { enabledByDefault: true, isolation: "balanced" });
+
 export const presetsStore = declareStore<PresetsStore>("presets");
+const animatedGradientDefaults: AnimatedGradientLibrary = {
+	presets: [],
+	lastUsed: null,
+	selected: false,
+};
+const animatedGradientStore = declareStore<AnimatedGradientLibrary>(
+	"animated_gradients",
+	animatedGradientDefaults,
+);
+export const animatedGradientsStore = {
+	...animatedGradientStore,
+	...createSerializedStore<AnimatedGradientLibrary>(
+		animatedGradientStore,
+		animatedGradientDefaults,
+	),
+};
 export const authStore = declareStore<AuthStore>("auth");
+export const automationsStore = declareStore<AutomationsStore>("automations");
+export const userProfileStore = declareStore<UserProfileStore>("user_profile");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
-export const recordingSettingsStore =
-	declareStore<RecordingSettingsStore>("recording_settings");
+export const recordingStartSafetyStore =
+	declareStore<RecordingStartSafetySettings>(
+		"recording_start_safety",
+		RECORDING_START_SAFETY_DEFAULTS,
+	);
+export const recordingSettingsStore = declareStore<RecordingSettingsStore>(
+	"recording_settings",
+	{
+		target: null,
+		micName: null,
+		cameraId: null,
+		mode: "instant",
+		systemAudio: false,
+		organizationId: null,
+		cameraDeviceSettings: {},
+		microphoneDeviceSettings: {},
+	},
+);
+export const teleprompterStore = declareStore<TeleprompterStore>(
+	"teleprompter",
+	teleprompterDefaults,
+);

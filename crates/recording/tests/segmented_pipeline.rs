@@ -226,8 +226,7 @@ fn segment_events_can_build_upload_manifest() {
             let exists = p.exists() || m4s_path.exists() || tmp_path.exists();
             assert!(
                 exists,
-                "segment file should exist on disk (checking {:?}, {:?}, {:?})",
-                p, m4s_path, tmp_path
+                "segment file should exist on disk (checking {p:?}, {m4s_path:?}, {tmp_path:?})"
             );
         }
     }

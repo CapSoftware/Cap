@@ -1,0 +1,59 @@
+name: Recording Reliability
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "apps/media-server/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "crates/recording/**"
+      - "bun.lock"
+      - ".github/workflows/recording-reliability.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "apps/media-server/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "crates/recording/**"
+      - "bun.lock"
+      - ".github/workflows/recording-reliability.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recording-reliability-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  recording-contract:
+    name: Recording ownership, preservation, and recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Verify recording contracts
+        working-directory: apps/web
+        run: |
+          bun run vitest run \
+            __tests__/unit/audio-level-publication.test.ts \
+            __tests__/unit/recording-output.test.ts \
+            __tests__/unit/recording-storage-lifecycle.test.ts \
+            __tests__/unit/desktop-recording-*.test.ts \
+            __tests__/unit/desktop-segments-*.test.ts \
+            __tests__/unit/finalize-desktop-recording.test.ts \
+            __tests__/unit/media-server-progress.test.ts \
+            __tests__/unit/media-processing-budget.test.ts \
+            __tests__/unit/playback-source.test.ts \
+            __tests__/unit/share-page-loading.test.ts \
+            __tests__/unit/media-player-store-refs.test.ts \
+            __tests__/unit/video-edit-processing.test.ts \
+            __tests__/unit/video-edit-published-output.test.ts \
+            __tests__/unit/upload-progress-playback.test.ts \
+            __tests__/unit/recording-prepare.test.ts \
+            __tests__/unit/s3-bucket-connections.test.ts

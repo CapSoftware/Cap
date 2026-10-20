@@ -18,7 +18,7 @@ use tauri::{
     AppHandle,
     image::Image,
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{TrayIcon, TrayIconBuilder},
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -28,6 +28,40 @@ const PREVIOUS_ITEM_PREFIX: &str = "previous_item_";
 const MAX_PREVIOUS_ITEMS: usize = 6;
 const MAX_TITLE_LENGTH: usize = 30;
 const THUMBNAIL_SIZE: u32 = 32;
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum LinuxTrayIcon {
+    Instant,
+    Screenshot,
+    Studio,
+    Stop,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxTrayIcon {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Instant => "so.cap.desktop-tray-instant-symbolic",
+            Self::Screenshot => "so.cap.desktop-tray-screenshot-symbolic",
+            Self::Studio => "so.cap.desktop-tray-studio-symbolic",
+            Self::Stop => "so.cap.desktop-tray-stop-symbolic",
+        }
+    }
+
+    fn svg(self) -> &'static str {
+        match self {
+            Self::Instant => {
+                include_str!("../icons/linux/so.cap.desktop-tray-instant-symbolic.svg")
+            }
+            Self::Screenshot => {
+                include_str!("../icons/linux/so.cap.desktop-tray-screenshot-symbolic.svg")
+            }
+            Self::Studio => include_str!("../icons/linux/so.cap.desktop-tray-studio-symbolic.svg"),
+            Self::Stop => include_str!("../icons/linux/so.cap.desktop-tray-stop-symbolic.svg"),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum TrayItem {
@@ -124,18 +158,29 @@ struct CachedPreviousItem {
     thumbnail_width: u32,
     thumbnail_height: u32,
     item_type: PreviousItemType,
-    created_at: std::time::SystemTime,
 }
 
 #[derive(Default)]
 struct PreviousItemsCache {
     items: Vec<CachedPreviousItem>,
+    revision: u64,
+    loaded: bool,
 }
 
-fn recordings_path(app: &AppHandle) -> PathBuf {
-    let path = app.path().app_data_dir().unwrap().join("recordings");
-    std::fs::create_dir_all(&path).unwrap_or_default();
-    path
+impl PreviousItemsCache {
+    fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn finish_loading(&mut self, revision: u64, items: Vec<CachedPreviousItem>) -> bool {
+        if self.revision != revision {
+            return false;
+        }
+        self.items = items;
+        self.loaded = true;
+        self.invalidate();
+        true
+    }
 }
 
 fn screenshots_path(app: &AppHandle) -> PathBuf {
@@ -201,11 +246,6 @@ fn load_single_item(
     }
 
     let meta = RecordingMeta::load_for_project(path).ok()?;
-    let created_at = path
-        .metadata()
-        .and_then(|m| m.created())
-        .unwrap_or_else(|_| std::time::SystemTime::now());
-
     let is_screenshot = path.extension().and_then(|s| s.to_str()) == Some("cap")
         && path.parent().map(|p| p == screenshots_dir).unwrap_or(false);
 
@@ -245,22 +285,19 @@ fn load_single_item(
         thumbnail_width,
         thumbnail_height,
         item_type,
-        created_at,
     })
 }
 
 fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<CachedPreviousItem> {
-    let mut items = Vec::new();
+    let mut paths = Vec::new();
     let screenshots_dir = screenshots_path(app);
 
-    let recordings_dir = recordings_path(app);
-    if recordings_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&recordings_dir)
-    {
+    for recordings_dir in crate::recordings_locations::known_recordings_dirs(app) {
+        let Ok(entries) = std::fs::read_dir(&recordings_dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
-            if let Some(item) = load_single_item(&entry.path(), &screenshots_dir, load_thumbnails) {
-                items.push(item);
-            }
+            paths.push(entry.path());
         }
     }
 
@@ -269,17 +306,66 @@ fn load_all_previous_items(app: &AppHandle, load_thumbnails: bool) -> Vec<Cached
     {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("cap")
-                && let Some(item) = load_single_item(&path, &screenshots_dir, load_thumbnails)
-            {
-                items.push(item);
+            if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                paths.push(path);
             }
         }
     }
 
-    items.sort_by_key(|b| std::cmp::Reverse(b.created_at));
-    items.truncate(MAX_PREVIOUS_ITEMS);
-    items
+    newest_valid_items(paths, MAX_PREVIOUS_ITEMS, |path| {
+        load_single_item(path, &screenshots_dir, load_thumbnails)
+    })
+}
+
+fn newest_valid_items<T>(
+    paths: Vec<PathBuf>,
+    limit: usize,
+    mut load: impl FnMut(&PathBuf) -> Option<T>,
+) -> Vec<T> {
+    let mut candidates = paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = path.metadata().ok()?;
+            metadata.is_dir().then(|| {
+                let created = metadata
+                    .created()
+                    .unwrap_or_else(|_| std::time::SystemTime::now());
+                (path, created)
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(_, created)| std::cmp::Reverse(*created));
+    candidates
+        .into_iter()
+        .filter_map(|(path, _)| load(&path))
+        .take(limit)
+        .collect()
+}
+
+fn load_previous_items_in_background(app: AppHandle, cache: Arc<Mutex<PreviousItemsCache>>) {
+    tokio::spawn(async move {
+        if !crate::startup::wait_for_window(&app).await {
+            return;
+        }
+        let worker_app = app.clone();
+        let worker_cache = cache.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            while !crate::app_is_exiting(&worker_app) {
+                let revision = worker_cache.lock().unwrap().revision;
+                let items = load_all_previous_items(&worker_app, true);
+                if worker_cache.lock().unwrap().finish_loading(revision, items) {
+                    return;
+                }
+            }
+        })
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, "Failed to load tray history");
+        }
+        if !crate::app_is_exiting(&app) {
+            refresh_tray_menu(&app, &cache);
+        }
+    });
 }
 
 fn create_previous_submenu(
@@ -291,7 +377,11 @@ fn create_previous_submenu(
         submenu.append(&MenuItem::with_id(
             app,
             "previous_empty",
-            "No recent items",
+            if cache.loaded {
+                "No recent items"
+            } else {
+                "Loading recent items…"
+            },
             false,
             None::<&str>,
         )?)?;
@@ -474,7 +564,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
     menu.append(&MenuItem::with_id(
         app,
         TrayItem::ImportVideo,
-        "Import Video...",
+        "Import Media...",
         true,
         None::<&str>,
     )?)?;
@@ -546,6 +636,7 @@ fn add_new_item_to_cache(cache: &Arc<Mutex<PreviousItemsCache>>, app: &AppHandle
     cache_guard.items.insert(0, new_item);
 
     cache_guard.items.truncate(MAX_PREVIOUS_ITEMS);
+    cache_guard.invalidate();
 }
 
 fn refresh_tray_menu(app: &AppHandle, cache: &Arc<Mutex<PreviousItemsCache>>) {
@@ -630,6 +721,73 @@ pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_tray_icon_for_mode(mode: RecordingMode) -> LinuxTrayIcon {
+    match mode {
+        RecordingMode::Studio => LinuxTrayIcon::Studio,
+        RecordingMode::Instant => LinuxTrayIcon::Instant,
+        RecordingMode::Screenshot => LinuxTrayIcon::Screenshot,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_linux_tray_symbolic_icon(icon: LinuxTrayIcon) -> std::io::Result<PathBuf> {
+    let dir = dirs::runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("cap-tray-icons");
+    std::fs::create_dir_all(&dir)?;
+
+    let path = dir.join(format!("{}.svg", icon.name()));
+    let svg = icon.svg().as_bytes();
+    if std::fs::read(&path).ok().as_deref() != Some(svg) {
+        std::fs::write(path, svg)?;
+    }
+
+    Ok(dir)
+}
+
+#[cfg(target_os = "linux")]
+fn set_linux_tray_icon(tray: &TrayIcon<tauri::Wry>, icon: LinuxTrayIcon) -> tauri::Result<()> {
+    let icon_dir = write_linux_tray_symbolic_icon(icon).map_err(tauri::Error::Io)?;
+    let icon_name = icon.name().to_string();
+
+    tray.with_inner_tray_icon(move |inner| unsafe {
+        let indicator = inner.app_indicator() as *mut libappindicator::AppIndicator;
+        if let Some(indicator) = indicator.as_mut() {
+            indicator.set_icon_theme_path(&icon_dir.to_string_lossy());
+            indicator.set_icon_full(&icon_name, "Cap tray icon");
+        }
+    })?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn set_tray_icon_for_mode(tray: &TrayIcon<tauri::Wry>, mode: RecordingMode) -> tauri::Result<()> {
+    set_linux_tray_icon(tray, linux_tray_icon_for_mode(mode))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_tray_icon_for_mode(tray: &TrayIcon<tauri::Wry>, mode: RecordingMode) -> tauri::Result<()> {
+    let icon = Image::from_bytes(get_mode_icon(mode))?;
+    tray.set_icon(Some(icon))?;
+    tray.set_icon_as_template(true)?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn set_tray_stop_icon(tray: &TrayIcon<tauri::Wry>) -> tauri::Result<()> {
+    set_linux_tray_icon(tray, LinuxTrayIcon::Stop)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_tray_stop_icon(tray: &TrayIcon<tauri::Wry>) -> tauri::Result<()> {
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png"))?;
+    tray.set_icon(Some(icon))?;
+    tray.set_icon_as_template(true)?;
+    Ok(())
+}
+
 pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
     if cfg!(target_os = "windows") {
         return;
@@ -639,9 +797,8 @@ pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
         return;
     };
 
-    if let Ok(icon) = Image::from_bytes(get_mode_icon(mode)) {
-        let _ = tray.set_icon(Some(icon));
-        let _ = tray.set_icon_as_template(true);
+    if let Err(error) = set_tray_icon_for_mode(&tray, mode) {
+        tracing::warn!("Failed to update tray icon: {error}");
     }
 }
 
@@ -660,8 +817,7 @@ fn handle_mode_selection(
 }
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let items = load_all_previous_items(app, false);
-    let cache = Arc::new(Mutex::new(PreviousItemsCache { items }));
+    let cache = Arc::new(Mutex::new(PreviousItemsCache::default()));
 
     app.manage(TrayMenuCache {
         cache: cache.clone(),
@@ -688,7 +844,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
-                    tokio::spawn(async move {
+                    tauri::async_runtime::spawn(async move {
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
                         }
@@ -724,9 +880,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                             Display::get_containing_cursor().unwrap_or_else(Display::primary);
                         let target = ScreenCaptureTarget::Display { id: display.id() };
 
-                        match recording::take_screenshot(app.clone(), target).await {
+                        match recording::take_screenshot(app.clone(), target.clone()).await {
                             Ok(path) => {
-                                let _ = ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                                if crate::automation::should_open_screenshot_editor(&app, &target) {
+                                    let _ =
+                                        ShowCapWindow::ScreenshotEditor { path }.show(&app).await;
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("Failed to take screenshot: {e}");
@@ -741,8 +900,19 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                             .dialog()
                             .file()
                             .add_filter(
+                                "Media Files",
+                                &[
+                                    "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png",
+                                    "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
+                                ],
+                            )
+                            .add_filter(
                                 "Video Files",
                                 &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
+                            )
+                            .add_filter(
+                                "Image Files",
+                                &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"],
                             )
                             .blocking_pick_file();
 
@@ -755,18 +925,44 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                                 }
                             };
 
-                            match crate::import::start_video_import(app.clone(), path).await {
-                                Ok(project_path) => {
-                                    let _ = ShowCapWindow::Editor { project_path }.show(&app).await;
+                            if crate::import::is_supported_video_import_path(&path) {
+                                match crate::import::start_video_import(app.clone(), path).await {
+                                    Ok(project_path) => {
+                                        let _ =
+                                            ShowCapWindow::Editor { project_path }.show(&app).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to import video: {e}");
+                                        app.dialog()
+                                            .message(format!("Failed to import video: {e}"))
+                                            .title("Import Error")
+                                            .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                                            .blocking_show();
+                                    }
                                 }
-                                Err(e) => {
-                                    tracing::error!("Failed to import video: {e}");
-                                    app.dialog()
-                                        .message(format!("Failed to import video: {e}"))
-                                        .title("Import Error")
-                                        .kind(tauri_plugin_dialog::MessageDialogKind::Error)
-                                        .blocking_show();
+                            } else if crate::import::is_supported_image_import_path(&path) {
+                                match crate::import::start_image_import(app.clone(), path).await {
+                                    Ok(path) => {
+                                        let _ = ShowCapWindow::ScreenshotEditor { path }
+                                            .show(&app)
+                                            .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to import image: {e}");
+                                        app.dialog()
+                                            .message(format!("Failed to import image: {e}"))
+                                            .title("Import Error")
+                                            .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                                            .blocking_show();
+                                    }
                                 }
+                            } else {
+                                tracing::error!("Unsupported media import path: {:?}", path);
+                                app.dialog()
+                                    .message("Unsupported media file.")
+                                    .title("Import Error")
+                                    .kind(tauri_plugin_dialog::MessageDialogKind::Error)
+                                    .blocking_show();
                             }
                         }
                     });
@@ -837,8 +1033,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let is_recording = Arc::clone(&is_recording);
             let app_handle = app.clone();
             move |tray, event| {
-                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                if let tauri::tray::TrayIconEvent::Click { button_state, .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
+                        if button_state != tauri::tray::MouseButtonState::Down {
+                            return;
+                        }
                         let app = app_handle.clone();
                         tokio::spawn(async move {
                             let _ = recording::stop_recording(app.clone(), app.state()).await;
@@ -851,47 +1050,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(&app);
 
+    #[cfg(target_os = "linux")]
+    if let Some(tray) = app.tray_by_id("tray")
+        && let Err(error) = set_tray_icon_for_mode(&tray, current_mode)
     {
-        let app_clone = app.clone();
-        let cache_clone = cache.clone();
-        std::thread::spawn(move || {
-            let screenshots_dir = screenshots_path(&app_clone);
-            let items_needing_thumbnails: Vec<PathBuf> = {
-                let cache_guard = cache_clone.lock().unwrap();
-                cache_guard
-                    .items
-                    .iter()
-                    .filter(|item| item.thumbnail.is_none())
-                    .map(|item| item.path.clone())
-                    .collect()
-            };
-
-            if items_needing_thumbnails.is_empty() {
-                return;
-            }
-
-            for path in items_needing_thumbnails {
-                if let Some(updated_item) = load_single_item(&path, &screenshots_dir, true) {
-                    let mut cache_guard = cache_clone.lock().unwrap();
-                    if let Some(existing) = cache_guard.items.iter_mut().find(|i| i.path == path) {
-                        existing.thumbnail = updated_item.thumbnail;
-                        existing.thumbnail_width = updated_item.thumbnail_width;
-                        existing.thumbnail_height = updated_item.thumbnail_height;
-                    }
-                }
-            }
-
-            let app_for_refresh = app_clone.clone();
-            let cache_for_refresh = cache_clone.clone();
-            let _ = app_clone.run_on_main_thread(move || {
-                if let Some(tray) = app_for_refresh.tray_by_id("tray") {
-                    let cache_guard = cache_for_refresh.lock().unwrap();
-                    if let Ok(menu) = build_tray_menu(&app_for_refresh, &cache_guard) {
-                        let _ = tray.set_menu(Some(menu));
-                    }
-                }
-            });
-        });
+        tracing::warn!("Failed to initialize Linux tray icon: {error}");
     }
 
     RecordingStarted::listen_any(&app, {
@@ -908,9 +1071,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 return;
             };
 
-            if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png")) {
-                let _ = tray.set_icon(Some(icon));
-                let _ = tray.set_icon_as_template(true);
+            if let Err(error) = set_tray_stop_icon(&tray) {
+                tracing::warn!("Failed to update tray icon for recording start: {error}");
             }
         }
     });
@@ -930,9 +1092,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             };
 
             let current_mode = get_current_mode(&app_handle);
-            if let Ok(icon) = Image::from_bytes(get_mode_icon(current_mode)) {
-                let _ = tray.set_icon(Some(icon));
-                let _ = tray.set_icon_as_template(true);
+            if let Err(error) = set_tray_icon_for_mode(&tray, current_mode) {
+                tracing::warn!("Failed to update tray icon for recording stop: {error}");
             }
         }
     });
@@ -963,5 +1124,113 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         }
     });
 
+    crate::recordings_locations::RecordingsMigrationProgress::listen_any(&app, {
+        let app_handle = app.clone();
+        let cache_clone = cache.clone();
+        move |event| {
+            // Rebuild once when a storage-folder migration finishes: moved
+            // projects changed paths, so cached entries are stale.
+            if event.payload.done == event.payload.total {
+                cache_clone.lock().unwrap().invalidate();
+                load_previous_items_in_background(app_handle.clone(), cache_clone.clone());
+            }
+        }
+    });
+
+    crate::RecordingDeleted::listen_any(&app, {
+        let app = app.clone();
+        let cache = cache.clone();
+        move |event| {
+            {
+                let mut cache = cache.lock().unwrap();
+                cache.items.retain(|item| item.path != event.payload.path);
+                cache.invalidate();
+            }
+            refresh_tray_menu(&app, &cache);
+            load_previous_items_in_background(app.clone(), cache.clone());
+        }
+    });
+
+    load_previous_items_in_background(app.clone(), cache.clone());
+
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clean_stop_icon() -> Result<cap_utils::linux_recording_stop::StopTrayIcon, String> {
+    let image = image::load_from_memory(include_bytes!("../icons/tray-stop-icon.png"))
+        .map_err(|error| error.to_string())?
+        .resize_exact(32, 32, image::imageops::FilterType::Triangle)
+        .into_rgba8();
+    cap_utils::linux_recording_stop::StopTrayIcon::from_rgba(32, 32, image.as_raw())
+}
+
+#[cfg(test)]
+mod startup_history_tests {
+    use super::*;
+
+    #[test]
+    fn history_load_reads_only_enough_valid_metadata_for_the_menu() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = (0..100)
+            .map(|index| {
+                let path = directory.path().join(format!("{index}.cap"));
+                std::fs::create_dir(&path).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let mut reads = 0;
+        let loaded = newest_valid_items(paths.clone(), 6, |_| {
+            reads += 1;
+            (reads > 2).then_some(reads)
+        });
+        assert_eq!(reads, 8);
+        assert_eq!(loaded, vec![3, 4, 5, 6, 7, 8]);
+
+        let mut reference = paths.clone();
+        reference
+            .sort_by_key(|path| std::cmp::Reverse(path.metadata().unwrap().created().unwrap()));
+        reference.truncate(6);
+        assert_eq!(
+            newest_valid_items(paths, 6, |path| Some(path.clone())),
+            reference
+        );
+    }
+
+    #[test]
+    fn a_late_history_scan_cannot_overwrite_new_items_or_moved_folders() {
+        let mut cache = PreviousItemsCache::default();
+        let old_revision = cache.revision;
+        cache.invalidate();
+        assert!(!cache.finish_loading(old_revision, Vec::new()));
+        assert!(!cache.loaded);
+        assert!(cache.finish_loading(cache.revision, Vec::new()));
+        assert!(cache.loaded);
+        assert!(!cache.finish_loading(old_revision, Vec::new()));
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn set_clean_stop_mode(
+    app: &AppHandle,
+    generation: u32,
+    active: bool,
+) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = if crate::clean_capture::wayland_generation(&handle) != Some(generation) {
+            Err("Recording tray transition was superseded".to_string())
+        } else if let Some(tray) = handle.tray_by_id("tray") {
+            tray.set_visible(!active).map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        };
+        let _ = tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .map_err(|_| "Recording tray transition timed out".to_string())?
+        .map_err(|_| "Recording tray transition was lost".to_string())?
 }

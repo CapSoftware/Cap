@@ -1,0 +1,82 @@
+:root {
+	color-scheme: dark;
+	background: #000;
+}
+
+html,
+body,
+#root {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+	background: #000;
+}
+
+.camera-preview-root {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	cursor: move;
+	touch-action: none;
+	user-select: none;
+}
+
+video {
+	display: block;
+	width: 100%;
+	height: 100%;
+	background: #000;
+	object-fit: cover;
+	pointer-events: none;
+	transition: opacity 180ms ease;
+}
+
+video[data-mirror="true"] {
+	transform: scaleX(-1);
+}
+
+video[data-pip="true"] {
+	opacity: 0;
+}
+
+.camera-preview-pip-button {
+	all: unset;
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	display: flex;
+	width: 36px;
+	height: 36px;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid rgba(255, 255, 255, 0.18);
+	border-radius: 10px;
+	background: rgba(0, 0, 0, 0.58);
+	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+	color: rgba(255, 255, 255, 0.94);
+	cursor: pointer;
+	opacity: 1;
+	backdrop-filter: blur(14px);
+	transition:
+		opacity 160ms ease,
+		background 160ms ease,
+		transform 160ms ease;
+}
+
+.camera-preview-pip-button:hover,
+.camera-preview-pip-button:focus-visible {
+	background: rgba(0, 0, 0, 0.72);
+	transform: translateY(-1px);
+}
+
+.camera-preview-pip-button:focus-visible {
+	outline: 1px solid rgba(255, 255, 255, 0.72);
+	outline-offset: 2px;
+}
+
+.camera-preview-pip-button svg {
+	display: block;
+	width: 20px;
+	height: 20px;
+}

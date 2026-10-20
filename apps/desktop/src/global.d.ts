@@ -1889,6 +1889,7 @@ declare global {
 			cameraWsPort: number;
 			cameraOnlyMode?: boolean;
 			enableNativeCameraPreview?: boolean;
+			windowsWebview2BrowserArgs?: string;
 		};
 	}
 }

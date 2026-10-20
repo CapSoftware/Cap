@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import { serverEnv } from "@cap/env";
+import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
+import { decode, type JWT, type JWTDecodeParams } from "next-auth/jwt";
+import AppleProvider from "next-auth/providers/apple";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
@@ -11,24 +14,71 @@ import WorkOSProvider from "next-auth/providers/workos";
 import { sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
 import { users } from "../schema.ts";
-import { isEmailAllowedForSignup } from "./domain-utils.ts";
+import {
+	isBlockedAccountEmail,
+	isEmailAllowedForSignup,
+	isEmailBlockedFromSignup,
+} from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import {
+	provisionSsoMembership,
+	type SsoAuthContext,
+	type ValidatedSsoIdentity,
+	validateSsoSignIn,
+} from "./sso.ts";
+import { ssoLoginErrorPath } from "./sso-state.ts";
 
 export const maxDuration = 120;
 
-export const authOptions = (): NextAuthOptions => {
+const OTP_CODE_MAX_AGE_SECONDS = 10 * 60;
+
+export async function decodeSessionToken(
+	params: JWTDecodeParams,
+): Promise<JWT | null> {
+	const token = await decode(params);
+	if (!token) return null;
+	// A blocked email loses its existing sessions, not just new sign-ins.
+	if (typeof token.email === "string" && isBlockedAccountEmail(token.email))
+		return null;
+
+	const userId = typeof token.id === "string" ? token.id : null;
+	if (!userId) return token;
+
+	const [user] = await db()
+		.select({ authSessionVersion: users.authSessionVersion })
+		.from(users)
+		.where(eq(users.id, User.UserId.make(userId)))
+		.limit(1);
+
+	if (!user) return null;
+
+	const sessionVersion =
+		typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
+
+	if (sessionVersion !== user.authSessionVersion) return null;
+
+	return token;
+}
+
+export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
+	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
 
 	return {
 		get adapter() {
 			if (_adapter) return _adapter;
-			_adapter = DrizzleAdapter(db());
+			_adapter = DrizzleAdapter(db(), {
+				getSsoIdentity: () => validatedSsoIdentity,
+			});
 			return _adapter;
 		},
-		debug: true,
+		debug: process.env.NODE_ENV !== "production",
 		session: {
 			strategy: "jwt",
+		},
+		jwt: {
+			decode: decodeSessionToken,
 		},
 		get secret() {
 			return serverEnv().NEXTAUTH_SECRET;
@@ -38,10 +88,20 @@ export const authOptions = (): NextAuthOptions => {
 		},
 		get providers() {
 			if (_providers) return _providers;
+			const appleClientId = serverEnv().APPLE_CLIENT_ID;
+			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
 			_providers = [
+				...(appleClientId && appleClientSecret
+					? [
+							AppleProvider({
+								clientId: appleClientId,
+								clientSecret: appleClientSecret,
+							}),
+						]
+					: []),
 				GoogleProvider({
-					clientId: serverEnv().GOOGLE_CLIENT_ID!,
-					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET!,
+					clientId: serverEnv().GOOGLE_CLIENT_ID as string,
+					clientSecret: serverEnv().GOOGLE_CLIENT_SECRET as string,
 					authorization: {
 						params: {
 							scope: [
@@ -52,27 +112,39 @@ export const authOptions = (): NextAuthOptions => {
 						},
 					},
 				}),
-				WorkOSProvider({
-					clientId: serverEnv().WORKOS_CLIENT_ID as string,
-					clientSecret: serverEnv().WORKOS_API_KEY as string,
-					profile(profile) {
-						return {
-							id: profile.id,
-							name: profile.first_name
-								? `${profile.first_name} ${profile.last_name || ""}`
-								: profile.email?.split("@")[0] || profile.id,
-							email: profile.email,
-							image: profile.profile_picture_url,
-						};
-					},
-				}),
+				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
+					? [
+							WorkOSProvider({
+								clientId: serverEnv().WORKOS_CLIENT_ID as string,
+								clientSecret: serverEnv().WORKOS_API_KEY as string,
+								checks: ["state", "pkce"],
+								allowDangerousEmailAccountLinking: true,
+								profile(profile) {
+									return {
+										id: profile.id,
+										name:
+											[profile.first_name, profile.last_name]
+												.filter(Boolean)
+												.join(" ") ||
+											profile.email?.split("@")[0] ||
+											profile.id,
+										email: profile.email?.trim().toLowerCase(),
+										image: null,
+									};
+								},
+							}),
+						]
+					: []),
 				EmailProvider({
+					// next-auth defaults to 24h, but the code is 6 digits and the
+					// verify path has no attempt limiting, so a day-long window is a
+					// practical brute-force target. The OTP email and the dev console
+					// have always told users 10 minutes; this makes that true.
+					maxAge: OTP_CODE_MAX_AGE_SECONDS,
 					async generateVerificationToken() {
 						return crypto.randomInt(100000, 1000000).toString();
 					},
 					async sendVerificationRequest({ identifier, token }) {
-						console.log("sendVerificationRequest");
-
 						if (!serverEnv().RESEND_API_KEY) {
 							console.log("\n");
 							console.log(
@@ -84,16 +156,16 @@ export const authOptions = (): NextAuthOptions => {
 							);
 							console.log(`📧 Email: ${identifier}`);
 							console.log(`🔢 Code: ${token}`);
-							console.log(`⏱  Expires in: 10 minutes`);
+							console.log(
+								`⏱  Expires in: ${OTP_CODE_MAX_AGE_SECONDS / 60} minutes`,
+							);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
 							console.log("\n");
 						} else {
-							console.log({ identifier, token });
 							const { OTPEmail } = await import("../emails/otp-email");
 							const email = OTPEmail({ code: token, email: identifier });
-							console.log({ email });
 							await sendEmail({
 								email: identifier,
 								subject: `Your Cap Verification Code`,
@@ -116,12 +188,43 @@ export const authOptions = (): NextAuthOptions => {
 					secure: true,
 				},
 			},
+			callbackUrl: {
+				name: "next-auth.callback-url",
+				options: {
+					httpOnly: true,
+					sameSite: "none",
+					path: "/",
+					secure: true,
+				},
+			},
+			pkceCodeVerifier: {
+				name: "next-auth.pkce.code_verifier",
+				options: {
+					httpOnly: true,
+					sameSite: "none",
+					path: "/",
+					secure: true,
+					maxAge: 60 * 15,
+				},
+			},
 		},
 		callbacks: {
-			async signIn({ user, email, credentials }) {
-				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
-				if (!allowedDomains) return true;
-
+			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === "workos") {
+					validatedSsoIdentity = null;
+					try {
+						validatedSsoIdentity = await validateSsoSignIn(
+							profile,
+							account.providerAccountId,
+							ssoContext,
+						);
+					} catch {
+						return ssoLoginErrorPath(
+							"SsoSignInFailed",
+							ssoContext?.intent?.returnTo,
+						);
+					}
+				}
 				const rawEmail =
 					user?.email ||
 					(typeof email === "string"
@@ -131,6 +234,19 @@ export const authOptions = (): NextAuthOptions => {
 							: null);
 				if (!rawEmail || typeof rawEmail !== "string") return true;
 				const userEmail = rawEmail.toLowerCase();
+
+				if (
+					isEmailBlockedFromSignup(
+						userEmail,
+						serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS,
+					)
+				) {
+					console.warn(`Sign-in blocked for email: ${userEmail}`);
+					return "/login?error=SignupBlocked";
+				}
+
+				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+				if (!allowedDomains) return true;
 
 				const [existingUser] = await db()
 					.select()
@@ -161,7 +277,16 @@ export const authOptions = (): NextAuthOptions => {
 
 				return session;
 			},
-			async jwt({ token, user }) {
+			async jwt({ token, user, account }) {
+				if (account?.provider === "workos") {
+					if (!user || !validatedSsoIdentity) {
+						throw new Error("The SSO sign-in was not verified.");
+					}
+					await provisionSsoMembership(
+						User.UserId.make(user.id),
+						validatedSsoIdentity,
+					);
+				}
 				if (user || !token.id) {
 					const [dbUser] = await db()
 						.select({
@@ -170,9 +295,14 @@ export const authOptions = (): NextAuthOptions => {
 							lastName: users.lastName,
 							email: users.email,
 							image: users.image,
+							authSessionVersion: users.authSessionVersion,
 						})
 						.from(users)
-						.where(eq(users.email, (token.email || "").toLowerCase()))
+						.where(
+							user
+								? eq(users.id, User.UserId.make(user.id))
+								: eq(users.email, (token.email || "").toLowerCase()),
+						)
 						.limit(1);
 
 					if (!dbUser) {
@@ -188,6 +318,7 @@ export const authOptions = (): NextAuthOptions => {
 						lastName: dbUser.lastName,
 						email: dbUser.email,
 						picture: dbUser.image,
+						sessionVersion: dbUser.authSessionVersion,
 					};
 				}
 

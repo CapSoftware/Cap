@@ -7,6 +7,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	Select,
 	Switch,
 	Table,
 	TableBody,
@@ -25,24 +26,53 @@ import { toast } from "sonner";
 import { removeOrganizationInvite } from "@/actions/organization/remove-invite";
 import { removeOrganizationMember } from "@/actions/organization/remove-member";
 import { toggleProSeat } from "@/actions/organization/toggle-pro-seat";
+import { updateOrganizationMemberRole } from "@/actions/organization/update-member-role";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import {
+	type AssignableOrganizationRole,
+	canChangeOrganizationMemberRole,
+	canManageOrganizationMembers,
+	canManageOrganizationProSeats,
+	canRemoveOrganizationMember,
+	getEffectiveOrganizationRole,
+	normalizeAssignableOrganizationRole,
+	organizationRoleLabel,
+} from "@/lib/permissions/roles";
 import { calculateSeats } from "@/utils/organization";
 
 interface MembersCardProps {
-	isOwner: boolean;
-	showOwnerToast: () => void;
 	setIsInviteDialogOpen: (isOpen: boolean) => void;
 }
 
-export const MembersCard = ({
-	isOwner,
-	showOwnerToast,
-	setIsInviteDialogOpen,
-}: MembersCardProps) => {
+export const MembersCard = ({ setIsInviteDialogOpen }: MembersCardProps) => {
 	const router = useRouter();
-	const { activeOrganization } = useDashboardContext();
-	const { proSeatsRemaining } = calculateSeats(activeOrganization || {});
+	const { activeOrganization, user } = useDashboardContext();
+	const { proSeatsRemaining } = calculateSeats({
+		...(activeOrganization || {}),
+		ownerId: activeOrganization?.organization.ownerId,
+		ownerIsPro: Boolean(activeOrganization?.ownerIsPro),
+	});
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const pendingInviteEmails = new Set(
+		activeOrganization?.invites?.map((invite) =>
+			invite.invitedEmail.toLowerCase(),
+		) ?? [],
+	);
+	const memberEmails = new Set(
+		activeOrganization?.members?.map((member) =>
+			member.user.email.toLowerCase(),
+		) ?? [],
+	);
+	const canManageMembers = canManageOrganizationMembers(currentRole);
+	const canManageProSeats = canManageOrganizationProSeats(currentRole);
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [pendingMember, setPendingMember] = useState<{
@@ -51,6 +81,13 @@ export const MembersCard = ({
 		email: string;
 	} | null>(null);
 	const [deletingInviteId, setDeletingInviteId] = useState<string | null>(null);
+	const roleOptions = [
+		{ value: "admin", label: "Admin" },
+		{ value: "member", label: "Member" },
+	];
+	const showMemberManagerToast = () => {
+		toast.error("Only admins and owners can manage organization members");
+	};
 
 	const deleteInviteMutation = useMutation({
 		mutationFn: (inviteId: string) => {
@@ -95,6 +132,34 @@ export const MembersCard = ({
 				error instanceof Error
 					? error.message
 					: "An error occurred while removing member",
+			);
+		},
+	});
+
+	const updateRoleMutation = useMutation({
+		mutationFn: ({
+			memberId,
+			role,
+		}: {
+			memberId: string;
+			role: AssignableOrganizationRole;
+		}) => {
+			if (!activeOrganization?.organization.id) {
+				throw new Error("Organization not found");
+			}
+			return updateOrganizationMemberRole(
+				memberId,
+				activeOrganization.organization.id,
+				role,
+			);
+		},
+		onSuccess: () => {
+			toast.success("Role updated");
+			router.refresh();
+		},
+		onError: (error) => {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to update role",
 			);
 		},
 	});
@@ -179,13 +244,13 @@ export const MembersCard = ({
 						variant="dark"
 						className="px-6 min-w-auto"
 						onClick={() => {
-							if (!isOwner) {
-								showOwnerToast();
+							if (!canManageMembers) {
+								showMemberManagerToast();
 								return;
 							}
 							setIsInviteDialogOpen(true);
 						}}
-						disabled={!isOwner}
+						disabled={!canManageMembers}
 					>
 						+ Invite users
 					</Button>
@@ -205,39 +270,100 @@ export const MembersCard = ({
 					<TableBody>
 						{activeOrganization?.members?.map((member) => {
 							const memberIsOwner = isMemberOwner(member.user.id);
+							const memberRole = getEffectiveOrganizationRole({
+								userId: member.user.id,
+								ownerId: activeOrganization.organization.ownerId,
+								memberRole: member.role,
+							});
+							const assignableRole =
+								normalizeAssignableOrganizationRole(memberRole);
+							const canUpdateRole = canChangeOrganizationMemberRole({
+								actorRole: currentRole,
+								actorUserId: user.id,
+								targetUserId: member.user.id,
+								ownerId: activeOrganization.organization.ownerId,
+								targetRole: memberRole,
+								nextRole: assignableRole,
+							});
+							const canRemoveMember = canRemoveOrganizationMember({
+								actorRole: currentRole,
+								actorUserId: user.id,
+								targetUserId: member.user.id,
+								ownerId: activeOrganization.organization.ownerId,
+								targetRole: memberRole,
+							});
+							const roleUpdating =
+								updateRoleMutation.isPending &&
+								updateRoleMutation.variables?.memberId === member.id;
 							return (
 								<TableRow key={member.id}>
 									<TableCell>{member.user.name}</TableCell>
 									<TableCell>{member.user.email}</TableCell>
-									<TableCell>{memberIsOwner ? "Owner" : "Member"}</TableCell>
+									<TableCell>
+										{memberIsOwner || memberRole === "owner" ? (
+											"Owner"
+										) : (
+											<Select
+												value={assignableRole ?? "member"}
+												placeholder="Role"
+												options={roleOptions}
+												size="sm"
+												variant="gray"
+												onValueChange={(value) => {
+													const nextRole =
+														normalizeAssignableOrganizationRole(value);
+													if (!nextRole) return;
+													updateRoleMutation.mutate({
+														memberId: member.id,
+														role: nextRole,
+													});
+												}}
+												disabled={!canUpdateRole || roleUpdating}
+											/>
+										)}
+									</TableCell>
 									{buildEnv.NEXT_PUBLIC_IS_CAP && (
 										<TableCell>
 											{memberIsOwner ? (
-												<span className="text-xs text-gray-10">-</span>
+												<span className="text-xs text-gray-10">
+													{activeOrganization.ownerIsPro ? "Included" : "Free"}
+												</span>
 											) : (
-												<Switch
-													checked={member.hasProSeat}
-													onCheckedChange={(checked) =>
-														toggleProSeatMutation.mutate({
-															memberId: member.id,
-															enable: checked,
-														})
-													}
-													disabled={
-														!isOwner ||
-														(toggleProSeatMutation.isPending &&
-															toggleProSeatMutation.variables?.memberId ===
-																member.id) ||
-														(!member.hasProSeat && proSeatsRemaining <= 0)
-													}
-												/>
+												<div className="flex items-center gap-2">
+													<Switch
+														checked={member.hasProSeat}
+														onCheckedChange={(checked) =>
+															toggleProSeatMutation.mutate({
+																memberId: member.id,
+																enable: checked,
+															})
+														}
+														disabled={
+															!canManageProSeats ||
+															(toggleProSeatMutation.isPending &&
+																toggleProSeatMutation.variables?.memberId ===
+																	member.id) ||
+															(!member.hasProSeat && proSeatsRemaining <= 0)
+														}
+													/>
+													{member.hasProSeat &&
+														!activeOrganization.hasActiveProSeatProvider && (
+															<span className="text-xs text-amber-600">
+																Inactive
+															</span>
+														)}
+												</div>
 											)}
 										</TableCell>
 									)}
 									<TableCell>
 										{format(member.createdAt, "MMM d, yyyy")}
 									</TableCell>
-									<TableCell>Active</TableCell>
+									<TableCell>
+										{pendingInviteEmails.has(member.user.email.toLowerCase())
+											? "Pending"
+											: "Active"}
+									</TableCell>
 									<TableCell>
 										{!memberIsOwner ? (
 											<Button
@@ -246,7 +372,7 @@ export const MembersCard = ({
 												variant="destructive"
 												className="min-w-[unset] h-[28px]"
 												onClick={() => {
-													if (isOwner) {
+													if (canRemoveMember) {
 														handleRemoveMember({
 															id: member.id,
 															user: {
@@ -255,10 +381,10 @@ export const MembersCard = ({
 															},
 														});
 													} else {
-														showOwnerToast();
+														showMemberManagerToast();
 													}
 												}}
-												disabled={!isOwner}
+												disabled={!canRemoveMember}
 											>
 												Remove
 											</Button>
@@ -269,35 +395,47 @@ export const MembersCard = ({
 								</TableRow>
 							);
 						})}
-						{activeOrganization?.invites?.map((invite) => (
-							<TableRow key={invite.id}>
-								<TableCell className="text-gray-10">Pending</TableCell>
-								<TableCell>{invite.invitedEmail}</TableCell>
-								<TableCell>Member</TableCell>
-								{buildEnv.NEXT_PUBLIC_IS_CAP && <TableCell>-</TableCell>}
-								<TableCell>-</TableCell>
-								<TableCell>Invited</TableCell>
-								<TableCell>
-									<Button
-										type="button"
-										size="xs"
-										variant="destructive"
-										onClick={() => {
-											if (isOwner) {
-												deleteInviteMutation.mutate(invite.id);
-											} else {
-												showOwnerToast();
+						{activeOrganization?.invites
+							?.filter(
+								(invite) =>
+									!memberEmails.has(invite.invitedEmail.toLowerCase()),
+							)
+							.map((invite) => (
+								<TableRow key={invite.id}>
+									<TableCell className="text-gray-10">Pending</TableCell>
+									<TableCell>{invite.invitedEmail}</TableCell>
+									<TableCell>
+										{organizationRoleLabel(
+											normalizeAssignableOrganizationRole(invite.role) ??
+												"member",
+										)}
+									</TableCell>
+									{buildEnv.NEXT_PUBLIC_IS_CAP && <TableCell>-</TableCell>}
+									<TableCell>-</TableCell>
+									<TableCell>Invited</TableCell>
+									<TableCell>
+										<Button
+											type="button"
+											size="xs"
+											variant="destructive"
+											onClick={() => {
+												if (canManageMembers) {
+													deleteInviteMutation.mutate(invite.id);
+												} else {
+													showMemberManagerToast();
+												}
+											}}
+											disabled={
+												!canManageMembers || deletingInviteId === invite.id
 											}
-										}}
-										disabled={!isOwner || deletingInviteId === invite.id}
-									>
-										{deletingInviteId === invite.id
-											? "Deleting..."
-											: "Delete Invite"}
-									</Button>
-								</TableCell>
-							</TableRow>
-						))}
+										>
+											{deletingInviteId === invite.id
+												? "Deleting..."
+												: "Delete Invite"}
+										</Button>
+									</TableCell>
+								</TableRow>
+							))}
 					</TableBody>
 				</Table>
 			</Card>

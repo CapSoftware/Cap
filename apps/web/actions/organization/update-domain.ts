@@ -7,6 +7,7 @@ import { userIsPro } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { requireOrganizationSettingsManager } from "./authorization";
 import { addDomain, checkDomainStatus } from "./domain-utils";
 
 export async function updateDomain(
@@ -28,9 +29,9 @@ export async function updateDomain(
 		.from(organizations)
 		.where(eq(organizations.id, organizationId));
 
-	if (!organization || organization.ownerId !== user.id) {
-		throw new Error("Only the owner can update the custom domain");
-	}
+	if (!organization) throw new Error("Organization not found");
+
+	await requireOrganizationSettingsManager(user.id, organizationId);
 
 	// Check if domain is already being used by another organization
 	const existingDomain = await db()

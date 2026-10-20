@@ -186,6 +186,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				createdAt: videos.createdAt,
 				public: videos.public,
 				metadata: videos.metadata,
+				source: videos.source,
+				isScreenshot: videos.isScreenshot,
 				duration: videos.duration,
 				settings: videos.settings,
 				orgId: videos.orgId,
@@ -213,9 +215,10 @@ export const getVideosByFolderId = Effect.fn(function* (
 				ownerName: users.name,
 				effectiveDate: videos.effectiveCreatedAt,
 				hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-					Boolean,
-				),
+				hasActiveUpload:
+					sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
+						Boolean,
+					),
 			})
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))
@@ -247,6 +250,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.createdAt,
 				videos.public,
 				videos.metadata,
+				videos.source,
+				videos.isScreenshot,
 				videos.duration,
 				videos.settings,
 				videos.orgId,
@@ -332,6 +337,8 @@ export const getVideosByFolderId = Effect.fn(function* (
 								[key: string]: unknown;
 						  }
 						| undefined,
+					source: video.source,
+					isScreenshot: video.isScreenshot,
 					hasPassword: video.hasPassword,
 					hasInheritedPassword: rules.hasInheritedPassword,
 					inheritedPasswordSources: rules.inheritedPasswordSources,
@@ -358,6 +365,23 @@ export const getChildFolders = Effect.fn(function* (
 
 	const user = yield* CurrentUser;
 	if (!user.activeOrganizationId) throw new Error("No active organization");
+	const videoCount =
+		root.variant === "space"
+			? sql<number>`(
+					SELECT COUNT(*) FROM ${spaceVideos}
+					WHERE ${spaceVideos.folderId} = ${folders.id}
+						AND ${spaceVideos.spaceId} = ${root.spaceId}
+				)`
+			: root.variant === "org"
+				? sql<number>`(
+						SELECT COUNT(*) FROM ${sharedVideos}
+						WHERE ${sharedVideos.folderId} = ${folders.id}
+							AND ${sharedVideos.organizationId} = ${root.organizationId}
+					)`
+				: sql<number>`(
+						SELECT COUNT(*) FROM ${videos}
+						WHERE ${videos.folderId} = ${folders.id}
+					)`;
 
 	const childFolders = yield* db.use((db) =>
 		db
@@ -365,11 +389,13 @@ export const getChildFolders = Effect.fn(function* (
 				id: folders.id,
 				name: folders.name,
 				color: folders.color,
+				public: folders.public,
 				parentId: folders.parentId,
 				organizationId: folders.organizationId,
-				videoCount: sql<number>`(
-        	SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-	      )`,
+				createdAt: folders.createdAt,
+				// Nest the correlated query so Drizzle's single-table selection
+				// rewrite preserves the outer folders.id reference.
+				videoCount: sql<number>`${videoCount}`.mapWith(Number),
 			})
 			.from(folders)
 			.where(
@@ -377,7 +403,9 @@ export const getChildFolders = Effect.fn(function* (
 					eq(folders.parentId, folderId),
 					root.variant === "space"
 						? eq(folders.spaceId, root.spaceId)
-						: undefined,
+						: root.variant === "org"
+							? eq(folders.spaceId, root.organizationId)
+							: isNull(folders.spaceId),
 				),
 			),
 	);

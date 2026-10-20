@@ -47,6 +47,7 @@ windows = { workspace = true, features = [
 windows-core.workspace = true
 windows-numerics = "0.2.0"
 scap-direct3d = { path = "../scap-direct3d" }
+cap-d3d-adapter = { path = "../d3d-adapter" }
 
 [dev-dependencies]
 scap-targets = { path = "../scap-targets" }

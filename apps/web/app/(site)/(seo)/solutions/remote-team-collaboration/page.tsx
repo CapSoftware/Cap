@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
 import { RemoteTeamCollaborationPage } from "@/components/pages/seo/RemoteTeamCollaborationPage";
+import { ogImageUrl } from "@/lib/og/url";
+
+const ogImage = ogImageUrl({
+	title: "Remote team collaboration with async video",
+	tag: "Solutions",
+});
 
 export const metadata: Metadata = {
 	title:
@@ -15,7 +21,7 @@ export const metadata: Metadata = {
 		siteName: "Cap",
 		images: [
 			{
-				url: "https://cap.so/og.png",
+				url: ogImage,
 				width: 1200,
 				height: 630,
 				alt: "Cap: Remote Team Collaboration Software",
@@ -29,7 +35,7 @@ export const metadata: Metadata = {
 		title: "Remote Team Collaboration Software | Cap Screen Recorder",
 		description:
 			"Enhance your remote team collaboration with Cap's secure, open-source screen recording platform. Save time and boost productivity.",
-		images: ["https://cap.so/og.png"],
+		images: [ogImage],
 	},
 	alternates: {
 		canonical: "https://cap.so/solutions/remote-team-collaboration",

@@ -1,72 +1,30 @@
-import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
 import { homepageCopy } from "../../../data/homepage-copy";
 
 const Faq = () => {
-	const [openIndex, setOpenIndex] = useState<number | null>(null);
-
-	const toggleFaq = (index: number) => {
-		setOpenIndex(openIndex === index ? null : index);
-	};
-
 	return (
 		<div className="mx-auto max-w-[1000px] px-5">
 			<h2 className="mb-10 text-4xl text-gray-12">{homepageCopy.faq.title}</h2>
 			<div className="space-y-4">
 				{homepageCopy.faq.items.map((item, index) => (
-					<div
+					<details
 						key={index.toString()}
-						className={clsx(
-							"rounded-xl overflow-hidde border border-gray-5",
-							openIndex === index
-								? "bg-blue-500 text-white"
-								: "bg-gray-1 hover:bg-gray-3 text-gray-12",
-							"transition-colors duration-200",
-						)}
+						className="group overflow-hidden rounded-xl border border-gray-5 bg-gray-1 text-gray-12 transition-colors duration-200 open:bg-blue-500 open:text-white hover:bg-gray-3 open:hover:bg-blue-500"
 					>
-						<button
-							type="button"
-							className="flex justify-between items-center px-6 py-4 w-full text-left"
-							onClick={() => toggleFaq(index)}
-						>
-							<p
-								className={clsx(
-									"text-lg font-medium",
-									openIndex === index ? "text-gray-1" : "text-gray-12",
-								)}
-							>
-								{item.question}
-							</p>
-							{openIndex === index ? (
-								<FontAwesomeIcon
-									icon={faMinus}
-									className="flex-shrink-0 w-5 h-5 text-gray-1"
-								/>
-							) : (
-								<FontAwesomeIcon
-									icon={faPlus}
-									className="flex-shrink-0 w-5 h-5"
-								/>
-							)}
-						</button>
-
-						<AnimatePresence>
-							{openIndex === index && (
-								<motion.div
-									initial={{ height: 0, opacity: 0 }}
-									animate={{ height: "auto", opacity: 1 }}
-									exit={{ height: 0, opacity: 0 }}
-									transition={{ duration: 0.3 }}
-									className="overflow-hidden"
-								>
-									<p className="px-6 pb-4 text-gray-3">{item.answer}</p>
-								</motion.div>
-							)}
-						</AnimatePresence>
-					</div>
+						<summary className="block cursor-pointer list-none px-6 py-4 text-left marker:hidden [&::-webkit-details-marker]:hidden">
+							<div className="flex items-center justify-between">
+								<p className="text-lg font-medium text-gray-12 group-open:text-gray-1">
+									{item.question}
+								</p>
+								<span className="ml-4 flex-shrink-0 text-2xl leading-none group-open:hidden">
+									+
+								</span>
+								<span className="ml-4 hidden flex-shrink-0 text-2xl leading-none text-gray-1 group-open:block">
+									-
+								</span>
+							</div>
+						</summary>
+						<p className="px-6 pb-4 text-gray-3">{item.answer}</p>
+					</details>
 				))}
 			</div>
 		</div>
