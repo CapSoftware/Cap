@@ -453,6 +453,30 @@ pub fn trim_end_bounds(
     }
 }
 
+pub fn audio_trim_start_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.max(segment.start - segment.trim_start);
+    DragBounds {
+        min,
+        max: bounds.max.max(segment.start).max(min),
+    }
+}
+
+pub fn audio_trim_end_bounds(segment: &AudioTrackSegment, bounds: DragBounds) -> DragBounds {
+    let min = bounds.min.min(segment.end);
+    let max = segment
+        .duration
+        .filter(|duration| *duration > 0.)
+        .map_or(bounds.max, |duration| {
+            bounds
+                .max
+                .min(segment.start + duration - segment.trim_start)
+        });
+    DragBounds {
+        min,
+        max: max.max(min),
+    }
+}
+
 /// `SegmentContent`'s setup (`TL/MaskTrack.tsx:449-458`): the whole segment
 /// slides, clamped so it cannot pass either neighbour. Expressed as bounds on
 /// the *delta* rather than on the start, which is how the source clamps it.
@@ -479,6 +503,9 @@ pub trait TrackSegmentOps: Clone {
     fn end(&self) -> f64;
     fn set_start(&mut self, value: f64);
     fn set_end(&mut self, value: f64);
+    fn trim_start_to(&mut self, value: f64) {
+        self.set_start(value);
+    }
     fn lane(&self) -> u32 {
         0
     }
@@ -608,6 +635,10 @@ impl TrackSegmentOps for KeyboardTrackSegment {
 }
 
 impl TrackSegmentOps for AudioTrackSegment {
+    fn trim_start_to(&mut self, value: f64) {
+        self.trim_start = (self.trim_start + (value - self.start)).max(0.);
+        self.start = value;
+    }
     fn start(&self) -> f64 {
         self.start
     }
@@ -823,7 +854,7 @@ pub fn set_segment_start(
         if segment.start() == start {
             return false;
         }
-        segment.set_start(start);
+        segment.trim_start_to(start);
         if !matches!(kind, TrackKind::Style | TrackKind::Image) {
             sort_track(segments);
         }
@@ -2372,6 +2403,40 @@ fn normalize_clip_transitions(timeline: &mut TimelineConfiguration) {
     timeline.transitions = next;
 }
 
+/// Adds a key wherever an animated interval crosses a bend in a piecewise
+/// time remap, valued as the renderer's linear interpolation had it, so
+/// retiming the keys leaves the animation on its original path.
+fn split_keyframes_at<K>(
+    keys: &mut Vec<K>,
+    bends: &[f64],
+    time: fn(&K) -> f64,
+    lerp: impl Fn(&K, &K, f64) -> K,
+) {
+    keys.sort_by(|a, b| time(a).total_cmp(&time(b)));
+    for &bend in bends {
+        let next = keys.partition_point(|key| time(key) <= bend);
+        if next == 0 || next == keys.len() || time(&keys[next - 1]) == bend {
+            continue;
+        }
+        let (prev, following) = (&keys[next - 1], &keys[next]);
+        let t = (bend - time(prev)) / (time(following) - time(prev));
+        let key = lerp(prev, following, t);
+        keys.insert(next, key);
+    }
+}
+
+fn lerp_vector_keyframe(
+    prev: &cap_project::MaskVectorKeyframe,
+    next: &cap_project::MaskVectorKeyframe,
+    t: f64,
+) -> cap_project::MaskVectorKeyframe {
+    cap_project::MaskVectorKeyframe {
+        time: prev.time + (next.time - prev.time) * t,
+        x: prev.x + (next.x - prev.x) * t,
+        y: prev.y + (next.y - prev.y) * t,
+    }
+}
+
 pub fn set_clip_segment_timescale(
     timeline: &mut TimelineConfiguration,
     index: usize,
@@ -2429,9 +2494,44 @@ pub fn set_clip_segment_timescale(
         segment.start += shift(segment.start);
         segment.end += shift(segment.end);
     }
+    let bends = [old_offsets[index], absolute_start, old_next_boundary];
     for segment in &mut timeline.mask_segments {
-        segment.start += shift(segment.start);
+        let old_start = segment.start;
+        let start_shift = shift(old_start);
+        segment.start += start_shift;
         segment.end += shift(segment.end);
+        let keyframes = &mut segment.keyframes;
+        let relative_bends = bends.map(|bend| bend - old_start);
+        split_keyframes_at(
+            &mut keyframes.position,
+            &relative_bends,
+            |key| key.time,
+            lerp_vector_keyframe,
+        );
+        split_keyframes_at(
+            &mut keyframes.size,
+            &relative_bends,
+            |key| key.time,
+            lerp_vector_keyframe,
+        );
+        split_keyframes_at(
+            &mut keyframes.intensity,
+            &relative_bends,
+            |key| key.time,
+            |prev, next, t| cap_project::MaskScalarKeyframe {
+                time: prev.time + (next.time - prev.time) * t,
+                value: prev.value + (next.value - prev.value) * t,
+            },
+        );
+        for time in keyframes
+            .position
+            .iter_mut()
+            .chain(&mut keyframes.size)
+            .map(|key| &mut key.time)
+            .chain(keyframes.intensity.iter_mut().map(|key| &mut key.time))
+        {
+            *time += shift(old_start + *time) - start_shift;
+        }
     }
     for segment in &mut timeline.text_segments {
         segment.start += shift(segment.start);
@@ -3481,6 +3581,114 @@ mod tests {
     }
 
     #[test]
+    fn audio_trim_handles_stop_at_the_source_and_neighbours() {
+        let mut project = zoom_fixture();
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut audio =
+            default_audio_segment(5., 9., 0, "music.wav".into(), "Music".into(), Some(8.));
+        audio.trim_start = 2.;
+        timeline.audio_segments.push(audio.clone());
+        let model = TimelineModel::build(&project, false, false);
+        let start = trim_start_bounds(&model.audio, 0, 0, 0.5, 30.);
+        let end = trim_end_bounds(&model.audio, 0, 0, 0.5, 30.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 3.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(30.), 8.5);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(30.), 11.);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(0.), 5.5);
+
+        audio.trim_start = 0.;
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 5.);
+        for duration in [None, Some(0.)] {
+            audio.duration = duration;
+            assert_eq!(audio_trim_end_bounds(&audio, end).clamp(40.), 30.);
+        }
+        audio.duration = Some(8.);
+        audio.trim_start = 2.;
+        project.timeline.as_mut().unwrap().audio_segments = vec![
+            default_audio_segment(1., 4., 0, "before.wav".into(), "Before".into(), Some(3.)),
+            audio.clone(),
+            default_audio_segment(10., 12., 0, "after.wav".into(), "After".into(), Some(2.)),
+        ];
+        let model = TimelineModel::build(&project, false, false);
+        let start = trim_start_bounds(&model.audio, 0, 1, 0.5, 30.);
+        let end = trim_end_bounds(&model.audio, 0, 1, 0.5, 30.);
+        assert_eq!(audio_trim_start_bounds(&audio, start).clamp(0.), 4.);
+        assert_eq!(audio_trim_end_bounds(&audio, end).clamp(30.), 10.);
+    }
+
+    #[test]
+    fn audio_trim_floor_never_expands_a_short_source() {
+        let mut project = zoom_fixture();
+        let audio =
+            default_audio_segment(5., 5.25, 0, "short.wav".into(), "Short".into(), Some(0.25));
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .audio_segments
+            .push(audio.clone());
+        let model = TimelineModel::build(&project, false, false);
+        let min = min_segment_duration(TrackKind::Audio, 0.1);
+        let start =
+            audio_trim_start_bounds(&audio, trim_start_bounds(&model.audio, 0, 0, min, 30.));
+        let end = audio_trim_end_bounds(&audio, trim_end_bounds(&model.audio, 0, 0, min, 30.));
+        assert_eq!(start, DragBounds { min: 5., max: 5. });
+        assert_eq!(
+            end,
+            DragBounds {
+                min: 5.25,
+                max: 5.25
+            }
+        );
+    }
+
+    #[test]
+    fn audio_start_trim_preserves_the_source_at_retained_output_times() {
+        let mut project = zoom_fixture();
+        let mut audio =
+            default_audio_segment(2., 8., 0, "music.wav".into(), "Music".into(), Some(10.));
+        audio.trim_start = 1.;
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .audio_segments
+            .push(audio);
+        let source = (0..10)
+            .flat_map(|second| {
+                std::iter::repeat_n(
+                    (second + 1) as f32 / 16.,
+                    cap_audio::AudioData::SAMPLE_RATE as usize * 2,
+                )
+            })
+            .collect();
+        let music = cap_editor::MusicTracks::from([(
+            "music.wav".into(),
+            Arc::new(cap_audio::AudioData::from_samples(source, 2)),
+        )]);
+        let sample_at = |project: &ProjectConfiguration, time| {
+            let mut renderer = cap_editor::AudioRenderer::new(Vec::new()).with_music(music.clone());
+            renderer.set_playhead(time, project);
+            renderer.render_frame_raw(1, project).unwrap().1
+        };
+        let retained = sample_at(&project, 5.);
+        assert_eq!(retained, vec![5. / 16.; 2]);
+        for start in [3., 4., 3.5, 1., 3.5] {
+            assert!(set_segment_start(
+                project.timeline.as_mut().unwrap(),
+                TrackKind::Audio,
+                0,
+                start,
+            ));
+            assert_eq!(sample_at(&project, 5.), retained);
+        }
+        assert_eq!(
+            project.timeline.as_ref().unwrap().audio_segments[0].trim_start,
+            2.5
+        );
+    }
+
+    #[test]
     fn an_audio_split_moves_the_source_offset_and_hard_cuts_the_seam() {
         let mut config = config(serde_json::json!({
             "timeline": {
@@ -4014,6 +4222,95 @@ mod tests {
         assert_eq!(keyboard.keys[0].time_offset, 500.0);
         assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
+    }
+
+    #[test]
+    fn clip_speed_changes_remap_mask_keyframes_in_absolute_time() {
+        for (timescale, expected) in [
+            (
+                0.5,
+                [
+                    (2.0, 14.0, [2.0, 6.0, 10.0], None),
+                    (16.0, 24.0, [2.0, 5.0, 7.0], Some(4.0)),
+                    (21.0, 27.0, [1.0, 3.0, 5.0], None),
+                ],
+            ),
+            (
+                2.0,
+                [
+                    (0.5, 3.5, [0.5, 1.5, 2.5], None),
+                    (4.0, 9.0, [0.5, 2.0, 4.0], Some(1.0)),
+                    (6.0, 12.0, [1.0, 3.0, 5.0], None),
+                ],
+            ),
+        ] {
+            let mut project = two_clip_config();
+            let timeline = project.timeline.as_mut().unwrap();
+            for (start, end) in [(1.0, 7.0), (8.0, 14.0), (11.0, 17.0)] {
+                let mut mask = default_mask_segment(start, end, 0);
+                mask.keyframes = serde_json::from_value(serde_json::json!({
+                    "position": [
+                        { "time": 1.0, "x": 0.2, "y": 0.3 },
+                        { "time": 3.0, "x": 0.5, "y": 0.6 },
+                        { "time": 5.0, "x": 0.8, "y": 0.9 }
+                    ],
+                    "size": [{ "time": 3.0, "x": 0.3, "y": 0.4 }],
+                    "intensity": [{ "time": 5.0, "value": 0.7 }]
+                }))
+                .unwrap();
+                timeline.mask_segments.push(mask);
+            }
+            let original = project.clone();
+            let mut history = ProjectHistory::new(original.clone());
+            assert!(set_clip_segment_timescale(
+                project.timeline.as_mut().unwrap(),
+                0,
+                timescale
+            ));
+            for ((before, after), (start, end, times, boundary_key)) in original
+                .timeline
+                .as_ref()
+                .unwrap()
+                .mask_segments
+                .iter()
+                .zip(&project.timeline.as_ref().unwrap().mask_segments)
+                .zip(expected)
+            {
+                let mut expected = before.clone();
+                expected.start = start;
+                expected.end = end;
+                for (key, time) in expected.keyframes.position.iter_mut().zip(times) {
+                    key.time = time;
+                }
+                expected.keyframes.size[0].time = times[1];
+                expected.keyframes.intensity[0].time = times[2];
+                if let Some(time) = boundary_key {
+                    expected.keyframes.position.insert(
+                        1,
+                        cap_project::MaskVectorKeyframe {
+                            time,
+                            x: 0.2 + (0.5 - 0.2) * 0.5,
+                            y: 0.3 + (0.6 - 0.3) * 0.5,
+                        },
+                    );
+                }
+                assert_eq!(
+                    serde_json::to_value(after).unwrap(),
+                    serde_json::to_value(&expected).unwrap(),
+                    "mask starting at {} at speed {timescale}",
+                    before.start
+                );
+            }
+            history.record(&project);
+            assert_eq!(
+                serde_json::to_value(history.undo().unwrap()).unwrap(),
+                serde_json::to_value(&original).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(history.redo().unwrap()).unwrap(),
+                serde_json::to_value(&project).unwrap()
+            );
+        }
     }
 
     #[test]
