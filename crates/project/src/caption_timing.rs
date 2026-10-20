@@ -152,6 +152,40 @@ fn build_source_to_edited_mappings(
         .collect()
 }
 
+pub fn transcription_source_ranges(
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
+) -> Vec<std::ops::Range<f64>> {
+    let Some(timeline) = timeline else {
+        let duration = recording_durations.iter().sum();
+        return if duration > 0.0 {
+            vec![0.0..duration]
+        } else {
+            Vec::new()
+        };
+    };
+    let mut ranges: Vec<_> = build_source_to_edited_mappings(timeline, recording_durations)
+        .into_iter()
+        .zip(&timeline.segments)
+        .filter_map(|(mapping, segment)| {
+            let duration = *recording_durations.get(segment.recording_clip as usize)?;
+            let offset = mapping.source_start - segment.start;
+            let start = segment.start.max(0.0);
+            let end = segment.end.min(duration);
+            (start < end).then_some(offset + start..offset + end)
+        })
+        .collect();
+    ranges.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut merged: Vec<std::ops::Range<f64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
 fn map_time_range_within_mapping(
     start: f64,
     end: f64,
@@ -428,6 +462,48 @@ pub fn synchronize_captions(project: &mut ProjectConfiguration, recording_durati
 mod tests {
     use super::*;
     use crate::CaptionsData;
+
+    #[test]
+    fn transcription_ranges_follow_source_cuts_independent_of_speed_and_clip_order() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [
+                {"recordingSegment":1,"start":1.0,"end":3.0,"timescale":0.5},
+                {"recordingSegment":0,"start":5.0,"end":6.0,"timescale":2.0},
+                {"recordingSegment":0,"start":1.0,"end":3.0,"timescale":1.0},
+                {"recordingSegment":0,"start":2.0,"end":4.0,"timescale":1.0},
+                {"recordingSegment":0,"start":4.0,"end":4.5,"timescale":1.0},
+                {"recordingSegment":0,"start":1.0,"end":3.0,"timescale":2.0}
+            ], "zoomSegments": []
+        }))
+        .unwrap();
+        assert_eq!(
+            transcription_source_ranges(Some(&timeline), &[10.0, 4.0]),
+            vec![1.0..4.5, 5.0..6.0, 11.0..13.0]
+        );
+    }
+
+    #[test]
+    fn transcription_ranges_preserve_empty_timelines_and_clip_to_sources() {
+        let mut timeline: TimelineConfiguration =
+            serde_json::from_value(serde_json::json!({"segments": [], "zoomSegments": []}))
+                .unwrap();
+        assert!(transcription_source_ranges(Some(&timeline), &[30.0]).is_empty());
+        assert_eq!(
+            transcription_source_ranges(None, &[30.0, 10.0]),
+            vec![0.0..40.0]
+        );
+        timeline.segments = serde_json::from_value(serde_json::json!([
+            {"recordingSegment":0,"start":-1.0,"end":4.0,"timescale":1.0},
+            {"recordingSegment":0,"start":8.0,"end":40.0,"timescale":1.0},
+            {"recordingSegment":2,"start":0.0,"end":3.0,"timescale":1.0},
+            {"recordingSegment":0,"start":5.0,"end":5.0,"timescale":1.0}
+        ]))
+        .unwrap();
+        assert_eq!(
+            transcription_source_ranges(Some(&timeline), &[10.0]),
+            vec![0.0..4.0, 8.0..10.0]
+        );
+    }
 
     fn project(source_timed: bool, start: f32, end: f32) -> ProjectConfiguration {
         ProjectConfiguration {

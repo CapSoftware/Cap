@@ -3176,6 +3176,7 @@ impl EditorWindow {
         };
         let recording_durations = summary.clip_display_durations.clone();
         let recording_duration = summary.recording_duration;
+        let timeline = self.project.timeline.clone();
         let project_path = self.project_path.clone();
         let model = self.selected_caption_model().name;
         let language = self.sidebar.caption_language;
@@ -3187,9 +3188,16 @@ impl EditorWindow {
 
         cx.spawn_in(window, async move |this, cx| {
             let task_path = project_path.clone();
+            let task_durations = recording_durations.clone();
             let task = gpui_tokio::Tokio::spawn(cx, async move {
                 tokio::task::spawn_blocking(move || {
-                    transcription::transcribe_blocking(&task_path, model, language)
+                    transcription::transcribe_blocking(
+                        &task_path,
+                        model,
+                        language,
+                        timeline.as_ref(),
+                        &task_durations,
+                    )
                 })
                 .await
                 .map_err(|error| format!("Transcription task panicked: {error}"))?

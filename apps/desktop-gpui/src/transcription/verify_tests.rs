@@ -36,6 +36,8 @@ use cap_verify::{
     report::{self, Case, Tier},
 };
 
+use cap_rendering::Video;
+
 use super::*;
 
 const MAX_WORD_SECS: f32 = 2.5;
@@ -335,10 +337,15 @@ fn takes_fixture() -> FixtureSpec {
 /// segments.
 fn check_project(case: &mut Case, project: &Path, takes: &Takes) {
     let mut tokens = Vec::new();
-    let result = transcribe_project_with(project, |audio_path| {
-        tokens = fake_tokens(audio_path)?;
-        caption_segments_from_tokens(tokens.clone())
-    });
+    let result = transcribe_project_with(
+        project,
+        None,
+        &takes.iter().map(|take| take.0).collect::<Vec<_>>(),
+        |audio_path| {
+            tokens = fake_tokens(audio_path)?;
+            Ok(caption_segments_from_tokens(tokens.clone()))
+        },
+    );
     let segments = match result {
         Ok(segments) => segments,
         Err(e) => {
@@ -526,7 +533,7 @@ fn instant_project_is_refused() {
         ),
     }
     let mut called = false;
-    let result = transcribe_project_with(&project, |_| {
+    let result = transcribe_project_with(&project, None, &[], |_| {
         called = true;
         Ok(Vec::new())
     });
@@ -606,32 +613,24 @@ fn segmentation_case(id: &str, unicode: bool) {
             unicode,
         );
         let reference = reference_segments(&tokens);
-        match caption_segments_from_tokens(tokens.clone()) {
-            Err(e) if reference.is_empty() && e.contains("No speech") => empty += 1,
-            Err(e) => {
-                failed += 1;
+        let product = caption_segments_from_tokens(tokens.clone());
+        if product.is_empty() {
+            empty += 1;
+        }
+        segments += product.len();
+        let problems = compare_segments(&product, &reference, 0.0);
+        if !problems.is_empty() {
+            failed += 1;
+            if failed <= 3 {
                 case.problem(
                     "caption-segments",
-                    format!("seed {seed}: unexpected error {e}"),
+                    format!(
+                        "seed {seed}: {} problems (first: {}); tokens {:?}",
+                        problems.len(),
+                        problems[0],
+                        tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
+                    ),
                 );
-            }
-            Ok(product) => {
-                segments += product.len();
-                let problems = compare_segments(&product, &reference, 0.0);
-                if !problems.is_empty() {
-                    failed += 1;
-                    if failed <= 3 {
-                        case.problem(
-                            "caption-segments",
-                            format!(
-                                "seed {seed}: {} problems (first: {}); tokens {:?}",
-                                problems.len(),
-                                problems[0],
-                                tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
-                            ),
-                        );
-                    }
-                }
             }
         }
     }
@@ -649,4 +648,187 @@ fn segmentation_matches_reference() {
 #[test]
 fn segmentation_matches_reference_unicode() {
     segmentation_case("captions/app/segmentation/unicode", true);
+}
+
+#[test]
+fn trimmed_transcription_extracts_only_used_audio_and_restores_source_times() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).expect("fixture");
+    let takes = multi_segment_takes(&project, &spec);
+    let durations: Vec<f64> = takes.iter().map(|take| take.0).collect();
+    for (clips, expected_ranges, expected_starts) in [
+        (
+            serde_json::json!([
+                {"recordingSegment": 0, "start": 1.0, "end": 3.0, "timescale": 2.0}
+            ]),
+            vec![1.0..3.0],
+            vec![0.125],
+        ),
+        (
+            serde_json::json!([
+                {"recordingSegment": 1, "start": 1.0, "end": 3.0, "timescale": 0.5},
+                {"recordingSegment": 0, "start": 3.0, "end": 4.0, "timescale": 2.0},
+                {"recordingSegment": 0, "start": 0.5, "end": 1.5, "timescale": 1.0},
+                {"recordingSegment": 0, "start": 1.0, "end": 2.0, "timescale": 1.0},
+                {"recordingSegment": 0, "start": 3.0, "end": 4.0, "timescale": 1.0}
+            ]),
+            vec![0.5..2.0, 3.0..4.0, durations[0] + 1.0..durations[0] + 3.0],
+            vec![0.5, 4.125, 4.75, 6.75],
+        ),
+        (
+            serde_json::json!([
+                {"recordingSegment":0,"start":4.0,"end":durations[0],"timescale":1.0},
+                {"recordingSegment":1,"start":0.0,"end":1.0,"timescale":1.0}
+            ]),
+            vec![4.0..durations[0] + 1.0],
+            vec![0.25],
+        ),
+    ] {
+        let timeline: TimelineConfiguration = serde_json::from_value(serde_json::json!({
+            "segments": clips, "zoomSegments": []
+        }))
+        .unwrap();
+        let mut called = 0;
+        let segments = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+            let range = &expected_ranges[called];
+            let audio = media::decode_audio(path, Some(MARKER_RATE)).unwrap();
+            let duration = audio.mono().len() as f64 / f64::from(MARKER_RATE);
+            assert!(
+                (duration - (range.end - range.start)).abs() < 0.002,
+                "extracted {duration}s, expected {}s",
+                range.end - range.start
+            );
+            called += 1;
+            Ok(vec![CaptionSegment {
+                id: "segment-0".into(),
+                start: 0.25,
+                end: 0.5,
+                text: "word".into(),
+                words: vec![CaptionWord {
+                    text: "word".into(),
+                    start: 0.25,
+                    end: 0.5,
+                }],
+            }])
+        })
+        .unwrap();
+        assert_eq!(called, expected_ranges.len());
+        for (segment, range) in segments.iter().zip(expected_ranges) {
+            assert!((f64::from(segment.start) - range.start - 0.25).abs() < 1e-5);
+            assert!((f64::from(segment.end) - range.start - 0.5).abs() < 1e-5);
+            assert_eq!(segment.words[0].start, segment.start);
+            assert_eq!(segment.words[0].end, segment.end);
+        }
+        let ids: std::collections::HashSet<_> =
+            segments.iter().map(|segment| &segment.id).collect();
+        assert_eq!(ids.len(), segments.len());
+        let tracks = derive_caption_track_segments(&segments, &timeline, &durations);
+        assert_eq!(tracks.len(), expected_starts.len());
+        for (track, expected) in tracks.iter().zip(expected_starts) {
+            assert!((track.start - expected).abs() < 1e-5);
+        }
+    }
+}
+
+#[test]
+fn trimmed_sources_match_full_audio_with_positive_and_negative_offsets() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).unwrap();
+    let meta = RecordingMeta::load_for_project(&project).unwrap();
+    let Some(StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
+        panic!("studio")
+    };
+    let segment = &inner.segments[0];
+    for audio in [
+        segment.mic.as_ref().unwrap(),
+        segment.system_audio.as_ref().unwrap(),
+    ] {
+        let path = meta.path(&audio.path);
+        let decoded = cap_audio::AudioData::from_file(&path).unwrap();
+        for offset_secs in [-0.4, 0.3] {
+            let full = cap_editor::assemble_transcription_audio(
+                &[TranscriptionAudioTake {
+                    display_duration_secs: 5.0,
+                    sources: vec![TranscriptionAudioSource {
+                        samples: decoded.samples().to_vec(),
+                        channels: usize::from(decoded.channels()),
+                        offset_secs,
+                    }],
+                }],
+                DECODE_SAMPLE_RATE,
+            )
+            .unwrap();
+            for range in [0.0..1.0, 1.25..2.5, 3.0..4.0] {
+                let source =
+                    decode_transcription_source(&path, offset_secs, range.clone()).unwrap();
+                let trimmed = cap_editor::assemble_transcription_audio(
+                    &[TranscriptionAudioTake {
+                        display_duration_secs: range.end - range.start,
+                        sources: vec![source],
+                    }],
+                    DECODE_SAMPLE_RATE,
+                )
+                .unwrap();
+                let start = (range.start * f64::from(DECODE_SAMPLE_RATE)).round() as usize;
+                let reference = &full[start..start + trimmed.len()];
+                let worst = trimmed
+                    .iter()
+                    .zip(reference)
+                    .fold(0.0_f32, |worst, (a, b)| worst.max((a - b).abs()));
+                assert!(
+                    worst < 0.001,
+                    "offset {offset_secs}, range {range:?}, worst sample error {worst}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn transcription_keeps_speech_after_empty_ranges_and_cleans_up_on_failure() {
+    let spec = takes_fixture();
+    let project = fixture::ensure_fixture(&spec, fixture::write_fixture).unwrap();
+    let takes = multi_segment_takes(&project, &spec);
+    let durations: Vec<_> = takes.iter().map(|take| take.0).collect();
+    let timeline = serde_json::from_value(serde_json::json!({"segments": [
+        {"start":0.0,"end":1.0,"timescale":1.0},
+        {"start":3.0,"end":4.0,"timescale":1.0}
+    ], "zoomSegments": []}))
+    .unwrap();
+    let mut calls = 0;
+    let mut temporary = PathBuf::new();
+    let result = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+        temporary = path.to_path_buf();
+        calls += 1;
+        if calls == 1 {
+            return Ok(Vec::new());
+        }
+        Ok(caption_segments_from_tokens([CaptionWord {
+            text: "speech".into(),
+            start: 0.1,
+            end: 0.2,
+        }]))
+    })
+    .unwrap();
+    assert_eq!(calls, 2);
+    assert!((result[0].words[0].start - 3.1).abs() < 1e-5);
+    assert!(!temporary.parent().unwrap().exists());
+    let error = transcribe_project_with(&project, Some(&timeline), &durations, |path| {
+        temporary = path.to_path_buf();
+        Err("test engine failure".into())
+    })
+    .unwrap_err();
+    assert_eq!(error, "test engine failure");
+    assert!(!temporary.parent().unwrap().exists());
+    let empty = transcribe_project_with(&project, Some(&timeline), &durations, |_| Ok(Vec::new()))
+        .unwrap_err();
+    assert_eq!(empty, "No speech detected in the audio");
+    assert!(caption_segments_from_tokens(Vec::new()).is_empty());
+    let empty_timeline =
+        serde_json::from_value(serde_json::json!({"segments":[],"zoomSegments":[]})).unwrap();
+    let error = transcribe_project_with(&project, Some(&empty_timeline), &durations, |_| {
+        panic!("an empty timeline must not run the model")
+    })
+    .unwrap_err();
+    assert!(error.contains("No audio sources"));
 }
