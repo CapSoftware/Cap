@@ -77,3 +77,5 @@ analysis/
 analysis/plans/
 .ralphy
 tmp/
+
+__pycache__/

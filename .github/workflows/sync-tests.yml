@@ -33,6 +33,8 @@ on:
       - "scripts/recording-reliability.py"
       - "scripts/recording-reliability-owned-process.cs"
       - "scripts/test-recording-reliability.py"
+      - "scripts/capbench.py"
+      - "scripts/test-capbench.py"
       - ".github/workflows/sync-tests.yml"
 
 concurrency:
@@ -99,6 +101,7 @@ jobs:
         run: |
           cargo test --locked -p cap-project --lib
           python -B scripts/test-recording-reliability.py
+          python -B scripts/test-capbench.py
 
       - name: Compile recording process supervisor (Windows)
         if: runner.os == 'Windows'
@@ -147,8 +150,10 @@ jobs:
           cargo test --locked -p cap-camera-effects --lib
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
-          # looking identical to a pass in the CI log.
-          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects
+          # looking identical to a pass in the CI log. The decoder model
+          # fuzzing runs in Engine verify (scripts/verify/suites.json); its
+          # 2 s decode deadline is not meant for a loaded hosted runner.
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects --skip decoder::model::
           cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
