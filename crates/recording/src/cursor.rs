@@ -572,7 +572,17 @@ pub fn spawn_cursor_recorder(
                 last_window_position = window_position;
             }
 
-            let cursor_id = if let Some(data) = get_cursor_data() {
+            // The cursor image only labels this tick's move and click events,
+            // and reading it builds a full TIFF of every representation
+            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
+            // record neither.
+            let buttons_changed = buttons_changed(
+                &last_mouse_state.button_pressed,
+                &mouse_state.button_pressed,
+            );
+            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
+                last_cursor_id.clone()
+            } else if let Some(data) = get_cursor_data() {
                 let cursor_id = cursor_id_for_image(
                     data,
                     &mut response,
@@ -701,6 +711,15 @@ pub fn spawn_cursor_recorder(
         thread: Some(thread),
         rx: rx.shared(),
     }
+}
+
+/// Whether any button present in both samples changed state: the same pairs
+/// the click events below are generated from.
+fn buttons_changed(previous: &[bool], current: &[bool]) -> bool {
+    previous
+        .iter()
+        .zip(current)
+        .any(|(previous, current)| previous != current)
 }
 
 fn cursor_id_for_image(
@@ -1632,6 +1651,19 @@ mod cursor_image_tests {
             clicks: vec![],
             keyboard_presses: vec![],
         }
+    }
+
+    #[test]
+    fn button_changes_match_the_pairs_clicks_are_built_from() {
+        assert!(!buttons_changed(
+            &[false, false, false],
+            &[false, false, false]
+        ));
+        assert!(buttons_changed(&[false, false], &[false, true]));
+        assert!(buttons_changed(&[true], &[false]));
+        // Clicks only compare buttons present in both samples.
+        assert!(!buttons_changed(&[false], &[false, true]));
+        assert!(!buttons_changed(&[], &[true]));
     }
 
     #[test]
