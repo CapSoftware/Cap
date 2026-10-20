@@ -186,6 +186,17 @@ pub fn transcription_source_ranges(
     merged
 }
 
+pub fn transcription_ranges_cover(
+    transcribed: &[std::ops::Range<f64>],
+    required: &[std::ops::Range<f64>],
+) -> bool {
+    required.iter().all(|range| {
+        transcribed
+            .iter()
+            .any(|source| source.start <= range.start && source.end >= range.end)
+    })
+}
+
 fn map_time_range_within_mapping(
     start: f64,
     end: f64,
@@ -503,6 +514,52 @@ mod tests {
             transcription_source_ranges(Some(&timeline), &[10.0]),
             vec![0.0..4.0, 8.0..10.0]
         );
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_identical_ranges() {
+        let ranges = [1.0..4.0, 6.0..10.0];
+        assert!(transcription_ranges_cover(&ranges, &ranges));
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_further_trims_and_reordered_clips() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [
+                {"start":7.0,"end":9.0,"timescale":2.0},
+                {"start":2.0,"end":3.0,"timescale":0.5}
+            ], "zoomSegments": []
+        }))
+        .unwrap();
+        let current = transcription_source_ranges(Some(&timeline), &[10.0]);
+        assert!(transcription_ranges_cover(&[1.0..4.0, 6.0..10.0], &current));
+    }
+
+    #[test]
+    fn transcription_coverage_rejects_audio_restored_by_undo() {
+        let timeline = serde_json::from_value(serde_json::json!({
+            "segments": [{"start":0.0,"end":10.0,"timescale":1.0}],
+            "zoomSegments": []
+        }))
+        .unwrap();
+        let current = transcription_source_ranges(Some(&timeline), &[10.0]);
+        assert!(!transcription_ranges_cover(
+            &[0.0..4.0, 6.0..10.0],
+            &current
+        ));
+        assert!(!transcription_ranges_cover(&[1.0..10.0], &current));
+        assert!(!transcription_ranges_cover(&[0.0..9.0], &current));
+        assert!(!transcription_ranges_cover(&[], &current));
+        assert!(!transcription_ranges_cover(
+            &[0.0..4.0],
+            &[0.0..4.0, 6.0..10.0]
+        ));
+    }
+
+    #[test]
+    fn transcription_coverage_accepts_an_empty_timeline() {
+        assert!(transcription_ranges_cover(&[0.0..10.0], &[]));
+        assert!(transcription_ranges_cover(&[], &[]));
     }
 
     fn project(source_timed: bool, start: f32, end: f32) -> ProjectConfiguration {

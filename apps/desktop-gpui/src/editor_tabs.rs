@@ -25,7 +25,7 @@ use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
     KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode,
+    StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -3177,6 +3177,8 @@ impl EditorWindow {
         let recording_durations = summary.clip_display_durations.clone();
         let recording_duration = summary.recording_duration;
         let timeline = self.project.timeline.clone();
+        let transcribed_ranges =
+            transcription_source_ranges(timeline.as_ref(), &recording_durations);
         let project_path = self.project_path.clone();
         let model = self.selected_caption_model().name;
         let language = self.sidebar.caption_language;
@@ -3207,10 +3209,19 @@ impl EditorWindow {
                 Err(error) => Err(format!("Transcription task failed: {error}")),
             };
 
-            match result {
-                Ok(segments) => {
-                    transcription::finish_generation(&project_path, None);
-                    let _ = this.update_in(cx, |this, window, cx| {
+            let result = match result {
+                Ok(segments) => this
+                    .update_in(cx, |this, window, cx| {
+                        let current_ranges = transcription_source_ranges(
+                            this.project.timeline.as_ref(),
+                            &recording_durations,
+                        );
+                        if !transcription_ranges_cover(&transcribed_ranges, &current_ranges) {
+                            return Err(
+                                "The timeline changed during generation. Generate captions again."
+                                    .to_string(),
+                            );
+                        }
                         this.apply_generated_captions(
                             segments,
                             &recording_durations,
@@ -3218,7 +3229,15 @@ impl EditorWindow {
                             window,
                             cx,
                         );
-                    });
+                        Ok(())
+                    })
+                    .unwrap_or(Ok(())),
+                Err(error) => Err(error),
+            };
+
+            match result {
+                Ok(()) => {
+                    transcription::finish_generation(&project_path, None);
                 }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");
