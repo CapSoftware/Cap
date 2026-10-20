@@ -109,14 +109,14 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			const oidcIssuer = serverEnv().OIDC_ISSUER;
 			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
 			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
-			if (
-				!trustedProxyWarned &&
+			const trustedProxyEnabled =
 				serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
-				serverEnv().TRUSTED_PROXY_AUTH_EMAIL
-			) {
+				serverEnv().TRUSTED_PROXY_AUTH_EMAIL &&
+				serverEnv().TRUSTED_PROXY_AUTH_SECRET?.trim();
+			if (!trustedProxyWarned && trustedProxyEnabled) {
 				trustedProxyWarned = true;
 				console.warn(
-					"[auth] trusted-proxy sign-in is ENABLED. Only run this behind a reverse proxy that strips client-sent copies of the trust header, or a login bypass is possible.",
+					"[auth] trusted-proxy sign-in is ENABLED. Keep the origin private and use an authenticating reverse proxy that strips client-sent copies of both the trust and secret headers and sets them only on owner-authenticated requests.",
 				);
 			}
 			_providers = [
@@ -196,8 +196,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							}),
 						]
 					: []),
-				...(serverEnv().TRUSTED_PROXY_AUTH_HEADER &&
-				serverEnv().TRUSTED_PROXY_AUTH_EMAIL
+				...(trustedProxyEnabled
 					? [
 							CredentialsProvider({
 								id: "trusted-proxy",
@@ -205,33 +204,28 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 								credentials: {},
 								// SECURITY: this header is trusted ONLY because the operator
 								// opted in via env, asserting Cap runs behind a reverse proxy
-								// that strips any client-sent copy of the header and sets it
-								// only on authenticated requests. Never enable without such a
+								// that strips client-sent copies of both trust headers and sets
+								// them only on owner-authenticated requests. Never enable without such a
 								// proxy — it would be a login bypass. Fails closed below.
 								async authorize(_credentials, req) {
 									const env = serverEnv();
 									const header = env.TRUSTED_PROXY_AUTH_HEADER?.toLowerCase();
 									const email = env.TRUSTED_PROXY_AUTH_EMAIL?.toLowerCase();
-									if (!header || !email) return null;
+									const secret = env.TRUSTED_PROXY_AUTH_SECRET;
+									if (!header || !email || !secret?.trim()) return null;
 									// The router is the sole authority for this header (it strips
 									// any client-sent copy), so its presence means the request was
 									// owner-authenticated. Fail closed on anything else.
 									if (req?.headers?.[header] !== "true") return null;
 
-									// Defense-in-depth: when a shared secret is configured, the proxy
-									// must also send it, so a request that reaches Cap outside the
-									// proxy can't spoof the header. Constant-time and length-blind.
-									const secret = env.TRUSTED_PROXY_AUTH_SECRET;
-									if (secret) {
-										const provided =
-											req?.headers?.["x-trusted-proxy-secret"] ?? "";
-										const digest = (s: string) =>
-											crypto.createHash("sha256").update(s).digest();
-										if (
-											!crypto.timingSafeEqual(digest(provided), digest(secret))
-										)
-											return null;
-									}
+									// Always require the proxy's secret, even if a caller can reach
+									// the origin directly. Compare fixed-size digests in constant time.
+									const provided = req?.headers?.["x-trusted-proxy-secret"];
+									if (typeof provided !== "string" || !provided) return null;
+									const digest = (s: string) =>
+										crypto.createHash("sha256").update(s).digest();
+									if (!crypto.timingSafeEqual(digest(provided), digest(secret)))
+										return null;
 
 									const [user] = await db()
 										.select({

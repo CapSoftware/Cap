@@ -44,6 +44,9 @@ const env = vi.hoisted(() => ({
 	GOOGLE_CLIENT_ID: "google-client",
 	GOOGLE_CLIENT_SECRET: "google-secret",
 	NEXTAUTH_SECRET: "next-auth-secret",
+	OIDC_ISSUER: undefined as string | undefined,
+	OIDC_CLIENT_ID: undefined as string | undefined,
+	OIDC_CLIENT_SECRET: undefined as string | undefined,
 	RESEND_API_KEY: undefined,
 	WORKOS_API_KEY: "workos-secret",
 	WORKOS_CLIENT_ID: "workos-client",
@@ -123,6 +126,9 @@ describe("authOptions", () => {
 		env.APPLE_CLIENT_SECRET = "apple-secret";
 		env.WORKOS_CLIENT_ID = "workos-client";
 		env.WORKOS_API_KEY = "workos-secret";
+		env.OIDC_ISSUER = undefined;
+		env.OIDC_CLIENT_ID = undefined;
+		env.OIDC_CLIENT_SECRET = undefined;
 		env.CAP_ALLOWED_SIGNUP_DOMAINS = undefined;
 		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
 		env.TRUSTED_PROXY_AUTH_HEADER = undefined;
@@ -182,9 +188,10 @@ describe("authOptions", () => {
 		},
 	);
 
-	it("enables trusted-proxy sign-in when both header and email are configured", () => {
+	it("enables trusted-proxy sign-in when header, email and secret are configured", () => {
 		env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
 		env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+		env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
 
 		expect(providerIds(authOptions())).toContain("trusted-proxy");
 	});
@@ -193,14 +200,63 @@ describe("authOptions", () => {
 		expect(providerIds(authOptions())).not.toContain("trusted-proxy");
 	});
 
-	it.each(["TRUSTED_PROXY_AUTH_HEADER", "TRUSTED_PROXY_AUTH_EMAIL"] as const)(
+	it.each([
+		"TRUSTED_PROXY_AUTH_HEADER",
+		"TRUSTED_PROXY_AUTH_EMAIL",
+		"TRUSTED_PROXY_AUTH_SECRET",
+	] as const)(
 		"does not expose a partially configured trusted-proxy provider when %s is missing",
 		(key) => {
 			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
 			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
 			env[key] = undefined;
 
 			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "", "   "])(
+		"does not register trusted-proxy with only header/email and an unusable secret (%s)",
+		(secret) => {
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+
+			expect(providerIds(authOptions())).not.toContain("trusted-proxy");
+		},
+	);
+
+	it.each([undefined, "proxy-secret"])(
+		"preserves independent OIDC sign-in and its verified-email gate with proxy secret %s",
+		async (secret) => {
+			env.OIDC_ISSUER = "https://idp.example";
+			env.OIDC_CLIENT_ID = "oidc-client";
+			env.OIDC_CLIENT_SECRET = "oidc-secret";
+			env.TRUSTED_PROXY_AUTH_HEADER = "x-openhost-is-owner";
+			env.TRUSTED_PROXY_AUTH_EMAIL = PROFILE.email;
+			env.TRUSTED_PROXY_AUTH_SECRET = secret;
+			const options = authOptions();
+			expect(providerIds(options)).toContain("oidc");
+			expect(providerIds(options).includes("trusted-proxy")).toBe(!!secret);
+			const { signIn } = callbacksFor(options);
+			const account: Account = {
+				provider: "oidc",
+				providerAccountId: "oidc-user",
+				type: "oauth",
+			};
+			for (const email_verified of [undefined, false, true]) {
+				const profile = { email: PROFILE.email, email_verified };
+				await expect(
+					signIn({
+						user: AUTHENTICATED_USER,
+						account,
+						profile,
+					}),
+				).resolves.toBe(
+					email_verified === true ? true : "/login?error=OidcEmailUnverified",
+				);
+			}
 		},
 	);
 
@@ -223,16 +279,17 @@ describe("authOptions", () => {
 		beforeEach(() => {
 			env.TRUSTED_PROXY_AUTH_HEADER = "X-OpenHost-Is-Owner";
 			env.TRUSTED_PROXY_AUTH_EMAIL = "Alex@Company.example";
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
 		});
 
-		it("signs in the configured user when the proxy sets the header", async () => {
+		const validHeaders = {
+			"x-openhost-is-owner": "true",
+			"x-trusted-proxy-secret": "proxy-secret",
+		};
+
+		it("signs in the configured user when the proxy sets both headers", async () => {
 			await expect(
-				trustedProxyAuthorize()(
-					{},
-					{
-						headers: { "x-openhost-is-owner": "true" },
-					},
-				),
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
 			).resolves.toMatchObject({
 				id: AUTHENTICATED_USER.id,
 				email: AUTHENTICATED_USER.email,
@@ -240,29 +297,63 @@ describe("authOptions", () => {
 		});
 
 		it.each([
-			["header is absent", {}],
-			["header is not exactly 'true'", { "x-openhost-is-owner": "1" }],
+			["header is absent", { "x-trusted-proxy-secret": "proxy-secret" }],
+			[
+				"header is not exactly 'true'",
+				{ ...validHeaders, "x-openhost-is-owner": "1" },
+			],
 		])("fails closed when the %s", async (_label, headers) => {
 			await expect(
 				trustedProxyAuthorize()({}, { headers }),
 			).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
 		});
 
 		it("fails closed when the configured user does not exist", async () => {
 			env.TRUSTED_PROXY_AUTH_EMAIL = "nobody@company.example";
 
 			await expect(
-				trustedProxyAuthorize()(
-					{},
-					{
-						headers: { "x-openhost-is-owner": "true" },
-					},
-				),
+				trustedProxyAuthorize()({}, { headers: validHeaders }),
 			).resolves.toBeNull();
+			expect(mocks.select).toHaveBeenCalledOnce();
 		});
 
-		it("requires the shared secret when one is configured", async () => {
-			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
+		it.each([undefined, "", "   "])(
+			"fails closed if the configured secret becomes unusable after registration (%s)",
+			async (secret) => {
+				const authorize = trustedProxyAuthorize();
+				env.TRUSTED_PROXY_AUTH_SECRET = secret;
+				await expect(
+					authorize({}, { headers: validHeaders }),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([undefined, "", "wrong", "x".repeat(1024), ["proxy-secret"]])(
+			"rejects missing, empty, incorrect or malformed request secrets (%s)",
+			async (secret) => {
+				await expect(
+					trustedProxyAuthorize()(
+						{},
+						{
+							headers: {
+								...validHeaders,
+								"x-trusted-proxy-secret": secret,
+							} as Record<string, string>,
+						},
+					),
+				).resolves.toBeNull();
+				expect(mocks.select).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects requests without headers", async () => {
+			await expect(trustedProxyAuthorize()({}, {})).resolves.toBeNull();
+			expect(mocks.select).not.toHaveBeenCalled();
+		});
+
+		it("always requires the shared secret", async () => {
 			const authorize = trustedProxyAuthorize();
 
 			await expect(
@@ -305,6 +396,9 @@ describe("authOptions", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 		try {
+			void freshAuthOptions().providers;
+			expect(warn).not.toHaveBeenCalled();
+			env.TRUSTED_PROXY_AUTH_SECRET = "proxy-secret";
 			for (let i = 0; i < 3; i++) void freshAuthOptions().providers;
 
 			expect(
