@@ -68,6 +68,7 @@ fn spec(tone: &Arc<AudioData>) -> PlaySpec {
         duration_secs: CLIP_SECS,
         start_playhead_secs: 0.0,
         playhead_rx,
+        playback_rate: watch::channel(1.0).1,
     }
 }
 

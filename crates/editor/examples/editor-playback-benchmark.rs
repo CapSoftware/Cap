@@ -642,6 +642,7 @@ async fn main() {
             segment_medias: segment_medias.clone(),
             music: cap_editor::MusicTracks::new(),
             audio_output: audio_output.clone(),
+            playback_rate: watch::channel(1.0).1,
             telemetry: Some(telemetry.clone()),
         };
 
