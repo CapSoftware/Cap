@@ -6228,7 +6228,10 @@ async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<
         // Waits for the background decode; a failed track just renders as an
         // empty waveform (playback/export surface the actual error).
         match segment.audio.get().await {
-            Ok(Some(audio)) => out.push(audio::get_waveform(&audio)),
+            Ok(Some(audio)) => out.push(audio::align_waveform_to_playback(
+                audio::get_waveform(&audio),
+                segment.audio_timing_repair.mic_offset_secs,
+            )),
             Ok(None) => out.push(Vec::new()),
             Err(error) => {
                 warn!(%error, "Mic audio failed to load; returning empty waveform");
@@ -6250,7 +6253,10 @@ async fn get_system_audio_waveforms(
 
     for segment in editor_instance.segment_medias.iter() {
         match segment.system_audio.get().await {
-            Ok(Some(audio)) => out.push(audio::get_waveform(&audio)),
+            Ok(Some(audio)) => out.push(audio::align_waveform_to_playback(
+                audio::get_waveform(&audio),
+                segment.audio_timing_repair.system_audio_offset_secs,
+            )),
             Ok(None) => out.push(Vec::new()),
             Err(error) => {
                 warn!(%error, "System audio failed to load; returning empty waveform");

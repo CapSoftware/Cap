@@ -1,0 +1,1148 @@
+import { DEQUANT4, DEQUANT8, QUANT4, QUANT8, ZIGZAG4, ZIGZAG8 } from "./tables"
+import {
+  dequant4, dequant8, dequantChromaDc, dequantLumaDc, fdct4, fdct8, hadamard2, hadamard4, idct4, idct8, qpDiv6, qpMod6,
+  quant4, quant8, quantDc, quantOffset,
+} from "./transform"
+import { reconAdd } from "./pixel"
+
+export function fwd4(src: Uint8Array, so: int, ss: int, pred: Uint8Array, po: int, ps: int, out: Int32Array, oo: int) {
+  const d0 = i32x4.loadU8(src, so) - i32x4.loadU8(pred, po)
+  const d1 = i32x4.loadU8(src, so + ss) - i32x4.loadU8(pred, po + ps)
+  const d2 = i32x4.loadU8(src, so + 2 * ss) - i32x4.loadU8(pred, po + 2 * ps)
+  const d3 = i32x4.loadU8(src, so + 3 * ss) - i32x4.loadU8(pred, po + 3 * ps)
+  const a0 = i32x4.shuffle(d0, d1, [0, 4, 1, 5])
+  const a1 = i32x4.shuffle(d0, d1, [2, 6, 3, 7])
+  const a2 = i32x4.shuffle(d2, d3, [0, 4, 1, 5])
+  const a3 = i32x4.shuffle(d2, d3, [2, 6, 3, 7])
+  const c0 = i32x4.shuffle(a0, a2, [0, 1, 4, 5])
+  const c1 = i32x4.shuffle(a0, a2, [2, 3, 6, 7])
+  const c2 = i32x4.shuffle(a1, a3, [0, 1, 4, 5])
+  const c3 = i32x4.shuffle(a1, a3, [2, 3, 6, 7])
+  const hs0 = c0 + c3
+  const hs1 = c1 + c2
+  const hd0 = c0 - c3
+  const hd1 = c1 - c2
+  const h0 = hs0 + hs1
+  const h1 = (hd0 << 1) + hd1
+  const h2 = hs0 - hs1
+  const h3 = hd0 - (hd1 << 1)
+  const b0 = i32x4.shuffle(h0, h1, [0, 4, 1, 5])
+  const b1 = i32x4.shuffle(h0, h1, [2, 6, 3, 7])
+  const b2 = i32x4.shuffle(h2, h3, [0, 4, 1, 5])
+  const b3 = i32x4.shuffle(h2, h3, [2, 6, 3, 7])
+  const r0 = i32x4.shuffle(b0, b2, [0, 1, 4, 5])
+  const r1 = i32x4.shuffle(b0, b2, [2, 3, 6, 7])
+  const r2 = i32x4.shuffle(b1, b3, [0, 1, 4, 5])
+  const r3 = i32x4.shuffle(b1, b3, [2, 3, 6, 7])
+  const s0 = r0 + r3
+  const s1 = r1 + r2
+  const t0 = r0 - r3
+  const t1 = r1 - r2
+  const y0 = s0 + s1
+  const y1 = (t0 << 1) + t1
+  const y2 = s0 - s1
+  const y3 = t0 - (t1 << 1)
+  y0.store(out, oo)
+  y1.store(out, oo + 4)
+  y2.store(out, oo + 8)
+  y3.store(out, oo + 12)
+}
+
+const ZIP32_LO = [0, 8, 1, 9, 4, 12, 5, 13]
+const ZIP32_HI = [2, 10, 3, 11, 6, 14, 7, 15]
+const ZIP64_LO = [0, 1, 8, 9, 4, 5, 12, 13]
+const ZIP64_HI = [2, 3, 10, 11, 6, 7, 14, 15]
+
+export function fwd4x2(src: Uint8Array, so: int, ss: int, pred: Uint8Array, po: int, ps: int, out: Int32Array, oo: int) {
+  const d0 = i32x8.loadU8(src, so) - i32x8.loadU8(pred, po)
+  const d1 = i32x8.loadU8(src, so + ss) - i32x8.loadU8(pred, po + ps)
+  const d2 = i32x8.loadU8(src, so + 2 * ss) - i32x8.loadU8(pred, po + 2 * ps)
+  const d3 = i32x8.loadU8(src, so + 3 * ss) - i32x8.loadU8(pred, po + 3 * ps)
+  const a0 = i32x8.shuffle(d0, d1, ZIP32_LO)
+  const a1 = i32x8.shuffle(d0, d1, ZIP32_HI)
+  const a2 = i32x8.shuffle(d2, d3, ZIP32_LO)
+  const a3 = i32x8.shuffle(d2, d3, ZIP32_HI)
+  const c0 = i32x8.shuffle(a0, a2, ZIP64_LO)
+  const c1 = i32x8.shuffle(a0, a2, ZIP64_HI)
+  const c2 = i32x8.shuffle(a1, a3, ZIP64_LO)
+  const c3 = i32x8.shuffle(a1, a3, ZIP64_HI)
+  const hs0 = c0 + c3
+  const hs1 = c1 + c2
+  const hd0 = c0 - c3
+  const hd1 = c1 - c2
+  const h0 = hs0 + hs1
+  const h1 = (hd0 << 1) + hd1
+  const h2 = hs0 - hs1
+  const h3 = hd0 - (hd1 << 1)
+  const b0 = i32x8.shuffle(h0, h1, ZIP32_LO)
+  const b1 = i32x8.shuffle(h0, h1, ZIP32_HI)
+  const b2 = i32x8.shuffle(h2, h3, ZIP32_LO)
+  const b3 = i32x8.shuffle(h2, h3, ZIP32_HI)
+  const r0 = i32x8.shuffle(b0, b2, ZIP64_LO)
+  const r1 = i32x8.shuffle(b0, b2, ZIP64_HI)
+  const r2 = i32x8.shuffle(b1, b3, ZIP64_LO)
+  const r3 = i32x8.shuffle(b1, b3, ZIP64_HI)
+  const s0 = r0 + r3
+  const s1 = r1 + r2
+  const t0 = r0 - r3
+  const t1 = r1 - r2
+  const y0 = s0 + s1
+  const y1 = (t0 << 1) + t1
+  const y2 = s0 - s1
+  const y3 = t0 - (t1 << 1)
+  y0.low().store(out, oo)
+  y1.low().store(out, oo + 4)
+  y2.low().store(out, oo + 8)
+  y3.low().store(out, oo + 12)
+  y0.high().store(out, oo + 16)
+  y1.high().store(out, oo + 20)
+  y2.high().store(out, oo + 24)
+  y3.high().store(out, oo + 28)
+}
+
+export function quant4v(c: Int32Array, o: int, qp: int, intra: bool, startPos: int): int {
+  const qbits = 15 + qpDiv6(qp)
+  const qm = qpMod6(qp) * 16
+  const f = i32x8.splat(quantOffset(qbits, intra))
+  const zero = i32x8.splat(0)
+  const v0 = i32x8.load(c, o)
+  const v1 = i32x8.load(c, o + 8)
+  const l0 = (v0.abs() * i32x8.load(QUANT4, qm) + f) >> qbits
+  const l1 = (v1.abs() * i32x8.load(QUANT4, qm + 8) + f) >> qbits
+  let q0 = i32x8.select(v0.lt(zero), zero - l0, l0)
+  const q1 = i32x8.select(v1.lt(zero), zero - l1, l1)
+  if (startPos > 0) q0 = q0.withLane(0, v0.lane(0))
+  q0.store(c, o)
+  q1.store(c, o + 8)
+  const nz = q0.ne(zero).mask() | (q1.ne(zero).mask() << 8)
+  return Math.popcount32(startPos > 0 ? nz & 0xfffe : nz)
+}
+
+// QUANT4's first factor of each qp % 6 row is the row's largest, so a zero level for the largest AC magnitude
+// under it means quant4v with startPos 1 would leave all four blocks' AC at zero.
+export function chromaAcZero(c: Int32Array, o: int, qp: int, intra: bool): bool {
+  const qbits = 15 + qpDiv6(qp)
+  let m = i32x8.load(c, o).withLane(0, 0).abs().max(i32x8.load(c, o + 8).abs())
+  m = m.max(i32x8.load(c, o + 16).withLane(0, 0).abs()).max(i32x8.load(c, o + 24).abs())
+  m = m.max(i32x8.load(c, o + 32).withLane(0, 0).abs()).max(i32x8.load(c, o + 40).abs())
+  m = m.max(i32x8.load(c, o + 48).withLane(0, 0).abs()).max(i32x8.load(c, o + 56).abs())
+  const l = (m * i32x8.splat(int(QUANT4[qpMod6(qp) * 16]!)) + i32x8.splat(quantOffset(qbits, intra))) >> qbits
+  return l.eq(i32x8.splat(0)).mask() === 0xff
+}
+
+const K12 = i16x8(1, 1, 1, 1, 2, 2, 2, 2)
+const ROW_SWAP = [4, 5, 6, 7, 0, 1, 2, 3]
+const ROW_REV = [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12]
+const ROW_TT = [0, 1, 3, 2, 4, 5, 7, 6, 8, 9, 11, 10, 12, 13, 15, 14]
+const ROW_UU = [1, 0, 2, 0, 5, 4, 6, 4, 9, 8, 10, 8, 13, 12, 14, 12]
+const ZZ4_EO = [0, 8, 2, 4, 10, 1, 9, 3, 12, 6, 14, 5, 11, 13, 7, 15]
+const EVEN_ODD: int[] = [0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15]
+
+function quantPairs(keep: int): Int16Array {
+  const t = new Int16Array(96)
+  for (let i = 0; i < 96; i++) {
+    if ((i & 1) === keep) t[i] = int(QUANT4[i]!)
+  }
+  return t
+}
+
+function dequantPairs(keep: int): Int16Array {
+  const t = new Int16Array(96)
+  for (let i = 0; i < 96; i++) {
+    if ((i & 1) === keep) t[i] = int(DEQUANT4[(i & ~15) + EVEN_ODD[i & 15]!]!)
+  }
+  return t
+}
+
+const QUANT4_EVEN = quantPairs(0)
+const QUANT4_ODD = quantPairs(1)
+const DEQUANT4_COLS_A = dequantPairs(0)
+const DEQUANT4_COLS_B = dequantPairs(1)
+const ROWS_A = [0, 4, 12, 8, 1, 5, 13, 9]
+const ROWS_B = [2, 6, 14, 10, 3, 7, 15, 11]
+
+export function code4(s: u8x16, p: u8x16, qp: int, intra: bool, coef: Int16Array, zo: int, blk: Uint8Array, bo: int): int {
+  const p01 = p.widenLow()
+  const p23 = p.widenHigh()
+  const lo = s.widenLow() - p01
+  const hi = (s.widenHigh() - p23).swizzle(ROW_SWAP)
+  const vs = lo + hi
+  const vd = lo - hi
+  const x = i16x8.shuffle(vs, vd, [0, 1, 2, 3, 8, 9, 10, 11])
+  const z = i16x8.shuffle(vs, vd, [4, 5, 6, 7, 12, 13, 14, 15])
+  const y = i16x16.concat(x * K12 + z, x - z * K12)
+  const yr = y.swizzle(ROW_REV)
+  const hs = y + yr
+  const hd = y - yr
+  const mt = i16x16(-1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0, -1, -1, 0, 0, -1)
+  const t = i16x16.select(mt, hs, hd).swizzle(ROW_TT)
+  const u = i16x16.select(mt, hd, hs).swizzle(ROW_UU)
+  const c = t * i16x16(1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 2) +
+    u * i16x16(1, 2, -1, 1, 1, 2, -1, 1, 1, 2, -1, 1, 1, 2, -1, 1)
+  const qbits = 15 + qpDiv6(qp)
+  const qm = qpMod6(qp) * 16
+  const f = i32x8.splat(quantOffset(qbits, intra))
+  const a = c.abs()
+  const ci = i32x8.bitcast(c)
+  const signEven = (ci << 16) >> 31
+  const signOdd = ci >> 31
+  const levelEven = (i16x16.madd(a, i16x16.load(QUANT4_EVEN, qm)) + f) >> qbits
+  const levelOdd = (i16x16.madd(a, i16x16.load(QUANT4_ODD, qm)) + f) >> qbits
+  const q = i16x16.packSat((levelEven ^ signEven) - signEven, (levelOdd ^ signOdd) - signOdd)
+  q.swizzle(ZZ4_EO).store(coef, zo)
+  const zeros = u8x32.bitcast(q.eq(i16x16.splat(0))).mask()
+  if (zeros === 0xffffffff) {
+    p.store(blk, bo)
+    return 0
+  }
+  const nz = (32 - Math.popcount32(zeros)) >> 1
+  const sh = qpDiv6(qp)
+  const ca = i16x16.madd(q, i16x16.load(DEQUANT4_COLS_A, qm)) << sh
+  const cb = i16x16.madd(q, i16x16.load(DEQUANT4_COLS_B, qm)) << sh
+  const ef = i32x8.concat((ca + cb).low(), (ca - cb).low())
+  const hg = i32x8.concat((ca + (cb >> 1)).high(), ((ca >> 1) - cb).high())
+  const xa = ef + hg
+  const xb = ef - hg
+  const ra = i32x8.shuffle(xa, xb, ROWS_A)
+  const rb = i32x8.shuffle(xa, xb, ROWS_B)
+  const ef2 = i32x8.concat((ra + rb).low(), (ra - rb).low())
+  const hg2 = i32x8.concat((ra + (rb >> 1)).high(), ((ra >> 1) - rb).high())
+  const r32 = i32x8.splat(32)
+  const o01 = (ef2 + hg2 + r32) >> 6
+  const o32 = (ef2 - hg2 + r32) >> 6
+  const r = i16x16.packSat(o01, o32).addSat(i16x16.concat(p01, p23.swizzle(ROW_SWAP)))
+  u8x16.bitcast(i32x4.bitcast(u8x16.packSat(r.low(), r.high())).swizzle([0, 1, 3, 2])).store(blk, bo)
+  return nz
+}
+
+export function dequant4v(c: Int32Array, o: int, qp: int) {
+  const sh = qpDiv6(qp)
+  const qm = qpMod6(qp) * 16
+  ((i32x8.load(c, o) * i32x8.load(DEQUANT4, qm)) << sh).store(c, o)
+  ((i32x8.load(c, o + 8) * i32x8.load(DEQUANT4, qm + 8)) << sh).store(c, o + 8)
+}
+
+export function idct4v(c: Int32Array, o: int) {
+  const d0 = i32x4.load(c, o)
+  const d1 = i32x4.load(c, o + 4)
+  const d2 = i32x4.load(c, o + 8)
+  const d3 = i32x4.load(c, o + 12)
+  const a0 = i32x4.shuffle(d0, d1, [0, 4, 1, 5])
+  const a1 = i32x4.shuffle(d0, d1, [2, 6, 3, 7])
+  const a2 = i32x4.shuffle(d2, d3, [0, 4, 1, 5])
+  const a3 = i32x4.shuffle(d2, d3, [2, 6, 3, 7])
+  const t0 = i32x4.shuffle(a0, a2, [0, 1, 4, 5])
+  const t1 = i32x4.shuffle(a0, a2, [2, 3, 6, 7])
+  const t2 = i32x4.shuffle(a1, a3, [0, 1, 4, 5])
+  const t3 = i32x4.shuffle(a1, a3, [2, 3, 6, 7])
+  const he = t0 + t2
+  const hf = t0 - t2
+  const hg = (t1 >> 1) - t3
+  const hh = t1 + (t3 >> 1)
+  const x0 = he + hh
+  const x1 = hf + hg
+  const x2 = hf - hg
+  const x3 = he - hh
+  const b0 = i32x4.shuffle(x0, x1, [0, 4, 1, 5])
+  const b1 = i32x4.shuffle(x0, x1, [2, 6, 3, 7])
+  const b2 = i32x4.shuffle(x2, x3, [0, 4, 1, 5])
+  const b3 = i32x4.shuffle(x2, x3, [2, 6, 3, 7])
+  const f0 = i32x4.shuffle(b0, b2, [0, 1, 4, 5])
+  const f1 = i32x4.shuffle(b0, b2, [2, 3, 6, 7])
+  const f2 = i32x4.shuffle(b1, b3, [0, 1, 4, 5])
+  const f3 = i32x4.shuffle(b1, b3, [2, 3, 6, 7])
+  const e = f0 + f2
+  const ff = f0 - f2
+  const g = (f1 >> 1) - f3
+  const h = f1 + (f3 >> 1)
+  const r = i32x4.splat(32)
+  const o0 = (e + h + r) >> 6
+  const o1 = (ff + g + r) >> 6
+  const o2 = (ff - g + r) >> 6
+  const o3 = (e - h + r) >> 6
+  o0.store(c, o)
+  o1.store(c, o + 4)
+  o2.store(c, o + 8)
+  o3.store(c, o + 12)
+}
+
+export function recon4(rec: Uint8Array, ro: int, rs: int, c: Int32Array, o: int, pred: Uint8Array, po: int, ps: int) {
+  for (let y = 0; y < 4; y++) {
+    const v = i32x4.loadU8(pred, po + y * ps) + i32x4.load(c, o + y * 4)
+    v.storeU8(rec, ro + y * rs)
+  }
+}
+
+export function copy4(dst: Uint8Array, d: int, ds: int, src: Uint8Array, s: int, ss: int) {
+  for (let y = 0; y < 4; y++) i32x4.loadU8(src, s + y * ss).storeU8(dst, d + y * ds)
+}
+
+export function copy8(dst: Uint8Array, d: int, ds: int, src: Uint8Array, s: int, ss: int) {
+  for (let y = 0; y < 8; y++) u8x16.loadLow(src, s + y * ss).storeLow(dst, d + y * ds)
+}
+
+export function reconC8(rec: Uint8Array, ro: int, rs: int, c: Int32Array, o: int, pred: Uint8Array, po: int, ps: int) {
+  for (let y = 0; y < 8; y++) {
+    const bo = o + (y >> 2) * 32 + (y & 3) * 4
+    const r = i16x8.packSat(i32x4.load(c, bo), i32x4.load(c, bo + 16)).addSat(i16x8.loadU8(pred, po + y * ps))
+    r.storeU8(rec, ro + y * rs)
+  }
+}
+
+function reconRow8(rec: Uint8Array, ro: int, v: i32x8, pred: Uint8Array, po: int) {
+  i16x8.packSat(v.low(), v.high()).addSat(i16x8.loadU8(pred, po)).storeU8(rec, ro)
+}
+
+export function idctC8(c: Int32Array, o: int, rec: Uint8Array, ro: int, rs: int, pred: Uint8Array, po: int) {
+  for (let h = 0; h < 2; h++) {
+    const b = o + h * 32
+    const d0 = i32x8.concat(i32x4.load(c, b), i32x4.load(c, b + 16))
+    const d1 = i32x8.concat(i32x4.load(c, b + 4), i32x4.load(c, b + 20))
+    const d2 = i32x8.concat(i32x4.load(c, b + 8), i32x4.load(c, b + 24))
+    const d3 = i32x8.concat(i32x4.load(c, b + 12), i32x4.load(c, b + 28))
+    const a0 = i32x8.shuffle(d0, d1, ZIP32_LO)
+    const a1 = i32x8.shuffle(d0, d1, ZIP32_HI)
+    const a2 = i32x8.shuffle(d2, d3, ZIP32_LO)
+    const a3 = i32x8.shuffle(d2, d3, ZIP32_HI)
+    const t0 = i32x8.shuffle(a0, a2, ZIP64_LO)
+    const t1 = i32x8.shuffle(a0, a2, ZIP64_HI)
+    const t2 = i32x8.shuffle(a1, a3, ZIP64_LO)
+    const t3 = i32x8.shuffle(a1, a3, ZIP64_HI)
+    const he = t0 + t2
+    const hf = t0 - t2
+    const hg = (t1 >> 1) - t3
+    const hh = t1 + (t3 >> 1)
+    const x0 = he + hh
+    const x1 = hf + hg
+    const x2 = hf - hg
+    const x3 = he - hh
+    const b0 = i32x8.shuffle(x0, x1, ZIP32_LO)
+    const b1 = i32x8.shuffle(x0, x1, ZIP32_HI)
+    const b2 = i32x8.shuffle(x2, x3, ZIP32_LO)
+    const b3 = i32x8.shuffle(x2, x3, ZIP32_HI)
+    const f0 = i32x8.shuffle(b0, b2, ZIP64_LO)
+    const f1 = i32x8.shuffle(b0, b2, ZIP64_HI)
+    const f2 = i32x8.shuffle(b1, b3, ZIP64_LO)
+    const f3 = i32x8.shuffle(b1, b3, ZIP64_HI)
+    const e = f0 + f2
+    const ff = f0 - f2
+    const g = (f1 >> 1) - f3
+    const hv = f1 + (f3 >> 1)
+    const r = i32x8.splat(32)
+    const y = ro + h * 4 * rs
+    const p = po + h * 32
+    reconRow8(rec, y, (e + hv + r) >> 6, pred, p)
+    reconRow8(rec, y + rs, (ff + g + r) >> 6, pred, p + 8)
+    reconRow8(rec, y + 2 * rs, (ff - g + r) >> 6, pred, p + 16)
+    reconRow8(rec, y + 3 * rs, (e - hv + r) >> 6, pred, p + 24)
+  }
+}
+
+export function recon16(rec: Uint8Array, ro: int, rs: int, c: Int32Array, pred: Uint8Array, po: int) {
+  for (let y = 0; y < 16; y++) {
+    const bo = (y >> 2) * 64 + (y & 3) * 4
+    const lo = i16x8.packSat(i32x4.load(c, bo), i32x4.load(c, bo + 16))
+    const hi = i16x8.packSat(i32x4.load(c, bo + 32), i32x4.load(c, bo + 48))
+    const p = u8x16.load(pred, po + y * 16)
+    u8x16.packSat(lo.addSat(p.widenLow()), hi.addSat(p.widenHigh())).store(rec, ro + y * rs)
+  }
+}
+
+export function reconDc16(rec: Uint8Array, ro: int, rs: int, dc: Int32Array, pred: Uint8Array, po: int) {
+  const r32 = i32x4.splat(32)
+  for (let by = 0; by < 4; by++) {
+    const d = (i32x4.load(dc, by * 4) + r32) >> 6
+    const k = i16x8.packSat(d, d)
+    const lo = k.swizzle([0, 0, 0, 0, 1, 1, 1, 1])
+    const hi = k.swizzle([2, 2, 2, 2, 3, 3, 3, 3])
+    for (let y = by * 4; y < by * 4 + 4; y++) {
+      const p = u8x16.load(pred, po + y * 16)
+      u8x16.packSat(lo.addSat(p.widenLow()), hi.addSat(p.widenHigh())).store(rec, ro + y * rs)
+    }
+  }
+}
+
+export function copy16(dst: Uint8Array, d: int, ds: int, src: Uint8Array, s: int) {
+  for (let y = 0; y < 16; y++) u8x16.load(src, s + y * 16).store(dst, d + y * ds)
+}
+
+export function reconDcC8(rec: Uint8Array, ro: int, rs: int, dc: Int32Array, o: int, pred: Uint8Array, po: int) {
+  const d = (i32x4.load(dc, o) + i32x4.splat(32)) >> 6
+  const k = i16x8.packSat(d, d)
+  const k0 = k.swizzle([0, 0, 0, 0, 1, 1, 1, 1])
+  const k1 = k.swizzle([2, 2, 2, 2, 3, 3, 3, 3])
+  for (let y = 0; y < 4; y++) {
+    const r = k0.addSat(i16x8.loadU8(pred, po + y * 8))
+    r.storeU8(rec, ro + y * rs)
+  }
+  for (let y = 4; y < 8; y++) {
+    const r = k1.addSat(i16x8.loadU8(pred, po + y * 8))
+    r.storeU8(rec, ro + y * rs)
+  }
+}
+
+export function zigzag4(c: Int32Array, o: int, coef: Int16Array, d: int) {
+  const a = i16x8.packSat(i32x4.load(c, o), i32x4.load(c, o + 4))
+  const b = i16x8.packSat(i32x4.load(c, o + 8), i32x4.load(c, o + 12))
+  i16x8.shuffle(a, b, [0, 1, 4, 8, 5, 2, 3, 6]).store(coef, d)
+  i16x8.shuffle(a, b, [9, 12, 13, 10, 7, 11, 14, 15]).store(coef, d + 8)
+}
+
+export function zigzagAc4(c: Int32Array, o: int, coef: Int16Array, d: int) {
+  const a = i16x8.packSat(i32x4.load(c, o), i32x4.load(c, o + 4))
+  const b = i16x8.packSat(i32x4.load(c, o + 8), i32x4.load(c, o + 12))
+  i16x8.shuffle(a, b, [1, 4, 8, 5, 2, 3, 6, 9]).store(coef, d)
+  i16x8.shuffle(a, b, [12, 13, 10, 7, 11, 14, 15, 0]).withLane(7, 0).store(coef, d + 8)
+}
+
+const ZZ8_A0 = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 0, 25, 18, 11, 4, 5]
+const ZZ8_A1 = [12, 19, 26, 0, 0, 0, 0, 0, 27, 20, 13, 6, 7, 14, 21, 28]
+const ZZ8_B1 = [0, 0, 0, 1, 8, 16, 9, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+const ZZ8_M1 = i16x16(-1, -1, -1, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1)
+const ZZ8_A2 = [0, 0, 0, 0, 0, 0, 0, 0, 29, 22, 15, 23, 30, 0, 0, 0]
+const ZZ8_B2 = [3, 10, 17, 24, 25, 18, 11, 4, 0, 0, 0, 0, 0, 5, 12, 19]
+const ZZ8_M2 = i16x16(0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, 0, 0, 0)
+const ZZ8_B3 = [26, 27, 20, 13, 6, 0, 7, 14, 21, 28, 29, 22, 15, 23, 30, 31]
+
+// Quantised 8x8 levels fit in 16 bits (fwd8 works in 16-bit lanes), so packSat keeps them exactly.
+export function zigzag8(c: Int32Array, o: int, coef: Int16Array, d: int) {
+  const r01 = i16x16.packSat(i32x8.load(c, o), i32x8.load(c, o + 8))
+  const r23 = i16x16.packSat(i32x8.load(c, o + 16), i32x8.load(c, o + 24))
+  const r45 = i16x16.packSat(i32x8.load(c, o + 32), i32x8.load(c, o + 40))
+  const r67 = i16x16.packSat(i32x8.load(c, o + 48), i32x8.load(c, o + 56))
+  i16x16.shuffle(r01, r23, ZZ8_A0).withLane(10, r45.lane(0)).store(coef, d)
+  i16x16.select(ZZ8_M1, i16x16.shuffle(r01, r23, ZZ8_A1), i16x16.shuffle(r45, r67, ZZ8_B1)).store(coef, d + 16)
+  i16x16.select(ZZ8_M2, i16x16.shuffle(r01, r23, ZZ8_A2), i16x16.shuffle(r45, r67, ZZ8_B2)).store(coef, d + 32)
+  i16x16.shuffle(r45, r67, ZZ8_B3).withLane(5, r23.lane(15)).store(coef, d + 48)
+}
+
+export function nonzeroMask(c: Int16Array, o: int, n: int): int {
+  const zero = i16x16.splat(0)
+  const m = i16x16.load(c, o).ne(zero).mask()
+  if (n <= 16) return m & ((1 << n) - 1)
+  return m | (i16x16.load(c, o + 16).ne(zero).mask() << 16) | (i16x16.load(c, o + 32).ne(zero).mask() << 32) |
+    (i16x16.load(c, o + 48).ne(zero).mask() << 48)
+}
+
+function h4row(v: i32x4): i32x4 {
+  const p = v.swizzle([1, 0, 3, 2])
+  const t = i32x4.select(i32x4(-1, 0, -1, 0), v + p, p - v)
+  const q = t.swizzle([2, 3, 0, 1])
+  return i32x4.select(i32x4(-1, -1, 0, 0), t + q, q - t).swizzle([0, 2, 3, 1])
+}
+
+export function hadamard4v(c: Int32Array, o: int, forward: bool) {
+  const a0 = h4row(i32x4.load(c, o))
+  const a1 = h4row(i32x4.load(c, o + 4))
+  const a2 = h4row(i32x4.load(c, o + 8))
+  const a3 = h4row(i32x4.load(c, o + 12))
+  const s0 = a0 + a1
+  const s1 = a2 + a3
+  const d0 = a0 - a1
+  const d1 = a2 - a3
+  const sh = forward ? 1 : 0
+  ((s0 + s1) >> sh).store(c, o)
+  ((s0 - s1) >> sh).store(c, o + 4)
+  ((d0 - d1) >> sh).store(c, o + 8)
+  ((d0 + d1) >> sh).store(c, o + 12)
+}
+
+export function quantDcv(c: Int32Array, o: int, n: int, qp: int, intra: bool): int {
+  const qbits = 16 + qpDiv6(qp)
+  const f = i32x4.splat(quantOffset(qbits, intra))
+  const mf = i32x4.splat(int(QUANT4[qpMod6(qp) * 16]!))
+  const zero = i32x4.splat(0)
+  let nz = 0
+  for (let k = 0; k < n; k += 4) {
+    const v = i32x4.load(c, o + k)
+    const l = (v.abs() * mf + f) >> qbits
+    const q = i32x4.select(v.lt(zero), zero - l, l)
+    nz += Math.popcount32(q.ne(zero).mask())
+    q.store(c, o + k)
+  }
+  return nz
+}
+
+export function dequantLumaDcv(c: Int32Array, o: int, qp: int) {
+  const ls = i32x4.splat(16 * int(DEQUANT4[qpMod6(qp) * 16]!))
+  const q6 = qpDiv6(qp)
+  if (qp >= 36) {
+    for (let k = 0; k < 16; k += 4) ((i32x4.load(c, o + k) * ls) << (q6 - 6)).store(c, o + k)
+    return
+  }
+  const r = i32x4.splat(1 << (5 - q6))
+  for (let k = 0; k < 16; k += 4) ((i32x4.load(c, o + k) * ls + r) >> (6 - q6)).store(c, o + k)
+}
+
+export function hadamard2v(c: Int32Array, o: int) {
+  const c0 = c[o]!
+  const c1 = c[o + 1]!
+  const c2 = c[o + 2]!
+  const c3 = c[o + 3]!
+  c[o] = c0 + c1 + c2 + c3
+  c[o + 1] = c0 - c1 + c2 - c3
+  c[o + 2] = c0 + c1 - c2 - c3
+  c[o + 3] = c0 - c1 - c2 + c3
+}
+
+export function dequantChromaDcv(c: Int32Array, o: int, qp: int) {
+  const ls = i32x4.splat(16 * int(DEQUANT4[qpMod6(qp) * 16]!))
+  (((i32x4.load(c, o) * ls) << qpDiv6(qp)) >> 5).store(c, o)
+}
+
+export function fwd8(src: Uint8Array, so: int, ss: int, pred: Uint8Array, po: int, ps: int, out: Int32Array, oo: int) {
+  const r0 = i16x8.loadU8(src, so + 0 * ss) - i16x8.loadU8(pred, po + 0 * ps)
+  const r1 = i16x8.loadU8(src, so + 1 * ss) - i16x8.loadU8(pred, po + 1 * ps)
+  const r2 = i16x8.loadU8(src, so + 2 * ss) - i16x8.loadU8(pred, po + 2 * ps)
+  const r3 = i16x8.loadU8(src, so + 3 * ss) - i16x8.loadU8(pred, po + 3 * ps)
+  const r4 = i16x8.loadU8(src, so + 4 * ss) - i16x8.loadU8(pred, po + 4 * ps)
+  const r5 = i16x8.loadU8(src, so + 5 * ss) - i16x8.loadU8(pred, po + 5 * ps)
+  const r6 = i16x8.loadU8(src, so + 6 * ss) - i16x8.loadU8(pred, po + 6 * ps)
+  const r7 = i16x8.loadU8(src, so + 7 * ss) - i16x8.loadU8(pred, po + 7 * ps)
+  const ct0 = i16x8.shuffle(r0, r1, [0, 8, 1, 9, 2, 10, 3, 11])
+  const ct1 = i16x8.shuffle(r0, r1, [4, 12, 5, 13, 6, 14, 7, 15])
+  const ct2 = i16x8.shuffle(r2, r3, [0, 8, 1, 9, 2, 10, 3, 11])
+  const ct3 = i16x8.shuffle(r2, r3, [4, 12, 5, 13, 6, 14, 7, 15])
+  const ct4 = i16x8.shuffle(r4, r5, [0, 8, 1, 9, 2, 10, 3, 11])
+  const ct5 = i16x8.shuffle(r4, r5, [4, 12, 5, 13, 6, 14, 7, 15])
+  const ct6 = i16x8.shuffle(r6, r7, [0, 8, 1, 9, 2, 10, 3, 11])
+  const ct7 = i16x8.shuffle(r6, r7, [4, 12, 5, 13, 6, 14, 7, 15])
+  const cu0 = i16x8.shuffle(ct0, ct2, [0, 1, 8, 9, 2, 3, 10, 11])
+  const cu1 = i16x8.shuffle(ct0, ct2, [4, 5, 12, 13, 6, 7, 14, 15])
+  const cu2 = i16x8.shuffle(ct1, ct3, [0, 1, 8, 9, 2, 3, 10, 11])
+  const cu3 = i16x8.shuffle(ct1, ct3, [4, 5, 12, 13, 6, 7, 14, 15])
+  const cu4 = i16x8.shuffle(ct4, ct6, [0, 1, 8, 9, 2, 3, 10, 11])
+  const cu5 = i16x8.shuffle(ct4, ct6, [4, 5, 12, 13, 6, 7, 14, 15])
+  const cu6 = i16x8.shuffle(ct5, ct7, [0, 1, 8, 9, 2, 3, 10, 11])
+  const cu7 = i16x8.shuffle(ct5, ct7, [4, 5, 12, 13, 6, 7, 14, 15])
+  const c0 = i16x8.shuffle(cu0, cu4, [0, 1, 2, 3, 8, 9, 10, 11])
+  const c1 = i16x8.shuffle(cu0, cu4, [4, 5, 6, 7, 12, 13, 14, 15])
+  const c2 = i16x8.shuffle(cu1, cu5, [0, 1, 2, 3, 8, 9, 10, 11])
+  const c3 = i16x8.shuffle(cu1, cu5, [4, 5, 6, 7, 12, 13, 14, 15])
+  const c4 = i16x8.shuffle(cu2, cu6, [0, 1, 2, 3, 8, 9, 10, 11])
+  const c5 = i16x8.shuffle(cu2, cu6, [4, 5, 6, 7, 12, 13, 14, 15])
+  const c6 = i16x8.shuffle(cu3, cu7, [0, 1, 2, 3, 8, 9, 10, 11])
+  const c7 = i16x8.shuffle(cu3, cu7, [4, 5, 6, 7, 12, 13, 14, 15])
+  const hs07 = c0 + c7
+  const hs16 = c1 + c6
+  const hs25 = c2 + c5
+  const hs34 = c3 + c4
+  const ha0 = hs07 + hs34
+  const ha1 = hs16 + hs25
+  const ha2 = hs07 - hs34
+  const ha3 = hs16 - hs25
+  const hd07 = c0 - c7
+  const hd16 = c1 - c6
+  const hd25 = c2 - c5
+  const hd34 = c3 - c4
+  const ha4 = hd16 + hd25 + (hd07 + (hd07 >> 1))
+  const ha5 = hd07 - hd34 - (hd25 + (hd25 >> 1))
+  const ha6 = hd07 + hd34 - (hd16 + (hd16 >> 1))
+  const ha7 = hd16 - hd25 + (hd34 + (hd34 >> 1))
+  const h0 = ha0 + ha1
+  const h4 = ha0 - ha1
+  const h2 = ha2 + (ha3 >> 1)
+  const h6 = (ha2 >> 1) - ha3
+  const h1 = ha4 + (ha7 >> 2)
+  const h3 = ha5 + (ha6 >> 2)
+  const h5 = ha6 - (ha5 >> 2)
+  const h7 = (ha4 >> 2) - ha7
+  const wt0 = i16x8.shuffle(h0, h1, [0, 8, 1, 9, 2, 10, 3, 11])
+  const wt1 = i16x8.shuffle(h0, h1, [4, 12, 5, 13, 6, 14, 7, 15])
+  const wt2 = i16x8.shuffle(h2, h3, [0, 8, 1, 9, 2, 10, 3, 11])
+  const wt3 = i16x8.shuffle(h2, h3, [4, 12, 5, 13, 6, 14, 7, 15])
+  const wt4 = i16x8.shuffle(h4, h5, [0, 8, 1, 9, 2, 10, 3, 11])
+  const wt5 = i16x8.shuffle(h4, h5, [4, 12, 5, 13, 6, 14, 7, 15])
+  const wt6 = i16x8.shuffle(h6, h7, [0, 8, 1, 9, 2, 10, 3, 11])
+  const wt7 = i16x8.shuffle(h6, h7, [4, 12, 5, 13, 6, 14, 7, 15])
+  const wu0 = i16x8.shuffle(wt0, wt2, [0, 1, 8, 9, 2, 3, 10, 11])
+  const wu1 = i16x8.shuffle(wt0, wt2, [4, 5, 12, 13, 6, 7, 14, 15])
+  const wu2 = i16x8.shuffle(wt1, wt3, [0, 1, 8, 9, 2, 3, 10, 11])
+  const wu3 = i16x8.shuffle(wt1, wt3, [4, 5, 12, 13, 6, 7, 14, 15])
+  const wu4 = i16x8.shuffle(wt4, wt6, [0, 1, 8, 9, 2, 3, 10, 11])
+  const wu5 = i16x8.shuffle(wt4, wt6, [4, 5, 12, 13, 6, 7, 14, 15])
+  const wu6 = i16x8.shuffle(wt5, wt7, [0, 1, 8, 9, 2, 3, 10, 11])
+  const wu7 = i16x8.shuffle(wt5, wt7, [4, 5, 12, 13, 6, 7, 14, 15])
+  const w0 = i16x8.shuffle(wu0, wu4, [0, 1, 2, 3, 8, 9, 10, 11])
+  const w1 = i16x8.shuffle(wu0, wu4, [4, 5, 6, 7, 12, 13, 14, 15])
+  const w2 = i16x8.shuffle(wu1, wu5, [0, 1, 2, 3, 8, 9, 10, 11])
+  const w3 = i16x8.shuffle(wu1, wu5, [4, 5, 6, 7, 12, 13, 14, 15])
+  const w4 = i16x8.shuffle(wu2, wu6, [0, 1, 2, 3, 8, 9, 10, 11])
+  const w5 = i16x8.shuffle(wu2, wu6, [4, 5, 6, 7, 12, 13, 14, 15])
+  const w6 = i16x8.shuffle(wu3, wu7, [0, 1, 2, 3, 8, 9, 10, 11])
+  const w7 = i16x8.shuffle(wu3, wu7, [4, 5, 6, 7, 12, 13, 14, 15])
+  const vs07 = w0 + w7
+  const vs16 = w1 + w6
+  const vs25 = w2 + w5
+  const vs34 = w3 + w4
+  const va0 = vs07 + vs34
+  const va1 = vs16 + vs25
+  const va2 = vs07 - vs34
+  const va3 = vs16 - vs25
+  const vd07 = w0 - w7
+  const vd16 = w1 - w6
+  const vd25 = w2 - w5
+  const vd34 = w3 - w4
+  const va4 = vd16 + vd25 + (vd07 + (vd07 >> 1))
+  const va5 = vd07 - vd34 - (vd25 + (vd25 >> 1))
+  const va6 = vd07 + vd34 - (vd16 + (vd16 >> 1))
+  const va7 = vd16 - vd25 + (vd34 + (vd34 >> 1))
+  const v0 = va0 + va1
+  const v4 = va0 - va1
+  const v2 = va2 + (va3 >> 1)
+  const v6 = (va2 >> 1) - va3
+  const v1 = va4 + (va7 >> 2)
+  const v3 = va5 + (va6 >> 2)
+  const v5 = va6 - (va5 >> 2)
+  const v7 = (va4 >> 2) - va7
+  i32x8.convert(v0).store(out, oo + 0)
+  i32x8.convert(v1).store(out, oo + 8)
+  i32x8.convert(v2).store(out, oo + 16)
+  i32x8.convert(v3).store(out, oo + 24)
+  i32x8.convert(v4).store(out, oo + 32)
+  i32x8.convert(v5).store(out, oo + 40)
+  i32x8.convert(v6).store(out, oo + 48)
+  i32x8.convert(v7).store(out, oo + 56)
+}
+
+export function idct8v(c: Int32Array, o: int) {
+  const rnd = i32x8.splat(32)
+  const d0 = i32x8.load(c, o + 0)
+  const d1 = i32x8.load(c, o + 8)
+  const d2 = i32x8.load(c, o + 16)
+  const d3 = i32x8.load(c, o + 24)
+  const d4 = i32x8.load(c, o + 32)
+  const d5 = i32x8.load(c, o + 40)
+  const d6 = i32x8.load(c, o + 48)
+  const d7 = i32x8.load(c, o + 56)
+  const ta0 = i32x8.shuffle(d0, d1, [0, 8, 1, 9, 4, 12, 5, 13])
+  const ta1 = i32x8.shuffle(d0, d1, [2, 10, 3, 11, 6, 14, 7, 15])
+  const ta2 = i32x8.shuffle(d2, d3, [0, 8, 1, 9, 4, 12, 5, 13])
+  const ta3 = i32x8.shuffle(d2, d3, [2, 10, 3, 11, 6, 14, 7, 15])
+  const ta4 = i32x8.shuffle(d4, d5, [0, 8, 1, 9, 4, 12, 5, 13])
+  const ta5 = i32x8.shuffle(d4, d5, [2, 10, 3, 11, 6, 14, 7, 15])
+  const ta6 = i32x8.shuffle(d6, d7, [0, 8, 1, 9, 4, 12, 5, 13])
+  const ta7 = i32x8.shuffle(d6, d7, [2, 10, 3, 11, 6, 14, 7, 15])
+  const tb0 = i32x8.shuffle(ta0, ta2, [0, 1, 8, 9, 4, 5, 12, 13])
+  const tb1 = i32x8.shuffle(ta0, ta2, [2, 3, 10, 11, 6, 7, 14, 15])
+  const tb2 = i32x8.shuffle(ta1, ta3, [0, 1, 8, 9, 4, 5, 12, 13])
+  const tb3 = i32x8.shuffle(ta1, ta3, [2, 3, 10, 11, 6, 7, 14, 15])
+  const tb4 = i32x8.shuffle(ta4, ta6, [0, 1, 8, 9, 4, 5, 12, 13])
+  const tb5 = i32x8.shuffle(ta4, ta6, [2, 3, 10, 11, 6, 7, 14, 15])
+  const tb6 = i32x8.shuffle(ta5, ta7, [0, 1, 8, 9, 4, 5, 12, 13])
+  const tb7 = i32x8.shuffle(ta5, ta7, [2, 3, 10, 11, 6, 7, 14, 15])
+  const t0 = i32x8.shuffle(tb0, tb4, [0, 1, 2, 3, 8, 9, 10, 11])
+  const t4 = i32x8.shuffle(tb0, tb4, [4, 5, 6, 7, 12, 13, 14, 15])
+  const t1 = i32x8.shuffle(tb1, tb5, [0, 1, 2, 3, 8, 9, 10, 11])
+  const t5 = i32x8.shuffle(tb1, tb5, [4, 5, 6, 7, 12, 13, 14, 15])
+  const t2 = i32x8.shuffle(tb2, tb6, [0, 1, 2, 3, 8, 9, 10, 11])
+  const t6 = i32x8.shuffle(tb2, tb6, [4, 5, 6, 7, 12, 13, 14, 15])
+  const t3 = i32x8.shuffle(tb3, tb7, [0, 1, 2, 3, 8, 9, 10, 11])
+  const t7 = i32x8.shuffle(tb3, tb7, [4, 5, 6, 7, 12, 13, 14, 15])
+  const ga0 = t0 + t4
+  const ga4 = t0 - t4
+  const ga2 = (t2 >> 1) - t6
+  const ga6 = t2 + (t6 >> 1)
+  const gb0 = ga0 + ga6
+  const gb2 = ga4 + ga2
+  const gb4 = ga4 - ga2
+  const gb6 = ga0 - ga6
+  const ga1 = t5 - t3 - t7 - (t7 >> 1)
+  const ga3 = t1 + t7 - t3 - (t3 >> 1)
+  const ga5 = t7 - t1 + t5 + (t5 >> 1)
+  const ga7 = t3 + t5 + t1 + (t1 >> 1)
+  const gb1 = ga1 + (ga7 >> 2)
+  const gb7 = ga7 - (ga1 >> 2)
+  const gb3 = ga3 + (ga5 >> 2)
+  const gb5 = (ga3 >> 2) - ga5
+  const g0 = gb0 + gb7
+  const g1 = gb2 + gb5
+  const g2 = gb4 + gb3
+  const g3 = gb6 + gb1
+  const g4 = gb6 - gb1
+  const g5 = gb4 - gb3
+  const g6 = gb2 - gb5
+  const g7 = gb0 - gb7
+  const qa0 = i32x8.shuffle(g0, g1, [0, 8, 1, 9, 4, 12, 5, 13])
+  const qa1 = i32x8.shuffle(g0, g1, [2, 10, 3, 11, 6, 14, 7, 15])
+  const qa2 = i32x8.shuffle(g2, g3, [0, 8, 1, 9, 4, 12, 5, 13])
+  const qa3 = i32x8.shuffle(g2, g3, [2, 10, 3, 11, 6, 14, 7, 15])
+  const qa4 = i32x8.shuffle(g4, g5, [0, 8, 1, 9, 4, 12, 5, 13])
+  const qa5 = i32x8.shuffle(g4, g5, [2, 10, 3, 11, 6, 14, 7, 15])
+  const qa6 = i32x8.shuffle(g6, g7, [0, 8, 1, 9, 4, 12, 5, 13])
+  const qa7 = i32x8.shuffle(g6, g7, [2, 10, 3, 11, 6, 14, 7, 15])
+  const qb0 = i32x8.shuffle(qa0, qa2, [0, 1, 8, 9, 4, 5, 12, 13])
+  const qb1 = i32x8.shuffle(qa0, qa2, [2, 3, 10, 11, 6, 7, 14, 15])
+  const qb2 = i32x8.shuffle(qa1, qa3, [0, 1, 8, 9, 4, 5, 12, 13])
+  const qb3 = i32x8.shuffle(qa1, qa3, [2, 3, 10, 11, 6, 7, 14, 15])
+  const qb4 = i32x8.shuffle(qa4, qa6, [0, 1, 8, 9, 4, 5, 12, 13])
+  const qb5 = i32x8.shuffle(qa4, qa6, [2, 3, 10, 11, 6, 7, 14, 15])
+  const qb6 = i32x8.shuffle(qa5, qa7, [0, 1, 8, 9, 4, 5, 12, 13])
+  const qb7 = i32x8.shuffle(qa5, qa7, [2, 3, 10, 11, 6, 7, 14, 15])
+  const q0 = i32x8.shuffle(qb0, qb4, [0, 1, 2, 3, 8, 9, 10, 11])
+  const q4 = i32x8.shuffle(qb0, qb4, [4, 5, 6, 7, 12, 13, 14, 15])
+  const q1 = i32x8.shuffle(qb1, qb5, [0, 1, 2, 3, 8, 9, 10, 11])
+  const q5 = i32x8.shuffle(qb1, qb5, [4, 5, 6, 7, 12, 13, 14, 15])
+  const q2 = i32x8.shuffle(qb2, qb6, [0, 1, 2, 3, 8, 9, 10, 11])
+  const q6 = i32x8.shuffle(qb2, qb6, [4, 5, 6, 7, 12, 13, 14, 15])
+  const q3 = i32x8.shuffle(qb3, qb7, [0, 1, 2, 3, 8, 9, 10, 11])
+  const q7 = i32x8.shuffle(qb3, qb7, [4, 5, 6, 7, 12, 13, 14, 15])
+  const za0 = q0 + q4
+  const za4 = q0 - q4
+  const za2 = (q2 >> 1) - q6
+  const za6 = q2 + (q6 >> 1)
+  const zb0 = za0 + za6
+  const zb2 = za4 + za2
+  const zb4 = za4 - za2
+  const zb6 = za0 - za6
+  const za1 = q5 - q3 - q7 - (q7 >> 1)
+  const za3 = q1 + q7 - q3 - (q3 >> 1)
+  const za5 = q7 - q1 + q5 + (q5 >> 1)
+  const za7 = q3 + q5 + q1 + (q1 >> 1)
+  const zb1 = za1 + (za7 >> 2)
+  const zb7 = za7 - (za1 >> 2)
+  const zb3 = za3 + (za5 >> 2)
+  const zb5 = (za3 >> 2) - za5
+  const z0 = (zb0 + zb7 + rnd) >> 6
+  const z1 = (zb2 + zb5 + rnd) >> 6
+  const z2 = (zb4 + zb3 + rnd) >> 6
+  const z3 = (zb6 + zb1 + rnd) >> 6
+  const z4 = (zb6 - zb1 + rnd) >> 6
+  const z5 = (zb4 - zb3 + rnd) >> 6
+  const z6 = (zb2 - zb5 + rnd) >> 6
+  const z7 = (zb0 - zb7 + rnd) >> 6
+  z0.store(c, o + 0)
+  z1.store(c, o + 8)
+  z2.store(c, o + 16)
+  z3.store(c, o + 24)
+  z4.store(c, o + 32)
+  z5.store(c, o + 40)
+  z6.store(c, o + 48)
+  z7.store(c, o + 56)
+}
+
+export function quant8v(c: Int32Array, o: int, qp: int, intra: bool): int {
+  const qbits = 16 + qpDiv6(qp)
+  const qm = qpMod6(qp) * 64
+  const f = i32x8.splat(quantOffset(qbits, intra))
+  const zero = i32x8.splat(0)
+  let nzv = zero
+  for (let k = 0; k < 8; k++) {
+    const v = i32x8.load(c, o + k * 8)
+    const l = (v.abs() * i32x8.load(QUANT8, qm + k * 8) + f) >> qbits
+    const q = i32x8.select(v.lt(zero), zero - l, l)
+    nzv += q.ne(zero)
+    q.store(c, o + k * 8)
+  }
+  return -nzv.sum()
+}
+
+export function dequant8v(c: Int32Array, o: int, out: Int32Array, oo: int, qp: int) {
+  const q6 = qpDiv6(qp)
+  const qm = qpMod6(qp) * 64
+  const s16 = i32x8.splat(16)
+  if (q6 >= 6) {
+    for (let k = 0; k < 8; k++) {
+      const d = (i32x8.load(c, o + k * 8) * i32x8.load(DEQUANT8, qm + k * 8) * s16) << (q6 - 6)
+      d.store(out, oo + k * 8)
+    }
+    return
+  }
+  const r = i32x8.splat(1 << (5 - q6))
+  for (let k = 0; k < 8; k++) {
+    const d = (i32x8.load(c, o + k * 8) * i32x8.load(DEQUANT8, qm + k * 8) * s16 + r) >> (6 - q6)
+    d.store(out, oo + k * 8)
+  }
+}
+
+export function recon8(rec: Uint8Array, ro: int, rs: int, c: Int32Array, o: int, pred: Uint8Array, po: int, ps: int) {
+  for (let y = 0; y < 8; y++) {
+    const r = i16x8.packSat(i32x4.load(c, o + y * 8), i32x4.load(c, o + y * 8 + 4)).addSat(i16x8.loadU8(pred, po + y * ps))
+    r.storeU8(rec, ro + y * rs)
+  }
+}
+
+export function recon8b(blk: Uint8Array, bo: int, c: Int32Array, o: int, pred: Uint8Array, po: int) {
+  for (let y = 0; y < 8; y += 2) {
+    const r0 = i16x8.packSat(i32x4.load(c, o + y * 8), i32x4.load(c, o + y * 8 + 4)).addSat(i16x8.loadU8(pred, po + y * 8))
+    const r1 = i16x8.packSat(i32x4.load(c, o + y * 8 + 8), i32x4.load(c, o + y * 8 + 12)).addSat(i16x8.loadU8(pred, po + y * 8 + 8))
+    u8x16.packSat(r0, r1).store(blk, bo + y * 8)
+  }
+}
+
+function pixels(seed: int, n: int): Uint8Array {
+  let out: u8[] = []
+  let x = seed
+  for (let i = 0; i < n; i++) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    const v = i % 9 === 0 ? 255 : i % 13 === 0 ? 0 : (x >> 9) & 255
+    out.push(u8(v))
+  }
+  return new Uint8Array(out)
+}
+
+test("vector 4x4 transform, quantisation and inverse match the scalar ones exactly", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 200; seed++) {
+    const src = pixels(seed, 64)
+    const pred = seed % 4 === 0 ? pixels(seed + 1, 64) : pixels(seed * 7 + 3, 64)
+    const qp = seed % 52
+    const intra = seed % 3 === 0
+    const start = seed % 5 === 0 ? 1 : 0
+    let ref: int[] = []
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) ref.push(int(src[y * 8 + x]!) - int(pred[y * 8 + x]!))
+    }
+    fdct4(&ref, 0)
+    const v = new Int32Array(16)
+    fwd4(src, 0, 8, pred, 0, 8, v, 0)
+    for (let i = 0; i < 16; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    const nzRef = quant4(&ref, 0, qp, intra, start)
+    const nzV = quant4v(v, 0, qp, intra, start)
+    if (nzRef !== nzV) bad++
+    for (let i = 0; i < 16; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    dequant4(&ref, 0, qp, start)
+    dequant4v(v, 0, qp)
+    if (start > 0) v[0] = ref[0]!
+    for (let i = 0; i < 16; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    idct4(&ref, 0)
+    idct4v(v, 0)
+    for (let i = 0; i < 16; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("chromaAcZero only reports a plane whose four blocks' AC all quantise to zero", () => {
+  let bad = 0
+  let zero = 0
+  let coded = 0
+  for (let seed = 1; seed <= 600; seed++) {
+    const src = pixels(seed, 64)
+    const noise = pixels(seed * 3 + 1, 64)
+    const amp = seed % 7 === 0 ? 255 : seed % 13
+    const pred = new Uint8Array(64)
+    for (let i = 0; i < 64; i++) {
+      const p = int(src[i]!) + int(noise[i]!) % (2 * amp + 1) - amp
+      pred[i] = p < 0 ? 0 : p > 255 ? 255 : p
+    }
+    const qp = seed % 40
+    const intra = seed % 2 === 0
+    const c = new Int32Array(64)
+    fwd4x2(src, 0, 8, pred, 0, 8, c, 0)
+    fwd4x2(src, 32, 8, pred, 32, 8, c, 32)
+    const az = chromaAcZero(c, 0, qp, intra)
+    let nz = 0
+    for (let b = 0; b < 4; b++) nz += quant4v(c, b * 16, qp, intra, 1)
+    if (az && nz > 0) bad++
+    if (az) zero++
+    if (nz > 0) coded++
+  }
+  expect(bad).toBe(0)
+  expect(zero > 50).toBe(true)
+  expect(coded > 50).toBe(true)
+})
+
+test("chromaAcZero is exact for one AC coefficient at a largest-factor position", () => {
+  let bad = 0
+  for (let qp = 0; qp < 52; qp++) {
+    for (let k = 0; k < 2; k++) {
+      const intra = k === 1
+      let lo = 0
+      let hi = 9200
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1
+        const t = new Int32Array(16)
+        t[2] = mid
+        if (quant4v(t, 0, qp, intra, 1) > 0) {
+          hi = mid
+        } else {
+          lo = mid
+        }
+      }
+      for (let b = 0; b < 4; b++) {
+        const pos = b * 16 + (b % 2 === 0 ? 2 : 8)
+        for (let s = -1; s <= 1; s += 2) {
+          const c = new Int32Array(64)
+          c[b * 16] = 5000
+          c[pos] = s * lo
+          if (!chromaAcZero(c, 0, qp, intra)) bad++
+          c[pos] = s * hi
+          if (chromaAcZero(c, 0, qp, intra)) bad++
+        }
+      }
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("paired 4x4 transform equals two single ones", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 100; seed++) {
+    const src = pixels(seed * 11, 96)
+    const pred = seed % 4 === 0 ? pixels(seed + 5, 96) : pixels(seed * 3 + 7, 96)
+    const a = new Int32Array(40)
+    const b = new Int32Array(40)
+    a.fill(seed)
+    b.fill(seed)
+    fwd4(src, 1, 24, pred, 2, 20, a, 3)
+    fwd4(src, 5, 24, pred, 6, 20, a, 19)
+    fwd4x2(src, 1, 24, pred, 2, 20, b, 3)
+    for (let i = 0; i < 40; i++) {
+      if (a[i]! !== b[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("fused 4x4 coding matches transform, quantisation, zigzag and reconstruction one step at a time", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 400; seed++) {
+    const src = pixels(seed * 11 + 7, 16)
+    const pred = seed % 3 === 0 ? pixels(seed * 5 + 2, 16) : pixels(seed * 17 + 9, 16)
+    if (seed % 7 === 0) {
+      for (let i = 0; i < 16; i++) src[i] = Math.min(255, Math.max(0, int(pred[i]!) + (i % 3) - 1))
+    }
+    const qp = seed % 52
+    const intra = seed % 4 !== 0
+    const v = new Int32Array(16)
+    fwd4(src, 0, 4, pred, 0, 4, v, 0)
+    const nzRef = quant4v(v, 0, qp, intra, 0)
+    const zRef = new Int16Array(20)
+    zigzag4(v, 0, zRef, 2)
+    const a = pixels(seed * 3 + 1, 40 * 8)
+    const b = pixels(seed * 5 + 3, 24)
+    const keep = new Uint8Array(b)
+    if (nzRef > 0) {
+      dequant4v(v, 0, qp)
+      idct4v(v, 0)
+      recon4(a, 45, 40, v, 0, pred, 0, 4)
+    } else {
+      copy4(a, 45, 40, pred, 0, 4)
+    }
+    const z = new Int16Array(20)
+    const nz = code4(u8x16.load(src, 0), u8x16.load(pred, 0), qp, intra, z, 2, b, 5)
+    if (nz !== nzRef) bad++
+    for (let i = 0; i < 20; i++) {
+      if (z[i]! !== zRef[i]!) bad++
+    }
+    for (let i = 0; i < 16; i++) {
+      if (b[5 + i]! !== a[45 + (i >> 2) * 40 + (i & 3)]!) bad++
+    }
+    for (let i = 0; i < 24; i++) {
+      if ((i < 5 || i >= 21) && b[i]! !== keep[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("chroma 8x8 inverse transform matches four 4x4 inverses and the chroma reconstruction", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 200; seed++) {
+    const pred = seed % 5 === 0 ? pixels(seed * 3 + 8, 64) : pixels(seed * 23 + 1, 64)
+    const px = pixels(seed * 29 + 6, 64)
+    const scale = seed % 7 === 0 ? 700 : seed % 3 + 1
+    const a = new Int32Array(80)
+    const b = new Int32Array(80)
+    for (let i = 0; i < 64; i++) a[9 + i] = (int(px[i]!) - 128) * scale
+    for (let i = 0; i < 64; i++) b[9 + i] = a[9 + i]!
+    for (let k = 0; k < 4; k++) idct4v(a, 9 + k * 16)
+    const ra = pixels(seed * 31 + 2, 8 * 24 + 16)
+    const rb = new Uint8Array(ra)
+    reconC8(ra, 5, 24, a, 9, pred, 0, 8)
+    idctC8(b, 9, rb, 5, 24, pred, 0)
+    for (let i = 0; i < ra.length; i++) {
+      if (ra[i]! !== rb[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("DC-only luma 16x16 and chroma 8x8 reconstruction match the inverse transform of DC-only blocks", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 300; seed++) {
+    const pred = pixels(seed * 19 + 4, 256)
+    const px = pixels(seed * 37 + 2, 16)
+    const scale = seed % 5 === 0 ? 2000 : seed % 4 + 1
+    const dc = new Int32Array(20)
+    for (let i = 0; i < 16; i++) dc[i] = (int(px[i]!) - 128) * scale
+    const c = new Int32Array(256)
+    for (let b = 0; b < 16; b++) {
+      c[b * 16] = dc[b]!
+      idct4v(c, b * 16)
+    }
+    const a = pixels(seed * 41 + 9, 20 * 24)
+    const b = new Uint8Array(a)
+    recon16(a, 3, 20, c, pred, 0)
+    reconDc16(b, 3, 20, dc, pred, 0)
+    for (let i = 0; i < a.length; i++) {
+      if (a[i]! !== b[i]!) bad++
+    }
+    const cc = new Int32Array(80)
+    for (let k = 0; k < 4; k++) cc[9 + k * 16] = dc[2 + k]!
+    const ca = pixels(seed * 43 + 1, 10 * 16)
+    const cb = new Uint8Array(ca)
+    idctC8(cc, 9, ca, 1, 16, pred, 64)
+    reconDcC8(cb, 1, 16, dc, 2, pred, 64)
+    for (let i = 0; i < ca.length; i++) {
+      if (ca[i]! !== cb[i]!) bad++
+    }
+    const za = pixels(seed * 47 + 3, 20 * 18)
+    const zb = new Uint8Array(za)
+    copy16(za, 21, 20, pred, 0)
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) zb[21 + y * 20 + x] = pred[y * 16 + x]!
+    }
+    for (let i = 0; i < za.length; i++) {
+      if (za[i]! !== zb[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+test("vector 8x8 transform, quantisation and inverse match the scalar ones exactly", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 150; seed++) {
+    const src = pixels(seed * 3, 128)
+    const pred = seed % 4 === 0 ? pixels(seed + 11, 128) : pixels(seed * 5 + 1, 128)
+    const qp = seed % 52
+    const intra = seed % 3 === 0
+    let ref: int[] = []
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) ref.push(int(src[y * 16 + x]!) - int(pred[y * 16 + x]!))
+    }
+    fdct8(&ref, 0)
+    const v = new Int32Array(64)
+    fwd8(src, 0, 16, pred, 0, 16, v, 0)
+    for (let i = 0; i < 64; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    const nzRef = quant8(&ref, 0, qp, intra)
+    if (quant8v(v, 0, qp, intra) !== nzRef) bad++
+    for (let i = 0; i < 64; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    dequant8(&ref, 0, qp)
+    dequant8v(v, 0, v, 0, qp)
+    for (let i = 0; i < 64; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+    idct8(&ref, 0)
+    idct8v(v, 0)
+    for (let i = 0; i < 64; i++) {
+      if (int(v[i]!) !== ref[i]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})
+
+function sameAs(v: Int32Array, o: int, ref: int[], ro: int, n: int): int {
+  let bad = 0
+  for (let i = 0; i < n; i++) {
+    if (int(v[o + i]!) !== ref[ro + i]!) bad++
+  }
+  return bad
+}
+
+test("vector DC transforms, reconstruction, copies and zigzag scans match the scalar ones exactly", () => {
+  let bad = 0
+  for (let seed = 1; seed <= 300; seed++) {
+    const qp = seed % 52
+    const qpc = seed % 40
+    const intra = seed % 3 !== 0
+    const px = pixels(seed * 13 + 5, 1024)
+    let ref: int[] = []
+    for (let i = 0; i < 16; i++) ref.push((int(px[i]!) - 128) * 32)
+    const v = new Int32Array(ref)
+    hadamard4(&ref, 0, true)
+    hadamard4v(v, 0, true)
+    bad += sameAs(v, 0, ref, 0, 16)
+    if (quantDc(&ref, 0, 16, qp, intra) !== quantDcv(v, 0, 16, qp, intra)) bad++
+    bad += sameAs(v, 0, ref, 0, 16)
+    hadamard4(&ref, 0, false)
+    hadamard4v(v, 0, false)
+    bad += sameAs(v, 0, ref, 0, 16)
+    dequantLumaDc(&ref, 0, qp)
+    dequantLumaDcv(v, 0, qp)
+    bad += sameAs(v, 0, ref, 0, 16)
+    let cr: int[] = []
+    for (let i = 0; i < 4; i++) cr.push((int(px[16 + i]!) - 128) * 32)
+    const cv = new Int32Array(cr)
+    hadamard2(&cr, 0)
+    hadamard2v(cv, 0)
+    bad += sameAs(cv, 0, cr, 0, 4)
+    if (quantDc(&cr, 0, 4, qpc, intra) !== quantDcv(cv, 0, 4, qpc, intra)) bad++
+    bad += sameAs(cv, 0, cr, 0, 4)
+    hadamard2(&cr, 0)
+    hadamard2v(cv, 0)
+    dequantChromaDc(&cr, 0, qpc)
+    dequantChromaDcv(cv, 0, qpc)
+    bad += sameAs(cv, 0, cr, 0, 4)
+    let res: int[] = []
+    for (let i = 0; i < 256; i++) res.push((int(px[256 + i]!) - 128) * (seed % 4 + 1))
+    const rv = new Int32Array(res)
+    const pred = pixels(seed * 7 + 1, 256)
+    const a = new Uint8Array(512)
+    const b = new Uint8Array(512)
+    for (let blk = 0; blk < 16; blk++) {
+      const o = (blk >> 2) * 64 + (blk & 3) * 4
+      reconAdd(a, o, 16, 4, res, blk * 16, pred, o, 16)
+    }
+    recon16(b, 0, 16, rv, pred, 0)
+    for (let i = 0; i < 512; i++) {
+      if (a[i]! !== b[i]!) bad++
+    }
+    a.fill(0)
+    b.fill(0)
+    reconAdd(a, 3, 24, 4, res, 32, pred, 5, 16)
+    recon4(b, 3, 24, rv, 32, pred, 5, 16)
+    reconAdd(a, 200, 24, 8, res, 64, pred, 17, 16)
+    recon8(b, 200, 24, rv, 64, pred, 17, 16)
+    reconAdd(a, 400, 8, 8, res, 128, pred, 40, 8)
+    recon8b(b, 400, rv, 128, pred, 40)
+    for (let i = 0; i < 512; i++) {
+      if (a[i]! !== b[i]!) bad++
+    }
+    a.fill(0)
+    b.fill(0)
+    for (let blk = 0; blk < 4; blk++) {
+      const o = (blk >> 1) * 32 + (blk & 1) * 4
+      reconAdd(a, (blk >> 1) * 4 * 20 + (blk & 1) * 4 + 1, 20, 4, res, 128 + blk * 16, pred, o, 8)
+    }
+    reconC8(b, 1, 20, rv, 128, pred, 0, 8)
+    copy4(a, 300, 24, pred, 9, 16)
+    copy8(a, 340, 21, pred, 40, 16)
+    for (let y = 0; y < 4; y++) {
+      for (let x = 0; x < 4; x++) b[300 + y * 24 + x] = pred[9 + y * 16 + x]!
+    }
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) b[340 + y * 21 + x] = pred[40 + y * 16 + x]!
+    }
+    for (let i = 0; i < 512; i++) {
+      if (a[i]! !== b[i]!) bad++
+    }
+    const zz = new Int16Array(32)
+    zigzag4(rv, 48, zz, 0)
+    zigzagAc4(rv, 80, zz, 16)
+    for (let k = 0; k < 16; k++) {
+      if (int(zz[k]!) !== res[48 + ZIGZAG4[k]!]!) bad++
+    }
+    for (let k = 1; k < 16; k++) {
+      if (int(zz[16 + k - 1]!) !== res[80 + ZIGZAG4[k]!]!) bad++
+    }
+    if (zz[31]! !== 0) bad++
+    const z8 = new Int16Array(70)
+    zigzag8(rv, 128, z8, 3)
+    for (let k = 0; k < 64; k++) {
+      if (int(z8[3 + k]!) !== res[128 + ZIGZAG8[k]!]!) bad++
+    }
+  }
+  expect(bad).toBe(0)
+})

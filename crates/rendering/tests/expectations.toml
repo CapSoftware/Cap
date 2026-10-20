@@ -1,0 +1,5 @@
+# Strict expected failures of the native rendering tests in this directory
+# (format: crates/verify-expect). A listed failure that no longer occurs fails
+# the run: remove the entry together with the fix.
+#
+# No known failures: the IOSurface source lifetime bug was fixed by #2625.

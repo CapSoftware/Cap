@@ -1,0 +1,280 @@
+export const RC_CQP = 0
+export const RC_CRF = 1
+export const RC_VBR = 2
+
+export function qstep(qp: f64): f64 {
+  return 0.625 * Math.pow(2.0, qp / 6.0)
+}
+
+export class RateControl {
+  mode: int
+  base: f64
+  ipOffset: int
+  targetBps: f64
+  maxBps: f64
+  bufferBits: f64
+  fill: f64
+  fps: f64
+  gopSec: f64
+  bankBits: f64
+  longHalf = 1.0
+  shortHalf = 0.15
+  firstShare = 0.5
+  cheapShare = 0.35
+  logKI = 0.0
+  alphaI = 0.55
+  actI = 0.0
+  act = 1.0
+  haveI = false
+  probed = false
+  probeQp = 0
+  probeBits = 0.0
+  lastQpI = -1
+  cplxMb = 0.0
+  frameMbs = 1
+  warmMbs = 0
+  longK = 0.0
+  longT = 0.0
+  shortK = 0.0
+  shortT = 0.0
+  haveP = false
+  stepDt = 0.0
+  spent = 0.0
+  wanted = 0.0
+  elapsed = 0.0
+  minQp = 10
+  maxQp = 51
+  vbrMinQp = 8
+  cheapQp = 12
+
+  constructor(mode: int, base: f64, ipOffset: int, targetKbps: int, maxKbps: int, bufferKbits: int, fps: f64, keyint: int) {
+    this.mode = mode
+    this.base = base
+    this.ipOffset = ipOffset
+    this.targetBps = f64(targetKbps) * 1000.0
+    this.maxBps = f64(maxKbps > 0 ? maxKbps : targetKbps) * 1000.0
+    const buf = bufferKbits > 0 ? f64(bufferKbits) * 1000.0 : this.maxBps * 2.0
+    this.bufferBits = buf
+    this.fill = buf * 0.9
+    this.fps = fps
+    this.gopSec = (keyint > 0 ? f64(keyint) : 1.0) / fps
+    this.bankBits = this.targetBps
+  }
+
+  wantsProbe(act: f64): bool {
+    if (this.mode !== RC_VBR) return false
+    return !this.haveI || Math.abs(Math.log(Math.max(1.0, act) / this.actI)) > 0.22
+  }
+
+  probeQpValue(): int {
+    const q = this.vbrMinQp - this.ipOffset
+    return q < 0 ? 0 : q
+  }
+
+  seedIntra(qp: int, bits: int) {
+    this.probed = true
+    this.probeQp = qp
+    this.probeBits = Math.max(1.0, f64(bits))
+  }
+
+  predictIntra(qp: f64, act: f64): f64 {
+    if (!this.haveI && !this.probed) return -1.0
+    return Math.exp(this.logKI - this.alphaI * Math.log(qstep(qp))) * act
+  }
+
+  predictBits(intra: bool, qp: int, mbs: int): f64 {
+    if (intra) return this.predictIntra(f64(qp), this.act)
+    if (this.cplxMb <= 0.0) return -1.0
+    return this.cplxMb * f64(mbs) / qstep(f64(qp))
+  }
+
+  rateAt(qP: f64, k: f64, t: f64): f64 {
+    let r = t > 0.0 ? k / t / qstep(qP) : 0.0
+    const i = this.predictIntra(qP - f64(this.ipOffset), this.actI)
+    if (i > 0.0) r += i / this.gopSec
+    return r
+  }
+
+  warm(): bool {
+    return this.warmMbs >= this.frameMbs
+  }
+
+  solveQp(want: f64, k: f64, t: f64): f64 {
+    let lo = 0.0
+    let hi = 51.0
+    for (let n = 0; n < 24; n++) {
+      const mid = (lo + hi) * 0.5
+      if (this.rateAt(mid, k, t) > want) {
+        lo = mid
+      } else {
+        hi = mid
+      }
+    }
+    return hi
+  }
+
+  frameQp(intra: bool, act: f64, mbs: int, dtFrames: int): int {
+    if (this.mode !== RC_VBR) {
+      const qp = Math.round(this.base) - (intra ? this.ipOffset : 0)
+      return qp < this.minQp ? this.minQp : qp > this.maxQp ? this.maxQp : qp
+    }
+    const dt = f64(dtFrames) / this.fps
+    this.elapsed += dt
+    this.stepDt = dt
+    this.fill = Math.min(this.bufferBits, this.fill + this.maxBps * dt)
+    if (intra) {
+      this.act = Math.max(1.0, act)
+      this.frameMbs = mbs
+      if (this.probed) {
+        this.logKI = Math.log(this.probeBits / this.act) + this.alphaI * Math.log(qstep(f64(this.probeQp)))
+        this.warmMbs = 0
+      }
+      this.actI = this.act
+    }
+    const floorQ = f64(this.vbrMinQp)
+    const warm = this.warm()
+    let qP = this.base
+    if (intra && !warm && this.probed) {
+      qP = floorQ
+      const share = this.firstShare * this.targetBps * this.gopSec
+      for (let n = 0; n < 51; n++) {
+        if (this.predictIntra(qP - f64(this.ipOffset), this.act) <= share || qP >= 51.0) break
+        qP += 1.0
+      }
+    } else if (this.haveI || this.haveP) {
+      const abrBuf = 2.0 * this.targetBps * Math.max(1.0, Math.sqrt(this.elapsed))
+      const over = Math.max(0.5, Math.min(2.0, 1.0 + (this.spent - this.wanted) / abrBuf))
+      const kp = !intra && this.cplxMb > 0.0 ? this.cplxMb * f64(mbs) : 0.0
+      const dl = Math.pow(0.5, dt / this.longHalf)
+      const ds = Math.pow(0.5, dt / this.shortHalf)
+      qP = this.solveQp(this.targetBps / over, this.longK * dl + kp, this.longT * dl + dt)
+      const qs = this.solveQp(this.maxBps, this.shortK * ds + kp, this.shortT * ds + dt)
+      if (qs > qP) qP = qs
+      if (!warm && this.lastQpI >= 0 && qP < f64(this.lastQpI + this.ipOffset)) qP = f64(this.lastQpI + this.ipOffset)
+    }
+    if (qP < floorQ) qP = floorQ
+    if (this.fill < this.bufferBits * 0.5) qP -= 6.0 * Math.log2(Math.max(0.5, 2.0 * this.fill / this.bufferBits))
+    let q = Math.round(qP) - (intra ? this.ipOffset : 0)
+    if (intra) {
+      const cheap = this.cheapShare * this.targetBps * this.gopSec
+      while (q < this.cheapQp - this.ipOffset && this.predictIntra(f64(q), this.act) > cheap) q++
+    }
+    for (let n = 0; n < 51; n++) {
+      const p = this.predictBits(intra, q, mbs)
+      if (p < 0.0 || p <= this.fill * 0.5 || q >= this.maxQp) break
+      q++
+    }
+    return q < 0 ? 0 : q > this.maxQp ? this.maxQp : q
+  }
+
+  peekQp(mbs: int, dtFrames: int): int {
+    const elapsed = this.elapsed
+    const fill = this.fill
+    const stepDt = this.stepDt
+    const q = this.frameQp(false, 0.0, mbs, dtFrames)
+    this.elapsed = elapsed
+    this.fill = fill
+    this.stepDt = stepDt
+    return q
+  }
+
+  spend(bits: int) {
+    this.spent += f64(bits)
+    this.fill -= f64(bits)
+    if (this.fill < 0.0) this.fill = 0.0
+  }
+
+  addWindow(k: f64, t: f64) {
+    const dl = Math.pow(0.5, t / this.longHalf)
+    this.longK = this.longK * dl + k
+    this.longT = this.longT * dl + t
+    const ds = Math.pow(0.5, t / this.shortHalf)
+    this.shortK = this.shortK * ds + k
+    this.shortT = this.shortT * ds + t
+  }
+
+  update(intra: bool, qp: int, bits: int, codedMbs: int) {
+    this.spend(bits)
+    if (this.mode !== RC_VBR) return
+    const b = Math.max(1.0, f64(bits))
+    const ls = Math.log(qstep(f64(qp)))
+    if (intra) {
+      if (this.probed && Math.abs(qp - this.probeQp) >= 2) {
+        const a = Math.log(this.probeBits / b) / (ls - Math.log(qstep(f64(this.probeQp))))
+        this.alphaI = Math.max(0.3, Math.min(1.5, a))
+      }
+      const c = Math.log(b / this.act) + this.alphaI * ls
+      this.logKI = this.haveI && !this.probed ? this.logKI * 0.5 + c * 0.5 : c
+      this.haveI = true
+      this.probed = false
+      this.lastQpI = qp
+      this.addWindow(0.0, this.stepDt)
+    } else {
+      const k = b * qstep(f64(qp))
+      if (codedMbs > 0) {
+        const per = k / f64(codedMbs)
+        const w = Math.max(0.05, Math.min(0.6, 2.0 * f64(codedMbs) / f64(this.frameMbs)))
+        this.cplxMb = this.cplxMb <= 0.0 ? per : this.cplxMb * (1.0 - w) + per * w
+        this.warmMbs += codedMbs
+      }
+      this.haveP = true
+      this.addWindow(k, this.stepDt)
+    }
+    this.wanted = Math.min(this.wanted + this.targetBps * this.stepDt, this.spent + this.bankBits)
+  }
+
+  updateB(anchorQp: int, bits: int) {
+    this.spend(bits)
+    if (this.mode !== RC_VBR) return
+    const k = f64(bits) * qstep(f64(anchorQp))
+    this.longK += k
+    this.shortK += k
+  }
+}
+
+test("qstep doubles every 6 qp", () => {
+  expect(qstep(28.0) / qstep(22.0)).toBeCloseTo(2.0)
+})
+
+test("vbr raises qp when the buffer cannot hold the predicted frame", () => {
+  const rc = new RateControl(RC_VBR, 26.0, 3, 500, 800, 800, 30.0, 60)
+  rc.frameQp(false, 0.0, 8000, 1)
+  rc.update(false, 26, 400000, 8000)
+  const q = rc.frameQp(false, 0.0, 8000, 1)
+  expect(q > 26).toBe(true)
+})
+
+test("vbr sizes the first idr to its share of the gop budget", () => {
+  const rc = new RateControl(RC_VBR, 26.0, 3, 1000, 1500, 0, 30.0, 60)
+  rc.seedIntra(9, 8000000)
+  const q = rc.frameQp(true, 1000.0, 8160, 1)
+  expect(q > 9).toBe(true)
+  expect(rc.predictIntra(f64(q), 1000.0) <= 0.5 * 1000000.0 * 2.0).toBe(true)
+})
+
+test("vbr lets an idr below the cheap qp take only a bounded share of the gop budget", () => {
+  const costly = new RateControl(RC_VBR, 26.0, 3, 1000, 1500, 0, 30.0, 60)
+  costly.seedIntra(9, 800000)
+  expect(costly.frameQp(true, 1000.0, 8160, 1)).toBe(9)
+  const cheap = new RateControl(RC_VBR, 26.0, 3, 1000, 1500, 0, 30.0, 60)
+  cheap.seedIntra(9, 200000)
+  expect(cheap.frameQp(true, 1000.0, 8160, 1) < 9).toBe(true)
+})
+
+test("vbr peek answers like the next frame without advancing the controller", () => {
+  const rc = new RateControl(RC_VBR, 26.0, 3, 1000, 1500, 0, 30.0, 60)
+  rc.seedIntra(9, 400000)
+  rc.update(true, rc.frameQp(true, 1000.0, 8160, 1), 400000, 8160)
+  rc.update(false, rc.frameQp(false, 0.0, 4000, 1), 300000, 4000)
+  const q = rc.peekQp(4000, 15)
+  expect(rc.peekQp(4000, 15)).toBe(q)
+  expect(rc.frameQp(false, 0.0, 4000, 15)).toBe(q)
+})
+
+test("vbr idle time banks at most one second of target", () => {
+  const rc = new RateControl(RC_VBR, 26.0, 3, 1000, 1500, 0, 30.0, 60)
+  rc.seedIntra(9, 400000)
+  rc.update(true, rc.frameQp(true, 1000.0, 8160, 1), 400000, 8160)
+  rc.update(false, rc.frameQp(false, 0.0, 10, 300), 2000, 10)
+  expect(rc.wanted - rc.spent <= 1000000.0).toBe(true)
+})
