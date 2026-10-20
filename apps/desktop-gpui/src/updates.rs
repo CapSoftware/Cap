@@ -91,6 +91,12 @@ fn qualifies(
             && remote != current)
 }
 
+/// A check the user asked for answers now; a scheduled one waits for the
+/// work in flight to finish before showing its modal prompt.
+fn holds_scheduled_prompt(manual: bool, busy: bool) -> bool {
+    !manual && busy
+}
+
 fn current_version() -> Result<Version, String> {
     Version::parse(env!("CARGO_PKG_VERSION")).map_err(|error| error.to_string())
 }
@@ -370,6 +376,22 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             };
 
             if !manual && ignored_version.as_ref() == Some(&release.version) {
+                continue;
+            }
+
+            // The prompt is modal and brings Cap forward, so an automatic
+            // check holds it until a recording, export, import or
+            // transcription has finished rather than interrupting it.
+            let mut channel_changed = false;
+            while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                cx.background_executor().timer(BUSY_RETRY_DELAY).await;
+                channel_changed =
+                    cx.update(|cx| cx.global::<UpdateScheduler>().pending.channel.is_some());
+                if channel_changed {
+                    break;
+                }
+            }
+            if channel_changed {
                 continue;
             }
 
@@ -698,6 +720,14 @@ mod tests {
             signature: "c2ln".to_string(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn only_scheduled_checks_wait_for_work_in_flight() {
+        assert!(holds_scheduled_prompt(false, true));
+        assert!(!holds_scheduled_prompt(false, false));
+        assert!(!holds_scheduled_prompt(true, true));
+        assert!(!holds_scheduled_prompt(true, false));
     }
 
     #[test]
