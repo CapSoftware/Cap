@@ -1083,7 +1083,11 @@ impl EditorInstance {
                         .map(|timeline| timeline.duration())
                         .unwrap_or(0.0);
                     let total_frames = (total_duration * f64::from(fps)).ceil() as u32;
-                    let frame_number = frame_number.min(total_frames.saturating_sub(1));
+                    let mut last_frame = total_frames.saturating_sub(1);
+                    if f64::from(last_frame) / f64::from(fps) >= total_duration {
+                        last_frame = last_frame.saturating_sub(1);
+                    }
+                    let frame_number = frame_number.min(last_frame);
                     let frame_time = frame_number as f64 / fps as f64;
                     let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
                         if timeline.transitions.is_empty() {

@@ -22,6 +22,7 @@ fn paused_preview_at_timeline_end() {
     use cap_editor::{AudioOutput, EditorFrameOutput, EditorInstance};
     use cap_project::XY;
     use cap_verify::fixture;
+    use cap_verify::video_code::{FrameMarker, StreamKind};
 
     let id = "seek/basic/paused-end30/editor";
     if !report::selected(id) {
@@ -55,13 +56,14 @@ fn paused_preview_at_timeline_end() {
         .unwrap();
 
         let result = async {
-            for (cuts, requested, expected) in [
-                (vec![(0.0, 6.0, 1.0)], 0, 0),
-                (vec![(0.0, 6.0, 1.0)], 180, 179),
-                (vec![(3.0, 4.0, 1.0)], 179, 29),
-                (vec![(3.0, 4.01, 1.0)], 31, 30),
-                (vec![(3.0, 3.01, 1.0)], 1, 0),
-                (vec![(0.0, 1.0, 1.0), (3.0, 4.0, 1.0)], 30, 30),
+            for (cuts, requested, expected, expected_source) in [
+                (vec![(0.0, 6.0, 1.0)], 0, 0, 0),
+                (vec![(0.0, 6.0, 1.0)], 180, 179, 179),
+                (vec![(3.0, 4.0, 1.0)], 179, 29, 119),
+                (vec![(3.0, 4.01, 1.0)], 31, 30, 120),
+                (vec![(3.0, 3.01, 1.0)], 1, 0, 90),
+                (vec![(0.0, 31.0 / 30.0, 1.0)], 31, 30, 30),
+                (vec![(0.0, 1.0, 1.0), (3.0, 4.0, 1.0)], 30, 30, 90),
             ] {
                 let mut config = project.config();
                 common::set_cuts(&mut config, &cuts);
@@ -91,6 +93,15 @@ fn paused_preview_at_timeline_end() {
                     order: cap_verify::video_code::PixelOrder::Rgba,
                 };
                 let readout = common::read_expecting(&view, &model.expect(expected, 30));
+                for kind in StreamKind::ALL {
+                    let marker = FrameMarker::new(kind, 0, expected_source);
+                    if readout.get(kind).marker() != Some(marker) {
+                        return Err(format!(
+                            "request {requested}: got {:?}, expected {marker:?}",
+                            readout.get(kind)
+                        ));
+                    }
+                }
                 common::check_requests(&mut case, &model, &[expected], &[readout], 30);
             }
             Ok::<_, String>(())
