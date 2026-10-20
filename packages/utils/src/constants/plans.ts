@@ -16,31 +16,12 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
-export const VALID_STRIPE_PLAN_PRICE_IDS = new Set<string>([
-	STRIPE_PLAN_IDS.development.yearly,
-	STRIPE_PLAN_IDS.development.monthly,
-	STRIPE_PLAN_IDS.production.yearly,
-	STRIPE_PLAN_IDS.production.monthly,
-]);
-
 export const isValidStripePlanPriceId = (
 	priceId: string,
-	environment?: "development" | "production",
+	environment: keyof typeof STRIPE_PLAN_IDS,
 ): boolean => {
-	const env =
-		environment ??
-		(process.env.VERCEL_ENV === "production"
-			? "production"
-			: process.env.VERCEL_ENV
-				? "development"
-				: undefined);
-
-	if (env) {
-		const envPlans = STRIPE_PLAN_IDS[env];
-		return priceId === envPlans.yearly || priceId === envPlans.monthly;
-	}
-
-	return VALID_STRIPE_PLAN_PRICE_IDS.has(priceId);
+	const envPlans = STRIPE_PLAN_IDS[environment];
+	return priceId === envPlans.yearly || priceId === envPlans.monthly;
 };
 
 export const STRIPE_SIGNED_BAA_PRICE_IDS: Record<string, string> = {

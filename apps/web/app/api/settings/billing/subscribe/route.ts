@@ -6,6 +6,7 @@ import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
@@ -28,13 +29,14 @@ export async function POST(request: NextRequest) {
 		);
 	}
 
-	const safeQuantity =
-		typeof quantity === "number" &&
-		Number.isInteger(quantity) &&
-		quantity >= 1 &&
-		quantity <= 1000
-			? quantity
-			: 1;
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json(
+			{ error: true, message: "Invalid quantity" },
+			{ status: 400 },
+		);
+	}
 
 	if (!user) {
 		console.error("User not found");

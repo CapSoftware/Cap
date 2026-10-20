@@ -60,6 +60,15 @@ describe("checkout redirects", () => {
 		});
 	});
 
+	it("rejects an invalid guest checkout quantity before creating a session", async () => {
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({ priceId: "price_pro", quantity: -5 }),
+		);
+
+		expect(response.status).toBe(400);
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
+	});
+
 	it("keeps existing guest checkout requests on the web flow", async () => {
 		const response = await startGuestCheckout(
 			makeGuestCheckoutRequest({ priceId: "price_pro", quantity: 1 }),

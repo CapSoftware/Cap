@@ -1,6 +1,7 @@
 import { serverEnv } from "@cap/env";
 import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
+import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
 import { trackServerEvent } from "@/lib/server-analytics";
 
@@ -23,13 +24,11 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: "Invalid priceId" }, { status: 400 });
 	}
 
-	const safeQuantity =
-		typeof quantity === "number" &&
-		Number.isInteger(quantity) &&
-		quantity >= 1 &&
-		quantity <= 1000
-			? quantity
-			: 1;
+	const safeQuantity = parseCheckoutQuantity(quantity);
+	if (safeQuantity === null) {
+		console.error("Invalid quantity");
+		return Response.json({ error: "Invalid quantity" }, { status: 400 });
+	}
 
 	try {
 		console.log("Creating guest checkout session");
@@ -57,7 +56,7 @@ export async function POST(request: NextRequest) {
 				"guest_checkout_started",
 				{
 					price_id: priceId,
-					quantity: quantity || 1,
+					quantity: safeQuantity,
 					platform: checkoutPlatform,
 					session_id: checkoutSession.id,
 				},

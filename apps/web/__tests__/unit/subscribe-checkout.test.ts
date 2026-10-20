@@ -62,23 +62,28 @@ const makeSubscribeRequest = (body: Record<string, unknown>) =>
 	}) as unknown as import("next/server").NextRequest;
 
 describe("Stripe plan allowlist", () => {
-	it("accepts only legitimate Pro plan price IDs", () => {
-		expect(isValidStripePlanPriceId(STRIPE_PLAN_IDS.development.yearly)).toBe(
-			true,
-		);
-		expect(isValidStripePlanPriceId(STRIPE_PLAN_IDS.development.monthly)).toBe(
-			true,
-		);
-		expect(isValidStripePlanPriceId(STRIPE_PLAN_IDS.production.yearly)).toBe(
-			true,
-		);
-		expect(isValidStripePlanPriceId(STRIPE_PLAN_IDS.production.monthly)).toBe(
-			true,
-		);
-
-		expect(isValidStripePlanPriceId("price_arbitrary_attacker_id")).toBe(false);
-		expect(isValidStripePlanPriceId("price_free_tier")).toBe(false);
-		expect(isValidStripePlanPriceId("")).toBe(false);
+	it("rejects IDs that are not a Pro plan price in either environment", () => {
+		for (const environment of ["development", "production"] as const) {
+			expect(
+				isValidStripePlanPriceId("price_arbitrary_attacker_id", environment),
+			).toBe(false);
+			expect(isValidStripePlanPriceId("price_free_tier", environment)).toBe(
+				false,
+			);
+			expect(isValidStripePlanPriceId("", environment)).toBe(false);
+		}
+		expect(
+			isValidStripePlanPriceId(
+				STRIPE_PLAN_IDS.development.monthly,
+				"development",
+			),
+		).toBe(true);
+		expect(
+			isValidStripePlanPriceId(
+				STRIPE_PLAN_IDS.production.monthly,
+				"production",
+			),
+		).toBe(true);
 	});
 
 	it("validates price IDs against specific deployment environments", () => {
@@ -153,6 +158,36 @@ describe("POST /api/settings/billing/subscribe", () => {
 					{ price: STRIPE_PLAN_IDS.development.monthly, quantity: 2 },
 				],
 				mode: "subscription",
+			}),
+		);
+	});
+
+	it.each([0, -5, 1.5, "3", 10001])(
+		"rejects quantity %s with 400 before creating a session",
+		async (quantity) => {
+			const response = await subscribe(
+				makeSubscribeRequest({
+					priceId: STRIPE_PLAN_IDS.development.monthly,
+					quantity,
+				}),
+			);
+
+			expect(response.status).toBe(400);
+			expect(checkoutMocks.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("defaults a missing quantity to one seat", async () => {
+		const response = await subscribe(
+			makeSubscribeRequest({ priceId: STRIPE_PLAN_IDS.development.monthly }),
+		);
+
+		expect(response.status).toBe(200);
+		expect(checkoutMocks.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				line_items: [
+					{ price: STRIPE_PLAN_IDS.development.monthly, quantity: 1 },
+				],
 			}),
 		);
 	});
