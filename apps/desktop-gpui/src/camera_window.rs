@@ -1446,11 +1446,6 @@ impl Render for CameraToolbarView {
     }
 }
 
-/// Channels to and from the `camera-blur` worker thread, plus the foreground
-/// pump that paints its outputs. Dropping this closes the job channel, which
-/// ends the thread and releases the ONNX/GPU resources -- the
-/// `release_blur_resources` behaviour (`camera.rs:1477-1484`).
-#[cfg(target_os = "macos")]
 /// A camera frame and the preview settings it is converted with.
 #[cfg(target_os = "macos")]
 struct ConvertJob {
@@ -1502,6 +1497,11 @@ fn run_preview_conversion(
     }
 }
 
+/// Channels to and from the `camera-blur` worker thread, plus the foreground
+/// pump that paints its outputs. Dropping this closes the job channel, which
+/// ends the thread and releases the ONNX/GPU resources -- the
+/// `release_blur_resources` behaviour (`camera.rs:1477-1484`).
+#[cfg(target_os = "macos")]
 struct BlurBridge {
     epoch: u64,
     tx: flume::Sender<camera_blur::BlurJob>,
