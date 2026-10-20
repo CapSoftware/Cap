@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import { customerCopy } from "../../emails/customer-copy";
+import { customerCopy } from "../../packages/database/loops/customer-copy";
 import { runLoopsSync } from "../../packages/database/loops/worker";
 
 const { values } = parseArgs({

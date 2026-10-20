@@ -10,6 +10,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
@@ -321,7 +322,7 @@ app.get(
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					public: await getNewVideoPublic(videoOrgId),
 					duration: durationInSecs,
 					width,
 					height,

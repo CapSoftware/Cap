@@ -22,6 +22,10 @@ function createServerEnv() {
 			DATABASE_ENCRYPTION_KEY: z
 				.string()
 				.optional()
+				.refine(
+					(key) => !key || [16, 32].includes(Buffer.from(key, "hex").length),
+					"Must be 32 or 64 hex characters, e.g. from `openssl rand -hex 32`",
+				)
 				.describe(
 					"32 byte hex string for encrypting values like AWS access keys",
 				),
@@ -74,6 +78,12 @@ function createServerEnv() {
 			// Provide these to use WorkOS for enterprise SSO
 			WORKOS_CLIENT_ID: z.string().optional(),
 			WORKOS_API_KEY: z.string().optional(),
+
+			/// Generic OIDC
+			OIDC_ISSUER: z.string().optional(),
+			OIDC_CLIENT_ID: z.string().optional(),
+			OIDC_CLIENT_SECRET: z.string().optional(),
+			OIDC_NAME: z.string().optional(),
 
 			/// Settings
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true).describe(

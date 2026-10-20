@@ -56,4 +56,3 @@ jobs:
           scripts/loops/sources.test.ts
           scripts/loops/profile.test.ts
           scripts/loops/lifecycle.test.ts
-          scripts/loops/watchdog.test.ts

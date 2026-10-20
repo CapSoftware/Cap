@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { createSignal, onMount, Show } from "solid-js";
 import { commands, type IncompleteRecordingInfo } from "~/utils/tauri";
 
@@ -112,7 +113,16 @@ export function RecoveryToast() {
 								{recoverMutation.isPending ? "..." : "Recover"}
 							</Button>
 							<Button
-								onClick={() => discardMutation.mutate(rec().projectPath)}
+								onClick={async () => {
+									const projectPath = rec().projectPath;
+									if (
+										!(await ask(
+											"Are you sure you want to delete this recording?",
+										))
+									)
+										return;
+									discardMutation.mutate(projectPath);
+								}}
 								disabled={isProcessing()}
 								variant="gray"
 								size="xs"

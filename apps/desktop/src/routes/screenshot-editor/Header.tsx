@@ -2,12 +2,12 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, onCleanup, Suspense } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { commands } from "~/utils/tauri";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
 import IconLucideCopy from "~icons/lucide/copy";
@@ -184,7 +184,7 @@ export function Header() {
 								>
 									<DropdownItem
 										onSelect={() => {
-											revealItemInDir(path());
+											commands.revealItemInDir(path());
 										}}
 									>
 										<IconLucideFolder class="size-4 text-gray-11" />

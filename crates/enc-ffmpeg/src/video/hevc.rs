@@ -214,7 +214,15 @@ impl HevcEncoderBuilder {
                 output_height,
                 flags,
             ) {
-                Ok(context) => Some(context),
+                Ok(mut context) => {
+                    super::colour::use_bt709_for_rgb_input(
+                        &mut context,
+                        input_config.pixel_format,
+                        output_format,
+                    )
+                    .map_err(HevcEncoderError::FFmpeg)?;
+                    Some(context)
+                }
                 Err(e) => {
                     if needs_pixel_conversion {
                         error!(

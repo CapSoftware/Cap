@@ -38,6 +38,7 @@ import {
 	calculatePlaybackSpeed,
 	clamp,
 	countWords,
+	preserveScrollTop,
 	type TeleprompterPlaybackState,
 	teleprompterPlaybackRunning,
 	updateTeleprompterPlayback,
@@ -300,8 +301,10 @@ export default function Teleprompter() {
 	function resizeEditor() {
 		const element = editorElement;
 		if (!element) return;
-		element.style.height = "0px";
-		element.style.height = `${element.scrollHeight}px`;
+		preserveScrollTop(scrollElement, () => {
+			element.style.height = "0px";
+			element.style.height = `${element.scrollHeight}px`;
+		});
 	}
 
 	function stopPlayback() {
