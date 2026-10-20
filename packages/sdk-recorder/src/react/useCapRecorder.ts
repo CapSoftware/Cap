@@ -37,7 +37,6 @@ export function useCapRecorder(options: RecorderOptions) {
 					? { enabled: microphoneEnabled, deviceId: microphoneDeviceId }
 					: undefined,
 			systemAudio,
-			maxDurationMs,
 		});
 		recorderRef.current = recorder;
 
@@ -67,12 +66,11 @@ export function useCapRecorder(options: RecorderOptions) {
 		microphoneEnabled,
 		microphoneDeviceId,
 		systemAudio,
-		maxDurationMs,
 	]);
 
 	const start = useCallback(async () => {
-		await recorderRef.current?.start();
-	}, []);
+		await recorderRef.current?.start({ maxDurationMs });
+	}, [maxDurationMs]);
 
 	const pause = useCallback(() => {
 		recorderRef.current?.pause();

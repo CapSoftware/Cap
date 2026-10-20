@@ -109,10 +109,11 @@ export class CapRecorder {
 		this.emit("phasechange", { phase });
 	}
 
-	async start(): Promise<void> {
+	async start(options?: Pick<RecorderOptions, "maxDurationMs">): Promise<void> {
 		if (this._phase !== "idle") {
 			throw new Error(`Cannot start from phase "${this._phase}"`);
 		}
+		const maxDurationMs = options?.maxDurationMs ?? this.maxDurationMs;
 
 		try {
 			this.setPhase("requesting-permission");
@@ -157,7 +158,7 @@ export class CapRecorder {
 			this.startDurationTimer();
 			this.maxDurationTimeout = setTimeout(() => {
 				this.stop();
-			}, this.maxDurationMs);
+			}, maxDurationMs);
 			this.setPhase("recording");
 		} catch (error) {
 			this.setPhase("error");
