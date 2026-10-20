@@ -11,36 +11,41 @@ use std::{
 };
 use tracing::warn;
 
+// Pool-wrapped: device polling calls this every few seconds from tokio threads
+// that have no ambient NSAutoreleasePool, so the discovery session's
+// autoreleased temporaries would otherwise leak for the process lifetime.
 pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
-    let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
+    objc::ar_pool(|| {
+        let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
 
-    if api::macos_available("13.0")
-        && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
-    {
-        device_types.push(typ);
-    }
-
-    if api::macos_available("14.0") {
-        if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+        if api::macos_available("13.0")
+            && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
+        {
             device_types.push(typ);
         }
-        if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
-            device_types.push(typ);
+
+        if api::macos_available("14.0") {
+            if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+                device_types.push(typ);
+            }
+            if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
+                device_types.push(typ);
+            }
+        } else {
+            device_types.push(av::CaptureDeviceType::external_unknown());
         }
-    } else {
-        device_types.push(av::CaptureDeviceType::external_unknown());
-    }
 
-    let device_types = ns::Array::from_slice(&device_types);
+        let device_types = ns::Array::from_slice(&device_types);
 
-    let video_discovery_session =
-        av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
-            &device_types,
-            Some(av::MediaType::video()),
-            av::CaptureDevicePos::Unspecified,
-        );
+        let video_discovery_session =
+            av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
+                &device_types,
+                Some(av::MediaType::video()),
+                av::CaptureDevicePos::Unspecified,
+            );
 
-    video_discovery_session.devices()
+        video_discovery_session.devices()
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +91,7 @@ pub type OutputDelegateCallback = Box<dyn FnMut(CallbackData)>;
 pub struct CallbackOutputDelegateInner {
     callback: OutputDelegateCallback,
     stream_start: Option<(Instant, Duration)>,
+    dropped_frames: u64,
 }
 
 impl CallbackOutputDelegateInner {
@@ -93,15 +99,51 @@ impl CallbackOutputDelegateInner {
         Self {
             callback,
             stream_start: None,
+            dropped_frames: 0,
         }
     }
 }
 
 define_obj_type!(
-    pub CallbackOutputDelegate + VideoDataOutputSampleBufDelegateImpl,
+    pub CallbackOutputDelegate + VideoDataOutputSampleBufDelegateImpl + OutputDelegateDeallocation,
     CallbackOutputDelegateInner,
     OUTPUT_DELEGATE
 );
+
+trait OutputDelegateDeallocation {
+    fn cls_add_methods(cls: &objc::Class<objc::Id>) {
+        extern "C" fn dealloc(delegate: &mut CallbackOutputDelegate, selector: &objc::Sel) {
+            let object = delegate as *mut CallbackOutputDelegate;
+            unsafe {
+                let superclass_dealloc: unsafe extern "C" fn(
+                    *mut CallbackOutputDelegate,
+                    &objc::Sel,
+                ) = std::mem::transmute(objc::NS_OBJECT.method_impl(selector));
+                std::ptr::drop_in_place(delegate.inner_mut());
+                superclass_dealloc(object, selector);
+            }
+        }
+
+        // The pinned cidre macro drops only the Rust payload. Its later
+        // class_addMethod cannot replace this complete NSObject deallocator.
+        let added = unsafe {
+            objc::class_addMethod(
+                cls,
+                objc::sel_reg_name(c"dealloc".as_ptr().cast()),
+                std::mem::transmute::<
+                    extern "C" fn(&mut CallbackOutputDelegate, &objc::Sel),
+                    extern "C" fn(),
+                >(dealloc),
+                c"v@:".as_ptr().cast(),
+            )
+        };
+        assert!(added, "Camera delegate deallocator already registered");
+    }
+
+    fn cls_add_protocol(_: &objc::Class<objc::Id>) {}
+}
+
+impl OutputDelegateDeallocation for CallbackOutputDelegate {}
 
 impl VideoDataOutputSampleBufDelegate for CallbackOutputDelegate {}
 
@@ -146,6 +188,39 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
 
         if result.is_err() {
             warn!("Suppressed panic in AVFoundation output delegate");
+        }
+    }
+
+    extern "C" fn impl_capture_output_did_drop_sample_buf_from_connection(
+        &mut self,
+        _cmd: Option<&cidre::objc::Sel>,
+        _output: &av::CaptureOutput,
+        sample_buf: &cm::SampleBuf,
+        _connection: &av::CaptureConnection,
+    ) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let inner = self.inner_mut();
+            inner.dropped_frames += 1;
+
+            if inner.dropped_frames == 1 || inner.dropped_frames.is_multiple_of(100) {
+                let reason = sample_buf
+                    .attach(
+                        cm::sample_buffer::buf_attach_keys::dropped_frame_reason(),
+                        std::ptr::null_mut(),
+                    )
+                    .map(|value| value.desc().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                warn!(
+                    count = inner.dropped_frames,
+                    reason = %reason,
+                    "AVFoundation dropped camera sample buffer(s)"
+                );
+            }
+        }));
+
+        if result.is_err() {
+            warn!("Suppressed panic in AVFoundation drop delegate");
         }
     }
 }
@@ -196,5 +271,65 @@ impl<'a> BaseAddrLockGuard<'a> {
 impl<'a> Drop for BaseAddrLockGuard<'a> {
     fn drop(&mut self) {
         let _ = unsafe { self.0.unlock_lock_base_addr(self.1) };
+    }
+}
+
+#[cfg(test)]
+mod deallocation_tests {
+    use super::*;
+    use std::{
+        ffi::c_void,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        #[link_name = "objc_setAssociatedObject"]
+        fn set_associated_object(
+            object: *const c_void,
+            key: *const c_void,
+            value: *const c_void,
+            policy: usize,
+        );
+    }
+
+    static ASSOCIATION_KEY: u8 = 0;
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn delegate(counter: DropCounter) -> arc::R<CallbackOutputDelegate> {
+        CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |_| {
+            let _ = &counter;
+        })))
+    }
+
+    #[test]
+    fn final_release_drops_payload_and_native_associated_objects_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        for cycle in 0..100 {
+            let outer = delegate(DropCounter(drops.clone()));
+            let associated = delegate(DropCounter(drops.clone()));
+            unsafe {
+                set_associated_object(
+                    std::ptr::from_ref(outer.as_ref()).cast(),
+                    std::ptr::from_ref(&ASSOCIATION_KEY).cast(),
+                    std::ptr::from_ref(associated.as_ref()).cast(),
+                    1,
+                );
+            }
+            drop(associated);
+            assert_eq!(drops.load(Ordering::SeqCst), cycle * 2);
+            drop(outer);
+            assert_eq!(drops.load(Ordering::SeqCst), (cycle + 1) * 2);
+        }
     }
 }

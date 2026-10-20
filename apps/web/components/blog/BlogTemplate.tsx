@@ -1,16 +1,17 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import MuxPlayer from "@mux/mux-player-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId } from "react";
+import { RichText, renderRichText } from "@/components/RichText";
 import { formatDate } from "../../lib/utils";
 
 interface BlogPost {
 	title: string;
 	description: string;
 	publishedAt: string;
+	updatedAt?: string;
 	category: string;
 	image?: string;
 	author: string;
@@ -72,19 +73,9 @@ interface BlogPost {
 	}[];
 }
 
-const renderHTML = (content: string) => {
-	const styledContent = content.replace(
-		/<a\s/g,
-		'<a class="font-semibold text-blue-500 transition-colors hover:text-blue-600" ',
-	);
-
-	return (
-		<div
-			className="prose prose-lg"
-			dangerouslySetInnerHTML={{ __html: styledContent }}
-		/>
-	);
-};
+const renderHTML = (content: string) => (
+	<RichText content={content} className="prose prose-lg" />
+);
 
 export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 	const cloud1Id = useId();
@@ -142,8 +133,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					{content.description}
 				</p>
 				<div className="flex justify-center items-center space-x-2 text-sm text-gray-10 fade-in-down animate-delay-2">
-					<time dateTime={content.publishedAt}>
-						{formatDate(content.publishedAt)}
+					<time dateTime={content.updatedAt ?? content.publishedAt}>
+						{content.updatedAt
+							? `Updated ${formatDate(content.updatedAt)}`
+							: formatDate(content.publishedAt)}
 					</time>
 					<span>•</span>
 					<span>by {content.author}</span>
@@ -194,15 +187,16 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 							<tbody>
 								{content.comparisonTable.rows.map((row, rowIndex) => (
 									<tr
-										key={`row-${rowIndex}`}
+										key={row.join("|")}
 										className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"}
 									>
-										{row.map((cell, cellIndex) => (
+										{row.map((cell) => (
 											<td
-												key={`cell-${rowIndex}-${cellIndex}`}
+												key={cell}
 												className="px-6 py-4 border-b border-gray-200"
-												dangerouslySetInnerHTML={{ __html: cell }}
-											/>
+											>
+												{renderRichText(cell)}
+											</td>
 										))}
 									</tr>
 								))}
@@ -223,9 +217,9 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 					<p className="mb-8 text-xl text-gray-700">{method.description}</p>
 
-					{method.steps.map((step, stepIndex) => (
+					{method.steps.map((step) => (
 						<div
-							key={`step-${methodIndex}-${stepIndex}`}
+							key={step.title ?? step.content}
 							className="p-6 mb-8 rounded-xl border border-gray-100 shadow-md bg-gray-1"
 						>
 							{step.title && (
@@ -255,7 +249,9 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{item.question}
 								</summary>
-								<p className="mt-4 text-gray-700">{item.answer}</p>
+								<p className="mt-4 text-gray-700">
+									{renderRichText(item.answer)}
+								</p>
 							</details>
 						))}
 					</div>
@@ -293,11 +289,12 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 
 					<figure className="overflow-hidden rounded-xl shadow-lg">
-						<MuxPlayer
-							playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
-							metadataVideoTitle="Cap Demo"
-							accentColor="#5C9FFF"
-							style={{ aspectRatio: "16/9", width: "100%" }}
+						<iframe
+							src={content.videoDemo.videoSrc}
+							title={content.videoDemo.caption}
+							allow="fullscreen; picture-in-picture"
+							allowFullScreen
+							className="w-full border-0 aspect-video"
 						/>
 					</figure>
 				</section>
@@ -319,7 +316,9 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{faq.question}
 								</summary>
-								<p className="mt-4 text-gray-700">{faq.answer}</p>
+								<p className="mt-4 text-gray-700">
+									{renderRichText(faq.answer)}
+								</p>
 							</details>
 						))}
 					</div>

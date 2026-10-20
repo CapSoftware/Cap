@@ -32,8 +32,8 @@ pub async fn run_suite(hardware: &DiscoveredHardware, duration: u64) -> Result<T
         };
 
         let mut result = TestResult::new(
-            format!("playback-{}", label),
-            format!("Playback {}", label),
+            format!("playback-{label}"),
+            format!("Playback {label}"),
             test_config,
         );
 

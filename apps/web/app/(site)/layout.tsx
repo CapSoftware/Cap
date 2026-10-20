@@ -1,7 +1,8 @@
 import { buildEnv } from "@cap/env";
+import "@cap/ui/style";
 import type { PropsWithChildren } from "react";
 import { formatStarCount, getGitHubStars } from "@/utils/github";
-import { MessengerWidget } from "../Layout/MessengerWidget";
+import { DeferredMessengerWidget } from "../Layout/DeferredMessengerWidget";
 import { Footer } from "./Footer";
 import { Navbar } from "./Navbar";
 
@@ -14,7 +15,7 @@ export default async function Layout(props: PropsWithChildren) {
 			<Navbar stars={stars} />
 			{props.children}
 			<Footer />
-			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <MessengerWidget />}
+			{buildEnv.NEXT_PUBLIC_IS_CAP === "true" && <DeferredMessengerWidget />}
 		</>
 	);
 }

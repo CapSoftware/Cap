@@ -1,0 +1,526 @@
+@import "@radix-ui/colors/red.css";
+@import "@radix-ui/colors/red-dark.css";
+@import "@radix-ui/colors/gray.css";
+@import "@radix-ui/colors/gray-alpha.css";
+@import "@radix-ui/colors/gray-dark.css";
+@import "@radix-ui/colors/blue.css";
+@import "@radix-ui/colors/green.css";
+@import "@radix-ui/colors/purple.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Regular.otf") format("opentype");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Italic.otf") format("opentype");
+	font-weight: 400;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Medium.otf") format("opentype");
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-MediumItalic.otf") format("opentype");
+	font-weight: 500;
+	font-style: italic;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-Bold.otf") format("opentype");
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Neue Montreal";
+	src: url("/fonts/NeueMontreal-BoldItalic.otf") format("opentype");
+	font-weight: 700;
+	font-style: italic;
+	font-display: swap;
+}
+
+:root {
+	--primary: #005cb1;
+	--primary-2: #004c93;
+	--primary-3: #003b73;
+	--secondary: #2eb4ff;
+	--secondary-2: #1696e0;
+	--secondary-3: #117ebd;
+	--tertiary: #c5eaff;
+	--tertiary-2: #d3e5ff;
+	--tertiary-3: #e0edff;
+	--filler: #efefef;
+	--filler-2: #e4e4e4;
+	--filler-3: #e2e2e2;
+	--filler-txt: #b3b3b3;
+	--text-primary: #0d1b2a;
+	--text-secondary: #ffffff;
+	color-scheme: light;
+	font-family:
+		"Neue Montreal", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+}
+
+@layer base {
+	:root {
+		--background: 0 0% 100%;
+		--foreground: 224 71.4% 4.1%;
+		--card: 0 0% 100%;
+		--card-foreground: 224 71.4% 4.1%;
+		--popover: 0 0% 100%;
+		--popover-foreground: 224 71.4% 4.1%;
+		--primary-foreground: 210 20% 98%;
+		--secondary-foreground: 220.9 39.3% 11%;
+		--muted: 220 14.3% 95.9%;
+		--muted-foreground: 220 8.9% 46.1%;
+		--accent: 220 14.3% 95.9%;
+		--accent-foreground: 220.9 39.3% 11%;
+		--destructive: 0 84.2% 60.2%;
+		--destructive-foreground: 210 20% 98%;
+		--border: 220 13% 91%;
+		--input: 220 13% 91%;
+		--ring: 224 71.4% 4.1%;
+		--radius: 0.5rem;
+	}
+
+	* {
+		@apply border-border;
+	}
+}
+
+*,
+*:before,
+*:after {
+	box-sizing: border-box;
+}
+
+* {
+	min-width: 0;
+	min-height: 0;
+}
+
+::selection {
+	background: #000000;
+	color: #ffffff;
+}
+
+::-webkit-scrollbar {
+	width: 4px;
+	height: 4px;
+}
+
+::-webkit-scrollbar-track {
+	border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--gray-7);
+	border-radius: 10px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+	@apply m-0 font-normal tracking-normal;
+}
+
+a,
+p,
+span,
+input,
+label,
+button {
+	@apply tracking-normal leading-[1.5rem];
+}
+
+p {
+	@apply m-0;
+}
+
+a {
+	@apply transition-all;
+}
+
+label {
+	@apply block text-sm font-semibold text-left;
+}
+
+.dark-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.2) inset;
+}
+
+.gray-button-border {
+	@apply border-gray-8;
+}
+
+.dark-button-border {
+	@apply border-gray-12;
+}
+
+.gray-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.4) inset;
+}
+
+body {
+	margin: 0;
+	width: 100%;
+	color: var(--text-primary);
+	background: var(--gray-2);
+}
+
+.settings-slider {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 100%;
+	height: 4px;
+	border-radius: 999px;
+	background: linear-gradient(
+		to right,
+		var(--blue-9) 0%,
+		var(--blue-9) var(--slider-progress, 50%),
+		var(--gray-4) var(--slider-progress, 50%),
+		var(--gray-4) 100%
+	);
+	outline: none;
+	cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: #ffffff;
+	border: 1px solid var(--gray-6);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* Paper aesthetic shared with the welcome / how-it-works pages. */
+:root {
+	--paper: #fbfaf7;
+	--ink: #20242c;
+	--ink-soft: #8b8f98;
+	--paper-accent: #4785ff;
+	--track: #dcdcd4;
+}
+
+.cap-fade-up {
+	animation: cap-fade-up 0.45s ease both;
+}
+
+/* Drill-in sheet (device pickers) sliding over the recorder panel. */
+.cap-sheet-in {
+	animation: cap-sheet-in 0.2s ease both;
+}
+
+.cap-fade-up-1 {
+	animation-delay: 0.06s;
+}
+
+.cap-fade-up-2 {
+	animation-delay: 0.12s;
+}
+
+.cap-fade-up-3 {
+	animation-delay: 0.18s;
+}
+
+.cap-fade-up-4 {
+	animation-delay: 0.24s;
+}
+
+.cap-fade-up-5 {
+	animation-delay: 0.3s;
+}
+
+.cap-fade-up-6 {
+	animation-delay: 0.36s;
+}
+
+.cap-signin {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 4px 4px 10px;
+	text-align: center;
+}
+
+.cap-signin-brand {
+	height: 24px;
+	width: auto;
+	color: var(--ink);
+}
+
+.cap-signin-doodle {
+	width: 102px;
+	height: auto;
+	margin-top: 26px;
+	overflow: visible;
+}
+
+.cap-signin-boil {
+	filter: var(--cap-signin-boil, none);
+}
+
+.cap-signin-stroke {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 4.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.cap-signin-ring {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: cap-draw 0.8s ease 0.35s forwards;
+}
+
+.cap-signin-dot {
+	fill: var(--paper-accent);
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation:
+		cap-pop 0.45s ease 1.05s both,
+		cap-soft-pulse 1.9s ease-in-out 2.2s infinite;
+}
+
+.cap-signin-spark {
+	fill: none;
+	stroke: var(--paper-accent);
+	stroke-width: 3.5;
+	stroke-linecap: round;
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: cap-pop 0.5s ease forwards;
+}
+
+.cap-signin-spark.is-1 {
+	animation-delay: 1.2s;
+}
+
+.cap-signin-spark.is-2 {
+	animation-delay: 1.35s;
+}
+
+.cap-signin-spark.is-3 {
+	animation-delay: 1.5s;
+}
+
+.cap-signin h1 {
+	margin-top: 22px;
+	font-size: 19px;
+	font-weight: 500;
+	letter-spacing: -0.01em;
+	line-height: 1.25;
+	color: var(--ink);
+}
+
+.cap-signin-lede {
+	margin-top: 8px;
+	max-width: 236px;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--ink-soft);
+}
+
+.cap-signin-wait {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 16px;
+	font-size: 12.5px;
+	font-weight: 500;
+	line-height: 1.4;
+	color: var(--ink-soft);
+}
+
+.cap-signin-wait svg {
+	width: 15px;
+	height: 15px;
+	flex: 0 0 auto;
+	overflow: visible;
+}
+
+.cap-signin-wait circle {
+	fill: none;
+	stroke: var(--paper-accent);
+	stroke-width: 3;
+	stroke-linecap: round;
+	stroke-dasharray: 0.125 0.125;
+	animation: cap-march 1.1s linear infinite;
+}
+
+.cap-paper-cta {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 42px;
+	margin-top: 22px;
+	padding: 0 24px;
+	border: 1.5px solid var(--ink);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--ink);
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1.4;
+	cursor: pointer;
+	transition:
+		background 0.2s ease,
+		color 0.2s ease,
+		border-color 0.2s ease,
+		opacity 0.2s ease;
+}
+
+.cap-paper-cta:hover:not(:disabled) {
+	background: var(--ink);
+	color: var(--paper);
+}
+
+.cap-paper-cta:focus-visible {
+	outline: 2px solid var(--paper-accent);
+	outline-offset: 2px;
+}
+
+.cap-paper-cta:disabled {
+	cursor: not-allowed;
+	opacity: 0.45;
+}
+
+.cap-paper-cta.is-ghost {
+	border-color: var(--track);
+	color: var(--ink-soft);
+}
+
+.cap-paper-cta.is-ghost:hover:not(:disabled) {
+	background: transparent;
+	border-color: var(--ink-soft);
+	color: var(--ink);
+}
+
+.cap-signin-footnote {
+	margin-top: 14px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--ink-soft);
+}
+
+.cap-paper-error {
+	padding: 10px 14px;
+	border: 1.5px solid #e5484d;
+	border-radius: 14px;
+	color: #e5484d;
+	font-size: 12px;
+	line-height: 1.5;
+	text-align: left;
+}
+
+@keyframes cap-fade-up {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes cap-sheet-in {
+	from {
+		opacity: 0;
+		transform: translateX(14px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes cap-draw {
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes cap-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.15);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes cap-soft-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}
+
+@keyframes cap-march {
+	to {
+		stroke-dashoffset: -0.25;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cap-signin-boil {
+		filter: none;
+	}
+
+	.cap-fade-up,
+	.cap-sheet-in,
+	.cap-signin-ring,
+	.cap-signin-dot,
+	.cap-signin-spark {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+		animation-iteration-count: 1;
+	}
+
+	.cap-signin-wait circle {
+		animation: none;
+	}
+}

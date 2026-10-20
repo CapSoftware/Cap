@@ -25,6 +25,7 @@ import {
 	storeConversationInSupermemory,
 	syncCapKnowledgeBase,
 } from "@/lib/messenger/supermemory";
+import { sendMessengerSupportEmail } from "@/lib/messenger/support-email";
 
 const normalizeContent = (content: string) => content.trim().slice(0, 6000);
 
@@ -226,12 +227,30 @@ export const sendMessengerUserMessage = async ({
 	const identity = viewer.user
 		? `${viewer.user.name ?? "User"} <${viewer.user.email}>`
 		: `Anonymous visitor (${effectiveAnonymousId ?? "unknown"})`;
+	const supportEmailUser = viewer.user
+		? {
+				id: viewer.user.id,
+				email: viewer.user.email,
+				name: viewer.user.name,
+			}
+		: null;
 
 	const reply = await generateMessengerAgentReply({
 		userIdentity: identity,
 		identityTag: getIdentityTag(effectiveUserId, effectiveAnonymousId),
 		query: normalized,
 		history,
+		supportEmailTool: supportEmailUser
+			? {
+					execute: ({ subject, message }) =>
+						sendMessengerSupportEmail({
+							user: supportEmailUser,
+							conversationId,
+							subject,
+							message,
+						}),
+				}
+			: null,
 	});
 
 	const responseAt = new Date();

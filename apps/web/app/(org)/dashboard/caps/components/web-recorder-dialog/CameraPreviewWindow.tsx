@@ -11,7 +11,15 @@ import {
 	Square,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	forwardRef,
+	useCallback,
+	useEffect,
+	useImperativeHandle,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 type CameraPreviewSize = "sm" | "lg";
@@ -74,15 +82,19 @@ const getPreviewMetrics = (
 	};
 };
 
+export interface CameraPreviewWindowHandle {
+	stopStream: () => void;
+}
+
 interface CameraPreviewWindowProps {
 	cameraId: string;
 	onClose: () => void;
 }
 
-export const CameraPreviewWindow = ({
-	cameraId,
-	onClose,
-}: CameraPreviewWindowProps) => {
+export const CameraPreviewWindow = forwardRef<
+	CameraPreviewWindowHandle,
+	CameraPreviewWindowProps
+>(({ cameraId, onClose }, ref) => {
 	const [size, setSize] = useState<CameraPreviewSize>("sm");
 	const [shape, setShape] = useState<CameraPreviewShape>("round");
 	const [mirrored, setMirrored] = useState(false);
@@ -125,6 +137,27 @@ export const CameraPreviewWindow = ({
 
 		return "autoPictureInPicture" in proto;
 	}, []);
+
+	const stopStream = useCallback(() => {
+		if (streamRef.current) {
+			streamRef.current.getTracks().forEach((track) => {
+				track.stop();
+			});
+			streamRef.current = null;
+		}
+
+		if (videoRef.current) {
+			videoRef.current.srcObject = null;
+		}
+	}, []);
+
+	useImperativeHandle(
+		ref,
+		() => ({
+			stopStream,
+		}),
+		[stopStream],
+	);
 
 	useEffect(() => {
 		if (!canUseAutoPiPAttribute) {
@@ -169,6 +202,7 @@ export const CameraPreviewWindow = ({
 	}, []);
 
 	useEffect(() => {
+		let cancelled = false;
 		const startCamera = async () => {
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
@@ -176,6 +210,10 @@ export const CameraPreviewWindow = ({
 						deviceId: { exact: cameraId },
 					},
 				});
+				if (cancelled) {
+					for (const track of stream.getTracks()) track.stop();
+					return;
+				}
 
 				streamRef.current = stream;
 
@@ -190,14 +228,10 @@ export const CameraPreviewWindow = ({
 		startCamera();
 
 		return () => {
-			if (streamRef.current) {
-				streamRef.current.getTracks().forEach((track) => {
-					track.stop();
-				});
-				streamRef.current = null;
-			}
+			cancelled = true;
+			stopStream();
 		};
-	}, [cameraId]);
+	}, [cameraId, stopStream]);
 
 	useEffect(() => {
 		const metrics = getPreviewMetrics(size, shape, videoDimensions);
@@ -492,7 +526,7 @@ export const CameraPreviewWindow = ({
 									e.stopPropagation();
 									handleClose();
 								}}
-								className="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
+								className="p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
 							>
 								<X className="size-5.5" />
 							</button>
@@ -503,7 +537,7 @@ export const CameraPreviewWindow = ({
 									setSize((s) => (s === "sm" ? "lg" : "sm"));
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									size === "lg" && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -522,7 +556,7 @@ export const CameraPreviewWindow = ({
 									);
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									shape !== "round" && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -539,7 +573,7 @@ export const CameraPreviewWindow = ({
 									setMirrored((m) => !m);
 								}}
 								className={clsx(
-									"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+									"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 									mirrored && "bg-gray-3 text-gray-12",
 								)}
 							>
@@ -553,7 +587,7 @@ export const CameraPreviewWindow = ({
 										handleTogglePictureInPicture();
 									}}
 									className={clsx(
-										"p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+										"p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
 										isInPictureInPicture && "bg-gray-3 text-gray-12",
 									)}
 								>
@@ -628,4 +662,6 @@ export const CameraPreviewWindow = ({
 		</div>,
 		document.body,
 	);
-};
+});
+
+CameraPreviewWindow.displayName = "CameraPreviewWindow";

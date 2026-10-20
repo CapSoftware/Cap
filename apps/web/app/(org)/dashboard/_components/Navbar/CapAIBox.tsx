@@ -1,8 +1,8 @@
 import { Dialog, DialogTrigger } from "@cap/ui";
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { memo, useState } from "react";
+import { Fit, Layout, useRive } from "@/lib/rive";
 import { useTheme } from "../../Contexts";
 import CapAIDialog from "./CapAIDialog";
 

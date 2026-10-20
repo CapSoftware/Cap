@@ -1,0 +1,1047 @@
+name: "desktop-release"
+
+# Reusable core of the desktop release pipeline. Callers:
+#   - publish.yml         -> channel: stable, version from Cargo.toml, manual CN publish
+#   - publish-nightly.yml -> channel: nightly, generated prerelease version, auto CN publish
+#   - promote-nightly.yml -> channel: stable, rebuilds a nightly's commit as a plain x.y.z
+#
+# Cap ships as the GPUI app only, under the platform names existing installs
+# update from, so 0.6.0 and earlier Tauri installs update straight into it.
+#
+# Stable releases get a cap-v{version} git tag + draft GitHub release and are
+# published on CrabNebula manually (Discord bot / dashboard), exactly as before.
+# Nightly releases skip the GitHub side entirely and go to the CrabNebula
+# "nightly" channel, which is invisible to the default update endpoint and to
+# the website's `latest` download URLs.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to stamp into the build and the CrabNebula release"
+        required: true
+        type: string
+      channel:
+        description: "Release channel: stable or nightly"
+        required: true
+        type: string
+      sha:
+        description: "Commit SHA to build (and to tag, for stable releases)"
+        required: true
+        type: string
+      auto_publish:
+        description: "Publish the CrabNebula release automatically after upload"
+        required: false
+        type: boolean
+        default: false
+      interactionId:
+        description: "Discord Interaction ID"
+        required: false
+        type: string
+        default: ""
+
+env:
+  CN_APPLICATION: cap/cap
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.create_tag.outputs.tag_name }}
+      needs_release: ${{ steps.create_tag.outputs.release_published != 'true' }}
+      cn_release_stdout: ${{ steps.create_cn_release.outputs.stdout }}
+      gh_release_url: ${{ steps.create_gh_release.outputs.url || steps.create_tag.outputs.release_url }}
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
+    steps:
+      - name: Prepare release
+        id: create_tag
+        if: ${{ inputs.channel == 'stable' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = "cap-v${{ inputs.version }}";
+            const buildSha = "${{ inputs.sha }}";
+            const tagRef = `tags/${tag}`;
+
+            const TAG_EXISTED = "tag_existed";
+            const TAG_NAME = "tag_name";
+            const RELEASE_PUBLISHED = "release_published";
+            const RELEASE_URL = "release_url";
+
+            core.setOutput(TAG_NAME, tag);
+
+            async function main() {
+              let tagExisted = true;
+              let tagSha = "";
+              let releasePublished = false;
+              let releaseUrl = "";
+
+              try {
+                const tagRefResponse = await github.rest.git.getRef({
+                  ref: tagRef,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                });
+
+                tagExisted = true;
+                tagSha = tagRefResponse.data.object.sha;
+                core.notice(`Tag '${tag}' already exists. Reusing it for this release run.`);
+              } catch (error) {
+                if ("status" in error && error.status === 404) tagExisted = false;
+                else throw error;
+              }
+
+              if (!tagExisted)
+                await github.rest.git.createRef({
+                  ref: `refs/${tagRef}`,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: buildSha,
+                });
+
+              const releases = await github.paginate(github.rest.repos.listReleases, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              });
+
+              const release = releases.find((release) => release.tag_name === tag);
+
+              if (release) {
+                releaseUrl = release.html_url;
+                releasePublished = !release.draft;
+
+                if (releasePublished)
+                  throw new Error(`Release '${tag}' is already published: ${releaseUrl}. Bump apps/desktop/src-tauri/Cargo.toml before publishing a new build.`);
+                else
+                  core.notice(`Draft release '${tag}' already exists. Continuing build and upload.`);
+              }
+
+              if (tagExisted && !releasePublished && tagSha !== buildSha) {
+                await github.rest.git.updateRef({
+                  ref: tagRef,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: buildSha,
+                  force: true,
+                });
+
+                core.notice(`Updated unpublished tag '${tag}' to ${buildSha}.`);
+              }
+
+              core.setOutput(TAG_EXISTED, tagExisted);
+              core.setOutput(RELEASE_PUBLISHED, releasePublished);
+              core.setOutput(RELEASE_URL, releaseUrl);
+            }
+
+            await main();
+
+      - name: Create draft CN release
+        id: create_cn_release
+        if: ${{ steps.create_tag.outputs.release_published != 'true' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release draft ${{ env.CN_APPLICATION }} ${{ inputs.version }} --framework tauri ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Create draft GH release
+        id: create_gh_release
+        if: ${{ inputs.channel == 'stable' && steps.create_tag.outputs.release_published != 'true' }}
+        # TODO: Change to stable version when available
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ inputs.version }}
+          tag_name: ${{ steps.create_tag.outputs.tag_name }}
+          draft: true
+          generate_release_notes: true
+
+      - name: Update Discord interaction
+        if: ${{ inputs.channel == 'stable' && inputs.interactionId != '' && steps.create_tag.outputs.release_published != 'true' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
+
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-ready",
+                  tag: "${{ steps.create_tag.outputs.tag_name }}",
+                  version: "${{ inputs.version }}",
+                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
+                  interactionId: "${{ inputs.interactionId }}",
+                  cnReleaseId
+                }),
+                headers: {
+                	"Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
+            }
+
+            main();
+
+  build:
+    needs: draft
+    if: ${{ needs.draft.outputs.needs_release == 'true' }}
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            runner: macos-latest-xlarge
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest-xlarge
+            arch: aarch64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            arch: x86_64
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            arch: x86_64
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
+      # Cap ships as the GPUI app only, under the platform names every
+      # existing install already updates from.
+      CAP_BUNDLE: apps/desktop-gpui/target/${{ matrix.settings.target }}/release/bundle
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Test GPUI patch checkout
+        if: ${{ hashFiles('scripts/prepare-gpui-dependency.test.mjs') != '' }}
+        run: node --test scripts/prepare-gpui-dependency.test.mjs
+
+      - name: Test desktop packaging scripts
+        run: node --test scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Create API Key File
+        if: ${{ runner.os == 'macOS' }}
+        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
+
+      - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2
+        if: ${{ runner.os == 'macOS' }}
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Verify certificate
+        if: ${{ runner.os == 'macOS' }}
+        run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Verify Rust toolchain
+        shell: bash
+        run: |
+          rustc -Vv
+          cargo -V
+          rustup show active-toolchain
+
+      # Release builds get their own cache flavour (release-profile rlibs for
+      # both the root workspace and the standalone GPUI workspace). Save it
+      # even when the job fails later, because the Windows job most often dies
+      # at SignPath approval, long after the compile it would have cached.
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-release
+          save-cache: true
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            apps/desktop-gpui -> target
+
+      # Nightly and promoted builds carry a version that differs from the
+      # committed Cargo.toml; Tauri reads the app version from package.version,
+      # and the GPUI build syncs its own manifest from this one.
+      # Runs after the cache step so the stamped version never lands in the
+      # cache key's Cargo.toml hash (a fresh nightly version each night would
+      # otherwise write a fresh multi-GB cache entry per target per night).
+      - name: Stamp build version
+        shell: bash
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = "apps/desktop/src-tauri/Cargo.toml";
+            const version = process.env.BUILD_VERSION;
+            let toml = fs.readFileSync(path, "utf8");
+            const re = /^version = ".*"$/m;
+            if (!re.test(toml)) {
+              console.error("package.version line not found in " + path);
+              process.exit(1);
+            }
+            toml = toml.replace(re, "version = \"" + version + "\"");
+            fs.writeFileSync(path, toml);
+            console.log("Stamped " + path + " with " + version);
+          '
+          node scripts/sync-desktop-versions.mjs
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Create .env file in root
+        shell: bash
+        run: |
+          {
+            echo "appVersion=${{ inputs.version }}"
+            echo "VITE_ENVIRONMENT=production"
+            echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}"
+            echo 'NEXTAUTH_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'VITE_OPENPANEL_CLIENT_ID=${{ secrets.VITE_OPENPANEL_CLIENT_ID }}'
+            echo 'VITE_OPENPANEL_API_URL=${{ secrets.VITE_OPENPANEL_API_URL }}'
+            echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}'
+            echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}'
+          } >> .env
+
+      - name: Run cap-setup
+        shell: bash
+        run: bun run cap-setup
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
+
+      # The sidecars ship inside Cap, which is itself stripped, and nothing
+      # symbolicates them, so their symbol tables are dead weight in every
+      # download.
+      - name: Build desktop binaries
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+        run: ./scripts/build-desktop-binaries.sh ${{ matrix.settings.target }}
+
+      # The final link used to peak well above the 16GB stock Linux runner and
+      # get OOM-killed ("runner received a shutdown signal") under fat LTO +
+      # full debuginfo. The release profile is thin LTO + line tables now, but
+      # the headroom is cheap, so keep it. The runner already ships an active
+      # /swapfile (resizing it fails with "Text file busy"), so add a large
+      # swapfile on the roomy /mnt disk on top of the existing swap.
+      # macOS runs on xlarge runners and is unaffected.
+      - name: Increase swap space (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          sudo swapoff /mnt/swapfile 2>/dev/null || true
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          swapon --show
+          free -h
+
+      # The same link used to exhaust commit on the 16GB Windows runner
+      # ("rustc-LLVM ERROR: out of memory" while linking cap-desktop), so
+      # raise the pagefile on the roomy D: disk, the Windows analog of the
+      # Linux swapfile above. Kept for headroom after the move to thin LTO.
+      - name: Increase pagefile size (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        uses: al-cheb/configure-pagefile-action@a3b6ebd6b634da88790d9c58d4b37a7f4a7b8708 # v1.4
+        with:
+          minimum-size: 16GB
+          maximum-size: 24GB
+          disk-root: "D:"
+
+      # The Tauri bundler is only the packager here: it lays the prebuilt GPUI
+      # binary out in the same app bundle, installer and package formats the
+      # Tauri updater already installs, so existing installs update into Cap.
+      - name: Build Cap
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              node scripts/build-linux-packages.mjs "$TARGET" --verbose
+              ;;
+            macOS)
+              node scripts/bundle-gpui.mjs "$TARGET" --bundles app,dmg
+              ;;
+            Windows)
+              node scripts/bundle-gpui.mjs "$TARGET" --no-bundle
+              ;;
+          esac
+        env:
+          TARGET: ${{ matrix.settings.target }}
+          CI: false
+          LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/apps/desktop-gpui/target/{1}/release:{0}/target/native-deps/lib', github.workspace, matrix.settings.target) || '' }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_PATH: ${{ runner.os == 'macOS' && format('{0}/api.p8', github.workspace) || '' }}
+          APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+      - name: Build pinned pigz
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/pigz"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/pigz.tar.gz" "https://zlib.net/pigz/pigz-$PIGZ_VERSION.tar.gz"
+          echo "$PIGZ_SHA256  $dir/pigz.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$dir/pigz.tar.gz" -C "$dir"
+          make -C "$dir/pigz-$PIGZ_VERSION" CC=cc
+          "$dir/pigz-$PIGZ_VERSION/pigz" --version
+          echo "$dir/pigz-$PIGZ_VERSION" >> "$GITHUB_PATH"
+        env:
+          PIGZ_VERSION: "2.8"
+          PIGZ_SHA256: eb872b4f0e1f0ebe59c9f7bd8c506c4204893ba6a8492de31df416f0d5170fd0
+
+      # Same bytes, smaller downloads: zopfli for the updater archive, which
+      # every install (0.6.0's Tauri updater included) still unpacks as gzip,
+      # and LZMA for the disk image, which macOS 10.15+ mounts natively.
+      - name: Shrink macOS packages
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: node scripts/finalize-macos-packages.mjs "$CAP_BUNDLE"
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_KEYCHAIN: ${{ format('{0}/build.keychain', runner.temp) }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # Sign Cap's prebuilt binary and its sidecars in one request, then bundle
+      # the installer from the signed payload.
+      - name: Stage Windows payload for Authenticode signing
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          ./scripts/windows-release-signing.ps1 -Operation Stage -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Upload unsigned Windows payload
+        if: ${{ runner.os == 'Windows' }}
+        id: upload_unsigned_windows_payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-windows-payload
+          path: target/${{ matrix.settings.target }}/release/windows-signing/payload
+          if-no-files-found: error
+
+      - name: Submit SignPath payload signing request
+        if: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 90
+        id: submit_signpath_payload_signing_request
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_payload.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 5400
+          service-unavailable-timeout-in-seconds: 5400
+          output-artifact-directory: signed-windows-payload
+
+      - name: Restore and verify signed Windows payload
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          ./scripts/windows-release-signing.ps1 -Operation Restore -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Bundle Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: node scripts/bundle-gpui.mjs "$TARGET" --skip-build --bundles nsis
+        env:
+          TARGET: ${{ matrix.settings.target }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Verify macOS app contents and signing
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_app() {
+            local app="$1" executable_name="$2"
+            shift 2
+            local plist="$app/Contents/Info.plist"
+            if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" != "so.cap.desktop" ]]; then
+              echo "::error::$app does not keep the so.cap.desktop identity."
+              exit 1
+            fi
+            if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" != "$executable_name" ]]; then
+              echo "::error::$app does not launch $executable_name."
+              exit 1
+            fi
+            for binary in "$executable_name" "$@"; do
+              executable="$app/Contents/MacOS/$binary"
+              if [[ ! -x "$executable" ]]; then
+                echo "::error::Bundled executable missing or not executable: $executable"
+                exit 1
+              fi
+              codesign --verify --strict "$executable"
+            done
+            if [[ -e "$app/Contents/MacOS/cap-gpui" ]]; then
+              echo "::error::$app still bundles the GPUI sidecar."
+              exit 1
+            fi
+            SIGNATURE="$(codesign -dv --verbose=4 "$app/Contents/MacOS/$executable_name" 2>&1)"
+            if ! grep -Eq 'flags=.*runtime' <<< "$SIGNATURE"; then
+              echo "::error::$executable_name is not signed with the macOS hardened runtime."
+              exit 1
+            fi
+            if ! grep -Eq '^Authority=Developer ID Application:' <<< "$SIGNATURE"; then
+              echo "::error::$executable_name is not signed with a Developer ID Application certificate."
+              exit 1
+            fi
+            codesign --verify --deep --strict "$app"
+            spctl --assess --type execute "$app"
+            xcrun stapler validate "$app"
+            if [[ ! -s "$app.tar.gz" || ! -s "$app.tar.gz.sig" ]]; then
+              echo "::error::The $app updater artifact or production signature is missing."
+              exit 1
+            fi
+            local bundle_root dmg
+            bundle_root="$(dirname "$(dirname "$app")")"
+            dmg="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+            if [[ -z "$dmg" || ! -s "$dmg" ]]; then
+              echo "::error::The disk image beside $app is missing or empty."
+              exit 1
+            fi
+            codesign --verify "$dmg"
+          }
+          verify_app "$CAP_BUNDLE/macos/Cap.app" Cap cap-muxer cap-cli
+          if [[ -e "$CAP_BUNDLE/macos/Cap.app/Contents/MacOS/cap-exporter" ]]; then
+            echo "::error::Cap still bundles the duplicate cap-exporter sidecar."
+            exit 1
+          fi
+
+      - name: Notarize and verify macOS disk images
+        if: ${{ runner.os == 'macOS' }}
+        timeout-minutes: 45
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ github.workspace }}/api.p8
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=("$CAP_BUNDLE"/dmg/*.dmg)
+          if [[ ${#DMGS[@]} -ne 1 ]]; then
+            echo "::error::Expected one Cap disk image, found ${#DMGS[@]}."
+            exit 1
+          fi
+          [[ -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" && -s "$APPLE_API_KEY_PATH" ]]
+          for DMG in "${DMGS[@]}"; do
+            [[ -f "$DMG" && -s "$DMG" && ! -L "$DMG" ]]
+            codesign --verify "$DMG"
+            NOTARY_RESULT="$(mktemp "$RUNNER_TEMP/cap-dmg-notary.XXXXXX")"
+            NOTARY_EXIT=0
+            xcrun notarytool submit "$DMG" \
+              --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+              --wait --timeout 20m --output-format json > "$NOTARY_RESULT" || NOTARY_EXIT=$?
+            node -e '
+              const fs = require("node:fs");
+              const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.id ?? "")) {
+                throw new Error("Notarization submission ID is missing or invalid.");
+              }
+              console.log(JSON.stringify({ submissionId: result.id, status: result.status }));
+              if (process.argv[2] !== "0" || result.status !== "Accepted") {
+                throw new Error("Disk image notarization did not complete with Accepted status.");
+              }
+            ' "$NOTARY_RESULT" "$NOTARY_EXIT"
+            xcrun stapler staple "$DMG"
+            xcrun stapler validate "$DMG"
+            codesign --verify "$DMG"
+            spctl --assess --type open --context context:primary-signature "$DMG"
+          done
+
+      # Guards against the Linux packaging regressions:
+      #   1. FFmpeg soname mismatch: every libav*/libsw* a binary lists as
+      #      NEEDED must be bundled under /usr/lib/cap/ with the exact same soname.
+      #      The bundled libs come from native-deps (FFmpeg 7); if a binary
+      #      linked system FFmpeg 6 the loader fails at launch.
+      #   2. Undeclared runtime dependency: a system lib a binary NEEDs that is
+      #      neither bundled nor part of the declared stack must appear in the
+      #      .deb Depends, or the loader aborts at launch. This is the
+      #      libpipewire-0.3.so.0 crash that shipped in 0.5.2.
+      - name: Verify Linux deb contents
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DEB="$(find "$CAP_BUNDLE/deb" -name '*.deb' | head -n1)"
+          if [[ -z "$DEB" ]]; then echo "::error::No .deb produced"; exit 1; fi
+          if [[ ! -s "$DEB.sig" ]]; then echo "::error::No .deb updater signature produced next to $DEB"; exit 1; fi
+          if [[ "$(dpkg-deb -f "$DEB" Package)" != "cap" ]]; then
+            echo "::error::The Cap deb must keep the 'cap' package name so existing installs upgrade into it."
+            exit 1
+          fi
+          echo "Inspecting $DEB"
+          WORK="$(mktemp -d)"
+          dpkg-deb -x "$DEB" "$WORK"
+
+          EXECUTABLES=()
+          for binary in Cap cap-muxer cap-cli; do
+            executable="$WORK/usr/bin/$binary"
+            if [[ ! -x "$executable" ]]; then
+              echo "::error::Bundled executable missing or not executable: /usr/bin/$binary"
+              exit 1
+            fi
+            EXECUTABLES+=("$executable")
+          done
+          for binary in cap-gpui cap-exporter; do
+            if [[ -e "$WORK/usr/bin/$binary" ]]; then
+              echo "::error::The Cap deb still ships /usr/bin/$binary"
+              exit 1
+            fi
+          done
+
+          CAP_RPATH="$(objdump -p "$WORK/usr/bin/Cap" | awk '/RPATH|RUNPATH/{print $2}')"
+          if [[ "$CAP_RPATH" != *"\$ORIGIN/../lib/cap"* ]]; then
+            echo "::error::The bundled Cap executable cannot resolve shared libraries from /usr/lib/cap"
+            exit 1
+          fi
+
+          # (1) every FFmpeg soname the binaries NEED is bundled
+          NEEDED="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' | sort -u || true)"
+          echo "Binaries NEED FFmpeg sonames:"; echo "${NEEDED:-(none)}"
+          echo "Bundled FFmpeg libs:"; ls -1 "$WORK/usr/lib/cap" 2>/dev/null || true
+          MISSING=0
+          for so in $NEEDED; do
+            if [[ ! -f "$WORK/usr/lib/cap/$so" ]]; then
+              echo "::error::A binary NEEDs $so but it is not bundled under /usr/lib/cap/"
+              MISSING=1
+            fi
+          done
+          if [[ "$MISSING" -ne 0 ]]; then
+            echo "::error::FFmpeg soname mismatch between binaries and bundled libs."
+            exit 1
+          fi
+          echo "FFmpeg soname bundle OK"
+
+          # (2) runtime libs that are NOT bundled must be declared in the .deb
+          # Depends, or the dynamic loader aborts at launch.
+          DEPENDS="$(dpkg-deb -f "$DEB" Depends || true)"
+          echo "Declared Depends: ${DEPENDS:-(none)}"
+          if ! echo "$DEPENDS" | grep -Eq '(^|,[[:space:]]*)pulseaudio-utils([[:space:](,]|$)'; then
+            echo "::error::Linux system audio requires pulseaudio-utils (pactl) in .deb Depends."
+            exit 1
+          fi
+          if echo "$DEPENDS" | grep -Eq 'webkit2gtk|libgtk-3|appindicator'; then
+            echo "::error::The Cap deb must not depend on the Tauri webview stack."
+            exit 1
+          fi
+          NEEDED_ALL="$(for executable in "${EXECUTABLES[@]}"; do objdump -p "$executable"; done | awk '/NEEDED/{print $2}' | sort -u)"
+          # soname -> a Depends token that satisfies it. The alsa token is a
+          # substring so it matches both libasound2 and libasound2t64.
+          declare -A SONAME_DEP=(
+            [libpipewire-0.3.so.0]="libpipewire-0.3-0"
+            [libasound.so.2]="libasound2"
+            [libxkbcommon.so.0]="libxkbcommon0"
+            [libxkbcommon-x11.so.0]="libxkbcommon-x11-0"
+            [libX11.so.6]="libx11-6"
+            [libssl.so.3]="libssl3"
+          )
+          DEP_MISSING=0
+          for so in "${!SONAME_DEP[@]}"; do
+            if echo "$NEEDED_ALL" | grep -qx "$so"; then
+              tok="${SONAME_DEP[$so]}"
+              if ! echo "$DEPENDS" | grep -q "$tok"; then
+                echo "::error::A binary NEEDs $so but '$tok' is not declared in .deb Depends (add it to apps/desktop-gpui/tauri.conf.json bundle.linux.deb.depends)."
+                DEP_MISSING=1
+              else
+                echo "Runtime dep OK: $so -> $tok"
+              fi
+            fi
+          done
+          if [[ "$DEP_MISSING" -ne 0 ]]; then
+            echo "::error::Undeclared runtime dependency in .deb Depends."
+            exit 1
+          fi
+          echo "Runtime dependency declarations OK"
+
+      - name: Verify Linux RPM and AppImage contents
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        env:
+          CAP_RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          BUNDLE="$GITHUB_WORKSPACE/$CAP_BUNDLE"
+          RPM="$BUNDLE/rpm/Cap-$CAP_RELEASE_VERSION-1.x86_64.rpm"
+          APPIMAGE="$BUNDLE/appimage/Cap_${CAP_RELEASE_VERSION}_amd64.AppImage"
+          test -s "$APPIMAGE.sig"
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "$WORK"' EXIT
+          mkdir "$WORK/rpm" "$WORK/appimage"
+          (cd "$WORK/appimage" && "$APPIMAGE" --appimage-extract > /dev/null)
+          APPROOT="$WORK/appimage/squashfs-root"
+          verify_root() {
+            local root="$1"
+            shift
+            for binary in "$@"; do
+              test -x "$root/usr/bin/$binary"
+              while read -r soname; do
+                test -f "$root/usr/lib/cap/$soname"
+              done < <(objdump -p "$root/usr/bin/$binary" | awk '/NEEDED/{print $2}' | grep -E '^lib(av|sw|postproc)' || true)
+            done
+            test ! -e "$root/usr/bin/cap-gpui"
+          }
+          verify_root "$APPROOT" Cap cap-muxer cap-cli
+          if [[ -n "$(find "$APPROOT" \( -name 'libwebkit2gtk-*' -o -name 'libgtk-3.so*' -o -name 'WebKitWebProcess' \) -print -quit)" || -e "$APPROOT/apprun-hooks" ]]; then
+            echo "::error::The Cap AppImage still bundles the Tauri webview runtime"
+            exit 1
+          fi
+          if [[ "$CAP_RELEASE_VERSION" != *-* ]]; then
+            test -s "$RPM"
+            test "$(rpm -qp --queryformat '%{VERSION}-%{RELEASE}' "$RPM")" = "$CAP_RELEASE_VERSION-1"
+            rpm -Kv "$RPM"
+            if rpm -qpR "$RPM" | grep -Eq 'webkit2gtk|libgtk-3|gtk3'; then
+              echo "::error::The Cap RPM must not require the Tauri webview stack."
+              exit 1
+            fi
+            bsdtar -xf "$RPM" -C "$WORK/rpm"
+            test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
+            verify_root "$WORK/rpm" Cap cap-muxer cap-cli
+          fi
+          test "$(cat "$APPROOT/usr/lib/cap/package-format")" = appimage
+          test -x "$APPROOT/usr/bin/pactl"
+          test -s "$APPROOT/usr/lib/alsa-lib/libasound_module_pcm_pulse.so"
+          test -s "$APPROOT/usr/lib/cap/alsa-pulse.conf"
+          if [[ -n "$(find "$APPROOT" -name 'libwayland-client.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage bundles a Wayland client that can conflict with host Mesa drivers"
+            exit 1
+          fi
+          if [[ -n "$(find "$APPROOT/usr/lib" -maxdepth 1 -name 'libpipewire-0.3.so*' -print -quit)" ]]; then
+            echo "::error::The Cap AppImage bundles PipeWire that can conflict with host ALSA plugins"
+            exit 1
+          fi
+
+      - name: Build Arch Linux package
+        id: build_arch
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CAP_BUNDLE/arch"
+          docker run --rm --network none \
+            --env CAP_PACKAGE_UID="$(id -u)" \
+            --volume "${{ github.workspace }}:/source:ro" \
+            --volume "${{ github.workspace }}/$CAP_BUNDLE/arch:/output" \
+            archlinux:base-devel@sha256:68bfc3b0d277b08a99101dc9b94aaa03e5ae70cf1b4fb965c03b2b87b915760d \
+            bash -c 'useradd --uid "$CAP_PACKAGE_UID" --create-home cap-package && runuser -u cap-package -- bash /source/scripts/build-linux-arch-package.sh "$1" /output' \
+            bash "/source/$CAP_BUNDLE/deb/Cap_${{ inputs.version }}_amd64.deb"
+          PACKAGES=("$CAP_BUNDLE/arch/"*.pkg.tar.zst)
+          test "${#PACKAGES[@]}" -eq 1
+          test -s "${PACKAGES[0]}"
+          test "$(bsdtar -xOf "${PACKAGES[0]}" usr/lib/cap/package-format)" = arch
+
+      - name: Verify Windows installer contents
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe)
+          if ($installers.Count -ne 1) {
+            throw "Expected one Windows NSIS installer, found $($installers.Count)."
+          }
+          $sevenZip = Get-Command 7z -ErrorAction Stop
+          $requiredFiles = @(
+            "Cap.exe", "cap-muxer.exe", "cap-cli.exe",
+            "avcodec-61.dll", "avdevice-61.dll", "avfilter-10.dll", "avformat-61.dll",
+            "avutil-59.dll", "postproc-58.dll", "swresample-5.dll", "swscale-8.dll",
+            "dxcompiler.dll", "dxil.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"
+          )
+          $forbiddenFiles = @("cap-gpui.exe", "cap-exporter.exe")
+          foreach ($installer in $installers) {
+            $contents = & $sevenZip.Source l -slt $installer.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not inspect Windows installer '$($installer.Name)'."
+            }
+            foreach ($file in $requiredFiles) {
+              if ($contents -notcontains "Path = $file") {
+                throw "Windows installer '$($installer.Name)' is missing bundled '$file'."
+              }
+            }
+            foreach ($file in $forbiddenFiles) {
+              if ($contents -contains "Path = $file") {
+                throw "Windows installer '$($installer.Name)' unexpectedly bundles '$file'."
+              }
+            }
+          }
+
+      - name: Upload unsigned Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        id: upload_unsigned_windows_installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-windows-installer
+          path: ${{ env.CAP_BUNDLE }}/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        if: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 90
+        id: submit_signpath_signing_request
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+          wait-for-completion: true
+          # Both signing stages share the six-hour job budget with the build.
+          # Match the approval and retry budgets so waiting for approval does
+          # not expire at the action's shorter default retry timeout.
+          wait-for-completion-timeout-in-seconds: 5400
+          service-unavailable-timeout-in-seconds: 5400
+          output-artifact-directory: signed-windows-installer
+
+      - name: Restore signed Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $signedDir = "signed-windows-installer"
+          $bundleDir = "$env:CAP_BUNDLE/nsis"
+
+          if (-not (Test-Path $signedDir)) {
+            throw "Signed artifact directory '$signedDir' not found."
+          }
+
+          $executables = Get-ChildItem -Path $signedDir -Filter *.exe -Recurse
+          if (-not $executables) {
+            throw "No signed executables found in '$signedDir'."
+          }
+
+          Write-Host "Copying signed executables to: $bundleDir"
+          Copy-Item -Path (Join-Path $signedDir '*.exe') -Destination $bundleDir -Force
+
+          Write-Host "Files in bundle directory after signing:"
+          Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
+
+      - name: Verify Windows installer Authenticode signature
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists after SignPath signing."
+          }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Windows installer '$($installer.Name)' has invalid Authenticode status: $($signature.Status)."
+            }
+          }
+
+      - name: Verify extracted Windows payload signatures and hashes
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "$env:CAP_BUNDLE/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists for extracted payload verification."
+          }
+          foreach ($installer in $installers) {
+            ./scripts/windows-release-signing.ps1 -Operation VerifyInstaller -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE" -InstallerPath $installer.FullName
+          }
+
+      - name: Re-sign Windows installer for the updater
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          BUNDLE_DIR="../../$CAP_BUNDLE/nsis"
+          for exe in "$BUNDLE_DIR"/*.exe; do
+            echo "Re-signing $(basename "$exe") for the updater..."
+            rm -f "${exe}.sig"
+            bun run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+            if [[ ! -s "${exe}.sig" ]]; then
+              echo "::error::Windows production updater signature missing for $exe"
+              exit 1
+            fi
+          done
+          echo "Signature files after re-signing:"
+          ls -la "$BUNDLE_DIR"/*.sig
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Retain signed packages for release validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: desktop-release-${{ matrix.settings.target }}-${{ inputs.sha }}
+          path: |
+            ${{ env.CAP_BUNDLE }}/dmg/*.dmg
+            ${{ env.CAP_BUNDLE }}/macos/*.tar.gz
+            ${{ env.CAP_BUNDLE }}/macos/*.sig
+            ${{ env.CAP_BUNDLE }}/nsis/*.exe
+            ${{ env.CAP_BUNDLE }}/nsis/*.sig
+            ${{ env.CAP_BUNDLE }}/deb/*.deb
+            ${{ env.CAP_BUNDLE }}/deb/*.sig
+            ${{ env.CAP_BUNDLE }}/appimage/*.AppImage
+            ${{ env.CAP_BUNDLE }}/appimage/*.sig
+            ${{ env.CAP_BUNDLE }}/rpm/*.rpm
+            target/${{ matrix.settings.target }}/release/windows-signing/payload-manifest.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+      - name: Locate release assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          one() {
+            if [[ $# -ne 1 || ! -s "$1" ]]; then
+              echo "::error::Expected exactly one non-empty release asset, found $# ($*)." >&2
+              exit 1
+            fi
+            printf '%s' "$1"
+          }
+          {
+            case "$RUNNER_OS" in
+              macOS)
+                echo "cap_dmg=$(one "$CAP_BUNDLE"/dmg/*.dmg)"
+                echo "cap_update=$(one "$CAP_BUNDLE"/macos/*.app.tar.gz)"
+                ;;
+              Windows)
+                echo "cap_installer=$(one "$CAP_BUNDLE"/nsis/*.exe)"
+                ;;
+              Linux)
+                echo "cap_deb=$(one "$CAP_BUNDLE"/deb/*.deb)"
+                echo "cap_appimage=$(one "$CAP_BUNDLE"/appimage/*.AppImage)"
+                echo "cap_arch=$(one "$CAP_BUNDLE"/arch/*.pkg.tar.zst)"
+                if [[ "$VERSION" != *-* ]]; then
+                  echo "cap_rpm=$(one "$CAP_BUNDLE"/rpm/*.rpm)"
+                fi
+                ;;
+            esac
+          } >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Upload Cap macOS disk image
+        if: ${{ runner.os == 'macOS' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_dmg }}" --public-platform dmg-${{ matrix.settings.arch }} ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap macOS update
+        if: ${{ runner.os == 'macOS' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_update }}" --signature "${{ steps.assets.outputs.cap_update }}.sig" --update-platform darwin-${{ matrix.settings.arch }} ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_installer }}" --signature "${{ steps.assets.outputs.cap_installer }}.sig" --public-platform nsis-${{ matrix.settings.arch }} --update-platform windows-${{ matrix.settings.arch }} ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap Linux deb
+        if: ${{ runner.os == 'Linux' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_deb }}" --signature "${{ steps.assets.outputs.cap_deb }}.sig" --public-platform deb-x86_64 --update-platform linux-x86_64-deb ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap Linux AppImage
+        if: ${{ runner.os == 'Linux' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_appimage }}" --signature "${{ steps.assets.outputs.cap_appimage }}.sig" --public-platform appimage-x86_64 --update-platform linux-x86_64-appimage ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap Linux RPM
+        if: ${{ runner.os == 'Linux' && !contains(inputs.version, '-') }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_rpm }}" --public-platform rpm-x86_64 ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload Cap Arch Linux package
+        if: ${{ runner.os == 'Linux' }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ inputs.version }}" --file "${{ steps.assets.outputs.cap_arch }}" --public-platform pacman-x86_64 ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+  done:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      CN_CHANNEL_FLAG: ${{ inputs.channel == 'nightly' && '--channel nightly' || '' }}
+    steps:
+      - name: Publish CN release
+        if: ${{ inputs.auto_publish }}
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release publish ${{ env.CN_APPLICATION }} "${{ inputs.version }}" ${{ env.CN_CHANNEL_FLAG }}
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Send Discord notification
+        if: ${{ inputs.channel == 'stable' && inputs.interactionId != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            async function main() {
+              const token = await core.getIDToken("cap-discord-bot");
+              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
+
+              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
+                method: "POST",
+                body: JSON.stringify({
+                  type: "release-done",
+                  interactionId: "${{ inputs.interactionId }}",
+                  version: "${{ inputs.version }}",
+                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
+                  cnReleaseId
+                }),
+                headers: {
+                	"Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                }
+              });
+
+              if(resp.status !== 200) throw new Error(await resp.text());
+            }
+
+            main();

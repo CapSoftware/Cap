@@ -1,3 +1,5 @@
+import { PRICING } from "./pricing";
+
 export interface HeaderCopyVariants {
 	default: {
 		title: string;
@@ -11,6 +13,15 @@ export interface HeaderCopy {
 		href: string;
 	};
 	variants: HeaderCopyVariants;
+	modes: {
+		id: "instant" | "studio" | "screenshot";
+		label: string;
+		title: string;
+	}[];
+	links: {
+		label: string;
+		href: string;
+	}[];
 	cta: {
 		primaryButton: string;
 		secondaryButton: string;
@@ -131,19 +142,43 @@ export const homepageCopy: HomePageCopy = {
 		},
 		variants: {
 			default: {
-				title: "Beautiful, Shareable Screen Recordings",
+				title: "The only screen recording app you need",
 				description:
-					"Cap is the open-source alternative to Loom — native, fast, and yours to control. Record locally with full editing power, or share instantly while you record. Bring your own S3 bucket, your own domain, your own rules.",
+					"Cap is the only screen recording tool you need — three modes in one app that replace your recorder, editor, screenshot tool, and video host. Fully open source, and you can connect your own Google Drive or S3 bucket, so you own every recording.",
 			},
 		},
+		modes: [
+			{
+				id: "instant",
+				label: "Instant",
+				title: "Record and share in seconds",
+			},
+			{
+				id: "studio",
+				label: "Studio",
+				title: "Record and edit locally",
+			},
+			{
+				id: "screenshot",
+				label: "Screenshot",
+				title: "Capture, annotate and copy",
+			},
+		],
+		links: [
+			{ label: "Screen recordings", href: "/screen-recorder" },
+			{ label: "Screenshots", href: "/features" },
+			{ label: "Privacy", href: "/privacy" },
+			{ label: "Open source", href: "/open-source-screen-recorder" },
+		],
 		cta: {
 			primaryButton: "Upgrade to Cap Pro",
-			secondaryButton: "Download",
-			freeVersionText: "No credit card required. Get started for free.",
+			secondaryButton: "View on GitHub",
+			freeVersionText:
+				"No credit card required. Record locally, share when you choose.",
 			seeOtherOptionsText: "More download options",
 		},
 	},
-	textReveal: "Record. Edit. Share. — On Your Terms.",
+	textReveal: "Record. Edit. Share.",
 	recordingModes: {
 		title: "Three Modes, Zero Compromise",
 		subtitle:
@@ -169,7 +204,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				title: "Your Storage, Your Rules",
 				description:
-					"Connect your own S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure — perfect for teams with compliance requirements or anyone who values data sovereignty.",
+					"Connect your own Google Drive or S3 bucket, use Cap Cloud, or keep everything local. You're never locked into our infrastructure, perfect for teams with compliance requirements or anyone who values data sovereignty.",
 			},
 			{
 				title: "Privacy by Default, Sharing by Choice",
@@ -184,7 +219,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				title: "Cross-Platform For Your Entire Team",
 				description:
-					"Native apps for macOS and Windows that feel at home on each platform. No janky Electron apps or browser extensions — just fast, reliable recording that works with your existing tools and workflow.",
+					"Native apps for macOS and Windows that feel at home on each platform, plus a Chrome extension when browser recording is the right fit. Fast, reliable recording that works with your existing tools and workflow.",
 			},
 			{
 				title: "Quality That Makes You Look Professional",
@@ -218,7 +253,7 @@ export const homepageCopy: HomePageCopy = {
 				key: "storage",
 				title: "Bring Your Own Storage",
 				description:
-					"Plug in your own S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your bucket, your bill — no vendor lock-in, ever.",
+					"Plug in your own Google Drive or S3 bucket, route to Cap Cloud, or keep recordings entirely local. Your videos, your storage, your bill, with no vendor lock-in, ever.",
 			},
 			{
 				key: "ai",
@@ -266,22 +301,23 @@ export const homepageCopy: HomePageCopy = {
 		title: "Simple, Honest Pricing",
 		subtitle:
 			"Start free, upgrade when you need more. Early adopter pricing locked in forever.",
-		lovedBy: "Trusted by 30,000+ users",
+		lovedBy: "Trusted by 50,000+ users",
 		commercial: {
 			title: "Desktop License",
 			description:
-				"For professionals who want unlimited local recording and editing.",
+				"A commercial license for the Cap desktop app — unlimited local recording and editing.",
 			features: [
-				"Commercial usage",
-				"Unlimited local recordings",
+				"Commercial usage rights",
+				"Unlimited local recordings & editing",
 				"Studio Mode with full editor",
+				"20 cloud shareable links / month (up to 5 min each)",
 				"Export to any format",
 				"Community support",
 			],
 			cta: "Get Desktop License",
 			pricing: {
-				yearly: 29,
-				lifetime: 58,
+				yearly: PRICING.commercial.yearly,
+				lifetime: PRICING.commercial.lifetime,
 			},
 			labels: {
 				licenses: "License type",
@@ -298,18 +334,19 @@ export const homepageCopy: HomePageCopy = {
 				"Everything in Desktop License",
 				"Unlimited cloud storage & bandwidth",
 				"Auto-generated titles, summaries, clickable chapters, and transcriptions for every recording",
+				"SOC 2 Type II & ISO 27001 compliant",
 				"Custom domain (cap.yourdomain.com)",
 				"Password protected shares",
 				"Viewer analytics & engagement",
 				"Team workspaces",
 				"Loom video importer",
-				"Custom S3 bucket support",
+				"Custom S3 bucket & Google Drive support",
 				"Priority support & early features",
 			],
 			cta: "Get Started",
 			pricing: {
-				annual: 8.16,
-				monthly: 12,
+				annual: PRICING.pro.annualPerMonth,
+				monthly: PRICING.pro.monthly,
 			},
 			labels: {
 				users: "Per user",
@@ -334,7 +371,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "How long can I record for on the free version?",
 				answer:
-					"You can record for 5 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
+					"Studio Mode lets you record locally without a time limit. Free cloud shareable links are limited to 5 minutes each.",
 			},
 			{
 				question: "How does Cap AI work?",
@@ -359,7 +396,7 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Which platforms do you support?",
 				answer:
-					"Native desktop apps for macOS (Apple Silicon & Intel) and Windows. View your shareable links from anywhere.",
+					"Native desktop apps for macOS (Apple Silicon & Intel), Windows, and Linux, plus a Chrome extension. View your shareable links from anywhere.",
 			},
 			{
 				question: "Can I use Cap for commercial purposes?",
@@ -369,12 +406,12 @@ export const homepageCopy: HomePageCopy = {
 			{
 				question: "Is my data secure?",
 				answer:
-					"Security is core to Cap. As an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. End-to-end encryption for cloud storage, option to use your own infrastructure, and community-driven security reviews keep your content safe.",
+					"Security is core to Cap. Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, and as an open source project, our code is fully auditable and transparent — you can see exactly how your data is handled. You can connect your own storage or self-host Cap for more control over your recordings.",
 			},
 			{
-				question: "What about GDPR/HIPAA compliance?",
+				question: "What about SOC 2, ISO 27001, GDPR, and HIPAA compliance?",
 				answer:
-					"Cap Pro supports custom S3 buckets in any region for GDPR compliance. For HIPAA and other regulations, our self-hosted option gives you complete control. We also offer signed BAAs for enterprise customers.",
+					"Cap is SOC 2 Type II, ISO 27001, and HIPAA compliant, with signed BAAs available for organizations handling PHI. Cap Pro also lets you bring your own storage, including custom S3 buckets in any region or your own Google Drive, for GDPR compliance. For teams that want complete control, our self-hosted option keeps everything on your own infrastructure.",
 			},
 		],
 	},

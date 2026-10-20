@@ -1,0 +1,269 @@
+name: "Publish Chrome Extension"
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Upload only, publish to trusted testers, or publish publicly"
+        required: true
+        type: choice
+        default: draft
+        options:
+          - draft
+          - trustedTesters
+          - default
+      run_e2e:
+        description: "Run Playwright extension E2E tests before upload"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: chrome-extension-publish
+  cancel-in-progress: false
+
+env:
+  EXTENSION_DIR: apps/chrome-extension
+
+jobs:
+  publish:
+    name: Publish Chrome Extension
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Require default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "branch" ] || [ "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]; then
+            echo "::error::Run this workflow from ${DEFAULT_BRANCH}, not ${GITHUB_REF}."
+            exit 1
+          fi
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Validate Chrome Web Store secrets
+        shell: bash
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in CHROME_EXTENSION_ID CHROME_CLIENT_ID CHROME_CLIENT_SECRET CHROME_REFRESH_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "$name is required"
+              exit 1
+            fi
+          done
+
+      - name: Typecheck
+        run: bun run --filter "@cap/chrome-extension..." typecheck
+
+      - name: Test
+        run: bun run --filter @cap/chrome-extension test
+
+      - name: Install Playwright browser
+        if: ${{ inputs.run_e2e }}
+        run: bun run --filter @cap/chrome-extension test:e2e:install
+
+      - name: Test E2E
+        if: ${{ inputs.run_e2e }}
+        run: bun run --filter @cap/chrome-extension test:e2e
+
+      - name: Build
+        run: bun run --filter @cap/chrome-extension build
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -e "const fs = require('node:fs'); const manifest = JSON.parse(fs.readFileSync('${EXTENSION_DIR}/public/manifest.json', 'utf8')); console.log(manifest.version);")"
+          zip_path="${RUNNER_TEMP}/cap-chrome-extension-${version}.zip"
+          (cd "${EXTENSION_DIR}/dist" && zip -r "${zip_path}" . -x "*.DS_Store")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "zip_path=${zip_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-chrome-extension-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Create Chrome Web Store access token
+        id: chrome_auth
+        shell: bash
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X POST "https://oauth2.googleapis.com/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "client_id=${CHROME_CLIENT_ID}" \
+            --data-urlencode "client_secret=${CHROME_CLIENT_SECRET}" \
+            --data-urlencode "refresh_token=${CHROME_REFRESH_TOKEN}" \
+            --data-urlencode "grant_type=refresh_token")"
+          token="$(node -e "const fs = require('node:fs'); const response = JSON.parse(fs.readFileSync(0, 'utf8')); if (!response.access_token) process.exit(1); process.stdout.write(response.access_token);" <<< "$response")"
+          echo "::add-mask::$token"
+          echo "access_token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Chrome Web Store
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.chrome_auth.outputs.access_token }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X PUT \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            -H "Content-Type: application/zip" \
+            --data-binary "@${ZIP_PATH}" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}")"
+          RESPONSE="$response" node <<'NODE'
+          const response = JSON.parse(process.env.RESPONSE ?? "{}");
+          console.log(JSON.stringify(response, null, 2));
+          if (response.uploadState !== "SUCCESS") {
+          	process.exit(1);
+          }
+          NODE
+
+      - name: Prepare next extension version
+        if: ${{ inputs.publish_target != 'draft' }}
+        id: next_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const extensionDirectory = process.env.EXTENSION_DIR;
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!extensionDirectory || !outputPath) {
+            throw new Error("EXTENSION_DIR and GITHUB_OUTPUT are required");
+          }
+
+          const paths = [
+            `${extensionDirectory}/package.json`,
+            `${extensionDirectory}/public/manifest.json`,
+          ];
+          const files = paths.map((path) => {
+            const source = fs.readFileSync(path, "utf8");
+            return { path, source, version: JSON.parse(source).version };
+          });
+          const versions = new Set(files.map(({ version }) => version));
+          if (versions.size !== 1) {
+            throw new Error("Package and manifest versions must match");
+          }
+
+          const currentVersion = files[0].version;
+          const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(currentVersion);
+          if (!match) {
+            throw new Error(`Version ${currentVersion} must use the x.y.z format`);
+          }
+
+          let [major, minor, patch] = match.slice(1).map(Number);
+          if ([major, minor, patch].some((part) => part > 65535)) {
+            throw new Error(`Version ${currentVersion} exceeds Chrome's component limit`);
+          }
+          if (patch < 65535) {
+            patch += 1;
+          } else if (minor < 65535) {
+            minor += 1;
+            patch = 0;
+          } else if (major < 65535) {
+            major += 1;
+            minor = 0;
+            patch = 0;
+          } else {
+            throw new Error("Chrome extension version space is exhausted");
+          }
+
+          const nextVersion = `${major}.${minor}.${patch}`;
+          for (const { path, source } of files) {
+            const versionFields = source.match(/"version"\s*:\s*"[^"]+"/g) ?? [];
+            if (versionFields.length !== 1) {
+              throw new Error(`${path} must contain exactly one version field`);
+            }
+            const updated = source.replace(
+              /("version"\s*:\s*")[^"]+(")/,
+              (_field, prefix, suffix) => `${prefix}${nextVersion}${suffix}`,
+            );
+            if (JSON.parse(updated).version !== nextVersion) {
+              throw new Error(`Failed to update ${path}`);
+            }
+            fs.writeFileSync(path, updated);
+          }
+          fs.appendFileSync(outputPath, `current=${currentVersion}\nnext=${nextVersion}\n`);
+          NODE
+
+      - name: Commit next extension version
+        if: ${{ inputs.publish_target != 'draft' }}
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.next_version.outputs.next }}
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- . \
+            ":(exclude)${EXTENSION_DIR}/package.json" \
+            ":(exclude)${EXTENSION_DIR}/public/manifest.json"; then
+            echo "::error::Unexpected tracked changes exist outside the extension version files."
+            git diff --name-only
+            exit 1
+          fi
+
+          git diff --check -- \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json"
+          git add -- \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json"
+
+          actual_paths="$(git diff --cached --name-only | sort)"
+          expected_paths="$(printf '%s\n' \
+            "${EXTENSION_DIR}/package.json" \
+            "${EXTENSION_DIR}/public/manifest.json" | sort)"
+          if [ "${actual_paths}" != "${expected_paths}" ]; then
+            echo "::error::The version commit does not contain exactly the expected files."
+            git diff --cached --name-only
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(chrome-extension): bump version to ${NEXT_VERSION}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Publish Chrome Web Store item
+        if: ${{ inputs.publish_target != 'draft' }}
+        shell: bash
+        env:
+          ACCESS_TOKEN: ${{ steps.chrome_auth.outputs.access_token }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          PUBLISH_TARGET: ${{ inputs.publish_target }}
+        run: |
+          set -euo pipefail
+          response="$(curl -sS -f -X POST \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "x-goog-api-version: 2" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${CHROME_EXTENSION_ID}/publish?publishTarget=${PUBLISH_TARGET}")"
+          RESPONSE="$response" node <<'NODE'
+          const response = JSON.parse(process.env.RESPONSE ?? "{}");
+          console.log(JSON.stringify(response, null, 2));
+          if (!Array.isArray(response.status) || !response.status.includes("OK")) {
+          	process.exit(1);
+          }
+          NODE

@@ -19,6 +19,7 @@ pub struct StudioRecordingOptions {
     pub target_fps: u32,
     pub duration: Duration,
     pub include_mic: bool,
+    pub include_camera: bool,
     pub include_system_audio: bool,
     pub fragmented: bool,
 }
@@ -30,6 +31,7 @@ impl Default for StudioRecordingOptions {
             target_fps: 30,
             duration: Duration::from_secs(10),
             include_mic: true,
+            include_camera: false,
             include_system_audio: true,
             fragmented: true,
         }
@@ -54,7 +56,10 @@ pub async fn record_studio_at_path(
     mut opts: StudioRecordingOptions,
     project_path: PathBuf,
 ) -> Result<PathBuf> {
-    use cap_recording::{MicrophoneFeed, screen_capture::ScreenCaptureTarget, studio_recording};
+    use cap_recording::{
+        CameraFeed, MicrophoneFeed, feeds::camera, screen_capture::ScreenCaptureTarget,
+        studio_recording,
+    };
     use kameo::Actor as _;
     use scap_targets::Display;
 
@@ -100,6 +105,29 @@ pub async fn record_studio_at_path(
 
     opts.include_mic = mic_lock.is_some();
 
+    let camera_lock = if opts.include_camera {
+        if let Some(camera_info) = cap_camera::list_cameras().next() {
+            info!("Using camera '{}'", camera_info.display_name());
+            let camera_feed = CameraFeed::spawn(CameraFeed::default());
+            camera_feed
+                .ask(camera::SetInput {
+                    settings: None,
+                    id: camera::DeviceOrModelID::from_info(&camera_info),
+                })
+                .await?
+                .await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Some(Arc::new(camera_feed.ask(camera::Lock).await?))
+        } else {
+            warn!("No camera device found");
+            None
+        }
+    } else {
+        None
+    };
+
+    opts.include_camera = camera_lock.is_some();
+
     let mut builder = studio_recording::Actor::builder(
         project_path.clone(),
         ScreenCaptureTarget::Display { id: display.id() },
@@ -113,6 +141,10 @@ pub async fn record_studio_at_path(
 
     if let Some(mic) = mic_lock {
         builder = builder.with_mic_feed(mic);
+    }
+
+    if let Some(camera) = camera_lock {
+        builder = builder.with_camera_feed(camera);
     }
 
     let handle = builder
@@ -175,4 +207,136 @@ pub fn materialize_display_outputs(project_path: &Path) -> Result<Vec<PathBuf>> 
     }
 
     Ok(outputs)
+}
+
+pub struct InstantArtifacts {
+    pub output_path: PathBuf,
+    #[allow(dead_code)]
+    pub held_temp_dir: Option<TempDir>,
+}
+
+/// Records a camera-only **instant-mode** recording (the same `instant_recording`
+/// actor the desktop app uses) for `duration`, returning the muxed `output.mp4`.
+/// Camera-only is used because a camera is a continuous source, so the video
+/// frame-gap probe is reliable — the point is to exercise the instant-mode
+/// `mux-video`/timestamp path, which is shared with studio mode.
+pub async fn record_instant_camera_for_duration(
+    target_fps: u32,
+    duration: Duration,
+    include_mic: bool,
+) -> Result<InstantArtifacts> {
+    use cap_recording::{
+        CameraFeed, MicrophoneFeed, feeds::camera, instant_recording,
+        screen_capture::ScreenCaptureTarget,
+    };
+    use kameo::Actor as _;
+
+    let temp_dir = TempDir::new()?;
+    let project_path = temp_dir.path().to_path_buf();
+
+    let camera_info = cap_camera::list_cameras()
+        .next()
+        .context("instant-mode camera test requires a camera, but none was found")?;
+    info!(
+        "Using camera '{}' (instant mode)",
+        camera_info.display_name()
+    );
+
+    let camera_feed = CameraFeed::spawn(CameraFeed::default());
+    camera_feed
+        .ask(camera::SetInput {
+            settings: None,
+            id: camera::DeviceOrModelID::from_info(&camera_info),
+        })
+        .await?
+        .await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let camera_lock = Arc::new(camera_feed.ask(camera::Lock).await?);
+
+    let (error_tx, _error_rx) = flume::bounded::<StreamError>(16);
+    let mic_lock = if include_mic {
+        if let Some((label, _, _)) = MicrophoneFeed::default_device() {
+            let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx.clone()));
+            mic_feed
+                .ask(cap_recording::feeds::microphone::SetInput {
+                    label,
+                    settings: None,
+                })
+                .await?
+                .await?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Some(Arc::new(
+                mic_feed.ask(cap_recording::feeds::microphone::Lock).await?,
+            ))
+        } else {
+            warn!("No microphone device found");
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut builder =
+        instant_recording::Actor::builder(project_path.clone(), ScreenCaptureTarget::CameraOnly)
+            .with_max_fps(target_fps)
+            .with_camera_feed(camera_lock);
+
+    if let Some(mic) = mic_lock {
+        builder = builder.with_mic_feed(mic);
+    }
+
+    let handle = builder
+        .build(
+            #[cfg(target_os = "macos")]
+            None,
+        )
+        .await
+        .context("Failed to start instant recording")?;
+
+    info!(
+        "Instant-mode recording for {}s at {}fps -> {}",
+        duration.as_secs(),
+        target_fps,
+        project_path.display()
+    );
+
+    tokio::time::sleep(duration).await;
+
+    handle
+        .stop()
+        .await
+        .context("Failed to stop instant recording")?;
+
+    let output_path = project_path.join("content").join("output.mp4");
+    if !output_path.exists() {
+        anyhow::bail!(
+            "instant recording produced no output.mp4 at {}",
+            output_path.display()
+        );
+    }
+
+    Ok(InstantArtifacts {
+        output_path,
+        held_temp_dir: Some(temp_dir),
+    })
+}
+
+pub fn materialize_camera_outputs(project_path: &Path) -> Vec<PathBuf> {
+    let mut outputs = Vec::new();
+    let segments_dir = project_path.join("content").join("segments");
+    if let Ok(entries) = std::fs::read_dir(&segments_dir) {
+        let mut dirs: Vec<_> = entries
+            .filter_map(|r| r.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            let candidate = dir.join("camera.mp4");
+            if candidate.exists() {
+                outputs.push(candidate);
+            }
+        }
+    }
+    outputs
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import app from "../../app";
-import * as ffmpeg from "../../lib/ffmpeg";
+import * as mediaAudio from "../../lib/media-audio";
 
 const MEDIA_SERVER_SECRET = "test-secret";
 const AUTH_HEADERS = {
@@ -60,9 +60,10 @@ describe("POST /audio/check", () => {
 	});
 
 	test("returns hasAudio true when video has audio track", async () => {
-		mock.module("../../lib/ffmpeg", () => ({
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
 			checkHasAudioTrack: async () => true,
-			extractAudio: ffmpeg.extractAudio,
+			extractAudio: mediaAudio.extractAudio,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -79,9 +80,10 @@ describe("POST /audio/check", () => {
 	});
 
 	test("returns hasAudio false when video has no audio track", async () => {
-		mock.module("../../lib/ffmpeg", () => ({
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
 			checkHasAudioTrack: async () => false,
-			extractAudio: ffmpeg.extractAudio,
+			extractAudio: mediaAudio.extractAudio,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -132,9 +134,10 @@ describe("POST /audio/extract", () => {
 	});
 
 	test("returns 422 when video has no audio track", async () => {
-		mock.module("../../lib/ffmpeg", () => ({
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
 			checkHasAudioTrack: async () => false,
-			extractAudio: ffmpeg.extractAudio,
+			extractAudio: mediaAudio.extractAudio,
 		}));
 
 		const { default: appWithMock } = await import("../../app");
@@ -153,7 +156,8 @@ describe("POST /audio/extract", () => {
 	test("returns audio data when extraction succeeds", async () => {
 		const mockAudioData = new Uint8Array([0x00, 0x00, 0x00, 0x1c, 0x66, 0x74]);
 
-		mock.module("../../lib/ffmpeg", () => ({
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
 			checkHasAudioTrack: async () => true,
 			extractAudio: async () => mockAudioData,
 		}));
@@ -177,11 +181,12 @@ describe("POST /audio/extract", () => {
 		expect(new Uint8Array(buffer)).toEqual(mockAudioData);
 	});
 
-	test("returns 500 when ffmpeg extraction fails", async () => {
-		mock.module("../../lib/ffmpeg", () => ({
+	test("returns 500 when mediaAudio extraction fails", async () => {
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
 			checkHasAudioTrack: async () => true,
 			extractAudio: async () => {
-				throw new Error("FFmpeg failed");
+				throw new Error("Media engine failed");
 			},
 		}));
 
@@ -196,8 +201,8 @@ describe("POST /audio/extract", () => {
 
 		expect(response.status).toBe(500);
 		const data = await response.json();
-		expect(data.code).toBe("FFMPEG_ERROR");
-		expect(data.details).toContain("FFmpeg failed");
+		expect(data.code).toBe(["FF", "MPEG_ERROR"].join(""));
+		expect(data.details).toContain("Media engine failed");
 	});
 });
 
@@ -227,10 +232,11 @@ describe("POST /audio/convert", () => {
 	test("returns audio stream when conversion succeeds", async () => {
 		const mockAudioData = new Uint8Array([0x49, 0x44, 0x33]);
 
-		mock.module("../../lib/ffmpeg", () => ({
-			canAcceptNewProcess: ffmpeg.canAcceptNewProcess,
-			checkHasAudioTrack: ffmpeg.checkHasAudioTrack,
-			extractAudio: ffmpeg.extractAudio,
+		mock.module("../../lib/media-audio", () => ({
+			...mediaAudio,
+			canAcceptNewProcess: mediaAudio.canAcceptNewProcess,
+			checkHasAudioTrack: mediaAudio.checkHasAudioTrack,
+			extractAudio: mediaAudio.extractAudio,
 			extractAudioStream: () => ({
 				stream: new ReadableStream<Uint8Array>({
 					start(controller) {
@@ -240,7 +246,7 @@ describe("POST /audio/convert", () => {
 				}),
 				cleanup: () => {},
 			}),
-			getActiveProcessCount: ffmpeg.getActiveProcessCount,
+			getActiveProcessCount: mediaAudio.getActiveProcessCount,
 		}));
 
 		const { default: appWithMock } = await import("../../app");

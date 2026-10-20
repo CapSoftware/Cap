@@ -18,7 +18,7 @@ const ModeOption = (props: ModeOptionProps) => {
 			data-tauri-drag-region="false"
 			onClick={() => props.onSelect(props.mode)}
 			class={cx(
-				"relative flex flex-col items-center rounded-xl border-2 transition-all duration-200 cursor-pointer overflow-hidden group",
+				"relative flex flex-col items-center rounded-xl border-2 transition-all duration-200 overflow-hidden group",
 				props.isSelected
 					? "border-blue-9 bg-blue-3 dark:bg-blue-3/30 shadow-lg shadow-blue-9/10"
 					: "border-gray-4 dark:border-gray-5 bg-gray-2 dark:bg-gray-3 hover:border-gray-6 dark:hover:border-gray-6 hover:bg-gray-3 dark:hover:bg-gray-4",
@@ -96,7 +96,7 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 			<Show when={props.onClose}>
 				<div
 					onClick={() => props.onClose?.()}
-					class="absolute -top-2.5 -right-2.5 p-2 rounded-full border duration-200 bg-gray-2 border-gray-3 hover:bg-gray-3 transition-colors cursor-pointer"
+					class="absolute -top-2.5 -right-2.5 p-2 rounded-full border duration-200 bg-gray-2 border-gray-3 hover:bg-gray-3 transition-colors"
 				>
 					<IconCapX class="invert-1 size-2 dark:invert" />
 				</div>

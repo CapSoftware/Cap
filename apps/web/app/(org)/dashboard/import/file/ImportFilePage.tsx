@@ -1,24 +1,15 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import type { Folder, Organisation } from "@cap/web-domain";
 import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useStore } from "@tanstack/react-store";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
-import { toast } from "sonner";
-import { createVideoForServerProcessing } from "@/actions/video/create-for-processing";
-import { triggerVideoProcessing } from "@/actions/video/trigger-processing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { sendProgressUpdate } from "@/app/(org)/dashboard/caps/components/sendProgressUpdate";
-import {
-	type UploadStatus,
-	useUploadingContext,
-} from "@/app/(org)/dashboard/caps/UploadingContext";
+import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { uploadWithTarget } from "@/utils/upload-target";
+import { importMediaFile } from "../import-media";
 
 export const ImportFilePage = () => {
 	const { user, activeOrganization } = useDashboardContext();
@@ -38,12 +29,12 @@ export const ImportFilePage = () => {
 				return;
 			}
 
-			const ok = await uploadVideoForServerProcessing(
+			const ok = await importMediaFile({
 				file,
-				undefined,
-				activeOrganization.organization.id,
+				orgId: activeOrganization.organization.id,
 				setUploadStatus,
-			);
+			});
+
 			if (ok) router.push("/dashboard/caps");
 		},
 		[user, activeOrganization, setUploadStatus, router],
@@ -62,14 +53,6 @@ export const ImportFilePage = () => {
 			setIsDragOver(false);
 			const file = e.dataTransfer.files[0];
 			if (!file) return;
-
-			const isVideo =
-				file.type.startsWith("video/") ||
-				/\.(mov|mp4|avi|mkv|webm|m4v)$/i.test(file.name);
-			if (!isVideo) {
-				toast.error("Please drop a video file.");
-				return;
-			}
 			await processFile(file);
 		},
 		[processFile],
@@ -115,11 +98,14 @@ export const ImportFilePage = () => {
 				</Link>
 				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
 				<p className="mt-1 text-sm text-gray-10">
-					Upload a video file from your device.
+					Upload a video or image file from your device.
 				</p>
 			</div>
 
-			<div
+			<button
+				type="button"
+				disabled={isUploading}
+				onClick={handleBrowseClick}
 				onDragOver={(e) => {
 					e.preventDefault();
 					if (!isUploading) setIsDragOver(true);
@@ -135,51 +121,48 @@ export const ImportFilePage = () => {
 				}`}
 			>
 				{isUploading ? (
-					<div className="flex flex-col items-center gap-4">
-						<div className="flex items-center justify-center size-16 rounded-full bg-gray-3">
-							<div className="size-6 border-2 border-gray-8 border-t-blue-10 rounded-full animate-spin" />
-						</div>
-						<div className="flex flex-col items-center gap-1">
-							<p className="text-sm font-medium text-gray-12">{statusLabel}</p>
+					<span className="flex flex-col items-center gap-4">
+						<span className="flex items-center justify-center size-16 rounded-full bg-gray-3">
+							<span className="size-6 border-2 border-gray-8 border-t-blue-10 rounded-full animate-spin" />
+						</span>
+						<span className="flex flex-col items-center gap-1">
+							<span className="text-sm font-medium text-gray-12">
+								{statusLabel}
+							</span>
 							{progressPercent !== null && (
-								<div className="w-48 h-1.5 rounded-full bg-gray-4 mt-2 overflow-hidden">
-									<div
+								<span className="w-48 h-1.5 rounded-full bg-gray-4 mt-2 overflow-hidden">
+									<span
 										className="h-full rounded-full bg-blue-10 transition-all duration-300"
 										style={{ width: `${progressPercent}%` }}
 									/>
-								</div>
+								</span>
 							)}
-						</div>
-					</div>
+						</span>
+					</span>
 				) : (
-					<div className="flex flex-col items-center gap-4">
-						<div className="flex items-center justify-center size-16 rounded-full bg-gray-3 text-gray-10">
+					<span className="flex flex-col items-center gap-4">
+						<span className="flex items-center justify-center size-16 rounded-full bg-gray-3 text-gray-10">
 							<FontAwesomeIcon className="size-6" icon={faUpload} />
-						</div>
-						<div className="flex flex-col items-center gap-1">
-							<p className="text-sm font-medium text-gray-12">
-								Drag and drop your video here
-							</p>
-							<p className="text-xs text-gray-10">
-								MP4, MOV, AVI, MKV, WebM up to any size
-							</p>
-						</div>
-						<Button
-							onClick={handleBrowseClick}
-							variant="dark"
-							size="sm"
-							className="mt-2"
-						>
+						</span>
+						<span className="flex flex-col items-center gap-1">
+							<span className="text-sm font-medium text-gray-12">
+								Drag and drop your video or image here
+							</span>
+							<span className="text-xs text-gray-10">
+								MP4, MOV, AVI, MKV, WebM, JPG, or PNG
+							</span>
+						</span>
+						<span className="inline-flex items-center justify-center mt-2 h-8 px-3 rounded-full bg-gray-12 text-sm font-medium text-gray-1">
 							Browse Files
-						</Button>
-					</div>
+						</span>
+					</span>
 				)}
-			</div>
+			</button>
 
 			<input
 				ref={inputRef}
 				type="file"
-				accept="video/*,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V"
+				accept="video/*,image/jpeg,image/png,.mov,.MOV,.mp4,.MP4,.avi,.AVI,.mkv,.MKV,.webm,.WEBM,.m4v,.M4V,.jpg,.JPG,.jpeg,.JPEG,.png,.PNG"
 				onChange={handleFileChange}
 				className="hidden"
 			/>
@@ -191,168 +174,3 @@ export const ImportFilePage = () => {
 		</div>
 	);
 };
-
-async function uploadVideoForServerProcessing(
-	file: File,
-	folderId: Folder.FolderId | undefined,
-	orgId: Organisation.OrganisationId,
-	setUploadStatus: (state: UploadStatus | undefined) => void,
-) {
-	try {
-		setUploadStatus({ status: "parsing" });
-
-		let duration: number | undefined;
-		let resolution: string | undefined;
-
-		try {
-			const parser = await import("@remotion/media-parser");
-			const metadata = await parser.parseMedia({
-				src: file,
-				fields: {
-					durationInSeconds: true,
-					dimensions: true,
-				},
-			});
-
-			duration = metadata.durationInSeconds
-				? Math.round(metadata.durationInSeconds)
-				: undefined;
-			resolution = metadata.dimensions
-				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
-				: undefined;
-		} catch (parseError) {
-			console.warn(
-				"Failed to parse video metadata, continuing without it:",
-				parseError,
-			);
-		}
-
-		setUploadStatus({ status: "creating" });
-		const videoData = await createVideoForServerProcessing({
-			duration,
-			resolution,
-			folderId,
-			orgId,
-		});
-
-		const uploadId = videoData.id;
-
-		setUploadStatus({
-			status: "uploadingVideo",
-			capId: uploadId,
-			progress: 0,
-			thumbnailUrl: undefined,
-		});
-
-		const createProgressTracker = () => {
-			const uploadState = {
-				videoId: uploadId,
-				uploaded: 0,
-				total: 0,
-				pendingTask: undefined as ReturnType<typeof setTimeout> | undefined,
-				lastUpdateTime: Date.now(),
-			};
-
-			const scheduleProgressUpdate = (uploaded: number, total: number) => {
-				uploadState.uploaded = uploaded;
-				uploadState.total = total;
-				uploadState.lastUpdateTime = Date.now();
-
-				if (uploadState.pendingTask) {
-					clearTimeout(uploadState.pendingTask);
-					uploadState.pendingTask = undefined;
-				}
-
-				const shouldSendImmediately = uploaded >= total;
-
-				if (!shouldSendImmediately) {
-					uploadState.pendingTask = setTimeout(() => {
-						if (uploadState.videoId) {
-							sendProgressUpdate(
-								uploadState.videoId,
-								uploadState.uploaded,
-								uploadState.total,
-							);
-						}
-						uploadState.pendingTask = undefined;
-					}, 2000);
-				}
-			};
-
-			const cleanup = () => {
-				if (uploadState.pendingTask) {
-					clearTimeout(uploadState.pendingTask);
-					uploadState.pendingTask = undefined;
-				}
-			};
-
-			const getTotal = () => uploadState.total;
-
-			return { scheduleProgressUpdate, cleanup, getTotal };
-		};
-
-		const progressTracker = createProgressTracker();
-
-		try {
-			await uploadWithTarget({
-				target: videoData.uploadTarget,
-				body: file,
-				fileName: file.name,
-				onProgress: ({ loaded, total }) => {
-					const percent = (loaded / total) * 100;
-					setUploadStatus({
-						status: "uploadingVideo",
-						capId: uploadId,
-						progress: percent,
-						thumbnailUrl: undefined,
-					});
-
-					progressTracker.scheduleProgressUpdate(loaded, total);
-				},
-			});
-			progressTracker.cleanup();
-			const total = progressTracker.getTotal() || 1;
-			sendProgressUpdate(uploadId, total, total);
-		} catch (uploadError) {
-			progressTracker.cleanup();
-			throw uploadError;
-		}
-
-		setUploadStatus({
-			status: "serverProcessing",
-			capId: uploadId,
-		});
-
-		try {
-			await triggerVideoProcessing({
-				videoId: uploadId,
-				rawFileKey: videoData.rawFileKey,
-				bucketId: videoData.bucketId,
-			});
-		} catch (triggerError) {
-			console.error("Failed to trigger processing:", triggerError);
-			toast.error("Failed to start video processing. Please try again.");
-			setUploadStatus(undefined);
-			return false;
-		}
-
-		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
-		return true;
-	} catch (err) {
-		console.error("Video upload failed", err);
-
-		if (err instanceof Error && err.message === "upgrade_required") {
-			toast.error(
-				"Video duration exceeds the limit for free accounts. Please upgrade to Pro.",
-			);
-		} else {
-			toast.error("Failed to upload video. Please try again.");
-		}
-	}
-
-	setUploadStatus(undefined);
-	return false;
-}

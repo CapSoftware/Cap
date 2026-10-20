@@ -8,6 +8,7 @@ use std::{
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{self, null, null_mut},
+    sync::OnceLock,
     time::Duration,
 };
 use tracing::*;
@@ -359,10 +360,20 @@ impl Iterator for VideoInputDeviceIterator {
     }
 }
 
+/// Binding the capture filter opens the device through its KS driver, which
+/// costs a thread and dozens of kernel handles that are not reclaimed on
+/// release. Plain enumeration (name/id/model) must never pay that price, so
+/// binding is deferred until formats or capture genuinely need it
+/// (CapSoftware/Cap#2132).
 #[derive(Clone)]
 pub struct VideoInputDevice {
     moniker: IMoniker,
     prop_bag: IPropertyBag,
+    bound: OnceLock<BoundFilter>,
+}
+
+#[derive(Clone)]
+struct BoundFilter {
     filter: IBaseFilter,
     output_pin: IPin,
     stream_config: IAMStreamConfig,
@@ -371,20 +382,31 @@ pub struct VideoInputDevice {
 impl VideoInputDevice {
     fn new(moniker: IMoniker) -> windows_core::Result<Self> {
         let prop_bag: IPropertyBag = unsafe { moniker.BindToStorage(None, None) }?;
-        let filter: IBaseFilter = unsafe { moniker.BindToObject(None, None) }?;
-
-        let output_pin = filter
-            .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
-            .ok_or(E_FAIL)?;
-        let stream_config = output_pin.cast::<IAMStreamConfig>().ok().ok_or(E_FAIL)?;
 
         Ok(Self {
             moniker,
             prop_bag,
+            bound: OnceLock::new(),
+        })
+    }
+
+    fn bound(&self) -> windows_core::Result<&BoundFilter> {
+        if let Some(bound) = self.bound.get() {
+            return Ok(bound);
+        }
+
+        let filter: IBaseFilter = unsafe { self.moniker.BindToObject(None, None) }?;
+        let output_pin = filter
+            .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
+            .ok_or(E_FAIL)?;
+        let stream_config = output_pin.cast::<IAMStreamConfig>()?;
+
+        let _ = self.bound.set(BoundFilter {
             filter,
             output_pin,
             stream_config,
-        })
+        });
+        self.bound.get().ok_or_else(|| E_FAIL.into())
     }
 
     pub fn name(&self) -> Option<OsString> {
@@ -410,22 +432,16 @@ impl VideoInputDevice {
     }
 
     pub fn media_types(&self) -> Option<VideoMediaTypesIterator<'_>> {
-        self.stream_config
+        self.bound()
+            .ok()?
+            .stream_config
             .media_types()
             .map(|inner| VideoMediaTypesIterator { inner })
             .ok()
     }
 
-    pub fn filter(&self) -> &IBaseFilter {
-        &self.filter
-    }
-
-    pub fn stream_config(&self) -> &IAMStreamConfig {
-        &self.stream_config
-    }
-
-    pub fn output_pin(&self) -> &IPin {
-        &self.output_pin
+    pub fn output_pin(&self) -> windows_core::Result<&IPin> {
+        Ok(&self.bound()?.output_pin)
     }
 
     pub fn start_capturing(
@@ -433,8 +449,14 @@ impl VideoInputDevice {
         format: &AMMediaType,
         callback: SinkCallback,
     ) -> Result<CaptureHandle, StartCapturingError> {
+        let bound = self
+            .bound()
+            .map_err(StartCapturingError::BindDevice)?
+            .clone();
+
         unsafe {
-            self.stream_config
+            bound
+                .stream_config
                 .SetFormat(&**format)
                 .map_err(StartCapturingError::Other)?;
 
@@ -460,7 +482,7 @@ impl VideoInputDevice {
                 .SetFiltergraph(&graph_builder)
                 .map_err(StartCapturingError::ConfigureGraph)?;
             graph_builder
-                .AddFilter(&self.filter, None)
+                .AddFilter(&bound.filter, None)
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             let sink_filter: IBaseFilter = sink_filter
@@ -476,14 +498,14 @@ impl VideoInputDevice {
                 .FindInterface(
                     Some(&PIN_CATEGORY_CAPTURE),
                     Some(&MEDIATYPE_Video),
-                    &self.filter,
+                    &bound.filter,
                     &IAMStreamConfig::IID,
                     &mut stream_config,
                 )
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             graph_builder
-                .Connect(&self.output_pin, &input_sink_pin)
+                .Connect(&bound.output_pin, &input_sink_pin)
                 .map_err(StartCapturingError::ConfigureGraph)?;
 
             media_control.Run().map_err(StartCapturingError::Run)?;
@@ -491,7 +513,7 @@ impl VideoInputDevice {
             Ok(CaptureHandle {
                 media_control,
                 graph_builder,
-                output_capture_pin: self.output_pin,
+                output_capture_pin: bound.output_pin,
                 input_sink_pin,
             })
         }
@@ -521,6 +543,8 @@ impl CaptureHandle {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartCapturingError {
+    #[error("BindDevice: {0}")]
+    BindDevice(windows_core::Error),
     #[error("No input pin")]
     NoInputPin,
     #[error("CreateGraph: {0}")]

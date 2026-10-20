@@ -1,8 +1,9 @@
 import "server-only";
 
 import type { MessengerMessageRole } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
+import { generateText, stepCountIs, tool } from "ai";
+import { z } from "zod";
+import { runWithAiProviders } from "@/lib/ai/run";
 import { CAP_REFERENCE_GUIDE, MESSENGER_AGENT_PROMPT } from "./constants";
 import { getKnowledgeTag, searchSupermemory } from "./supermemory";
 
@@ -10,6 +11,36 @@ type ConversationMessage = {
 	role: MessengerMessageRole;
 	content: string;
 };
+
+type SupportEmailToolInput = {
+	subject: string;
+	message: string;
+};
+
+type SupportEmailToolResult =
+	| {
+			status: "sent";
+			remainingToday: number;
+	  }
+	| {
+			status: "rate_limited";
+			remainingToday: 0;
+	  };
+
+type SupportEmailTool = {
+	execute: (input: SupportEmailToolInput) => Promise<SupportEmailToolResult>;
+};
+
+type SupportEmailExecutionResult = {
+	content: string;
+	isError?: boolean;
+};
+
+const MESSENGER_MAX_TOKENS = 350;
+const MESSENGER_TOOL_DISPATCH_MAX_TOKENS = 512;
+
+const MESSENGER_APOLOGY_REPLY =
+	"Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!";
 
 const normalizeContext = (sections: string[]) =>
 	sections
@@ -19,12 +50,29 @@ const normalizeContext = (sections: string[]) =>
 		.join("\n\n")
 		.slice(0, 7000);
 
+// zod strips unknown keys (like a spoofed `email`) before `execute` runs;
+// the server alone controls sender, recipient, and reply-to.
+const supportEmailInputSchema = z.object({
+	subject: z.string().describe("A concise support email subject."),
+	message: z
+		.string()
+		.describe(
+			"A concise support email body summarizing the user's issue and relevant context from the chat.",
+		),
+});
+
+const SUPPORT_EMAIL_TOOL_NAME = "send_support_email";
+const SUPPORT_EMAIL_TOOL_DESCRIPTION =
+	"Send a concise support email to the Cap team after the signed-in user explicitly asks or agrees. The server controls the recipient, sender, reply-to address, account email, conversation id, and rate limit.";
+
 const buildSystemPrompt = ({
 	userIdentity,
 	context,
+	supportEmailAvailable,
 }: {
 	userIdentity: string;
 	context: string;
+	supportEmailAvailable: boolean;
 }) =>
 	[
 		MESSENGER_AGENT_PROMPT,
@@ -42,10 +90,18 @@ Critical rules:
 - Never make up features, pricing, dates, or technical details. If you're not sure, say so honestly. Always use the Cap Reference Guide below for accurate facts, URLs, and pricing.
 - When linking to Cap pages, ALWAYS use the full URL from the reference guide (e.g. https://cap.so/download, not just "cap.so"). Get the exact URL right.
 - If you genuinely can't help, say something like "I'm not sure on that one, let me get someone from the team to take a look" rather than stiff corporate escalation language.
-- Keep responses focused, usually 1-3 short paragraphs max. This is a chat, not an email.
+- Keep responses focused, usually 1-2 short paragraphs max and under 120 words unless the user asks for detailed steps.
 - Be genuinely helpful, personable, and respectful. You represent Cap and should leave the user feeling good about the interaction.
 - ONLY discuss Cap and topics directly related to Cap (screen recording, sharing, account, billing, technical issues with Cap, etc.). If a user asks about other apps, competitors, or unrelated topics, politely steer the conversation back to Cap. Never recommend, compare, or discuss competing products or unrelated software.
-- If you notice the conversation is going in circles, the user seems frustrated, or their issue isn't getting resolved after a few back-and-forth messages, gently suggest they email the team directly at hello@cap.so for more hands-on help. Say something natural like "this one might need a closer look from the team, if you shoot an email to hello@cap.so we can dig into it properly" rather than stiff escalation language.`,
+- If you notice the conversation is going in circles, the user seems frustrated, or their issue isn't getting resolved after a few back-and-forth messages, offer to send it to the team if the support email tool is available. If the tool is unavailable, gently suggest emailing hello@cap.so for more hands-on help.`,
+		supportEmailAvailable
+			? `Support email tool:
+- You can send one support email to hello@cap.so by using send_support_email, but only after the user explicitly asks you to send it or agrees to your offer.
+- Never ask for, accept, or invent a sender or recipient email address. The server uses the signed-in account email automatically.
+- Keep the email subject short and the body factual. Include the user's issue, useful details already shared, and what they need from the team.
+- After the tool result, tell the user briefly whether it was sent. If the tool says rate_limited, say they can still email hello@cap.so directly.`
+			: `Support email:
+- You cannot send support email for this user in the current chat. If a hands-on review is needed, ask them to email hello@cap.so directly.`,
 		CAP_REFERENCE_GUIDE,
 		`The person you're talking to: ${userIdentity}`,
 		context
@@ -61,133 +117,70 @@ const mapHistoryForLlm = (history: ConversationMessage[]) =>
 		content: message.content.slice(0, 6000),
 	}));
 
-const parseAnthropicContent = (payload: unknown) => {
-	if (!payload || typeof payload !== "object") return null;
-	const content = (payload as { content?: unknown }).content;
-	if (!Array.isArray(content)) return null;
-	const text = content
-		.map((block) => {
-			if (!block || typeof block !== "object") return "";
-			const type = (block as { type?: unknown }).type;
-			const value = (block as { text?: unknown }).text;
-			if (type !== "text" || typeof value !== "string") return "";
-			return value;
-		})
-		.join("\n")
-		.trim();
-	return text.length > 0 ? text : null;
+const readToolString = (input: unknown, key: keyof SupportEmailToolInput) => {
+	if (!input || typeof input !== "object") return null;
+	const value = (input as Record<string, unknown>)[key];
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
 };
 
-const callAnthropic = async ({
-	systemPrompt,
-	history,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-}) => {
-	const key = serverEnv().ANTHROPIC_API_KEY;
-	if (!key) return null;
-
-	const response = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"x-api-key": key,
-			"anthropic-version": "2023-06-01",
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			model: "claude-sonnet-4-6",
-			temperature: 0.65,
-			max_tokens: 500,
-			system: systemPrompt,
-			messages: mapHistoryForLlm(history),
-		}),
-		signal: AbortSignal.timeout(35000),
-	});
-
-	if (!response.ok) {
-		const text = await response.text();
-		throw new Error(`Anthropic chat failed: ${response.status} ${text}`);
-	}
-
-	const payload = await response.json();
-	return parseAnthropicContent(payload);
-};
-
-const parseOpenAiContent = (payload: unknown) => {
-	if (!payload || typeof payload !== "object") return null;
-	const choices = (payload as { choices?: unknown }).choices;
-	if (!Array.isArray(choices) || choices.length === 0) return null;
-	const first = choices[0] as {
-		message?: {
-			content?: unknown;
-		};
+const readSupportEmailInput = (input: unknown) => {
+	const subject = readToolString(input, "subject");
+	const message = readToolString(input, "message");
+	if (!subject || !message) return null;
+	return {
+		subject,
+		message,
 	};
-	const content = first.message?.content;
-	if (typeof content === "string") return content.trim();
-	return null;
 };
 
-const callOpenAi = async ({
-	systemPrompt,
-	history,
+const formatSupportEmailToolResult = (result: SupportEmailToolResult) => {
+	if (result.status === "sent") {
+		return `Support email sent to hello@cap.so from the user's account email. Remaining sends today: ${result.remainingToday}.`;
+	}
+	return "Support email was not sent because this user has reached the 2 emails per day limit.";
+};
+
+const fallbackReplyFromSupportEmailToolResults = (
+	toolResults: SupportEmailExecutionResult[],
+) => {
+	const firstToolResult = toolResults[0];
+	if (firstToolResult?.content.includes("Support email sent")) {
+		return "Done, I sent that to the team from your account email. We'll follow up with you there.";
+	}
+	if (firstToolResult?.isError) {
+		return "I couldn't send that to the team right now. Please email hello@cap.so directly.";
+	}
+	return "I couldn't send another support email from your account today. You're limited to 2 per day, but you can still email hello@cap.so directly.";
+};
+
+const executeSupportEmailTool = async ({
+	input,
+	supportEmailTool,
 }: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-}) => {
-	const key = serverEnv().OPENAI_API_KEY;
-	if (!key) return null;
-
-	const response = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${key}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			model: "gpt-4o-mini",
-			temperature: 0.65,
-			max_tokens: 500,
-			messages: [
-				{ role: "system", content: systemPrompt },
-				...mapHistoryForLlm(history),
-			],
-		}),
-		signal: AbortSignal.timeout(35000),
-	});
-
-	if (!response.ok) {
-		const text = await response.text();
-		throw new Error(`OpenAI chat failed: ${response.status} ${text}`);
+	input: unknown;
+	supportEmailTool: SupportEmailTool;
+}): Promise<SupportEmailExecutionResult> => {
+	const parsedInput = readSupportEmailInput(input);
+	if (!parsedInput) {
+		return {
+			content: "Missing subject or message.",
+			isError: true,
+		};
 	}
 
-	const payload = await response.json();
-	return parseOpenAiContent(payload);
-};
-
-const callGroq = async ({
-	systemPrompt,
-	history,
-}: {
-	systemPrompt: string;
-	history: ConversationMessage[];
-}) => {
-	const client = getGroqClient();
-	if (!client) return null;
-
-	const completion = await client.chat.completions.create({
-		model: GROQ_MODEL,
-		temperature: 0.65,
-		max_tokens: 500,
-		messages: [
-			{ role: "system", content: systemPrompt },
-			...mapHistoryForLlm(history),
-		],
-	});
-
-	const content = completion.choices[0]?.message?.content;
-	if (!content) return null;
-	return content.trim();
+	try {
+		const result = await supportEmailTool.execute(parsedInput);
+		return {
+			content: formatSupportEmailToolResult(result),
+		};
+	} catch {
+		return {
+			content: "Failed to send support email.",
+			isError: true,
+		};
+	}
 };
 
 export const generateMessengerAgentReply = async ({
@@ -195,11 +188,13 @@ export const generateMessengerAgentReply = async ({
 	identityTag,
 	query,
 	history,
+	supportEmailTool = null,
 }: {
 	userIdentity: string;
 	identityTag: string;
 	query: string;
 	history: ConversationMessage[];
+	supportEmailTool?: SupportEmailTool | null;
 }) => {
 	const [personalContext, knowledgeContext] = await Promise.all([
 		searchSupermemory({ query, containerTag: identityTag, limit: 4 }).catch(
@@ -215,20 +210,89 @@ export const generateMessengerAgentReply = async ({
 	const systemPrompt = buildSystemPrompt({
 		userIdentity,
 		context: normalizeContext([...knowledgeContext, ...personalContext]),
+		supportEmailAvailable: Boolean(supportEmailTool),
 	});
 
-	const fromAnthropic = await callAnthropic({ systemPrompt, history }).catch(
-		() => null,
-	);
-	if (fromAnthropic) return fromAnthropic;
+	// Shared across providers on purpose: once a support email attempt has
+	// happened, no other provider may retry the turn (`stopOnError` below).
+	const state: {
+		sent: boolean;
+		toolResults: SupportEmailExecutionResult[];
+	} = { sent: false, toolResults: [] };
 
-	const fromOpenAi = await callOpenAi({ systemPrompt, history }).catch(
-		() => null,
-	);
-	if (fromOpenAi) return fromOpenAi;
+	const tools = supportEmailTool
+		? {
+				[SUPPORT_EMAIL_TOOL_NAME]: tool({
+					description: SUPPORT_EMAIL_TOOL_DESCRIPTION,
+					inputSchema: supportEmailInputSchema,
+					execute: async (input) => {
+						// In-execute latch: providers without a parallel-tool-call
+						// switch (eg. the AssemblyAI gateway) can emit several tool
+						// calls in one step; only the first may send an email.
+						if (state.sent) {
+							const result: SupportEmailExecutionResult = {
+								content:
+									"Only one support email can be sent per assistant response.",
+								isError: true,
+							};
+							state.toolResults.push(result);
+							return result.content;
+						}
+						state.sent = true;
 
-	const fromGroq = await callGroq({ systemPrompt, history }).catch(() => null);
-	if (fromGroq) return fromGroq;
+						const result = await executeSupportEmailTool({
+							input,
+							supportEmailTool,
+						});
+						state.toolResults.push(result);
+						return result.content;
+					},
+				}),
+			}
+		: undefined;
 
-	return "Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!";
+	try {
+		return await runWithAiProviders(
+			"chat",
+			async (selection) => {
+				const result = await generateText({
+					model: selection.model(),
+					system: systemPrompt,
+					messages: mapHistoryForLlm(history),
+					maxOutputTokens: supportEmailTool
+						? MESSENGER_TOOL_DISPATCH_MAX_TOKENS
+						: MESSENGER_MAX_TOKENS,
+					// Parity with the previous per-provider implementations: the
+					// raw Anthropic calls never sent temperature.
+					...(selection.supportsTemperature &&
+					selection.provider !== "anthropic"
+						? { temperature: 0.65 }
+						: {}),
+					abortSignal: AbortSignal.timeout(35000),
+					...(tools
+						? {
+								tools,
+								stopWhen: stepCountIs(2),
+								...(selection.providerOptions
+									? { providerOptions: selection.providerOptions }
+									: {}),
+							}
+						: {}),
+				});
+
+				const text = result.text.trim();
+				if (text) return text;
+				if (state.toolResults.length > 0) {
+					return fallbackReplyFromSupportEmailToolResults(state.toolResults);
+				}
+				throw new Error("Messenger agent returned an empty reply");
+			},
+			{ stopOnError: () => state.sent },
+		);
+	} catch {
+		if (state.toolResults.length > 0) {
+			return fallbackReplyFromSupportEmailToolResults(state.toolResults);
+		}
+		return MESSENGER_APOLOGY_REPLY;
+	}
 };

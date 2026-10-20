@@ -1,37 +1,14 @@
 "use client";
 
+import type { UploadStatus } from "@cap/recorder-core";
 import { useStore } from "@tanstack/react-store";
 import { Store } from "@tanstack/store";
 import type React from "react";
 import { createContext, useContext, useEffect, useState } from "react";
 
-export type UploadStatus =
-	| {
-			status: "parsing";
-	  }
-	| {
-			status: "creating";
-	  }
-	| {
-			status: "converting";
-			capId: string;
-			progress: number;
-	  }
-	| {
-			status: "uploadingThumbnail";
-			capId: string;
-			progress: number;
-	  }
-	| {
-			status: "uploadingVideo";
-			capId: string;
-			progress: number;
-			thumbnailUrl: string | undefined;
-	  }
-	| {
-			status: "serverProcessing";
-			capId: string;
-	  };
+// Re-exported so existing importers keep working; the canonical definition
+// lives in @cap/recorder-core alongside the uploader that produces it.
+export type { UploadStatus } from "@cap/recorder-core";
 
 interface UploadingContextType {
 	uploadingStore: Store<{ uploadStatus?: UploadStatus }>;

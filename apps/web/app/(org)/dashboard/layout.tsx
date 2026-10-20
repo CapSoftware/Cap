@@ -1,10 +1,16 @@
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { organizationInvites } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
+import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
+import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
 import DashboardInner from "./_components/DashboardInner";
+import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
@@ -20,6 +26,21 @@ import {
 
 export const dynamic = "force-dynamic";
 
+async function getPendingInviteIdForUser(email: string) {
+	const [invite] = await db()
+		.select({ id: organizationInvites.id })
+		.from(organizationInvites)
+		.where(
+			and(
+				eq(organizationInvites.invitedEmail, email.toLowerCase()),
+				eq(organizationInvites.status, "pending"),
+			),
+		)
+		.limit(1);
+
+	return invite?.id ?? null;
+}
+
 export default async function DashboardLayout({
 	children,
 }: {
@@ -27,6 +48,9 @@ export default async function DashboardLayout({
 }) {
 	const user = await getCurrentUser();
 	if (!user) redirect("/login");
+
+	const pendingInviteId = await getPendingInviteIdForUser(user.email);
+	if (pendingInviteId) redirect(`/invite/${pendingInviteId}`);
 
 	if (!user.name || user.name.length === 0) {
 		redirect("/onboarding/welcome");
@@ -56,6 +80,14 @@ export default async function DashboardLayout({
 		userPreferences = null;
 	}
 
+	// Fail-open: the meter is informational and must never take the shell down.
+	const shareableLinkUsage = userIsPro(user)
+		? null
+		: await getShareableLinkUsage(user.id).catch((error) => {
+				console.error("Failed to load shareable link usage", error);
+				return null;
+			});
+
 	let activeOrganization = organizationSelect.find(
 		(organization) =>
 			organization.organization.id === user.activeOrganizationId,
@@ -83,7 +115,9 @@ export default async function DashboardLayout({
 					anyNewNotifications={anyNewNotifications}
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
+					shareableLinkUsage={shareableLinkUsage}
 				>
+					<DashboardPasteImport />
 					<div className="bg-gray-2 dashboard-grid">
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">

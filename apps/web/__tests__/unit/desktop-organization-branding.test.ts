@@ -85,6 +85,7 @@ describe("desktop organization branding", () => {
 	it("filters tombstoned and inaccessible organization rows", () => {
 		const rows = [
 			row({ id: "owned" }),
+			row({ id: "admin", ownerId: "user-2", role: "admin" }),
 			row({ id: "member", ownerId: "user-2", role: "member" }),
 			row({ id: "owner-member", ownerId: "user-2", role: "owner" }),
 			row({ id: "tombstone", tombstoneAt: new Date() }),
@@ -93,7 +94,7 @@ describe("desktop organization branding", () => {
 
 		expect(
 			filterAccessibleOrganizationRows(rows, "user-1").map((r) => r.id),
-		).toEqual(["owned", "member", "owner-member"]);
+		).toEqual(["owned", "admin", "member", "owner-member"]);
 	});
 
 	it("derives owner role and edit access from ownership", () => {
@@ -135,6 +136,12 @@ describe("desktop organization branding", () => {
 			),
 		).toBe(false);
 		expect(
+			canEditOrganizationBranding(
+				row({ ownerId: "user-2", role: "admin" }),
+				"user-1",
+			),
+		).toBe(true);
+		expect(
 			canEditOrganizationBranding(row({ tombstoneAt: new Date() }), "user-1"),
 		).toBe(false);
 		expect(
@@ -142,7 +149,7 @@ describe("desktop organization branding", () => {
 				row({ ownerId: "user-2", role: "owner" }),
 				"user-1",
 			),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("validates and normalizes branding patch payloads", () => {

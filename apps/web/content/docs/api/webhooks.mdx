@@ -1,21 +1,22 @@
 ---
 title: "Webhooks"
-summary: "Receive real-time notifications about events in your Cap workspace"
+summary: "Current webhook availability for public Cap integrations"
 tags: "API, Integration"
 ---
 
-# Webhooks - Coming Soon
+Cap does not currently expose a documented public webhook subscription API for customer applications.
 
-Webhooks are not yet available in Cap. This feature is currently on our roadmap and under consideration for a future release.
+The repository contains internal webhook endpoints for services such as Stripe and the media-processing pipeline. Those are implementation endpoints, not a stable customer webhook product, and integrations should not call them.
 
-## What Webhooks Will Do
+## Poll supported API state
 
-When available, webhooks will let you receive real-time HTTP POST notifications whenever events happen in your Cap workspace, such as a video being created, processed, or viewed. Instead of repeatedly checking the API for updates, Cap will push event data directly to a URL you specify.
+Use the [REST API](/docs/api/rest-api) to read the supported developer state. For an uploaded video, poll its status endpoint until `ready` is `true` before presenting it as processed.
 
-## In the Meantime
+Keep polling bounded:
 
-You can use the [REST API](/docs/api/overview) to poll for changes. For example, to check for new or updated videos, periodically call the list videos endpoint and compare results against your local state.
+- Use backoff instead of a tight loop.
+- Stop on terminal success or error.
+- Store the last observed state locally.
+- Respect HTTP errors and any retry guidance returned by the API.
 
-## Stay Updated
-
-We share feature updates and progress on our [Discord server](https://discord.gg/y8gdQ3WRN3). Join the community to stay informed about when webhooks and other new features become available.
+Do not build against an undocumented route or assume that an internal webhook payload will remain stable.

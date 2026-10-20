@@ -209,7 +209,9 @@ export const MediaFormatConverter = ({
 				setSupportedFormats((prev) => [...prev, "webm"]);
 			}
 
-			trackEvent(`${conversionPath}_tool_loaded`);
+			trackEvent("media_format_tool_loaded", {
+				conversion_path: conversionPath,
+			});
 		};
 
 		checkSupport();
@@ -280,7 +282,8 @@ export const MediaFormatConverter = ({
 
 		if (!isValidType) {
 			setError(`Please select a ${currentSourceFormat.toUpperCase()} file.`);
-			trackEvent(`${conversionPath}_invalid_file_type`, {
+			trackEvent("media_format_invalid_file_type", {
+				conversion_path: conversionPath,
 				fileType: selectedFile.type,
 			});
 			return;
@@ -288,14 +291,16 @@ export const MediaFormatConverter = ({
 
 		if (selectedFile.size > 500 * 1024 * 1024) {
 			setError("File size exceeds 500MB limit.");
-			trackEvent(`${conversionPath}_file_too_large`, {
+			trackEvent("media_format_file_too_large", {
+				conversion_path: conversionPath,
 				fileSize: selectedFile.size,
 			});
 			return;
 		}
 
 		setFile(selectedFile);
-		trackEvent(`${conversionPath}_file_selected`, {
+		trackEvent("media_format_file_selected", {
+			conversion_path: conversionPath,
 			fileSize: selectedFile.size,
 		});
 	};
@@ -332,7 +337,8 @@ export const MediaFormatConverter = ({
 		}
 		parserControllerRef.current = { abort: () => {} };
 
-		trackEvent(`${conversionPath}_conversion_started`, {
+		trackEvent("media_format_conversion_started", {
+			conversion_path: conversionPath,
 			fileSize: file.size,
 			fileName: file.name,
 		});
@@ -368,7 +374,8 @@ export const MediaFormatConverter = ({
 
 				setError(errorMessage);
 
-				trackEvent(`${conversionPath}_conversion_failed`, {
+				trackEvent("media_format_conversion_failed", {
+					conversion_path: conversionPath,
 					fileSize: file.size,
 					fileName: file.name,
 					error: err.message || "Unknown error",
@@ -410,7 +417,8 @@ export const MediaFormatConverter = ({
 			setOutputUrl(url);
 			setProgress(100);
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
+			trackEvent("media_format_conversion_completed", {
+				conversion_path: conversionPath,
 				fileSize: file?.size,
 				fileName: file?.name,
 				outputSize: blob.size,
@@ -554,7 +562,8 @@ export const MediaFormatConverter = ({
 
 			recordedChunksRef.current = [gifBlob];
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
+			trackEvent("media_format_conversion_completed", {
+				conversion_path: conversionPath,
 				fileSize: file?.size,
 				fileName: file?.name,
 				outputSize: gifBlob.size,
@@ -655,7 +664,8 @@ export const MediaFormatConverter = ({
 
 			recordedChunksRef.current = [blob];
 
-			trackEvent(`${conversionPath}_conversion_completed`, {
+			trackEvent("media_format_conversion_completed", {
+				conversion_path: conversionPath,
 				fileSize: file?.size,
 				fileName: file?.name,
 				outputSize: blob.size,
@@ -712,7 +722,8 @@ export const MediaFormatConverter = ({
 			newExtension,
 		);
 
-		trackEvent(`${conversionPath}_download_clicked`, {
+		trackEvent("media_format_download_clicked", {
+			conversion_path: conversionPath,
 			fileName: downloadFileName,
 		});
 
@@ -738,7 +749,7 @@ export const MediaFormatConverter = ({
 		setError(null);
 		recordedChunksRef.current = [];
 
-		trackEvent(`${conversionPath}_reset`);
+		trackEvent("media_format_reset", { conversion_path: conversionPath });
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";

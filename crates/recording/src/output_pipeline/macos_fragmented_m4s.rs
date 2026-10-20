@@ -1,6 +1,6 @@
 use super::core::{
     BlockingThreadFinish, DiskSpaceMonitor, HealthSender, PipelineHealthEvent, SharedHealthSender,
-    combine_finish_errors, wait_for_blocking_thread_finish,
+    combine_finish_errors, frame_timing_log_threshold_ms, wait_for_blocking_thread_finish,
 };
 use super::macos_frame_convert::{FramePool, fill_frame_from_sample_buf};
 use crate::{
@@ -154,6 +154,7 @@ struct EncoderState {
 }
 
 pub struct MacOSFragmentedM4SMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -170,6 +171,7 @@ pub struct MacOSFragmentedM4SMuxer {
 }
 
 pub struct MacOSFragmentedM4SMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub bpp: f32,
@@ -182,6 +184,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
 impl Default for MacOSFragmentedM4SMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(2),
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
@@ -218,6 +221,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -292,16 +296,22 @@ impl MacOSFragmentedM4SMuxer {
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
+            prefer_videotoolbox_hw_input: true,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
         if let Some(tx) = &self.segment_tx {
             encoder.set_segment_callback(tx.clone());
         }
+        let hw_input = encoder.is_videotoolbox_hw_input();
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
@@ -318,8 +328,11 @@ impl MacOSFragmentedM4SMuxer {
                     _ => ffmpeg::format::Pixel::NV12,
                 };
 
-                let mut frame_pool =
-                    FramePool::new(pixel_format, video_config.width, video_config.height);
+                // The zero-copy VideoToolbox path never materializes CPU
+                // frames, so the pool (a full frame allocation) is software
+                // fallback only.
+                let mut frame_pool = (!hw_input)
+                    .then(|| FramePool::new(pixel_format, video_config.width, video_config.height));
 
                 if ready_tx.send(Ok(())).is_err() {
                     return Err(anyhow!("Failed to send ready signal - receiver dropped"));
@@ -330,7 +343,7 @@ impl MacOSFragmentedM4SMuxer {
                 let mut total_frames = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
-                const SLOW_THRESHOLD_MS: u128 = 5;
+                let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
                     if matches!(
@@ -343,56 +356,100 @@ impl MacOSFragmentedM4SMuxer {
                     if disk_exhausted {
                         continue;
                     }
-                    let convert_start = std::time::Instant::now();
-                    let frame = frame_pool.get_frame();
-                    let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
-                    let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
-                        slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
-                            debug!(
-                                elapsed_ms = convert_elapsed_ms,
-                                count = slow_convert_count,
-                                "fill_frame_from_sample_buf exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
-                            );
+                    if let Some(frame_pool) = frame_pool.as_mut() {
+                        let convert_start = std::time::Instant::now();
+                        let frame = frame_pool.get_frame();
+                        let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
+                        let convert_elapsed_ms = convert_start.elapsed().as_millis();
+
+                        if convert_elapsed_ms > slow_threshold_ms {
+                            slow_convert_count += 1;
+                            if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = convert_elapsed_ms,
+                                    count = slow_convert_count,
+                                    "fill_frame_from_sample_buf exceeded {}ms threshold",
+                                    slow_threshold_ms
+                                );
+                            }
                         }
-                    }
 
-                    match fill_result {
-                        Ok(()) => {
-                            let encode_start = std::time::Instant::now();
-                            let owned_frame = frame_pool.take_frame();
+                        match fill_result {
+                            Ok(()) => {
+                                let encode_start = std::time::Instant::now();
+                                let owned_frame = frame_pool.take_frame();
 
-                            match encoder_clone.lock() {
-                                Ok(mut encoder) => {
-                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                        warn!("Failed to encode frame: {e}");
+                                match encoder_clone.lock() {
+                                    Ok(mut encoder) => {
+                                        if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
+                                            warn!("Failed to encode frame: {e}");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                        return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
                                     }
                                 }
-                                Err(_) => {
-                                    error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
-                                    return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+
+                                let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                                if encode_elapsed_ms > slow_threshold_ms {
+                                    slow_encode_count += 1;
+                                    if slow_encode_count <= 5
+                                        || slow_encode_count.is_multiple_of(100)
+                                    {
+                                        debug!(
+                                            elapsed_ms = encode_elapsed_ms,
+                                            count = slow_encode_count,
+                                            "encoder.queue_frame exceeded {}ms threshold",
+                                            slow_threshold_ms
+                                        );
+                                    }
                                 }
                             }
-
-                            let encode_elapsed_ms = encode_start.elapsed().as_millis();
-
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
-                                slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
-                                    debug!(
-                                        elapsed_ms = encode_elapsed_ms,
-                                        count = slow_encode_count,
-                                        "encoder.queue_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
-                                    );
-                                }
+                            Err(e) => {
+                                warn!("Failed to convert frame: {e:?}");
                             }
                         }
-                        Err(e) => {
-                            warn!("Failed to convert frame: {e:?}");
+                    } else {
+                        let encode_start = std::time::Instant::now();
+
+                        let queued = match sample_buf.image_buf() {
+                            Some(image_buf) => {
+                                let ptr = (std::ptr::from_ref(image_buf)
+                                    as *const std::ffi::c_void)
+                                    .cast_mut();
+                                match encoder_clone.lock() {
+                                    Ok(mut encoder) => {
+                                        unsafe { encoder.queue_hw_pixel_buffer(ptr, timestamp) }
+                                            .map_err(|e| anyhow!("{e}"))
+                                    }
+                                    Err(_) => {
+                                        error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                        return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                    }
+                                }
+                            }
+                            None => Err(anyhow!("sample buffer has no image buffer")),
+                        };
+
+                        if let Err(e) = queued {
+                            warn!("Failed to encode frame: {e}");
+                        }
+
+                        let encode_elapsed_ms = encode_start.elapsed().as_millis();
+
+                        if encode_elapsed_ms > slow_threshold_ms {
+                            slow_encode_count += 1;
+                            if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
+                                debug!(
+                                    elapsed_ms = encode_elapsed_ms,
+                                    count = slow_encode_count,
+                                    "encoder.queue_hw_pixel_buffer exceeded {}ms threshold",
+                                    slow_threshold_ms
+                                );
+                            }
                         }
                     }
 
@@ -630,10 +687,15 @@ impl MacOSFragmentedM4SCameraMuxer {
             preset: self.preset,
             bpp: self.bpp,
             output_size: self.output_size,
+            prefer_videotoolbox_hw_input: false,
         };
 
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            true,
+        )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
         }
@@ -670,7 +732,7 @@ impl MacOSFragmentedM4SCameraMuxer {
                 let mut total_frames = 0u64;
                 let mut disk_monitor = DiskSpaceMonitor::new();
                 let mut disk_exhausted = false;
-                const SLOW_THRESHOLD_MS: u128 = 5;
+                let slow_threshold_ms = frame_timing_log_threshold_ms(&video_config);
 
                 while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
                     if matches!(
@@ -689,14 +751,14 @@ impl MacOSFragmentedM4SCameraMuxer {
                     let fill_result = fill_frame_from_sample_buf(&sample_buf, frame);
                     let convert_elapsed_ms = convert_start.elapsed().as_millis();
 
-                    if convert_elapsed_ms > SLOW_THRESHOLD_MS {
+                    if convert_elapsed_ms > slow_threshold_ms {
                         slow_convert_count += 1;
                         if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = convert_elapsed_ms,
                                 count = slow_convert_count,
                                 "Camera fill_frame_from_sample_buf exceeded {}ms threshold",
-                                SLOW_THRESHOLD_MS
+                                slow_threshold_ms
                             );
                         }
                     }
@@ -720,14 +782,14 @@ impl MacOSFragmentedM4SCameraMuxer {
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
-                            if encode_elapsed_ms > SLOW_THRESHOLD_MS {
+                            if encode_elapsed_ms > slow_threshold_ms {
                                 slow_encode_count += 1;
                                 if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                                     debug!(
                                         elapsed_ms = encode_elapsed_ms,
                                         count = slow_encode_count,
                                         "Camera encoder.queue_frame exceeded {}ms threshold",
-                                        SLOW_THRESHOLD_MS
+                                        slow_threshold_ms
                                     );
                                 }
                             }

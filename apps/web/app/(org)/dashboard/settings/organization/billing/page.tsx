@@ -1,38 +1,75 @@
 "use client";
 
 import { buildEnv } from "@cap/env";
-import { useCallback, useRef } from "react";
-import { toast } from "sonner";
+import { Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import Link from "next/link";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import {
+	canManageOrganizationBilling,
+	getEffectiveOrganizationRole,
+} from "@/lib/permissions/roles";
 import { BillingSummaryCard } from "../components/BillingSummaryCard";
 import { MembersCard } from "../components/MembersCard";
 import { SeatManagementCard } from "../components/SeatManagementCard";
+import { SignedBaaCard } from "../components/SignedBaaCard";
 
 export default function BillingAndMembersPage() {
 	const { activeOrganization, user, setInviteDialogOpen } =
 		useDashboardContext();
-	const isOwner = user?.id === activeOrganization?.organization.ownerId;
-	const ownerToastShown = useRef(false);
-
-	const showOwnerToast = useCallback(() => {
-		if (!ownerToastShown.current) {
-			toast.error("Only the owner can make changes");
-			ownerToastShown.current = true;
-			setTimeout(() => {
-				ownerToastShown.current = false;
-			}, 3000);
-		}
-	}, []);
+	const currentMember = activeOrganization?.members.find(
+		(member) => member.userId === user.id,
+	);
+	const currentRole = getEffectiveOrganizationRole({
+		userId: user.id,
+		ownerId: activeOrganization?.organization.ownerId,
+		memberRole: currentMember?.role,
+	});
+	const canManageBilling = canManageOrganizationBilling(currentRole);
 
 	return (
 		<div className="flex flex-col gap-6">
-			{buildEnv.NEXT_PUBLIC_IS_CAP && <BillingSummaryCard />}
-			{buildEnv.NEXT_PUBLIC_IS_CAP && <SeatManagementCard />}
-			<MembersCard
-				isOwner={isOwner}
-				showOwnerToast={showOwnerToast}
-				setIsInviteDialogOpen={setInviteDialogOpen}
-			/>
+			{buildEnv.NEXT_PUBLIC_IS_CAP &&
+				(canManageBilling ? (
+					<>
+						<BillingSummaryCard />
+						{activeOrganization && (
+							<Card>
+								<CardHeader>
+									<CardTitle>SAML SSO invoices</CardTitle>
+									<CardDescription>
+										If your organization has an SSO subscription, open its
+										invoices from Security settings.
+									</CardDescription>
+								</CardHeader>
+								<Link
+									href={`/dashboard/settings/organization/security?organizationId=${encodeURIComponent(activeOrganization.organization.id)}`}
+									className="mt-3 inline-block text-sm font-medium underline"
+									prefetch={false}
+								>
+									Open SSO invoices in Security settings
+								</Link>
+							</Card>
+						)}
+						{activeOrganization?.hasActiveProSeatProvider ? (
+							<div className="grid gap-6 items-stretch md:grid-cols-2">
+								<SeatManagementCard />
+								<SignedBaaCard />
+							</div>
+						) : (
+							<SignedBaaCard />
+						)}
+					</>
+				) : (
+					<Card>
+						<CardHeader>
+							<CardTitle>Billing</CardTitle>
+							<CardDescription>
+								Billing is managed by the organization owner.
+							</CardDescription>
+						</CardHeader>
+					</Card>
+				))}
+			<MembersCard setIsInviteDialogOpen={setInviteDialogOpen} />
 		</div>
 	);
 }

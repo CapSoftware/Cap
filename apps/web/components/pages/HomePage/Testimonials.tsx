@@ -121,9 +121,9 @@ const Testimonials = () => {
 	return (
 		<div className="w-full max-w-[1200px] mx-auto md:px-5">
 			<div className="px-5 mb-16 text-center">
-				<h1 className="mx-auto mb-3 w-full text-4xl font-medium text-gray-12 text-balance">
+				<h2 className="mx-auto mb-3 w-full text-4xl font-medium text-gray-12 text-balance">
 					{homepageCopy.testimonials.title}
-				</h1>
+				</h2>
 				<p className="text-lg text-gray-10 w-full max-w-[400px] mx-auto leading-[1.75rem]">
 					{homepageCopy.testimonials.subtitle}
 				</p>

@@ -16,21 +16,27 @@ import {
 	createResource,
 	createSignal,
 	For,
-	type JSX,
-	onCleanup,
 	onMount,
-	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { Input } from "~/routes/editor/ui";
-import { authStore, generalSettingsStore } from "~/store";
+import { Input, Slider } from "~/routes/editor/ui";
+import {
+	audioEnhancementStore,
+	authStore,
+	generalSettingsStore,
+	recordingStartSafetyStore,
+} from "~/store";
+import { clientEnv } from "~/utils/env";
 import {
 	deriveGeneralSettings,
 	type GeneralSettingsStore,
+	RECORDING_START_SAFETY_DEFAULTS,
+	type RecordingStartSafetySettings,
 } from "~/utils/general-settings";
 import {
 	type AppTheme,
@@ -40,12 +46,20 @@ import {
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
-	type StudioRecordingQuality,
+	type UpdateChannel,
 	type WindowExclusion,
 } from "~/utils/tauri";
+import IconLucideAlertTriangle from "~icons/lucide/alert-triangle";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
-import { SettingItem, ToggleSettingItem } from "./Setting";
+import {
+	Section,
+	SectionCard,
+	SectionRows,
+	SettingItem,
+	SettingsPageContent,
+	ToggleSettingItem,
+} from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -70,9 +84,39 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
+const isSameExclusion = (a: WindowExclusion, b: WindowExclusion) =>
+	(a.bundleIdentifier ?? null) === (b.bundleIdentifier ?? null) &&
+	(a.ownerName ?? null) === (b.ownerName ?? null) &&
+	(a.windowTitle ?? null) === (b.windowTitle ?? null);
+
+const coversDefaultExclusion = (
+	entry: WindowExclusion,
+	defaultEntry: WindowExclusion,
+) => {
+	if (isSameExclusion(entry, defaultEntry)) return true;
+	if (
+		defaultEntry.windowTitle &&
+		entry.windowTitle === defaultEntry.windowTitle
+	) {
+		return true;
+	}
+	if (
+		defaultEntry.bundleIdentifier &&
+		entry.bundleIdentifier === defaultEntry.bundleIdentifier
+	) {
+		return true;
+	}
+	if (defaultEntry.ownerName && entry.ownerName === defaultEntry.ownerName) {
+		return !entry.windowTitle || entry.windowTitle === defaultEntry.windowTitle;
+	}
+	return false;
+};
+
 type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
 const MAX_FPS_OPTIONS = [
+	{ value: 24, label: "24 FPS" },
+	{ value: 25, label: "25 FPS" },
 	{ value: 30, label: "30 FPS" },
 	{ value: 60, label: "60 FPS (Recommended)" },
 	{ value: 120, label: "120 FPS" },
@@ -85,11 +129,25 @@ const DEFAULT_PROJECT_NAME_TEMPLATE =
 	"{target_name} ({target_kind}) {date} {time}";
 
 export default function GeneralSettings() {
-	const [store] = createResource(() => generalSettingsStore.get());
+	const [stores] = createResource(() =>
+		Promise.all([
+			generalSettingsStore.get(),
+			recordingStartSafetyStore.get(),
+			audioEnhancementStore.get(),
+		]),
+	);
 
 	return (
-		<Show when={store.state === "ready" && ([store()] as const)}>
-			{(store) => <Inner initialStore={store()[0] ?? null} />}
+		<Show when={stores()} keyed>
+			{(stores) => (
+				<Inner
+					initialStore={stores[0] ?? null}
+					initialRecordingStartSafety={
+						stores[1] ?? RECORDING_START_SAFETY_DEFAULTS
+					}
+					initialStudioSoundByDefault={stores[2]?.enabledByDefault ?? true}
+				/>
+			)}
 		</Show>
 	);
 }
@@ -129,11 +187,11 @@ function AppearanceSection(props: {
 									aria-checked={isSelected()}
 									aria-label={`Select theme: ${theme.name}`}
 									onClick={() => props.onThemeChange(theme.id)}
-									class="flex flex-col gap-2 items-center group focus:outline-none"
+									class="flex flex-col gap-2 items-center group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1 rounded-xl"
 								>
 									<div
 										class={cx(
-											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-all duration-150",
+											"w-full aspect-[5/3] rounded-lg overflow-hidden border-2 transition-[border-color,box-shadow] duration-150",
 											isSelected()
 												? "border-blue-9"
 												: "border-gray-4 group-hover:border-gray-6",
@@ -168,58 +226,27 @@ function AppearanceSection(props: {
 	);
 }
 
-function Inner(props: { initialStore: GeneralSettingsStore | null }) {
+function Inner(props: {
+	initialStore: GeneralSettingsStore | null;
+	initialRecordingStartSafety: RecordingStartSafetySettings;
+	initialStudioSoundByDefault: boolean;
+}) {
 	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveGeneralSettings(props.initialStore),
+	);
+	const [
+		confirmBeforeRecordingWithoutMicrophone,
+		setConfirmBeforeRecordingWithoutMicrophone,
+	] = createSignal(
+		props.initialRecordingStartSafety.confirmBeforeRecordingWithoutMicrophone,
+	);
+
+	const [studioSoundByDefault, setStudioSoundByDefault] = createSignal(
+		props.initialStudioSoundByDefault,
 	);
 
 	createEffect(() => {
 		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
-	});
-
-	let scrollContainerRef: HTMLDivElement | undefined;
-
-	const scrollToSection = (section: string) => {
-		try {
-			localStorage.removeItem("cap.settings.scrollToSection");
-		} catch {}
-		const attempt = (remaining: number) => {
-			const target = document.getElementById(`settings-section-${section}`);
-			const container = scrollContainerRef;
-			if (!target || !container) {
-				if (remaining > 0) {
-					window.setTimeout(() => attempt(remaining - 1), 50);
-				}
-				return;
-			}
-			const containerRect = container.getBoundingClientRect();
-			const targetRect = target.getBoundingClientRect();
-			const offset =
-				targetRect.top - containerRect.top + container.scrollTop - 8;
-			container.scrollTo({ top: offset, behavior: "smooth" });
-			target.classList.add("settings-section-pulse");
-			window.setTimeout(() => {
-				target.classList.remove("settings-section-pulse");
-			}, 1600);
-		};
-		attempt(10);
-	};
-
-	onMount(() => {
-		let pending: string | null = null;
-		try {
-			pending = localStorage.getItem("cap.settings.scrollToSection");
-		} catch {}
-		if (pending) {
-			scrollToSection(pending);
-		}
-
-		const unlisten = events.requestScrollToSettingsSection.listen((event) => {
-			scrollToSection(event.payload.section);
-		});
-		onCleanup(() => {
-			unlisten.then((cb) => cb()).catch(() => {});
-		});
 	});
 
 	const [windows, { refetch: refetchWindows }] = createResource(
@@ -232,6 +259,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			initialValue: [] as CaptureWindow[],
 		},
 	);
+	const [defaultExcludedWindows] = createResource(
+		() => commands.getDefaultExcludedWindows(),
+		{
+			initialValue: [] as WindowExclusion[],
+		},
+	);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -240,12 +273,50 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
+		const previousValue = settings[key];
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		try {
+			await generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
+		} catch (error) {
+			setSettings(key as keyof GeneralSettingsStore, previousValue);
+			console.error(`Failed to update ${key}`, error);
+		}
+	};
+
+	const handleRecordingStartSafetyChange = async (value: boolean) => {
+		const previousValue = confirmBeforeRecordingWithoutMicrophone();
+		setConfirmBeforeRecordingWithoutMicrophone(value);
+		try {
+			await recordingStartSafetyStore.set({
+				confirmBeforeRecordingWithoutMicrophone: value,
+			});
+		} catch (error) {
+			setConfirmBeforeRecordingWithoutMicrophone(previousValue);
+			console.error("Failed to update recording start safety", error);
+		}
+	};
+
+	const handleStudioSoundByDefaultChange = async (value: boolean) => {
+		const previousValue = studioSoundByDefault();
+		setStudioSoundByDefault(value);
+		try {
+			await audioEnhancementStore.set({ enabledByDefault: value });
+		} catch (error) {
+			setStudioSoundByDefault(previousValue);
+			console.error("Failed to update Studio Sound default", error);
+		}
 	};
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const missingDefaultExclusions = createMemo(() =>
+		defaultExcludedWindows().filter(
+			(defaultEntry) =>
+				!excludedWindows().some((entry) =>
+					coversDefaultExclusion(entry, defaultEntry),
+				),
+		),
+	);
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -352,7 +423,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
-			| StudioRecordingQuality
 			| number,
 	>(props: {
 		label: string;
@@ -396,8 +466,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div ref={scrollContainerRef} class="flex flex-col h-full custom-scroll">
-			<div class="px-6 py-6 space-y-7 max-w-[42rem]">
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
+			<SettingsPageContent>
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
 					onThemeChange={(newTheme) => {
@@ -437,17 +507,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</Section>
 				)}
 
-				<QualitySection
-					studioQuality={settings.studioRecordingQuality ?? "balanced"}
-					onStudioQualityChange={(value) =>
-						handleChange("studioRecordingQuality", value)
-					}
-					instantResolution={settings.instantModeMaxResolution ?? 1920}
-					onInstantResolutionChange={(value) =>
-						handleChange("instantModeMaxResolution", value)
-					}
-				/>
-
 				<Section
 					title="Recording"
 					description="Behaviour while you record and after you stop."
@@ -464,6 +523,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								{ text: "5 seconds", value: 5 },
 								{ text: "10 seconds", value: 10 },
 							]}
+						/>
+						<ToggleSettingItem
+							label="Confirm before recording without a microphone"
+							description="Require confirmation when no microphone is selected or the selected microphone is unavailable."
+							value={confirmBeforeRecordingWithoutMicrophone()}
+							onChange={handleRecordingStartSafetyChange}
+						/>
+						<ToggleSettingItem
+							label="Studio Sound on new recordings"
+							description="Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
+							value={studioSoundByDefault()}
+							onChange={handleStudioSoundByDefaultChange}
 						/>
 						<SelectSettingItem
 							label="Main window when recording starts"
@@ -532,11 +603,37 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							value={!!settings.autoZoomOnClicks}
 							onChange={(value) => handleChange("autoZoomOnClicks", value)}
 						/>
+						<SettingItem
+							label="Default zoom amount"
+							description="Zoom level for newly created and auto-generated zoom segments."
+						>
+							<div class="flex gap-2 items-center w-52">
+								<Slider
+									class="flex-1"
+									value={[settings.defaultZoomAmount ?? 1.5]}
+									onChange={(v) => setSettings("defaultZoomAmount", v[0])}
+									onChangeEnd={(v) => handleChange("defaultZoomAmount", v[0])}
+									minValue={1}
+									maxValue={4.5}
+									step={0.1}
+									formatTooltip="x"
+								/>
+								<span class="w-9 text-xs text-right text-gray-11 tabular-nums">
+									{`${(settings.defaultZoomAmount ?? 1.5).toFixed(1)}x`}
+								</span>
+							</div>
+						</SettingItem>
 						<ToggleSettingItem
 							label="Capture keyboard presses"
 							description="Record key presses so you can add keyboard overlays in the editor."
 							value={!!settings.captureKeyboardEvents}
 							onChange={(value) => handleChange("captureKeyboardEvents", value)}
+						/>
+						<ToggleSettingItem
+							label="Draw the MacBook notch on screen recordings"
+							description="Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
+							value={!!settings.macbookNotchOverlay}
+							onChange={(value) => handleChange("macbookNotchOverlay", value)}
 						/>
 						<SelectSettingItem
 							label="Max capture framerate"
@@ -555,20 +652,33 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					</SectionRows>
 				</Section>
 
-				<Section
-					title="Cap Pro"
-					description="Settings available with a Cap Pro license."
-					pro
-				>
-					<SectionRows>
-						<ToggleSettingItem
-							label="Auto-open shareable links"
-							description="Open the share link in your browser as soon as the upload finishes."
-							value={!settings.disableAutoOpenLinks}
-							onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
-						/>
-					</SectionRows>
-				</Section>
+				<StorageSection
+					recordingsPath={settings.recordingsPath ?? null}
+					onPick={async () => {
+						try {
+							const path = await commands.pickRecordingsFolder();
+							if (path !== null) {
+								setSettings("recordingsPath", path);
+								await offerRecordingsMigration();
+							}
+						} catch (e) {
+							toast.error(
+								`Failed to choose recordings folder: ${e instanceof Error ? e.message : String(e)}`,
+							);
+						}
+					}}
+					onReset={async () => {
+						try {
+							await commands.resetRecordingsFolder();
+							setSettings("recordingsPath", null);
+							await offerRecordingsMigration();
+						} catch (e) {
+							toast.error(
+								`Failed to reset recordings folder: ${e instanceof Error ? e.message : String(e)}`,
+							);
+						}
+					}}
+				/>
 
 				<DefaultProjectNameCard
 					onChange={(value) =>
@@ -579,6 +689,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
+					missingDefaultExclusions={missingDefaultExclusions()}
 					availableWindows={availableWindows()}
 					onRequestAvailableWindows={refreshAvailableWindows}
 					onRemove={handleRemoveExclusion}
@@ -588,8 +699,21 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					isWindows={ostype === "windows"}
 				/>
 
+				<UpdatesSection
+					value={settings.updateChannel ?? "stable"}
+					onChange={async (channel) => {
+						await handleChange("updateChannel", channel);
+						try {
+							await commands.updatesChannelChanged();
+						} catch (error) {
+							console.error("Failed to notify update channel change", error);
+						}
+					}}
+				/>
+
 				<ServerURLSetting
-					value={settings.serverUrl ?? "https://cap.so"}
+					value={settings.serverUrl ?? clientEnv.VITE_SERVER_URL}
+					defaultValue={clientEnv.VITE_SERVER_URL}
 					onChange={async (v) => {
 						const url = new URL(v);
 						const origin = url.origin;
@@ -611,8 +735,95 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					value={settings.enableTelemetry !== false}
 					onChange={(v) => handleChange("enableTelemetry", v)}
 				/>
-			</div>
+			</SettingsPageContent>
 		</div>
+	);
+}
+
+async function offerRecordingsMigration() {
+	let count = 0;
+	try {
+		count = await commands.countRecordingsToMigrate();
+	} catch {
+		// Recordings in other folders stay visible in the library either way,
+		// so a failed scan just means we don't offer the move.
+		return;
+	}
+	if (count === 0) return;
+
+	const plural = count === 1 ? "recording" : "recordings";
+	const shouldMove = await confirm(
+		`Move your ${count} existing ${plural} to the new location? Recordings stay in your library either way.`,
+	);
+	if (!shouldMove) return;
+
+	const toastId = toast.loading(`Moving ${count} ${plural}…`);
+	let unlisten: (() => void) | undefined;
+	try {
+		unlisten = await events.recordingsMigrationProgress.listen((e) => {
+			toast.loading(
+				`Moving recordings… ${Math.min(e.payload.done + 1, e.payload.total)}/${e.payload.total}`,
+				{ id: toastId },
+			);
+		});
+
+		const summary = await commands.migrateRecordingsToCurrentDir();
+
+		const parts = [
+			`Moved ${summary.moved} ${summary.moved === 1 ? "recording" : "recordings"}`,
+		];
+		if (summary.skippedInUse > 0) {
+			parts.push(`${summary.skippedInUse} in use — left in place`);
+		}
+		if (summary.failed.length > 0) {
+			parts.push(
+				`${summary.failed.length} failed — kept in the original folder`,
+			);
+			toast.error(parts.join(" · "), { id: toastId });
+		} else {
+			toast.success(parts.join(" · "), { id: toastId });
+		}
+	} catch (e) {
+		toast.error(
+			`Failed to move recordings: ${e instanceof Error ? e.message : String(e)}`,
+			{ id: toastId },
+		);
+	} finally {
+		unlisten?.();
+	}
+}
+
+function StorageSection(props: {
+	recordingsPath: string | null;
+	onPick: () => Promise<void>;
+	onReset: () => Promise<void>;
+}) {
+	const defaultLabel = "Default (Application Support)";
+	const displayPath = () => props.recordingsPath ?? defaultLabel;
+	const isCustom = () => props.recordingsPath !== null;
+
+	return (
+		<Section title="Storage" description="Where Cap saves your recordings.">
+			<SectionCard padded>
+				<div class="flex flex-col gap-3">
+					<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-3 border border-gray-4 min-w-0">
+						<span class="flex-1 text-xs text-gray-12 truncate font-mono">
+							{displayPath()}
+						</span>
+					</div>
+					<div class="flex justify-end gap-2">
+						<Show when={isCustom()}>
+							<Button size="sm" variant="gray" onClick={props.onReset}>
+								Reset to Default
+							</Button>
+						</Show>
+						<Button size="sm" variant="dark" onClick={props.onPick}>
+							Choose Folder
+						</Button>
+					</div>
+				</div>
+			</SectionCard>
+		</Section>
 	);
 }
 
@@ -634,50 +845,70 @@ function TelemetryCard(props: {
 	);
 }
 
-type StudioQualityTier = {
-	value: StudioRecordingQuality;
+type UpdateChannelOption = {
+	value: UpdateChannel;
 	label: string;
-	summary: string;
-	bestFor: string;
+	description: string;
 };
 
-const STUDIO_QUALITY_TIERS: StudioQualityTier[] = [
+const UPDATE_CHANNEL_OPTIONS: UpdateChannelOption[] = [
 	{
-		value: "compatibility",
-		label: "Compatibility",
-		summary: "Lower bitrate to keep older or low-power machines smooth.",
-		bestFor: "Older Intel Macs, 8GB MacBook Air, weaker laptops.",
+		value: "stable",
+		label: "Stable",
+		description: "Versioned releases (recommended)",
 	},
 	{
-		value: "balanced",
-		label: "Balanced",
-		summary: "Sharp footage with sensible CPU and disk usage.",
-		bestFor: "Most modern Macs and PCs with 16GB+ RAM.",
-	},
-	{
-		value: "ultra",
-		label: "Ultra",
-		summary: "Maximum detail for color-graded, large-display edits.",
-		bestFor: "M-series Pro/Max, discrete GPUs, 32GB+ RAM, NVMe.",
+		value: "nightly",
+		label: "Nightly",
+		description:
+			"The newest builds, updated automatically in the background when you're not recording or exporting. May be unstable.",
 	},
 ];
 
-type InstantResolutionTier = {
-	value: number;
-	label: string;
-	summary: string;
-};
+function UpdatesSection(props: {
+	value: UpdateChannel;
+	onChange: (value: UpdateChannel) => void;
+}) {
+	const currentOption = createMemo(
+		() =>
+			UPDATE_CHANNEL_OPTIONS.find((option) => option.value === props.value) ??
+			UPDATE_CHANNEL_OPTIONS[0],
+	);
 
-const INSTANT_RESOLUTION_TIERS: InstantResolutionTier[] = [
-	{ value: 1280, label: "720p", summary: "Smallest size, low bandwidth." },
-	{
-		value: 1920,
-		label: "1080p",
-		summary: "Recommended. Sharp on most networks.",
-	},
-	{ value: 2560, label: "1440p", summary: "More detail for desktop content." },
-	{ value: 3840, label: "4K", summary: "Max clarity. Needs fast upload." },
-];
+	return (
+		<Section title="Updates" description="Choose which Cap builds you receive.">
+			<SectionCard>
+				<div class="flex flex-col gap-3 px-4 py-4">
+					<div class="flex justify-between items-start gap-4">
+						<div class="flex flex-col gap-0.5 min-w-0">
+							<p class="text-[13px] text-gray-12">Update channel</p>
+							<p class="text-xs leading-snug text-gray-10">
+								Which release channel Cap updates from.
+							</p>
+						</div>
+						<SegmentedControl
+							value={props.value}
+							onChange={props.onChange}
+							options={UPDATE_CHANNEL_OPTIONS.map((option) => ({
+								value: option.value,
+								label: option.label,
+							}))}
+						/>
+					</div>
+					<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
+						<p class="text-xs text-gray-12">{currentOption().description}</p>
+						<Show when={props.value === "nightly"}>
+							<p class="text-[11px] text-gray-10 leading-snug">
+								Switching back to Stable will return you to the latest stable
+								version, which may be older than your current build.
+							</p>
+						</Show>
+					</div>
+				</div>
+			</SectionCard>
+		</Section>
+	);
+}
 
 function SegmentedControl<T extends string | number>(props: {
 	value: T;
@@ -694,7 +925,7 @@ function SegmentedControl<T extends string | number>(props: {
 							type="button"
 							onClick={() => props.onChange(option.value)}
 							class={cx(
-								"px-3 py-1 text-xs font-medium rounded-md transition-all",
+								"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
 								isSelected()
 									? "bg-gray-1 text-gray-12 shadow-sm"
 									: "text-gray-10 hover:text-gray-12",
@@ -709,172 +940,22 @@ function SegmentedControl<T extends string | number>(props: {
 	);
 }
 
-function StudioQualitySubsection(props: {
-	value: StudioRecordingQuality;
-	onChange: (value: StudioRecordingQuality) => void;
-}) {
-	const currentTier = createMemo(
-		() =>
-			STUDIO_QUALITY_TIERS.find((t) => t.value === props.value) ??
-			STUDIO_QUALITY_TIERS[1],
-	);
-
-	return (
-		<div
-			id="settings-section-studio-quality"
-			class="flex flex-col gap-3 px-4 py-4"
-		>
-			<div class="flex justify-between items-start gap-4">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Studio mode</p>
-					<p class="text-xs leading-snug text-gray-10">
-						Encoder profile for local Studio recordings.
-					</p>
-				</div>
-				<SegmentedControl
-					value={props.value}
-					onChange={props.onChange}
-					options={STUDIO_QUALITY_TIERS.map((tier) => ({
-						value: tier.value,
-						label: tier.label,
-					}))}
-				/>
-			</div>
-			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
-				<p class="text-xs text-gray-12">{currentTier().summary}</p>
-				<p class="text-[11px] text-gray-10 leading-snug">
-					<span class="text-gray-11">Best for:</span> {currentTier().bestFor}
-				</p>
-			</div>
-		</div>
-	);
-}
-
-function InstantQualitySubsection(props: {
-	value: number;
-	onChange: (value: number) => void;
-}) {
-	const currentTier = createMemo(
-		() =>
-			INSTANT_RESOLUTION_TIERS.find((t) => t.value === props.value) ??
-			INSTANT_RESOLUTION_TIERS[1],
-	);
-
-	return (
-		<div
-			id="settings-section-instant-quality"
-			class="flex flex-col gap-3 px-4 py-4"
-		>
-			<div class="flex justify-between items-start gap-4">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] font-medium text-gray-12">Instant mode</p>
-					<p class="text-xs leading-snug text-gray-10">
-						Maximum upload resolution for Instant recordings.
-					</p>
-				</div>
-				<SegmentedControl
-					value={props.value}
-					onChange={props.onChange}
-					options={INSTANT_RESOLUTION_TIERS.map((tier) => ({
-						value: tier.value,
-						label: tier.label,
-					}))}
-				/>
-			</div>
-			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
-				<p class="text-xs text-gray-12">{currentTier().summary}</p>
-			</div>
-		</div>
-	);
-}
-
-function QualitySection(props: {
-	studioQuality: StudioRecordingQuality;
-	onStudioQualityChange: (value: StudioRecordingQuality) => void;
-	instantResolution: number;
-	onInstantResolutionChange: (value: number) => void;
-}) {
-	return (
-		<Section
-			title="Quality"
-			description="Pick the right profile for each recording mode."
-		>
-			<SectionCard class="divide-y divide-gray-3">
-				<StudioQualitySubsection
-					value={props.studioQuality}
-					onChange={props.onStudioQualityChange}
-				/>
-				<InstantQualitySubsection
-					value={props.instantResolution}
-					onChange={props.onInstantResolutionChange}
-				/>
-			</SectionCard>
-		</Section>
-	);
-}
-
-function Section(
-	props: ParentProps<{
-		title: string;
-		description?: string;
-		right?: JSX.Element;
-		pro?: boolean;
-	}>,
-) {
-	return (
-		<section class="space-y-2.5">
-			<header class="flex justify-between items-end gap-3 px-1">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<div class="flex gap-2 items-center">
-						<h3 class="text-sm font-semibold tracking-tight text-gray-12">
-							{props.title}
-						</h3>
-						<Show when={props.pro}>
-							<span class="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-blue-9 text-white">
-								Pro
-							</span>
-						</Show>
-					</div>
-					<Show when={props.description}>
-						<p class="text-xs leading-relaxed text-gray-10">
-							{props.description}
-						</p>
-					</Show>
-				</div>
-				<Show when={props.right}>
-					<div class="flex shrink-0 gap-2 items-center">{props.right}</div>
-				</Show>
-			</header>
-			{props.children}
-		</section>
-	);
-}
-
-function SectionCard(props: ParentProps<{ class?: string; padded?: boolean }>) {
-	return (
-		<div
-			class={cx(
-				"overflow-hidden rounded-xl border border-gray-3 bg-gray-2",
-				props.padded && "px-4 py-4",
-				props.class,
-			)}
-		>
-			{props.children}
-		</div>
-	);
-}
-
-function SectionRows(props: ParentProps) {
-	return (
-		<SectionCard class="divide-y divide-gray-3">{props.children}</SectionCard>
-	);
-}
-
 function ServerURLSetting(props: {
 	value: string;
+	defaultValue: string;
 	onChange: (v: string) => void;
 }) {
 	const [value, setValue] = createWritableMemo(() => props.value);
+	const isDefaultValue = () =>
+		props.value === props.defaultValue && value() === props.defaultValue;
+	const resetToDefault = () => {
+		if (props.value === props.defaultValue) {
+			setValue(props.defaultValue);
+			return;
+		}
+
+		props.onChange(props.defaultValue);
+	};
 
 	return (
 		<Section
@@ -891,7 +972,15 @@ function ServerURLSetting(props: {
 							onInput={(e) => setValue(e.currentTarget.value)}
 						/>
 					</label>
-					<div class="flex justify-end">
+					<div class="flex justify-end gap-2">
+						<Button
+							size="sm"
+							variant="gray"
+							disabled={isDefaultValue()}
+							onClick={resetToDefault}
+						>
+							Reset to Default
+						</Button>
 						<Button
 							size="sm"
 							variant="dark"
@@ -975,7 +1064,7 @@ function DefaultProjectNameCard(props: {
 			<button
 				type="button"
 				title="Click to copy"
-				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-all duration-150 ease-out cursor-pointer bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
+				class="px-1.5 py-0.5 mx-0.5 font-mono text-[11px] rounded-md transition-[background-color,color,transform] duration-150 ease-out bg-gray-3 hover:bg-gray-4 active:scale-95 text-gray-12"
 				onClick={() => commands.writeClipboardString(props.children)}
 			>
 				{props.children}
@@ -1041,11 +1130,11 @@ function DefaultProjectNameCard(props: {
 
 					<Collapsible class="w-full rounded-lg">
 						<Collapsible.Trigger class="inline-flex gap-1 items-center text-xs transition-colors text-gray-10 hover:text-gray-12 group">
-							<IconCapChevronDown class="size-3.5 ui-group-expanded:rotate-180 transition-transform duration-200" />
+							<IconCapChevronDown class="size-3.5 data-group-expanded:rotate-180 transition-transform duration-200" />
 							<span>Available placeholders</span>
 						</Collapsible.Trigger>
 
-						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+						<Collapsible.Content class="space-y-3 pt-3 text-xs text-gray-12 opacity-0 transition animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 							<p class="text-gray-10">
 								Click any placeholder to copy it. Time supports custom formats
 								via <code class="text-gray-12">{"{moment:HH:mm}"}</code>.
@@ -1099,6 +1188,7 @@ function DefaultProjectNameCard(props: {
 
 function ExcludedWindowsCard(props: {
 	excludedWindows: WindowExclusion[];
+	missingDefaultExclusions: WindowExclusion[];
 	availableWindows: CaptureWindow[];
 	onRequestAvailableWindows: () => Promise<CaptureWindow[]>;
 	onRemove: (index: number) => Promise<void>;
@@ -1108,7 +1198,15 @@ function ExcludedWindowsCard(props: {
 	isWindows: boolean;
 }) {
 	const hasExclusions = () => props.excludedWindows.length > 0;
+	const hasMissingDefaultExclusions = () =>
+		props.missingDefaultExclusions.length > 0;
+	const missingDefaultLabels = () =>
+		props.missingDefaultExclusions.map(getExclusionPrimaryLabel).join(", ");
 	const canAdd = () => !props.isLoading;
+	const handleResetClick = () => {
+		if (props.isLoading) return;
+		void props.onReset();
+	};
 
 	const handleAddClick = async (event: MouseEvent) => {
 		event.preventDefault();
@@ -1177,10 +1275,7 @@ function ExcludedWindowsCard(props: {
 						variant="gray"
 						size="sm"
 						disabled={props.isLoading}
-						onClick={() => {
-							if (props.isLoading) return;
-							void props.onReset();
-						}}
+						onClick={handleResetClick}
 					>
 						Reset
 					</Button>
@@ -1198,6 +1293,31 @@ function ExcludedWindowsCard(props: {
 			}
 		>
 			<SectionCard padded>
+				<Show when={hasMissingDefaultExclusions()}>
+					<div class="mb-3 rounded-lg border border-amber-6 bg-amber-3/30 px-3 py-2.5">
+						<div class="flex items-start gap-2">
+							<IconLucideAlertTriangle class="mt-0.5 size-4 shrink-0 text-amber-11" />
+							<div class="min-w-0 flex-1 space-y-1">
+								<p class="text-xs font-medium text-amber-11">
+									Recommended Cap windows are not excluded
+								</p>
+								<p class="text-[10px] leading-snug text-amber-11">
+									Camera, settings, or recording windows can appear as black
+									boxes in screen recordings. Missing: {missingDefaultLabels()}.
+								</p>
+							</div>
+							<Button
+								variant="gray"
+								size="sm"
+								disabled={props.isLoading}
+								onClick={handleResetClick}
+								class="shrink-0"
+							>
+								Restore
+							</Button>
+						</div>
+					</div>
+				</Show>
 				<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
 					<Show
 						when={hasExclusions()}
@@ -1249,8 +1369,8 @@ function ExcludedWindowsSkeleton() {
 				{(width) => (
 					<div class="flex gap-2 items-center pr-1 pl-3 py-1.5 rounded-full border bg-gray-3 border-gray-4 animate-pulse">
 						<div class="flex flex-col gap-1 leading-tight">
-							<div class={cx("h-2.5 rounded bg-gray-4", width)} />
-							<div class="w-14 h-2 rounded bg-gray-4" />
+							<div class={cx("h-2.5 rounded-sm bg-gray-4", width)} />
+							<div class="w-14 h-2 rounded-sm bg-gray-4" />
 						</div>
 						<div class="rounded-full size-5 bg-gray-4" />
 					</div>

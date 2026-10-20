@@ -6,7 +6,9 @@ import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import { AuthorByline } from "@/components/blog/AuthorByline";
 import { BlogTemplate } from "@/components/blog/BlogTemplate";
+import { getPostComponents } from "@/components/blog/post-components";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
+import { ogImageUrl } from "@/lib/og/url";
 import { getBlogPosts } from "@/utils/blog";
 import {
 	getInteractiveBlogContent,
@@ -39,9 +41,14 @@ export async function generateMetadata(
 		title: string;
 		publishedAt: string;
 		description: string;
-		image: string;
+		image?: string;
 	};
-	const ogImage = `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`;
+	// Posts with real cover art keep it; everything else gets the branded
+	// dynamic OG image.
+	const ogImage =
+		image && image !== "/og.png"
+			? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`
+			: ogImageUrl({ title, tag: "Blog" });
 
 	return {
 		title,
@@ -116,7 +123,10 @@ export default async function PostPage(props: PostProps) {
 						</p>
 					</header>
 					<hr className="my-6" />
-					<MDXRemote source={post.content} />
+					<MDXRemote
+						source={post.content}
+						components={getPostComponents(post.slug)}
+					/>
 					{"author" in post.metadata && post.metadata.author && (
 						<AuthorByline authors={post.metadata.author} />
 					)}
