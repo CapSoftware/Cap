@@ -118,17 +118,6 @@ pub fn export_bounds(scaled: &[Annotation], canvas: (u32, u32)) -> ExportBounds 
     }
 }
 
-/// The whole canvas pass. Faithfully in the source's order: masks from an
-/// unmodified copy of the frame, then the shape/text draw, then the expanded
-/// output canvas -- white-filled unless the background is invisible -- with
-/// the working canvas blitted at `(-minX, -minY)`.
-///
-/// Two deliberate matches of the source's own quirks: annotations are drawn
-/// onto the *frame-sized* working canvas, so the parts dragged past the frame
-/// are clipped there and the union expansion only pads the margins (that is
-/// what `drawAnnotations(ctx, ..)` before the final `drawImage` does); and the
-/// blit offset is rounded to a whole pixel where the browser would resample at
-/// a fractional one.
 pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     let width = raw.width.max(1);
     let height = raw.height.max(1);
@@ -149,7 +138,7 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
     }
     let scale_x = f64::from(width) / f64::from(raw.base_width.max(1));
     let scale_y = f64::from(height) / f64::from(raw.base_height.max(1));
-    let scaled = scale_annotations(&config.annotations, scale_x, scale_y);
+    let mut scaled = scale_annotations(&config.annotations, scale_x, scale_y);
 
     let mut canvas = raw.rgba.clone();
 
@@ -173,8 +162,6 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         }
     }
 
-    draw_annotations_onto(&mut canvas, width, height, &scaled);
-
     let bounds = export_bounds(&scaled, (width, height));
     let mut out = vec![0u8; bounds.width as usize * bounds.height as usize * 4];
     if !has_no_visible_background(&config.background.source) {
@@ -191,6 +178,11 @@ pub fn composite(raw: &RawFrame, config: &ProjectConfiguration) -> Composited {
         (width, height),
         offset,
     );
+    for annotation in &mut scaled {
+        annotation.x += offset.0 as f64;
+        annotation.y += offset.1 as f64;
+    }
+    draw_annotations_onto(&mut out, bounds.width, bounds.height, &scaled);
 
     Composited {
         rgba: out,
@@ -959,37 +951,44 @@ mod tests {
         }
     }
 
-    /// A composite with no annotations is the frame itself over the white
-    /// output canvas, and an annotation past the edge pads the output --
-    /// matching the source, the part outside the frame is clipped by the
-    /// working canvas, so the pad is background-coloured.
     #[test]
-    fn composite_passes_the_frame_through_and_pads_for_overflow() {
+    fn composite_exports_annotations_past_each_frame_edge() {
         let raw = RawFrame {
-            rgba: [0u8, 0, 255, 255].repeat(16), // 4x4 solid blue
+            rgba: [0u8, 0, 255, 255].repeat(16),
             width: 4,
             height: 4,
-            base_width: 4,
-            base_height: 4,
+            base_width: 2,
+            base_height: 2,
         };
-        let config = ProjectConfiguration::default();
-        let out = composite(&raw, &config);
-        assert_eq!((out.width, out.height), (4, 4));
-        assert_eq!(&out.rgba[..4], &[0, 0, 255, 255]);
+        for invisible in [false, true] {
+            for (x, y, pixel, size) in [
+                (3., 0., (7, 1), (10, 4)),
+                (-3., 0., (1, 1), (10, 4)),
+                (0., 3., (1, 7), (4, 10)),
+                (0., -3., (1, 1), (4, 10)),
+            ] {
+                let mut config = ProjectConfiguration::default();
+                if invisible {
+                    invisible_background(&mut config);
+                }
+                let mut rectangle = annotation(AnnotationType::Rectangle, x, y, 2., 2.);
+                rectangle.stroke_width = 0.;
+                rectangle.fill_color = "#00ff00".into();
+                config.annotations.push(rectangle);
 
-        // A rectangle hanging entirely past the right edge: its stroke band
-        // (x 4..12 at width 4) misses the 4px working canvas, so -- like the
-        // source -- the expansion pads white with nothing drawn in it.
-        let mut with_overflow = ProjectConfiguration::default();
-        with_overflow
-            .annotations
-            .push(annotation(AnnotationType::Rectangle, 6., 0., 4., 4.));
-        let out = composite(&raw, &with_overflow);
-        assert_eq!((out.width, out.height), (10, 4));
-        // Column 0 is still the frame's blue...
-        assert_eq!(&out.rgba[..4], &[0, 0, 255, 255]);
-        // ...and the padded margin past the frame is the white fill.
-        let margin = 9 * 4;
-        assert_eq!(&out.rgba[margin..margin + 4], &[255, 255, 255, 255]);
+                let out = composite(&raw, &config);
+                let png = encode_for_save(&out).unwrap();
+                let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+                assert_eq!(decoded.dimensions(), size);
+                assert_eq!(decoded.get_pixel(pixel.0, pixel.1).0, [0, 255, 0, 255]);
+                let origin = ((-x * 2.).max(0.) as u32, (-y * 2.).max(0.) as u32);
+                assert_eq!(decoded.get_pixel(origin.0, origin.1).0, [0, 0, 255, 255]);
+                let gap = if x == 0. { (1, 5) } else { (5, 1) };
+                assert_eq!(
+                    decoded.get_pixel(gap.0, gap.1).0,
+                    if invisible { [0; 4] } else { [255; 4] }
+                );
+            }
+        }
     }
 }
