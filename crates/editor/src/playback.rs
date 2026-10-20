@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use crate::{
     audio_output::{AudioOutput, PlaySpec},
     editor,
-    editor_instance::SegmentMedia,
+    editor_instance::{SegmentMedia, cursor_timeline_settings},
     segments::get_audio_segments,
     telemetry::{
         PlaybackFrameSource, PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent,
@@ -1458,6 +1458,13 @@ impl Playback {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
                         || clip_audio_changed(&cached_project, &next_project);
+                    let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
+                        != cursor_timeline_settings(&next_project.cursor);
+                    let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
+                        &cached_project,
+                        &next_project,
+                        self.render_constants.options.screen_size,
+                    );
                     cached_project = next_project;
                     if adopted.is_none()
                         && audio_changed
@@ -1475,9 +1482,13 @@ impl Playback {
                             generation,
                         );
                     }
-                    cursor_timelines = build_cursor_timelines(&cached_project);
-                    zoom_timelines = build_zoom_timelines(&cached_project);
-                    outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    if cursor_changed {
+                        cursor_timelines = build_cursor_timelines(&cached_project);
+                    }
+                    if zoom_changed {
+                        zoom_timelines = build_zoom_timelines(&cached_project);
+                        outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    }
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;

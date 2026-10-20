@@ -42,10 +42,18 @@ impl AudioEncoderBase {
         output: &mut S,
     ) -> Result<(), ffmpeg::Error> {
         // Input frames are stamped in input-rate units; BufferedResampler
-        // rescales them to the encoder's output rate.
-        let input_rate = f64::from(self.resampler.input().rate);
+        // rescales them to the encoder's output rate. A source that changes
+        // rate mid-stream moves that unit, so the stored state moves with it.
+        let previous_rate = self.resampler.input().rate;
+        let input_rate = if frame.rate() > 0 {
+            frame.rate()
+        } else {
+            previous_rate
+        };
         self.inner
-            .update_pts_with_rate(&mut frame, timestamp, input_rate);
+            .rescale_input_rate(f64::from(previous_rate), f64::from(input_rate));
+        self.inner
+            .update_pts_with_rate(&mut frame, timestamp, f64::from(input_rate));
 
         self.resampler.add_frame(frame);
 
