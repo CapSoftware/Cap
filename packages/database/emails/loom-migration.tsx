@@ -53,14 +53,14 @@ export function LoomMigrationStatusEmail({
 	return (
 		<Html>
 			<Head />
-			<Preview>Your Loom migration is {statusLabel.toLowerCase()}</Preview>
+			<Preview>{`Loom migration: ${statusLabel}`}</Preview>
 			<Body className="bg-white font-sans">
 				<Container className="mx-auto my-10 max-w-[500px] px-6">
 					<Heading>Loom migration update</Heading>
 					<Text>
-						Your migration for {organizationName} is {statusLabel.toLowerCase()}
-						.
+						There is an update on the Loom migration for {organizationName}.
 					</Text>
+					<Text>{`Status: ${statusLabel}`}</Text>
 					{message && <Text>{message}</Text>}
 					<Link href={dashboardUrl}>View your migration</Link>
 				</Container>
