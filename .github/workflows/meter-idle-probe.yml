@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, blacksmith-6vcpu-macos-26]
+        runner: [macos-15, blacksmith-6vcpu-macos-15]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
@@ -55,7 +55,7 @@ jobs:
       - name: Build
         run: |
           cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target aarch64-apple-darwin --bin cap-gpui
-          frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/aarch64-apple-darwin/debug/Frameworks"
+          frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/aarch64-apple-darwin/Frameworks"
           mkdir -p "$frameworks"
           ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
 
