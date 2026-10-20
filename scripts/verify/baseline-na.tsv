@@ -1,0 +1,2 @@
+# glob<TAB>reason (cases n/a on the cap-v0.6.0 production baseline)
+captions/*	caption projection model (synchronize_captions) and transcription audio assembly did not exist in cap-v0.6.0; captions suite not run

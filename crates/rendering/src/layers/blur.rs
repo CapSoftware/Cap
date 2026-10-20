@@ -63,6 +63,15 @@ impl BlurLayer {
             .map(|(_, texture)| texture)
     }
 
+    pub fn clear_result(&mut self) {
+        self.result = None;
+    }
+
+    #[cfg(test)]
+    pub fn has_cached_result(&self) -> bool {
+        self.result.is_some()
+    }
+
     pub fn store_result(
         &mut self,
         device: &wgpu::Device,

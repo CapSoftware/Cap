@@ -90,6 +90,7 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
     "Win32_Storage_Xps",
+    "Win32_Storage_FileSystem",
 ] }
 
 cap-d3d-adapter = { path = "../d3d-adapter" }
@@ -103,7 +104,7 @@ scap-cpal = { path = "../scap-cpal" }
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11.0", default-features = false, features = ["tokio"] }
 pipewire = "0.10.0"
-x11rb = { version = "0.13.2", features = ["composite", "xfixes"] }
+x11rb = { version = "0.13.2", features = ["composite", "shm", "xfixes"] }
 
 [dev-dependencies]
 tempfile = "3.20.0"

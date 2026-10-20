@@ -42,6 +42,7 @@ use crate::{
         GuideAxis, NormRect, SNAP_PX, SnapGuide, build_snap_targets, snap_moving_rect,
     },
     main_window::{Mode, TargetType},
+    sign_in::SignIn,
     theme::Theme,
 };
 
@@ -367,11 +368,14 @@ impl TargetSelect {
                     })
                     .await;
 
-                let Ok((icon_wanted, active)) = this.update(cx, |this: &mut Self, cx| {
+                let Ok((icon_wanted, active, changed)) = this.update(cx, |this: &mut Self, cx| {
                     let (display, window) = probe;
-                    this.microphone_fill =
+                    let microphone_fill =
                         crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
-                    let changed = this.cursor_display != display || this.hovered_window != window;
+                    let changed = this.cursor_display != display
+                        || this.hovered_window != window
+                        || this.microphone_fill != microphone_fill;
+                    this.microphone_fill = microphone_fill;
                     this.cursor_display = display;
                     this.hovered_window = window;
                     if changed {
@@ -383,10 +387,12 @@ impl TargetSelect {
                             .map(|window| window.id.clone())
                             .filter(|id| !this.icons.contains_key(&id.to_string())),
                         this.active_window().cloned(),
+                        changed,
                     )
                 }) else {
                     return;
                 };
+                let fetched_icon = icon_wanted.is_some();
                 if let Some(id) = icon_wanted {
                     Self::fetch_icon(id, &this, cx).await;
                 }
@@ -399,8 +405,11 @@ impl TargetSelect {
 
                 // Repaint the overlays explicitly: none of them is the active
                 // window while the user hovers another app, and an inactive
-                // window only repaints when asked (the unit-2 finding).
-                cx.update(app_windows::refresh_target_overlays);
+                // window only repaints when asked (the unit-2 finding). A tick
+                // that changed nothing they draw has nothing to repaint.
+                if changed || fetched_icon {
+                    cx.update(app_windows::refresh_target_overlays);
+                }
                 cx.background_executor().timer(POLL_INTERVAL).await;
             }
         }));
@@ -601,6 +610,9 @@ pub struct OverlayWindow {
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
     device_menu: Option<OverlayDeviceMenu>,
+    /// Cached off the store so the start pill does not re-read the settings
+    /// file every frame; refreshed whenever the shared sign-in reports.
+    signed_in: bool,
     _main_subscription: Option<gpui::Subscription>,
 }
 
@@ -608,6 +620,7 @@ pub struct OverlayWindow {
 enum OverlayDeviceChoice {
     Camera(Option<crate::devices::CameraOption>),
     Microphone(Option<crate::devices::MicrophoneOption>),
+    Access(crate::permissions::OSPermission),
 }
 
 struct OverlayDeviceMenu {
@@ -632,6 +645,14 @@ fn mode_menu_items(current: Mode) -> Vec<crate::ui::MenuItem> {
         .collect()
 }
 
+/// Overlays are never the active window while the picker is up, and an
+/// inactive window may not present a bare notify, so every state an overlay
+/// draws asks for its repaint explicitly.
+fn repaint(window: &mut Window, cx: &mut Context<OverlayWindow>) {
+    cx.notify();
+    window.refresh();
+}
+
 impl OverlayWindow {
     pub fn new(
         display: &scap_targets::Display,
@@ -641,12 +662,36 @@ impl OverlayWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
-        cx.observe(&select, |_, _, cx| cx.notify()).detach();
+        cx.observe_in(&select, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
+        let session = crate::session::RecordingSession::global(cx);
+        let mut drawn_phase = session.read(cx).phase;
+        cx.observe_in(&session, window, move |_, session, window, cx| {
+            let phase = session.read(cx).phase;
+            if phase != drawn_phase {
+                drawn_phase = phase;
+                repaint(window, cx);
+            }
+        })
+        .detach();
         let main = cx.global::<app_windows::AppWindows>().main;
         let main_subscription = main
             .update(cx, |_, _, cx| cx.entity())
             .ok()
-            .map(|main| cx.observe(&main, |_, _, cx| cx.notify()));
+            .map(|main| cx.observe_in(&main, window, |_, _, window, cx| repaint(window, cx)));
+        let media = crate::media_access::MediaAccess::global(cx);
+        media.update(cx, |access, cx| access.refresh(cx));
+        cx.observe_in(&media, window, |_, _, window, cx| repaint(window, cx))
+            .detach();
+        cx.observe_in(
+            &SignIn::global(cx),
+            window,
+            |this: &mut Self, _, window, cx| {
+                this.signed_in = crate::store::auth_snapshot().signed_in();
+                repaint(window, cx);
+            },
+        )
+        .detach();
 
         let logical = display
             .logical_size()
@@ -695,6 +740,7 @@ impl OverlayWindow {
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
             device_menu: None,
+            signed_in: crate::store::auth_snapshot().signed_in(),
             _main_subscription: main_subscription,
         }
     }
@@ -771,6 +817,13 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
+        if self.needs_sign_in(self.select.read(cx).recording_mode, cx) {
+            self.signed_in = crate::store::auth_snapshot().signed_in();
+            if !self.signed_in {
+                self.start_sign_in(cx);
+                return;
+            }
+        }
         if let ScreenCaptureTarget::Window { id } = &target {
             let window = scap_targets::Window::from_id(id);
             let expected_title = crate::main_window::auto_window_title();
@@ -809,11 +862,33 @@ impl OverlayWindow {
         cx.defer(app_windows::dismiss_target_overlays);
     }
 
+    /// Instant mode uploads as it records, so it cannot start signed out
+    /// (`target-select-overlay.tsx`'s "Sign In To Use"). The editor's record
+    /// flow always records Studio whatever the pill says.
+    fn needs_sign_in(&self, mode: Mode, cx: &App) -> bool {
+        mode == Mode::Instant
+            && !self.signed_in
+            && crate::session::RecordingSession::global(cx)
+                .read(cx)
+                .editor_recording_target()
+                .is_none()
+    }
+
+    /// The overlays sit above every app, browser included, so they step aside
+    /// for the main window's sign-in prompt, and re-open for the same target
+    /// kind once signed in.
+    fn start_sign_in(&mut self, cx: &mut Context<Self>) {
+        let Some(kind) = self.select.read(cx).mode else {
+            return;
+        };
+        cx.defer(move |cx: &mut App| app_windows::show_instant_sign_in(kind, cx));
+    }
+
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
         self.theme.refresh(window, cx, false);
     }
 
-    fn sync_inline_camera(&mut self, cx: &mut Context<Self>) {
+    fn sync_inline_camera(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let camera = (self.select.read(cx).mode == Some(TargetType::CameraOnly))
             .then(|| app_windows::camera_preview_entity(cx))
             .flatten();
@@ -824,7 +899,7 @@ impl OverlayWindow {
         }
         self.inline_camera_subscription = camera
             .as_ref()
-            .map(|camera| cx.observe(camera, |_, _, cx| cx.notify()));
+            .map(|camera| cx.observe_in(camera, window, |_, _, window, cx| repaint(window, cx)));
         self.inline_camera = camera;
     }
 
@@ -857,7 +932,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
-        self.sync_inline_camera(cx);
+        self.sync_inline_camera(window, cx);
         let viewport = window.viewport_size();
         let display_size = overlay_viewport_size(
             (f32::from(viewport.width), f32::from(viewport.height)),
@@ -983,6 +1058,17 @@ impl OverlayWindow {
     fn apply_device_choice(&mut self, choice: OverlayDeviceChoice, cx: &mut Context<Self>) {
         self.device_menu = None;
         let main = cx.global::<app_windows::AppWindows>().main;
+        let needs_access = match &choice {
+            OverlayDeviceChoice::Camera(Some(_)) => Some(crate::permissions::OSPermission::Camera),
+            OverlayDeviceChoice::Microphone(Some(_)) => {
+                Some(crate::permissions::OSPermission::Microphone)
+            }
+            OverlayDeviceChoice::Access(permission) => Some(*permission),
+            _ => None,
+        };
+        if let Some(permission) = needs_access {
+            request_media_access(permission, cx);
+        }
         cx.defer(move |cx| {
             if !recording_devices_available(cx) {
                 return;
@@ -990,6 +1076,7 @@ impl OverlayWindow {
             if let Err(error) = main.update(cx, |view, _, cx| match choice {
                 OverlayDeviceChoice::Camera(camera) => view.set_camera_selection(camera, cx),
                 OverlayDeviceChoice::Microphone(mic) => view.set_microphone_selection(mic, cx),
+                OverlayDeviceChoice::Access(_) => {}
             }) {
                 tracing::warn!(%error, "could not update the recording device");
             }
@@ -1006,7 +1093,29 @@ impl OverlayWindow {
         if view.is_enumerating_devices() {
             return;
         }
-        let (items, choices) = if camera {
+        let permission = if camera {
+            crate::permissions::OSPermission::Camera
+        } else {
+            crate::permissions::OSPermission::Microphone
+        };
+        let access = crate::media_access::MediaAccess::global(cx);
+        let access_item = (!access.read(cx).allowed(permission)).then(|| {
+            let label = match (
+                camera,
+                access.read(cx).status(permission)
+                    == crate::permissions::OSPermissionStatus::Denied,
+            ) {
+                (true, true) => "Turn on camera access in Settings…",
+                (true, false) => "Allow camera access…",
+                (false, true) => "Turn on microphone access in Settings…",
+                (false, false) => "Allow microphone access…",
+            };
+            (
+                crate::ui::MenuItem::new(label, false),
+                OverlayDeviceChoice::Access(permission),
+            )
+        });
+        let (mut items, mut choices) = if camera {
             let mut items = vec![crate::ui::MenuItem::new(
                 "No Camera",
                 view.camera_selection().is_none(),
@@ -1037,6 +1146,10 @@ impl OverlayWindow {
             }
             (items, choices)
         };
+        if let Some((item, choice)) = access_item {
+            items.insert(0, item);
+            choices.insert(0, choice);
+        }
         self.mode_menu = None;
         self.countdown_menu = None;
         self.device_menu = Some(OverlayDeviceMenu {
@@ -1060,6 +1173,23 @@ impl OverlayWindow {
         let enabled = selected.is_some();
         let disabled = view.is_enumerating_devices() || !recording_devices_available(cx);
         let theme = self.theme;
+        let permission = if camera {
+            crate::permissions::OSPermission::Camera
+        } else {
+            crate::permissions::OSPermission::Microphone
+        };
+        let access = crate::media_access::MediaAccess::global(cx);
+        let access = access.read(cx);
+        let blocked = enabled && !access.allowed(permission);
+        let pill_label = if !blocked {
+            if enabled { "On" } else { "Off" }
+        } else if access.requesting(permission) {
+            "Asking…"
+        } else if access.status(permission) == crate::permissions::OSPermissionStatus::Denied {
+            "Allow in Settings"
+        } else {
+            "Allow"
+        };
         div()
             .id(if camera {
                 "overlay-camera"
@@ -1128,24 +1258,30 @@ impl OverlayWindow {
                     .justify_center()
                     .rounded_full()
                     .text_size(px(11.))
-                    .bg(if enabled {
+                    .bg(if blocked {
+                        Hsla::from(theme.amber_3)
+                    } else if enabled {
                         Hsla::from(theme.blue_9)
                     } else {
                         Hsla::from(theme.gray_5)
                     })
-                    .text_color(if enabled {
+                    .text_color(if blocked {
+                        Hsla::from(theme.amber_11)
+                    } else if enabled {
                         gpui::white()
                     } else {
                         Hsla::from(theme.gray_11)
                     })
-                    .child(if enabled { "On" } else { "Off" })
+                    .child(pill_label)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         if disabled {
                             return;
                         }
-                        if enabled {
+                        if blocked {
+                            this.apply_device_choice(OverlayDeviceChoice::Access(permission), cx);
+                        } else if enabled {
                             this.apply_device_choice(
                                 if camera {
                                     OverlayDeviceChoice::Camera(None)
@@ -2079,16 +2215,20 @@ impl OverlayWindow {
         } else {
             (theme.blue_10, theme.blue_11)
         };
+        let needs_sign_in = self.needs_sign_in(mode, cx);
         let label = match mode {
             Mode::Screenshot => "Take Screenshot",
+            _ if needs_sign_in => "Sign In To Use",
             _ => "Start Recording",
         };
         let icon = match mode {
+            Mode::Instant if needs_sign_in => "icons/user-round.svg",
             Mode::Instant => "icons/instant.svg",
             Mode::Studio => "icons/film-cut.svg",
             Mode::Screenshot => "icons/camera.svg",
         };
         let mode_label = match mode {
+            Mode::Instant if needs_sign_in => "Instant Mode — Sign in to record instantly",
             Mode::Instant => "Instant Mode — Record shareable link",
             Mode::Studio => "Studio Mode — Record and edit locally",
             Mode::Screenshot => "Screenshot Mode",
@@ -2405,6 +2545,27 @@ impl OverlayWindow {
             cx.defer(move |cx: &mut App| crate::screenshot::take_screenshot(target, cx));
         }
         cx.notify();
+    }
+}
+
+/// Ask for camera/mic access from the overlay. The macOS prompt floats above
+/// the overlays, but System Settings is an ordinary window they would cover,
+/// so a denied permission steps the picker aside before opening the pane.
+fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut App) {
+    let access = crate::media_access::MediaAccess::global(cx);
+    if access.read(cx).allowed(permission) {
+        return;
+    }
+    let denied =
+        access.read(cx).status(permission) == crate::permissions::OSPermissionStatus::Denied;
+    if denied {
+        cx.defer(move |cx| {
+            app_windows::dismiss_target_overlays(cx);
+            crate::media_access::MediaAccess::global(cx)
+                .update(cx, |access, cx| access.request(permission, cx));
+        });
+    } else {
+        access.update(cx, |access, cx| access.request(permission, cx));
     }
 }
 

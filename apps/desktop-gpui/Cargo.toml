@@ -25,6 +25,7 @@ path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
+cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
@@ -116,6 +117,8 @@ global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
+# Round caps and joins for the onboarding doodles; already in the tree via gpui.
+lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
@@ -147,6 +150,7 @@ tracing-appender = "0.2"
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
 # `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
+bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "multipart",
@@ -161,6 +165,7 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]
@@ -168,7 +173,11 @@ tauri-winres = "0.3.5"
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
+# Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
+# audio markers for the fake transcriber.
+cap-verify = { path = "../../crates/verify" }
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -179,7 +188,6 @@ raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
-    "Win32_Media",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
@@ -202,10 +210,11 @@ x11rb = "0.13"
 objc2 = "0.5.2"
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = "0.2.2"
+objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.5.1"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
@@ -233,6 +242,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
 # Whisper caption models only.
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
+hound = "3.5"
 
 # Mirror of the root workspace patch: cap-recording's converter stack is built
 # and tested against the vendored wgpu-hal, not the crates.io release.

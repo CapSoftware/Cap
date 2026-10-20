@@ -77,6 +77,30 @@ impl Drop for RecoveryLease {
     }
 }
 
+/// Removes the original media backup of a publication whose lock was never
+/// shared with a preparing reader, after the same durability barrier and
+/// receipt checks the shared lease uses.
+pub(super) fn retire_unread_originals(
+    project: &Path,
+    workspace: &Path,
+) -> Result<(), RecoveryError> {
+    let retirement = OriginalMediaRetirement {
+        project: project.canonicalize()?,
+        workspace: workspace.canonicalize()?,
+        receipt: read_recovery_publication(&workspace.join(RECOVERY_PUBLICATION_RECEIPT))?,
+    };
+    retirement.validate()?;
+    sync_directories(&project.join("content/segments"))?;
+    for directory in [
+        project.join("content"),
+        project.to_path_buf(),
+        workspace.to_path_buf(),
+    ] {
+        File::open(directory)?.sync_all()?;
+    }
+    retirement.remove_originals()
+}
+
 struct OriginalMediaRetirement {
     project: PathBuf,
     workspace: PathBuf,
