@@ -9548,6 +9548,7 @@ mod project_uniforms_tests {
             }
         );
         let zoom = ZoomTransformTimeline::from_project(&project, &events, 4.0, size);
+        let project = Arc::new(project);
         let source = DecodedFrame::new(vec![160; 320 * 180 * 4], size.x, size.y);
         let mut ordered_renderer = FrameRenderer::new(&constants);
         let mut linear_renderer = FrameRenderer::new(&constants);
@@ -9666,6 +9667,7 @@ mod project_uniforms_tests {
                 f64::from(duration_secs),
                 size,
             );
+            let project = Arc::new(project);
             let mut renderer = FrameRenderer::new(&constants);
             let mut layers = RendererLayers::new(&constants.device, &constants.queue);
             let mut random = 0x9e37_79b9_u32;
