@@ -123,12 +123,29 @@ export async function buildCompositeStream(
 	const context = new AudioContext();
 	const destination = context.createMediaStreamDestination();
 	streams.audioMix = { context, stream: destination.stream };
+	const mix = context.createGain();
+	mix.gain.value = 1 / audioTracks.length;
+	mix.connect(destination);
 	for (const track of audioTracks) {
-		context
-			.createMediaStreamSource(new MediaStream([track]))
-			.connect(destination);
+		context.createMediaStreamSource(new MediaStream([track])).connect(mix);
 	}
-	await context.resume();
+	let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			context.resume(),
+			new Promise<never>((_, reject) => {
+				startupTimeout = setTimeout(() => {
+					reject(
+						new Error(
+							"Recording audio startup timed out. Check your audio device and try again.",
+						),
+					);
+				}, 10_000);
+			}),
+		]);
+	} finally {
+		clearTimeout(startupTimeout);
+	}
 
 	return new MediaStream([
 		...tracks.filter((track) => track.kind !== "audio"),

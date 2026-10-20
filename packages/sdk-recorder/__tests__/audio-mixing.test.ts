@@ -30,8 +30,13 @@ class Stream {
 class Mixer {
 	static instances: Mixer[] = [];
 	readonly inputs: Track[] = [];
+	readonly connections: unknown[] = [];
 	readonly output = new Track("audio");
 	readonly destination = { stream: new Stream([this.output]) };
+	readonly mix = {
+		gain: { value: 1 },
+		connect: mock(() => {}),
+	};
 	resume = mock(async () => {});
 	close = mock(async () => {});
 
@@ -43,16 +48,28 @@ class Mixer {
 		return this.destination;
 	}
 
+	createGain() {
+		return this.mix;
+	}
+
 	createMediaStreamSource(stream: Stream) {
 		return {
-			connect: () => {
+			connect: (destination: unknown) => {
 				this.inputs.push(...stream.getAudioTracks());
+				this.connections.push(destination);
 			},
 		};
 	}
 }
 
-const globals = ["MediaStream", "AudioContext", "MediaRecorder", "navigator"];
+const globals = [
+	"MediaStream",
+	"AudioContext",
+	"MediaRecorder",
+	"navigator",
+	"setTimeout",
+	"clearTimeout",
+];
 const descriptors = globals.map(
 	(name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
 );
@@ -129,6 +146,9 @@ test("records both audio sources through one track and releases the mixer", asyn
 		expect(input?.getVideoTracks()).toEqual([video]);
 		expect(input?.getAudioTracks()).toEqual([mixer?.output]);
 		expect(mixer?.inputs).toEqual([system, mic]);
+		expect(mixer?.connections).toEqual([mixer?.mix, mixer?.mix]);
+		expect(mixer?.mix.gain.value).toBe(0.5);
+		expect(mixer?.mix.connect).toHaveBeenCalledWith(mixer?.destination);
 	} finally {
 		recorder.destroy();
 	}
@@ -156,6 +176,48 @@ test.each([
 		expect(Mixer.instances).toHaveLength(0);
 	},
 );
+
+test("times out pending audio startup and releases captured tracks", async () => {
+	const { video, system, mic } = capture(true, true);
+	setGlobal(
+		"AudioContext",
+		class extends Mixer {
+			resume = mock(() => new Promise<void>(() => {}));
+		},
+	);
+	let deadline: (() => void) | undefined;
+	const timeout = mock((callback: () => void, delay: number) => {
+		expect(delay).toBe(10_000);
+		deadline = callback;
+		return 7;
+	});
+	const clear = mock(() => {});
+	setGlobal("setTimeout", timeout);
+	setGlobal("clearTimeout", clear);
+	const recorder = new CapRecorder({
+		publicKey: "test-public-key",
+		mode: "tab",
+		camera: { enabled: false },
+		systemAudio: true,
+	});
+	try {
+		const starting = recorder.start();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(deadline).toBeDefined();
+		deadline?.();
+		await expect(starting).rejects.toThrow("Recording audio startup timed out");
+		expect(recorder.phase).toBe("error");
+		expect(clear).toHaveBeenCalledWith(7);
+		expect(video.stop).toHaveBeenCalled();
+		expect(system.stop).toHaveBeenCalled();
+		expect(mic.stop).toHaveBeenCalled();
+		const mixer = Mixer.instances[0];
+		expect(mixer?.output.stop).toHaveBeenCalled();
+		expect(mixer?.close).toHaveBeenCalledTimes(1);
+	} finally {
+		recorder.destroy();
+	}
+});
 
 test.each(["encoder", "audio"] as const)(
 	"cleans up both audio sources when %s initialization fails",
