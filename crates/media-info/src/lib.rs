@@ -189,6 +189,10 @@ impl AudioInfo {
         let sample_size = self.sample_size();
         let packed_sample_size = sample_size * input_channels;
         let samples = packed_data.len() / packed_sample_size;
+        // A device callback can end mid-sample or carry no whole sample at
+        // all (empty buffers around device changes); a frame with zero samples
+        // has no planes to copy into.
+        let packed_data = &packed_data[..samples * packed_sample_size];
 
         let mut frame = frame::Audio::new(
             self.sample_format,
@@ -196,6 +200,10 @@ impl AudioInfo {
             ChannelLayout::default(out_channels as i32),
         );
         frame.set_rate(self.sample_rate);
+
+        if samples == 0 {
+            return frame;
+        }
 
         if input_channels == 1 || (frame.is_packed() && input_channels <= out_channels) {
             // frame is allocated with parameters derived from packed_data, so this is safe
@@ -449,6 +457,37 @@ mod tests {
             assert_eq!(&frame.data(1)[0..2], &[2, 2]);
             assert_eq!(&frame.data(2)[0..2], &[3, 3]);
             assert_eq!(&frame.data(3)[0..2], &[4, 4]);
+        }
+
+        #[test]
+        fn wrap_empty_and_partial_callbacks() {
+            for format in [Sample::F32(Type::Packed), Sample::F32(Type::Planar)] {
+                for channels in [1, 2, 6] {
+                    let info = AudioInfo::new_raw(format, 48_000, channels);
+                    let sample_bytes = 4 * channels as usize;
+                    for len in [
+                        0,
+                        1,
+                        3,
+                        sample_bytes - 1,
+                        sample_bytes + 1,
+                        3 * sample_bytes + 3,
+                    ] {
+                        let input: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                        let frame = info.wrap_frame(&input);
+                        assert_eq!(
+                            frame.samples(),
+                            len / sample_bytes,
+                            "{format:?} {channels} {len}"
+                        );
+                    }
+                }
+            }
+
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 2);
+            let frame = info.wrap_frame(&[1, 2, 3, 4, 5]);
+            assert_eq!(frame.samples(), 2);
+            assert_eq!(&frame.data(0)[0..4], &[1, 2, 3, 4]);
         }
 
         #[test]

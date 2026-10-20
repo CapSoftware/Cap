@@ -362,6 +362,15 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err(format!("Video path {} not found!", path.display()));
     }
 
+    // Repairs tracks older recorders stamped at the wrong rate, and display
+    // fps that finalization replaced with the average rate, before anything
+    // reads them. Non-fatal: the editor opens the files as they are.
+    match cap_recording::track_heal::heal_stretched_tracks(path) {
+        Ok(true) => tracing::info!(?path, "Healed recording tracks"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(?path, "Track heal check failed: {error:#}"),
+    }
+
     let meta = RecordingMeta::load_for_project(path)
         .map_err(|error| format!("Failed to load recording meta: {error}"))?;
 
@@ -1426,6 +1435,7 @@ pub struct EditorWindow {
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
     /// first render that knows both the width and the duration does it.
     fitted: bool,
+    restore_transform: Option<Transform>,
     /// The transport's zoom slider track rect, written by the slider's own
     /// prepaint canvas and read by the pointer maths.
     zoom_slider_track: ui::SliderTrack,
@@ -2081,6 +2091,7 @@ impl EditorWindow {
             view: TimelineView::default(),
             playback_follow: timeline::PlaybackFollow::default(),
             fitted: false,
+            restore_transform: None,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
             project: ProjectConfiguration::default(),
@@ -2283,6 +2294,7 @@ impl EditorWindow {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let waveform_paths = self.timeline.waveform_paths.clone();
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
             self.has_camera,
@@ -2291,6 +2303,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.waveform_paths = waveform_paths;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -2902,6 +2915,14 @@ impl EditorWindow {
         self.instance.take()
     }
 
+    pub fn timeline_transform(&self) -> Transform {
+        self.view.transform
+    }
+
+    pub fn restore_timeline_transform(&mut self, transform: Transform) {
+        self.restore_transform = Some(transform);
+    }
+
     /// Hand the window its transport, the pump's counters, and the duration
     /// the engine will actually stop at.
     pub fn set_transport(
@@ -3297,6 +3318,26 @@ impl EditorWindow {
     /// stop, this just guarantees one happens.
     pub fn stop_for_measurement(&mut self, cx: &mut Context<Self>) {
         self.stop_playback(cx);
+    }
+
+    pub(crate) fn has_waveforms(&self) -> (bool, bool) {
+        let present = |tables: &[Arc<Vec<f32>>]| tables.iter().any(|peaks| !peaks.is_empty());
+        (
+            present(&self.timeline.mic_waveforms),
+            present(&self.timeline.system_waveforms),
+        )
+    }
+
+    pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
+        self.timeline.waveform_paths.stats()
+    }
+
+    pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        self.view
+            .transform
+            .update_zoom(seconds, self.playhead, total);
+        cx.notify();
     }
 
     fn capture_playback_key(
@@ -3742,7 +3783,11 @@ impl EditorWindow {
         cx.notify();
     }
 
-    fn invalidate_playback_chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn invalidate_playback_chrome(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
         self.transport_controls.update(cx, |_, cx| cx.notify());
         // While playing, nothing else the parent renders reads the playhead:
@@ -3750,9 +3795,11 @@ impl EditorWindow {
         // scene-mode pane gates on it too. Notifying the parent here would
         // rebuild every cached section -- header, toolbar, sidebar included --
         // at the 60Hz playhead rate, which is the same class of rebuild that
-        // measured 40ms/frame on the text-panel sidebar. Paused paths (hover,
-        // seeks) keep the full invalidation: the overlay's element boxes
-        // appear and disappear as the playhead crosses segments.
+        // measured 40ms/frame on the text-panel sidebar. A paused playhead
+        // change keeps the full invalidation: the overlay's element boxes
+        // appear and disappear as the playhead crosses segments. Pointer hover
+        // goes through `invalidate_hover_chrome` instead, and an arriving
+        // paused frame whose layout changed still notifies the whole editor.
         if !self.playing {
             cx.notify();
         }
@@ -3773,10 +3820,16 @@ impl EditorWindow {
         );
     }
 
+    pub(crate) fn preview_frames_presented(&self) -> Option<u64> {
+        self.stats
+            .as_ref()
+            .map(|stats| stats.presented.load(Ordering::Relaxed))
+    }
+
     /// `onMouseMove` on the timeline container (`TL/index.tsx:1170-1188`):
     /// while paused, the pointer's time becomes `previewTime`; outside the
     /// content column, and at all times while playing, it is cleared.
-    fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn timeline_hover(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
         // `if (editorState.playing) return;` -- the handler bails *before* it
         // writes, so a preview time set while paused survives a play rather
         // than being cleared. The ghost is hidden by the render's own
@@ -3789,17 +3842,28 @@ impl EditorWindow {
         if next != self.view.preview_time {
             self.view.preview_time = next;
             self.emit_preview_frame();
-            self.invalidate_playback_chrome(window, cx);
+            self.invalidate_hover_chrome(cx);
         }
     }
 
-    fn timeline_hover_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn timeline_hover_leave(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.playing || self.view.preview_time.is_none() {
             return;
         }
         self.view.preview_time = None;
         self.emit_preview_frame();
-        self.invalidate_playback_chrome(window, cx);
+        self.invalidate_hover_chrome(cx);
+    }
+
+    /// Pointer-hover state that only the timeline, the transport and the
+    /// canvas overlay read. Notifying `self` would rebuild the header, toolbar
+    /// and sidebar on every pointer move, because each section observes the
+    /// editor. Notifying a child view marks its ancestors dirty instead, so
+    /// this window and its canvas overlay still re-render while the untouched
+    /// sections are reused from their cache.
+    fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
+        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.transport_controls.update(cx, |_, cx| cx.notify());
     }
 
     fn set_hovered_track(
@@ -4181,6 +4245,14 @@ impl EditorWindow {
             .and_then(|timeline| timeline.segments.get(index))
             .map(|segment| (segment.start, segment.end));
 
+        let audio_segment = if kind == TrackKind::Audio {
+            self.project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.audio_segments.get(index))
+        } else {
+            None
+        };
         let kind_of_drag = match (kind, hit) {
             // The clip's handles: recording-domain, no promotion threshold, no
             // selection on release.
@@ -4196,16 +4268,22 @@ impl EditorWindow {
             (TrackKind::Clip, Hit::Body { .. }) => None,
             (_, Hit::Handle { start: true, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_start_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimStart {
                     start,
-                    bounds: edits::trim_start_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_start_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Handle { start: false, .. }) => {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
+                let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
                     end,
-                    bounds: edits::trim_end_bounds(segments, lane, index, min, total),
+                    bounds: audio_segment.map_or(bounds, |segment| {
+                        edits::audio_trim_end_bounds(segment, bounds)
+                    }),
                 })
             }
             (_, Hit::Body { .. }) => Some(DragKind::Move {
@@ -5889,7 +5967,7 @@ impl EditorWindow {
             changed = true;
         }
         if changed {
-            cx.notify();
+            self.invalidate_hover_chrome(cx);
         }
     }
 
@@ -10173,6 +10251,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        self.timeline.waveform_paths.sweep();
         if !self.project_ready() {
             if self
                 .preparing_presentation
@@ -11181,9 +11260,17 @@ impl Render for EditorWindow {
         if !self.fitted && self.total_duration() > 0.0 {
             self.fitted = true;
             let total = self.total_duration();
-            self.view
-                .transform
-                .fit_on_mount(timeline::content_width(viewport_width), total);
+            match self
+                .restore_transform
+                .take()
+                .and_then(|saved| Transform::restored(saved, total))
+            {
+                Some(transform) => self.view.transform = transform,
+                None => self
+                    .view
+                    .transform
+                    .fit_on_mount(timeline::content_width(viewport_width), total),
+            }
         }
 
         if self.export.is_some() {
