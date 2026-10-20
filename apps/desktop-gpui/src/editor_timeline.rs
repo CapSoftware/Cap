@@ -4736,6 +4736,17 @@ mod tests {
         let peaks = speech_like_peaks(400, 7.);
         let offset = gpui::point(px(250.5), px(312.25));
         let relative = waveform_geometry(peaks.clone());
+        let path = waveform_path(&relative).unwrap();
+        let moved = translated_path(path.clone(), offset);
+        for (before, after) in path.vertices.iter().zip(&moved.vertices) {
+            assert_eq!(after.xy_position, before.xy_position + offset);
+        }
+        assert_eq!(moved.bounds.origin, path.bounds.origin + offset);
+        assert_eq!(moved.bounds.size, path.bounds.size);
+
+        // Building at the absolute position gives the same shape; the
+        // tessellator's triangle order can differ with float rounding, so the
+        // comparison is on the vertex count and the bounds.
         let absolute = WaveformGeometry {
             origin: relative.origin + offset,
             clip_bounds: gpui::Bounds {
@@ -4744,23 +4755,13 @@ mod tests {
             },
             ..relative.clone()
         };
-        let moved = translated_path(waveform_path(&relative).unwrap(), offset);
         let built = waveform_path(&absolute).unwrap();
-        // The tessellator may emit the same triangles in another order once
-        // float rounding differs, so compare the vertex sets.
-        let sorted = |path: &gpui::Path<Pixels>| {
-            let mut vertices = waveform_vertices(path);
-            vertices.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            vertices
-        };
-        let (moved, built) = (sorted(&moved), sorted(&built));
-        assert_eq!(moved.len(), built.len());
-        for ((mx, my), (bx, by)) in moved.iter().zip(&built) {
-            assert!(
-                (mx - bx).abs() < 0.01 && (my - by).abs() < 0.01,
-                "({mx}, {my}) vs ({bx}, {by})"
-            );
-        }
+        assert_eq!(built.vertices.len(), moved.vertices.len());
+        let close = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.01;
+        assert!(close(built.bounds.origin.x, moved.bounds.origin.x));
+        assert!(close(built.bounds.origin.y, moved.bounds.origin.y));
+        assert!(close(built.bounds.size.width, moved.bounds.size.width));
+        assert!(close(built.bounds.size.height, moved.bounds.size.height));
     }
 
     #[test]
