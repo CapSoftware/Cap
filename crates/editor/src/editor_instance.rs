@@ -123,16 +123,15 @@ impl PreviewCursorCache {
 fn refresh_project_snapshot(
     project_rx: &mut watch::Receiver<ProjectConfiguration>,
     snapshot: &mut Arc<ProjectConfiguration>,
-) -> bool {
+) -> Option<Arc<ProjectConfiguration>> {
     let refreshed = {
         let project = project_rx.borrow_and_update();
         if !project.has_changed() {
-            return false;
+            return None;
         }
         Arc::new(project.clone())
     };
-    *snapshot = refreshed;
-    true
+    Some(std::mem::replace(snapshot, refreshed))
 }
 
 fn get_video_duration_fallback(path: &Path) -> Option<f64> {
@@ -1040,7 +1039,13 @@ impl EditorInstance {
                         break;
                     }
 
-                    if refresh_project_snapshot(&mut project_rx, &mut project) {
+                    if let Some(previous) = refresh_project_snapshot(&mut project_rx, &mut project)
+                        && !ZoomTransformTimeline::project_inputs_match(
+                            &previous,
+                            &project,
+                            self.render_constants.options.screen_size,
+                        )
+                    {
                         zoom_timelines.clear();
                         outgoing_zoom_timelines.clear();
                     }
@@ -1119,7 +1124,7 @@ impl EditorInstance {
                             // timeline playback and export use (the old focus
                             // interpolator was never precomputed here and fell
                             // back to a divergent direct interpolation). The
-                            // timeline is kept until the project changes: it
+                            // timeline is kept until its inputs change: it
                             // precomputes from t=0, so rebuilding it per frame
                             // made each scrub frame cost O(playhead).
                             let zoom_timeline = zoom_timelines
@@ -2298,7 +2303,7 @@ mod tests {
             let mut snapshot = Arc::new(project_rx.borrow_and_update().clone());
             let initial = Arc::clone(&snapshot);
             for _ in 0..3 {
-                assert!(!refresh_project_snapshot(&mut project_rx, &mut snapshot));
+                assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot).is_none());
                 assert!(Arc::ptr_eq(&snapshot, &initial));
             }
             assert_eq!(snapshot.background.padding, padding);
@@ -2315,13 +2320,14 @@ mod tests {
             project_tx.send_modify(|project| project.background.padding = padding);
         }
 
-        assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot));
+        let previous = refresh_project_snapshot(&mut project_rx, &mut snapshot).unwrap();
+        assert!(Arc::ptr_eq(&previous, &initial));
         assert!(!Arc::ptr_eq(&snapshot, &initial));
         assert_eq!(snapshot.background.padding, 16.0);
         assert_eq!(initial.background.padding, 0.0);
 
         let refreshed = Arc::clone(&snapshot);
-        assert!(!refresh_project_snapshot(&mut project_rx, &mut snapshot));
+        assert!(refresh_project_snapshot(&mut project_rx, &mut snapshot).is_none());
         assert!(Arc::ptr_eq(&snapshot, &refreshed));
     }
 

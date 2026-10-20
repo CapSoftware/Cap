@@ -2850,26 +2850,6 @@ fn matches_compression(current: ExportCompression, expected: ExportCompression) 
     std::mem::discriminant(&current) == std::mem::discriminant(&expected)
 }
 
-// The NV12 readback wait sleeps in 1 ms steps (`frame_pipeline.rs`), which the
-// default 15.6 ms Windows timer resolution stretches to most of a frame each.
-#[cfg(windows)]
-struct TimerResolution;
-
-#[cfg(windows)]
-impl TimerResolution {
-    fn hold_one_millisecond() -> Self {
-        unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
-        Self
-    }
-}
-
-#[cfg(windows)]
-impl Drop for TimerResolution {
-    fn drop(&mut self) {
-        unsafe { windows_sys::Win32::Media::timeEndPeriod(1) };
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_export(
     project_path: PathBuf,
@@ -2890,9 +2870,6 @@ async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
-    #[cfg(windows)]
-    let _timer_resolution = TimerResolution::hold_one_millisecond();
-
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {
         builder = builder.with_config(make_cursor_only_project(project));
@@ -2915,7 +2892,10 @@ async fn run_export(
         let total = base.total_frames(fps);
         (PreparedBase::Mp4(base), total)
     } else {
-        let base = builder.build().await.map_err(|error| error.to_string())?;
+        let base = builder
+            .build_video_only()
+            .await
+            .map_err(|error| error.to_string())?;
         let total = base.total_frames(fps);
         (PreparedBase::Other(base), total)
     };

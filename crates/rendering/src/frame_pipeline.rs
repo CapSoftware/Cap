@@ -16,7 +16,6 @@ use foreign_types::ForeignType;
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
-const NV12_READBACK_SPIN: std::time::Duration = std::time::Duration::from_millis(8);
 
 /// Whether this process has selected a software (CPU rasterizer) wgpu adapter.
 /// Software adapters like Windows WARP legitimately take tens of seconds for the
@@ -890,7 +889,7 @@ impl RgbaToNv12Converter {
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
 
         self.pending = Some(PendingNv12Output::Readback(PendingNv12Readback {
-            rx: None,
+            armed: None,
             mapped: false,
             buffer: readback_buffer,
             width,
@@ -907,7 +906,7 @@ impl RgbaToNv12Converter {
     /// Arms the pending output after its command buffer has been submitted:
     /// readback mode starts the buffer map, surface mode registers a
     /// native queue completion signal.
-    pub fn after_submit(&mut self, queue: &wgpu::Queue) {
+    pub fn after_submit(&mut self, queue: &wgpu::Queue, submission: &wgpu::SubmissionIndex) {
         match self.pending.as_mut() {
             Some(PendingNv12Output::Readback(pending)) => {
                 let (tx, rx) = oneshot::channel();
@@ -917,7 +916,7 @@ impl RgbaToNv12Converter {
                     .map_async(wgpu::MapMode::Read, move |result| {
                         let _ = tx.send(result);
                     });
-                pending.rx = Some(rx);
+                pending.armed = Some((rx, submission.clone()));
                 pending.mapped = true;
             }
             #[cfg(target_os = "macos")]
@@ -1113,7 +1112,10 @@ impl PendingNv12Surface {
 }
 
 pub struct PendingNv12Readback {
-    rx: Option<oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    armed: Option<(
+        oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+        wgpu::SubmissionIndex,
+    )>,
     mapped: bool,
     buffer: Arc<wgpu::Buffer>,
     pub width: u32,
@@ -1142,41 +1144,25 @@ impl PendingNv12Readback {
         device: &wgpu::Device,
         buffer_pool: Option<&mut NV12BufferPool>,
     ) -> Result<Nv12RenderedFrame, RenderingError> {
-        let Some(mut rx) = self.rx.take() else {
+        let Some((mut rx, submission)) = self.armed.take() else {
             return Err(self.cancel());
         };
 
-        let start_time = Instant::now();
-        let timeout_duration = gpu_buffer_wait_timeout(self.export_deadlines);
-
-        loop {
-            if readback_waited(start_time, self.frame_number) > timeout_duration {
-                return Err(self.cancel());
+        let completed = wait_for_submission(
+            device,
+            &submission,
+            Instant::now(),
+            self.frame_number,
+            gpu_buffer_wait_timeout(self.export_deadlines),
+        )
+        .await;
+        match (completed, rx.try_recv()) {
+            (true, Ok(Ok(()))) => {}
+            (_, Ok(Err(error))) => {
+                self.unmap();
+                return Err(RenderingError::BufferMapFailed(error));
             }
-
-            match rx.try_recv() {
-                Ok(result) => match result {
-                    Ok(()) => break,
-                    Err(error) => {
-                        self.unmap();
-                        return Err(RenderingError::BufferMapFailed(error));
-                    }
-                },
-                Err(oneshot::error::TryRecvError::Empty) => {
-                    device.poll(wgpu::PollType::Poll)?;
-                    // tokio's timer ticks in whole milliseconds, so even a
-                    // 100µs sleep outlasts a frame's GPU work and caps the
-                    // export at the timer rate; sleep only once a frame is slow.
-                    if start_time.elapsed() < NV12_READBACK_SPIN {
-                        tokio::task::yield_now().await;
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                    }
-                }
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(self.cancel());
-                }
-            }
+            _ => return Err(self.cancel()),
         }
 
         let buffer_slice = self.buffer.slice(..);
@@ -2250,9 +2236,9 @@ pub async fn finish_encoder_nv12_pooled(
         }));
     }
 
-    queue.submit(std::iter::once(encoder.finish()));
+    let submission = queue.submit(std::iter::once(encoder.finish()));
     if submitted {
-        nv12_converter.after_submit(queue);
+        nv12_converter.after_submit(queue, &submission);
     }
 
     if let Some(prev) = previous {
@@ -2453,8 +2439,8 @@ mod surface_output_tests {
                 .await
                 .expect("conversion submission")
         );
-        queue.submit(std::iter::once(encoder.finish()));
-        converter.after_submit(queue);
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(queue, &submission);
         converter
             .take_pending()
             .expect("conversion pending")
@@ -2479,8 +2465,8 @@ mod surface_output_tests {
                 .await
                 .expect("surface conversion")
         );
-        queue.submit([encoder.finish()]);
-        converter.after_submit(&queue);
+        let submission = queue.submit([encoder.finish()]);
+        converter.after_submit(&queue, &submission);
         let Some(PendingNv12Output::Surface(mut pending)) = converter.take_pending() else {
             panic!("expected surface output");
         };
