@@ -218,6 +218,21 @@ pub fn force_software_wgpu_adapter() -> bool {
         })
 }
 
+fn parse_gpu_power_preference(value: &str) -> wgpu::PowerPreference {
+    match value.to_ascii_lowercase().as_str() {
+        "low" | "integrated" | "battery" => wgpu::PowerPreference::LowPower,
+        "high" | "performance" | "discrete" => wgpu::PowerPreference::HighPerformance,
+        _ => wgpu::PowerPreference::None,
+    }
+}
+
+/// `CAP_GPU_PREFERENCE` selects the physical GPU when more than one is present.
+/// `low` picks the integrated GPU, `high` picks the high-performance (usually
+/// discrete) GPU, and the default (`system`/`auto`) lets the platform choose.
+pub fn gpu_power_preference() -> wgpu::PowerPreference {
+    parse_gpu_power_preference(&std::env::var("CAP_GPU_PREFERENCE").unwrap_or_default())
+}
+
 pub fn create_wgpu_instance_sync() -> wgpu::Instance {
     #[cfg(not(target_os = "windows"))]
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -287,7 +302,7 @@ pub async fn probe_software_adapter() -> Option<(bool, String)> {
     } else {
         instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: gpu_power_preference(),
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
@@ -2499,7 +2514,7 @@ pub async fn create_shared_device() -> Result<SharedWgpuDevice, RenderingError> 
     } else {
         instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: gpu_power_preference(),
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
@@ -5206,6 +5221,35 @@ impl ProjectUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_power_preference_defaults_to_system() {
+        for value in ["", "system", "auto", "System"] {
+            assert_eq!(
+                parse_gpu_power_preference(value),
+                wgpu::PowerPreference::None,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_power_preference_honors_overrides() {
+        for value in ["low", "integrated", "battery", "LOW"] {
+            assert_eq!(
+                parse_gpu_power_preference(value),
+                wgpu::PowerPreference::LowPower,
+                "{value}"
+            );
+        }
+        for value in ["high", "performance", "discrete", "HIGH"] {
+            assert_eq!(
+                parse_gpu_power_preference(value),
+                wgpu::PowerPreference::HighPerformance,
+                "{value}"
+            );
+        }
+    }
 
     #[test]
     fn camera_blur_output_rejects_missing_pending_and_failed_masks() {

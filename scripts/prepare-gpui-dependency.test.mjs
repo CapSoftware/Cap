@@ -122,6 +122,7 @@ test("dependency verification handles overlapping patches without changing the c
 	writeFileSync(path.join(upstream, "renderer.rs"), "base\n");
 	writeFileSync(path.join(upstream, "windows.rs"), "base\n");
 	writeFileSync(path.join(upstream, "frames.rs"), "base\n");
+	writeFileSync(path.join(upstream, "gpu.rs"), "base\n");
 	commit();
 	const base = git(upstream, "rev-parse", "HEAD").trim();
 	const patch = (name) => {
@@ -142,6 +143,8 @@ test("dependency verification handles overlapping patches without changing the c
 	patch("zed-linux.patch");
 	writeFileSync(path.join(upstream, "frames.rs"), "paced frames\n");
 	patch("zed-idle-frames.patch");
+	writeFileSync(path.join(upstream, "gpu.rs"), "high performance GPU\n");
+	patch("zed-gpu-preference.patch");
 	const script = path.join(cap, "scripts/prepare-gpui-dependency.sh");
 	writeFileSync(
 		script,
@@ -164,6 +167,10 @@ test("dependency verification handles overlapping patches without changing the c
 		assert.equal(
 			readFileSync(path.join(zed, "frames.rs"), "utf8"),
 			"paced frames\n",
+		);
+		assert.equal(
+			readFileSync(path.join(zed, "gpu.rs"), "utf8"),
+			"high performance GPU\n",
 		);
 	});
 
