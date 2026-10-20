@@ -196,6 +196,7 @@ pub const BACKGROUND_IMAGE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "png", "gif",
 pub const CURRENT_DESKTOP_BACKGROUND_BASENAME: &str = "current-desktop-background";
 /// `recording.rs:92-93`.
 const DESKTOP_BACKGROUND_MAX_DIMENSION: u32 = 2560;
+#[cfg(target_os = "macos")]
 const DESKTOP_BACKGROUND_JPEG_QUALITY: u8 = 82;
 
 /// The sidebar's fallback border/shadow objects. The UI's numbers, **not**
@@ -1953,30 +1954,33 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
 /// re-encoding to JPEG at quality 82. The `sips` path matters -- macOS ships
 /// HEIC wallpapers the `image` crate cannot decode.
 fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(), String> {
-    let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
-        width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
-    });
-
-    let mut command = std::process::Command::new("sips");
-    command
-        .arg("-s")
-        .arg("format")
-        .arg("jpeg")
-        .arg("-s")
-        .arg("formatOptions")
-        .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
-    if needs_downscale {
-        command
-            .arg("-Z")
-            .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
-    }
-    if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
-        && output_status.status.success()
+    #[cfg(target_os = "macos")]
     {
-        return Ok(());
+        let needs_downscale = image::image_dimensions(source).is_ok_and(|(width, height)| {
+            width > DESKTOP_BACKGROUND_MAX_DIMENSION || height > DESKTOP_BACKGROUND_MAX_DIMENSION
+        });
+
+        let mut command = std::process::Command::new("sips");
+        command
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(DESKTOP_BACKGROUND_JPEG_QUALITY.to_string());
+        if needs_downscale {
+            command
+                .arg("-Z")
+                .arg(DESKTOP_BACKGROUND_MAX_DIMENSION.to_string());
+        }
+        if let Ok(output_status) = command.arg(source).arg("--out").arg(output).output()
+            && output_status.status.success()
+        {
+            return Ok(());
+        }
     }
 
-    let decoded = cap_gpui_kernels::codec::open_image(source)
+    let decoded = cap_gpui_kernels::codec::decode_image_file(source)
         .map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
@@ -2426,6 +2430,13 @@ impl EditorWindow {
                     }
                     Err(error) => {
                         tracing::error!("couldn't import your desktop wallpaper: {error}");
+                        cx.spawn(async move |_, _| {
+                            crate::platform::alert_dialog(
+                                "Couldn't import your desktop wallpaper",
+                                &error,
+                            );
+                        })
+                        .detach();
                     }
                 }
                 cx.notify();
