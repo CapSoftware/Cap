@@ -4105,6 +4105,12 @@ impl ProjectUniforms {
         cursor_event_order: CursorEventOrder,
     ) -> Self {
         let options = &constants.options;
+        let camera_size = options.camera_size.map(|size| {
+            segment_frames
+                .camera_frame
+                .as_ref()
+                .map_or(size, |frame| XY::new(frame.width(), frame.height()))
+        });
         let output_size = Self::get_output_size(options, project, resolution_base);
         let fps_f32 = fps.max(1) as f32;
         let timeline_time = f64::from(frame_number) / f64::from(fps.max(1));
@@ -4246,8 +4252,7 @@ impl ProjectUniforms {
         // camera and cursor layers. Only engages when a camera actually exists;
         // otherwise the layers render normally (graceful full-screen fallback).
         let split_layout: Option<SplitLayoutComputed> = if scene.is_split() {
-            options
-                .camera_size
+            camera_size
                 .filter(|_| !project.camera.hide)
                 .map(|camera_size| {
                     let out_w = output_size.0 as f32;
@@ -4795,8 +4800,7 @@ impl ProjectUniforms {
             display_outer_bounds
         };
 
-        let camera = options
-            .camera_size
+        let camera = camera_size
             .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -5005,8 +5009,7 @@ impl ProjectUniforms {
                 }
             });
 
-        let camera_only = options
-            .camera_size
+        let camera_only = camera_size
             .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
