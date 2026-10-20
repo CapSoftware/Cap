@@ -428,8 +428,12 @@ impl crate::Queue for Queue {
                 })
                 .copy();
 
-                let raw = match command_buffers.last() {
-                    Some(&cmd_buf) => cmd_buf.raw.to_owned(),
+                let last_encoded = command_buffers
+                    .iter()
+                    .rev()
+                    .find_map(|cmd_buf| cmd_buf.raw.as_ref());
+                let raw = match last_encoded {
+                    Some(raw) => raw.to_owned(),
                     None => {
                         let queue = self.raw.lock();
                         queue
@@ -449,14 +453,17 @@ impl crate::Queue for Queue {
                     raw.encode_signal_event(shared_event, signal_value);
                 }
                 // only return an extra one if it's extra
-                match command_buffers.last() {
+                match last_encoded {
                     Some(_) => None,
                     None => Some(raw),
                 }
             };
 
-            for cmd_buffer in command_buffers {
-                cmd_buffer.raw.commit();
+            for raw in command_buffers
+                .iter()
+                .filter_map(|cmd_buf| cmd_buf.raw.as_ref())
+            {
+                raw.commit();
             }
 
             if let Some(raw) = extra_command_buffer {
@@ -980,6 +987,7 @@ pub struct CommandEncoder {
     shared: Arc<AdapterShared>,
     raw_queue: Arc<Mutex<metal::CommandQueue>>,
     raw_cmd_buf: Option<metal::CommandBuffer>,
+    pending_label: Option<String>,
     state: CommandState,
     temp: Temp,
     counters: Arc<wgt::HalCounters>,
@@ -999,7 +1007,7 @@ unsafe impl Sync for CommandEncoder {}
 
 #[derive(Debug)]
 pub struct CommandBuffer {
-    raw: metal::CommandBuffer,
+    raw: Option<metal::CommandBuffer>,
 }
 
 impl crate::DynCommandBuffer for CommandBuffer {}

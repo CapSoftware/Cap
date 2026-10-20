@@ -1,15 +1,13 @@
 mod script_outline;
 
-use std::cell::RefCell;
 use std::time::Instant;
 
 use gpui::{
-    Bounds, BoxShadow, ContentMask, Corners, FillOptions, FillRule, Hsla, IntoElement, Path,
-    PathBuilder, PathStyle, Pixels, Styled, Window, canvas, fill, hsla, linear_color_stop,
-    linear_gradient, point, px, size,
+    Bounds, BoxShadow, ContentMask, Corners, Hsla, IntoElement, Pixels, Styled, Window, canvas,
+    fill, hsla, linear_color_stop, linear_gradient, point, px, size,
 };
 
-use script_outline::{SCRIPT_BOUNDS, SCRIPT_OUTLINE};
+use script_outline::LOADING;
 
 const STATIC_PHASE_SECONDS: f32 = 3.;
 const FADE_IN_SECONDS: f32 = 0.3;
@@ -21,13 +19,6 @@ const SWEEP_PERIOD_SECONDS: f32 = 1.6;
 const SWEEP_HALF_WIDTH: f32 = 0.26;
 const SCRIPT_REST_ALPHA: f32 = 0.12;
 const SCRIPT_PEAK_ALPHA: f32 = 0.42;
-
-enum Segment {
-    Move(f32, f32),
-    Line(f32, f32),
-    Quad(f32, f32, f32, f32),
-    Close,
-}
 
 struct Cloud {
     lightness: f32,
@@ -148,53 +139,14 @@ fn sweep_alpha(position: f32, center: f32) -> f32 {
     ease_in_out(1. - (position - center).abs() / SWEEP_HALF_WIDTH)
 }
 
-/// The glyph contours overlap where the letters join; a non-zero fill
-/// tessellates them as one union, so the translucent word never doubles up.
-fn script_path(origin: (f32, f32), scale: f32) -> Option<Path<Pixels>> {
-    thread_local! {
-        static CACHE: RefCell<Option<([u32; 3], Path<Pixels>)>> = const { RefCell::new(None) };
-    }
-    let key = [origin.0.to_bits(), origin.1.to_bits(), scale.to_bits()];
-    CACHE.with_borrow_mut(|cache| {
-        if let Some((cached, path)) = cache.as_ref()
-            && *cached == key
-        {
-            return Some(path.clone());
-        }
-        let place = |x: f32, y: f32| point(px(origin.0 + x * scale), px(origin.1 - y * scale));
-        let mut builder = PathBuilder::fill().with_style(PathStyle::Fill(
-            FillOptions::default()
-                .with_fill_rule(FillRule::NonZero)
-                .with_tolerance(0.02),
-        ));
-        for segment in SCRIPT_OUTLINE {
-            match *segment {
-                Segment::Move(x, y) => builder.move_to(place(x, y)),
-                Segment::Line(x, y) => builder.line_to(place(x, y)),
-                Segment::Quad(cx, cy, x, y) => builder.curve_to(place(x, y), place(cx, cy)),
-                Segment::Close => builder.close(),
-            }
-        }
-        let path = builder.build().ok()?;
-        *cache = Some((key, path.clone()));
-        Some(path)
-    })
-}
-
 fn paint_script(area: Bounds<Pixels>, elapsed: f32, opacity: f32, window: &mut Window) {
-    let ((min_x, min_y), (max_x, max_y)) = SCRIPT_BOUNDS;
-    let word_width = max_x - min_x;
-    let word_height = max_y - min_y;
-    let scale =
-        (f32::from(area.size.width) / word_width).min(f32::from(area.size.height) / word_height);
-    if scale <= 0. || opacity <= 0. {
+    if opacity <= 0. {
         return;
     }
-    let origin = (
-        f32::from(area.center().x) - (min_x + word_width / 2.) * scale,
-        f32::from(area.center().y) + (min_y + word_height / 2.) * scale,
-    );
-    let Some(path) = script_path(origin, scale) else {
+    let Some((origin, scale)) = LOADING.fit(area) else {
+        return;
+    };
+    let Some(path) = LOADING.path(origin, scale) else {
         return;
     };
     window.paint_path(path.clone(), hsla(0., 0., 1., SCRIPT_REST_ALPHA * opacity));
