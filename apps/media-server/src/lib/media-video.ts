@@ -3,6 +3,12 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
+import {
+	type CapcodecOptions,
+	capcodecOptionsForJob,
+	encodeVideoWithCapcodec,
+	remainingTimeoutMs,
+} from "./capcodec-encoder";
 import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
@@ -1521,6 +1527,29 @@ export async function processVideo(
 		metadata.duration,
 		opts.timeoutMs,
 	);
+	const capcodec =
+		videoTranscode && !normalizeH264Level ? capcodecOptionsForJob(opts) : null;
+	if (capcodec) {
+		try {
+			await processVideoWithCapcodec(
+				inputPath,
+				metadata,
+				opts,
+				capcodec,
+				outputTempFile.path,
+				audioTranscode,
+				extraInputArgs,
+				extraOutputArgs,
+				processTimeoutMs,
+				onProgress,
+				abortSignal,
+			);
+			return outputTempFile;
+		} catch (err) {
+			await outputTempFile.cleanup();
+			throw err;
+		}
+	}
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
@@ -1659,6 +1688,91 @@ export async function processVideo(
 			abortSignal?.removeEventListener("abort", abortCleanup);
 		}
 		await terminateProcess(proc);
+	}
+}
+
+async function processVideoWithCapcodec(
+	inputPath: string,
+	metadata: VideoMetadata,
+	opts: Required<VideoProcessingOptions>,
+	capcodec: CapcodecOptions,
+	outputPath: string,
+	audioTranscode: boolean,
+	extraInputArgs: string[],
+	extraOutputArgs: string[],
+	processTimeoutMs: number,
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	const videoOnly = await createTempFile(".fmp4");
+	const controller = new AbortController();
+	const forwardAbort = () => controller.abort();
+	abortSignal?.addEventListener("abort", forwardAbort, { once: true });
+	const startedAt = performance.now();
+	const encodePromise = encodeVideoWithCapcodec({
+		inputPath,
+		outputPath: videoOnly.path,
+		width: metadata.width,
+		height: metadata.height,
+		fps: metadata.fps,
+		maxWidth: opts.maxWidth,
+		maxHeight: opts.maxHeight,
+		extraInputArgs,
+		options: capcodec,
+		totalDurationUs: metadata.duration * 1_000_000,
+		onProgress,
+		abortSignal: controller.signal,
+	});
+	try {
+		await withTimeout(encodePromise, processTimeoutMs, async () => {
+			controller.abort();
+			await encodePromise.catch(() => undefined);
+		});
+		const muxArgs = [
+			"ffmpeg",
+			"-hide_banner",
+			"-nostdin",
+			"-i",
+			videoOnly.path,
+		];
+		if (metadata.audioCodec) {
+			muxArgs.push(
+				...extraInputArgs,
+				"-i",
+				inputPath,
+				"-map",
+				"0:v:0",
+				"-map",
+				"1:a:0",
+				"-c:v",
+				"copy",
+			);
+			if (audioTranscode) {
+				muxArgs.push("-c:a", "aac", "-b:a", opts.audioBitrate);
+			} else {
+				muxArgs.push("-c:a", "copy");
+			}
+		} else {
+			muxArgs.push("-map", "0:v:0", "-c:v", "copy", "-an");
+		}
+		muxArgs.push(
+			"-movflags",
+			"+faststart",
+			...extraOutputArgs,
+			"-y",
+			outputPath,
+		);
+		await runFfmpegCommand(
+			muxArgs,
+			remainingTimeoutMs(processTimeoutMs, performance.now() - startedAt),
+			abortSignal,
+		);
+		if ((await file(outputPath).size) === 0) {
+			throw new Error("capcodec mux produced an empty output file");
+		}
+	} finally {
+		abortSignal?.removeEventListener("abort", forwardAbort);
+		await videoOnly.cleanup();
 	}
 }
 

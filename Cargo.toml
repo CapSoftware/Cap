@@ -109,6 +109,26 @@ opt-level = 2
 [profile.dev.package.cap-audio]
 opt-level = 2
 
+# The verification suite decodes markers from every output pixel it reads;
+# unoptimised it spends minutes in its own loops.
+[profile.dev.package.cap-verify]
+opt-level = 3
+
+# Engine verification suite in CI (.github/workflows/engine-verify.yml).
+# Dependencies come from the Rust cache, so optimising them costs nothing on
+# a warm run and speeds up the cases; workspace crates rebuild on every run
+# and stay cheap to compile. No debuginfo or incremental state to cache.
+[profile.ci-verify]
+inherits = "dev"
+debug = 0
+incremental = false
+
+[profile.ci-verify.package."*"]
+opt-level = 1
+
+[profile.ci-verify.package.cap-verify]
+opt-level = 3
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"

@@ -49,7 +49,7 @@ pkgdesc="Screen recording with Studio, Instant, and screenshot modes"
 arch=("$architecture")
 url="https://cap.so"
 license=("AGPL-3.0-only")
-depends=("webkit2gtk-4.1" "gtk3" "libappindicator-gtk3" "libva" "libpulse" "libpipewire" "alsa-lib" "alsa-plugins" "libxkbcommon" "libxkbcommon-x11" "openssl" "vulkan-icd-loader" "xdg-desktop-portal" "xdg-utils" "gst-plugins-good" "gst-libav")
+depends=("libva" "libpulse" "libpipewire" "alsa-lib" "alsa-plugins" "libxkbcommon" "libxkbcommon-x11" "libx11" "openssl" "wayland" "libglvnd" "vulkan-icd-loader" "xdg-desktop-portal" "xdg-utils")
 optdepends=("xdg-desktop-portal-hyprland: screen capture on Hyprland and Omarchy" "vulkan-driver: hardware accelerated recording and editing")
 provides=("cap=\$pkgver")
 conflicts=("cap")
@@ -60,7 +60,7 @@ sha256sums=("$checksum")
 
 package() {
 	bsdtar -xOf "\$srcdir/Cap.deb" "$data_member" | bsdtar -xf - -C "\$pkgdir"
-	for binary in Cap cap-gpui cap-cli cap-exporter cap-muxer; do
+	for binary in Cap cap-cli cap-muxer; do
 		test -x "\$pkgdir/usr/bin/\$binary"
 	done
 	printf 'arch\n' > "\$pkgdir/usr/lib/cap/package-format"
