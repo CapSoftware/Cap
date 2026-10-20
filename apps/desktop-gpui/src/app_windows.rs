@@ -5490,6 +5490,7 @@ fn load_editor_waveforms(
             gpui_tokio::Tokio::spawn(cx, async move {
                 let mut mic = Vec::with_capacity(instance.segment_medias.len());
                 let mut system = Vec::with_capacity(instance.segment_medias.len());
+                let mut repairs = Vec::with_capacity(instance.segment_medias.len());
                 for segment in instance.segment_medias.iter() {
                     for (loader, out) in [
                         (&segment.audio, &mut mic),
@@ -5497,31 +5498,51 @@ fn load_editor_waveforms(
                     ] {
                         out.push(loader.get().await.ok().flatten());
                     }
+                    repairs.push(segment.audio_timing_repair);
                 }
-                (mic, system)
+                (mic, system, repairs)
             })
         });
-        let Ok((mic, system)) = task.await else {
+        let Ok((mic, system, repairs)) = task.await else {
             return;
         };
-        let peaks = cx
+        let (peaks, envelopes) = cx
             .background_executor()
             .spawn(async move {
-                let [mic, system] = [mic, system].map(|tracks| {
-                    tracks
-                        .into_iter()
-                        .map(|audio| {
-                            Arc::new(match audio {
-                                Some(audio) => editor_timeline::waveform_peaks(
-                                    &audio.sample_slices().collect::<Vec<_>>(),
-                                    audio.channels(),
-                                ),
-                                None => Vec::new(),
+                let measure =
+                    |tracks: &[Option<Arc<cap_audio::DecodedAudio>>],
+                     kernel: fn(&[&[f32]], u16) -> Vec<f32>| {
+                        tracks
+                            .iter()
+                            .map(|audio| {
+                                Arc::new(match audio {
+                                    Some(audio) => kernel(
+                                        &audio.sample_slices().collect::<Vec<_>>(),
+                                        audio.channels(),
+                                    ),
+                                    None => Vec::new(),
+                                })
                             })
-                        })
-                        .collect::<Vec<_>>()
-                });
-                (mic, system)
+                            .collect::<Vec<_>>()
+                    };
+                let peaks = (
+                    measure(&mic, editor_timeline::waveform_peaks),
+                    measure(&system, editor_timeline::waveform_peaks),
+                );
+                let mic_levels = measure(&mic, crate::clean_up::loudness_db);
+                let system_levels = measure(&system, crate::clean_up::loudness_db);
+                let envelopes = mic_levels
+                    .into_iter()
+                    .zip(system_levels)
+                    .zip(repairs)
+                    .map(|((mic, system), repair)| crate::clean_up::ClipEnvelope {
+                        mic: (!mic.is_empty()).then_some(mic),
+                        system: (!system.is_empty()).then_some(system),
+                        mic_repair_secs: f64::from(repair.mic_offset_secs),
+                        system_repair_secs: f64::from(repair.system_audio_offset_secs),
+                    })
+                    .collect::<Vec<_>>();
+                (peaks, envelopes)
             })
             .await;
         let _ = handle.update(cx, |view, window, cx| {
@@ -5530,7 +5551,8 @@ fn load_editor_waveforms(
                 system = peaks.1.iter().filter(|peaks| !peaks.is_empty()).count(),
                 "editor waveforms ready"
             );
-            view.set_waveforms(peaks.0, peaks.1, window, cx)
+            view.set_waveforms(peaks.0, peaks.1, window, cx);
+            view.set_clean_up_envelopes(envelopes, window, cx);
         });
     })
     .detach();

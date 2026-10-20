@@ -1203,6 +1203,16 @@ pub struct TimelineModel {
     /// The span a live ghost trim is removing, in output time. Drawn as a gap
     /// with a red duration badge, the way Blip's ghost resize marks the cut.
     pub clip_ghost_gap: Option<(f64, f64)>,
+    pub silences: Vec<SilenceMark>,
+    pub show_silences: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SilenceMark {
+    pub start: f64,
+    pub end: f64,
+    pub kept: bool,
+    pub focused: bool,
 }
 
 impl TimelineModel {
@@ -1431,6 +1441,8 @@ impl TimelineModel {
             system_waveforms: Vec::new(),
             waveform_paths: Arc::default(),
             clip_ghost_gap: None,
+            silences: Vec::new(),
+            show_silences: false,
         };
         model.rows = build_rows(
             config,
@@ -1629,6 +1641,39 @@ fn clip_rows(
             }
         })
         .collect()
+}
+
+fn render_silence_mark(
+    theme: &Theme,
+    mark: SilenceMark,
+    view: TimelineView,
+    secs_per_pixel: f64,
+) -> AnyElement {
+    let red = Hsla::from(gpui::rgb(0xef4444));
+    let x = ((mark.start - view.transform.position) / secs_per_pixel) as f32;
+    let width = (((mark.end - mark.start) / secs_per_pixel) as f32).max(2.);
+    let (fill, border, border_width) = if mark.kept {
+        (
+            with_alpha(Hsla::from(theme.editor.text_3), 0.08),
+            with_alpha(Hsla::from(theme.editor.text_3), 0.45),
+            1.,
+        )
+    } else if mark.focused {
+        (with_alpha(red, 0.3), red, 1.5)
+    } else {
+        (with_alpha(red, 0.16), with_alpha(red, 0.5), 1.)
+    };
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(x))
+        .w(px(width))
+        .rounded(px(4.))
+        .bg(fill)
+        .border(px(border_width))
+        .border_color(border)
+        .into_any_element()
 }
 
 /// `#rrggbb` / `#rgb`, the form every colour in the config takes.
@@ -2245,6 +2290,20 @@ fn render_track_content(
                 secs_per_pixel,
                 height,
             ));
+        }
+    }
+
+    if row.kind == TrackKind::Clip && model.show_silences {
+        let (visible_start, visible_end) = (
+            view.transform.position,
+            view.transform.position + view.transform.zoom,
+        );
+        for mark in model
+            .silences
+            .iter()
+            .filter(|mark| mark.end >= visible_start && mark.start <= visible_end)
+        {
+            content = content.child(render_silence_mark(theme, *mark, view, secs_per_pixel));
         }
     }
 
