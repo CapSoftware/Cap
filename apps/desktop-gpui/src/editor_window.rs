@@ -6090,8 +6090,17 @@ impl EditorWindow {
                 cx,
             )
         } else {
+            let locked = if selection.track == TrackKind::Clip {
+                self.project.locked_tracks.clone()
+            } else {
+                Vec::new()
+            };
             self.edit(
-                |timeline| edits::delete_segments(timeline, selection.track, &selection.indices),
+                |timeline| {
+                    edits::with_locked_tracks(timeline, &locked, |timeline| {
+                        edits::delete_segments(timeline, selection.track, &selection.indices)
+                    })
+                },
                 window,
                 cx,
             )
@@ -7954,10 +7963,13 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let locked = self.project.locked_tracks.clone();
         let Some(timeline) = self.project.timeline.as_mut() else {
             return;
         };
-        if !edits::set_clip_segment_timescale(timeline, index, timescale) {
+        if !edits::with_locked_tracks(timeline, &locked, |timeline| {
+            edits::set_clip_segment_timescale(timeline, index, timescale)
+        }) {
             return;
         }
         self.project_changed(window, cx);
@@ -8041,10 +8053,13 @@ impl EditorWindow {
     ) {
         self.clip_speed = None;
         let mut merged = None;
+        let locked = self.project.locked_tracks.clone();
         let changed = self.edit(
             |timeline| {
-                merged = edits::merge_clip_segments(timeline, index, direction);
-                merged.is_some()
+                edits::with_locked_tracks(timeline, &locked, |timeline| {
+                    merged = edits::merge_clip_segments(timeline, index, direction);
+                    merged.is_some()
+                })
             },
             window,
             cx,
@@ -10955,6 +10970,69 @@ impl EditorWindow {
                                     },
                                 )),
                             )
+                    }))
+                    .children(edits::lockable_track(kind).map(|track| {
+                        let locked = self.project.locked_tracks.contains(&track);
+                        let left = if delete_label.is_some() {
+                            timeline::TRACK_GUTTER - 48.
+                        } else {
+                            timeline::TRACK_GUTTER - 24.
+                        };
+                        div()
+                            .id(gpui::ElementId::NamedInteger(
+                                "track-lock".into(),
+                                (kind as usize as u64) << 16 | lane as u64,
+                            ))
+                            .absolute()
+                            .left(px(left))
+                            .top(px((model.track_height() - 20.) / 2.))
+                            .w(px(20.))
+                            .h(px(20.))
+                            .when(row_hovered || locked, |this| {
+                                this.cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(6.))
+                                    .bg(Hsla::from(theme.editor.ctl_active))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.edit_project(
+                                                "track-lock",
+                                                window,
+                                                cx,
+                                                move |project| {
+                                                    if let Some(at) = project
+                                                        .locked_tracks
+                                                        .iter()
+                                                        .position(|t| *t == track)
+                                                    {
+                                                        project.locked_tracks.remove(at);
+                                                    } else {
+                                                        project.locked_tracks.push(track);
+                                                    }
+                                                    true
+                                                },
+                                            );
+                                        }),
+                                    )
+                                    .child(
+                                        svg()
+                                            .path(if locked {
+                                                "icons/lock.svg"
+                                            } else {
+                                                "icons/lock-open.svg"
+                                            })
+                                            .size(px(13.))
+                                            .text_color(if locked {
+                                                Hsla::from(theme.editor.accent)
+                                            } else {
+                                                Hsla::from(theme.editor.text_3)
+                                            }),
+                                    )
+                            })
                     }))
                     // The lane's delete: a ghost that only appears with the
                     // row under the pointer, and only turns red under its own.

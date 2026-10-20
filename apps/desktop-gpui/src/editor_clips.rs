@@ -617,10 +617,12 @@ impl EditorWindow {
             return;
         }
         self.edit_project("clip-delete", window, cx, move |project| {
-            project
-                .timeline
-                .as_mut()
-                .is_some_and(|timeline| edits::delete_clip_segments(timeline, &[index]))
+            let locked = project.locked_tracks.clone();
+            project.timeline.as_mut().is_some_and(|timeline| {
+                edits::with_locked_tracks(timeline, &locked, |timeline| {
+                    edits::delete_clip_segments(timeline, &[index])
+                })
+            })
         });
         self.set_selection(None, cx);
     }
