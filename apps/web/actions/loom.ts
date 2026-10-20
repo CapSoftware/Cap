@@ -19,6 +19,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
@@ -449,7 +450,7 @@ async function importLoomVideoForOwner({
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(writable.bucketId),
 			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+			public: await getNewVideoPublic(orgId),
 			...(oembedMeta?.duration ? { duration: oembedMeta.duration } : {}),
 			...(oembedMeta?.width ? { width: oembedMeta.width } : {}),
 			...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
@@ -1291,6 +1292,7 @@ export async function createConciergeLoomFileUpload({
 			},
 			request.organizationId,
 		).pipe(runPromise);
+		const isPublic = await getNewVideoPublic(request.organizationId);
 		await db().transaction(async (tx) => {
 			const [reservation] = await tx
 				.select({
@@ -1318,7 +1320,7 @@ export async function createConciergeLoomFileUpload({
 				source: { type: "webMP4" as const },
 				bucket: Option.getOrNull(upload.bucketId),
 				storageIntegrationId: Option.getOrNull(upload.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: isPublic,
 			});
 			await tx.insert(videoUploads).values({
 				videoId,

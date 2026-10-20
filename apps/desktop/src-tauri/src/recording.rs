@@ -4,10 +4,10 @@ use cap_media_info::ffmpeg_sample_format_for;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CameraShape, CursorClickEvent, GlideDirection, InstantRecordingMeta, MultipleSegments,
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CameraShape, CornerStyle, CursorClickEvent, GlideDirection, InstantRecordingMeta,
+    MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration,
+    TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 #[cfg(target_os = "macos")]
 use cap_recording::SendableShareableContent;
@@ -6700,6 +6700,7 @@ fn apply_recording_camera_preview_state(
         CameraPreviewShape::Round => {
             config.camera.shape = CameraShape::Square;
             config.camera.rounding = 100.0;
+            config.camera.rounding_type = CornerStyle::Rounded;
         }
         CameraPreviewShape::Square => {
             config.camera.shape = CameraShape::Square;
@@ -10177,6 +10178,19 @@ mod preparing_presentation_parity_tests {
         ProjectConfiguration::default()
     }
 
+    fn preparing_static_projection(
+        preset: &ProjectConfiguration,
+        target: &ScreenCaptureTarget,
+        stopped: &TimelineConfiguration,
+    ) -> ProjectConfiguration {
+        let mut snapshot = preparing_presentation_snapshot(Some(preset), Some(target)).unwrap();
+        apply_recording_camera_preview_state(
+            &mut snapshot,
+            &crate::camera::CameraPreviewState::default(),
+        );
+        crate::editor_preparing::project_from_preparing_presentation(&snapshot, stopped)
+    }
+
     fn ordinary_static_projection(
         preset: &ProjectConfiguration,
         target: &ScreenCaptureTarget,
@@ -10210,10 +10224,8 @@ mod preparing_presentation_parity_tests {
                 mass: 1.0,
             };
             let original = value(&preset);
-            let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
             let stopped = recording_timeline(one_segment(6.0), Vec::new());
-            let projected =
-                crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+            let projected = preparing_static_projection(&preset, &target, &stopped);
             let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
             assert_eq!(value(&projected), value(&ordinary));
             assert_eq!(value(&preset), original);
@@ -10265,12 +10277,8 @@ mod preparing_presentation_parity_tests {
                     damping: 22.0,
                     mass: 0.8,
                 };
-                let snapshot =
-                    preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
                 let stopped = recording_timeline(one_segment(6.0), Vec::new());
-                let projected = crate::editor_preparing::project_from_preparing_presentation(
-                    &snapshot, &stopped,
-                );
+                let projected = preparing_static_projection(&preset, &target, &stopped);
                 assert_eq!(
                     value(&projected),
                     value(&ordinary_static_projection(
@@ -10353,10 +10361,8 @@ mod preparing_presentation_parity_tests {
         }))
         .unwrap();
         preset.timeline = Some(recording_timeline(one_segment(2.0), vec![old_zoom]));
-        let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
         let stopped = recording_timeline(one_segment(6.0), Vec::new());
-        let projected =
-            crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+        let projected = preparing_static_projection(&preset, &target, &stopped);
         let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
         assert_eq!(value(&projected), value(&ordinary));
         let timeline = projected.timeline.as_ref().unwrap();
@@ -10372,7 +10378,7 @@ mod preparing_presentation_parity_tests {
     }
 
     #[test]
-    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+    fn ordinary_late_camera_state_preserves_unrelated_camera_fields() {
         for (shape, expected_shape, rounding) in [
             (CameraPreviewShape::Round, CameraShape::Square, 100.0),
             (CameraPreviewShape::Square, CameraShape::Square, 25.0),
@@ -10389,6 +10395,9 @@ mod preparing_presentation_parity_tests {
                 let mut expected = config.clone();
                 expected.camera.shape = expected_shape;
                 expected.camera.rounding = rounding;
+                if shape == CameraPreviewShape::Round {
+                    expected.camera.rounding_type = CornerStyle::Rounded;
+                }
                 expected.camera.background_blur.mode = blur;
                 apply_recording_camera_preview_state(
                     &mut config,

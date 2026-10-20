@@ -923,6 +923,9 @@ impl RecordingSession {
         self.paused_accum = Duration::ZERO;
         self.paused_since = None;
         self.start_cue = None;
+        if self.mode() == Some(recording::RecordingMode::Studio) {
+            crate::app_windows::prewarm_shared_wgpu_device(cx);
+        }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
         #[cfg(target_os = "linux")]

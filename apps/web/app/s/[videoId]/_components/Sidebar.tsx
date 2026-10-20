@@ -44,6 +44,7 @@ type AiGenerationStatus =
 	| "SKIPPED";
 
 interface SidebarProps {
+	sidebarId?: string;
 	data: VideoData;
 	commentsData: CommentType[];
 	optimisticComments: CommentType[];
@@ -99,6 +100,7 @@ const tabTransition = {
 export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
 		{
+			sidebarId,
 			data,
 			commentsData,
 			setCommentsData,
@@ -300,8 +302,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								onClick={() => {
 									if (canLeaveSummary()) onCollapse();
 								}}
-								aria-label="Hide comments"
-								title="Hide comments"
+								aria-label="Hide sidebar"
+								title="Hide sidebar"
+								aria-controls={sidebarId}
+								aria-expanded={true}
 								className="hidden shrink-0 items-center justify-center px-3 text-gray-9 transition-colors hover:bg-gray-1 hover:text-gray-12 lg:flex"
 							>
 								<svg
@@ -309,7 +313,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									className="size-4 fill-current"
 									aria-hidden
 								>
-									<title>Hide comments</title>
+									<title>Hide sidebar</title>
 									<path d="M5.7 3.3a.6.6 0 0 0 0 .85L9.55 8 5.7 11.85a.6.6 0 1 0 .85.85l4.27-4.27a.6.6 0 0 0 0-.86L6.55 3.3a.6.6 0 0 0-.85 0Z" />
 								</svg>
 							</button>

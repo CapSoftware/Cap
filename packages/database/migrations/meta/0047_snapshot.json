@@ -1,8 +1,8 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "1cd109bd-1e00-49c3-bbf3-97f0025e557c",
-	"prevId": "d78f7c74-5007-4c78-96c3-50bf45012ad1",
+	"id": "9d613bfd-8b45-4013-8bb5-ae1f48316c30",
+	"prevId": "9d84b33e-c3a0-4696-b89e-3f79f2eba35e",
 	"tables": {
 		"accounts": {
 			"name": "accounts",
@@ -1694,230 +1694,6 @@
 			"uniqueConstraints": {},
 			"checkConstraint": {}
 		},
-		"loom_migration_imports": {
-			"name": "loom_migration_imports",
-			"columns": {
-				"videoId": {
-					"name": "videoId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"requestId": {
-					"name": "requestId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				}
-			},
-			"indexes": {
-				"loom_migration_imports_request_idx": {
-					"name": "loom_migration_imports_request_idx",
-					"columns": ["requestId"],
-					"isUnique": false
-				}
-			},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"loom_migration_imports_videoId": {
-					"name": "loom_migration_imports_videoId",
-					"columns": ["videoId"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
-		"loom_migration_requests": {
-			"name": "loom_migration_requests",
-			"columns": {
-				"id": {
-					"name": "id",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"organizationId": {
-					"name": "organizationId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"activeOrganizationId": {
-					"name": "activeOrganizationId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"requestedByUserId": {
-					"name": "requestedByUserId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"workspaceName": {
-					"name": "workspaceName",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"customerNote": {
-					"name": "customerNote",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"customerReply": {
-					"name": "customerReply",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"invitedAt": {
-					"name": "invitedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"status": {
-					"name": "status",
-					"type": "varchar(32)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "'pending'"
-				},
-				"capMessage": {
-					"name": "capMessage",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"expectedVideoCount": {
-					"name": "expectedVideoCount",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"importedVideoCount": {
-					"name": "importedVideoCount",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"queuedVideoCount": {
-					"name": "queuedVideoCount",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"activeImportCount": {
-					"name": "activeImportCount",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"activeImportLeaseToken": {
-					"name": "activeImportLeaseToken",
-					"type": "varchar(36)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"activeImportLeaseUntil": {
-					"name": "activeImportLeaseUntil",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastOperatorUserId": {
-					"name": "lastOperatorUserId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"lastOperatorAt": {
-					"name": "lastOperatorAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"completedAt": {
-					"name": "completedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"updatedAt": {
-					"name": "updatedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				}
-			},
-			"indexes": {
-				"loom_migration_active_org_idx": {
-					"name": "loom_migration_active_org_idx",
-					"columns": ["activeOrganizationId"],
-					"isUnique": true
-				},
-				"loom_migration_org_created_idx": {
-					"name": "loom_migration_org_created_idx",
-					"columns": ["organizationId", "createdAt"],
-					"isUnique": false
-				},
-				"loom_migration_status_created_idx": {
-					"name": "loom_migration_status_created_idx",
-					"columns": ["status", "createdAt"],
-					"isUnique": false
-				}
-			},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"loom_migration_requests_id": {
-					"name": "loom_migration_requests_id",
-					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
 		"loops_sync_jobs": {
 			"name": "loops_sync_jobs",
 			"columns": {
@@ -2013,6 +1789,286 @@
 				"loops_sync_jobs_userId": {
 					"name": "loops_sync_jobs_userId",
 					"columns": ["userId"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"mcp_oauth_clients": {
+			"name": "mcp_oauth_clients",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"clientId": {
+					"name": "clientId",
+					"type": "varchar(128)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"clientName": {
+					"name": "clientName",
+					"type": "varchar(100)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"redirectUris": {
+					"name": "redirectUris",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"activatedAt": {
+					"name": "activatedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"client_id_idx": {
+					"name": "client_id_idx",
+					"columns": ["clientId"],
+					"isUnique": true
+				},
+				"inactive_created_at_idx": {
+					"name": "inactive_created_at_idx",
+					"columns": ["activatedAt", "createdAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"mcp_oauth_clients_id": {
+					"name": "mcp_oauth_clients_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"mcp_oauth_codes": {
+			"name": "mcp_oauth_codes",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"userId": {
+					"name": "userId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"clientId": {
+					"name": "clientId",
+					"type": "varchar(128)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"codeHash": {
+					"name": "codeHash",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"codeChallenge": {
+					"name": "codeChallenge",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"redirectUri": {
+					"name": "redirectUri",
+					"type": "varchar(512)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"resource": {
+					"name": "resource",
+					"type": "varchar(512)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"expiresAt": {
+					"name": "expiresAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"consumedAt": {
+					"name": "consumedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"code_hash_idx": {
+					"name": "code_hash_idx",
+					"columns": ["codeHash"],
+					"isUnique": true
+				},
+				"expires_at_idx": {
+					"name": "expires_at_idx",
+					"columns": ["expiresAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"mcp_oauth_codes_id": {
+					"name": "mcp_oauth_codes_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"mcp_oauth_tokens": {
+			"name": "mcp_oauth_tokens",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"userId": {
+					"name": "userId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"clientId": {
+					"name": "clientId",
+					"type": "varchar(128)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"familyId": {
+					"name": "familyId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"resource": {
+					"name": "resource",
+					"type": "varchar(512)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"accessHash": {
+					"name": "accessHash",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"refreshHash": {
+					"name": "refreshHash",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"accessExpiresAt": {
+					"name": "accessExpiresAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"refreshExpiresAt": {
+					"name": "refreshExpiresAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"revokedAt": {
+					"name": "revokedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"access_hash_idx": {
+					"name": "access_hash_idx",
+					"columns": ["accessHash"],
+					"isUnique": true
+				},
+				"refresh_hash_idx": {
+					"name": "refresh_hash_idx",
+					"columns": ["refreshHash"],
+					"isUnique": true
+				},
+				"family_id_idx": {
+					"name": "family_id_idx",
+					"columns": ["familyId"],
+					"isUnique": false
+				},
+				"refresh_expires_at_idx": {
+					"name": "refresh_expires_at_idx",
+					"columns": ["refreshExpiresAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"mcp_oauth_tokens_id": {
+					"name": "mcp_oauth_tokens_id",
+					"columns": ["id"]
 				}
 			},
 			"uniqueConstraints": {},
@@ -4724,6 +4780,11 @@
 				"owner_id_idx": {
 					"name": "owner_id_idx",
 					"columns": ["ownerId"],
+					"isUnique": false
+				},
+				"owner_updated_id_idx": {
+					"name": "owner_updated_id_idx",
+					"columns": ["ownerId", "updatedAt", "id"],
 					"isUnique": false
 				},
 				"is_public_idx": {

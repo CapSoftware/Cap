@@ -9,8 +9,6 @@ const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 
 const _CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
-const AXIOM_API_TOKEN = "xaat-c0704be6-e942-4935-b068-3b491d7cc00f";
-const AXIOM_DATASET = "cap-otel";
 
 const parsedStage = () => {
 	if ($app.stage === "staging") return { variant: "staging" } as const;
@@ -83,8 +81,6 @@ export default $config({
 		});
 
 		const vercelVariables = [
-			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
-			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
 			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
