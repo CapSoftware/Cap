@@ -422,11 +422,10 @@ describe("Signed BAA payment and signing", () => {
 
 	it("refreshes payment status after a failed purchase instead of offering another charge", async () => {
 		vi.mocked(getSignedBaaStatus).mockResolvedValue(createStatus({ details }));
-		vi.mocked(purchaseSignedBaa).mockRejectedValue(
-			new Error(
-				"The payment succeeded but the agreement could not be completed.",
-			),
-		);
+		vi.mocked(purchaseSignedBaa).mockResolvedValue({
+			success: false,
+			error: "The payment succeeded but the agreement could not be completed.",
+		});
 		await render();
 		await waitFor(() => expect(button("Get Signed BAA")?.disabled).toBe(false));
 		await click("Get Signed BAA");
