@@ -130,7 +130,11 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							updatedAt: _updatedAt,
 							id: _id,
 							...insertData
-						} = data as Record<string, unknown>;
+						} = data as CreateVideoInput & {
+							createdAt?: unknown;
+							updatedAt?: unknown;
+							id?: unknown;
+						};
 						const promises: MySqlInsertBase<any, any, any>[] = [
 							db.insert(Db.videos).values([
 								{
