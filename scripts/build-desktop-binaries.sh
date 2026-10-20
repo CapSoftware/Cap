@@ -40,4 +40,13 @@ build_sidecar() {
 }
 
 build_sidecar "cap-muxer" "cap-muxer" "cap-muxer"
-build_sidecar "cap" "cap" "cap-cli" "cap-exporter"
+case "$TARGET" in
+    *-apple-darwin)
+        # The macOS app binary runs the CLI itself (`Cap --cap-cli`); `cap-cli` is the small
+        # launcher that re-executes it (crates/cli-launcher), so the engine ships once.
+        build_sidecar "cap-cli-launcher" "cap-cli-launcher" "cap-cli"
+        ;;
+    *)
+        build_sidecar "cap" "cap" "cap-cli" "cap-exporter"
+        ;;
+esac

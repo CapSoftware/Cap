@@ -536,6 +536,12 @@ jobs:
             codesign --verify "$dmg"
           }
           verify_app "$CAP_BUNDLE/macos/Cap.app" Cap cap-muxer cap-cli
+          # cap-cli re-executes the app binary as `Cap --cap-cli`; the signed bundle's CLI must run.
+          cli_version="$("$CAP_BUNDLE/macos/Cap.app/Contents/MacOS/cap-cli" --version)"
+          if [[ "$cli_version" != cap\ * ]]; then
+            echo "::error::The bundled cap-cli did not run the CLI: $cli_version"
+            exit 1
+          fi
           if [[ -e "$CAP_BUNDLE/macos/Cap.app/Contents/MacOS/cap-exporter" ]]; then
             echo "::error::Cap still bundles the duplicate cap-exporter sidecar."
             exit 1

@@ -103,6 +103,15 @@ The bundle carries `cap-muxer` and `cap-cli` only: `cap-exporter` was a
 byte-identical copy of `cap-cli`, and the self-test now runs `cap-cli`
 directly. Release sidecars are built without debug info and stripped.
 
+On macOS `Cap` itself is the CLI: run as `Cap --cap-cli <args>` it hands its
+arguments to the `cap` crate before any of the app starts, and
+`Contents/MacOS/cap-cli` is a small launcher (`crates/cli-launcher`) that
+re-executes it that way. The engine ships once instead of twice, and every
+shim `cap desktop install-cli` or Settings → CLI created still points at
+`cap-cli`. Windows and Linux keep the standalone CLI binary: a Windows GUI
+binary has no console to print to, and the AppImage already routes the CLI
+through its own `--cap-cli` launcher.
+
 After `tauri bundle`, the release shrinks every artifact without changing a
 byte of what gets installed:
 

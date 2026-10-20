@@ -1470,6 +1470,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cli-launcher"
+version = "0.1.0"
+
+[[package]]
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [

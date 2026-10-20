@@ -280,7 +280,7 @@ async fn run_detached(params: RecordParams, format: OutputFormat) -> Result<(), 
     let mut worker_params = params.clone();
     worker_params.path = Some(path.clone());
 
-    let mut command = std::process::Command::new(&exe);
+    let mut command = crate::cli_command(&exe);
     command
         .arg("record")
         .arg("__session-run")
