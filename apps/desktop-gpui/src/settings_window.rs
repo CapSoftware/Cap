@@ -663,6 +663,8 @@ pub struct SettingsWindow {
     _sign_in_subscriptions: [gpui::Subscription; 2],
     user_profile: Option<UserProfile>,
     profile_image: Option<Arc<RenderImage>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 impl SettingsWindow {
@@ -749,6 +751,9 @@ impl SettingsWindow {
 
         let pages = crate::settings_pages::PagesState::new(window, cx);
         let page_scroll = ScrollHandle::new();
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, |this: &Self, _| {
+            this.menu.is_some() || this.shortcut_listening()
+        });
 
         Self {
             theme,
@@ -784,6 +789,8 @@ impl SettingsWindow {
             _sign_in_subscriptions: sign_in_subscriptions,
             user_profile,
             profile_image: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
     }
 
@@ -1553,6 +1560,7 @@ fn covers_default_exclusion(entry: &WindowExclusion, default: &WindowExclusion) 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         if self.page == Page::Quality
             && let Some(mode) = self.quality_scroll_request.take()
@@ -1567,6 +1575,7 @@ impl Render for SettingsWindow {
 
         let shell = div()
             .track_focus(&self.focus)
+            .capture_any_mouse_down(|_, window, cx| ui::keyboard_nav::pointer_used(window, cx))
             // `(window-chrome).tsx` binds Cmd-W to `getCurrentWindow().close()`
             // for every chrome window. Escape is not bound there and is not
             // bound here.
@@ -1774,6 +1783,7 @@ impl SettingsWindow {
 
         div()
             .id("settings-nav")
+            .role(gpui::Role::TabList)
             .flex()
             .flex_col()
             // `.cap-settings-nav { padding: 0 var(--sidebar-padding-x)
@@ -1788,6 +1798,10 @@ impl SettingsWindow {
                 let selected = page == self.page;
                 div()
                     .id(SharedString::from(page.slug()))
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Tab)
+                    .aria_label(page.label())
+                    .aria_selected(selected)
                     .flex()
                     .flex_row()
                     .items_center()

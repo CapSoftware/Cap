@@ -20,12 +20,12 @@ use std::{
     time::Duration,
 };
 
+use cap_cli_install as cli_install;
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, rgb, svg,
 };
-use cap_cli_install as cli_install;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -1327,6 +1327,10 @@ impl SettingsWindow {
         // Keys must reach the root's on_key_down, not a focused field.
         self.focus_root(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn shortcut_listening(&self) -> bool {
+        self.pages.listening.is_some()
     }
 
     /// Leave recording mode without touching the binding. Safe to call when

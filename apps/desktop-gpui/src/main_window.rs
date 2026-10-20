@@ -851,6 +851,8 @@ pub struct MainWindow {
     input_enumeration_gate: devices::InputEnumerationGate,
     /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
     prewarm_task: Option<gpui::Task<()>>,
+    keyboard_nav: bool,
+    _keyboard_nav: gpui::Subscription,
 }
 
 /// `createLicenseQuery` (`utils/queries.ts:257-273`): pro from the auth
@@ -1059,6 +1061,8 @@ impl MainWindow {
         })
         .detach();
 
+        let keyboard_nav = ui::keyboard_nav::install(window, cx, Self::keyboard_nav_blocked);
+
         Self {
             theme,
             // `rawOptions.mode` -- the recording mode is a persisted setting,
@@ -1113,7 +1117,17 @@ impl MainWindow {
             input_poll_generation: 0,
             input_enumeration_gate: devices::InputEnumerationGate::default(),
             prewarm_task: None,
+            keyboard_nav: false,
+            _keyboard_nav: keyboard_nav,
         }
+    }
+
+    fn keyboard_nav_blocked(&self, cx: &gpui::App) -> bool {
+        self.session.read(cx).phase != Phase::Idle
+            || self.microphone_warning.is_some()
+            || self.sign_in_prompt.is_some()
+            || self.idle_error(cx).is_some()
+            || app_windows::clean_capture_pending(cx)
     }
 
     /// Kick off device enumeration.
@@ -2695,6 +2709,7 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.keyboard_nav = ui::keyboard_nav::active(window, cx);
         let theme = self.theme;
         let meter_active = self.panel.is_none()
             && self.microphone.is_some()
@@ -2762,6 +2777,7 @@ impl Render for MainWindow {
                     cx.stop_propagation();
                 }
             }))
+            .capture_any_mouse_down(|_, window, cx| ui::keyboard_nav::pointer_used(window, cx))
     }
 }
 
@@ -3456,6 +3472,7 @@ impl MainWindow {
     /// 8px from the window edges (`mx-2`).
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let keyboard_nav = self.keyboard_nav;
 
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
@@ -3474,6 +3491,9 @@ impl MainWindow {
                 .group(id)
                 .when(cfg!(target_os = "windows"), |this| this.occlude())
                 .tab_index(0)
+                .when(keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(label)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3901,6 +3921,9 @@ impl MainWindow {
                     .child(
                         div()
                             .id("panel-back")
+                            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                            .role(gpui::Role::Button)
+                            .aria_label("Back")
                             .flex()
                             .flex_row()
                             .items_center()
@@ -5631,6 +5654,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .flex()
             .flex_col()
             .w(px(self.target_card_width()))
@@ -5876,6 +5903,10 @@ impl MainWindow {
 
         div()
             .id(id)
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
+            .aria_selected(selected)
             .relative()
             .flex()
             .flex_row()
@@ -6150,6 +6181,10 @@ impl MainWindow {
             div()
                 .id(SharedString::from(id))
                 .tab_index(0)
+                .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                .role(gpui::Role::Button)
+                .aria_label(mode.panel_title())
+                .aria_selected(selected)
                 .relative()
                 .on_hover(cx.listener(move |this, hovered, _, cx| {
                     this.update_mode_hover(mode, false, *hovered, cx);
@@ -6218,6 +6253,9 @@ impl MainWindow {
                 div()
                     .id("mode-info")
                     .tab_index(0)
+                    .when(self.keyboard_nav, ui::keyboard_nav::ring)
+                    .role(gpui::Role::Button)
+                    .aria_label("Recording mode info")
                     .tooltip(move |_, cx| ui::Tooltip::new(&theme, "Recording mode info").view(cx))
                     .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .absolute()
@@ -6303,6 +6341,12 @@ impl MainWindow {
             .child(
                 div()
                     .id(dropdown_id.clone())
+                    .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                    .role(gpui::Role::Button)
+                    .aria_label(match target {
+                        TargetType::Display => "Choose a display",
+                        _ => "Choose a window",
+                    })
                     .flex()
                     .w(px(28.))
                     .rounded_r(px(9.))
@@ -6394,6 +6438,10 @@ impl MainWindow {
 
         let base = div()
             .id(SharedString::from(target.label()))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(target.label())
+            .aria_selected(selected)
             .flex()
             .flex_1()
             .py(px(8.))
@@ -6567,6 +6615,9 @@ impl MainWindow {
 
         div()
             .id(SharedString::from(id))
+            .when(self.keyboard_nav, ui::keyboard_nav::stop)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .relative()
             .flex()
             .flex_row()

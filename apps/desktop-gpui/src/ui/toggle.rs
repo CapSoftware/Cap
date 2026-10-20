@@ -9,6 +9,7 @@ use gpui::{
     RenderOnce, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
+use super::keyboard_nav;
 use crate::theme::Theme;
 
 /// `cva` sizes. `lg` is `w-14 h-7 p-0.75` with a `size-6` thumb; no window
@@ -125,7 +126,7 @@ impl Toggle {
 }
 
 impl RenderOnce for Toggle {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Toggle {
             id,
             checked,
@@ -140,6 +141,10 @@ impl RenderOnce for Toggle {
 
         div()
             .id(id)
+            .when(
+                keyboard_nav::active(window, cx) && !disabled,
+                keyboard_nav::stop,
+            )
             .w(width)
             .h(height)
             .p(padding)

@@ -46,6 +46,7 @@ mod color_picker;
 mod editor_button;
 mod field;
 mod kbd;
+pub mod keyboard_nav;
 mod menu;
 mod microphone_level;
 mod number_field;

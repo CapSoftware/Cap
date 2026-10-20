@@ -213,6 +213,21 @@ pub fn text_input_has_focus(window: &Window, cx: &App) -> bool {
     })
 }
 
+/// Is a focused field in this window composing IME text? Tab belongs to the
+/// input method then.
+pub fn text_input_is_composing(window: &Window, cx: &App) -> bool {
+    let Some(live) = cx.try_global::<LiveInputs>() else {
+        return false;
+    };
+    let inputs = live.0.borrow();
+    inputs.iter().any(|weak| {
+        weak.upgrade().is_some_and(|entity| {
+            let input = entity.read(cx);
+            input.marked_range.is_some() && input.focus.is_focused(window)
+        })
+    })
+}
+
 fn register_live_input(weak: WeakEntity<TextInputState>, cx: &mut App) {
     if !cx.has_global::<LiveInputs>() {
         cx.set_global(LiveInputs::default());
@@ -1828,7 +1843,11 @@ impl RenderOnce for TextInput {
         let state = self.state.clone();
         let (focus, multi_line, disabled) = {
             let read = state.read(cx);
-            (read.focus.clone(), read.multi_line, read.disabled)
+            (
+                read.focus.clone().tab_stop(!read.disabled),
+                read.multi_line,
+                read.disabled,
+            )
         };
         let focused = focus.is_focused(window);
         // `leading-normal` on a `text-xs` input is 1.35 in this font stack;
