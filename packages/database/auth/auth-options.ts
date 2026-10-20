@@ -60,6 +60,17 @@ export async function decodeSessionToken(
 	return token;
 }
 
+const OIDC_PROVIDER_ID = "oidc";
+
+type OidcClaims = {
+	sub: string;
+	email?: string;
+	email_verified?: boolean;
+	name?: string;
+	preferred_username?: string;
+	picture?: string;
+};
+
 export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
@@ -90,7 +101,42 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 			if (_providers) return _providers;
 			const appleClientId = serverEnv().APPLE_CLIENT_ID;
 			const appleClientSecret = serverEnv().APPLE_CLIENT_SECRET;
+			const oidcIssuer = serverEnv().OIDC_ISSUER;
+			const oidcClientId = serverEnv().OIDC_CLIENT_ID;
+			const oidcClientSecret = serverEnv().OIDC_CLIENT_SECRET;
 			_providers = [
+				...(oidcIssuer && oidcClientId && oidcClientSecret
+					? [
+							{
+								id: OIDC_PROVIDER_ID,
+								name: serverEnv().OIDC_NAME || "SSO",
+								type: "oauth" as const,
+								wellKnown: `${oidcIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`,
+								issuer: oidcIssuer,
+								clientId: oidcClientId,
+								clientSecret: oidcClientSecret,
+								idToken: true,
+								checks: ["state" as const, "pkce" as const],
+								authorization: { params: { scope: "openid email profile" } },
+								// Linking is gated on a verified email in the signIn callback,
+								// because a generic issuer is not known to verify addresses.
+								allowDangerousEmailAccountLinking: true,
+								profile(profile: OidcClaims) {
+									const email = profile.email?.trim().toLowerCase();
+									return {
+										id: profile.sub,
+										name:
+											profile.name ||
+											profile.preferred_username ||
+											email?.split("@")[0] ||
+											profile.sub,
+										email,
+										image: profile.picture ?? null,
+									};
+								},
+							},
+						]
+					: []),
 				...(appleClientId && appleClientSecret
 					? [
 							AppleProvider({
@@ -210,6 +256,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 		},
 		callbacks: {
 			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === OIDC_PROVIDER_ID) {
+					const claims = profile as OidcClaims | undefined;
+					if (!claims?.email || claims.email_verified !== true) {
+						return "/login?error=OidcEmailUnverified";
+					}
+				}
 				if (account?.provider === "workos") {
 					validatedSsoIdentity = null;
 					try {

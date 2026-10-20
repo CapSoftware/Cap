@@ -194,13 +194,20 @@ fn build() -> Guide {
                 notes: Some(
                     "EXCEPTION: export NDJSON uses PascalCase `type` tags and snake_case fields \
                      (rendered_count, total_frames) for desktop compatibility. --format selects the \
-                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output.",
+                     CONTAINER (mp4/gif/mov), NOT output mode; use --json for machine-readable output. Pass several projects to export them in one run; each is written to '<project name>.<ext>' inside the output directory.",
                 ),
                 ..cmd(
                     "export",
-                    "Render a .cap project to a video file.",
+                    "Render one or more .cap projects to video files.",
                     OutputMode::Ndjson,
-                    &["Progress", "Completed", "Error"],
+                    &[
+                        "Progress",
+                        "Completed",
+                        "Error",
+                        "FileStarted",
+                        "FileFailed",
+                        "BatchCompleted",
+                    ],
                 )
             },
             cmd(

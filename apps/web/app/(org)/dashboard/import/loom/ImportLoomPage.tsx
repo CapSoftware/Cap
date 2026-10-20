@@ -67,6 +67,7 @@ import {
 	canManageOrganizationSettings,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
+import { LoomConciergeRow } from "./LoomConciergeRow";
 
 type Mode = "single" | "csv";
 
@@ -554,14 +555,6 @@ export const ImportLoomPage = ({
 								? "Bring a single Loom video into Cap, or bulk import recordings for organization members and new users from a CSV."
 								: "Paste a Loom share link to bring it into Cap."}
 						</p>
-						{buildEnv.NEXT_PUBLIC_IS_CAP && canUseCsvImport && (
-							<Link
-								href="/dashboard/migrations/loom"
-								className="mt-2 inline-block text-sm text-blue-11 underline"
-							>
-								Want Cap to move your whole Loom workspace for you?
-							</Link>
-						)}
 					</div>
 				</div>
 			</div>
@@ -1062,6 +1055,14 @@ export const ImportLoomPage = ({
 						)}
 					</div>
 				)}
+
+				{buildEnv.NEXT_PUBLIC_IS_CAP &&
+					canUseCsvImport &&
+					activeOrganization?.organization.id && (
+						<LoomConciergeRow
+							organizationId={activeOrganization.organization.id}
+						/>
+					)}
 			</div>
 
 			<Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>

@@ -1,10 +1,5 @@
-import type { Metadata } from "next";
-import { LoomMigrationPage } from "./LoomMigrationPage";
-
-export const metadata: Metadata = {
-	title: "Loom Migration — Cap",
-};
+import { redirect } from "next/navigation";
 
 export default function Page() {
-	return <LoomMigrationPage />;
+	redirect("/dashboard/import/loom");
 }

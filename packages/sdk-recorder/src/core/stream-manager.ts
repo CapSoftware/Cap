@@ -11,6 +11,7 @@ export interface ManagedStreams {
 	display: MediaStream | null;
 	camera: MediaStream | null;
 	microphone: MediaStream | null;
+	audioMix?: { context: AudioContext; stream: MediaStream };
 }
 
 export async function acquireStreams(
@@ -69,16 +70,30 @@ export async function acquireStreams(
 }
 
 export function releaseStreams(streams: ManagedStreams) {
-	for (const stream of Object.values(streams)) {
+	const { audioMix } = streams;
+	for (const stream of [
+		streams.display,
+		streams.camera,
+		streams.microphone,
+		audioMix?.stream,
+	]) {
 		if (stream) {
 			for (const track of stream.getTracks()) {
 				track.stop();
 			}
 		}
 	}
+	if (audioMix) {
+		void audioMix.context.close().catch((error) => {
+			console.error("CapRecorder: failed to close audio mixer:", error);
+		});
+		streams.audioMix = undefined;
+	}
 }
 
-export function buildCompositeStream(streams: ManagedStreams): MediaStream {
+export async function buildCompositeStream(
+	streams: ManagedStreams,
+): Promise<MediaStream> {
 	const tracks: MediaStreamTrack[] = [];
 
 	if (streams.display) {
@@ -102,5 +117,38 @@ export function buildCompositeStream(streams: ManagedStreams): MediaStream {
 		}
 	}
 
-	return new MediaStream(tracks);
+	const audioTracks = tracks.filter((track) => track.kind === "audio");
+	if (audioTracks.length <= 1) return new MediaStream(tracks);
+
+	const context = new AudioContext();
+	const destination = context.createMediaStreamDestination();
+	streams.audioMix = { context, stream: destination.stream };
+	const mix = context.createGain();
+	mix.gain.value = 1 / audioTracks.length;
+	mix.connect(destination);
+	for (const track of audioTracks) {
+		context.createMediaStreamSource(new MediaStream([track])).connect(mix);
+	}
+	let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			context.resume(),
+			new Promise<never>((_, reject) => {
+				startupTimeout = setTimeout(() => {
+					reject(
+						new Error(
+							"Recording audio startup timed out. Check your audio device and try again.",
+						),
+					);
+				}, 10_000);
+			}),
+		]);
+	} finally {
+		clearTimeout(startupTimeout);
+	}
+
+	return new MediaStream([
+		...tracks.filter((track) => track.kind !== "audio"),
+		...destination.stream.getAudioTracks(),
+	]);
 }
