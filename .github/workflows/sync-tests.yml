@@ -33,6 +33,8 @@ on:
       - "scripts/recording-reliability.py"
       - "scripts/recording-reliability-owned-process.cs"
       - "scripts/test-recording-reliability.py"
+      - "scripts/capbench.py"
+      - "scripts/test-capbench.py"
       - ".github/workflows/sync-tests.yml"
 
 concurrency:
@@ -99,6 +101,7 @@ jobs:
         run: |
           cargo test --locked -p cap-project --lib
           python -B scripts/test-recording-reliability.py
+          python -B scripts/test-capbench.py
 
       - name: Compile recording process supervisor (Windows)
         if: runner.os == 'Windows'
