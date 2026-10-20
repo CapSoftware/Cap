@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { comments } from "@cap/database/schema";
+import { comments, videos } from "@cap/database/schema";
 import {
 	provideOptionalAuth,
 	Storage,
@@ -12,6 +12,7 @@ import {
 } from "@cap/web-backend";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { type Comment, Policy } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import { Effect, Exit, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeWaveform } from "@/lib/comment-media";
@@ -122,7 +123,29 @@ export async function newMediaComment(data: {
 		updatedAt: now,
 	};
 
-	await db().insert(comments).values(newComment);
+	await db().transaction(async (tx) => {
+		const [current] = await tx
+			.select({
+				ownerId: videos.ownerId,
+				bucket: videos.bucket,
+				storageIntegrationId: videos.storageIntegrationId,
+			})
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!current ||
+			current.ownerId !== video.ownerId ||
+			current.bucket !== Option.getOrNull(video.bucketId) ||
+			current.storageIntegrationId !==
+				Option.getOrNull(video.storageIntegrationId)
+		) {
+			throw new Error(
+				"Recording ownership or storage changed; upload the comment again",
+			);
+		}
+		await tx.insert(comments).values(newComment);
+	});
 
 	try {
 		await createNotification({

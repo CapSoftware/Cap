@@ -48,6 +48,7 @@ type UploadTargetInput = {
 };
 
 type StorageObjectHead = RecordingObjectHead & {
+	VersionId?: string;
 	ContentLength?: number;
 	ContentType?: string;
 	Metadata?: Record<string, string | undefined>;
@@ -454,6 +455,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 					ContentType: result.ContentType,
 					Metadata: result.Metadata,
 					ETag: result.ETag,
+					VersionId: result.VersionId,
 				}),
 			),
 		),

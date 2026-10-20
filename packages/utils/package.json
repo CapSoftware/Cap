@@ -3,7 +3,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/index.ts",
-		"./helpers": "./src/helpers.ts"
+		"./helpers": "./src/helpers.ts",
+		"./recording-ownership-preflight": "./src/recording-ownership-preflight.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc -b",
