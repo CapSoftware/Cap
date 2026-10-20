@@ -729,6 +729,66 @@ pub fn waveform_window(visible: (f64, f64), zoom: f64, duration: f64) -> (f64, f
     (start, end)
 }
 
+/// Where a segment's waveform path sits inside its canvas. Everything is
+/// canvas-local, so a timeline that only scrolls keeps hitting the cache; the
+/// path is moved into place when painted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WaveformLayout {
+    range: (f64, f64),
+    origin: gpui::Point<Pixels>,
+    size: gpui::Size<Pixels>,
+    samples: usize,
+    clip_bounds: gpui::Bounds<Pixels>,
+}
+
+/// `view` is the timeline's (position, zoom), `segment` its (start, output
+/// duration) and `canvas` the (canvas height, lane width, lane height, wave
+/// height). `None` when the segment is off screen.
+fn waveform_layout(
+    view: (f64, f64),
+    segment: (f64, f64),
+    full_width: f64,
+    canvas: (Pixels, Pixels, Pixels, Pixels),
+) -> Option<WaveformLayout> {
+    let (view_start, zoom) = view;
+    let (timeline_start, output_duration) = segment;
+    let (canvas_height, lane_width, lane_height, wave_height) = canvas;
+    // The visible slice, in segment-local output seconds
+    // (`TL/ClipTrack.tsx:202-245`).
+    let view_end = view_start + zoom;
+    let visible_start = view_start.max(timeline_start) - timeline_start;
+    let visible_end = view_end.min(timeline_start + output_duration) - timeline_start;
+    if visible_end <= visible_start {
+        return None;
+    }
+    let px_per_sec = full_width / output_duration;
+    let range = waveform_window((visible_start, visible_end), zoom, output_duration);
+    let window_width = (range.1 - range.0) * px_per_sec;
+    Some(WaveformLayout {
+        range,
+        origin: gpui::point(px((range.0 * px_per_sec) as f32), px(0.)),
+        size: gpui::size(px(window_width as f32), wave_height),
+        samples: waveform_window_sample_count(window_width, zoom * px_per_sec),
+        clip_bounds: gpui::Bounds {
+            origin: gpui::point(px(0.), canvas_height - lane_height),
+            size: gpui::size(lane_width, lane_height),
+        },
+    })
+}
+
+/// `waveform_sample_count` for a window wider than the viewport: the sample
+/// cap grows with the window, so the slice on screen keeps the density it had
+/// when only the visible slice was built.
+fn waveform_window_sample_count(window_width: f64, viewport_width: f64) -> usize {
+    let scale = if viewport_width.is_finite() && viewport_width > 0. {
+        (window_width / viewport_width).max(1.)
+    } else {
+        1.
+    };
+    let cap = (MAX_WAVEFORM_SAMPLES as f64 * scale).ceil() as usize;
+    ((window_width * WAVEFORM_SAMPLES_PER_PIXEL).ceil() as usize).min(cap)
+}
+
 /// `path` moved by `offset`: cached waveform paths are built relative to their
 /// segment and placed where the segment is drawn this frame.
 fn translated_path(
@@ -3247,31 +3307,13 @@ fn render_waveform(
     gpui::canvas(
         |bounds, _window, _cx| bounds,
         move |_, bounds, window, _cx| {
-            // The visible slice, in segment-local output seconds
-            // (`TL/ClipTrack.tsx:202-245`). Off screen entirely: nothing.
-            let view_start = transform.position;
-            let view_end = view_start + transform.zoom;
-            let visible_start = view_start.max(timeline_start) - timeline_start;
-            let visible_end = view_end.min(timeline_start + output_duration) - timeline_start;
-            if visible_end <= visible_start {
+            let Some(layout) = waveform_layout(
+                (transform.position, transform.zoom),
+                (timeline_start, output_duration),
+                full_width,
+                (bounds.size.height, px(width), px(height), px(wave_height)),
+            ) else {
                 return;
-            }
-            let px_per_sec = full_width / output_duration;
-            // Built relative to this canvas and moved into place below, so a
-            // timeline that only scrolls keeps hitting the cache.
-            let (window_start, window_end) = waveform_window(
-                (visible_start, visible_end),
-                transform.zoom,
-                output_duration,
-            );
-            let origin = gpui::point(px((window_start * px_per_sec) as f32), px(0.));
-            let window_width = ((window_end - window_start) * px_per_sec) as f32;
-            let size = gpui::size(px(window_width), px(wave_height));
-            let samples = waveform_sample_count(window_width as f64);
-
-            let clip_bounds = gpui::Bounds {
-                origin: gpui::point(px(0.), bounds.size.height - px(height)),
-                size: gpui::size(px(width), px(height)),
             };
 
             for (track, peaks, scale) in [
@@ -3280,14 +3322,14 @@ fn render_waveform(
             ] {
                 let geometry = WaveformGeometry {
                     peaks: peaks.clone(),
-                    range: (window_start, window_end),
-                    target_samples: samples,
+                    range: layout.range,
+                    target_samples: layout.samples,
                     holds: holds.clone(),
                     source_start: segment_start,
-                    origin,
-                    size,
+                    origin: layout.origin,
+                    size: layout.size,
                     scale,
-                    clip_bounds,
+                    clip_bounds: layout.clip_bounds,
                 };
                 if let Some(path) = paths.get_or_build((index, track), geometry) {
                     let path = translated_path(path, bounds.origin);
@@ -4770,12 +4812,18 @@ mod tests {
         let slot = (0, WaveformTrack::Mic);
         let peaks = speech_like_peaks(2000, 9.);
         let zoom = 20.;
-        let duration = 190.;
+        let segment = (12., 190.);
+        let full_width = 190. * 60.;
+        let canvas = (px(44.), px(full_width as f32), px(44.), px(18.));
         for frame in 0..600 {
-            let start = 40. + frame as f64 / 60.;
-            let (window_start, window_end) = waveform_window((start, start + zoom), zoom, duration);
+            let position = 40. + frame as f64 / 60.;
+            let layout = waveform_layout((position, zoom), segment, full_width, canvas).unwrap();
             let geometry = WaveformGeometry {
-                range: (window_start, window_end),
+                range: layout.range,
+                target_samples: layout.samples,
+                origin: layout.origin,
+                size: layout.size,
+                clip_bounds: layout.clip_bounds,
                 ..waveform_geometry(peaks.clone())
             };
             paths.get_or_build(slot, geometry).unwrap();
@@ -4783,6 +4831,28 @@ mod tests {
         let stats = paths.stats();
         assert!(stats.builds <= 3, "{stats:?}");
         assert_eq!(stats.builds + stats.hits, 600);
+    }
+
+    #[test]
+    fn an_off_screen_segment_has_no_waveform_layout() {
+        let canvas = (px(44.), px(600.), px(44.), px(18.));
+        assert!(waveform_layout((0., 20.), (30., 10.), 600., canvas).is_none());
+        assert!(waveform_layout((50., 20.), (30., 10.), 600., canvas).is_none());
+    }
+
+    #[test]
+    fn the_wider_window_keeps_the_on_screen_sample_density_at_the_cap() {
+        for (window, viewport) in [(15_000., 10_000.), (4_500., 3_000.), (900., 600.)] {
+            let samples = waveform_window_sample_count(window, viewport);
+            let window_density = samples as f64 / window;
+            let visible_density = waveform_sample_count(viewport) as f64 / viewport;
+            assert!(
+                (window_density - visible_density).abs() < 1e-3,
+                "{window} {viewport}: {window_density} vs {visible_density}"
+            );
+        }
+        assert_eq!(waveform_window_sample_count(300., 600.), 600);
+        assert_eq!(waveform_window_sample_count(300., 0.), 600);
     }
 
     #[test]
