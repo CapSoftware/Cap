@@ -61,6 +61,7 @@ mod picker_ui_benchmark;
 mod platform;
 mod presets;
 mod recording;
+mod screen_studio_import;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
