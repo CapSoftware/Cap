@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-entries"
+description = "Enables the entries command without any pre-configured scope."
+commands.allow = ["entries"]
+
+[[permission]]
+identifier = "deny-entries"
+description = "Denies the entries command without any pre-configured scope."
+commands.deny = ["entries"]

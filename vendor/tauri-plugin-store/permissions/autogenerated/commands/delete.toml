@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-delete"
+description = "Enables the delete command without any pre-configured scope."
+commands.allow = ["delete"]
+
+[[permission]]
+identifier = "deny-delete"
+description = "Denies the delete command without any pre-configured scope."
+commands.deny = ["delete"]

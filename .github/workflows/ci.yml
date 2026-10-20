@@ -226,7 +226,9 @@ jobs:
 
       - name: Test desktop installation and storage helpers
         shell: bash
-        run: cargo test --locked -p cap-utils -p cap-cli-install --lib
+        run: |
+          cargo test --locked -p cap-utils -p cap-cli-install --lib
+          cargo test --locked -p tauri-plugin-store --test store_lifecycle
 
       # cap-desktop is the Tauri app, which no longer ships; Cap is the GPUI app
       # plus the cap-muxer and cap-cli sidecars built from this workspace.

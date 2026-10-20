@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-keys"
+description = "Enables the keys command without any pre-configured scope."
+commands.allow = ["keys"]
+
+[[permission]]
+identifier = "deny-keys"
+description = "Denies the keys command without any pre-configured scope."
+commands.deny = ["keys"]

@@ -14,6 +14,8 @@
 			"!apps/desktop/src/global.d.ts",
 			"!apps/web/public/gif.worker.js",
 			"!packages/ui-solid/src/auto-imports.d.ts",
+			"!vendor/tauri-plugin-store/api-iife.js",
+			"!vendor/tauri-plugin-store/permissions/schemas/schema.json",
 			"!capcodec/**/*.tov",
 			"!capcodec/**/*.py",
 			"!capcodec/**/*.md",
