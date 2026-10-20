@@ -5054,8 +5054,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // "Load more" queues only the newly shown rows once the first page has
-        // landed.
         let mut rows = rows;
         for row in &mut rows[..20] {
             row.thumbnail_stale = false;
@@ -5087,7 +5085,6 @@ mod tests {
                 .collect();
         assert_eq!(found, [49].into_iter().chain(490..500).collect::<Vec<_>>());
 
-        // A row without a thumbnail file has nothing to decode.
         rows[30].item.thumbnail = None;
         assert!(
             pending_thumbnail_decodes(&rows, &[30], RecordingRow::pending_thumbnail).is_empty()
