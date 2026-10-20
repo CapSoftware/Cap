@@ -1,22 +1,36 @@
 pub fn is_opaque(rgba: &[u8]) -> bool {
     const ALPHA_MASK: u128 = 0xff000000ff000000ff000000ff000000;
-    let mut blocks = rgba.chunks_exact(16);
-    blocks
-        .by_ref()
-        .all(|block| u128::from_le_bytes(block.try_into().unwrap()) & ALPHA_MASK == ALPHA_MASK)
-        && blocks
-            .remainder()
-            .iter()
-            .skip(3)
-            .step_by(4)
-            .all(|&alpha| alpha == 255)
+    let mut chunks = rgba.chunks_exact(64);
+    for chunk in &mut chunks {
+        let b0 = u128::from_le_bytes(chunk[0..16].try_into().unwrap());
+        let b1 = u128::from_le_bytes(chunk[16..32].try_into().unwrap());
+        let b2 = u128::from_le_bytes(chunk[32..48].try_into().unwrap());
+        let b3 = u128::from_le_bytes(chunk[48..64].try_into().unwrap());
+        if (b0 & b1 & b2 & b3) & ALPHA_MASK != ALPHA_MASK {
+            return false;
+        }
+    }
+    let mut rem = chunks.remainder().chunks_exact(16);
+    for block in &mut rem {
+        if u128::from_le_bytes(block.try_into().unwrap()) & ALPHA_MASK != ALPHA_MASK {
+            return false;
+        }
+    }
+    rem.remainder()
+        .iter()
+        .skip(3)
+        .step_by(4)
+        .all(|&alpha| alpha == 255)
 }
 
 pub fn has_translucent_pixel(rgba: &[u8]) -> bool {
-    rgba.iter().skip(3).step_by(4).any(|&alpha| alpha != 255)
+    !is_opaque(rgba)
 }
 
 pub fn flatten_onto_white(rgba: &[u8]) -> Vec<u8> {
+    if is_opaque(rgba) {
+        return rgba.to_vec();
+    }
     let mut rgba = rgba.to_vec();
     for pixel in rgba.chunks_exact_mut(4) {
         let alpha = pixel[3];
@@ -198,6 +212,9 @@ fn blend_row_over(target: &mut [u8], source: &[u8]) {
 }
 
 pub fn premultiply(rgba: &mut [u8]) {
+    if is_opaque(rgba) {
+        return;
+    }
     for pixel in rgba.chunks_exact_mut(4) {
         let alpha = u16::from(pixel[3]);
         if alpha == 255 {
@@ -210,6 +227,9 @@ pub fn premultiply(rgba: &mut [u8]) {
 }
 
 pub fn demultiply(rgba: &mut [u8]) {
+    if is_opaque(rgba) {
+        return;
+    }
     for pixel in rgba.chunks_exact_mut(4) {
         let alpha = u32::from(pixel[3]);
         if alpha == 255 || alpha == 0 {

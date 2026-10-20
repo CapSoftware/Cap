@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -143,6 +144,22 @@ pub struct MFDecodedFrame {
     pub plane_time: Duration,
 }
 
+// The decoder's output surface for a sample: a texture array, the sample's slice in it, and its
+// time. Media Foundation decodes into the slice again as soon as the sample is released, so the
+// sample is held until the copy out of it is queued.
+struct DecoderSurface {
+    _sample: IMFSample,
+    texture: ID3D11Texture2D,
+    subresource: u32,
+    pts: i64,
+}
+
+pub struct NV12Sample {
+    pub pts: i64,
+    pub data: NV12Data,
+}
+
+#[derive(Clone)]
 pub struct NV12Data {
     pub data: Arc<Vec<u8>>,
     pub y_stride: u32,
@@ -514,6 +531,36 @@ fn create_internal_texture(
     })
 }
 
+unsafe fn create_staging_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+) -> Result<ID3D11Texture2D, String> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_NV12,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+
+    unsafe {
+        let mut tex: Option<ID3D11Texture2D> = None;
+        device
+            .CreateTexture2D(&desc, None, Some(&mut tex))
+            .map_err(|e| format!("CreateTexture2D staging failed: {e:?}"))?;
+        tex.ok_or_else(|| "CreateTexture2D staging returned null".to_string())
+    }
+}
+
 fn create_uav(
     device: &ID3D11Device,
     texture: &ID3D11Texture2D,
@@ -536,6 +583,9 @@ fn create_uav(
     }
 }
 
+// Samples whose copy to a staging texture can be in flight while an earlier one is read back.
+const READBACK_DEPTH: usize = 2;
+
 pub struct MediaFoundationDecoder {
     source_reader: IMFSourceReader,
     d3d11_device: ID3D11Device,
@@ -545,9 +595,10 @@ pub struct MediaFoundationDecoder {
     height: u32,
     frame_rate_num: u32,
     frame_rate_den: u32,
-    staging_texture: Option<ID3D11Texture2D>,
-    staging_width: u32,
-    staging_height: u32,
+    readback_free: Vec<ID3D11Texture2D>,
+    readback_queue: VecDeque<(i64, ID3D11Texture2D)>,
+    // How the stream stopped, reported once the queued readbacks are drained.
+    readback_end: Option<Result<(), String>>,
     frame_pool: FramePool,
     plane_converter: Nv12PlaneConverter,
     capabilities: MFDecoderCapabilities,
@@ -606,6 +657,10 @@ impl MediaFoundationDecoder {
 
         let plane_converter = Nv12PlaneConverter::new(&d3d11_device, &d3d11_context)?;
 
+        let readback_free = (0..READBACK_DEPTH)
+            .map(|_| unsafe { create_staging_texture(&d3d11_device, width, height) })
+            .collect::<Result<Vec<_>, _>>()?;
+
         if width > capabilities.max_width || height > capabilities.max_height {
             warn!(
                 video_width = width,
@@ -633,9 +688,9 @@ impl MediaFoundationDecoder {
             height,
             frame_rate_num,
             frame_rate_den,
-            staging_texture: None,
-            staging_width: 0,
-            staging_height: 0,
+            readback_free,
+            readback_queue: VecDeque::new(),
+            readback_end: None,
             frame_pool: FramePool::new(),
             plane_converter,
             capabilities,
@@ -663,60 +718,48 @@ impl MediaFoundationDecoder {
         &self.capabilities
     }
 
-    pub fn read_texture_to_cpu(
-        &mut self,
-        texture: &ID3D11Texture2D,
-        width: u32,
-        height: u32,
-    ) -> Result<NV12Data, String> {
-        unsafe { self.read_texture_to_cpu_inner(texture, width, height) }
+    /// Reads the next sample back to the CPU. The copy of the sample after it is queued
+    /// first, so the GPU decodes and copies that one while this one is copied out.
+    pub fn read_nv12(&mut self) -> Result<Option<NV12Sample>, String> {
+        while self.readback_end.is_none()
+            && let Some(staging) = self.readback_free.pop()
+        {
+            match unsafe { self.read_decoder_surface() } {
+                Ok(Some(surface)) => {
+                    unsafe {
+                        self.d3d11_context.CopySubresourceRegion(
+                            &staging,
+                            0,
+                            0,
+                            0,
+                            0,
+                            &surface.texture,
+                            surface.subresource,
+                            None,
+                        );
+                    }
+                    self.readback_queue.push_back((surface.pts, staging));
+                }
+                end => {
+                    self.readback_free.push(staging);
+                    self.readback_end = Some(end.map(|_| ()));
+                }
+            }
+        }
+
+        let Some((pts, staging)) = self.readback_queue.pop_front() else {
+            return self
+                .readback_end
+                .take()
+                .expect("the queue only runs dry once the stream has stopped")
+                .map(|()| None);
+        };
+        let data = unsafe { self.map_staging(&staging) };
+        self.readback_free.push(staging);
+        Ok(Some(NV12Sample { pts, data: data? }))
     }
 
-    unsafe fn read_texture_to_cpu_inner(
-        &mut self,
-        texture: &ID3D11Texture2D,
-        width: u32,
-        height: u32,
-    ) -> Result<NV12Data, String> {
-        if self.staging_width != width
-            || self.staging_height != height
-            || self.staging_texture.is_none()
-        {
-            let desc = D3D11_TEXTURE2D_DESC {
-                Width: width,
-                Height: height,
-                MipLevels: 1,
-                ArraySize: 1,
-                Format: DXGI_FORMAT_NV12,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                Usage: D3D11_USAGE_STAGING,
-                BindFlags: 0,
-                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-                MiscFlags: 0,
-            };
-
-            let staging_texture = unsafe {
-                let mut tex: Option<ID3D11Texture2D> = None;
-                self.d3d11_device
-                    .CreateTexture2D(&desc, None, Some(&mut tex))
-                    .map_err(|e| format!("CreateTexture2D staging failed: {e:?}"))?;
-                tex.ok_or("CreateTexture2D staging returned null")?
-            };
-
-            self.staging_texture = Some(staging_texture);
-            self.staging_width = width;
-            self.staging_height = height;
-        }
-
-        let staging = self.staging_texture.as_ref().unwrap();
-
-        unsafe {
-            self.d3d11_context.CopyResource(staging, texture);
-        }
-
+    unsafe fn map_staging(&self, staging: &ID3D11Texture2D) -> Result<NV12Data, String> {
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d11_context
@@ -725,8 +768,8 @@ impl MediaFoundationDecoder {
         }
 
         let y_stride = mapped.RowPitch;
-        let y_height = height;
-        let uv_height = height / 2;
+        let y_height = self.height;
+        let uv_height = self.height / 2;
 
         let y_size = (y_stride * y_height) as usize;
         let uv_size = (y_stride * uv_height) as usize;
@@ -757,38 +800,42 @@ impl MediaFoundationDecoder {
         }
     }
 
-    unsafe fn read_sample_inner(&mut self) -> Result<Option<MFDecodedFrame>, String> {
+    unsafe fn read_decoder_surface(&mut self) -> Result<Option<DecoderSurface>, String> {
         let mut stream_index = 0u32;
         let mut flags = 0u32;
         let mut timestamp = 0i64;
         let mut sample: Option<IMFSample> = None;
 
-        unsafe {
-            self.source_reader
-                .ReadSample(
-                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                    0,
-                    Some(&mut stream_index),
-                    Some(&mut flags),
-                    Some(&mut timestamp),
-                    Some(&mut sample),
-                )
-                .map_err(|e| format!("ReadSample failed: {e:?}"))?;
-        }
-
         const MF_SOURCE_READERF_ENDOFSTREAM: u32 = 0x00000001;
         const MF_SOURCE_READERF_ERROR: u32 = 0x00000002;
 
-        if flags & MF_SOURCE_READERF_ENDOFSTREAM != 0 {
-            return Ok(None);
-        }
+        // A stream tick (a gap in the stream) comes without a sample; only the end-of-stream
+        // flag means no samples follow.
+        let sample = loop {
+            unsafe {
+                self.source_reader
+                    .ReadSample(
+                        MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                        0,
+                        Some(&mut stream_index),
+                        Some(&mut flags),
+                        Some(&mut timestamp),
+                        Some(&mut sample),
+                    )
+                    .map_err(|e| format!("ReadSample failed: {e:?}"))?;
+            }
 
-        if flags & MF_SOURCE_READERF_ERROR != 0 {
-            return Err("Stream error".to_string());
-        }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM != 0 {
+                return Ok(None);
+            }
 
-        let Some(sample) = sample else {
-            return Ok(None);
+            if flags & MF_SOURCE_READERF_ERROR != 0 {
+                return Err("Stream error".to_string());
+            }
+
+            if let Some(sample) = sample.take() {
+                break sample;
+            }
         };
 
         let buffer = unsafe {
@@ -815,6 +862,19 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("GetSubresourceIndex failed: {e:?}"))?
         };
 
+        Ok(Some(DecoderSurface {
+            _sample: sample,
+            texture,
+            subresource: subresource_index,
+            pts: timestamp,
+        }))
+    }
+
+    unsafe fn read_sample_inner(&mut self) -> Result<Option<MFDecodedFrame>, String> {
+        let Some(surface) = (unsafe { self.read_decoder_surface()? }) else {
+            return Ok(None);
+        };
+
         let frame_textures =
             self.frame_pool
                 .acquire(&self.d3d11_device, self.width, self.height)?;
@@ -828,8 +888,8 @@ impl MediaFoundationDecoder {
                 0,
                 0,
                 0,
-                &texture,
-                subresource_index,
+                &surface.texture,
+                surface.subresource,
                 None,
             );
 
@@ -849,7 +909,7 @@ impl MediaFoundationDecoder {
             textures: Arc::new(frame_textures),
             width: self.width,
             height: self.height,
-            pts: timestamp,
+            pts: surface.pts,
             plane_time,
         }))
     }
@@ -872,6 +932,9 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("Seek failed: {e:?}"))?;
         }
 
+        self.readback_free
+            .extend(self.readback_queue.drain(..).map(|(_, staging)| staging));
+        self.readback_end = None;
         Ok(())
     }
 }
@@ -1130,6 +1193,59 @@ mod tests {
             }
             drop(decoder);
         }
+    }
+
+    #[test]
+    #[ignore = "requires a Windows D3D11 device"]
+    fn pipelined_readback_returns_every_sample_in_order() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/h264-decoder-lifecycle.mp4");
+        // This file, like the reference recording, ends with a stream error rather than an
+        // end-of-stream flag, so both readers stop at whichever comes first.
+        let mut expected = Vec::new();
+        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let staging = decoder.readback_free[0].clone();
+        let expected_end = loop {
+            match unsafe { decoder.read_decoder_surface() } {
+                Ok(Some(surface)) => unsafe {
+                    decoder.d3d11_context.CopySubresourceRegion(
+                        &staging,
+                        0,
+                        0,
+                        0,
+                        0,
+                        &surface.texture,
+                        surface.subresource,
+                        None,
+                    );
+                    expected.push((surface.pts, decoder.map_staging(&staging).unwrap().data));
+                },
+                end => break end.is_err(),
+            }
+        };
+        drop(decoder);
+
+        let mut decoder = MediaFoundationDecoder::new(&path).unwrap();
+        let mut read = Vec::new();
+        let end = loop {
+            match decoder.read_nv12() {
+                Ok(Some(sample)) => read.push((sample.pts, sample.data.data)),
+                end => break end.is_err(),
+            }
+        };
+        assert!(expected.len() > READBACK_DEPTH);
+        assert!(read == expected);
+        assert_eq!(end, expected_end);
+
+        let first = |decoder: &mut MediaFoundationDecoder| {
+            let sample = decoder.read_nv12().unwrap().unwrap();
+            (sample.pts, sample.data.data)
+        };
+        decoder.seek(0).unwrap();
+        assert!(first(&mut decoder) == expected[0]);
+        decoder.read_nv12().unwrap();
+        decoder.seek(0).unwrap();
+        assert!(first(&mut decoder) == expected[0]);
     }
 
     fn normalized(path: &str) -> String {
