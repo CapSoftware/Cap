@@ -726,3 +726,19 @@ mod tests {
         assert!(!overlap_is_visible(to_rect(0., 0., 0., 100.), monitor));
     }
 }
+
+pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
+    false
+}
+
+pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+    None
+}
+
+pub fn system_settings_frontmost() -> bool {
+    false
+}
+
+pub fn window_is_closable(_window: &Window) -> bool {
+    false
+}
