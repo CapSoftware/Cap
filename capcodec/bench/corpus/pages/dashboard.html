@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Overview · Production · Pulseboard</title>
+<style>
+* {
+	box-sizing: border-box;
+}
+html,
+body {
+	margin: 0;
+	height: 100%;
+	overflow: hidden;
+	background: #f5f6f8;
+	font-family: "Noto Sans", "Liberation Sans", sans-serif;
+	color: #1b1f24;
+	font-size: 12px;
+	cursor: default;
+	user-select: none;
+}
+.num {
+	font-variant-numeric: tabular-nums;
+}
+header {
+	height: 52px;
+	background: #fff;
+	border-bottom: 1px solid #e3e6ea;
+	display: flex;
+	align-items: center;
+	padding: 0 20px;
+	gap: 24px;
+}
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-weight: 700;
+	font-size: 15px;
+}
+.brand .lg {
+	width: 24px;
+	height: 24px;
+	border-radius: 7px;
+	background: conic-gradient(from 200deg, #22c55e, #06b6d4, #6366f1, #22c55e);
+}
+nav {
+	display: flex;
+	gap: 4px;
+	height: 100%;
+}
+nav span {
+	display: flex;
+	align-items: center;
+	padding: 0 12px;
+	font-size: 13px;
+	color: #5b6573;
+	border-bottom: 2px solid transparent;
+}
+nav span:hover {
+	color: #1b1f24;
+}
+nav span.on {
+	color: #1b1f24;
+	font-weight: 600;
+	border-bottom-color: #4f46e5;
+}
+.hr {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.sel {
+	height: 30px;
+	border: 1px solid #dde1e6;
+	border-radius: 7px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 10px;
+	font-size: 12.5px;
+	background: #fff;
+}
+.sel:hover {
+	border-color: #c4c9d0;
+	background: #fafbfc;
+}
+.sel .car {
+	font-size: 9px;
+	color: #8a94a3;
+}
+.live {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12px;
+	font-weight: 600;
+	color: #15803d;
+	background: #dcfce7;
+	border-radius: 999px;
+	padding: 4px 11px;
+}
+.live i {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: #22c55e;
+	box-shadow: 0 0 0 0 #22c55e80;
+	animation: pulse 1.6s infinite;
+}
+@keyframes pulse {
+	0% {
+		box-shadow: 0 0 0 0 #22c55e80;
+	}
+	70% {
+		box-shadow: 0 0 0 7px #22c55e00;
+	}
+	100% {
+		box-shadow: 0 0 0 0 #22c55e00;
+	}
+}
+.avatar {
+	width: 30px;
+	height: 30px;
+	border-radius: 50%;
+	background: #0891b2;
+	color: #fff;
+	font-weight: 700;
+	font-size: 12px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+main {
+	padding: 14px 20px;
+	display: grid;
+	grid-template-columns: repeat(12, 1fr);
+	grid-auto-rows: min-content;
+	gap: 12px;
+}
+.panel {
+	background: #fff;
+	border: 1px solid #e3e6ea;
+	border-radius: 10px;
+	padding: 12px 14px;
+	position: relative;
+}
+.panel h4 {
+	margin: 0 0 8px;
+	font-size: 12.5px;
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.panel h4 .sub {
+	color: #8a94a3;
+	font-weight: 400;
+	font-size: 11.5px;
+}
+.panel h4 .acts {
+	margin-left: auto;
+	color: #8a94a3;
+	font-weight: 400;
+	display: flex;
+	gap: 10px;
+	font-size: 11px;
+}
+.kpi {
+	grid-column: span 2;
+	height: 104px;
+	display: flex;
+	flex-direction: column;
+}
+.kpi .lab {
+	font-size: 11px;
+	color: #6b7583;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	font-weight: 600;
+}
+.kpi .val {
+	font-size: 26px;
+	font-weight: 700;
+	margin-top: 4px;
+	letter-spacing: -0.01em;
+}
+.kpi .val small {
+	font-size: 14px;
+	color: #6b7583;
+	font-weight: 600;
+	margin-left: 2px;
+}
+.kpi .dl {
+	font-size: 11.5px;
+	margin-top: auto;
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+.up {
+	color: #15803d;
+}
+.dn {
+	color: #b91c1c;
+}
+.kpi .dl .vs {
+	color: #8a94a3;
+}
+.kpi canvas {
+	position: absolute;
+	right: 12px;
+	top: 34px;
+	width: 112px;
+	height: 40px;
+}
+.chart {
+	grid-column: span 7;
+	height: 318px;
+}
+.chart.r {
+	grid-column: span 5;
+}
+.chart canvas {
+	width: 100%;
+	height: 262px;
+	display: block;
+}
+.legend {
+	display: flex;
+	gap: 14px;
+	font-size: 11.5px;
+	color: #4b5563;
+	position: absolute;
+	right: 14px;
+	top: 12px;
+}
+.legend span {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.legend i {
+	width: 10px;
+	height: 3px;
+	border-radius: 2px;
+}
+.tbl {
+	grid-column: span 8;
+}
+table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 11.5px;
+}
+th {
+	text-align: right;
+	font-weight: 600;
+	color: #6b7583;
+	font-size: 11px;
+	padding: 5px 8px;
+	border-bottom: 1px solid #e3e6ea;
+	white-space: nowrap;
+}
+th:first-child,
+td:first-child {
+	text-align: left;
+}
+td {
+	text-align: right;
+	padding: 3px 8px;
+	border-bottom: 1px solid #f0f2f4;
+	height: 24px;
+	white-space: nowrap;
+}
+tr:hover td {
+	background: #f7f8fb;
+}
+td.ep {
+	font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+	font-size: 11px;
+	color: #1f2937;
+}
+td .m {
+	display: inline-block;
+	width: 42px;
+	font-family: "Noto Sans", sans-serif;
+	font-weight: 700;
+	font-size: 10px;
+	color: #6b7583;
+}
+td canvas {
+	width: 90px;
+	height: 18px;
+	vertical-align: middle;
+}
+.bar {
+	display: inline-block;
+	width: 54px;
+	height: 6px;
+	border-radius: 3px;
+	background: #eef0f3;
+	vertical-align: middle;
+	overflow: hidden;
+	margin-left: 6px;
+}
+.bar i {
+	display: block;
+	height: 100%;
+	background: #22c55e;
+}
+.flash {
+	animation: flash 0.9s ease-out;
+}
+@keyframes flash {
+	0% {
+		background: #fff4c2;
+	}
+	100% {
+		background: transparent;
+	}
+}
+.side {
+	grid-column: span 4;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.errs .er {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11.5px;
+	margin-bottom: 7px;
+}
+.errs .er .n {
+	width: 150px;
+	color: #374151;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.errs .er .b {
+	flex: 1;
+	height: 8px;
+	background: #f1f3f5;
+	border-radius: 4px;
+	overflow: hidden;
+}
+.errs .er .b i {
+	display: block;
+	height: 100%;
+	background: #f87171;
+	border-radius: 4px;
+	transition: width 0.5s ease;
+}
+.errs .er .c {
+	width: 44px;
+	text-align: right;
+	color: #4b5563;
+}
+.feed {
+	flex: 1;
+	overflow: hidden;
+	height: 236px;
+}
+.ev {
+	display: flex;
+	gap: 8px;
+	font-size: 11.5px;
+	padding: 5px 0;
+	border-bottom: 1px solid #f0f2f4;
+	align-items: center;
+	white-space: nowrap;
+	overflow: hidden;
+}
+.ev .t {
+	color: #8a94a3;
+	font-family: "JetBrains Mono", monospace;
+	font-size: 10.5px;
+}
+.ev .lv {
+	font-size: 10px;
+	font-weight: 700;
+	border-radius: 4px;
+	padding: 0 5px;
+	line-height: 16px;
+}
+.lv.info {
+	background: #e0f2fe;
+	color: #0369a1;
+}
+.lv.warn {
+	background: #fef3c7;
+	color: #92400e;
+}
+.lv.err {
+	background: #fee2e2;
+	color: #b91c1c;
+}
+.ev.new {
+	animation: slidein 0.35s ease-out;
+}
+@keyframes slidein {
+	from {
+		transform: translateY(-14px);
+		opacity: 0;
+	}
+	to {
+		transform: none;
+		opacity: 1;
+	}
+}
+#tip {
+	position: absolute;
+	display: none;
+	pointer-events: none;
+	background: #111827;
+	color: #f9fafb;
+	font-size: 11.5px;
+	border-radius: 7px;
+	padding: 7px 10px;
+	line-height: 1.55;
+	z-index: 10;
+	box-shadow: 0 6px 18px #0003;
+	white-space: nowrap;
+}
+#tip i {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	margin-right: 6px;
+}
+.statusline {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	height: 26px;
+	background: #fff;
+	border-top: 1px solid #e3e6ea;
+	display: flex;
+	align-items: center;
+	gap: 18px;
+	padding: 0 20px;
+	font-size: 11.5px;
+	color: #6b7583;
+}
+.statusline .ok {
+	color: #15803d;
+	font-weight: 600;
+}
+</style>
+<script src="common/cap.js"></script>
+<script src="common/terminal.js"></script>
+</head>
+<body>
+<header>
+	<div class="brand"><span class="lg"></span>Pulseboard</div>
+	<nav><span class="on">Overview</span><span>Traffic</span><span>Performance</span><span>Errors</span><span>Revenue</span><span>Alerts</span></nav>
+	<div class="hr">
+		<span class="sel" id="env">● <b style="font-weight:600">Production</b> · eu-west-1<span class="car">▼</span></span>
+		<span class="sel" id="range">Last 1 hour<span class="car">▼</span></span>
+		<span class="live"><i></i>Live</span>
+		<span class="sel" id="refresh">↻ <span id="cd" class="num">1s</span></span>
+		<span class="avatar">SW</span>
+	</div>
+</header>
+<main id="grid"></main>
+<div id="tip"></div>
+<div class="statusline"><span class="ok">● All systems operational</span><span>Last updated <b id="upd" class="num"></b></span><span>Ingest lag <b id="lag" class="num">0.8 s</b></span><span>Data points <b id="pts" class="num">1,284,331</b></span><span style="margin-left:auto">Region eu-west-1 · 12 hosts · 48 pods</span></div>
+<script src="common/dashboard.js"></script>
+<script>
+capSetReady();
+</script>
+</body>
+</html>
