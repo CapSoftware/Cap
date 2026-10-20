@@ -160,7 +160,7 @@ describe("Cap for Agents docs", () => {
 			"Highlight",
 			"They do not automatically follow",
 			"multiple text lanes",
-			"Export with Subtitles",
+			"Enabled captions are automatically rendered",
 			"WebVTT (VTT)",
 			"Generate and edit captions",
 			"Show recorded keyboard input",

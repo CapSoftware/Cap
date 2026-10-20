@@ -17,11 +17,16 @@ use crate::{DecodedFrame, PixelFormat};
 #[cfg(target_os = "windows")]
 use cap_video_decode::FrameTextures;
 
+use crate::cpu_yuv::YuvMatrix;
+
 use super::{
     DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, ManagedVideoControl, ManagedVideoError,
     ManagedVideoInput, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame,
     record_pts_hole,
 };
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -30,13 +35,21 @@ struct ProcessedFrame {
     width: u32,
     height: u32,
     format: PixelFormat,
+    matrix: YuvMatrix,
     y_stride: u32,
     uv_stride: u32,
+    #[cfg(target_os = "linux")]
+    cuda: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
 }
 
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
-        match self.format {
+        #[cfg(target_os = "linux")]
+        if let Some(cuda) = &self.cuda {
+            return DecodedFrame::new_nv12_cuda(Arc::clone(cuda), Arc::clone(&self.data))
+                .with_matrix(self.matrix);
+        }
+        let frame = match self.format {
             PixelFormat::Rgba => {
                 DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
             }
@@ -54,7 +67,8 @@ impl ProcessedFrame {
                 self.y_stride,
                 self.uv_stride,
             ),
-        }
+        };
+        frame.with_matrix(self.matrix)
     }
 }
 
@@ -70,8 +84,10 @@ struct PendingRequest {
     reply: oneshot::Sender<DecodedFrame>,
 }
 
-const MAX_FRAME_LOOKBACK_TOLERANCE: u32 = 2;
 const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
+/// Cache weight of a frame still on the GPU (it pins an NVDEC surface).
+#[cfg(target_os = "linux")]
+const CUDA_FRAME_CACHE_WEIGHT: usize = 16 * 1024 * 1024;
 
 fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
     let height = frame.height();
@@ -83,7 +99,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let v_stride = frame.stride(2) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_height = height / 2;
+            let uv_height = frame.plane_height(1);
             let u_size = (u_stride * uv_height) as usize;
 
             let mut data = Vec::with_capacity(y_size + 2 * u_size);
@@ -115,7 +131,7 @@ fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32
             let uv_stride = frame.stride(1) as u32;
 
             let y_size = (y_stride * height) as usize;
-            let uv_size = (uv_stride * (height / 2)) as usize;
+            let uv_size = (uv_stride * frame.plane_height(1)) as usize;
 
             let mut data = Vec::with_capacity(y_size + uv_size);
             data.extend_from_slice(&frame.data(0)[..y_size]);
@@ -131,6 +147,38 @@ impl CachedFrame {
     fn process_cpu(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
         match self {
             Self::Raw { frame, number } => {
+                #[cfg(target_os = "linux")]
+                if crate::linux_gpu::enabled() && frame.format() == format::Pixel::CUDA {
+                    // Keep NVDEC's surface: a new reference holds it alive
+                    // while the compositor copies it device-to-device.
+                    let data = unsafe {
+                        let mut reference = frame::Video::empty();
+                        ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr());
+                        let raw = reference.as_ptr();
+                        let cuda = crate::linux_gpu::CudaNv12Frame::new(
+                            (*raw).data[0] as u64,
+                            (*raw).data[1] as u64,
+                            (*raw).linesize[0] as usize,
+                            (*raw).linesize[1] as usize,
+                            frame.width(),
+                            frame.height(),
+                            Box::new(reference),
+                        );
+                        ProcessedFrame {
+                            data: Arc::new(Vec::new()),
+                            number: *number,
+                            width: frame.width(),
+                            height: frame.height(),
+                            format: PixelFormat::Nv12,
+                            matrix: YuvMatrix::from_color_space(frame.color_space()),
+                            y_stride: cuda.y_pitch as u32,
+                            uv_stride: cuda.uv_pitch as u32,
+                            cuda: Some(Arc::new(cuda)),
+                        }
+                    };
+                    *self = Self::Processed(data.clone());
+                    return data;
+                }
                 let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
                     extract_yuv_planes(frame)
                 {
@@ -140,8 +188,11 @@ impl CachedFrame {
                         width: frame.width(),
                         height: frame.height(),
                         format: pixel_format,
+                        matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride,
                         uv_stride,
+                        #[cfg(target_os = "linux")]
+                        cuda: None,
                     }
                 } else {
                     let frame_buffer = converter.convert(frame);
@@ -151,8 +202,11 @@ impl CachedFrame {
                         width: frame.width(),
                         height: frame.height(),
                         format: PixelFormat::Rgba,
+                        matrix: YuvMatrix::from_color_space(frame.color_space()),
                         y_stride: frame.width() * 4,
                         uv_stride: 0,
+                        #[cfg(target_os = "linux")]
+                        cuda: None,
                     }
                 };
 
@@ -205,6 +259,16 @@ enum CachedFrame {
 
 impl CachedFrame {
     fn estimated_bytes(&self) -> usize {
+        // Frames still on the GPU pin an NVDEC surface each; weighting them
+        // at 16 MB caps the 128 MB cache at 8 surfaces, inside the pool.
+        #[cfg(target_os = "linux")]
+        match self {
+            Self::Raw { frame, .. } if frame.format() == format::Pixel::CUDA => {
+                return CUDA_FRAME_CACHE_WEIGHT;
+            }
+            Self::Processed(frame) if frame.cuda.is_some() => return CUDA_FRAME_CACHE_WEIGHT,
+            _ => {}
+        }
         match self {
             Self::Raw { frame, .. } => {
                 let height = frame.height() as usize;
@@ -214,13 +278,14 @@ impl CachedFrame {
                             frame
                                 .stride(1)
                                 .saturating_add(frame.stride(2))
-                                .saturating_mul(height / 2),
+                                .saturating_mul(frame.plane_height(1) as usize),
                         )
                     }
-                    format::Pixel::NV12 => frame
-                        .stride(0)
-                        .saturating_mul(height)
-                        .saturating_add(frame.stride(1).saturating_mul(height / 2)),
+                    format::Pixel::NV12 => frame.stride(0).saturating_mul(height).saturating_add(
+                        frame
+                            .stride(1)
+                            .saturating_mul(frame.plane_height(1) as usize),
+                    ),
                     _ => (frame.width() as usize)
                         .saturating_mul(height)
                         .saturating_mul(4),
@@ -233,6 +298,19 @@ impl CachedFrame {
                 .saturating_mul(3),
         }
     }
+}
+
+/// Whether an idle decoder should decode one more frame past `anchor` (the
+/// frame the renderer last received): at most `readahead` frames ahead, so the
+/// held hardware surfaces stay within the decoder's pool.
+fn wants_readahead<T>(cache: &BTreeMap<u32, T>, anchor: Option<u32>, readahead: u32) -> bool {
+    anchor.is_some_and(|last| {
+        cache.range(last..).count() <= readahead as usize
+            && cache
+                .keys()
+                .next_back()
+                .is_none_or(|&newest| newest < last.saturating_add(readahead))
+    })
 }
 
 fn insert_cached_frame(
@@ -467,7 +545,11 @@ impl FfmpegDecoder {
             }
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             {
-                None
+                // Opt-in NVDEC for Linux GPU hosts (render farm workers).
+                match std::env::var("CAP_LINUX_HW_DECODE").as_deref() {
+                    Ok("cuda") => Some(ffmpeg::sys::AVHWDeviceType::AV_HWDEVICE_TYPE_CUDA),
+                    _ => None,
+                }
             }
         } else {
             None
@@ -496,7 +578,6 @@ impl FfmpegDecoder {
         };
 
         let time_base = this.decoder().time_base();
-        let start_time = this.start_time();
         let video_width = this.decoder().width();
         let video_height = this.decoder().height();
         let is_hw = this.is_hardware_accelerated();
@@ -514,6 +595,9 @@ impl FfmpegDecoder {
         // Previous vended frame number since the last reset, for pts-hole
         // discovery (the reader vends in pts order between resets).
         let mut prev_vended: Option<u32> = None;
+        // Newest frame the reader has vended since its last reset: where the
+        // reader is. The last sent frame is not, as it can be a cache hit.
+        let mut reader_at: Option<u32> = None;
 
         let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
         let first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
@@ -545,7 +629,6 @@ impl FfmpegDecoder {
             };
 
             let sw_time_base = sw_this.decoder().time_base();
-            let sw_start_time = sw_this.start_time();
 
             let mut sw_cache = BTreeMap::<u32, CachedFrame>::new();
             let mut sw_last_active_frame = None::<u32>;
@@ -557,6 +640,9 @@ impl FfmpegDecoder {
             let mut sw_gap_hold: Option<OutputFrame> = None;
             // Previous vended frame number since the last reset.
             let mut sw_prev_vended: Option<u32> = None;
+            // Newest frame the reader has vended since its last reset: where the
+            // reader is. The last sent frame is not, as it can be a cache hit.
+            let mut sw_reader_at: Option<u32> = None;
             let sw_last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let sw_first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let mut sw_frames = sw_this.frames();
@@ -577,8 +663,7 @@ impl FfmpegDecoder {
                 return;
             }
             if let Some(frame) = first_software_frame {
-                let current_frame =
-                    pts_to_frame(frame.pts().unwrap_or(0) - sw_start_time, sw_time_base, fps);
+                let current_frame = pts_to_frame(frame.pts().unwrap_or(0), sw_time_base, fps);
                 let mut cache_frame = CachedFrame::Raw {
                     frame,
                     number: current_frame,
@@ -590,6 +675,7 @@ impl FfmpegDecoder {
                 // The pre-decoded frame is a real vend: without seeding
                 // this, an opening static hold would never be recorded.
                 sw_prev_vended = Some(current_frame);
+                sw_reader_at = Some(current_frame);
             }
 
             let sw_decoder_type = DecoderType::FFmpegSoftware;
@@ -612,7 +698,7 @@ impl FfmpegDecoder {
                         }
 
                         let requested_time = requested_time.max(0.0);
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        let requested_frame = super::request_frame(requested_time, fps);
 
                         pending_requests.push(PendingRequest {
                             time: requested_time,
@@ -669,32 +755,38 @@ impl FfmpegDecoder {
                         continue;
                     }
 
-                    if is_backward_seek {
-                        let best_cached_frame = sw_cache
-                            .range(..=requested_frame)
-                            .next_back()
-                            .filter(|(k, _)| {
-                                requested_frame.saturating_sub(**k) <= MAX_FRAME_LOOKBACK_TOLERANCE
-                            })
-                            .map(|(k, _)| *k);
+                    // Nothing precedes the stream's first frame, so it holds
+                    // for any earlier request; a later one needs a seek.
+                    if let Some(first_frame) = sw_first_ever_frame.borrow().clone()
+                        && requested_frame <= first_frame.number
+                    {
+                        *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                        let _ = reply.send(first_frame.frame);
+                        continue;
+                    }
 
-                        if let Some(frame_num) = best_cached_frame
-                            && let Some(cached) = sw_cache.get_mut(&frame_num)
-                        {
-                            let data = cached.produce(&mut sw_converter);
+                    // Requests inside a KNOWN pts hole are answered with the
+                    // hole's start frame — the true VFR hold — without
+                    // touching the decoder; see the hardware path below.
+                    if let Some(hole_start) = sw_pts_holes
+                        .range(..=requested_frame)
+                        .next_back()
+                        .filter(|&(_, &end)| requested_frame < end)
+                        .map(|(&start, _)| start)
+                    {
+                        let data = sw_cache
+                            .get_mut(&hole_start)
+                            .map(|c| c.produce(&mut sw_converter))
+                            .or_else(|| sw_gap_hold.clone().filter(|h| h.number == hole_start));
+                        if let Some(data) = data {
+                            sw_gap_hold = Some(data.clone());
                             *sw_last_sent_frame.borrow_mut() = Some(data.clone());
                             let _ = reply.send(data.frame);
                             continue;
                         }
+                    }
 
-                        if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
-                            && let Some(first_frame) = sw_first_ever_frame.borrow().clone()
-                        {
-                            *sw_last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                            let _ = reply.send(first_frame.frame);
-                            continue;
-                        }
-
+                    if is_backward_seek {
                         if let Err(error) = sw_this.reset(requested_time)
                             && let Some(control) = &managed
                         {
@@ -708,28 +800,7 @@ impl FfmpegDecoder {
                         *sw_last_sent_frame.borrow_mut() = None;
                         sw_cache.clear();
                         sw_prev_vended = None;
-                    }
-
-                    // Requests inside a KNOWN pts hole are answered with the
-                    // hole's start frame — the true VFR hold — without
-                    // touching the decoder; see the hardware path above.
-                    if !is_backward_seek
-                        && let Some(hole_start) = sw_pts_holes
-                            .range(..=requested_frame)
-                            .next_back()
-                            .filter(|&(_, &end)| requested_frame < end)
-                            .map(|(&start, _)| start)
-                    {
-                        let data = sw_cache
-                            .get_mut(&hole_start)
-                            .map(|c| c.produce(&mut sw_converter))
-                            .or_else(|| sw_gap_hold.clone().filter(|h| h.number == hole_start));
-                        if let Some(data) = data {
-                            sw_gap_hold = Some(data.clone());
-                            *sw_last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = reply.send(data.frame);
-                            continue;
-                        }
+                        sw_reader_at = None;
                     }
 
                     if reply.is_closed() {
@@ -757,6 +828,11 @@ impl FfmpegDecoder {
                     let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                     let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
+                    // The reader has already passed this uncached frame: it fell
+                    // outside the cache window, or the last sent frame was a cache
+                    // hit away from the reader. Reading on cannot reach it.
+                    let behind_reader = sw_reader_at.is_some_and(|at| requested_frame <= at);
+
                     let is_far_forward = sw_last_sent_frame.borrow().as_ref().map_or_else(
                         || {
                             if sw_first_ever_frame.borrow().is_some() {
@@ -776,7 +852,7 @@ impl FfmpegDecoder {
                         },
                     );
 
-                    if is_far_forward {
+                    if is_far_forward || behind_reader {
                         if let Err(error) = sw_this.reset(requested_time)
                             && let Some(control) = &managed
                         {
@@ -790,6 +866,7 @@ impl FfmpegDecoder {
                         *sw_last_sent_frame.borrow_mut() = None;
                         sw_cache.clear();
                         sw_prev_vended = None;
+                        sw_reader_at = None;
                     }
 
                     let mut exit = false;
@@ -816,6 +893,12 @@ impl FfmpegDecoder {
                             // the vend continuity that hole discovery
                             // relies on.
                             sw_prev_vended = None;
+                            // The reader has still moved past it.
+                            if let Ok(frame) = &frame
+                                && let Some(pts) = frame.pts()
+                            {
+                                sw_reader_at = Some(pts_to_frame(pts, sw_time_base, fps));
+                            }
                             break;
                         }
 
@@ -830,7 +913,7 @@ impl FfmpegDecoder {
                             sw_prev_vended = None;
                             continue;
                         };
-                        let current_frame = pts_to_frame(pts - sw_start_time, sw_time_base, fps);
+                        let current_frame = pts_to_frame(pts, sw_time_base, fps);
 
                         if let Some(prev) = sw_prev_vended
                             && current_frame > prev + 1
@@ -838,6 +921,7 @@ impl FfmpegDecoder {
                             record_pts_hole(&mut sw_pts_holes, prev, current_frame);
                         }
                         sw_prev_vended = Some(current_frame);
+                        sw_reader_at = Some(current_frame);
 
                         let mut cache_frame = CachedFrame::Raw {
                             frame,
@@ -1054,7 +1138,7 @@ impl FfmpegDecoder {
             return;
         }
         if let Some(frame) = first_frame_result {
-            let current_frame = pts_to_frame(frame.pts().unwrap_or(0) - start_time, time_base, fps);
+            let current_frame = pts_to_frame(frame.pts().unwrap_or(0), time_base, fps);
             let mut cache_frame = CachedFrame::Raw {
                 frame,
                 number: current_frame,
@@ -1067,6 +1151,7 @@ impl FfmpegDecoder {
             // The pre-decoded frame is a real vend: without seeding this,
             // an opening static hold would never be recorded.
             prev_vended = Some(current_frame);
+            reader_at = Some(current_frame);
             info!(
                 "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                 name, current_frame, video_width, video_height
@@ -1085,7 +1170,86 @@ impl FfmpegDecoder {
         };
         let _ = ready_tx.send(Ok(init_result));
 
-        while let Ok(r) = rx.recv() {
+        // Export read-ahead: with no request pending, keep decoding forward
+        // into the cache so the renderer's next sequential request is served
+        // at once instead of waiting out NVDEC latency (~4.5 ms per 3K frame,
+        // which otherwise sits in every export frame). Bounded by `readahead`
+        // frames past the last request and by the cache's byte budget (hw
+        // surfaces). Off unless CAP_DECODER_READAHEAD is set: editor
+        // playback keeps its on-demand behaviour.
+        // More than the cache holds would evict the frames just decoded ahead.
+        #[cfg(target_os = "linux")]
+        let readahead_limit = (MAX_FRAME_CACHE_BYTES / CUDA_FRAME_CACHE_WEIGHT) as u32;
+        #[cfg(not(target_os = "linux"))]
+        let readahead_limit = FRAME_CACHE_SIZE as u32;
+        let readahead = std::env::var("CAP_DECODER_READAHEAD")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(0)
+            .min(readahead_limit);
+        let mut readahead_exhausted = false;
+        loop {
+            let r = if readahead > 0 {
+                match rx.try_recv() {
+                    Ok(message) => message,
+                    Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {
+                        // Cache hits don't touch `last_active_frame`; the
+                        // last frame actually sent is the renderer's position.
+                        let anchor = last_sent_frame
+                            .borrow()
+                            .as_ref()
+                            .map(|sent| sent.number)
+                            .or(last_active_frame);
+                        if !readahead_exhausted && wants_readahead(&cache, anchor, readahead) {
+                            if managed_stopped(managed.as_ref()) {
+                                return;
+                            }
+                            match frames.next() {
+                                Some(Ok(frame)) => {
+                                    if let Some(pts) = frame.pts() {
+                                        let current_frame = pts_to_frame(pts, time_base, fps);
+                                        if let Some(prev) = prev_vended
+                                            && current_frame > prev + 1
+                                        {
+                                            record_pts_hole(&mut pts_holes, prev, current_frame);
+                                        }
+                                        prev_vended = Some(current_frame);
+                                        reader_at = Some(current_frame);
+                                        let mut cache_frame = CachedFrame::Raw {
+                                            frame,
+                                            number: current_frame,
+                                        };
+                                        cache_frame.produce(&mut converter);
+                                        insert_cached_frame(
+                                            &mut cache,
+                                            current_frame,
+                                            cache_frame,
+                                            current_frame,
+                                            last_active_frame,
+                                            MAX_FRAME_CACHE_BYTES,
+                                        );
+                                    } else {
+                                        prev_vended = None;
+                                    }
+                                }
+                                Some(Err(_)) => prev_vended = None,
+                                None => readahead_exhausted = true,
+                            }
+                            continue;
+                        }
+                        match rx.recv() {
+                            Ok(message) => message,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            } else {
+                match rx.recv() {
+                    Ok(message) => message,
+                    Err(_) => break,
+                }
+            };
             if managed_stopped(managed.as_ref()) {
                 return;
             }
@@ -1096,7 +1260,7 @@ impl FfmpegDecoder {
                 }
 
                 let requested_time = requested_time.max(0.0);
-                let requested_frame = (requested_time * fps as f32).floor() as u32;
+                let requested_frame = super::request_frame(requested_time, fps);
 
                 pending_requests.push(PendingRequest {
                     time: requested_time,
@@ -1154,45 +1318,14 @@ impl FfmpegDecoder {
                     continue;
                 }
 
-                if is_backward_seek {
-                    let best_cached_frame = cache
-                        .range(..=requested_frame)
-                        .next_back()
-                        .filter(|(k, _)| {
-                            requested_frame.saturating_sub(**k) <= MAX_FRAME_LOOKBACK_TOLERANCE
-                        })
-                        .map(|(k, _)| *k);
-
-                    if let Some(frame_num) = best_cached_frame
-                        && let Some(cached) = cache.get_mut(&frame_num)
-                    {
-                        let data = cached.produce(&mut converter);
-                        *last_sent_frame.borrow_mut() = Some(data.clone());
-                        let _ = reply.send(data.frame);
-                        continue;
-                    }
-
-                    if requested_frame <= MAX_FRAME_LOOKBACK_TOLERANCE
-                        && let Some(first_frame) = first_ever_frame.borrow().clone()
-                    {
-                        *last_sent_frame.borrow_mut() = Some(first_frame.clone());
-                        let _ = reply.send(first_frame.frame);
-                        continue;
-                    }
-
-                    if let Err(error) = this.reset(requested_time)
-                        && let Some(control) = &managed
-                    {
-                        control.fail(managed_error(
-                            control,
-                            ManagedVideoError::Seek(error.to_string()),
-                        ));
-                        return;
-                    }
-                    frames = this.frames();
-                    *last_sent_frame.borrow_mut() = None;
-                    cache.clear();
-                    prev_vended = None;
+                // Nothing precedes the stream's first frame, so it holds
+                // for any earlier request; a later one needs a seek.
+                if let Some(first_frame) = first_ever_frame.borrow().clone()
+                    && requested_frame <= first_frame.number
+                {
+                    *last_sent_frame.borrow_mut() = Some(first_frame.clone());
+                    let _ = reply.send(first_frame.frame);
+                    continue;
                 }
 
                 // Requests inside a KNOWN pts hole are answered with the
@@ -1203,12 +1336,11 @@ impl FfmpegDecoder {
                 // bare "some cached frame lies beyond the request" test would
                 // also match disjoint cache islands left by seeks, and
                 // serving stale content there would freeze playback.
-                if !is_backward_seek
-                    && let Some(hole_start) = pts_holes
-                        .range(..=requested_frame)
-                        .next_back()
-                        .filter(|&(_, &end)| requested_frame < end)
-                        .map(|(&start, _)| start)
+                if let Some(hole_start) = pts_holes
+                    .range(..=requested_frame)
+                    .next_back()
+                    .filter(|&(_, &end)| requested_frame < end)
+                    .map(|(&start, _)| start)
                 {
                     let data = cache
                         .get_mut(&hole_start)
@@ -1220,6 +1352,24 @@ impl FfmpegDecoder {
                         let _ = reply.send(data.frame);
                         continue;
                     }
+                }
+
+                if is_backward_seek {
+                    if let Err(error) = this.reset(requested_time)
+                        && let Some(control) = &managed
+                    {
+                        control.fail(managed_error(
+                            control,
+                            ManagedVideoError::Seek(error.to_string()),
+                        ));
+                        return;
+                    }
+                    frames = this.frames();
+                    readahead_exhausted = false;
+                    *last_sent_frame.borrow_mut() = None;
+                    cache.clear();
+                    prev_vended = None;
+                    reader_at = None;
                 }
 
                 if reply.is_closed() {
@@ -1247,6 +1397,11 @@ impl FfmpegDecoder {
                 let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                 let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
+                // The reader has already passed this uncached frame: it fell
+                // outside the cache window, or the last sent frame was a cache
+                // hit away from the reader. Reading on cannot reach it.
+                let behind_reader = reader_at.is_some_and(|at| requested_frame <= at);
+
                 let is_far_forward = last_sent_frame.borrow().as_ref().map_or_else(
                     || {
                         if first_ever_frame.borrow().is_some() {
@@ -1264,7 +1419,7 @@ impl FfmpegDecoder {
                     |last| requested_frame.saturating_sub(last.number) > FRAME_CACHE_SIZE as u32,
                 );
 
-                if is_far_forward {
+                if is_far_forward || behind_reader {
                     if let Err(error) = this.reset(requested_time)
                         && let Some(control) = &managed
                     {
@@ -1275,9 +1430,11 @@ impl FfmpegDecoder {
                         return;
                     }
                     frames = this.frames();
+                    readahead_exhausted = false;
                     *last_sent_frame.borrow_mut() = None;
                     cache.clear();
                     prev_vended = None;
+                    reader_at = None;
                 }
 
                 let mut exit = false;
@@ -1303,6 +1460,12 @@ impl FfmpegDecoder {
                         // The frame just pulled is discarded: it breaks the
                         // vend continuity that hole discovery relies on.
                         prev_vended = None;
+                        // The reader has still moved past it.
+                        if let Ok(frame) = &frame
+                            && let Some(pts) = frame.pts()
+                        {
+                            reader_at = Some(pts_to_frame(pts, time_base, fps));
+                        }
                         break;
                     }
 
@@ -1317,7 +1480,7 @@ impl FfmpegDecoder {
                         prev_vended = None;
                         continue;
                     };
-                    let current_frame = pts_to_frame(pts - start_time, time_base, fps);
+                    let current_frame = pts_to_frame(pts, time_base, fps);
 
                     if let Some(prev) = prev_vended
                         && current_frame > prev + 1
@@ -1325,6 +1488,7 @@ impl FfmpegDecoder {
                         record_pts_hole(&mut pts_holes, prev, current_frame);
                     }
                     prev_vended = Some(current_frame);
+                    reader_at = Some(current_frame);
 
                     let mut cache_frame = CachedFrame::Raw {
                         frame,
@@ -1524,6 +1688,21 @@ impl FfmpegDecoder {
 mod cache_tests {
     use super::*;
 
+    #[test]
+    fn readahead_stops_at_its_window() {
+        let mut cache = BTreeMap::new();
+        assert!(!wants_readahead(&cache, None, 4), "no request served yet");
+        assert!(wants_readahead(&cache, Some(10), 4));
+        for number in 10..14 {
+            cache.insert(number, frame(number, 1));
+        }
+        assert!(wants_readahead(&cache, Some(10), 4));
+        cache.insert(14, frame(14, 1));
+        assert!(!wants_readahead(&cache, Some(10), 4), "window full");
+        assert!(wants_readahead(&cache, Some(12), 4), "renderer moved on");
+        assert!(!wants_readahead(&cache, Some(10), 0), "disabled");
+    }
+
     fn frame(number: u32, bytes: usize) -> CachedFrame {
         CachedFrame::Processed(ProcessedFrame {
             number,
@@ -1531,8 +1710,11 @@ mod cache_tests {
             width: 2,
             height: 2,
             format: PixelFormat::Nv12,
+            matrix: YuvMatrix::Bt601,
             y_stride: 2,
             uv_stride: 2,
+            #[cfg(target_os = "linux")]
+            cuda: None,
         })
     }
 

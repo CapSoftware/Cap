@@ -3,7 +3,7 @@
 //! Two halves, and they run very differently.
 //!
 //! The A/V sync self-test runs as a **subprocess** -- the `cap` CLI, shipped
-//! inside `Cap.app` as the `cap-exporter` sidecar. It cannot run in-process:
+//! inside `Cap.app` as the `cap-cli` sidecar. It cannot run in-process:
 //! `cap selftest av-sync` builds its own winit `EventLoop` for the flashing
 //! test pattern and needs the process main thread, which gpui owns for the
 //! whole life of the app. So this module resolves the binary, drives its
@@ -101,9 +101,9 @@ pub fn log_tail() -> cap_utils::log_upload::LogBundle {
 
 fn selftest_bin_name() -> &'static str {
     if cfg!(windows) {
-        "cap-exporter.exe"
+        "cap-cli.exe"
     } else {
-        "cap-exporter"
+        "cap-cli"
     }
 }
 
@@ -158,10 +158,7 @@ fn selftest_binary_candidates(
     let mut push_dir = |dir: &Path| {
         candidates.push(dir.join(selftest_bin_name()));
         if let Some(triple) = triple {
-            candidates.push(dir.join(format!(
-                "cap-exporter-{triple}{}",
-                std::env::consts::EXE_SUFFIX
-            )));
+            candidates.push(dir.join(format!("cap-cli-{triple}{}", std::env::consts::EXE_SUFFIX)));
         }
         candidates.push(dir.join(cap_bin_name()));
     };
@@ -819,12 +816,16 @@ pub fn write_report(report: &Value) -> Result<PathBuf, String> {
 /// [`write_report`] with the directory lifted into a parameter, so the naming
 /// and pruning are testable without writing into the real store.
 fn write_report_into(dir: &Path, report: &Value) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs())
         .unwrap_or(0);
+    write_report_at(dir, report, stamp)
+}
+
+fn write_report_at(dir: &Path, report: &Value, stamp: u64) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| format!("Failed to create the diagnostics folder: {error}"))?;
     // A run with no sidecar finishes in well under a second, so two of them
     // would otherwise write the same name and the second would overwrite the
     // first. The prefix and suffix stay exactly as the pruning filter expects.
@@ -1088,7 +1089,7 @@ mod tests {
     }
 
     /// The order the run has to follow: the binary shipped next to this build,
-    /// then the installed app, then the dev checkout. `cap-exporter` beats a
+    /// then the installed app, then the dev checkout. `cap-cli` beats a
     /// bare `cap` inside the same directory.
     #[test]
     fn the_sidecar_probe_walks_from_this_build_outwards() {
@@ -1197,8 +1198,9 @@ mod tests {
     #[test]
     fn reports_in_the_same_second_do_not_collide() {
         let dir = temp_dir("collide");
-        let first = write_report_into(&dir, &json!({ "first": true })).unwrap();
-        let second = write_report_into(&dir, &json!({ "second": true })).unwrap();
+        let at = 1_792_431_796;
+        let first = write_report_at(&dir, &json!({ "first": true }), at).unwrap();
+        let second = write_report_at(&dir, &json!({ "second": true }), at).unwrap();
 
         assert_ne!(first, second);
         assert!(first.exists() && second.exists());
@@ -1209,8 +1211,8 @@ mod tests {
         // Both parse back to the same second, so pruning still orders by time
         // first and falls back to the name.
         let stamp = |path: &Path| report_file_stamp(path.file_name().unwrap().to_str().unwrap());
-        assert_eq!(stamp(&first), stamp(&second));
-        assert!(stamp(&first).is_some_and(|secs| secs > 0));
+        assert_eq!(stamp(&first), Some(at));
+        assert_eq!(stamp(&second), Some(at));
 
         std::fs::remove_dir_all(&dir).ok();
     }

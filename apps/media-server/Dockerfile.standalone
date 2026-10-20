@@ -10,6 +10,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 COPY src ./src
+COPY capcodec.md ./capcodec.md
 
 ENV PORT=3456
 EXPOSE 3456

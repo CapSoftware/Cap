@@ -3,6 +3,7 @@ import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withSentryConfig } from "@sentry/nextjs/config";
 import ffmpegStaticPath from "ffmpeg-static";
 import workflowNext from "workflow/next";
 
@@ -30,8 +31,12 @@ const nextConfig = {
 	outputFileTracingIncludes: {
 		"/.well-known/workflow/v1/step": ffmpegTracingIncludes,
 		"/api/tools/loom-download": ffmpegTracingIncludes,
-		"/api/og": ["./lib/og/fonts/*.ttf"],
-		"/api/video/og": ["./lib/og/fonts/*.ttf", ...ffmpegTracingIncludes],
+		"/api/og": ["./lib/og/fonts/*.ttf", "./lib/og/assets/*.jpg"],
+		"/api/video/og": [
+			"./lib/og/fonts/*.ttf",
+			"./lib/og/assets/*.jpg",
+			...ffmpegTracingIncludes,
+		],
 		"/dashboard/settings/organization/billing": ["./lib/baa/*.pdf"],
 		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
 	},
@@ -155,4 +160,11 @@ const nextConfig = {
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
 };
 
-export default withWorkflow(nextConfig);
+export default withSentryConfig(withWorkflow(nextConfig), {
+	org: "cap-s2",
+	project: "cap-web",
+	authToken: process.env.SENTRY_AUTH_TOKEN,
+	telemetry: false,
+	silent: !process.env.CI,
+	sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+});

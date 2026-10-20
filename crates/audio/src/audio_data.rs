@@ -8,6 +8,15 @@ use std::{ops::Range, path::Path};
 
 use crate::cast_bytes_to_f32_slice;
 
+pub fn high_quality_resampler_options() -> ffmpeg::Dictionary<'static> {
+    let mut options = ffmpeg::Dictionary::new();
+    options.set("filter_size", "128");
+    // FFmpeg parses option values with strtod, which honours LC_NUMERIC. GTK applies the
+    // user's locale on Linux, so "0.97" fails with EINVAL under comma-decimal locales (#2359).
+    options.set("cutoff", "97/100");
+    options
+}
+
 // F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
@@ -61,10 +70,6 @@ impl AudioData {
 
         let target_channels = target_channels_for_source(source_channels);
         let target_channel_layout = ChannelLayout::default(target_channels as i32);
-        let mut options = ffmpeg::Dictionary::new();
-        options.set("filter_size", "128");
-        options.set("cutoff", "0.97");
-
         let mut resampler = resampling::Context::get_with(
             decoder.format(),
             decoder.channel_layout(),
@@ -72,7 +77,7 @@ impl AudioData {
             AudioData::SAMPLE_FORMAT,
             target_channel_layout,
             AudioData::SAMPLE_RATE,
-            options,
+            high_quality_resampler_options(),
         )
         .map_err(|e| format!("Resampler / {e}"))?;
 
@@ -253,6 +258,18 @@ impl AudioData {
             && source_end_sample <= self.covered_source_end_sample
     }
 
+    /// Interleaved 48 kHz samples starting at source sample 0. Used to
+    /// assemble a track from decoded windows (zero elsewhere) when only parts
+    /// of a long recording are needed.
+    pub fn from_samples(samples: Vec<f32>, channels: u16) -> Self {
+        Self {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn from_raw_f32(samples: Vec<f32>, channels: u16) -> Self {
         Self {
@@ -430,6 +447,85 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[cfg(unix)]
+    struct CommaDecimalThreadLocale {
+        locale: libc::locale_t,
+        previous: libc::locale_t,
+    }
+
+    #[cfg(unix)]
+    impl CommaDecimalThreadLocale {
+        fn activate() -> Option<Self> {
+            for name in [
+                c"pt_BR.UTF-8",
+                c"pt_BR.utf8",
+                c"de_DE.UTF-8",
+                c"de_DE.utf8",
+                c"fr_FR.UTF-8",
+                c"fr_FR.utf8",
+            ] {
+                let locale = unsafe {
+                    libc::newlocale(libc::LC_NUMERIC_MASK, name.as_ptr(), std::ptr::null_mut())
+                };
+                if locale.is_null() {
+                    continue;
+                }
+                let previous = unsafe { libc::uselocale(locale) };
+                let parsed = unsafe { libc::strtod(c"0,5".as_ptr(), std::ptr::null_mut()) };
+                if (parsed - 0.5).abs() < f64::EPSILON {
+                    return Some(Self { locale, previous });
+                }
+                unsafe {
+                    libc::uselocale(previous);
+                    libc::freelocale(locale);
+                }
+            }
+            None
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for CommaDecimalThreadLocale {
+        fn drop(&mut self) {
+            unsafe {
+                libc::uselocale(self.previous);
+                libc::freelocale(self.locale);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn high_quality_resampler_options_parse_under_comma_decimal_locale() {
+        let Some(_locale) = CommaDecimalThreadLocale::activate() else {
+            eprintln!("skipping: no comma-decimal locale is installed");
+            return;
+        };
+
+        let resampler = resampling::Context::get_with(
+            avformat::Sample::F32(avformat::sample::Type::Planar),
+            ChannelLayout::STEREO,
+            44_100,
+            AudioData::SAMPLE_FORMAT,
+            ChannelLayout::STEREO,
+            AudioData::SAMPLE_RATE,
+            high_quality_resampler_options(),
+        )
+        .expect("resampler options must parse under a comma-decimal LC_NUMERIC");
+
+        let mut cutoff = 0.0;
+        let result = unsafe {
+            ffmpeg::ffi::av_opt_get_double(
+                resampler.as_ptr() as *mut std::ffi::c_void,
+                c"cutoff".as_ptr(),
+                0,
+                &mut cutoff,
+            )
+        };
+        assert_eq!(result, 0);
+        assert!((cutoff - 0.97).abs() < 1e-9, "cutoff was {cutoff}");
+    }
+
     #[test]
     fn reused_resampler_output_matches_fresh_buffers_for_variable_frames() {
         for source_rate in [16_000, 44_100, 48_000, 96_000] {
@@ -439,9 +535,6 @@ mod tests {
                 let output_layout =
                     ChannelLayout::default(i32::from(target_channels_for_source(channels as u16)));
                 let create_resampler = || {
-                    let mut options = ffmpeg::Dictionary::new();
-                    options.set("filter_size", "128");
-                    options.set("cutoff", "0.97");
                     resampling::Context::get_with(
                         source_format,
                         source_layout,
@@ -449,7 +542,7 @@ mod tests {
                         AudioData::SAMPLE_FORMAT,
                         output_layout,
                         AudioData::SAMPLE_RATE,
-                        options,
+                        high_quality_resampler_options(),
                     )
                     .unwrap()
                 };

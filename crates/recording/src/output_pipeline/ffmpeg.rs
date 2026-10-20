@@ -444,6 +444,7 @@ struct SegmentedEncoderState {
 }
 
 pub struct SegmentedVideoMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -458,6 +459,7 @@ pub struct SegmentedVideoMuxer {
 }
 
 pub struct SegmentedVideoMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
@@ -468,6 +470,7 @@ pub struct SegmentedVideoMuxerConfig {
 impl Default for SegmentedVideoMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
@@ -502,6 +505,7 @@ impl Muxer for SegmentedVideoMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -665,8 +669,12 @@ impl SegmentedVideoMuxer {
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
         if let Some(tx) = &self.segment_tx {
             encoder.set_segment_callback(tx.clone());
         }
