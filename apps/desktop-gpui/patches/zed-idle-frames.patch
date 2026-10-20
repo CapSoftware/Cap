@@ -16,7 +16,7 @@ index 0294b7d..6fe853b 100644
      fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
      fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 393e517..74f7d32 100644
+index 393e517..e5850bf 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -120,6 +120,53 @@ struct WindowInvalidatorInner {
@@ -179,6 +179,90 @@ index 393e517..74f7d32 100644
      }
  
      /// Schedule a frame to be drawn on the next animation frame.
+@@ -6807,6 +6873,83 @@ pub fn outline(
+     }
+ }
+ 
++#[cfg(test)]
++mod frame_pacer_tests {
++    use super::{FramePacer, Instant};
++    use std::{cell::RefCell, rc::Rc, time::Duration};
++
++    fn recording_pacer() -> (FramePacer, Rc<RefCell<Vec<bool>>>, Instant) {
++        let calls = Rc::new(RefCell::new(Vec::new()));
++        let recorded = calls.clone();
++        let pacer = FramePacer::new(Some(Box::new(move |enabled| {
++            recorded.borrow_mut().push(enabled)
++        })));
++        let created = pacer.busy_at.get();
++        (pacer, calls, created)
++    }
++
++    #[test]
++    fn idle_frames_stop_requests_only_after_the_delay() {
++        let (pacer, calls, start) = recording_pacer();
++        pacer.frame_finished(false, start + Duration::from_millis(99));
++        assert!(calls.borrow().is_empty());
++        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        assert_eq!(*calls.borrow(), [false]);
++    }
++
++    #[test]
++    fn a_busy_frame_restarts_the_delay() {
++        let (pacer, calls, start) = recording_pacer();
++        pacer.frame_finished(true, start + Duration::from_millis(90));
++        pacer.frame_finished(false, start + Duration::from_millis(150));
++        assert!(calls.borrow().is_empty());
++        pacer.frame_finished(false, start + Duration::from_millis(190));
++        assert_eq!(*calls.borrow(), [false]);
++    }
++
++    #[test]
++    fn repeated_idle_frames_stop_requests_once() {
++        let (pacer, calls, start) = recording_pacer();
++        for ms in [100, 120, 500] {
++            pacer.frame_finished(false, start + Duration::from_millis(ms));
++        }
++        assert_eq!(*calls.borrow(), [false]);
++    }
++
++    #[test]
++    fn wake_restarts_requests_once_and_only_when_stopped() {
++        let (pacer, calls, start) = recording_pacer();
++        pacer.wake();
++        assert!(calls.borrow().is_empty());
++        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        pacer.wake();
++        pacer.wake();
++        assert_eq!(*calls.borrow(), [false, true]);
++    }
++
++    #[test]
++    fn a_woken_window_waits_a_full_delay_before_stopping_again() {
++        let (pacer, calls, start) = recording_pacer();
++        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        pacer.wake();
++        let woken = pacer.busy_at.get();
++        pacer.frame_finished(false, woken + Duration::from_millis(50));
++        assert_eq!(*calls.borrow(), [false, true]);
++        pacer.frame_finished(false, woken + FramePacer::IDLE_DELAY);
++        assert_eq!(*calls.borrow(), [false, true, false]);
++    }
++
++    #[test]
++    fn without_a_platform_toggle_nothing_is_tracked() {
++        let pacer = FramePacer::new(None);
++        let start = pacer.busy_at.get();
++        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        assert!(!pacer.paused.get());
++        pacer.wake();
++        assert!(!pacer.paused.get());
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::{
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
 index f5b2c1a..1d8d41b 100644
 --- a/crates/gpui_macos/src/window.rs
