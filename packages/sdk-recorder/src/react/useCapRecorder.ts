@@ -3,8 +3,16 @@ import { CapRecorder } from "../index";
 import type { RecorderOptions, RecorderPhase, RecordingResult } from "../types";
 
 export function useCapRecorder(options: RecorderOptions) {
-	const { publicKey, apiBase, mode, userId, camera, microphone, systemAudio } =
-		options;
+	const {
+		publicKey,
+		apiBase,
+		mode,
+		userId,
+		camera,
+		microphone,
+		systemAudio,
+		maxDurationMs,
+	} = options;
 	const cameraEnabled = camera?.enabled;
 	const cameraDeviceId = camera?.deviceId;
 	const microphoneEnabled = microphone?.enabled;
@@ -29,6 +37,7 @@ export function useCapRecorder(options: RecorderOptions) {
 					? { enabled: microphoneEnabled, deviceId: microphoneDeviceId }
 					: undefined,
 			systemAudio,
+			maxDurationMs,
 		});
 		recorderRef.current = recorder;
 
@@ -58,6 +67,7 @@ export function useCapRecorder(options: RecorderOptions) {
 		microphoneEnabled,
 		microphoneDeviceId,
 		systemAudio,
+		maxDurationMs,
 	]);
 
 	const start = useCallback(async () => {
