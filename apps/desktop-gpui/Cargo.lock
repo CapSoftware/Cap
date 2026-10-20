@@ -1532,6 +1532,7 @@ dependencies = [
  "anyhow",
  "ashpd 0.11.1",
  "base64 0.22.1",
+ "block2 0.5.1",
  "bytes",
  "cap-audio",
  "cap-camera",

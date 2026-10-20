@@ -770,7 +770,7 @@ fn cursor_id_for_image(
     cursor_id
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
@@ -877,50 +877,112 @@ mod macos_cursor_tests {
 
 #[cfg(target_os = "linux")]
 fn get_cursor_data() -> Option<CursorData> {
-    get_x11_cursor_data().or_else(fallback_cursor_data)
+    thread_local! {
+        static X11_CURSOR: std::cell::RefCell<X11CursorSource> = std::cell::RefCell::default();
+    }
+
+    X11_CURSOR
+        .with_borrow_mut(X11CursorSource::cursor_data)
+        .or_else(fallback_cursor_data)
 }
 
 #[cfg(target_os = "linux")]
-fn get_x11_cursor_data() -> Option<CursorData> {
-    use x11rb::protocol::xfixes::ConnectionExt as _;
+#[derive(Default)]
+struct X11CursorSource {
+    connection: Option<x11rb::rust_connection::RustConnection>,
+    last_image: Option<X11CursorImage>,
+}
 
-    let (conn, _) = x11rb::connect(None).ok()?;
-    conn.xfixes_query_version(5, 0).ok()?.reply().ok()?;
-    let cursor = conn.xfixes_get_cursor_image().ok()?.reply().ok()?;
+#[cfg(target_os = "linux")]
+struct X11CursorImage {
+    width: u16,
+    height: u16,
+    pixels: Vec<u32>,
+    png: Vec<u8>,
+}
 
-    let width = u32::from(cursor.width);
-    let height = u32::from(cursor.height);
-    if width == 0 || height == 0 {
-        return None;
+#[cfg(target_os = "linux")]
+impl X11CursorSource {
+    fn cursor_data(&mut self) -> Option<CursorData> {
+        let cursor = self.cursor_image()?;
+
+        let width = u32::from(cursor.width);
+        let height = u32::from(cursor.height);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(CursorData {
+            image: self.png(cursor.width, cursor.height, cursor.cursor_image)?,
+            hotspot: XY::new(
+                f64::from(cursor.xhot) / f64::from(width),
+                f64::from(cursor.yhot) / f64::from(height),
+            ),
+            shape: None,
+        })
     }
 
-    let pixel_count = usize::from(cursor.width).checked_mul(usize::from(cursor.height))?;
-    if cursor.cursor_image.len() != pixel_count {
+    fn cursor_image(&mut self) -> Option<x11rb::protocol::xfixes::GetCursorImageReply> {
+        use x11rb::protocol::xfixes::ConnectionExt as _;
+
+        if let Some(connection) = self.connection.take()
+            && let Some(cursor) = connection
+                .xfixes_get_cursor_image()
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+        {
+            self.connection = Some(connection);
+            return Some(cursor);
+        }
+
+        let (connection, _) = x11rb::connect(None).ok()?;
+        connection.xfixes_query_version(5, 0).ok()?.reply().ok()?;
+        let cursor = connection.xfixes_get_cursor_image().ok()?.reply().ok()?;
+        self.connection = Some(connection);
+        Some(cursor)
+    }
+
+    fn png(&mut self, width: u16, height: u16, pixels: Vec<u32>) -> Option<Vec<u8>> {
+        if let Some(last) = &self.last_image
+            && last.width == width
+            && last.height == height
+            && last.pixels == pixels
+        {
+            return Some(last.png.clone());
+        }
+
+        let png = x11_cursor_png(width, height, &pixels)?;
+        self.last_image = Some(X11CursorImage {
+            width,
+            height,
+            pixels,
+            png: png.clone(),
+        });
+        Some(png)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_cursor_png(width: u16, height: u16, pixels: &[u32]) -> Option<Vec<u8>> {
+    let pixel_count = usize::from(width).checked_mul(usize::from(height))?;
+    if pixels.len() != pixel_count {
         return None;
     }
 
     let mut rgba = Vec::with_capacity(pixel_count.checked_mul(4)?);
-    for pixel in cursor.cursor_image {
+    for &pixel in pixels {
         rgba.push(((pixel >> 16) & 0xff) as u8);
         rgba.push(((pixel >> 8) & 0xff) as u8);
         rgba.push((pixel & 0xff) as u8);
         rgba.push(((pixel >> 24) & 0xff) as u8);
     }
 
-    let image = image::RgbaImage::from_raw(width, height, rgba)?;
+    let image = image::RgbaImage::from_raw(u32::from(width), u32::from(height), rgba)?;
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image)
         .write_to(&mut bytes, image::ImageFormat::Png)
         .ok()?;
-
-    Some(CursorData {
-        image: bytes.into_inner(),
-        hotspot: XY::new(
-            f64::from(cursor.xhot) / f64::from(width),
-            f64::from(cursor.yhot) / f64::from(height),
-        ),
-        shape: None,
-    })
+    Some(bytes.into_inner())
 }
 
 #[cfg(target_os = "linux")]
@@ -965,6 +1027,44 @@ fn linux_cursor_png() -> Vec<u8> {
     bytes.into_inner()
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod x11_cursor_tests {
+    use super::{X11CursorSource, x11_cursor_png};
+
+    #[test]
+    fn cached_cursor_pngs_match_a_fresh_encode() {
+        let mut source = X11CursorSource::default();
+        let arrow = vec![0xff00_0000; 6];
+        let hand = vec![0x80ff_ffff; 6];
+
+        for (width, height, pixels) in [
+            (2, 3, &arrow),
+            (2, 3, &arrow),
+            (2, 3, &hand),
+            (3, 2, &hand),
+            (2, 3, &arrow),
+        ] {
+            assert_eq!(
+                source.png(width, height, pixels.clone()),
+                x11_cursor_png(width, height, pixels)
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_pixels_are_encoded_as_rgba() {
+        let png = x11_cursor_png(1, 1, &[0x8011_2233]).unwrap();
+        let image = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0x80]);
+    }
+
+    #[test]
+    fn cursor_with_mismatched_pixel_count_is_skipped() {
+        let mut source = X11CursorSource::default();
+        assert_eq!(source.png(2, 2, vec![0; 3]), None);
+    }
+}
+
 #[cfg(windows)]
 fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
@@ -990,6 +1090,23 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if cursor_info.hCursor.is_invalid() {
             return None;
+        }
+
+        // Rendering, trimming and PNG-encoding the cursor every tick only to hash it is wasted
+        // while the shape is unchanged. Keyed on the handle, so a cursor scheme change that keeps
+        // the system cursor handles shows the old image until the shape changes; key on the
+        // bitmap contents instead if that ever matters.
+        thread_local! {
+            static LAST_CURSOR: std::cell::RefCell<Option<(usize, CursorData)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let handle = cursor_info.hCursor.0 as usize;
+        if let Some(cached) = LAST_CURSOR.with_borrow(|last| {
+            last.as_ref()
+                .filter(|(last_handle, _)| *last_handle == handle)
+                .map(|(_, data)| data.clone())
+        }) {
+            return Some(cached);
         }
 
         // Get icon info
@@ -1265,11 +1382,13 @@ fn get_cursor_data() -> Option<CursorData> {
             )
             .ok()?;
 
-        Some(CursorData {
+        let data = CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
-        })
+        };
+        LAST_CURSOR.set(Some((handle, data.clone())));
+        Some(data)
     }
 }
 

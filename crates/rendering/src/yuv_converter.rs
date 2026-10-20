@@ -2022,8 +2022,8 @@ mod colour_matrix_tests {
                 .await
                 .expect("conversion submission")
         );
-        queue.submit(std::iter::once(encoder.finish()));
-        converter.after_submit(&queue);
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        converter.after_submit(&queue, &submission);
         let frame = converter
             .take_pending()
             .expect("conversion pending")
