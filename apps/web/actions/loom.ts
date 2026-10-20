@@ -255,6 +255,53 @@ export async function downloadLoomVideo(
 	}
 }
 
+type LoomImportTransaction = Parameters<
+	Parameters<ReturnType<typeof db>["transaction"]>[0]
+>[0];
+
+async function assertConciergeLease(
+	tx: LoomImportTransaction,
+	requestId: string,
+	leaseToken: string | undefined,
+) {
+	const [reservation] = await tx
+		.select({
+			activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+			leaseToken: loomMigrationRequests.activeImportLeaseToken,
+			leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+		})
+		.from(loomMigrationRequests)
+		.where(eq(loomMigrationRequests.id, requestId))
+		.limit(1)
+		.for("update");
+	if (
+		!leaseToken ||
+		!reservation?.activeOrganizationId ||
+		reservation.leaseToken !== leaseToken ||
+		!reservation.leaseUntil ||
+		reservation.leaseUntil <= new Date()
+	) {
+		throw new LoomMigrationError(
+			"The concierge import expired. Retry this video.",
+		);
+	}
+}
+
+async function recordConciergeImport(
+	tx: LoomImportTransaction,
+	videoId: Video.VideoId,
+	requestId: string,
+) {
+	await tx.insert(loomMigrationImports).values({ videoId, requestId });
+	await tx
+		.update(loomMigrationRequests)
+		.set({
+			queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
+			updatedAt: new Date(),
+		})
+		.where(eq(loomMigrationRequests.id, requestId));
+}
+
 async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
@@ -322,28 +369,60 @@ async function importLoomVideoForOwner({
 			const rawFileKey =
 				existingVideo.rawFileKey ??
 				`${ownerId}/${existingVideo.videoId}/raw-upload.mp4`;
+			const failedVideoId = existingVideo.videoId;
+			const failedUpdatedAt = existingVideo.uploadUpdatedAt;
 			const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
-			const claim = await db()
-				.update(videoUploads)
-				.set({
-					phase: "processing",
-					processingProgress: 0,
-					processingMessage: "Restarting Loom import...",
-					processingError: null,
-					rawFileKey,
-					updatedAt: claimedAt,
-				})
-				.where(
-					and(
-						eq(videoUploads.videoId, existingVideo.videoId),
-						eq(videoUploads.phase, "error"),
-						eq(videoUploads.updatedAt, existingVideo.uploadUpdatedAt),
-					),
-				);
-			const affectedRows = Array.isArray(claim)
-				? (claim[0] as { affectedRows?: number } | undefined)?.affectedRows
-				: (claim as { affectedRows?: number }).affectedRows;
-			if (affectedRows !== 1) {
+			const claimOutcome = await db().transaction(async (tx) => {
+				let mappedRequestId: string | undefined;
+				if (migrationRequestId) {
+					await assertConciergeLease(
+						tx,
+						migrationRequestId,
+						migrationLeaseToken,
+					);
+					const [mapped] = await tx
+						.select({ requestId: loomMigrationImports.requestId })
+						.from(loomMigrationImports)
+						.where(eq(loomMigrationImports.videoId, failedVideoId))
+						.limit(1);
+					mappedRequestId = mapped?.requestId;
+					if (mappedRequestId && mappedRequestId !== migrationRequestId) {
+						return "foreign" as const;
+					}
+				}
+				const claim = await tx
+					.update(videoUploads)
+					.set({
+						phase: "processing",
+						processingProgress: 0,
+						processingMessage: "Restarting Loom import...",
+						processingError: null,
+						rawFileKey,
+						updatedAt: claimedAt,
+					})
+					.where(
+						and(
+							eq(videoUploads.videoId, failedVideoId),
+							eq(videoUploads.phase, "error"),
+							eq(videoUploads.updatedAt, failedUpdatedAt),
+						),
+					);
+				const affectedRows = Array.isArray(claim)
+					? (claim[0] as { affectedRows?: number } | undefined)?.affectedRows
+					: (claim as { affectedRows?: number }).affectedRows;
+				if (affectedRows !== 1) return "busy" as const;
+				if (migrationRequestId && !mappedRequestId) {
+					await recordConciergeImport(tx, failedVideoId, migrationRequestId);
+				}
+				return "claimed" as const;
+			});
+			if (claimOutcome === "foreign") {
+				return {
+					success: false,
+					error: "This Loom import belongs to another migration request.",
+				};
+			}
+			if (claimOutcome === "busy") {
 				return {
 					success: false,
 					error: "This Loom import is already restarting.",
@@ -447,27 +526,7 @@ async function importLoomVideoForOwner({
 	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		if (migrationRequestId) {
-			const [reservation] = await tx
-				.select({
-					activeOrganizationId: loomMigrationRequests.activeOrganizationId,
-					leaseToken: loomMigrationRequests.activeImportLeaseToken,
-					leaseUntil: loomMigrationRequests.activeImportLeaseUntil,
-				})
-				.from(loomMigrationRequests)
-				.where(eq(loomMigrationRequests.id, migrationRequestId))
-				.limit(1)
-				.for("update");
-			if (
-				!migrationLeaseToken ||
-				!reservation?.activeOrganizationId ||
-				reservation.leaseToken !== migrationLeaseToken ||
-				!reservation.leaseUntil ||
-				reservation.leaseUntil <= new Date()
-			) {
-				throw new LoomMigrationError(
-					"The concierge import expired. Retry this video.",
-				);
-			}
+			await assertConciergeLease(tx, migrationRequestId, migrationLeaseToken);
 		}
 		await tx.insert(videos).values({
 			id: videoId,
@@ -499,17 +558,7 @@ async function importLoomVideoForOwner({
 			sourceId: loomVideoId,
 		});
 		if (migrationRequestId) {
-			await tx.insert(loomMigrationImports).values({
-				videoId,
-				requestId: migrationRequestId,
-			});
-			await tx
-				.update(loomMigrationRequests)
-				.set({
-					queuedVideoCount: sql`${loomMigrationRequests.queuedVideoCount} + 1`,
-					updatedAt: new Date(),
-				})
-				.where(eq(loomMigrationRequests.id, migrationRequestId));
+			await recordConciergeImport(tx, videoId, migrationRequestId);
 		}
 
 		if (destination.spaceId === orgId) {
