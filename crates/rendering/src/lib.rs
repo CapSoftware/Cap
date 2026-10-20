@@ -96,6 +96,19 @@ pub fn prewarm_fonts() {
     drop(layers::new_font_system());
 }
 
+/// Builds and drops a full set of renderer layers on `device`. The first build
+/// in a process waits on the driver compiling every layer's pipelines (about
+/// half a second on macOS); once that has happened, later builds take a few
+/// milliseconds, so warming it off the hot path keeps the first editor open
+/// from waiting on it.
+pub fn prewarm_renderer(device: &wgpu::Device, queue: &wgpu::Queue, prefer_cpu_conversion: bool) {
+    drop(RendererLayers::new_with_options(
+        device,
+        queue,
+        prefer_cpu_conversion,
+    ));
+}
+
 /// Unique installed font family names, sorted, for the editor's font picker.
 /// Reuses the process-wide font database scan (see [`prewarm_fonts`]).
 /// Dot-prefixed families (macOS-internal UI fonts) are hidden the same way

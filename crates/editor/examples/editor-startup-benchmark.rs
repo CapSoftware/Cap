@@ -32,6 +32,18 @@ fn percentile(data: &[f64], p: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+fn clone_shared_device(
+    shared: &cap_rendering::SharedWgpuDevice,
+) -> cap_rendering::SharedWgpuDevice {
+    cap_rendering::SharedWgpuDevice {
+        instance: shared.instance.clone(),
+        adapter: shared.adapter.clone(),
+        device: shared.device.clone(),
+        queue: shared.queue.clone(),
+        is_software_adapter: shared.is_software_adapter,
+    }
+}
+
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
 }
@@ -167,6 +179,8 @@ async fn main() {
     let profile_stages = has_flag(&args, "--profile-stages");
     let profile_stages_only = has_flag(&args, "--profile-stages-only");
     let prewarm_fonts = has_flag(&args, "--prewarm-fonts");
+    let shared_device_mode = has_flag(&args, "--shared-device");
+    let prewarm_renderer = has_flag(&args, "--prewarm-renderer");
     let resolution_base = cap_project::XY::new(1248, 702);
 
     println!("{}", "=".repeat(64));
@@ -187,6 +201,31 @@ async fn main() {
             started.elapsed().as_secs_f64() * 1000.0
         );
     }
+    let mut shared_device = None;
+    if prewarm_renderer {
+        let started = Instant::now();
+        tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .expect("Font preparation failed");
+        let shared = cap_rendering::create_shared_device()
+            .await
+            .expect("Failed to create shared device");
+        let (device, queue, software) = (
+            shared.device.clone(),
+            shared.queue.clone(),
+            shared.is_software_adapter,
+        );
+        tokio::task::spawn_blocking(move || {
+            cap_rendering::prewarm_renderer(&device, &queue, software)
+        })
+        .await
+        .expect("Renderer warmup failed");
+        shared_device = Some(shared);
+        println!(
+            "Renderer warmup before startup timing: {:.3}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     if profile_stages_only {
         run_stage_profile(recording_path, runs).await;
         return;
@@ -203,13 +242,20 @@ async fn main() {
 
         let (frame_tx, frame_rx) = mpsc::channel::<()>();
         let start = Instant::now();
+        if (shared_device_mode || prewarm_renderer) && shared_device.is_none() {
+            shared_device = Some(
+                cap_rendering::create_shared_device()
+                    .await
+                    .expect("Failed to create shared device"),
+            );
+        }
         let editor = EditorInstance::new(
             recording_path.clone(),
             |_| {},
             Box::new(move |_: EditorFrameOutput, _: FrameLayout| {
                 let _ = frame_tx.send(());
             }),
-            None,
+            shared_device.as_ref().map(clone_shared_device),
         )
         .await
         .expect("Failed to create editor instance");
