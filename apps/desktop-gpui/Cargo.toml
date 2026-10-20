@@ -209,10 +209,11 @@ x11rb = "0.13"
 objc2 = "0.5.2"
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = "0.2.2"
+objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.5.1"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }

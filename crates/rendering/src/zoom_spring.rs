@@ -185,9 +185,41 @@ impl CursorCropMaps {
     }
 }
 
+struct ClusterCenters {
+    clusters: Vec<ClickCluster>,
+    time_ordered: bool,
+}
+
+impl ClusterCenters {
+    fn new(clusters: Vec<ClickCluster>) -> Self {
+        let time_ordered =
+            clusters.is_sorted_by(|left, right| left.start_time_ms <= right.start_time_ms);
+        Self {
+            clusters,
+            time_ordered,
+        }
+    }
+
+    fn center_at(&self, time_ms: f64) -> Option<(f64, f64)> {
+        if self.time_ordered {
+            let through_time = self
+                .clusters
+                .partition_point(|cluster| cluster.start_time_ms <= time_ms);
+            self.clusters.get(through_time.saturating_sub(1))
+        } else {
+            self.clusters
+                .iter()
+                .rev()
+                .find(|cluster| cluster.start_time_ms <= time_ms)
+                .or_else(|| self.clusters.first())
+        }
+        .map(ClickCluster::center)
+    }
+}
+
 struct CroppedClusters {
     crop: Option<CursorCropMap>,
-    clusters: Vec<ClickCluster>,
+    clusters: ClusterCenters,
 }
 
 struct TimedClusterVariant {
@@ -197,7 +229,7 @@ struct TimedClusterVariant {
 }
 
 enum ZoomClusters {
-    Static(Vec<ClickCluster>),
+    Static(ClusterCenters),
     Styled {
         variants: Vec<CroppedClusters>,
         styles: Vec<TimedClusterVariant>,
@@ -214,14 +246,14 @@ impl ZoomClusters {
         crops: &CursorCropMaps,
     ) -> Self {
         let build = |crop| {
-            build_clusters(
+            ClusterCenters::new(build_clusters(
                 cursor_events,
                 moves_time_ordered,
                 recording_start,
                 recording_end,
                 segment.amount,
                 crop,
-            )
+            ))
         };
         let base = build(crops.base);
         let overlaps =
@@ -277,7 +309,7 @@ impl ZoomClusters {
                 &variants[variant].clusters
             }
         };
-        cluster_center_at_time(clusters, recording_ms)
+        clusters.center_at(recording_ms)
     }
 }
 
@@ -422,20 +454,6 @@ pub(crate) fn build_clusters(
     clusters.push(current);
 
     clusters
-}
-
-/// The active cluster at `time_ms` (RECORDING time) is the last cluster whose
-/// first event time is <= t; the spring smooths the discrete re-aims.
-pub(crate) fn cluster_center_at_time(
-    clusters: &[ClickCluster],
-    time_ms: f64,
-) -> Option<(f64, f64)> {
-    clusters
-        .iter()
-        .rev()
-        .find(|c| c.start_time_ms <= time_ms)
-        .or_else(|| clusters.first())
-        .map(|c| c.center())
 }
 
 /// One entry of the timeline-time -> recording-time mapping derived from
@@ -2058,7 +2076,10 @@ mod tests {
         };
         for ordered in [false, true] {
             let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
-            assert_eq!(cluster_center_at_time(&clusters, 2000.0), Some((0.1, 0.1)));
+            assert_eq!(
+                ClusterCenters::new(clusters).center_at(2000.0),
+                Some((0.1, 0.1))
+            );
         }
     }
 
@@ -2877,6 +2898,64 @@ mod tests {
                         format!("{ordered:?}"),
                         format!("{scanned:?}"),
                         "range {start}..{end} amount {amount}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn linear_cluster_center_at_time(
+        clusters: &[ClickCluster],
+        time_ms: f64,
+    ) -> Option<(f64, f64)> {
+        clusters
+            .iter()
+            .rev()
+            .find(|cluster| cluster.start_time_ms <= time_ms)
+            .or_else(|| clusters.first())
+            .map(ClickCluster::center)
+    }
+
+    #[test]
+    fn cluster_centers_match_linear_lookup_for_all_short_sequences() {
+        let starts = [
+            f64::NEG_INFINITY,
+            -0.0,
+            0.0,
+            1.0,
+            2.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let queries = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0_f64.next_down(),
+            1.0,
+            1.0_f64.next_up(),
+            2.0,
+            3.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for length in 0..=4 {
+            for mut sequence in 0..starts.len().pow(length) {
+                let clusters = (0..length)
+                    .map(|index| {
+                        let start = starts[sequence % starts.len()];
+                        sequence /= starts.len();
+                        ClickCluster::new(f64::from(index), f64::from(index) * 0.5, start)
+                    })
+                    .collect();
+                let centers = ClusterCenters::new(clusters);
+                for time in queries {
+                    assert_eq!(
+                        centers.center_at(time),
+                        linear_cluster_center_at_time(&centers.clusters, time),
+                        "clusters {:?}, time {time}",
+                        centers.clusters
                     );
                 }
             }

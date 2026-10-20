@@ -1435,6 +1435,7 @@ pub struct EditorWindow {
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
     /// first render that knows both the width and the duration does it.
     fitted: bool,
+    restore_transform: Option<Transform>,
     /// The transport's zoom slider track rect, written by the slider's own
     /// prepaint canvas and read by the pointer maths.
     zoom_slider_track: ui::SliderTrack,
@@ -2090,6 +2091,7 @@ impl EditorWindow {
             view: TimelineView::default(),
             playback_follow: timeline::PlaybackFollow::default(),
             fitted: false,
+            restore_transform: None,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
             project: ProjectConfiguration::default(),
@@ -2909,6 +2911,14 @@ impl EditorWindow {
 
     pub fn take_instance(&mut self) -> Option<Arc<EditorInstance>> {
         self.instance.take()
+    }
+
+    pub fn timeline_transform(&self) -> Transform {
+        self.view.transform
+    }
+
+    pub fn restore_timeline_transform(&mut self, transform: Transform) {
+        self.restore_transform = Some(transform);
     }
 
     /// Hand the window its transport, the pump's counters, and the duration
@@ -11204,9 +11214,17 @@ impl Render for EditorWindow {
         if !self.fitted && self.total_duration() > 0.0 {
             self.fitted = true;
             let total = self.total_duration();
-            self.view
-                .transform
-                .fit_on_mount(timeline::content_width(viewport_width), total);
+            match self
+                .restore_transform
+                .take()
+                .and_then(|saved| Transform::restored(saved, total))
+            {
+                Some(transform) => self.view.transform = transform,
+                None => self
+                    .view
+                    .transform
+                    .fit_on_mount(timeline::content_width(viewport_width), total),
+            }
         }
 
         if self.export.is_some() {
