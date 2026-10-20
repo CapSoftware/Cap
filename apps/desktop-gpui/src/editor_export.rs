@@ -2870,6 +2870,66 @@ async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
+    let normalize_loudness =
+        project.audio.normalize_loudness && !cursor_only && format != ExportFormatKind::Gif;
+    let path = render_export(
+        project_path,
+        project,
+        format,
+        cursor_only,
+        fps,
+        width,
+        height,
+        compression,
+        custom_bpp,
+        optimize,
+        force,
+        save_path,
+        progress_tx,
+        cancel,
+    )
+    .await?;
+    if normalize_loudness {
+        let target = path.clone();
+        match tokio::task::spawn_blocking(move || {
+            cap_export::loudness::normalize_file_loudness(
+                &target,
+                cap_export::loudness::SOCIAL_TARGET_LUFS,
+            )
+        })
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => tracing::warn!(
+                %error,
+                "Loudness normalization failed, keeping the unnormalized export"
+            ),
+            Err(error) => tracing::warn!(
+                %error,
+                "Loudness normalization task failed, keeping the unnormalized export"
+            ),
+        }
+    }
+    Ok(path)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn render_export(
+    project_path: PathBuf,
+    project: cap_project::ProjectConfiguration,
+    format: ExportFormatKind,
+    cursor_only: bool,
+    fps: u32,
+    width: u32,
+    height: u32,
+    compression: ExportCompression,
+    custom_bpp: Option<f32>,
+    optimize: bool,
+    force: bool,
+    save_path: Option<PathBuf>,
+    progress_tx: flume::Sender<(u32, u32)>,
+    cancel: Arc<AtomicBool>,
+) -> Result<PathBuf, String> {
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {
         builder = builder.with_config(make_cursor_only_project(project));
