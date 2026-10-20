@@ -7,6 +7,7 @@ name: Scratch CLI A/V sync proof
 on:
   push:
     branches: [ci/sync-proof-2591]
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -15,10 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         side: [main, pr]
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: blacksmith-6vcpu-macos-26
     timeout-minutes: 120
     env:
-      ROUNDS: "4"
+      ROUNDS: "6"
       RECORD_SECS: "32"
     steps:
       # Long cold builds let the display idle into the screensaver, which
