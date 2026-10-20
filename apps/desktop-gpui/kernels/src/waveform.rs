@@ -46,18 +46,18 @@ mod tests {
 
     #[test]
     fn peaks_match_a_sequential_sum_across_uneven_blocks() {
-        let samples = samples(48_000 * 3 + 1_234);
+        let uneven = samples(48_000 * 3 + 1_234);
         for channels in [1, 2] {
-            let expected = sequential_peaks(&samples, channels);
+            let expected = sequential_peaks(&uneven, channels);
             for block_len in [1, 7, 4_799, 9_600, 65_536, 32_768 * usize::from(channels)] {
-                let blocks: Vec<&[f32]> = samples.chunks(block_len).collect();
+                let blocks: Vec<&[f32]> = uneven.chunks(block_len).collect();
                 assert_peak_bits(&peaks(&blocks, channels), &expected, channels, block_len);
             }
             assert_peak_bits(
-                &peaks(&[&samples], channels),
+                &peaks(&[&uneven], channels),
                 &expected,
                 channels,
-                samples.len(),
+                uneven.len(),
             );
         }
 
