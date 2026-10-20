@@ -1393,6 +1393,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    playback_rate: f64,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2076,6 +2077,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            playback_rate: 1.0,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -3184,7 +3186,65 @@ impl EditorWindow {
 
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
+    fn set_playback_rate(&mut self, rate: f64) {
+        self.playback_rate = rate;
+        if let Some(instance) = &self.instance {
+            instance.set_playback_rate(rate);
+        }
+    }
+
+    fn shuttle(&mut self, rate: f64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_at_end() || self.preparing_transport_active() {
+            return;
+        }
+        self.set_playback_rate(rate);
+        let from = self.playhead;
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.start_playback(from, cx);
+        window.refresh();
+    }
+
+    fn shuttle_faster(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = if self.playing {
+            self.playback_rate
+        } else {
+            0.0
+        };
+        let next = SHUTTLE_RATES
+            .iter()
+            .copied()
+            .find(|rate| *rate > current && *rate >= 1.0)
+            .unwrap_or(SHUTTLE_RATES[SHUTTLE_RATES.len() - 1]);
+        self.shuttle(next, window, cx);
+    }
+
+    fn shuttle_slower(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = if self.playing {
+            self.playback_rate
+        } else {
+            1.0
+        };
+        let next = SHUTTLE_RATES
+            .iter()
+            .rev()
+            .copied()
+            .find(|rate| *rate < current)
+            .unwrap_or(SHUTTLE_RATES[0]);
+        self.shuttle(next, window, cx);
+    }
+
+    fn shuttle_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.set_playback_rate(1.0);
+        window.refresh();
+    }
+
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_playback_rate(1.0);
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
                 let seek = self.is_at_end().then_some(0.0);
@@ -3616,6 +3676,18 @@ impl EditorWindow {
             "c" => {
                 cx.stop_propagation();
                 self.split_at_playhead(window, cx);
+            }
+            "j" => {
+                cx.stop_propagation();
+                self.shuttle_slower(window, cx);
+            }
+            "k" => {
+                cx.stop_propagation();
+                self.shuttle_stop(window, cx);
+            }
+            "l" => {
+                cx.stop_propagation();
+                self.shuttle_faster(window, cx);
             }
             "escape" => {
                 cx.stop_propagation();
@@ -11212,6 +11284,8 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         *menu = None;
     }
 }
+
+const SHUTTLE_RATES: [f64; 6] = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 
 fn is_playback_shortcut(
     keystroke: &gpui::Keystroke,
