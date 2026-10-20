@@ -330,6 +330,8 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
 /// `DEFAULT_CAMERA_SCALE_DURING_ZOOM` (`projectConfig.ts:27`).
 pub const DEFAULT_CAMERA_SCALE_DURING_ZOOM: f32 = 0.7;
 
+const CAMERA_ROTATIONS: [(u16, &str); 4] = [(0, "0°"), (90, "90°"), (180, "180°"), (270, "270°")];
+
 /// The camera tab's `ShadowSettings` fallback, and the background tab's -- the
 /// UI's `{50, 18, 50}` rather than `ShadowConfiguration::default()`.
 const UI_SHADOW_FALLBACK: ShadowConfiguration = ShadowConfiguration {
@@ -1260,6 +1262,46 @@ impl EditorWindow {
                                 }),
                             ),
                         ))
+                        .child(
+                            ui::Subfield::plain(&theme, "Rotation").child(
+                                div().w(px(200.)).child(
+                                    ui::SegmentedControl::editor(
+                                        &theme,
+                                        "camera-rotation",
+                                        CAMERA_ROTATIONS
+                                            .iter()
+                                            .map(|(degrees, label)| {
+                                                ui::SegmentOption::new(
+                                                    *label,
+                                                    camera.rotation_degrees() == *degrees,
+                                                )
+                                            })
+                                            .collect(),
+                                    )
+                                    .stretch()
+                                    .on_select(cx.listener(
+                                        |this, index: &usize, window, cx| {
+                                            let Some(&(degrees, _)) = CAMERA_ROTATIONS.get(*index)
+                                            else {
+                                                return;
+                                            };
+                                            this.edit_project(
+                                                "camera-rotation",
+                                                window,
+                                                cx,
+                                                move |p| {
+                                                    if p.camera.rotation_degrees() == degrees {
+                                                        return false;
+                                                    }
+                                                    p.camera.rotation = degrees;
+                                                    true
+                                                },
+                                            );
+                                        },
+                                    )),
+                                ),
+                            ),
+                        )
                         .child(ui::Subfield::plain(&theme, "Background").child(
                             div().w(px(160.)).child(self.menu_select(
                                 SidebarMenu::CameraBlur,
