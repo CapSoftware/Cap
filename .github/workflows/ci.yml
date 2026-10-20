@@ -19,7 +19,7 @@ concurrency:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       gpui: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.gpui == 'true' || steps.desktop-resources.outputs.desktop-resources == 'true' }}
@@ -88,7 +88,7 @@ jobs:
 
   typecheck:
     name: Typecheck
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -133,7 +133,7 @@ jobs:
 
   mobile:
     name: Mobile
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -159,7 +159,7 @@ jobs:
 
   format-biome:
     name: Format (Biome)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -176,7 +176,7 @@ jobs:
 
   format-rust:
     name: Format (Cargo)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -198,9 +198,9 @@ jobs:
       matrix:
         settings:
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: blacksmith-6vcpu-macos-15
           - target: x86_64-pc-windows-msvc
-            runner: windows-2022
+            runner: blacksmith-8vcpu-windows-2025
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
@@ -235,7 +235,7 @@ jobs:
 
   lint-biome:
     name: Lint (Biome)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -253,7 +253,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     env:
       RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
       LD_LIBRARY_PATH: ${{ github.workspace }}/target/native-deps/lib:${{ github.workspace }}/target/debug
@@ -281,6 +281,7 @@ jobs:
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
+          cargo test --locked -p cap-recording --test x11_shm_capture -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
 
   build-gpui:
@@ -293,11 +294,14 @@ jobs:
       matrix:
         settings:
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: blacksmith-6vcpu-macos-15
+          # Cap still ships an Intel build, and Blacksmith has no Intel Macs.
+          - target: x86_64-apple-darwin
+            runner: macos-26-intel
           - target: x86_64-pc-windows-msvc
-            runner: windows-2022
+            runner: blacksmith-8vcpu-windows-2025
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.settings.runner }}
     env:
       # Full debuginfo for the opt-level 2 dependency tree is most of the
@@ -349,7 +353,8 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
             frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/Frameworks"
             mkdir -p "$frameworks"
@@ -367,7 +372,7 @@ jobs:
 
   tauri-plugins:
     name: Verify Tauri plugin versions
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     needs: changes
     if: needs.changes.outputs.tauri-plugins == 'true'
     steps:

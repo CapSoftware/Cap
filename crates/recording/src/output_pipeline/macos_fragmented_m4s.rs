@@ -154,6 +154,7 @@ struct EncoderState {
 }
 
 pub struct MacOSFragmentedM4SMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -170,6 +171,7 @@ pub struct MacOSFragmentedM4SMuxer {
 }
 
 pub struct MacOSFragmentedM4SMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub bpp: f32,
@@ -182,6 +184,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
 impl Default for MacOSFragmentedM4SMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(2),
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
@@ -218,6 +221,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -299,6 +303,7 @@ impl MacOSFragmentedM4SMuxer {
             self.base_path.clone(),
             self.video_config,
             encoder_config,
+            self.timed_fragments,
         )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());
@@ -689,6 +694,7 @@ impl MacOSFragmentedM4SCameraMuxer {
             self.base_path.clone(),
             self.video_config,
             encoder_config,
+            true,
         )?;
         if let Some(callback) = &self.disk_space_callback {
             encoder.set_disk_space_callback(callback.clone());

@@ -251,26 +251,38 @@ impl SegmentedVideoEncoder {
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
     ) -> Result<Self, InitError> {
-        Self::init_with_output_mode(base_path, video_config, config, false)
+        Self::init_with_options(base_path, video_config, config, false, false)
     }
 
-    /// Like [`Self::init`], but muxing, segment publication and manifest
-    /// writes (including the initial manifest) run on a dedicated writer
-    /// thread with a memory budget sized from the stream bitrate, so storage
-    /// stalls stop blocking the encoder. Output bytes and their order are
-    /// unchanged. Falls back to inline muxing if the thread cannot start.
+    pub fn init_with_timed_fragments(
+        base_path: PathBuf,
+        video_config: VideoInfo,
+        config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(base_path, video_config, config, timed_fragments, false)
+    }
+
+    /// Like [`Self::init_with_timed_fragments`], but muxing, segment
+    /// publication and manifest writes (including the initial manifest) run on
+    /// a dedicated writer thread with a memory budget sized from the stream
+    /// bitrate, so storage stalls stop blocking the encoder. Output bytes and
+    /// their order are unchanged. Falls back to inline muxing if the thread
+    /// cannot start.
     pub fn init_write_behind(
         base_path: PathBuf,
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
     ) -> Result<Self, InitError> {
-        Self::init_with_output_mode(base_path, video_config, config, true)
+        Self::init_with_options(base_path, video_config, config, timed_fragments, true)
     }
 
-    fn init_with_output_mode(
+    fn init_with_options(
         base_path: PathBuf,
         video_config: VideoInfo,
         config: SegmentedVideoEncoderConfig,
+        timed_fragments: bool,
         write_behind: bool,
     ) -> Result<Self, InitError> {
         std::fs::create_dir_all(&base_path)?;
@@ -306,6 +318,11 @@ impl SegmentedVideoEncoder {
             set_opt("use_template", "1");
             set_opt("single_file", "0");
             set_opt("hls_playlist", "1");
+            if timed_fragments {
+                set_opt("frag_type", "duration");
+                set_opt("frag_duration", "2");
+                set_opt("streaming", "1");
+            }
         }
 
         let mut builder = H264EncoderBuilder::new(video_config)
@@ -946,16 +963,20 @@ mod tests {
     }
 
     fn record_segments(base_path: &Path, write_behind: bool) -> Vec<(u32, bool, u64)> {
-        let init = if write_behind {
-            SegmentedVideoEncoder::init_write_behind
+        let mut encoder = if write_behind {
+            SegmentedVideoEncoder::init_write_behind(
+                base_path.to_path_buf(),
+                test_video_info(),
+                SegmentedVideoEncoderConfig::default(),
+                false,
+            )
         } else {
-            SegmentedVideoEncoder::init
-        };
-        let mut encoder = init(
-            base_path.to_path_buf(),
-            test_video_info(),
-            SegmentedVideoEncoderConfig::default(),
-        )
+            SegmentedVideoEncoder::init(
+                base_path.to_path_buf(),
+                test_video_info(),
+                SegmentedVideoEncoderConfig::default(),
+            )
+        }
         .unwrap();
         assert_eq!(encoder.mux.is_write_behind(), write_behind);
         let (tx, rx) = mpsc::channel();
@@ -1008,6 +1029,7 @@ mod tests {
             temp.path().to_path_buf(),
             test_video_info(),
             SegmentedVideoEncoderConfig::default(),
+            false,
         )
         .unwrap();
         let manifest_path = temp.path().join("manifest.json");
@@ -1030,6 +1052,7 @@ mod tests {
             temp.path().to_path_buf(),
             test_video_info(),
             SegmentedVideoEncoderConfig::default(),
+            false,
         )
         .unwrap();
         encoder.mux.drain();
