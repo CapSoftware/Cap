@@ -349,8 +349,8 @@ describe.runIf(Boolean(databaseUrl))(
 		it("burns an email OTP exactly once under concurrent guesses", async () => {
 			const identifier = `${id()}@example.com`;
 			const token = "482913";
-			const adapter = DrizzleAdapter(database());
-			if (!adapter.useVerificationToken) {
+			const { useVerificationToken } = DrizzleAdapter(database());
+			if (!useVerificationToken) {
 				throw new Error("Missing useVerificationToken adapter.");
 			}
 			await database()
@@ -359,7 +359,7 @@ describe.runIf(Boolean(databaseUrl))(
 
 			const attempts = await Promise.all(
 				Array.from({ length: 8 }, () =>
-					adapter.useVerificationToken({ identifier, token }),
+					useVerificationToken({ identifier, token }),
 				),
 			);
 
@@ -375,8 +375,8 @@ describe.runIf(Boolean(databaseUrl))(
 		it("never authenticates a wrong guess when it races the correct one", async () => {
 			const identifier = `${id()}@example.com`;
 			const token = "531942";
-			const adapter = DrizzleAdapter(database());
-			if (!adapter.useVerificationToken) {
+			const { useVerificationToken } = DrizzleAdapter(database());
+			if (!useVerificationToken) {
 				throw new Error("Missing useVerificationToken adapter.");
 			}
 			await database()
@@ -386,7 +386,7 @@ describe.runIf(Boolean(databaseUrl))(
 			const guesses = ["000000", "111111", token, "222222", "333333"];
 			const attempts = await Promise.all(
 				guesses.map((guess) =>
-					adapter.useVerificationToken({ identifier, token: guess }),
+					useVerificationToken({ identifier, token: guess }),
 				),
 			);
 
