@@ -283,6 +283,16 @@ impl Transform {
         }
     }
 
+    pub fn restored(saved: Transform, total_duration: f64) -> Option<Self> {
+        if saved.zoom <= 0. {
+            return None;
+        }
+        let mut transform = Self::initial(total_duration);
+        transform.update_zoom(saved.zoom, 0., total_duration);
+        transform.set_position(saved.position, total_duration);
+        Some(transform)
+    }
+
     /// `secsPerPixel = transform.zoom / timelineBounds.width`
     /// (`TL/index.tsx:189`, `TL/context.ts:91-92`).
     /// Floored at the smallest positive double so a transform with no project
@@ -3632,6 +3642,19 @@ mod tests {
         assert_eq!(Transform::initial(0.0).position, 0.0);
         // `Math.min(totalDuration(), 60 * 10)`.
         assert_eq!(Transform::initial(3_600.0).zoom, 600.0);
+    }
+
+    #[test]
+    fn restored_transform_keeps_the_saved_view_and_clamps_to_the_timeline() {
+        let saved = Transform {
+            zoom: 17.05,
+            position: 12.5,
+        };
+        assert_eq!(Transform::restored(saved, 61.0), Some(saved));
+        let shorter = Transform::restored(saved, 10.0).unwrap();
+        assert_eq!(shorter.zoom, 10.0);
+        assert_eq!(shorter.position, 4.0);
+        assert_eq!(Transform::restored(Transform::default(), 61.0), None);
     }
 
     #[test]
