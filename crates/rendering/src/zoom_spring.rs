@@ -111,12 +111,14 @@ impl CursorCropMap {
     }
 }
 
+#[derive(PartialEq)]
 struct TimedCursorCropMap {
     start: f64,
     end: f64,
     crop: Option<CursorCropMap>,
 }
 
+#[derive(PartialEq)]
 struct CursorCropMaps {
     base: Option<CursorCropMap>,
     styles: Vec<TimedCursorCropMap>,
@@ -183,9 +185,41 @@ impl CursorCropMaps {
     }
 }
 
+struct ClusterCenters {
+    clusters: Vec<ClickCluster>,
+    time_ordered: bool,
+}
+
+impl ClusterCenters {
+    fn new(clusters: Vec<ClickCluster>) -> Self {
+        let time_ordered =
+            clusters.is_sorted_by(|left, right| left.start_time_ms <= right.start_time_ms);
+        Self {
+            clusters,
+            time_ordered,
+        }
+    }
+
+    fn center_at(&self, time_ms: f64) -> Option<(f64, f64)> {
+        if self.time_ordered {
+            let through_time = self
+                .clusters
+                .partition_point(|cluster| cluster.start_time_ms <= time_ms);
+            self.clusters.get(through_time.saturating_sub(1))
+        } else {
+            self.clusters
+                .iter()
+                .rev()
+                .find(|cluster| cluster.start_time_ms <= time_ms)
+                .or_else(|| self.clusters.first())
+        }
+        .map(ClickCluster::center)
+    }
+}
+
 struct CroppedClusters {
     crop: Option<CursorCropMap>,
-    clusters: Vec<ClickCluster>,
+    clusters: ClusterCenters,
 }
 
 struct TimedClusterVariant {
@@ -195,7 +229,7 @@ struct TimedClusterVariant {
 }
 
 enum ZoomClusters {
-    Static(Vec<ClickCluster>),
+    Static(ClusterCenters),
     Styled {
         variants: Vec<CroppedClusters>,
         styles: Vec<TimedClusterVariant>,
@@ -205,19 +239,21 @@ enum ZoomClusters {
 impl ZoomClusters {
     fn new(
         cursor_events: &CursorEvents,
+        moves_time_ordered: bool,
         recording_start: f64,
         recording_end: f64,
         segment: &ZoomSegment,
         crops: &CursorCropMaps,
     ) -> Self {
         let build = |crop| {
-            build_clusters(
+            ClusterCenters::new(build_clusters(
                 cursor_events,
+                moves_time_ordered,
                 recording_start,
                 recording_end,
                 segment.amount,
                 crop,
-            )
+            ))
         };
         let base = build(crops.base);
         let overlaps =
@@ -273,7 +309,7 @@ impl ZoomClusters {
                 &variants[variant].clusters
             }
         };
-        cluster_center_at_time(clusters, recording_ms)
+        clusters.center_at(recording_ms)
     }
 }
 
@@ -330,6 +366,7 @@ impl ClickCluster {
 /// need no separate pass.
 pub(crate) fn build_clusters(
     cursor_events: &CursorEvents,
+    moves_time_ordered: bool,
     segment_start_secs: f64,
     segment_end_secs: f64,
     zoom_amount: f64,
@@ -351,27 +388,43 @@ pub(crate) fn build_clusters(
         m.x.is_finite() && m.y.is_finite() && m.time_ms.is_finite()
     };
 
-    let events_in_range: Vec<&cap_project::CursorMoveEvent> = cursor_events
-        .moves
+    // The narrowed slices only drop moves the filters below would reject, so
+    // the filters stay and NaN bounds still match a full scan.
+    let moves = cursor_events.moves.as_slice();
+    let (range_moves, moves_until_start, moves_from_start) = if moves_time_ordered {
+        let from_start = moves.partition_point(|m| m.time_ms < start_ms);
+        let through_end = moves
+            .partition_point(|m| m.time_ms <= end_ms)
+            .max(from_start);
+        let through_start = moves.partition_point(|m| m.time_ms <= start_ms);
+        (
+            &moves[from_start..through_end],
+            &moves[..through_start],
+            &moves[from_start..],
+        )
+    } else {
+        (moves, moves, moves)
+    };
+
+    let events_in_range: Vec<&cap_project::CursorMoveEvent> = range_moves
         .iter()
         .filter(finite)
         .filter(|m| m.time_ms >= start_ms && m.time_ms <= end_ms)
         .collect();
 
+    let previous = moves_until_start
+        .iter()
+        .filter(finite)
+        .rev()
+        .find(|m| m.time_ms <= start_ms);
+
     if events_in_range.is_empty() {
-        let fallback = cursor_events
-            .moves
-            .iter()
-            .filter(finite)
-            .rev()
-            .find(|m| m.time_ms <= start_ms)
-            .or_else(|| {
-                cursor_events
-                    .moves
-                    .iter()
-                    .filter(finite)
-                    .find(|m| m.time_ms >= start_ms)
-            });
+        let fallback = previous.or_else(|| {
+            moves_from_start
+                .iter()
+                .filter(finite)
+                .find(|m| m.time_ms >= start_ms)
+        });
 
         if let Some(evt) = fallback {
             let (x, y) = map_uv(evt.x, evt.y);
@@ -380,12 +433,16 @@ pub(crate) fn build_clusters(
         return vec![];
     }
 
+    let mut events = previous
+        .filter(|_| events_in_range[0].time_ms > start_ms)
+        .into_iter()
+        .chain(events_in_range);
     let mut clusters = Vec::new();
-    let first = events_in_range[0];
+    let first = events.next().unwrap();
     let (first_x, first_y) = map_uv(first.x, first.y);
     let mut current = ClickCluster::new(first_x, first_y, first.time_ms);
 
-    for evt in &events_in_range[1..] {
+    for evt in events {
         let (x, y) = map_uv(evt.x, evt.y);
         if current.can_add(x, y, cluster_w, cluster_h) {
             current.add(x, y, evt.time_ms);
@@ -399,23 +456,9 @@ pub(crate) fn build_clusters(
     clusters
 }
 
-/// The active cluster at `time_ms` (RECORDING time) is the last cluster whose
-/// first event time is <= t; the spring smooths the discrete re-aims.
-pub(crate) fn cluster_center_at_time(
-    clusters: &[ClickCluster],
-    time_ms: f64,
-) -> Option<(f64, f64)> {
-    clusters
-        .iter()
-        .rev()
-        .find(|c| c.start_time_ms <= time_ms)
-        .or_else(|| clusters.first())
-        .map(|c| c.center())
-}
-
 /// One entry of the timeline-time -> recording-time mapping derived from
 /// [`TimelineConfiguration::get_segment_time`]'s accumulation logic.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct TimeMapSegment {
     timeline_start: f64,
     timeline_end: f64,
@@ -580,6 +623,56 @@ struct StepTargets {
     snap: bool,
 }
 
+/// Segments with a NaN bound can never be active, so they are left out of the
+/// binary-searched index.
+#[derive(Default)]
+struct ZoomSegmentIndex {
+    ordered: Vec<usize>,
+    starts: Vec<f64>,
+    /// Running maximum of `end`, so the first entry reaching `t` is also the
+    /// first segment whose own end reaches `t`.
+    max_ends: Vec<f64>,
+    instant_windows: Vec<(f64, f64)>,
+}
+
+impl ZoomSegmentIndex {
+    fn new(zoom_segments: &[ZoomSegment]) -> Self {
+        let mut index = Self::default();
+        let mut max_end = f64::NEG_INFINITY;
+        for (i, segment) in zoom_segments.iter().enumerate() {
+            if segment.instant_animation {
+                index.instant_windows.push((
+                    segment.start - INSTANT_SNAP_WINDOW_SECS,
+                    segment.end + INSTANT_SNAP_WINDOW_SECS,
+                ));
+            }
+            if segment.start.is_nan() || segment.end.is_nan() {
+                continue;
+            }
+            max_end = max_end.max(segment.end);
+            index.ordered.push(i);
+            index.starts.push(segment.start);
+            index.max_ends.push(max_end);
+        }
+        index
+    }
+
+    /// Same active predicate `SegmentsCursor` used: (start, end].
+    fn active_at(&self, timeline_secs: f64) -> Option<usize> {
+        let started = self.starts.partition_point(|&start| timeline_secs > start);
+        let first_reaching = self
+            .max_ends
+            .partition_point(|&max_end| max_end < timeline_secs);
+        (first_reaching < started).then(|| self.ordered[first_reaching])
+    }
+
+    fn snaps_at(&self, timeline_secs: f64) -> bool {
+        self.instant_windows
+            .iter()
+            .any(|&(start, end)| timeline_secs >= start && timeline_secs <= end)
+    }
+}
+
 /// Deterministic, lazily precomputed zoom transform timeline.
 ///
 /// Construction is cheap (clusters only); integration happens on demand via
@@ -590,6 +683,7 @@ pub struct ZoomTransformTimeline {
     samples: Vec<TimelineSample>,
     state: Option<PrecomputeState>,
     zoom_segments: Vec<ZoomSegment>,
+    segment_index: ZoomSegmentIndex,
     /// Parallel to `zoom_segments`: prebuilt clusters (RECORDING-time ms) for
     /// Auto segments, `None` for Manual ones.
     clusters: Vec<Option<ZoomClusters>>,
@@ -646,6 +740,13 @@ impl ZoomTransformTimeline {
         } = selection;
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
+        let segment_index = ZoomSegmentIndex::new(&zoom_segments);
+        let moves_time_ordered = zoom_segments
+            .iter()
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+            && cursor_events
+                .moves
+                .is_sorted_by(|a, b| a.time_ms <= b.time_ms);
 
         let time_map = if zoom_segments.is_empty() {
             Vec::new()
@@ -671,6 +772,7 @@ impl ZoomTransformTimeline {
                     .max(recording_start);
                     Some(ZoomClusters::new(
                         cursor_events,
+                        moves_time_ordered,
                         recording_start,
                         recording_end,
                         segment,
@@ -688,12 +790,13 @@ impl ZoomTransformTimeline {
         };
         // One sample per step across the duration, plus one trailing sample so
         // a lookup right at the end always has a lerp partner.
-        let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
+        let total_samples = ((duration_secs * 1000.0 / STEP_MS).ceil() as usize).saturating_add(2);
         if zoom_segments.is_empty() {
             return Self {
                 samples: Vec::new(),
                 state: None,
                 zoom_segments,
+                segment_index,
                 clusters,
                 time_map,
                 recording_clip,
@@ -712,6 +815,7 @@ impl ZoomTransformTimeline {
             samples: Vec::new(),
             state: None,
             zoom_segments,
+            segment_index,
             clusters,
             time_map,
             recording_clip,
@@ -747,6 +851,39 @@ impl ZoomTransformTimeline {
             held_center_target: initial.center,
         });
         timeline
+    }
+
+    /// Whether a project edit can keep zoom samples for unchanged recording
+    /// data, screen dimensions, clip selection, and explicit duration.
+    pub fn project_inputs_match(
+        before: &ProjectConfiguration,
+        after: &ProjectConfiguration,
+        screen_size: XY<u32>,
+    ) -> bool {
+        let before_timeline = before.timeline.as_ref();
+        let after_timeline = after.timeline.as_ref();
+        let before_zooms = before_timeline
+            .map(|timeline| timeline.zoom_segments.as_slice())
+            .unwrap_or_default();
+        let after_zooms = after_timeline
+            .map(|timeline| timeline.zoom_segments.as_slice())
+            .unwrap_or_default();
+        let had_outgoing = before_timeline.is_some_and(|timeline| !timeline.transitions.is_empty());
+        let needs_outgoing =
+            after_timeline.is_some_and(|timeline| !timeline.transitions.is_empty());
+        if before_zooms != after_zooms || had_outgoing != needs_outgoing {
+            return false;
+        }
+        if before_zooms.is_empty() {
+            return true;
+        }
+
+        before.screen_movement_spring == after.screen_movement_spring
+            && before_timeline.map(TimelineConfiguration::duration)
+                == after_timeline.map(TimelineConfiguration::duration)
+            && build_time_map(before_timeline) == build_time_map(after_timeline)
+            && CursorCropMaps::from_project(before, screen_size)
+                == CursorCropMaps::from_project(after, screen_size)
     }
 
     /// Convenience constructor pulling zoom segments, edit mapping, spring
@@ -839,7 +976,9 @@ impl ZoomTransformTimeline {
         }
         let need_ms = (f64::from(timeline_secs).max(0.0)) * 1000.0;
         // +2: floor index plus its lerp partner.
-        let need_samples = ((need_ms / STEP_MS).ceil() as usize + 2).min(self.total_samples);
+        let need_samples = ((need_ms / STEP_MS).ceil() as usize)
+            .saturating_add(2)
+            .min(self.total_samples);
         while self.samples.len() < need_samples && self.state.is_some() {
             self.advance_one_step();
         }
@@ -976,17 +1115,8 @@ impl ZoomTransformTimeline {
     }
 
     fn targets_at(&self, timeline_secs: f64, held_center: XY<f32>) -> StepTargets {
-        // Same active predicate `SegmentsCursor` used: (start, end].
-        let active = self
-            .zoom_segments
-            .iter()
-            .position(|s| timeline_secs > s.start && timeline_secs <= s.end);
-
-        let snap = self.zoom_segments.iter().any(|s| {
-            s.instant_animation
-                && timeline_secs >= s.start - INSTANT_SNAP_WINDOW_SECS
-                && timeline_secs <= s.end + INSTANT_SNAP_WINDOW_SECS
-        });
+        let active = self.segment_index.active_at(timeline_secs);
+        let snap = self.segment_index.snaps_at(timeline_secs);
 
         match active {
             Some(index) => {
@@ -1160,6 +1290,174 @@ mod tests {
     fn follow_center(focus: (f64, f64)) -> XY<f32> {
         let (x, y) = SegmentBounds::calculate_follow_center(focus, 0.25);
         XY::new(x as f32, y as f32)
+    }
+
+    fn project_for_zoom_reuse() -> ProjectConfiguration {
+        let mut project = project_with_crop_styles(
+            vec![auto_segment(0.5, 18.0, 2.0)],
+            vec![crop_style(3.0, 8.0, 0, None)],
+        );
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments = vec![
+            TimelineSegment {
+                end: 10.0,
+                timescale: 1.0,
+                ..Default::default()
+            },
+            TimelineSegment {
+                recording_clip: 1,
+                start: 5.0,
+                end: 15.0,
+                timescale: 1.0,
+                ..Default::default()
+            },
+        ];
+        timeline.transitions.push(ClipTransition {
+            segment_index: 1,
+            kind: ClipTransitionType::CrossFade,
+            duration: 0.5,
+        });
+        timeline.text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 4.0, "end": 5.0, "layout": "fullscreen"
+            }))
+            .unwrap(),
+        );
+        project
+    }
+
+    #[test]
+    fn unrelated_project_edits_preserve_incoming_and_outgoing_zoom_samples() {
+        let project = project_for_zoom_reuse();
+        let mut edited = project.clone();
+        edited.background.padding = 24.0;
+        edited.camera.rounding = 0.75;
+        edited.cursor.size = 150;
+        let timeline = edited.timeline.as_mut().unwrap();
+        timeline.segments[0].name = Some("Intro".to_string());
+        timeline.segments[0].volume = Some(0.5);
+        timeline.text_segments[0].content = "Edited title".to_string();
+        timeline.style_segments[0]
+            .overrides
+            .background
+            .as_mut()
+            .unwrap()
+            .rounding = 12.0;
+        let screen = XY::new(1000, 1000);
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project, &edited, screen
+        ));
+
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.2, 0.8),
+                move_event(4000.0, 0.4, 0.3),
+                move_event(10000.0, 0.9, 0.7),
+                move_event(18000.0, 0.3, 0.2),
+            ],
+            clicks: vec![click_event(1000.0), click_event(7000.0)],
+        };
+        let duration = project.timeline.as_ref().unwrap().duration();
+        for recording_clip in [0, 1] {
+            for outgoing in [false, true] {
+                let build = |project| {
+                    ZoomTransformTimeline::from_project_for_recording_clip(
+                        project,
+                        &cursor,
+                        duration,
+                        screen,
+                        Some(recording_clip),
+                        outgoing,
+                    )
+                };
+                let mut retained = build(&project);
+                retained.ensure_precomputed_until(5.0);
+                let mut rebuilt = build(&edited);
+                for time in [9.0, 4.0, 0.0, 17.0, duration as f32] {
+                    retained.ensure_precomputed_until(time);
+                    rebuilt.ensure_precomputed_until(time);
+                    assert_samples_identical(&retained, &rebuilt);
+                    assert_eq!(retained.sample(time).bounds, rebuilt.sample(time).bounds);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_inputs_invalidate_when_framing_or_timing_changes() {
+        let project = project_for_zoom_reuse();
+        let changes: [fn(&mut ProjectConfiguration); 9] = [
+            |project| project.timeline.as_mut().unwrap().zoom_segments[0].amount = 3.0,
+            |project| project.screen_movement_spring.stiffness += 1.0,
+            |project| {
+                project.background.crop = Some(Crop {
+                    position: XY::new(100, 0),
+                    size: XY::new(500, 1000),
+                });
+            },
+            |project| {
+                project.timeline.as_mut().unwrap().style_segments[0]
+                    .overrides
+                    .background
+                    .as_mut()
+                    .unwrap()
+                    .crop = Some(Crop {
+                    position: XY::new(0, 100),
+                    size: XY::new(1000, 500),
+                });
+            },
+            |project| {
+                let segment = &mut project.timeline.as_mut().unwrap().segments[0];
+                segment.start += 1.0;
+                segment.end += 1.0;
+            },
+            |project| project.timeline.as_mut().unwrap().segments[0].timescale = 2.0,
+            |project| project.timeline.as_mut().unwrap().segments[0].recording_clip = 1,
+            |project| project.timeline.as_mut().unwrap().transitions[0].duration = 0.75,
+            |project| {
+                project.timeline.as_mut().unwrap().text_segments.push(
+                    serde_json::from_value(serde_json::json!({
+                        "start": 50.0, "end": 52.0, "layout": "fullscreen"
+                    }))
+                    .unwrap(),
+                );
+            },
+        ];
+        for (index, change) in changes.into_iter().enumerate() {
+            let mut edited = project.clone();
+            change(&mut edited);
+            assert!(
+                !ZoomTransformTimeline::project_inputs_match(
+                    &project,
+                    &edited,
+                    XY::new(1000, 1000)
+                ),
+                "change {index} reused stale zoom samples"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_zoom_tracks_still_refresh_outgoing_timeline_availability() {
+        let mut before = project_for_zoom_reuse();
+        before.timeline.as_mut().unwrap().zoom_segments.clear();
+        let mut after = before.clone();
+        after.timeline.as_mut().unwrap().transitions.clear();
+        let screen = XY::new(1000, 1000);
+
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &before, &after, screen
+        ));
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &after, &before, screen
+        ));
+        let no_transitions = after.clone();
+        after.background.padding = 24.0;
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &no_transitions,
+            &after,
+            screen
+        ));
     }
 
     #[test]
@@ -1767,6 +2065,68 @@ mod tests {
     }
 
     #[test]
+    fn auto_zoom_uses_position_at_segment_start_over_earlier_movement() {
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.9, 0.9),
+                move_event(2000.0, 0.1, 0.1),
+                move_event(6000.0, 0.9, 0.9),
+            ],
+            clicks: Vec::new(),
+        };
+        for ordered in [false, true] {
+            let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
+            assert_eq!(
+                ClusterCenters::new(clusters).center_at(2000.0),
+                Some((0.1, 0.1))
+            );
+        }
+    }
+
+    #[test]
+    fn auto_zoom_keeps_idle_cursor_visible_until_movement_resumes() {
+        for (recording_start, timescale) in [(0.0, 1.0), (10.0, 2.0)] {
+            let segment = auto_segment(2.0, 10.0, 2.0);
+            let mut project = project_with_crop_styles(vec![segment], Vec::new());
+            project.timeline.as_mut().unwrap().segments = vec![TimelineSegment {
+                recording_clip: 0,
+                start: recording_start,
+                end: recording_start + 12.0 * timescale,
+                timescale,
+                name: None,
+                speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
+            }];
+            let cursor = CursorEvents {
+                moves: vec![
+                    move_event(recording_start * 1000.0, 0.1, 0.1),
+                    move_event((recording_start + 6.0 * timescale) * 1000.0, 0.9, 0.9),
+                ],
+                clicks: Vec::new(),
+            };
+            let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                &project,
+                &cursor,
+                12.0,
+                XY::new(1920, 1080),
+                0,
+            );
+            timeline.precompute();
+
+            for (time, position) in [(4.0, 0.1), (8.0, 0.9)] {
+                let zoom = timeline.sample(time);
+                let (left, top, size) = visible_viewport(&zoom);
+                assert!(
+                    (left..=left + size).contains(&position)
+                        && (top..=top + size).contains(&position),
+                    "cursor {position} outside viewport at {time}s: {zoom:?}, source start={recording_start}, speed={timescale}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hovering_into_a_corner_re_aims_without_a_click() {
         // Regression for the real-recording report: clicks early near the
         // center, then the cursor HOVERS (no click) into the bottom-right
@@ -2094,6 +2454,125 @@ mod tests {
         );
     }
 
+    fn benchmark_project(duration_secs: f64, zoom_count: usize) -> ProjectConfiguration {
+        let spacing = duration_secs / zoom_count as f64;
+        let zoom_segments = (0..zoom_count)
+            .map(|i| {
+                let start = i as f64 * spacing + spacing * 0.25;
+                auto_segment(start, start + 4.0, 2.0)
+            })
+            .collect();
+        let mut project = project_with_crop_styles(zoom_segments, Vec::new());
+        if let Some(timeline) = project.timeline.as_mut() {
+            timeline.segments.push(TimelineSegment {
+                recording_clip: 0,
+                timescale: 1.0,
+                start: 0.0,
+                end: duration_secs,
+                name: None,
+                speed_audio_mode: None,
+                volume: None,
+                hide_cursor: None,
+            });
+        }
+        project
+    }
+
+    fn benchmark_cursor(duration_secs: f64) -> CursorEvents {
+        let moves = (0..(duration_secs * 60.0) as usize)
+            .map(|i| {
+                move_event(
+                    i as f64 * 1000.0 / 60.0,
+                    ((i as f64 * 0.0011).sin() + 1.0) / 2.0,
+                    ((i as f64 * 0.0007).cos() + 1.0) / 2.0,
+                )
+            })
+            .collect();
+        CursorEvents {
+            moves,
+            clicks: Vec::new(),
+        }
+    }
+
+    fn samples_hash(timeline: &ZoomTransformTimeline) -> u64 {
+        timeline
+            .samples
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325, |hash, sample| {
+                [
+                    sample.amount.to_bits(),
+                    sample.center.x.to_bits(),
+                    sample.center.y.to_bits(),
+                    sample.activity.to_bits(),
+                    u32::from(sample.snapped),
+                ]
+                .into_iter()
+                .fold(hash, |hash, word| {
+                    (hash ^ u64::from(word)).wrapping_mul(0x0100_0000_01b3)
+                })
+            })
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with --release --ignored --nocapture"]
+    fn benchmark_zoom_timeline_rebuild() {
+        use std::time::{Duration, Instant};
+
+        const RUNS: usize = 15;
+        let screen_size = XY::new(1920, 1080);
+        let percentile = |times: &mut Vec<Duration>, p: f64| {
+            times.sort_unstable();
+            let index = ((times.len() - 1) as f64 * p).round() as usize;
+            times[index].as_secs_f64() * 1000.0
+        };
+
+        println!(
+            "| recording | auto zooms | playhead | build p50 | precompute p50 | rebuild p50 | rebuild p95 | samples hash |"
+        );
+        println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
+        for (minutes, zoom_count) in [(10.0, 20), (30.0, 60), (60.0, 120)] {
+            let duration_secs = minutes * 60.0;
+            let project = benchmark_project(duration_secs, zoom_count);
+            let cursor = benchmark_cursor(duration_secs);
+            for playhead_fraction in [0.5, 1.0] {
+                let playhead = (duration_secs * playhead_fraction) as f32;
+                let mut build_times = Vec::with_capacity(RUNS);
+                let mut precompute_times = Vec::with_capacity(RUNS);
+                let mut rebuild_times = Vec::with_capacity(RUNS);
+                let mut checksum = 0.0f64;
+                let mut hash = 0;
+                for _ in 0..RUNS {
+                    let build_start = Instant::now();
+                    let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                        &project,
+                        &cursor,
+                        duration_secs,
+                        screen_size,
+                        0,
+                    );
+                    let build_elapsed = build_start.elapsed();
+                    let precompute_start = Instant::now();
+                    timeline.ensure_precomputed_until(playhead);
+                    let precompute_elapsed = precompute_start.elapsed();
+                    checksum += timeline.sample(playhead).display_amount();
+                    hash = samples_hash(&timeline);
+                    build_times.push(build_elapsed);
+                    precompute_times.push(precompute_elapsed);
+                    rebuild_times.push(build_elapsed + precompute_elapsed);
+                }
+                std::hint::black_box(checksum);
+                println!(
+                    "| {minutes} min | {zoom_count} | {:.0}% | {:.3} ms | {:.3} ms | {:.3} ms | {:.3} ms | {hash:016x} |",
+                    playhead_fraction * 100.0,
+                    percentile(&mut build_times, 0.5),
+                    percentile(&mut precompute_times, 0.5),
+                    percentile(&mut rebuild_times, 0.5),
+                    percentile(&mut rebuild_times, 0.95),
+                );
+            }
+        }
+    }
+
     #[test]
     fn timeline_mapping_filters_clusters_in_recording_time() {
         // Timeline: single segment showing recording range [10s, 20s] at 1x,
@@ -2316,5 +2795,170 @@ mod tests {
             top_flush,
             settled.bounds
         );
+    }
+
+    #[test]
+    fn segment_index_matches_linear_segment_scan() {
+        let mut instant = manual_segment(4.0, 4.5, 2.0, 0.5, 0.5);
+        instant.instant_animation = true;
+        let mut instant_nan = manual_segment(f64::NAN, 9.0, 2.0, 0.5, 0.5);
+        instant_nan.instant_animation = true;
+        let cases = [
+            vec![],
+            vec![manual_segment(1.0, 2.0, 2.0, 0.5, 0.5)],
+            vec![
+                manual_segment(1.0, 6.0, 2.0, 0.5, 0.5),
+                manual_segment(2.0, 3.0, 3.0, 0.5, 0.5),
+                manual_segment(2.0, 3.0, 4.0, 0.5, 0.5),
+                manual_segment(3.0, 3.0, 2.0, 0.5, 0.5),
+                manual_segment(5.0, 4.0, 2.0, 0.5, 0.5),
+                instant,
+            ],
+            vec![
+                manual_segment(f64::NAN, 2.0, 2.0, 0.5, 0.5),
+                manual_segment(-f64::NAN, 2.0, 2.0, 0.5, 0.5),
+                manual_segment(1.0, f64::NAN, 2.0, 0.5, 0.5),
+                manual_segment(-0.0, 0.0, 2.0, 0.5, 0.5),
+                manual_segment(f64::NEG_INFINITY, 0.5, 2.0, 0.5, 0.5),
+                manual_segment(7.0, f64::INFINITY, 2.0, 0.5, 0.5),
+                instant_nan,
+            ],
+        ];
+        for segments in cases {
+            let timeline = timeline_for(&segments, &CursorEvents::default(), 10.0);
+            let mut times: Vec<f64> = segments
+                .iter()
+                .flat_map(|s| [s.start, s.end, s.start - 0.1, s.end + 0.1])
+                .flat_map(|t| [t, t.next_down(), t.next_up()])
+                .collect();
+            times.extend((0..=1300).map(|step| step as f64 * STEP_MS / 1000.0));
+            for t in times {
+                let linear_active = timeline
+                    .zoom_segments
+                    .iter()
+                    .position(|s| t > s.start && t <= s.end);
+                let linear_snap = timeline.zoom_segments.iter().any(|s| {
+                    s.instant_animation
+                        && t >= s.start - INSTANT_SNAP_WINDOW_SECS
+                        && t <= s.end + INSTANT_SNAP_WINDOW_SECS
+                });
+                assert_eq!(timeline.segment_index.active_at(t), linear_active, "t={t}");
+                assert_eq!(timeline.segment_index.snaps_at(t), linear_snap, "t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn ordered_cluster_search_matches_full_scan() {
+        let moves = vec![
+            move_event(f64::NEG_INFINITY, 0.1, 0.1),
+            move_event(0.0, 0.2, 0.2),
+            move_event(500.0, f64::NAN, 0.5),
+            move_event(500.0, 0.9, 0.9),
+            move_event(500.0, 0.1, 0.9),
+            move_event(1_000.0, 0.5, f64::INFINITY),
+            move_event(2_000.0, 0.95, 0.05),
+            move_event(2_000.0, 0.05, 0.95),
+            move_event(3_500.0, 0.6, 0.4),
+            move_event(9_000.0, 0.3, 0.7),
+            move_event(f64::INFINITY, 0.8, 0.2),
+        ];
+        let cursor = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+        assert!(cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms));
+        let crop = CursorCropMap::from_crop(
+            &Crop {
+                position: XY::new(100, 50),
+                size: XY::new(1600, 900),
+            },
+            XY::new(1920, 1080),
+        );
+        let bounds = [
+            (0.0, 0.0),
+            (0.0, 0.5),
+            (0.5, 0.5),
+            (0.5, 2.0),
+            (0.6, 0.9),
+            (2.5, 3.0),
+            (4.0, 8.0),
+            (10.0, 20.0),
+            (-5.0, -1.0),
+            (f64::NAN, 2.0),
+            (0.5, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+        ];
+        for (start, end) in bounds {
+            for amount in [1.0, 2.0, 4.0] {
+                for crop in [None, crop] {
+                    let ordered = build_clusters(&cursor, true, start, end, amount, crop);
+                    let scanned = build_clusters(&cursor, false, start, end, amount, crop);
+                    assert_eq!(
+                        format!("{ordered:?}"),
+                        format!("{scanned:?}"),
+                        "range {start}..{end} amount {amount}"
+                    );
+                }
+            }
+        }
+    }
+
+    fn linear_cluster_center_at_time(
+        clusters: &[ClickCluster],
+        time_ms: f64,
+    ) -> Option<(f64, f64)> {
+        clusters
+            .iter()
+            .rev()
+            .find(|cluster| cluster.start_time_ms <= time_ms)
+            .or_else(|| clusters.first())
+            .map(ClickCluster::center)
+    }
+
+    #[test]
+    fn cluster_centers_match_linear_lookup_for_all_short_sequences() {
+        let starts = [
+            f64::NEG_INFINITY,
+            -0.0,
+            0.0,
+            1.0,
+            2.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let queries = [
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0_f64.next_down(),
+            1.0,
+            1.0_f64.next_up(),
+            2.0,
+            3.0,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for length in 0..=4 {
+            for mut sequence in 0..starts.len().pow(length) {
+                let clusters = (0..length)
+                    .map(|index| {
+                        let start = starts[sequence % starts.len()];
+                        sequence /= starts.len();
+                        ClickCluster::new(f64::from(index), f64::from(index) * 0.5, start)
+                    })
+                    .collect();
+                let centers = ClusterCenters::new(clusters);
+                for time in queries {
+                    assert_eq!(
+                        centers.center_at(time),
+                        linear_cluster_center_at_time(&centers.clusters, time),
+                        "clusters {:?}, time {time}",
+                        centers.clusters
+                    );
+                }
+            }
+        }
     }
 }

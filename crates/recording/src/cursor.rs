@@ -9,6 +9,10 @@ use futures::{FutureExt, future::Shared};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -40,6 +44,7 @@ pub struct CursorActor {
     pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
+#[derive(Clone)]
 pub struct IncrementalCaptureOutputs {
     pub cursor: Option<PathBuf>,
     pub keyboard: Option<PathBuf>,
@@ -170,6 +175,146 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
             output_path.display(),
             e
         );
+    }
+}
+
+struct IncrementalSnapshot {
+    cursor: Option<(Vec<CursorMoveEvent>, Vec<CursorClickEvent>)>,
+    keyboard: Option<Vec<KeyPressEvent>>,
+}
+
+impl IncrementalSnapshot {
+    fn capture(outputs: &IncrementalCaptureOutputs, response: &CursorActorResponse) -> Self {
+        Self {
+            cursor: outputs
+                .cursor
+                .as_ref()
+                .map(|_| (response.moves.clone(), response.clicks.clone())),
+            keyboard: outputs
+                .keyboard
+                .as_ref()
+                .map(|_| response.keyboard_presses.clone()),
+        }
+    }
+
+    fn write(self, outputs: &IncrementalCaptureOutputs) {
+        if let (Some(path), Some((moves, clicks))) = (&outputs.cursor, &self.cursor) {
+            flush_cursor_data(path, moves, clicks);
+        }
+        if let (Some(path), Some(presses)) = (&outputs.keyboard, &self.keyboard) {
+            flush_keyboard_data(path, presses);
+        }
+    }
+}
+
+enum WriterMessage {
+    Image {
+        path: PathBuf,
+        image: image::RgbaImage,
+    },
+    Snapshot(IncrementalSnapshot),
+}
+
+/// Writes cursor images and the incremental cursor and keyboard files on a
+/// separate thread so a slow or stalled output volume cannot pause input
+/// sampling. At most one periodic snapshot waits while another is written; a
+/// flush that finds one already waiting is skipped, since the next one carries
+/// every event. Cursor images that fail to save are retried, and any still
+/// missing at the end are reported so the recorder can drop them, matching the
+/// old inline behaviour of only registering images that reached disk.
+struct CursorFileWriter {
+    tx: std::sync::mpsc::Sender<WriterMessage>,
+    snapshot_queued: Arc<AtomicBool>,
+    thread: std::thread::JoinHandle<Vec<PathBuf>>,
+}
+
+const CURSOR_IMAGE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl CursorFileWriter {
+    fn spawn(outputs: IncrementalCaptureOutputs) -> std::io::Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<WriterMessage>();
+        let snapshot_queued = Arc::new(AtomicBool::new(false));
+        let queued = snapshot_queued.clone();
+        let thread = std::thread::Builder::new()
+            .name("cursor-writer".to_string())
+            .spawn(move || {
+                let mut failed_images: Vec<(PathBuf, image::RgbaImage)> = Vec::new();
+                loop {
+                    let message = if failed_images.is_empty() {
+                        rx.recv().ok()
+                    } else {
+                        match rx.recv_timeout(CURSOR_IMAGE_RETRY_INTERVAL) {
+                            Ok(message) => Some(message),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    };
+                    let had_failures = !failed_images.is_empty();
+                    match message {
+                        Some(WriterMessage::Image { path, image }) => {
+                            if !save_cursor_image(&path, &image) {
+                                failed_images.push((path, image));
+                            }
+                        }
+                        Some(WriterMessage::Snapshot(snapshot)) => {
+                            queued.store(false, Ordering::Release);
+                            snapshot.write(&outputs);
+                        }
+                        None if !had_failures => break,
+                        None => {}
+                    }
+                    if had_failures {
+                        failed_images.retain(|(path, image)| !save_cursor_image(path, image));
+                    }
+                }
+                failed_images.retain(|(path, image)| !save_cursor_image(path, image));
+                failed_images.into_iter().map(|(path, _)| path).collect()
+            })?;
+        Ok(Self {
+            tx,
+            snapshot_queued,
+            thread,
+        })
+    }
+
+    fn save_image(&self, path: PathBuf, image: image::RgbaImage) -> bool {
+        match self.tx.send(WriterMessage::Image { path, image }) {
+            Ok(()) => true,
+            Err(std::sync::mpsc::SendError(WriterMessage::Image { path, image })) => {
+                save_cursor_image(&path, &image)
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn flush(&self, snapshot: impl FnOnce() -> IncrementalSnapshot) {
+        if !self.snapshot_queued.swap(true, Ordering::AcqRel) {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot()));
+        }
+    }
+
+    fn finish(self, snapshot: Option<IncrementalSnapshot>) -> Vec<PathBuf> {
+        if let Some(snapshot) = snapshot {
+            let _ = self.tx.send(WriterMessage::Snapshot(snapshot));
+        }
+        drop(self.tx);
+        self.thread.join().unwrap_or_else(|_| {
+            tracing::error!("Cursor writer thread panicked");
+            Vec::new()
+        })
+    }
+}
+
+fn save_cursor_image(path: &Path, image: &image::RgbaImage) -> bool {
+    match image.save(path) {
+        Ok(()) => {
+            tracing::info!(path = %path.display(), "Saved cursor image");
+            true
+        }
+        Err(e) => {
+            tracing::error!("Failed to save cursor image: {}", e);
+            false
+        }
     }
 }
 
@@ -334,7 +479,6 @@ pub fn spawn_cursor_recorder(
     }
 
     use device_query::{DeviceQuery, DeviceState};
-    use sha2::{Digest, Sha256};
     use std::time::Duration;
     use tracing::{error, info};
 
@@ -364,7 +508,8 @@ pub fn spawn_cursor_recorder(
         let mut last_mouse_state = device_state.get_mouse();
         let mut last_keys: Vec<device_query::Keycode> = device_state.get_keys();
 
-        let mut last_position = cap_cursor_capture::RawCursorPosition::get();
+        let mut last_position =
+            cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
 
         std::fs::create_dir_all(&cursors_dir).unwrap();
 
@@ -376,9 +521,16 @@ pub fn spawn_cursor_recorder(
             keyboard_presses: vec![],
         };
 
+        let has_incremental_outputs =
+            incremental_outputs.cursor.is_some() || incremental_outputs.keyboard.is_some();
+        let writer = CursorFileWriter::spawn(incremental_outputs.clone())
+            .inspect_err(|e| error!("Failed to start cursor writer, writing inline: {e}"))
+            .ok();
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut last_cursor_image = None;
+        let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -394,15 +546,16 @@ pub fn spawn_cursor_recorder(
             }
 
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
-                last_position = cap_cursor_capture::RawCursorPosition::get();
                 last_mouse_state = device_state.get_mouse();
+                last_position =
+                    cap_cursor_capture::RawCursorPosition::from_coords(last_mouse_state.coords);
                 last_keys = device_state.get_keys();
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let position = cap_cursor_capture::RawCursorPosition::get();
+            let position = cap_cursor_capture::RawCursorPosition::from_coords(mouse_state.coords);
             // The first sample after the gate opens is always recorded so the
             // cursor has a known position at the recording's time zero.
             let position_changed = position != last_position || std::mem::take(&mut awaiting_start);
@@ -420,47 +573,44 @@ pub fn spawn_cursor_recorder(
                 last_window_position = window_position;
             }
 
-            let cursor_id = if let Some(data) = get_cursor_data() {
-                let hash_bytes = Sha256::digest(&data.image);
-                let id = u64::from_le_bytes(
-                    hash_bytes[..8]
-                        .try_into()
-                        .expect("sha256 produces at least 8 bytes"),
-                );
-
-                let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
-                    existing_id.id.to_string()
-                } else {
-                    let cursor_id = response.next_cursor_id.to_string();
-                    let file_name = format!("cursor_{cursor_id}.png");
-                    let cursor_path = cursors_dir.join(&file_name);
-
-                    if let Ok(image) = image::load_from_memory(&data.image) {
-                        let rgba_image = image.into_rgba8();
-
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            error!("Failed to save cursor image: {}", e);
-                        } else {
-                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
-                            response.cursors.insert(
-                                id,
-                                Cursor {
-                                    file_name,
-                                    id: response.next_cursor_id,
-                                    hotspot: data.hotspot,
-                                    shape: data.shape,
-                                },
-                            );
-                            response.next_cursor_id += 1;
-                        }
-                    }
-
-                    cursor_id
-                };
-                last_cursor_id = Some(cursor_id.clone());
-                Some(cursor_id)
-            } else {
+            // The cursor image only labels this tick's move and click events,
+            // and reading it builds a full TIFF of every representation
+            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
+            // record neither.
+            let buttons_changed = buttons_changed(
+                &last_mouse_state.button_pressed,
+                &mouse_state.button_pressed,
+            );
+            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
                 last_cursor_id.clone()
+            } else {
+                // While the pointer moves the shape rarely changes, so compare
+                // the raw bitmap first and build the TIFF only for a new shape.
+                let known = last_cursor_id
+                    .is_some()
+                    .then_some(last_cursor_fingerprint.as_ref())
+                    .flatten();
+                match sample_cursor(known) {
+                    CursorSample::Unchanged => last_cursor_id.clone(),
+                    CursorSample::Read {
+                        fingerprint,
+                        data: Some(data),
+                    } => {
+                        let cursor_id = cursor_id_for_image(
+                            data,
+                            &mut response,
+                            &cursors_dir,
+                            writer.as_ref(),
+                            &mut last_cursor_image,
+                        );
+                        last_cursor_id = Some(cursor_id.clone());
+                        // Only a registered image may short-circuit later ticks;
+                        // a failed decode or save keeps retrying.
+                        last_cursor_fingerprint = last_cursor_image.as_ref().and(fingerprint);
+                        Some(cursor_id)
+                    }
+                    CursorSample::Read { data: None, .. } => last_cursor_id.clone(),
+                }
             };
 
             let Some(cursor_id) = cursor_id else {
@@ -541,12 +691,11 @@ pub fn spawn_cursor_recorder(
 
             last_keys = current_keys;
 
-            if last_flush.elapsed() >= flush_interval {
-                if let Some(ref path) = incremental_outputs.cursor {
-                    flush_cursor_data(path, &response.moves, &response.clicks);
-                }
-                if let Some(ref kb_path) = incremental_outputs.keyboard {
-                    flush_keyboard_data(kb_path, &response.keyboard_presses);
+            if has_incremental_outputs && last_flush.elapsed() >= flush_interval {
+                let snapshot = || IncrementalSnapshot::capture(&incremental_outputs, &response);
+                match &writer {
+                    Some(writer) => writer.flush(snapshot),
+                    None => snapshot().write(&incremental_outputs),
                 }
                 last_flush = Instant::now();
             }
@@ -554,12 +703,20 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
-        if let Some(ref path) = incremental_outputs.cursor {
-            flush_cursor_data(path, &response.moves, &response.clicks);
-        }
-
-        if let Some(ref kb_path) = incremental_outputs.keyboard {
-            flush_keyboard_data(kb_path, &response.keyboard_presses);
+        let snapshot = has_incremental_outputs
+            .then(|| IncrementalSnapshot::capture(&incremental_outputs, &response));
+        match writer {
+            Some(writer) => {
+                let unsaved = writer.finish(snapshot);
+                response.cursors.retain(|_, cursor| {
+                    !unsaved.iter().any(|path| path.ends_with(&cursor.file_name))
+                });
+            }
+            None => {
+                if let Some(snapshot) = snapshot {
+                    snapshot.write(&incremental_outputs);
+                }
+            }
         }
 
         let _ = tx.send(response);
@@ -573,35 +730,198 @@ pub fn spawn_cursor_recorder(
     }
 }
 
-#[derive(Debug)]
+/// Whether any button present in both samples changed state: the same pairs
+/// the click events below are generated from.
+fn buttons_changed(previous: &[bool], current: &[bool]) -> bool {
+    previous
+        .iter()
+        .zip(current)
+        .any(|(previous, current)| previous != current)
+}
+
+fn cursor_id_for_image(
+    data: CursorData,
+    response: &mut CursorActorResponse,
+    cursors_dir: &Path,
+    writer: Option<&CursorFileWriter>,
+    last_cursor_image: &mut Option<(Vec<u8>, String)>,
+) -> String {
+    use sha2::{Digest, Sha256};
+
+    // Hashing a large macOS cursor TIFF costs milliseconds, and the image
+    // rarely changes between ticks.
+    if let Some((image, cursor_id)) = last_cursor_image
+        && *image == data.image
+    {
+        return cursor_id.clone();
+    }
+
+    let hash_bytes = Sha256::digest(&data.image);
+    let id = u64::from_le_bytes(
+        hash_bytes[..8]
+            .try_into()
+            .expect("sha256 produces at least 8 bytes"),
+    );
+
+    let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
+        existing_id.id.to_string()
+    } else {
+        let cursor_id = response.next_cursor_id.to_string();
+        let file_name = format!("cursor_{cursor_id}.png");
+        let cursor_path = cursors_dir.join(&file_name);
+
+        if let Ok(image) = image::load_from_memory(&data.image) {
+            let rgba_image = image.into_rgba8();
+
+            let saved = match writer {
+                Some(writer) => writer.save_image(cursor_path, rgba_image),
+                None => save_cursor_image(&cursor_path, &rgba_image),
+            };
+            if saved {
+                #[cfg(target_os = "macos")]
+                let shape = cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(hash_bytes))
+                    .map(Into::into);
+                #[cfg(not(target_os = "macos"))]
+                let shape = data.shape;
+                response.cursors.insert(
+                    id,
+                    Cursor {
+                        file_name,
+                        id: response.next_cursor_id,
+                        hotspot: data.hotspot,
+                        shape,
+                    },
+                );
+                response.next_cursor_id += 1;
+            }
+        }
+
+        cursor_id
+    };
+
+    *last_cursor_image = response
+        .cursors
+        .contains_key(&id)
+        .then(|| (data.image, cursor_id.clone()));
+    cursor_id
+}
+
+#[derive(Debug, Clone)]
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
+    #[cfg(not(target_os = "macos"))]
     shape: Option<CursorShape>,
 }
 
+/// Cheap enough to take every tick (~0.1 ms against ~0.4 ms for the TIFF),
+/// and changes whenever the TIFF would, since both come from the same image.
 #[cfg(target_os = "macos")]
-fn get_cursor_data() -> Option<CursorData> {
+#[derive(PartialEq)]
+struct CursorFingerprint {
+    pixels: Vec<u8>,
+    bitmap: (usize, usize, usize),
+    size: (u64, u64),
+    hotspot: (u64, u64),
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(PartialEq)]
+struct CursorFingerprint;
+
+enum CursorSample {
+    /// The cursor still matches the fingerprint of the last registered image.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Unchanged,
+    Read {
+        fingerprint: Option<CursorFingerprint>,
+        data: Option<CursorData>,
+    },
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sample_cursor(_known: Option<&CursorFingerprint>) -> CursorSample {
+    CursorSample::Read {
+        fingerprint: None,
+        data: get_cursor_data(),
+    }
+}
+
+/// One read of the current cursor per tick: its fingerprint, and its encoded
+/// image only when that fingerprint differs from `known`, both from the same
+/// `NSCursor` so a shape change between two reads can't pair them wrongly.
+#[cfg(target_os = "macos")]
+fn sample_cursor(known: Option<&CursorFingerprint>) -> CursorSample {
     use objc::rc::autoreleasepool;
     use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+        let Some(cursor) = NSCursor::currentSystemCursor().or_else(|| {
             let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
             cursor
-        })?;
-
-        macos_cursor_data(&cursor)
+        }) else {
+            return CursorSample::Read {
+                fingerprint: None,
+                data: None,
+            };
+        };
+        let fingerprint = macos_cursor_fingerprint(&cursor);
+        if fingerprint.is_some() && fingerprint.as_ref() == known {
+            return CursorSample::Unchanged;
+        }
+        CursorSample::Read {
+            data: macos_cursor_data(&cursor),
+            fingerprint,
+        }
     })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_fingerprint(cursor: &objc2_app_kit::NSCursor) -> Option<CursorFingerprint> {
+    use core_graphics::image::CGImageRef;
+    use foreign_types_shared::ForeignTypeRef;
+    use objc::{sel, sel_impl};
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSImage;
+
+    unsafe {
+        let image: Option<Retained<NSImage>> = msg_send![cursor, image];
+        let image = image?;
+        let size = image.size();
+        let hotspot = cursor.hotSpot();
+        let image_ptr = Retained::as_ptr(&image) as *mut objc::runtime::Object;
+        let nil = std::ptr::null_mut::<objc::runtime::Object>();
+        // `CGImageForProposedRect:context:hints:` returns an autoreleased
+        // CGImageRef, valid for the caller's autorelease pool.
+        let cg_image: *mut std::ffi::c_void = objc::msg_send![
+            image_ptr,
+            CGImageForProposedRect: std::ptr::null_mut::<std::ffi::c_void>()
+            context: nil
+            hints: nil
+        ];
+        if cg_image.is_null() {
+            return None;
+        }
+        let cg_image = CGImageRef::from_ptr(cg_image.cast());
+        Some(CursorFingerprint {
+            pixels: cg_image.data().bytes().to_vec(),
+            bitmap: (
+                cg_image.width(),
+                cg_image.height(),
+                cg_image.bytes_per_row(),
+            ),
+            size: (size.width.to_bits(), size.height.to_bits()),
+            hotspot: (hotspot.x.to_bits(), hotspot.y.to_bits()),
+        })
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
     use objc2::{msg_send, rc::Retained};
     use objc2_app_kit::NSImage;
-    use sha2::{Digest, Sha256};
 
     unsafe {
         // AppKit can return nil for transient system cursors despite NSCursor.image's nonnull annotation.
@@ -621,20 +941,17 @@ fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
 
         let image_data = image.TIFFRepresentation()?;
         let image = image_data.as_bytes_unchecked().to_vec();
-        let shape =
-            cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
 
         Some(CursorData {
             image,
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
-            shape: shape.map(Into::into),
         })
     }
 }
 
 #[cfg(all(test, target_os = "macos"))]
 mod macos_cursor_tests {
-    use super::macos_cursor_data;
+    use super::{macos_cursor_data, macos_cursor_fingerprint};
     use objc2::{AllocAnyThread, class, msg_send, rc::Retained, runtime::AnyObject};
     use objc2_app_kit::{NSCursor, NSImage};
 
@@ -649,6 +966,35 @@ mod macos_cursor_tests {
         let image = unsafe { NSImage::initWithSize(NSImage::alloc(), Default::default()) };
         let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
         assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    fn cursor_with(color: [u8; 4]) -> Retained<NSCursor> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let data: Retained<AnyObject> = unsafe {
+            msg_send![class!(NSData), dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(), length: png.len()]
+        };
+        let image: Retained<NSImage> = unsafe { msg_send![NSImage::alloc(), initWithData: &*data] };
+        NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default())
+    }
+
+    #[test]
+    fn the_fingerprint_tells_cursor_shapes_apart_without_encoding_them() {
+        let arrow = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let same = macos_cursor_fingerprint(&cursor_with([20, 40, 80, 255])).unwrap();
+        let recolored = macos_cursor_fingerprint(&cursor_with([200, 40, 80, 255])).unwrap();
+        assert!(arrow == same);
+        assert!(arrow != recolored);
+        assert!(!arrow.pixels.is_empty());
+    }
+
+    #[test]
+    fn a_cursor_without_an_image_has_no_fingerprint() {
+        let cursor = unsafe { NSCursor::new() };
+        assert!(macos_cursor_fingerprint(&cursor).is_none());
     }
 
     #[test]
@@ -683,50 +1029,112 @@ mod macos_cursor_tests {
 
 #[cfg(target_os = "linux")]
 fn get_cursor_data() -> Option<CursorData> {
-    get_x11_cursor_data().or_else(fallback_cursor_data)
+    thread_local! {
+        static X11_CURSOR: std::cell::RefCell<X11CursorSource> = std::cell::RefCell::default();
+    }
+
+    X11_CURSOR
+        .with_borrow_mut(X11CursorSource::cursor_data)
+        .or_else(fallback_cursor_data)
 }
 
 #[cfg(target_os = "linux")]
-fn get_x11_cursor_data() -> Option<CursorData> {
-    use x11rb::protocol::xfixes::ConnectionExt as _;
+#[derive(Default)]
+struct X11CursorSource {
+    connection: Option<x11rb::rust_connection::RustConnection>,
+    last_image: Option<X11CursorImage>,
+}
 
-    let (conn, _) = x11rb::connect(None).ok()?;
-    conn.xfixes_query_version(5, 0).ok()?.reply().ok()?;
-    let cursor = conn.xfixes_get_cursor_image().ok()?.reply().ok()?;
+#[cfg(target_os = "linux")]
+struct X11CursorImage {
+    width: u16,
+    height: u16,
+    pixels: Vec<u32>,
+    png: Vec<u8>,
+}
 
-    let width = u32::from(cursor.width);
-    let height = u32::from(cursor.height);
-    if width == 0 || height == 0 {
-        return None;
+#[cfg(target_os = "linux")]
+impl X11CursorSource {
+    fn cursor_data(&mut self) -> Option<CursorData> {
+        let cursor = self.cursor_image()?;
+
+        let width = u32::from(cursor.width);
+        let height = u32::from(cursor.height);
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(CursorData {
+            image: self.png(cursor.width, cursor.height, cursor.cursor_image)?,
+            hotspot: XY::new(
+                f64::from(cursor.xhot) / f64::from(width),
+                f64::from(cursor.yhot) / f64::from(height),
+            ),
+            shape: None,
+        })
     }
 
-    let pixel_count = usize::from(cursor.width).checked_mul(usize::from(cursor.height))?;
-    if cursor.cursor_image.len() != pixel_count {
+    fn cursor_image(&mut self) -> Option<x11rb::protocol::xfixes::GetCursorImageReply> {
+        use x11rb::protocol::xfixes::ConnectionExt as _;
+
+        if let Some(connection) = self.connection.take()
+            && let Some(cursor) = connection
+                .xfixes_get_cursor_image()
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+        {
+            self.connection = Some(connection);
+            return Some(cursor);
+        }
+
+        let (connection, _) = x11rb::connect(None).ok()?;
+        connection.xfixes_query_version(5, 0).ok()?.reply().ok()?;
+        let cursor = connection.xfixes_get_cursor_image().ok()?.reply().ok()?;
+        self.connection = Some(connection);
+        Some(cursor)
+    }
+
+    fn png(&mut self, width: u16, height: u16, pixels: Vec<u32>) -> Option<Vec<u8>> {
+        if let Some(last) = &self.last_image
+            && last.width == width
+            && last.height == height
+            && last.pixels == pixels
+        {
+            return Some(last.png.clone());
+        }
+
+        let png = x11_cursor_png(width, height, &pixels)?;
+        self.last_image = Some(X11CursorImage {
+            width,
+            height,
+            pixels,
+            png: png.clone(),
+        });
+        Some(png)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_cursor_png(width: u16, height: u16, pixels: &[u32]) -> Option<Vec<u8>> {
+    let pixel_count = usize::from(width).checked_mul(usize::from(height))?;
+    if pixels.len() != pixel_count {
         return None;
     }
 
     let mut rgba = Vec::with_capacity(pixel_count.checked_mul(4)?);
-    for pixel in cursor.cursor_image {
+    for &pixel in pixels {
         rgba.push(((pixel >> 16) & 0xff) as u8);
         rgba.push(((pixel >> 8) & 0xff) as u8);
         rgba.push((pixel & 0xff) as u8);
         rgba.push(((pixel >> 24) & 0xff) as u8);
     }
 
-    let image = image::RgbaImage::from_raw(width, height, rgba)?;
+    let image = image::RgbaImage::from_raw(u32::from(width), u32::from(height), rgba)?;
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image)
         .write_to(&mut bytes, image::ImageFormat::Png)
         .ok()?;
-
-    Some(CursorData {
-        image: bytes.into_inner(),
-        hotspot: XY::new(
-            f64::from(cursor.xhot) / f64::from(width),
-            f64::from(cursor.yhot) / f64::from(height),
-        ),
-        shape: None,
-    })
+    Some(bytes.into_inner())
 }
 
 #[cfg(target_os = "linux")]
@@ -771,6 +1179,44 @@ fn linux_cursor_png() -> Vec<u8> {
     bytes.into_inner()
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod x11_cursor_tests {
+    use super::{X11CursorSource, x11_cursor_png};
+
+    #[test]
+    fn cached_cursor_pngs_match_a_fresh_encode() {
+        let mut source = X11CursorSource::default();
+        let arrow = vec![0xff00_0000; 6];
+        let hand = vec![0x80ff_ffff; 6];
+
+        for (width, height, pixels) in [
+            (2, 3, &arrow),
+            (2, 3, &arrow),
+            (2, 3, &hand),
+            (3, 2, &hand),
+            (2, 3, &arrow),
+        ] {
+            assert_eq!(
+                source.png(width, height, pixels.clone()),
+                x11_cursor_png(width, height, pixels)
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_pixels_are_encoded_as_rgba() {
+        let png = x11_cursor_png(1, 1, &[0x8011_2233]).unwrap();
+        let image = image::load_from_memory(&png).unwrap().into_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0x80]);
+    }
+
+    #[test]
+    fn cursor_with_mismatched_pixel_count_is_skipped() {
+        let mut source = X11CursorSource::default();
+        assert_eq!(source.png(2, 2, vec![0; 3]), None);
+    }
+}
+
 #[cfg(windows)]
 fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
@@ -796,6 +1242,23 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if cursor_info.hCursor.is_invalid() {
             return None;
+        }
+
+        // Rendering, trimming and PNG-encoding the cursor every tick only to hash it is wasted
+        // while the shape is unchanged. Keyed on the handle, so a cursor scheme change that keeps
+        // the system cursor handles shows the old image until the shape changes; key on the
+        // bitmap contents instead if that ever matters.
+        thread_local! {
+            static LAST_CURSOR: std::cell::RefCell<Option<(usize, CursorData)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let handle = cursor_info.hCursor.0 as usize;
+        if let Some(cached) = LAST_CURSOR.with_borrow(|last| {
+            last.as_ref()
+                .filter(|(last_handle, _)| *last_handle == handle)
+                .map(|(_, data)| data.clone())
+        }) {
+            return Some(cached);
         }
 
         // Get icon info
@@ -1071,11 +1534,13 @@ fn get_cursor_data() -> Option<CursorData> {
             )
             .ok()?;
 
-        Some(CursorData {
+        let data = CursorData {
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
-        })
+        };
+        LAST_CURSOR.set(Some((handle, data.clone())));
+        Some(data)
     }
 }
 
@@ -1105,5 +1570,332 @@ mod input_epoch_tests {
             input_epoch(Some(&gate), start_time),
             Some(start_time.instant())
         );
+    }
+}
+
+#[cfg(test)]
+mod incremental_writer_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn response(events: usize) -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 1,
+            moves: (0..events)
+                .map(|i| CursorMoveEvent {
+                    active_modifiers: vec![],
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 16.0,
+                    x: i as f64 / events as f64,
+                    y: 0.5,
+                })
+                .collect(),
+            clicks: (0..events / 10)
+                .map(|i| CursorClickEvent {
+                    active_modifiers: vec![],
+                    cursor_num: 0,
+                    cursor_id: "0".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+            keyboard_presses: (0..events / 10)
+                .map(|i| KeyPressEvent {
+                    key: "a".to_string(),
+                    key_code: "KeyA".to_string(),
+                    time_ms: i as f64 * 160.0,
+                    down: i % 2 == 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn outputs(dir: &Path, name: &str) -> IncrementalCaptureOutputs {
+        IncrementalCaptureOutputs {
+            cursor: Some(dir.join(format!("{name}-cursor.json"))),
+            keyboard: Some(dir.join(format!("{name}-keyboard.bin"))),
+        }
+    }
+
+    #[test]
+    fn writer_thread_produces_the_same_files_as_inline_flushes() {
+        let dir = tempfile::tempdir().unwrap();
+        let full = response(500);
+
+        let inline = outputs(dir.path(), "inline");
+        IncrementalSnapshot::capture(&inline, &full).write(&inline);
+
+        let threaded = outputs(dir.path(), "threaded");
+        let writer = CursorFileWriter::spawn(threaded.clone()).unwrap();
+        writer.flush(|| IncrementalSnapshot::capture(&threaded, &response(10)));
+        writer.finish(Some(IncrementalSnapshot::capture(&threaded, &full)));
+
+        for (a, b) in [
+            (&inline.cursor, &threaded.cursor),
+            (&inline.keyboard, &threaded.keyboard),
+        ] {
+            let (a, b) = (a.as_ref().unwrap(), b.as_ref().unwrap());
+            assert_eq!(std::fs::read(a).unwrap(), std::fs::read(b).unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn flushes_do_not_wait_for_a_blocked_writer() {
+        use std::ffi::CString;
+        use std::io::Read;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("cursor.json");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+        let outputs = IncrementalCaptureOutputs {
+            cursor: Some(fifo.clone()),
+            keyboard: Some(dir.path().join("keyboard.bin")),
+        };
+
+        // Opening a FIFO for writing blocks until a reader arrives, which
+        // stands in for a stalled output volume.
+        let writer = CursorFileWriter::spawn(outputs.clone()).unwrap();
+        let started = Instant::now();
+        for events in [10, 20, 30, 40] {
+            writer.flush(|| IncrementalSnapshot::capture(&outputs, &response(events)));
+        }
+        assert!(writer.save_image(
+            dir.path().join("cursor_0.png"),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        assert!(started.elapsed() < Duration::from_millis(500));
+
+        let mut drain = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let drainer = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while !done.load(Ordering::Acquire) {
+                    if !matches!(drain.read(&mut buf), Ok(n) if n > 0) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            })
+        };
+
+        let final_response = response(50);
+        let unsaved = writer.finish(Some(IncrementalSnapshot::capture(
+            &outputs,
+            &final_response,
+        )));
+        done.store(true, Ordering::Release);
+        drainer.join().unwrap();
+
+        assert!(unsaved.is_empty());
+        assert!(dir.path().join("cursor_0.png").exists());
+        let expected = dir.path().join("expected-keyboard.bin");
+        flush_keyboard_data(&expected, &final_response.keyboard_presses);
+        assert_eq!(
+            std::fs::read(dir.path().join("keyboard.bin")).unwrap(),
+            std::fs::read(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn unsaved_cursor_images_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = CursorFileWriter::spawn(IncrementalCaptureOutputs {
+            cursor: None,
+            keyboard: None,
+        })
+        .unwrap();
+        let missing = dir.path().join("missing").join("cursor_0.png");
+        assert!(writer.save_image(
+            missing.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        let saved = dir.path().join("cursor_1.png");
+        assert!(writer.save_image(
+            saved.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        assert_eq!(writer.finish(None), vec![missing]);
+        assert!(saved.exists());
+    }
+
+    #[test]
+    fn cursor_images_are_retried_until_storage_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = CursorFileWriter::spawn(IncrementalCaptureOutputs {
+            cursor: None,
+            keyboard: None,
+        })
+        .unwrap();
+        let cursors_dir = dir.path().join("cursors");
+        let path = cursors_dir.join("cursor_0.png");
+        assert!(writer.save_image(
+            path.clone(),
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255])),
+        ));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!path.exists());
+        std::fs::create_dir_all(&cursors_dir).unwrap();
+        let deadline = Instant::now() + CURSOR_IMAGE_RETRY_INTERVAL * 3;
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(path.exists());
+        assert!(writer.finish(None).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cursor_image_tests {
+    use super::*;
+
+    fn png(color: [u8; 4]) -> Vec<u8> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba(color))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        png.into_inner()
+    }
+
+    fn cursor_data(image: Vec<u8>) -> CursorData {
+        CursorData {
+            image,
+            hotspot: XY::new(0.0, 0.0),
+            #[cfg(not(target_os = "macos"))]
+            shape: None,
+        }
+    }
+
+    fn empty_response() -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: Cursors::default(),
+            next_cursor_id: 0,
+            moves: vec![],
+            clicks: vec![],
+            keyboard_presses: vec![],
+        }
+    }
+
+    #[test]
+    fn button_changes_match_the_pairs_clicks_are_built_from() {
+        assert!(!buttons_changed(
+            &[false, false, false],
+            &[false, false, false]
+        ));
+        assert!(buttons_changed(&[false, false], &[false, true]));
+        assert!(buttons_changed(&[true], &[false]));
+        // Clicks only compare buttons present in both samples.
+        assert!(!buttons_changed(&[false], &[false, true]));
+        assert!(!buttons_changed(&[], &[true]));
+    }
+
+    #[test]
+    fn an_unchanged_cursor_image_reuses_its_id_without_hashing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+
+        assert_eq!(
+            cursor_id_for_image(
+                cursor_data(red.clone()),
+                &mut response,
+                dir.path(),
+                None,
+                &mut last
+            ),
+            "0"
+        );
+        assert_eq!(response.cursors.len(), 1);
+
+        // The hash path would register this image again; the fast path never looks.
+        response.cursors.clear();
+        assert_eq!(
+            cursor_id_for_image(cursor_data(red), &mut response, dir.path(), None, &mut last),
+            "0"
+        );
+        assert!(response.cursors.is_empty());
+    }
+
+    #[test]
+    fn a_changed_cursor_image_gets_hashed_and_a_new_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+        let blue = png([0, 0, 255, 255]);
+
+        for (image, expected) in [(red.clone(), "0"), (blue, "1"), (red, "0")] {
+            assert_eq!(
+                cursor_id_for_image(
+                    cursor_data(image),
+                    &mut response,
+                    dir.path(),
+                    None,
+                    &mut last
+                ),
+                expected
+            );
+        }
+        assert_eq!(response.cursors.len(), 2);
+        assert!(dir.path().join("cursor_0.png").exists());
+        assert!(dir.path().join("cursor_1.png").exists());
+    }
+
+    #[test]
+    fn a_cursor_image_that_fails_to_decode_is_not_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+
+        let id = cursor_id_for_image(
+            cursor_data(b"not an image".to_vec()),
+            &mut response,
+            dir.path(),
+            None,
+            &mut last,
+        );
+        assert_eq!(id, "0");
+        assert!(response.cursors.is_empty());
+        assert!(last.is_none());
+    }
+
+    #[test]
+    fn a_cursor_image_that_fails_to_save_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut response = empty_response();
+        let mut last = None;
+        let red = png([255, 0, 0, 255]);
+
+        // A directory at the cursor's path makes the PNG write fail.
+        let cursor_path = dir.path().join("cursor_0.png");
+        std::fs::create_dir(&cursor_path).unwrap();
+        cursor_id_for_image(
+            cursor_data(red.clone()),
+            &mut response,
+            dir.path(),
+            None,
+            &mut last,
+        );
+        assert!(response.cursors.is_empty());
+        assert!(last.is_none());
+
+        std::fs::remove_dir(&cursor_path).unwrap();
+        assert_eq!(
+            cursor_id_for_image(cursor_data(red), &mut response, dir.path(), None, &mut last),
+            "0"
+        );
+        assert_eq!(response.cursors.len(), 1);
+        assert!(cursor_path.is_file());
     }
 }

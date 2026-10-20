@@ -176,8 +176,11 @@ impl Menu {
         items: Vec<MenuItem>,
         state: &MenuState,
     ) -> Self {
-        let mut bg = theme.settings_card_bg();
-        bg.a = 1.;
+        let bg = if theme.is_dark() {
+            Hsla::from(gpui::rgb(0x2a2a2c))
+        } else {
+            gpui::white()
+        };
         Self {
             id: id.into(),
             items,
@@ -186,8 +189,14 @@ impl Menu {
             highlighted: state.visible_highlight(),
             min_width: px(180.),
             max_height: px(320.),
-            radius: px(8.),
-            shadow: Vec::new(),
+            radius: px(10.),
+            shadow: vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.18),
+                offset: gpui::point(px(0.), px(6.)),
+                blur_radius: px(18.),
+                spread_radius: px(0.),
+                inset: false,
+            }],
             bg,
             border: theme.settings_border(),
             hover: theme.settings_hover(),
