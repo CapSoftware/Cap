@@ -1,7 +1,15 @@
 import { Video } from "@cap/web-domain";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOEmbedVideo, parseCapShareUrl } from "@/lib/oembed";
 import type { PublicShareVideo } from "@/lib/public-share-video";
+
+const { webEnv } = vi.hoisted(() => ({
+	webEnv: { WEB_URL: "https://cap.so" },
+}));
+
+vi.mock("@cap/env", () => ({
+	serverEnv: () => webEnv,
+}));
 
 const video: PublicShareVideo = {
 	id: Video.VideoId.make("abc123"),
@@ -15,6 +23,10 @@ const video: PublicShareVideo = {
 };
 
 describe("Cap oEmbed", () => {
+	beforeEach(() => {
+		webEnv.WEB_URL = "https://cap.so";
+	});
+
 	it.each([
 		["https://cap.so/s/abc123", "abc123"],
 		["https://www.cap.so/s/abc123?t=3", "abc123"],
@@ -33,6 +45,31 @@ describe("Cap oEmbed", () => {
 		"not-a-url",
 	])("rejects unsupported URL %s", (url) => {
 		expect(parseCapShareUrl(url)).toBeNull();
+	});
+
+	it("parses /s/<id> on the configured web host", () => {
+		webEnv.WEB_URL = "https://www.Video.example.com";
+		expect(parseCapShareUrl("https://video.example.com/s/abc123")).toBe(
+			"abc123",
+		);
+		expect(parseCapShareUrl("https://www.video.example.com/s/abc123?t=3")).toBe(
+			"abc123",
+		);
+	});
+
+	it("keeps cap.so and cap.link links when the server is self-hosted", () => {
+		webEnv.WEB_URL = "https://video.example.com";
+		expect(parseCapShareUrl("https://cap.so/s/abc123")).toBe("abc123");
+		expect(parseCapShareUrl("https://www.cap.so/s/abc123")).toBe("abc123");
+		expect(parseCapShareUrl("https://cap.link/abc123")).toBe("abc123");
+	});
+
+	it("rejects an unrelated host, http, and the short cap.link shape on the configured host", () => {
+		webEnv.WEB_URL = "https://video.example.com";
+		expect(parseCapShareUrl("https://example.com/s/abc123")).toBeNull();
+		expect(parseCapShareUrl("http://video.example.com/s/abc123")).toBeNull();
+		expect(parseCapShareUrl("http://cap.so/s/abc123")).toBeNull();
+		expect(parseCapShareUrl("https://video.example.com/abc123")).toBeNull();
 	});
 
 	it("returns a responsive video response with preserved dimensions", () => {

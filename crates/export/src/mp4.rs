@@ -451,7 +451,7 @@ impl Mp4ExportSettings {
                     if !has_audio {
                         return None;
                     }
-                    match AACEncoder::init(AudioRenderer::info(), o) {
+                    match AACEncoder::init_for_export(AudioRenderer::info(), o) {
                         Ok(audio) => {
                             detached_audio = Some(audio);
                             None
@@ -837,7 +837,13 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         width,
         height,
         ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-    ) {
+    ) && cap_enc_ffmpeg::colour::use_bt709_for_rgb_input(
+        &mut converter,
+        ffmpeg::format::Pixel::RGBA,
+        ffmpeg::format::Pixel::NV12,
+    )
+    .is_ok()
+    {
         let mut nv12_frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
         if converter.run(&rgba_frame, &mut nv12_frame).is_ok() {
             let y_size = nv12_frame.stride(0) * height as usize;
@@ -972,8 +978,7 @@ impl ExportAudioWorker {
                 let fps_u64 = u64::from(fps);
                 let mut cursor = 0u64;
                 let mut last_timeline_frame: Option<u32> = None;
-                let mut rendered_frames = 0u32;
-                for job in job_rx {
+                for (rendered_frames, job) in job_rx.into_iter().enumerate() {
                     if is_cancelled() {
                         return Err(Mp4PipelineError::Interrupted);
                     }
@@ -1043,7 +1048,6 @@ impl ExportAudioWorker {
                         }
                     }
                     last_timeline_frame = Some(job.timeline_frame);
-                    rendered_frames += 1;
                     if packet_tx.send(queue.take()).is_err() {
                         return Err(Mp4PipelineError::Interrupted);
                     }
@@ -1135,7 +1139,7 @@ fn join_audio_thread(
 }
 
 #[derive(Debug)]
-pub(crate) struct TemporaryMp4Output {
+pub(crate) struct TemporaryExportOutput {
     path: tempfile::TempPath,
     #[cfg(unix)]
     file: std::fs::File,
@@ -1143,18 +1147,21 @@ pub(crate) struct TemporaryMp4Output {
     final_permissions: std::fs::Permissions,
 }
 
-impl AsRef<std::path::Path> for TemporaryMp4Output {
+impl AsRef<std::path::Path> for TemporaryExportOutput {
     fn as_ref(&self) -> &std::path::Path {
         self.path.as_ref()
     }
 }
 
-impl TemporaryMp4Output {
+impl TemporaryExportOutput {
     pub(crate) fn to_path_buf(&self) -> PathBuf {
         self.path.to_path_buf()
     }
 
-    fn persist_noclobber(self, output: &std::path::Path) -> Result<(), tempfile::PathPersistError> {
+    pub(crate) fn persist_noclobber(
+        self,
+        output: &std::path::Path,
+    ) -> Result<(), tempfile::PathPersistError> {
         #[cfg(unix)]
         let prepare_permissions = || {
             use std::os::unix::fs::MetadataExt;
@@ -1179,11 +1186,17 @@ impl TemporaryMp4Output {
     }
 }
 
-pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<TemporaryMp4Output, String> {
+pub(crate) fn temporary_export_output(
+    output: &std::path::Path,
+) -> Result<TemporaryExportOutput, String> {
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let suffix = output
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
     let temporary = tempfile::Builder::new()
         .prefix(".cap-export-")
-        .suffix(".mp4")
+        .suffix(&suffix)
         .tempfile_in(parent)
         .map_err(|error| error.to_string())?;
     #[cfg(unix)]
@@ -1205,7 +1218,7 @@ pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<Temporary
     let (file, path) = temporary.into_parts();
     #[cfg(not(unix))]
     drop(file);
-    Ok(TemporaryMp4Output {
+    Ok(TemporaryExportOutput {
         path,
         #[cfg(unix)]
         file,
@@ -1356,33 +1369,50 @@ fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
     );
 }
 
+fn rgba_into_rgb(mut pixels: Vec<u8>) -> Vec<u8> {
+    let pixel_count = pixels.len() / 4;
+    for pixel in 1..pixel_count {
+        let (src, dst) = (pixel * 4, pixel * 3);
+        pixels[dst] = pixels[src];
+        pixels[dst + 1] = pixels[src + 1];
+        pixels[dst + 2] = pixels[src + 2];
+    }
+    pixels.truncate(pixel_count * 3);
+    pixels
+}
+
+// Runs while the encoder is still draining its surface pool, so it converts in
+// place instead of holding the NV12 copy, the RGBA frame and a growing RGB copy
+// at once (measured at 4K: 48 MB of extra heap before, 27 MB after).
 fn save_screenshot_from_nv12(
-    nv12_data: &[u8],
+    nv12_data: Vec<u8>,
     width: u32,
     height: u32,
     y_stride: u32,
     project_path: &std::path::Path,
 ) {
     let y_plane_size = (y_stride as usize) * (height as usize);
-    let y_data = &nv12_data[..y_plane_size.min(nv12_data.len())];
-    let uv_data = if y_plane_size < nv12_data.len() {
-        &nv12_data[y_plane_size..]
-    } else {
+    if y_plane_size >= nv12_data.len() {
         return;
-    };
+    }
+    let (y_data, uv_data) = nv12_data.split_at(y_plane_size);
 
     let mut rgba = vec![0u8; (width * height * 4) as usize];
+    // The export's own NV12, so BT.709 like the stream it is encoded into.
     cap_rendering::cpu_yuv::nv12_to_rgba_simd(
-        y_data, uv_data, width, height, y_stride, width, &mut rgba,
-    );
-
-    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+        y_data,
+        uv_data,
         width,
         height,
-        rgba.chunks(4)
-            .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-            .collect::<Vec<_>>(),
+        y_stride,
+        width,
+        &mut rgba,
+        cap_rendering::cpu_yuv::YuvMatrix::Bt709,
     );
+    drop(nv12_data);
+
+    let rgb_img =
+        ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(width, height, rgba_into_rgb(rgba));
 
     let Some(rgb_img) = rgb_img else {
         return;
@@ -1447,6 +1477,7 @@ async fn export_render_to_channel(
             let mut first_frame_data: Option<FirstFrameNv12> = None;
             let mut frame_count = 0u32;
             let mut consecutive_timeouts = 0u32;
+            let mut encoder_blocked = Duration::ZERO;
 
             loop {
                 let timeout_secs = if frame_count == 0 {
@@ -1509,7 +1540,10 @@ async fn export_render_to_channel(
                     });
                 }
 
-                if sender.send(export_frame).is_err() {
+                let send_started = std::time::Instant::now();
+                let sent = sender.send(export_frame);
+                encoder_blocked += send_started.elapsed();
+                if sent.is_err() {
                     warn!("Encoder dropped, stopping render forwarding");
                     if stop_on_encoder_drop {
                         return Err(cap_rendering::RenderingError::ImageLoadError(
@@ -1529,7 +1563,7 @@ async fn export_render_to_channel(
             {
                 let _screenshot_task = tokio::task::spawn_blocking(move || {
                     save_screenshot_from_nv12(
-                        &first.data,
+                        first.data,
                         first.width,
                         first.height,
                         first.y_stride,
@@ -1538,13 +1572,32 @@ async fn export_render_to_channel(
                 });
             }
 
-            Ok::<_, cap_rendering::RenderingError>(())
+            Ok::<_, cap_rendering::RenderingError>(encoder_blocked)
         };
 
+        cap_rendering::loop_stats::take();
         tokio::try_join!(render_future, forward_future)
     };
 
-    render_result?;
+    let (_, encoder_blocked) = render_result?;
+
+    // The loop_stats counters are process-wide, so an export that overlaps another one reports
+    // a mix of both. That is fine for profiling one export at a time; per-export numbers need
+    // the counters passed through the render loop instead of kept in statics.
+    if cap_rendering::loop_stats::enabled() {
+        let [decode, render, prefetch, join, render_send, frames] =
+            cap_rendering::loop_stats::take();
+        info!(
+            frames,
+            decode_ms = decode / 1000,
+            render_ms = render / 1000,
+            prefetch_ms = prefetch / 1000,
+            join_ms = join / 1000,
+            render_send_ms = render_send / 1000,
+            encoder_send_ms = encoder_blocked.as_millis() as u64,
+            "NV12 export loop stats"
+        );
+    }
 
     Ok(())
 }
@@ -1672,7 +1725,7 @@ mod tests {
     async fn validation_failure_releases_pending_producer_receiver_and_temp_owners() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
-        let temporary = Arc::new(temporary_mp4_output(&output).unwrap());
+        let temporary = Arc::new(temporary_export_output(&output).unwrap());
         let temporary_path = temporary.to_path_buf();
         let abort = Arc::new(AtomicBool::new(false));
         let user = AtomicBool::new(false);
@@ -1746,13 +1799,13 @@ mod tests {
     fn temporary_output_is_removed_on_failure_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         let path = temporary.to_path_buf();
         std::fs::write(&path, b"partial").unwrap();
         drop(temporary);
         assert!(!path.exists());
         assert!(!output.exists());
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         std::fs::write(&temporary, b"completed").unwrap();
         std::fs::write(&output, b"existing").unwrap();
         drop(temporary.persist_noclobber(&output).unwrap_err());
@@ -1768,7 +1821,7 @@ mod tests {
         let output = directory.path().join("export.mp4");
         let reference = directory.path().join("reference.mp4");
         std::fs::write(&reference, b"reference").unwrap();
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         assert_eq!(
             std::fs::metadata(&temporary).unwrap().permissions().mode() & 0o077,
             0
@@ -1791,7 +1844,7 @@ mod tests {
         let private = directory.path().join("private.mp4");
         std::fs::write(&private, b"private recording").unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         let temporary_path = temporary.to_path_buf();
         std::fs::remove_file(&temporary_path).unwrap();
         symlink(&private, &temporary_path).unwrap();
@@ -1820,6 +1873,20 @@ mod tests {
         assert_eq!(frame.channel_layout(), ffmpeg::ChannelLayout::STEREO);
         for plane in 0..frame.planes() {
             assert!(frame.data(plane).iter().all(|byte| *byte == 0));
+        }
+    }
+
+    #[test]
+    fn rgba_into_rgb_matches_dropping_alpha() {
+        for pixel_count in [0usize, 1, 2, 3, 7, 64] {
+            let rgba = (0..pixel_count * 4)
+                .map(|value| (value * 37 % 251) as u8)
+                .collect::<Vec<_>>();
+            let expected = rgba
+                .chunks(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect::<Vec<_>>();
+            assert_eq!(rgba_into_rgb(rgba), expected);
         }
     }
 

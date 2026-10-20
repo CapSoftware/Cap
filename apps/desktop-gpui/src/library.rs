@@ -140,13 +140,13 @@ pub fn screenshots_dir() -> PathBuf {
 
 /// `list_recordings`, narrowed to what a Recents card draws.
 ///
-/// The scan itself is [`list_recordings_in`] -- one implementation, so the
+/// The scan itself is [`recording_items_in`] -- one implementation, so the
 /// carousel and the settings page can never disagree about what is in the
 /// library.
-fn scan_recordings(dir: &Path, out: &mut Vec<RecentItem>) {
+fn scan_recordings(dirs: &[PathBuf], out: &mut Vec<RecentItem>) {
     out.extend(
-        list_recordings_in(std::slice::from_ref(&dir.to_path_buf()))
-            .into_iter()
+        recording_items_in(dirs)
+            .take(RECENT_MEDIA_LIMIT)
             .map(|item| RecentItem {
                 kind: match item.mode {
                     RecordingMode::Studio => MediaKind::Studio,
@@ -354,7 +354,11 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
 /// Recordings only: `list_screenshots` is a separate command behind a separate
 /// settings page.
 pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
-    let mut out = Vec::new();
+    recording_items_in(dirs).collect()
+}
+
+fn recording_items_in(dirs: &[PathBuf]) -> impl Iterator<Item = RecordingItem> {
+    let mut paths = Vec::new();
     for dir in dirs {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
@@ -364,20 +368,26 @@ pub fn list_recordings_in(dirs: &[PathBuf]) -> Vec<RecordingItem> {
             if !path.is_dir() {
                 continue;
             }
-            let Ok(meta) = RecordingMeta::load_for_project(&path) else {
-                continue;
-            };
             let sort_time_millis = media_sort_time_millis(&path);
-            out.push(recording_item(path, meta, sort_time_millis));
+            paths.push((path, sort_time_millis));
         }
     }
-    out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-    out
+    paths.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+    paths.into_iter().filter_map(|(path, sort_time_millis)| {
+        let meta = RecordingMeta::load_for_project(&path).ok()?;
+        Some(recording_item(path, meta, sort_time_millis))
+    })
 }
 
 /// `list_recordings` against the real library.
 pub fn list_recordings() -> Vec<RecordingItem> {
     list_recordings_in(&known_recordings_dirs())
+}
+
+pub fn list_recordings_limited(limit: usize) -> Vec<RecordingItem> {
+    recording_items_in(&known_recordings_dirs())
+        .take(limit)
+        .collect()
 }
 
 pub fn find_incomplete_recordings_in(
@@ -765,11 +775,7 @@ fn newest_first(items: &mut [RecentItem]) {
 /// newer than nine of them.
 pub fn recent_media_in(recording_dirs: &[PathBuf], screenshots_dir: &Path) -> Vec<RecentItem> {
     let mut recordings = Vec::new();
-    for dir in recording_dirs {
-        scan_recordings(dir, &mut recordings);
-    }
-    newest_first(&mut recordings);
-    recordings.truncate(RECENT_MEDIA_LIMIT);
+    scan_recordings(recording_dirs, &mut recordings);
 
     let mut screenshots = Vec::new();
     scan_screenshots(screenshots_dir, &mut screenshots);
@@ -817,8 +823,10 @@ const MAX_DECODE_WORKERS: usize = 8;
 /// results come back over the receiver in completion order.
 ///
 /// Callers keep the returned tasks alive while draining the receiver --
-/// dropping them cancels whatever has not started, the same cancel-on-reassign
-/// contract the sequential await-per-item loops this replaced had.
+/// dropping them cancels whatever has not started, and dropping the receiver
+/// stops each running worker after its current decode, the same
+/// cancel-on-reassign contract the sequential await-per-item loops this
+/// replaced had.
 pub fn spawn_decode_pool<J, R>(
     executor: &gpui::BackgroundExecutor,
     jobs: Vec<J>,
@@ -857,16 +865,24 @@ where
             let job_rx = job_rx.clone();
             let result_tx = result_tx.clone();
             let decode = decode.clone();
-            executor.spawn(async move {
-                while let Ok(job) = job_rx.try_recv() {
-                    if let Some(result) = decode(job) {
-                        let _ = result_tx.send(result);
-                    }
-                }
-            })
+            executor.spawn(async move { drain_decode_jobs(&job_rx, &result_tx, decode) })
         })
         .collect();
     (tasks, result_rx)
+}
+
+fn drain_decode_jobs<J, R>(
+    jobs: &flume::Receiver<J>,
+    results: &flume::Sender<R>,
+    decode: impl Fn(J) -> Option<R>,
+) {
+    while !results.is_disconnected()
+        && let Ok(job) = jobs.try_recv()
+    {
+        if let Some(result) = decode(job) {
+            let _ = results.send(result);
+        }
+    }
 }
 
 /// Where the shared downscaled-thumbnail cache lives: the OS cache dir under
@@ -978,9 +994,13 @@ impl CacheSlot {
     }
 
     pub fn load(&self) -> Option<Arc<RenderImage>> {
+        self.load_rgba().map(rgba_to_render_image)
+    }
+
+    fn load_rgba(&self) -> Option<image::RgbaImage> {
         let bytes = std::fs::read(self.file()).ok()?;
         let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg).ok()?;
-        Some(rgba_to_render_image(decoded.into_rgba8()))
+        Some(decoded.into_rgba8())
     }
 
     /// Best effort throughout: a cache that cannot be written (read-only
@@ -1060,11 +1080,14 @@ pub fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
 /// smaller than the card is handed over as-is and the element stretches it,
 /// same as the browser would.
 pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
+    thumbnail_rgba(path).map(rgba_to_render_image)
+}
+
+/// [`decode_thumbnail`]'s pixels before the BGRA swap, through the same cache.
+pub fn thumbnail_rgba(path: &Path) -> Option<image::RgbaImage> {
     let cache = CacheSlot::for_source(path);
-    if let Some(cache) = &cache
-        && let Some(image) = cache.load()
-    {
-        return Some(image);
+    if let Some(rgba) = cache.as_ref().and_then(CacheSlot::load_rgba) {
+        return Some(rgba);
     }
 
     let bytes = std::fs::read(path).ok()?;
@@ -1102,7 +1125,7 @@ pub fn decode_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
     if let Some(cache) = &cache {
         cache.store(&rgba);
     }
-    Some(rgba_to_render_image(rgba))
+    Some(rgba)
 }
 
 // ---------------------------------------------------------------------------
@@ -1187,8 +1210,16 @@ pub fn create_screenshot(
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        return cap_gpui_kernels::codec::save_rgb_image(&image, output, image::ImageFormat::Jpeg)
-            .map_err(|e| e.to_string());
+        let staged = output.with_extension(format!("jpg.tmp-{}", crate::store::new_uuid_v4()));
+        cap_gpui_kernels::codec::save_rgb_image(&image, &staged, image::ImageFormat::Jpeg)
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&staged);
+                e.to_string()
+            })?;
+        return std::fs::rename(&staged, output).map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            e.to_string()
+        });
     }
 
     Err("Failed to create screenshot".to_string())
@@ -1201,6 +1232,28 @@ pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_jobs_stop_once_nobody_takes_the_results() {
+        let (job_tx, job_rx) = flume::unbounded();
+        for job in 0..6_u32 {
+            job_tx.send(job).unwrap();
+        }
+        let (result_tx, result_rx) = flume::unbounded();
+        let receiver = std::cell::RefCell::new(Some(result_rx));
+        let decoded = std::cell::RefCell::new(Vec::new());
+
+        drain_decode_jobs(&job_rx, &result_tx, |job| {
+            decoded.borrow_mut().push(job);
+            if job == 2 {
+                receiver.borrow_mut().take();
+            }
+            (job != 1).then_some(job)
+        });
+
+        assert_eq!(*decoded.borrow(), [0, 1, 2]);
+        assert_eq!(job_rx.len(), 3);
+    }
 
     /// A `.cap` bundle with a `recording-meta.json` the real parser accepts.
     /// `filetime` is not a dependency here, so the sort key -- the directory's
@@ -1392,6 +1445,117 @@ mod tests {
         std::fs::create_dir_all(&bundle).unwrap();
         std::fs::write(bundle.join("recording-meta.json"), meta).unwrap();
         bundle
+    }
+
+    #[test]
+    fn bounded_recordings_fill_from_valid_bundles_across_directories() {
+        let root = temp_dir("bounded-recordings");
+        let active = root.join("active");
+        let archived = root.join("archived");
+        std::fs::create_dir_all(&active).unwrap();
+        std::fs::create_dir_all(&archived).unwrap();
+        write_studio_bundle(&active, "old-studio", 1);
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_studio_bundle(&archived, "new-studio", 3);
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        write_bundle(
+            &active,
+            "instant",
+            r#"{"pretty_name":"Instant","sharing":null,"fps":30,"sample_rate":48000}"#,
+        );
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::fs::create_dir_all(archived.join("missing-meta")).unwrap();
+        write_bundle(&active, "corrupt-meta", "{ not json ");
+        std::fs::write(archived.join("loose.mp4"), b"").unwrap();
+        let dirs = [active, archived, root.join("missing-directory")];
+
+        let full = list_recordings_in(&dirs);
+        let bounded: Vec<_> = recording_items_in(&dirs).take(2).collect();
+        assert_eq!(bounded, full[..2]);
+        assert_eq!(bounded[0].pretty_name, "Instant");
+        assert_eq!(bounded[1].pretty_name, "new-studio");
+        assert_eq!(bounded[1].clip_count, 3);
+        assert!(recording_items_in(&dirs).take(0).next().is_none());
+        assert_eq!(recording_items_in(&dirs).take(20).collect::<Vec<_>>(), full);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "manual filesystem benchmark; set CAP_GPUI_LIBRARY_BENCH_DIR and CAP_GPUI_LIBRARY_BENCH_MODE"]
+    fn recording_scan_benchmark() {
+        fn eager_scan(dirs: &[PathBuf]) -> Vec<RecordingItem> {
+            let mut out = Vec::new();
+            for dir in dirs {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+                        continue;
+                    };
+                    let sort_time_millis = media_sort_time_millis(&path);
+                    out.push(recording_item(path, meta, sort_time_millis));
+                }
+            }
+            out.sort_by(|a, b| b.sort_time_millis.total_cmp(&a.sort_time_millis));
+            out
+        }
+
+        let dirs = [PathBuf::from(
+            std::env::var("CAP_GPUI_LIBRARY_BENCH_DIR")
+                .expect("Set the benchmark library directory"),
+        )];
+        let eager = match std::env::var("CAP_GPUI_LIBRARY_BENCH_MODE").as_deref() {
+            Ok("eager") => true,
+            Ok("bounded") => false,
+            _ => panic!("CAP_GPUI_LIBRARY_BENCH_MODE must be eager or bounded"),
+        };
+        let limit = std::env::var("CAP_GPUI_LIBRARY_BENCH_LIMIT")
+            .unwrap_or_else(|_| RECENT_MEDIA_LIMIT.to_string())
+            .parse::<usize>()
+            .expect("The benchmark limit must be an integer");
+        let scan = || {
+            if eager {
+                let mut items = eager_scan(&dirs);
+                items.truncate(limit);
+                return items;
+            }
+            recording_items_in(&dirs).take(limit).collect()
+        };
+        let mut expected = eager_scan(&dirs);
+        expected.truncate(limit);
+        assert_eq!(
+            recording_items_in(&dirs).take(limit).collect::<Vec<_>>(),
+            expected
+        );
+
+        for _ in 0..3 {
+            drop(std::hint::black_box(scan()));
+        }
+        let mut samples = Vec::new();
+        for _ in 0..15 {
+            let started = std::time::Instant::now();
+            let items = std::hint::black_box(scan());
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(items, expected);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            serde_json::json!({
+                "mode": if eager { "eager" } else { "bounded" },
+                "limit": limit,
+                "items": expected.len(),
+                "samples": samples.len(),
+                "median_ms": samples[samples.len() / 2],
+                "p95_ms": samples[(samples.len() * 95).div_ceil(100) - 1],
+            })
+        );
     }
 
     /// `RecordingMetaWithMetadata::new`: the mode, the clip count and the
