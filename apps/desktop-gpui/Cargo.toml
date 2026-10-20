@@ -5,11 +5,12 @@
 # wgpu-hal, tao) that only exist for the Tauri app.
 [workspace]
 resolver = "2"
-members = ["."]
+members = [".", "kernels"]
 
 [package]
 name = "cap-desktop-gpui"
 version = "0.6.1"
+description = "Beautiful screen recordings, owned by you."
 edition = "2024"
 license = "AGPL-3.0"
 publish = false
@@ -22,17 +23,10 @@ path = "src/main.rs"
 name = "studio-finalization-benchmark"
 path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
-[package.metadata.bundle]
-name = "Cap GPUI"
-identifier = "so.cap.desktop.gpui"
-icon = ["assets/dock-icon.png"]
-category = "public.app-category.productivity"
-osx_minimum_system_version = "12.3"
-osx_info_plist_exts = ["resources/Info.plist"]
-osx_url_schemes = ["cap-desktop"]
-
 [dependencies]
 cap-audio = { path = "../../crates/audio" }
+cap-cli-install = { path = "../../crates/cli-install" }
+cap-gpui-kernels = { path = "kernels" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -116,7 +110,6 @@ smallvec = "1"
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
 tokio = { version = "1", features = ["rt", "time"] }
-md-5 = "0.10"
 # The same crate `tauri_plugin_global_shortcut` wraps, at the Tauri app's pin:
 # store bindings are W3C `KeyboardEvent.code` strings and this owns the
 # platform mapping (Carbon RegisterEventHotKey on macOS).
@@ -124,6 +117,8 @@ global-hotkey = "0.7.0"
 # cap-recording's actor system; version must match its `kameo = "0.17.2"`.
 kameo = "0.17.2"
 flume = "0.11.0"
+# Round caps and joins for the onboarding doodles; already in the tree via gpui.
+lyon_tessellation = "1.0"
 anyhow = "1"
 chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
@@ -132,6 +127,7 @@ serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
 semver = "1"
 base64 = "0.22"
+minisign-verify = "0.2.4"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 # The screenshot export compositor (`src/screenshot_export.rs`): the canvas-2d
 # work `renderScreenshotExportCanvas` does in the webview -- shape rasterizing,
@@ -154,6 +150,7 @@ tracing-appender = "0.2"
 # model downloads. rustls so Linux builds do not pick up an OpenSSL system dep.
 # `multipart` is the log/diagnostic-report upload (`src/diagnostics.rs`):
 # `/api/desktop/logs` takes a multipart form, the same one the Tauri app posts.
+bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "multipart",
@@ -168,6 +165,7 @@ dirs = "6"
 whisper-rs = "0.11.0"
 
 [build-dependencies]
+cc = "1.4"
 tauri-winres = "0.3.5"
 
 [dev-dependencies]
@@ -175,7 +173,11 @@ tauri-winres = "0.3.5"
 # decoders, renderer and preview tasks are all tokio-spawned -- a current-thread
 # runtime would deadlock the moment the test thread blocks on a frame. Kept in
 # dev-dependencies so the shipped binary's tokio features are unchanged.
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "test-util", "net", "io-util", "macros"] }
+# Caption oracles (`src/transcription/verify_tests.rs`): fixture projects and
+# audio markers for the fake transcriber.
+cap-verify = { path = "../../crates/verify" }
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -187,6 +189,7 @@ tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
@@ -207,10 +210,11 @@ x11rb = "0.13"
 objc2 = "0.5.2"
 # `NSVisualEffectView` is the pre-macOS-26 window-material fallback. Features
 # only -- the versions stay pinned, or a second objc2 universe gets built.
-objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSAppearance", "NSWindow", "NSView", "NSResponder", "NSGraphics", "NSPasteboard", "NSVisualEffectView", "NSWorkspace", "NSAccessibility"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
-objc2-foundation = "0.2.2"
+objc2-foundation = { version = "0.2.2", features = ["NSNotification", "NSOperation", "NSString", "block2"] }
+block2 = "0.5.1"
 raw-window-handle = "0.6"
 core-foundation = "0.10"
 core-video = { version = "0.5.2", features = ["metal"] }
@@ -238,6 +242,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
 # Whisper caption models only.
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
+hound = "3.5"
 
 # Mirror of the root workspace patch: cap-recording's converter stack is built
 # and tested against the vendored wgpu-hal, not the crates.io release.
@@ -257,23 +262,30 @@ gpui_tokio = { path = "../../../zed-cap/crates/gpui_tokio" }
 # build deps at opt-level 2 and keep the app crate itself at 0.
 opt-level = 0
 # Incremental caches for this dep tree run to gigabytes on a disk that has
-# already been filled to zero once; the app crate is small enough that full
-# recompiles cost seconds.
+# already been filled to zero once; only the app crate, the one that changes
+# on every edit, opts back in below.
 incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
+# Full debug info for every dependency made a 1 GB Windows PDB that every
+# relink rewrote; line tables keep file:line backtraces through dependencies.
+debug = "line-tables-only"
 
-# ...and the app crate too, since the editor landed. `frame_image` un-pads and
-# BGRA-swaps a 1080x702 frame per displayed frame, which is 3MB of per-pixel
-# work on this side of the seam: at opt-level 0 it measures **30.1ms** and the
-# preview is convert-bound at 33fps with 45% of the renderer's frames dropped;
-# at opt-level 2 it is **0.92ms**, and playback holds 59.9fps with zero drops.
-# A dev build that cannot show the editor at its real speed is a dev build that
-# will get the wrong answer out of every later editor unit. Costs ~7s a build.
+# The app crate stays at opt-level 0; its per-frame pixel and sample loops live
+# in `cap-gpui-kernels` instead. `frame_image` alone measures 42.7ms per frame
+# unoptimized against 1.0ms here, and optimizing the whole app crate instead
+# turns a one-line edit into a 6-minute rebuild.
+[profile.dev.package.cap-gpui-kernels]
+opt-level = 3
+
+# Incremental halves a one-line rebuild for about 2 GB of cache, and line tables
+# cut its codegen and link time; breakpoints and backtraces keep their lines.
 [profile.dev.package.cap-desktop-gpui]
-opt-level = 2
+incremental = true
+debug = "line-tables-only"
 
 [profile.release]
+codegen-units = 1
 lto = "thin"
 strip = "symbols"

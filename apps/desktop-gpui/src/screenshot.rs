@@ -150,13 +150,16 @@ async fn write_png(path: PathBuf, image: image::DynamicImage) -> anyhow::Result<
 
         let file =
             std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
-        let encoder = image::codecs::png::PngEncoder::new_with_quality(
-            std::io::BufWriter::new(file),
+        cap_gpui_kernels::codec::write_png_file(
+            file,
+            &data,
+            width,
+            height,
+            color_type.into(),
             compression,
             image::codecs::png::FilterType::Adaptive,
-        );
-        image::ImageEncoder::write_image(encoder, &data, width, height, color_type.into())
-            .context("encoding the screenshot PNG")
+        )
+        .context("encoding the screenshot PNG")
     })
     .await
     .context("the PNG encode task died")?

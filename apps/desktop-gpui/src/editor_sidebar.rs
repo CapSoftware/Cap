@@ -590,58 +590,10 @@ pub fn noise_opacity(intensity: f32) -> f32 {
 /// `noise_scale` itself (`layers/background.rs:251-299`), so the player shows
 /// the real thing.
 fn noise_texture(width: u32, height: u32, base_frequency: f32) -> Arc<RenderImage> {
-    let mut rgba = image::RgbaImage::new(width.max(1), height.max(1));
-    for (x, y, pixel) in rgba.enumerate_pixels_mut() {
-        let value = fractal_noise(x as f32 * base_frequency, y as f32 * base_frequency, 0);
-        let alpha = fractal_noise(x as f32 * base_frequency, y as f32 * base_frequency, 7);
-        let level = (value.clamp(0., 1.) * 255.) as u8;
-        // BGRA, gpui's atlas order.
-        *pixel = image::Rgba([level, level, level, (alpha.clamp(0., 1.) * 255.) as u8]);
-    }
+    let rgba = cap_gpui_kernels::texture::noise_texture_bgra(width, height, base_frequency);
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         rgba
     )]))
-}
-
-/// Four octaves, each twice the frequency and half the amplitude -- what
-/// `numOctaves="4"` means.
-fn fractal_noise(x: f32, y: f32, seed: u32) -> f32 {
-    fractal_noise_octaves(x, y, seed, 4)
-}
-
-/// The same, at whatever `numOctaves` the call site's `feTurbulence` declares.
-/// The colour-grade previews' grain is `numOctaves="2"`
-/// (`colorCorrection.ts:56`).
-pub(crate) fn fractal_noise_octaves(x: f32, y: f32, seed: u32, octaves: u32) -> f32 {
-    let (mut value, mut amplitude, mut total, mut frequency) = (0., 1., 0., 1.);
-    for octave in 0..octaves {
-        value += amplitude * value_noise(x * frequency, y * frequency, seed + octave);
-        total += amplitude;
-        amplitude *= 0.5;
-        frequency *= 2.;
-    }
-    value / total
-}
-
-fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
-    let (x0, y0) = (x.floor(), y.floor());
-    let (fx, fy) = (x - x0, y - y0);
-    // Smoothstep, as the spec's interpolant is smooth rather than linear.
-    let (sx, sy) = (fx * fx * (3. - 2. * fx), fy * fy * (3. - 2. * fy));
-    let (x0, y0) = (x0 as i32, y0 as i32);
-    let corner = |dx: i32, dy: i32| lattice(x0 + dx, y0 + dy, seed);
-    let top = corner(0, 0) + sx * (corner(1, 0) - corner(0, 0));
-    let bottom = corner(0, 1) + sx * (corner(1, 1) - corner(0, 1));
-    top + sy * (bottom - top)
-}
-
-fn lattice(x: i32, y: i32, seed: u32) -> f32 {
-    let mut hash = (x as u32)
-        .wrapping_mul(374_761_393)
-        .wrapping_add((y as u32).wrapping_mul(668_265_263))
-        .wrapping_add(seed.wrapping_mul(2_246_822_519));
-    hash = (hash ^ (hash >> 13)).wrapping_mul(1_274_126_177);
-    f32::from((hash ^ (hash >> 16)) as u16) / 65_535.
 }
 
 // ---------------------------------------------------------------------------
@@ -2024,8 +1976,8 @@ fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(),
         return Ok(());
     }
 
-    let decoded =
-        image::open(source).map_err(|err| format!("failed to decode desktop background: {err}"))?;
+    let decoded = cap_gpui_kernels::codec::open_image(source)
+        .map_err(|err| format!("failed to decode desktop background: {err}"))?;
     let decoded = if decoded.width() > DESKTOP_BACKGROUND_MAX_DIMENSION
         || decoded.height() > DESKTOP_BACKGROUND_MAX_DIMENSION
     {
@@ -2037,9 +1989,7 @@ fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(),
     } else {
         decoded
     };
-    decoded
-        .to_rgb8()
-        .save_with_format(output, image::ImageFormat::Jpeg)
+    cap_gpui_kernels::codec::save_rgb_image(&decoded.to_rgb8(), output, image::ImageFormat::Jpeg)
         .map_err(|err| format!("failed to save desktop background: {err}"))
 }
 
