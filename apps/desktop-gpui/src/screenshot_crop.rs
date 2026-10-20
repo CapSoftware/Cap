@@ -1122,7 +1122,7 @@ impl ScreenshotEditorWindow {
 /// can be up to 768 logical (1536 physical) pixels wide and the load path
 /// already refused anything past `MAX_DIMENSION`.
 fn decode_crop_image(path: Option<&Path>) -> Option<Arc<RenderImage>> {
-    let decoded = image::open(path?).ok()?;
+    let decoded = cap_gpui_kernels::codec::open_image(path?).ok()?;
     Some(crate::library::rgba_to_render_image(decoded.into_rgba8()))
 }
 

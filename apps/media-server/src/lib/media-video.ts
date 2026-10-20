@@ -1,16 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
+import {
+	type CapcodecOptions,
+	capcodecOptionsForJob,
+	encodeVideoWithCapcodec,
+	remainingTimeoutMs,
+} from "./capcodec-encoder";
+import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
+	normalizeLocalPath,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
+import { fetchMedia, materializeMedia } from "./media-transfer";
+import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -1228,6 +1239,9 @@ export async function downloadVideoToTemp(
 		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
 	}
 
+	const local = await materializeMedia(videoUrl, abortSignal);
+	if (local) return { path: local.path, cleanup: async () => {} };
+
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);
@@ -1238,7 +1252,7 @@ export async function downloadVideoToTemp(
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
 
-		const response = await fetch(videoUrl, {
+		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
 		});
 
@@ -1513,6 +1527,29 @@ export async function processVideo(
 		metadata.duration,
 		opts.timeoutMs,
 	);
+	const capcodec =
+		videoTranscode && !normalizeH264Level ? capcodecOptionsForJob(opts) : null;
+	if (capcodec) {
+		try {
+			await processVideoWithCapcodec(
+				inputPath,
+				metadata,
+				opts,
+				capcodec,
+				outputTempFile.path,
+				audioTranscode,
+				extraInputArgs,
+				extraOutputArgs,
+				processTimeoutMs,
+				onProgress,
+				abortSignal,
+			);
+			return outputTempFile;
+		} catch (err) {
+			await outputTempFile.cleanup();
+			throw err;
+		}
+	}
 	const ffmpegArgs: string[] = [
 		"ffmpeg",
 		"-threads",
@@ -1544,6 +1581,10 @@ export async function processVideo(
 			"-level:v",
 			targetH264Level.ffmpegValue,
 		);
+		if (metadata.videoCodec === "vp8" || metadata.videoCodec === "vp9") {
+			// Reordered B-frames can make MP4 duration exclude the tail of sparse browser captures.
+			ffmpegArgs.push("-bf", "0");
+		}
 	} else {
 		ffmpegArgs.push("-c:v", "copy");
 	}
@@ -1650,6 +1691,91 @@ export async function processVideo(
 	}
 }
 
+async function processVideoWithCapcodec(
+	inputPath: string,
+	metadata: VideoMetadata,
+	opts: Required<VideoProcessingOptions>,
+	capcodec: CapcodecOptions,
+	outputPath: string,
+	audioTranscode: boolean,
+	extraInputArgs: string[],
+	extraOutputArgs: string[],
+	processTimeoutMs: number,
+	onProgress?: ProgressCallback,
+	abortSignal?: AbortSignal,
+): Promise<void> {
+	const videoOnly = await createTempFile(".fmp4");
+	const controller = new AbortController();
+	const forwardAbort = () => controller.abort();
+	abortSignal?.addEventListener("abort", forwardAbort, { once: true });
+	const startedAt = performance.now();
+	const encodePromise = encodeVideoWithCapcodec({
+		inputPath,
+		outputPath: videoOnly.path,
+		width: metadata.width,
+		height: metadata.height,
+		fps: metadata.fps,
+		maxWidth: opts.maxWidth,
+		maxHeight: opts.maxHeight,
+		extraInputArgs,
+		options: capcodec,
+		totalDurationUs: metadata.duration * 1_000_000,
+		onProgress,
+		abortSignal: controller.signal,
+	});
+	try {
+		await withTimeout(encodePromise, processTimeoutMs, async () => {
+			controller.abort();
+			await encodePromise.catch(() => undefined);
+		});
+		const muxArgs = [
+			"ffmpeg",
+			"-hide_banner",
+			"-nostdin",
+			"-i",
+			videoOnly.path,
+		];
+		if (metadata.audioCodec) {
+			muxArgs.push(
+				...extraInputArgs,
+				"-i",
+				inputPath,
+				"-map",
+				"0:v:0",
+				"-map",
+				"1:a:0",
+				"-c:v",
+				"copy",
+			);
+			if (audioTranscode) {
+				muxArgs.push("-c:a", "aac", "-b:a", opts.audioBitrate);
+			} else {
+				muxArgs.push("-c:a", "copy");
+			}
+		} else {
+			muxArgs.push("-map", "0:v:0", "-c:v", "copy", "-an");
+		}
+		muxArgs.push(
+			"-movflags",
+			"+faststart",
+			...extraOutputArgs,
+			"-y",
+			outputPath,
+		);
+		await runFfmpegCommand(
+			muxArgs,
+			remainingTimeoutMs(processTimeoutMs, performance.now() - startedAt),
+			abortSignal,
+		);
+		if ((await file(outputPath).size) === 0) {
+			throw new Error("capcodec mux produced an empty output file");
+		}
+	} finally {
+		abortSignal?.removeEventListener("abort", forwardAbort);
+		await videoOnly.cleanup();
+	}
+}
+
 function getThumbnailTimestamp(
 	duration: number,
 	requestedTimestamp: number,
@@ -1663,19 +1789,64 @@ function getThumbnailTimestamp(
 	return Math.min(Math.max(0, timestamp), Math.max(0, duration - 0.1));
 }
 
+class EmptyThumbnailError extends Error {}
+
 export async function generateThumbnail(
 	inputPath: string,
 	duration: number,
 	options: ThumbnailOptions = {},
+	abortSignal?: AbortSignal,
 ): Promise<Uint8Array> {
+	abortSignal?.throwIfAborted();
 	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
+	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
+	try {
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			timestamp,
+			THUMBNAIL_TIMEOUT_MS,
+			abortSignal,
+		);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		const remainingMs = deadline - performance.now();
+		if (
+			!(error instanceof EmptyThumbnailError) ||
+			!isAbsolute(normalizeLocalPath(inputPath)) ||
+			timestamp <= 0 ||
+			remainingMs <= 0
+		) {
+			throw error;
+		}
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			0,
+			remainingMs,
+			abortSignal,
+			true,
+		);
+	}
+}
+
+async function generateThumbnailFrame(
+	inputPath: string,
+	opts: Required<ThumbnailOptions>,
+	timestamp: number,
+	timeoutMs: number,
+	abortSignal?: AbortSignal,
+	localOnly = false,
+): Promise<Uint8Array> {
+	abortSignal?.throwIfAborted();
 	const qualityValue = Math.max(
 		2,
 		Math.min(31, Math.round(31 - (opts.quality / 100) * 29)),
 	);
 	const ffmpegArgs = [
 		"ffmpeg",
+		...(localOnly ? ["-protocol_whitelist", "file,pipe"] : []),
 		"-ss",
 		timestamp.toString(),
 		"-i",
@@ -1697,37 +1868,55 @@ export async function generateThumbnail(
 			stderr: "pipe",
 		}),
 	);
+	let termination: Promise<void> | undefined;
+	const stop = () => {
+		termination ??= terminateProcess(proc);
+		return termination;
+	};
+	const abort = () => {
+		void stop();
+	};
+	abortSignal?.addEventListener("abort", abort, { once: true });
 
 	try {
+		abortSignal?.throwIfAborted();
 		return await withTimeout(
 			(async () => {
-				const stderrPromise = readStreamWithLimit(
-					proc.stderr as ReadableStream<Uint8Array>,
-					MAX_STDERR_BYTES,
-				);
-
 				const chunks: Uint8Array[] = [];
 				let totalBytes = 0;
-				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+				const [, , exitCode] = await Promise.all([
+					(async () => {
+						const reader = (
+							proc.stdout as ReadableStream<Uint8Array>
+						).getReader();
+						try {
+							while (true) {
+								const { done, value } = await reader.read();
+								if (done) break;
+								chunks.push(value);
+								totalBytes += value.length;
+							}
+						} finally {
+							reader.releaseLock();
+						}
+					})(),
+					readStreamWithLimit(
+						proc.stderr as ReadableStream<Uint8Array>,
+						MAX_STDERR_BYTES,
+					),
+					proc.exited,
+				]);
+				abortSignal?.throwIfAborted();
 
-				try {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						chunks.push(value);
-						totalBytes += value.length;
-					}
-				} finally {
-					reader.releaseLock();
+				if (totalBytes === 0) {
+					throw new EmptyThumbnailError(
+						exitCode === 0
+							? "FFmpeg produced empty thumbnail"
+							: `FFmpeg thumbnail exited with code ${exitCode}`,
+					);
 				}
-
-				const [, exitCode] = await Promise.all([stderrPromise, proc.exited]);
-
 				if (exitCode !== 0) {
 					throw new Error(`FFmpeg thumbnail exited with code ${exitCode}`);
-				}
-				if (totalBytes === 0) {
-					throw new Error("FFmpeg produced empty thumbnail");
 				}
 
 				const output = new Uint8Array(totalBytes);
@@ -1739,11 +1928,15 @@ export async function generateThumbnail(
 
 				return output;
 			})(),
-			THUMBNAIL_TIMEOUT_MS,
-			() => terminateProcess(proc),
+			timeoutMs,
+			stop,
 		);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		throw error;
 	} finally {
-		await terminateProcess(proc);
+		abortSignal?.removeEventListener("abort", abort);
+		await stop();
 	}
 }
 
@@ -2027,10 +2220,6 @@ async function readUploadReceipt(
 	return { objectIdentity: `"cap-drive-content-v1:${digest}"` };
 }
 
-async function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function uploadSignal(abortSignal?: AbortSignal) {
 	const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
 	return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
@@ -2044,6 +2233,22 @@ async function uploadWithRetry(
 	ifNoneMatch?: "*",
 	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
+	if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
+		const response = await uploadDriveResumable(
+			presignedUrl,
+			bodyFactory(),
+			contentType,
+			ifNoneMatch,
+			abortSignal,
+		);
+		const receipt = await readUploadReceipt(
+			response,
+			presignedUrl,
+			contentLength,
+		);
+		abortSignal?.throwIfAborted();
+		return receipt;
+	}
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
@@ -2056,10 +2261,6 @@ async function uploadWithRetry(
 				"Content-Length": contentLength.toString(),
 			};
 			if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
-			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
-				headers["Content-Range"] =
-					`bytes 0-${contentLength - 1}/${contentLength}`;
-			}
 
 			response = await fetch(presignedUrl, {
 				method: "PUT",
@@ -2076,7 +2277,9 @@ async function uploadWithRetry(
 			}
 
 			lastError = uploadError;
-			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+				signal: abortSignal,
+			});
 			continue;
 		}
 
@@ -2103,7 +2306,9 @@ async function uploadWithRetry(
 		}
 
 		lastError = responseError;
-		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+			signal: abortSignal,
+		});
 	}
 
 	throw lastError ?? new Error("Storage upload failed after retries");
@@ -2113,24 +2318,40 @@ export async function uploadToS3(
 	data: Uint8Array | Blob,
 	presignedUrl: string,
 	contentType: string,
+	abortSignal?: AbortSignal,
 ): Promise<void> {
+	abortSignal?.throwIfAborted();
 	const blob =
 		data instanceof Blob
 			? data
-			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
+			: new Blob([new Uint8Array(data)], { type: contentType });
 
-	await uploadWithRetry(presignedUrl, contentType, blob.size, () => blob);
+	await uploadWithRetry(
+		presignedUrl,
+		contentType,
+		blob.size,
+		() => blob,
+		undefined,
+		abortSignal,
+	);
 }
 
 export async function uploadFileToS3(
 	filePath: string,
 	presignedUrl: string,
 	contentType: string,
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
+	abortSignal?.throwIfAborted();
 	const fileHandle = file(filePath);
 
-	return uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
-		file(filePath),
+	return uploadWithRetry(
+		presignedUrl,
+		contentType,
+		fileHandle.size,
+		() => file(filePath),
+		undefined,
+		abortSignal,
 	);
 }
 
@@ -2221,7 +2442,9 @@ async function uploadMultipartPart(
 			}
 
 			lastError = uploadError;
-			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+				signal: abortSignal,
+			});
 			continue;
 		}
 
@@ -2248,7 +2471,9 @@ async function uploadMultipartPart(
 		}
 
 		lastError = responseError;
-		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+			signal: abortSignal,
+		});
 	}
 
 	throw lastError ?? new Error(`Multipart upload part ${partNumber} failed`);
@@ -2415,16 +2640,29 @@ export async function muxMediaTracksToMp4(
 	outputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
+	abortSignal = AbortSignal.any([
+		...(abortSignal ? [abortSignal] : []),
+		AbortSignal.timeout(PROCESS_TIMEOUT_MS),
+	]);
 	const startedAt = performance.now();
 	const timing = await readRecordingVideoTiming(videoInputPath, {
 		abortSignal,
 		timeoutMs: PROCESS_TIMEOUT_MS,
 	});
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
 	const lastTimestamp = timing.lastTimestampTicks - timing.firstTimestampTicks;
 	// FFmpeg 7 can discard a fragmented MP4's stored final sample duration.
 	const videoTimingFilter = `setts=pts=PTS:dts=DTS:duration=if(eq(PTS-STARTPTS\\,${lastTimestamp})\\,${timing.lastDurationTicks}\\,DURATION)`;
+	const audioTiming = audioInputPath
+		? await readRecordingAudioTail(audioInputPath, abortSignal, true)
+		: undefined;
+	if (audioTiming && audioTiming.packetCount === undefined)
+		throw new Error("Recording audio packet count is missing");
+	// FFmpeg synthesizes nominal AAC durations, so bind the final duration to the stored source sample.
+	const audioTimingFilter = audioTiming?.packetCount
+		? `setts=duration=if(eq(N\\,${audioTiming.packetCount - 1})\\,${audioTiming.durationTicks}\\,DURATION)`
+		: undefined;
 	const args = audioInputPath
 		? [
 				"ffmpeg",
@@ -2443,6 +2681,7 @@ export async function muxMediaTracksToMp4(
 				"copy",
 				"-bsf:v",
 				videoTimingFilter,
+				...(audioTimingFilter ? ["-bsf:a", audioTimingFilter] : []),
 				"-avoid_negative_ts",
 				"disabled",
 				"-movie_timescale",

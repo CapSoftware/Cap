@@ -1,3 +1,4 @@
+pub mod estimates;
 pub mod gif;
 pub mod mov;
 pub mod mp4;
@@ -58,6 +59,8 @@ pub enum ExporterBuildError {
     MediaLoad(String),
     #[error("IO error at path '{0}': {1}")]
     IO(PathBuf, std::io::Error),
+    #[error("There is nothing to export: the timeline is empty")]
+    NothingToExport,
 }
 
 pub struct ExporterBuilder {
@@ -84,30 +87,40 @@ impl ExporterBuilder {
     }
 
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
-        self.build_inner(None).await
+        self.build_inner(None, true).await
+    }
+
+    pub async fn build_video_only(self) -> Result<ExporterBase, ExporterBuildError> {
+        self.build_inner(None, false).await
     }
 
     pub async fn build_for_mp4(
         self,
         cancellation: Arc<AtomicBool>,
     ) -> Result<Mp4ExporterBase, ExporterBuildError> {
-        self.build_inner(Some(cancellation))
+        self.build_inner(Some(cancellation), true)
             .await
             .map(Mp4ExporterBase)
     }
 
-    async fn build_inner(
-        self,
-        cancellation: Option<Arc<AtomicBool>>,
-    ) -> Result<ExporterBase, ExporterBuildError> {
-        type Error = ExporterBuildError;
-
-        let mut project_config = if let Some(config) = self.config {
+    fn load_project_config(&mut self) -> Result<ProjectConfiguration, ExporterBuildError> {
+        let project_config = if let Some(config) = self.config.take() {
             config
         } else {
             ProjectConfiguration::load(&self.project_path)
-                .map_err(|v| Error::ConfigLoad(v.into()))?
+                .map_err(|error| ExporterBuildError::ConfigLoad(error.into()))?
         };
+        Ok(project_config)
+    }
+
+    async fn build_inner(
+        mut self,
+        cancellation: Option<Arc<AtomicBool>>,
+        include_audio: bool,
+    ) -> Result<ExporterBase, ExporterBuildError> {
+        type Error = ExporterBuildError;
+
+        let mut project_config = self.load_project_config()?;
 
         let recording_meta =
             RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
@@ -120,43 +133,35 @@ impl ExporterBuilder {
                 .map_err(Error::RecordingsMeta)?,
         );
 
-        // A freshly recorded .cap has no timeline — only the editor creates one. Without it the
-        // render loop's get_segment_time() returns None on frame 0 and produces zero frames (an empty
-        // export). Synthesize the same default timeline the editor would (one segment per recording,
-        // spanning its full duration) so raw recordings — e.g. from `cap export` — render correctly.
-        // Desktop exports already carry a timeline by export time, so this only fires for un-edited
-        // projects and changes nothing for them.
-        if project_config.timeline.is_none() {
-            let segments: Vec<TimelineSegment> = recordings
+        synthesize_default_timeline(&mut project_config, &recordings);
+        fill_clip_offsets(
+            &mut project_config,
+            &recording_meta.project_path,
+            studio_meta,
+        );
+
+        cap_project::clamp_timeline_to_sources(
+            &mut project_config,
+            &recordings
                 .segments
                 .iter()
-                .enumerate()
-                .filter_map(|(i, segment)| {
-                    let duration = segment.duration();
-                    (duration > 0.0).then_some(TimelineSegment {
-                        recording_clip: i as u32,
-                        start: 0.0,
-                        end: duration,
-                        timescale: 1.0,
-                        name: None,
-                        speed_audio_mode: None,
-                    })
-                })
-                .collect();
-            if !segments.is_empty() {
-                project_config.timeline = Some(TimelineConfiguration {
-                    segments,
-                    transitions: Vec::new(),
-                    zoom_segments: Vec::new(),
-                    scene_segments: Vec::new(),
-                    mask_segments: Vec::new(),
-                    text_segments: Vec::new(),
-                    caption_segments: Vec::new(),
-                    keyboard_segments: Vec::new(),
-                    audio_segments: Vec::new(),
-                    camera3d_segments: Vec::new(),
-                });
-            }
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+        cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
+        cap_project::synchronize_captions(
+            &mut project_config,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+
+        let duration =
+            cap_rendering::get_duration(&recordings, &recording_meta, studio_meta, &project_config);
+        if duration.is_nan() || duration <= 0.0 {
+            return Err(Error::NothingToExport);
         }
 
         let output_path = self
@@ -200,6 +205,15 @@ impl ExporterBuilder {
             let (segments, audio) =
                 finish_audio_preparation(segments, preparation, &control.stop).await?;
             (segments, Some(audio))
+        } else if !include_audio {
+            let segments = cap_editor::create_segments_without_audio(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await
+            .map_err(Error::MediaLoad)?;
+            (segments, None)
         } else {
             let segments = cap_editor::create_segments(
                 &recording_meta,
@@ -214,6 +228,12 @@ impl ExporterBuilder {
             }
             (segments, None)
         };
+
+        if reads_recordings_forward(&project_config) {
+            for segment in &segments {
+                segment.decoders.prefer_sequential_access();
+            }
+        }
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)
@@ -232,6 +252,8 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
+            sample_windows: None,
+            sample_timing: None,
         })
     }
 }
@@ -256,20 +278,100 @@ async fn finish_audio_preparation(
     Ok((segments, audio))
 }
 
-pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
-    project_config.background.source = BackgroundSource::Color {
-        value: [0, 0, 0],
-        alpha: 0,
+/// A freshly recorded .cap has no timeline — only the editor creates one. Without it the
+/// render loop's get_segment_time() returns None on frame 0 and produces zero frames (an empty
+/// export). Synthesize the same default timeline the editor would (one segment per recording,
+/// spanning its full duration) so raw recordings — e.g. from `cap export` — render correctly.
+/// Desktop exports already carry a timeline by export time, so this only fires for un-edited
+/// projects and changes nothing for them.
+pub fn synthesize_default_timeline(
+    project_config: &mut ProjectConfiguration,
+    recordings: &ProjectRecordingsMeta,
+) {
+    if project_config.timeline.is_some() {
+        return;
+    }
+    let segments: Vec<TimelineSegment> = recordings
+        .segments
+        .iter()
+        .enumerate()
+        .filter_map(|(i, segment)| {
+            let duration = segment.duration();
+            (duration > 0.0).then_some(TimelineSegment {
+                recording_clip: i as u32,
+                start: 0.0,
+                end: duration,
+                timescale: 1.0,
+                name: None,
+                speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
+            })
+        })
+        .collect();
+    if !segments.is_empty() {
+        project_config.timeline = Some(TimelineConfiguration {
+            segments,
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+        });
+    }
+}
+
+/// Whether export requests every recording's frames front to back: each
+/// recording's timeline segments advance through its source without
+/// overlapping, and no transition renders two timeline segments at once.
+fn reads_recordings_forward(project_config: &ProjectConfiguration) -> bool {
+    let Some(timeline) = &project_config.timeline else {
+        return true;
     };
-    project_config.background.blur = 0.0;
-    project_config.background.shadow = 0.0;
-    project_config.background.advanced_shadow = None;
-    project_config.background.border = None;
+    if !timeline.transitions.is_empty() {
+        return false;
+    }
+    let mut source_ends = std::collections::HashMap::<u32, f64>::new();
+    timeline.segments.iter().all(|segment| {
+        let source_end = source_ends
+            .entry(segment.recording_clip)
+            .or_insert(f64::NEG_INFINITY);
+        let forward = segment.start >= *source_end && segment.end >= segment.start;
+        *source_end = segment.end;
+        forward
+    })
+}
+
+pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
+    fn clear_background_pixels(background: &mut cap_project::BackgroundConfiguration) {
+        background.source = BackgroundSource::Color {
+            value: [0, 0, 0],
+            alpha: 0,
+        };
+        background.blur = 0.0;
+        background.shadow = 0.0;
+        background.advanced_shadow = None;
+        background.border = None;
+    }
+
+    clear_background_pixels(&mut project_config.background);
     project_config.captions = None;
     project_config.keyboard = None;
 
     if let Some(timeline) = project_config.timeline.as_mut() {
         timeline.mask_segments.clear();
+        timeline.image_segments.clear();
+        for style in &mut timeline.style_segments {
+            if let Some(background) = style.overrides.background.as_mut() {
+                clear_background_pixels(background);
+            }
+        }
         // Fullscreen text segments pause the recording clock (holds), which
         // shapes the frame count and cursor motion. Split titles also move
         // the cursor with the display, so both need invisible placeholders.
@@ -289,14 +391,23 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 fn prepare_streaming_output(
     output: &std::path::Path,
     eligible: bool,
-) -> Option<mp4::TemporaryMp4Output> {
-    if !eligible
-        || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
-        || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
+) -> Option<mp4::TemporaryExportOutput> {
+    if !eligible || output.extension().and_then(|extension| extension.to_str()) != Some("mp4") {
         return None;
     }
-    mp4::temporary_mp4_output(output).ok()
+    prepare_new_output(output).ok().flatten()
+}
+
+/// Stages a new export beside its destination so a failed or cancelled export
+/// never leaves a partial file there. Existing destinations are written in place.
+fn prepare_new_output(
+    output: &std::path::Path,
+) -> Result<Option<mp4::TemporaryExportOutput>, String> {
+    if !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(None);
+    }
+    mp4::temporary_export_output(output).map(Some)
 }
 
 struct ExportAudioCancellation {
@@ -341,8 +452,10 @@ pub struct ExporterBase {
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
     streaming_audio: Option<ExportAudioRenderer>,
-    streaming_output: Option<mp4::TemporaryMp4Output>,
+    streaming_output: Option<mp4::TemporaryExportOutput>,
     audio_cancellation: Option<ExportAudioCancellation>,
+    sample_windows: Option<cap_rendering::FrameWindows>,
+    sample_timing: Option<Arc<estimates::SampleTiming>>,
 }
 
 impl ExporterBase {
@@ -371,6 +484,36 @@ impl ExporterBase {
 mod cursor_only_tests {
     use super::*;
     use cap_project::TextLayout;
+
+    #[test]
+    fn cursor_only_preserves_style_geometry_without_image_or_background_pixels() {
+        let project = ProjectConfiguration {
+            timeline: Some(serde_json::from_value(serde_json::json!({
+            "segments": [], "zoomSegments": [],
+            "imageSegments": [{ "start": 1.0, "end": 2.0, "path": "content/images/example.png" }],
+            "styleSegments": [{ "start": 1.0, "end": 2.0, "overrides": {
+                "background": { "source": { "type": "color", "value": [255, 0, 0], "alpha": 255 },
+                    "crop": { "position": { "x": 40, "y": 20 }, "size": { "x": 800, "y": 600 } },
+                    "padding": 15.0
+                }
+            } }]
+            })).expect("timed configuration")),
+            ..Default::default()
+        };
+        let cursor_only = make_cursor_only_project(project);
+        let timeline = cursor_only.timeline.as_ref().expect("timeline");
+        assert!(timeline.image_segments.is_empty());
+        let styled = cursor_only.style_at(1.5);
+        assert_eq!(styled.background.padding, 15.0);
+        assert_eq!(
+            styled.background.crop.as_ref().expect("crop").size,
+            cap_project::XY::new(800, 600)
+        );
+        assert!(matches!(
+            styled.background.source,
+            BackgroundSource::Color { alpha: 0, .. }
+        ));
+    }
 
     #[test]
     fn cursor_only_preserves_layout_and_recording_time_without_title_pixels() {
@@ -535,6 +678,23 @@ mod cancellation_tests {
     }
 
     #[test]
+    fn new_gif_destinations_are_staged_beside_the_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.gif");
+        let staged = prepare_new_output(&output).unwrap().unwrap();
+        let staged_path = staged.to_path_buf();
+        assert_eq!(staged_path.parent(), Some(directory.path()));
+        assert_eq!(staged_path.extension(), output.extension());
+        assert!(!output.exists());
+        staged.persist_noclobber(&output).unwrap();
+        assert!(output.exists());
+        assert!(!staged_path.exists());
+
+        assert!(prepare_new_output(&output).unwrap().is_none());
+        assert!(prepare_new_output(&directory.path().join("missing/export.gif")).is_err());
+    }
+
+    #[test]
     fn prepared_destination_is_removed_when_preparation_is_dropped() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
@@ -566,5 +726,217 @@ mod cancellation_tests {
         user.store(true, Ordering::Relaxed);
         assert!(cancellation.user.load(Ordering::Relaxed));
         assert!(!cancellation.stop.load(Ordering::Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod forward_read_tests {
+    use super::*;
+
+    fn project(timeline: serde_json::Value) -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({ "timeline": timeline })).unwrap()
+    }
+
+    fn segment(clip: u32, start: f64, end: f64) -> serde_json::Value {
+        serde_json::json!({ "recordingSegment": clip, "start": start, "end": end, "timescale": 1.0 })
+    }
+
+    #[test]
+    fn forward_reads_require_advancing_segments_without_transitions() {
+        assert!(reads_recordings_forward(&ProjectConfiguration::default()));
+        assert!(reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(0, 4.0, 6.0), segment(1, 0.0, 2.0), segment(0, 9.0, 12.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 5.0, 8.0), segment(0, 2.0, 4.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(0, 3.5, 6.0)],
+            "zoomSegments": []
+        }))));
+        assert!(!reads_recordings_forward(&project(serde_json::json!({
+            "segments": [segment(0, 0.0, 4.0), segment(1, 0.0, 4.0)],
+            "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 }],
+            "zoomSegments": []
+        }))));
+    }
+}
+
+/// A Studio recording with a camera is saved without clip offsets: the
+/// editor fills them in from the tracks' start times (and the devices'
+/// calibration) when it first opens the project. An export of a project the
+/// editor never opened would otherwise play every audio track from its own
+/// start, late against the screen by how much earlier it started.
+fn fill_clip_offsets(
+    config: &mut ProjectConfiguration,
+    project_path: &std::path::Path,
+    studio_meta: &StudioRecordingMeta,
+) {
+    if config.clips.is_empty() {
+        config.clips = cap_editor::initial_clip_configuration(project_path, studio_meta);
+    }
+}
+
+#[cfg(test)]
+mod clip_offset_tests {
+    use super::*;
+    use cap_project::{
+        AudioMeta, ClipConfiguration, ClipOffsets, Cursors, MultipleSegment, MultipleSegments,
+        VideoMeta,
+    };
+
+    fn camera_recording() -> StudioRecordingMeta {
+        let video = |path: &str, start: f64| VideoMeta {
+            path: path.into(),
+            fps: 30,
+            start_time: Some(start),
+            device_id: None,
+        };
+        let audio = |path: &str, start: f64| AudioMeta {
+            path: path.into(),
+            start_time: Some(start),
+            device_id: None,
+            gap_summary: None,
+        };
+        StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: vec![MultipleSegment {
+                    display: video("display.mp4", 0.2026),
+                    camera: Some(video("camera.mp4", 0.0331)),
+                    mic: Some(audio("audio-input.ogg", 0.0331)),
+                    system_audio: Some(audio("system_audio.ogg", 0.0)),
+                    cursor: None,
+                    keyboard: None,
+                    display_notch: None,
+                }],
+                cursors: Cursors::default(),
+                status: None,
+            },
+        }
+    }
+
+    #[test]
+    fn a_project_without_clip_offsets_gets_the_editors() {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = camera_recording();
+        let mut config = ProjectConfiguration::default();
+        assert!(config.clips.is_empty());
+        fill_clip_offsets(&mut config, dir.path(), &meta);
+        let offsets = config.clips[0].offsets;
+        assert!((offsets.mic - 0.1695).abs() < 1e-4, "mic {}", offsets.mic);
+        assert!(
+            (offsets.system_audio - 0.2026).abs() < 1e-4,
+            "system {}",
+            offsets.system_audio
+        );
+        assert_eq!(offsets.camera, 0.0);
+    }
+
+    #[test]
+    fn saved_clip_offsets_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ProjectConfiguration {
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: ClipOffsets {
+                    camera: 0.0,
+                    mic: 0.5,
+                    system_audio: 0.0,
+                },
+                offsets_auto_calculated: false,
+            }],
+            ..Default::default()
+        };
+        fill_clip_offsets(&mut config, dir.path(), &camera_recording());
+        assert_eq!(config.clips[0].offsets.mic, 0.5);
+    }
+}
+
+#[cfg(test)]
+mod subtitle_export_tests {
+    use super::*;
+
+    fn project(enabled: bool, export: bool) -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({
+            "textSizeVersion": 1,
+            "textAnimVersion": 1,
+            "captions": {
+                "segments": [{"id": "source", "start": 0.0, "end": 2.0, "text": "Keep this caption"}],
+                "sourceTimed": true,
+                "settings": {"enabled": enabled, "exportWithSubtitles": export, "font": "System Sans-Serif"}
+            },
+            "timeline": {
+                "segments": [{"start": 0.0, "end": 4.0, "timescale": 1.0}],
+                "zoomSegments": [],
+                "captionSegments": [{"id": "projected", "start": 0.0, "end": 2.0, "text": "Keep this caption"}]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn subtitle_export_builder_preserves_caption_visibility_for_disk_and_explicit_configs() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("project-config.json");
+        for enabled in [false, true] {
+            for export in [false, true] {
+                let editor = project(enabled, export);
+                let original = serde_json::to_value(&editor).unwrap();
+                std::fs::write(&path, serde_json::to_vec(&editor).unwrap()).unwrap();
+                let mut disk = ExporterBase::builder(temp.path().to_path_buf());
+                let mut explicit =
+                    ExporterBase::builder(temp.path().to_path_buf()).with_config(editor);
+                for output in [
+                    disk.load_project_config().unwrap(),
+                    explicit.load_project_config().unwrap(),
+                ] {
+                    assert_eq!(output.captions.as_ref().unwrap().settings.enabled, enabled);
+                    assert_eq!(serde_json::to_value(output).unwrap(), original);
+                }
+                let persisted: ProjectConfiguration =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                assert_eq!(serde_json::to_value(persisted).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn subtitle_export_includes_legacy_captions_without_an_export_setting() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("project-config.json");
+        let mut value = serde_json::to_value(project(true, true)).unwrap();
+        assert!(
+            value["captions"]["settings"]
+                .as_object_mut()
+                .unwrap()
+                .remove("exportWithSubtitles")
+                .is_some()
+        );
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut builder = ExporterBase::builder(temp.path().to_path_buf());
+        let output = builder.load_project_config().unwrap();
+        let settings = output.captions.unwrap().settings;
+        assert!(settings.enabled);
+        assert!(!settings.export_with_subtitles);
+    }
+
+    #[test]
+    fn subtitle_export_keeps_missing_captions_missing() {
+        let mut builder = ExporterBase::builder(PathBuf::from("unused-project"))
+            .with_config(ProjectConfiguration::default());
+        assert!(builder.load_project_config().unwrap().captions.is_none());
+    }
+
+    #[test]
+    fn subtitle_export_never_reintroduces_cursor_only_captions() {
+        for export in [false, true] {
+            let mut builder = ExporterBase::builder(PathBuf::from("unused-project"))
+                .with_config(make_cursor_only_project(project(true, export)));
+            let output = builder.load_project_config().unwrap();
+            assert!(output.captions.is_none());
+            assert!(output.timeline.unwrap().caption_segments.is_empty());
+        }
     }
 }

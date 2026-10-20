@@ -11,6 +11,7 @@ import {
 	getActiveProbeOperationCount,
 	withMediaOperation,
 } from "./media-operations";
+import { materializeMedia } from "./media-transfer";
 
 const PROBE_TIMEOUT_MS = 30_000;
 const probeFetch: typeof fetch = globalThis.fetch.bind(globalThis);
@@ -119,6 +120,8 @@ async function probeMedia(path: string): Promise<VideoMetadata> {
 }
 
 export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
+	const local = await materializeMedia(videoUrl);
+	if (local) return probeVideoFile(local.path);
 	if (!canAcceptNewProbeOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}

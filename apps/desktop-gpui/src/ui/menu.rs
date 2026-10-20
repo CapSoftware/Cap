@@ -156,6 +156,8 @@ pub struct Menu {
     highlighted: Option<usize>,
     min_width: Pixels,
     max_height: Pixels,
+    radius: Pixels,
+    shadow: Vec<gpui::BoxShadow>,
     bg: Hsla,
     border: Hsla,
     hover: Hsla,
@@ -174,8 +176,11 @@ impl Menu {
         items: Vec<MenuItem>,
         state: &MenuState,
     ) -> Self {
-        let mut bg = theme.settings_card_bg();
-        bg.a = 1.;
+        let bg = if theme.is_dark() {
+            Hsla::from(gpui::rgb(0x2a2a2c))
+        } else {
+            gpui::white()
+        };
         Self {
             id: id.into(),
             items,
@@ -184,6 +189,14 @@ impl Menu {
             highlighted: state.visible_highlight(),
             min_width: px(180.),
             max_height: px(320.),
+            radius: px(10.),
+            shadow: vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.18),
+                offset: gpui::point(px(0.), px(6.)),
+                blur_radius: px(18.),
+                spread_radius: px(0.),
+                inset: false,
+            }],
             bg,
             border: theme.settings_border(),
             hover: theme.settings_hover(),
@@ -206,6 +219,24 @@ impl Menu {
             border: theme.gray(3),
             hover: theme.gray(3),
             text: theme.gray(12),
+            ..Self::settings(theme, id, items, state)
+        }
+    }
+
+    /// The editor's popovers: an `ed-card` panel behind an `ed-line` hairline.
+    pub fn editor(
+        theme: &Theme,
+        id: impl Into<ElementId>,
+        items: Vec<MenuItem>,
+        state: &MenuState,
+    ) -> Self {
+        Self {
+            radius: px(12.),
+            shadow: theme.editor.pop_shadow(),
+            bg: Hsla::from(theme.editor.card),
+            border: Hsla::from(theme.editor.line),
+            hover: Hsla::from(theme.editor.ctl_hover),
+            text: Hsla::from(theme.editor.text_1),
             ..Self::settings(theme, id, items, state)
         }
     }
@@ -289,6 +320,8 @@ impl RenderOnce for Menu {
             highlighted,
             min_width,
             max_height,
+            radius,
+            shadow,
             bg,
             border,
             hover,
@@ -345,7 +378,8 @@ impl RenderOnce for Menu {
                             .max_h(max_height)
                             .overflow_y_scroll()
                             .p(px(4.))
-                            .rounded(px(8.))
+                            .rounded(radius)
+                            .shadow(shadow)
                             .border_1()
                             .border_color(border)
                             .bg(bg)

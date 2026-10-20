@@ -7,7 +7,10 @@ import * as path from "node:path";
 import { env } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { createLinuxBundleConfig } from "./linux-bundle-config.mjs";
+import {
+	createLinuxBundleConfig,
+	GPUI_RPM_DEPENDS,
+} from "./linux-bundle-config.mjs";
 
 const exec = promisify(execCb);
 const execFile = promisify(execFileCb);
@@ -737,28 +740,43 @@ async function writeLinuxTauriConfig(sonameLibs) {
 	await fs.mkdir(appimageLibDir, { recursive: true });
 	await fs.copyFile(pulsePlugin, path.join(appimageLibDir, pluginName));
 
-	const configPath = path.join(
-		__root,
-		"apps",
-		"desktop",
-		"src-tauri",
-		"tauri.linux.conf.json",
+	const tauriDirectory = path.join(__root, "apps", "desktop", "src-tauri");
+	const tauriConfig = JSON.parse(
+		await fs.readFile(path.join(tauriDirectory, "tauri.conf.json"), "utf8"),
 	);
-	const baseConfig = JSON.parse(
-		await fs.readFile(
-			path.join(path.dirname(configPath), "tauri.conf.json"),
-			"utf8",
-		),
-	);
-	const config = createLinuxBundleConfig(
-		sonameLibs,
-		baseConfig.bundle.linux.deb.files,
-		baseConfig.bundle.linux.deb.depends,
+	await writeFileIfChanged(
+		path.join(tauriDirectory, "tauri.linux.conf.json"),
+		`${JSON.stringify(
+			createLinuxBundleConfig(
+				sonameLibs,
+				tauriConfig.bundle.linux.deb.files,
+				tauriConfig.bundle.linux.deb.depends,
+			),
+			null,
+			"\t",
+		)}\n`,
 	);
 
+	const gpuiDirectory = path.join(__root, "apps", "desktop-gpui");
+	const gpuiConfig = JSON.parse(
+		await fs.readFile(path.join(gpuiDirectory, "tauri.conf.json"), "utf8"),
+	);
 	await writeFileIfChanged(
-		configPath,
-		`${JSON.stringify(config, null, "\t")}\n`,
+		path.join(gpuiDirectory, "tauri.linux.conf.json"),
+		`${JSON.stringify(
+			createLinuxBundleConfig(
+				sonameLibs,
+				{},
+				gpuiConfig.bundle.linux.deb.depends,
+				{
+					root: "../..",
+					rpmDependencies: GPUI_RPM_DEPENDS,
+					mediaFramework: false,
+				},
+			),
+			null,
+			"\t",
+		)}\n`,
 	);
 	console.log(
 		`Generated Linux Tauri package configs with ${sonameLibs.length} shared libraries`,
@@ -789,7 +807,7 @@ async function ensureMsvcVersion() {
 			`Visual Studio Installer not found at ${vswherePath}. ` +
 				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
 				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
-				`then re-run pnpm dev.`,
+				`then re-run bun run dev.`,
 		);
 	}
 
@@ -809,7 +827,7 @@ async function ensureMsvcVersion() {
 			`No Visual Studio 2022 installation with MSVC v143 was found. ` +
 				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
 				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
-				`then re-run pnpm dev.`,
+				`then re-run bun run dev.`,
 		);
 	}
 
@@ -827,7 +845,7 @@ async function ensureMsvcVersion() {
 				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
 				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
 				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
-				`After updating, run: cargo clean -p cap-desktop && pnpm dev:windows\n`,
+				`After updating, run: cargo clean -p cap-desktop && bun run dev:windows\n`,
 		);
 	}
 

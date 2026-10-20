@@ -27,6 +27,10 @@ import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createExportToFileTask, exportVideo } from "~/utils/export";
 import {
+	recordingMetaNeedsRecovery,
+	recordingOpenErrorMessage,
+} from "~/utils/recording";
+import {
 	commands,
 	events,
 	type FramesRendered,
@@ -45,6 +49,46 @@ type MediaEntry = {
 	isNew: boolean;
 	type?: "recording" | "screenshot";
 };
+
+function createRecordingOpen(projectPath: string, onOpened: () => void) {
+	const [isOpening, setIsOpening] = createSignal(false);
+	let cancelled = false;
+
+	onCleanup(() => {
+		cancelled = true;
+	});
+
+	return {
+		isOpening,
+		cancel: () => {
+			cancelled = true;
+		},
+		open: async () => {
+			if (cancelled || isOpening()) return;
+			setIsOpening(true);
+			try {
+				const meta = await commands.getRecordingMetaByPath(projectPath);
+				if (cancelled) return;
+				if (recordingMetaNeedsRecovery(meta)) {
+					await commands.recoverRecording(projectPath);
+				}
+				if (cancelled) return;
+				await commands.showWindow({ Editor: { project_path: projectPath } });
+				if (!cancelled) onOpened();
+			} catch (error) {
+				if (!cancelled) {
+					await commands
+						.globalMessageDialog(recordingOpenErrorMessage(error, projectPath))
+						.catch((dialogError) => {
+							console.error("Failed to show recording open error", dialogError);
+						});
+				}
+			} finally {
+				if (!cancelled) setIsOpening(false);
+			}
+		},
+	};
+}
 
 export default function () {
 	onMount(() => {
@@ -119,6 +163,16 @@ export default function () {
 
 								const type = media.type ?? "recording";
 								const isRecording = type !== "screenshot";
+								const openRecording = createRecordingOpen(media.path, () => {
+									setRecordings(
+										produce((state) => {
+											const index = state.findIndex(
+												(entry) => entry.path === media.path,
+											);
+											if (index !== -1) state.splice(index, 1);
+										}),
+									);
+								});
 
 								const { copy, save, upload, actionState } =
 									createRecordingMutations(media, (e) => {
@@ -295,6 +349,7 @@ export default function () {
 														tooltipText="Close"
 														tooltipPlacement="right"
 														onClick={() => {
+															openRecording.cancel();
 															const setMedia = isRecording
 																? setRecordings
 																: setScreenshots;
@@ -317,24 +372,8 @@ export default function () {
 															class="absolute bottom-3 left-3 z-20"
 															tooltipText="Edit"
 															tooltipPlacement="right"
-															onClick={() => {
-																const setMedia = isRecording
-																	? setRecordings
-																	: setScreenshots;
-																setMedia(
-																	produce((state) => {
-																		const index = state.findIndex(
-																			(entry) => entry.path === media.path,
-																		);
-																		if (index !== -1) {
-																			state.splice(index, 1);
-																		}
-																	}),
-																);
-																commands.showWindow({
-																	Editor: { project_path: media.path },
-																});
-															}}
+															disabled={openRecording.isOpening()}
+															onClick={openRecording.open}
 														>
 															<IconCapEditor class="size-4" />
 														</TooltipIconButton>

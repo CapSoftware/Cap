@@ -85,31 +85,31 @@ function FadeCornerTriangle(props: { edge: "in" | "out" }) {
 		<div
 			class={cx(
 				"overflow-hidden size-[11px]",
-				props.edge === "in" ? "rounded-tl-xl" : "rounded-tr-xl",
+				props.edge === "in" ? "rounded-tl-lg" : "rounded-tr-lg",
 			)}
 		>
 			<svg class="block size-full" viewBox="0 0 11 11" aria-hidden="true">
 				{props.edge === "in" ? (
 					<>
-						<polygon points="0,0 11,0 0,11" fill="rgba(255,255,255,0.9)" />
+						<polygon class="cap-fade-corner" points="0,0 11,0 0,11" />
 						<line
+							class="cap-fade-corner-line"
 							x1="11"
 							y1="0"
 							x2="0"
 							y2="11"
-							stroke="rgba(0,0,0,0.18)"
 							stroke-width="0.75"
 						/>
 					</>
 				) : (
 					<>
-						<polygon points="11,0 0,0 11,11" fill="rgba(255,255,255,0.9)" />
+						<polygon class="cap-fade-corner" points="11,0 0,0 11,11" />
 						<line
+							class="cap-fade-corner-line"
 							x1="0"
 							y1="0"
 							x2="11"
 							y2="11"
-							stroke="rgba(0,0,0,0.18)"
 							stroke-width="0.75"
 						/>
 					</>
@@ -143,16 +143,16 @@ function FadeControl(props: {
 						aria-hidden="true"
 					>
 						<rect
+							class="cap-fade-shade"
 							x={geometry().shadeX}
 							y="0"
 							width={geometry().shadeWidth}
 							height="100"
-							fill="rgba(0,0,0,0.34)"
 						/>
 						<path
+							class="cap-fade-curve"
 							d={fadeEnvelopeCurve(props.edge, geometry().span)}
 							fill="none"
-							stroke="rgba(255,255,255,0.94)"
 							stroke-width="1.5"
 							vector-effect="non-scaling-stroke"
 						/>
@@ -172,7 +172,7 @@ function FadeControl(props: {
 					onMouseDown={props.onMouseDown}
 					onDblClick={props.onDblClick}
 				>
-					<div class="absolute top-0 left-1/2 -translate-x-1/2 border border-black/20 bg-white shadow-sm pointer-events-none size-2.5" />
+					<div class="absolute top-0 left-1/2 -translate-x-1/2 bg-ed-card ring-1 ring-ed-line-strong shadow-sm pointer-events-none size-2.5" />
 				</div>
 			</Show>
 
@@ -400,29 +400,20 @@ export function AudioTrack(props: {
 				fallback={
 					<button
 						type="button"
-						class={cx(
-							"group/empty flex gap-2 justify-center items-center w-full text-sm rounded-xl border transition-all duration-200 pointer-events-auto",
+						class="cap-empty-lane pointer-events-auto"
+						data-active={
 							editorState.timeline.audioPicker === props.laneIndex
-								? "border-emerald-7 bg-emerald-9/10 text-emerald-11"
-								: "border-dashed border-gray-4/60 bg-gray-3/15 text-(--text-tertiary) hover:border-emerald-7/60 hover:bg-emerald-9/5 hover:text-gray-12",
-						)}
+								? ""
+								: undefined
+						}
 						onMouseDown={(e) => e.stopPropagation()}
 						onClick={(e) => {
 							e.stopPropagation();
 							props.onRequestAdd(props.laneIndex);
 						}}
 					>
-						<span
-							class={cx(
-								"flex justify-center items-center rounded-full transition-colors size-6",
-								editorState.timeline.audioPicker === props.laneIndex
-									? "bg-emerald-9 text-emerald-1"
-									: "bg-gray-4/40 text-gray-11 group-hover/empty:bg-emerald-9 group-hover/empty:text-emerald-1",
-							)}
-						>
-							<IconLucidePlus class="size-3.5" />
-						</span>
-						<span class="font-medium">Add audio</span>
+						<span>Add background music or import your own audio</span>
+						<span class="cap-empty-lane-action">· Add audio</span>
 					</button>
 				}
 			>
@@ -451,12 +442,9 @@ export function AudioTrack(props: {
 							data-index={index}
 							forceVisible={isDragging()}
 							segColor="var(--track-audio)"
-							class={cx(
-								"border transition-colors duration-200 group",
-								isSelected() ? "border-emerald-11" : "border-transparent",
-								!segment.enabled && "opacity-50",
-							)}
-							innerClass="ring-emerald-8"
+							class="group"
+							selected={isSelected()}
+							muted={!segment.enabled}
 							title={segment.name || "Audio"}
 							segment={segment}
 							onMouseDown={(e) => {
@@ -506,7 +494,7 @@ export function AudioTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="relative z-0 flex justify-center items-center cursor-grab px-3 overflow-hidden"
+								class="relative z-0 flex items-center cursor-grab overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									() => index,
 									() => ({ original: { ...segment } }),
@@ -532,16 +520,18 @@ export function AudioTrack(props: {
 								<SegmentLabel
 									compactAt={24}
 									full={() => (
-										<div class="flex z-10 gap-1.5 items-center max-w-full text-xs text-white/95 drop-shadow-sm">
-											<IconLucideMusic class="size-3 shrink-0 opacity-90" />
-											<span class="max-w-full font-medium truncate">
+										<div class="cap-seg-labels z-10 max-w-full">
+											<span class="cap-seg-label max-w-full truncate">
 												{segment.name || "Audio"}
+											</span>
+											<span class="cap-seg-sublabel">
+												{`${Math.round(segment.end - segment.start)}s`}
 											</span>
 										</div>
 									)}
 									compact={() => (
-										<div class="flex z-10 items-center max-w-full text-xs text-white/95 drop-shadow-sm">
-											<span class="max-w-full font-medium truncate">
+										<div class="cap-seg-labels z-10 max-w-full">
+											<span class="cap-seg-label max-w-full truncate">
 												{segment.name || "Audio"}
 											</span>
 										</div>

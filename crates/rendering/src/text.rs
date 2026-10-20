@@ -1,4 +1,4 @@
-use cap_project::{TextAlign, TextAnimation, TextSegment, XY};
+use cap_project::{TextAlign, TextAnimation, TextBackgroundStyle, TextSegment, XY};
 
 /// Text font sizes are authored against a 1080p-tall reference frame and
 /// scaled to the output height, so a project renders identically at every
@@ -11,6 +11,7 @@ pub const MAX_FONT_SIZE: f32 = 480.0;
 
 #[derive(Debug, Clone)]
 pub struct PreparedText {
+    pub track: u32,
     pub content: String,
     pub bounds: [f32; 4],
     pub color: [f32; 4],
@@ -31,6 +32,36 @@ pub struct PreparedText {
     pub offset: [f32; 2],
     /// Animation scale about the box center.
     pub scale: f32,
+    /// Outline (output px, colour); `None` when the width is 0.
+    pub stroke: Option<(f32, [f32; 4])>,
+    /// 0..1 halo strength in the text colour; 0 disables the glow passes.
+    pub glow: f32,
+    /// Right-hand colour of a horizontal gradient that starts at `color`.
+    pub gradient_color: Option<[f32; 4]>,
+    pub background_style: TextBackgroundStyle,
+    /// Fraction of the wrap width left visible by a wipe; 1 = unclipped.
+    pub wipe: f32,
+    pub stagger_in: Option<StaggerEdge>,
+    pub stagger_out: Option<StaggerEdge>,
+}
+
+/// One edge of a per-word / per-letter reveal: `progress` runs 0 → 1 toward
+/// fully visible, and [`stagger_alpha`] turns it into a unit's alpha.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StaggerEdge {
+    pub by_word: bool,
+    pub progress: f32,
+}
+
+/// Every unit gets the same-length window; unit `i` of `n` opens its window
+/// at `i / n` of the remaining span so the last unit finishes exactly at 1.
+pub fn stagger_alpha(edge: StaggerEdge, unit: usize, units: usize) -> f32 {
+    if edge.progress >= 1.0 || units == 0 {
+        return 1.0;
+    }
+    const WINDOW: f32 = 0.55;
+    let start = (unit as f32 / units as f32) * (1.0 - WINDOW);
+    ease_out_cubic(((edge.progress - start) / WINDOW).clamp(0.0, 1.0))
 }
 
 fn parse_color(hex: &str) -> [f32; 4] {
@@ -53,20 +84,24 @@ fn parse_rgb_color(hex: &str) -> Option<[f32; 4]> {
     None
 }
 
-pub(crate) fn text_background_rect(
+/// The block-level background behind a text box. A pill widens the side
+/// padding and rounds to half its height.
+pub(crate) fn background_rect(
     bounds: [f32; 4],
     laid_out_height: f32,
     font_size: f32,
+    center: [f32; 2],
     scale: f32,
     offset: [f32; 2],
+    pill: bool,
 ) -> ([f32; 4], f32) {
     let padding = font_size * 0.2;
-    let left = bounds[0] - padding;
+    let padding_x = if pill { font_size * 0.5 } else { padding };
+    let left = bounds[0] - padding_x;
     let top = bounds[1] - padding;
-    let right = bounds[2] + padding;
+    let right = bounds[2] + padding_x;
     let bottom = bounds[1] + (bounds[3] - bounds[1]).max(laid_out_height) + padding;
-    let cx = (bounds[0] + bounds[2]) * 0.5;
-    let cy = (bounds[1] + bounds[3]) * 0.5;
+    let [cx, cy] = center;
     let transform = |x: f32, y: f32| {
         [
             cx + (x - cx) * scale + offset[0],
@@ -77,9 +112,42 @@ pub(crate) fn text_background_rect(
     let [transformed_right, transformed_bottom] = transform(right, bottom);
     let width = (transformed_right - transformed_left).max(0.0);
     let height = (transformed_bottom - transformed_top).max(0.0);
+    let radius = if pill {
+        height * 0.5
+    } else {
+        font_size * 0.15 * scale
+    };
     (
         [transformed_left, transformed_top, width, height],
-        (font_size * 0.15 * scale)
+        radius.min(width * 0.5).min(height * 0.5),
+    )
+}
+
+/// One marker stroke behind a laid-out line: `ink` is the line's glyph extent
+/// (left, right) and `line` its top and height, all in unscaled buffer space.
+pub(crate) fn highlight_rect(
+    ink: (f32, f32),
+    line: (f32, f32),
+    font_size: f32,
+    box_center: [f32; 2],
+    scale: f32,
+    offset: [f32; 2],
+) -> ([f32; 4], f32) {
+    let padding_x = font_size * 0.12;
+    let padding_y = font_size * 0.06;
+    let transform = |x: f32, y: f32| {
+        [
+            box_center[0] + (x - box_center[0]) * scale + offset[0],
+            box_center[1] + (y - box_center[1]) * scale + offset[1],
+        ]
+    };
+    let [left, top] = transform(ink.0 - padding_x, line.0 - padding_y);
+    let [right, bottom] = transform(ink.1 + padding_x, line.0 + line.1 + padding_y);
+    let width = (right - left).max(0.0);
+    let height = (bottom - top).max(0.0);
+    (
+        [left, top, width, height],
+        (font_size * 0.12 * scale)
             .min(width * 0.5)
             .min(height * 0.5),
     )
@@ -99,6 +167,10 @@ fn ease_out_back(t: f32) -> f32 {
 }
 
 const POP_MIN_SCALE: f32 = 0.8;
+const ZOOM_MAX_SCALE: f32 = 1.35;
+const BOUNCE_TRAVEL: f32 = 1.25;
+/// Extra tracking at the start of a `Tracking` reveal, in em.
+const TRACKING_TRAVEL_EM: f32 = 0.35;
 
 #[derive(Debug, Clone, Copy)]
 struct AnimSample {
@@ -107,6 +179,11 @@ struct AnimSample {
     scale: f32,
     /// Fraction of characters visible (typewriter); 1 for other styles.
     reveal: f32,
+    /// Fraction of the width visible (wipe); 1 for other styles.
+    wipe: f32,
+    /// Extra letter spacing in em (tracking); 0 for other styles.
+    tracking: f32,
+    stagger: Option<StaggerEdge>,
 }
 
 const ANIM_REST: AnimSample = AnimSample {
@@ -114,6 +191,9 @@ const ANIM_REST: AnimSample = AnimSample {
     offset: [0.0, 0.0],
     scale: 1.0,
     reveal: 1.0,
+    wipe: 1.0,
+    tracking: 0.0,
+    stagger: None,
 };
 
 /// `progress` runs 0 → 1 toward fully visible for both edges: time since
@@ -148,9 +228,55 @@ fn sample_animation(
             offset: [0.0, -direction * (1.0 - eased) * slide_px],
             ..ANIM_REST
         },
+        TextAnimation::SlideLeft => AnimSample {
+            alpha: eased,
+            offset: [direction * (1.0 - eased) * slide_px, 0.0],
+            ..ANIM_REST
+        },
+        TextAnimation::SlideRight => AnimSample {
+            alpha: eased,
+            offset: [-direction * (1.0 - eased) * slide_px, 0.0],
+            ..ANIM_REST
+        },
         TextAnimation::Pop => AnimSample {
             alpha: eased,
             scale: POP_MIN_SCALE + (1.0 - POP_MIN_SCALE) * ease_out_back(progress),
+            ..ANIM_REST
+        },
+        TextAnimation::Zoom => AnimSample {
+            alpha: eased,
+            scale: ZOOM_MAX_SCALE - (ZOOM_MAX_SCALE - 1.0) * eased,
+            ..ANIM_REST
+        },
+        TextAnimation::Bounce => AnimSample {
+            alpha: eased,
+            offset: [
+                0.0,
+                direction * (1.0 - ease_out_back(progress)) * slide_px * BOUNCE_TRAVEL,
+            ],
+            ..ANIM_REST
+        },
+        TextAnimation::Wipe => AnimSample {
+            wipe: eased,
+            ..ANIM_REST
+        },
+        TextAnimation::Words => AnimSample {
+            stagger: Some(StaggerEdge {
+                by_word: true,
+                progress,
+            }),
+            ..ANIM_REST
+        },
+        TextAnimation::Letters => AnimSample {
+            stagger: Some(StaggerEdge {
+                by_word: false,
+                progress,
+            }),
+            ..ANIM_REST
+        },
+        TextAnimation::Tracking => AnimSample {
+            alpha: eased,
+            tracking: (1.0 - eased) * TRACKING_TRAVEL_EM,
             ..ANIM_REST
         },
         TextAnimation::Typewriter => AnimSample {
@@ -192,7 +318,9 @@ pub fn prepare_texts(
         output_size.y as f32 / REFERENCE_HEIGHT
     };
 
-    for (i, segment) in segments.iter().enumerate() {
+    let mut ordered = segments.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, segment)| (segment.track, *index));
+    for (i, segment) in ordered {
         if !segment.enabled || hidden_indices.contains(&i) {
             continue;
         }
@@ -242,12 +370,24 @@ pub fn prepare_texts(
         }
 
         let reveal = enter.reveal.min(exit.reveal);
-        let content = reveal_content(&segment.content, reveal);
+        let cased = if segment.uppercase {
+            segment.content.to_uppercase()
+        } else {
+            segment.content.clone()
+        };
+        let content = reveal_content(&cased, reveal);
         if content.is_empty() {
             continue;
         }
+        let wipe = enter.wipe * exit.wipe;
+        if wipe <= 0.0 {
+            continue;
+        }
+        let tracking_px = (enter.tracking + exit.tracking) * font_size;
+        let stroke_px = segment.stroke_width.clamp(0.0, 40.0) * height_scale;
 
         prepared.push(PreparedText {
+            track: segment.track,
             content,
             bounds: [left, top, right, bottom],
             color: parse_color(&segment.color),
@@ -261,7 +401,7 @@ pub fn prepare_texts(
             italic: segment.italic,
             opacity,
             align: segment.align,
-            letter_spacing: segment.letter_spacing.clamp(-24.0, 240.0) * height_scale,
+            letter_spacing: segment.letter_spacing.clamp(-24.0, 240.0) * height_scale + tracking_px,
             line_height: segment.line_height.clamp(0.5, 3.0),
             shadow: segment.shadow.clamp(0.0, 1.0),
             offset: [
@@ -269,6 +409,13 @@ pub fn prepare_texts(
                 enter.offset[1] + exit.offset[1],
             ],
             scale: (enter.scale * exit.scale).max(0.01),
+            stroke: (stroke_px > 0.0).then(|| (stroke_px, parse_color(&segment.stroke_color))),
+            glow: segment.glow.clamp(0.0, 1.0),
+            gradient_color: segment.gradient_color.as_deref().and_then(parse_rgb_color),
+            background_style: segment.background_style,
+            wipe,
+            stagger_in: enter.stagger,
+            stagger_out: exit.stagger,
         });
     }
 
@@ -295,6 +442,12 @@ mod tests {
             italic: false,
             color: "#ffffff".to_string(),
             background_color: None,
+            background_style: Default::default(),
+            uppercase: false,
+            stroke_width: 0.0,
+            stroke_color: "#000000".to_string(),
+            gradient_color: None,
+            glow: 0.0,
             fade_duration: 0.15,
             align: TextAlign::Center,
             letter_spacing: 0.0,
@@ -314,6 +467,40 @@ mod tests {
         prepare_texts(XY::new(1920, 1080), time, &[seg], &[])
             .into_iter()
             .next()
+    }
+
+    #[test]
+    fn text_layer_order_preserves_hidden_segment_identity() {
+        let mut front = segment(TextAnimation::None, TextAnimation::None);
+        front.track = 2;
+        front.content = "Front".into();
+        let mut back = front.clone();
+        back.track = 0;
+        back.content = "Back".into();
+        let mut middle = front.clone();
+        middle.track = 1;
+        middle.content = "Middle".into();
+        let segments = [front, back, middle];
+        let prepared = prepare_texts(XY::new(1920, 1080), 5.0, &segments, &[]);
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|text| text.content.as_str())
+                .collect::<Vec<_>>(),
+            ["Back", "Middle", "Front"]
+        );
+        assert_eq!(
+            prepared.iter().map(|text| text.track).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        let hidden = prepare_texts(XY::new(1920, 1080), 5.0, &segments, &[0]);
+        assert_eq!(
+            hidden
+                .iter()
+                .map(|text| text.content.as_str())
+                .collect::<Vec<_>>(),
+            ["Back", "Middle"]
+        );
     }
 
     #[test]
@@ -346,25 +533,165 @@ mod tests {
 
     #[test]
     fn background_rect_expands_authored_bounds_then_transforms_about_center() {
-        let (rect, radius) = text_background_rect(
+        let (rect, radius) = background_rect(
             [100.0, 200.0, 300.0, 400.0],
             100.0,
             50.0,
+            [200.0, 300.0],
             0.5,
             [10.0, -20.0],
+            false,
         );
         assert_eq!(rect, [155.0, 225.0, 110.0, 110.0]);
         assert!((radius - 3.75).abs() < 0.000_001);
     }
 
     #[test]
+    fn pill_background_widens_and_rounds_to_half_height() {
+        let (rect, radius) = background_rect(
+            [100.0, 200.0, 300.0, 260.0],
+            60.0,
+            50.0,
+            [200.0, 230.0],
+            1.0,
+            [0.0, 0.0],
+            true,
+        );
+        assert_eq!(rect, [75.0, 190.0, 250.0, 80.0]);
+        assert_eq!(radius, 40.0);
+    }
+
+    #[test]
+    fn highlight_rect_hugs_one_line_of_ink() {
+        let (rect, radius) = highlight_rect(
+            (100.0, 200.0),
+            (50.0, 60.0),
+            50.0,
+            [150.0, 80.0],
+            1.0,
+            [0.0, 0.0],
+        );
+        assert_eq!(rect, [94.0, 47.0, 112.0, 66.0]);
+        assert_eq!(radius, 6.0);
+    }
+
+    #[test]
+    fn slides_enter_from_opposite_sides_and_exit_through() {
+        let seg = |anim| segment(anim, anim);
+        let left = prepare_one(seg(TextAnimation::SlideLeft), 0.1).unwrap();
+        assert!(left.offset[0] > 0.0 && left.offset[1] == 0.0);
+        let left_exit = prepare_one(seg(TextAnimation::SlideLeft), 9.9).unwrap();
+        assert!(left_exit.offset[0] < 0.0);
+        let right = prepare_one(seg(TextAnimation::SlideRight), 0.1).unwrap();
+        assert!(right.offset[0] < 0.0);
+        assert!(
+            prepare_one(seg(TextAnimation::SlideRight), 5.0)
+                .unwrap()
+                .offset
+                == [0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn zoom_starts_large_and_bounce_overshoots_the_rest_position() {
+        let zoom = prepare_one(segment(TextAnimation::Zoom, TextAnimation::None), 0.05).unwrap();
+        assert!(zoom.scale > 1.25 && zoom.scale < ZOOM_MAX_SCALE);
+        assert_eq!(
+            prepare_one(segment(TextAnimation::Zoom, TextAnimation::None), 5.0)
+                .unwrap()
+                .scale,
+            1.0
+        );
+        let early = prepare_one(segment(TextAnimation::Bounce, TextAnimation::None), 0.05).unwrap();
+        assert!(early.offset[1] > 0.0, "starts below its rest position");
+        let late = prepare_one(segment(TextAnimation::Bounce, TextAnimation::None), 0.8).unwrap();
+        assert!(late.offset[1] < 0.0, "overshoots above before settling");
+    }
+
+    #[test]
+    fn wipe_reveals_width_without_fading() {
+        let seg = segment(TextAnimation::Wipe, TextAnimation::Wipe);
+        let half = prepare_one(seg.clone(), 0.5).unwrap();
+        assert_eq!(half.opacity, 1.0);
+        assert!(half.wipe > 0.5 && half.wipe < 1.0);
+        assert_eq!(prepare_one(seg.clone(), 5.0).unwrap().wipe, 1.0);
+        assert!(prepare_one(seg.clone(), 9.8).unwrap().wipe < 1.0);
+        assert!(
+            prepare_one(seg, 0.0).is_none(),
+            "nothing visible at width 0"
+        );
+    }
+
+    #[test]
+    fn words_and_letters_carry_their_edge_progress() {
+        let seg = segment(TextAnimation::Words, TextAnimation::Letters);
+        let entering = prepare_one(seg.clone(), 0.25).unwrap();
+        assert_eq!(
+            entering.stagger_in,
+            Some(StaggerEdge {
+                by_word: true,
+                progress: 0.25
+            })
+        );
+        assert_eq!(entering.stagger_out, None);
+        assert_eq!(entering.opacity, 1.0);
+        assert_eq!(
+            stagger_alpha(entering.stagger_in.unwrap(), 0, 2),
+            ease_out_cubic(0.25 / 0.55)
+        );
+        assert!(stagger_alpha(entering.stagger_in.unwrap(), 1, 2) < 0.2);
+        let resting = prepare_one(seg.clone(), 5.0).unwrap();
+        assert_eq!(resting.stagger_in, None);
+        let exiting = prepare_one(seg, 9.5).unwrap();
+        assert_eq!(
+            exiting.stagger_out,
+            Some(StaggerEdge {
+                by_word: false,
+                progress: 0.5
+            })
+        );
+    }
+
+    #[test]
+    fn tracking_widens_letter_spacing_while_entering() {
+        let seg = segment(TextAnimation::Tracking, TextAnimation::None);
+        let entering = prepare_one(seg.clone(), 0.05).unwrap();
+        let eased = ease_out_cubic(0.05);
+        let expected = (1.0 - eased) * TRACKING_TRAVEL_EM * 48.0;
+        assert!((entering.letter_spacing - expected).abs() < 1e-3);
+        assert_eq!(prepare_one(seg, 5.0).unwrap().letter_spacing, 0.0);
+    }
+
+    #[test]
+    fn look_fields_are_prepared_and_scaled() {
+        let mut seg = segment(TextAnimation::None, TextAnimation::None);
+        seg.uppercase = true;
+        seg.stroke_width = 4.0;
+        seg.stroke_color = "#ff0000".to_string();
+        seg.gradient_color = Some("#0000ff".to_string());
+        seg.glow = 0.5;
+        seg.background_style = TextBackgroundStyle::Pill;
+        let text = prepare_texts(XY::new(3840, 2160), 5.0, &[seg], &[])
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(text.content, "HELLO");
+        assert_eq!(text.stroke, Some((8.0, [1.0, 0.0, 0.0, 1.0])));
+        assert_eq!(text.gradient_color, Some([0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(text.glow, 0.5);
+        assert_eq!(text.background_style, TextBackgroundStyle::Pill);
+    }
+
+    #[test]
     fn multiline_background_keeps_the_authored_transform_origin() {
-        let (rect, _) = text_background_rect(
+        let (rect, _) = background_rect(
             [100.0, 200.0, 300.0, 400.0],
             300.0,
             50.0,
+            [200.0, 300.0],
             0.5,
             [10.0, -20.0],
+            false,
         );
         assert_eq!(rect, [155.0, 225.0, 110.0, 160.0]);
     }

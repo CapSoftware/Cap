@@ -21,6 +21,7 @@ const footerLinks = {
 		{ label: "Blog", href: "/blog" },
 		{ label: "Changelog", href: "/changelog" },
 		{ label: "Docs", href: "/docs" },
+		{ label: "Cap for Agents", href: "/agents" },
 		{ label: "Pricing", href: "/pricing" },
 		{ label: "Download", href: "/download" },
 		{
@@ -53,7 +54,7 @@ const footerLinks = {
 		},
 		{
 			label: "System Status",
-			href: "https://cap.openstatus.dev/",
+			href: "https://status.cap.so",
 			isExternal: true,
 		},
 	] as FooterLink[],

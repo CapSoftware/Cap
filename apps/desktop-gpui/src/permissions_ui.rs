@@ -159,10 +159,11 @@ impl PermissionsState {
 
     /// Whether to show the "grants from System Settings may need a relaunch"
     /// hint -- the Tauri onboarding's "Restart Required" dialog, inline.
-    /// Visible from the moment a required permission is routed through
-    /// System Settings until both required grants have actually landed.
+    /// Visible after a required request fails or its System Settings pane
+    /// is opened, until both required grants have actually landed.
     pub fn relaunch_hint(&self) -> bool {
-        self.sent_to_settings && !self.necessary_granted()
+        (self.sent_to_settings || self.attempted.screen || self.attempted.accessibility)
+            && !self.necessary_granted()
     }
 }
 
@@ -176,6 +177,13 @@ pub fn sweep_raw() -> Option<RawPermissions> {
     match fake_spec() {
         Some(spec) => parse_fake(&spec),
         None => permissions::check_raw(),
+    }
+}
+
+pub fn sweep_raw_preflight() -> Option<RawPermissions> {
+    match fake_spec() {
+        Some(spec) => parse_fake(&spec),
+        None => permissions::check_raw_preflight(),
     }
 }
 

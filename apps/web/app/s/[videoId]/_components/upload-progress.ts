@@ -35,12 +35,41 @@ export type UploadProgress =
 			lastUpdated: Date;
 	  };
 
+/**
+ * Identifies an upload state by value. `useUploadProgress` builds a new object
+ * on every render, so anything that stores it has to compare this instead.
+ */
+export function uploadProgressKey(progress: UploadProgress | null): string {
+	if (!progress) return "none";
+	return JSON.stringify(progress, (_key, value: unknown) =>
+		value instanceof Date ? value.getTime() : value,
+	);
+}
+
 export function shouldDeferPlaybackSource(
 	uploadProgress: UploadProgress | null,
 ): boolean {
 	return (
 		uploadProgress?.status === "fetching" ||
 		uploadProgress?.status === "uploading"
+	);
+}
+
+export function isRecordingUpload(
+	uploadProgress: UploadProgress | null,
+	recordingStopped: boolean,
+): boolean {
+	return !recordingStopped && uploadProgress?.status === "uploading";
+}
+
+export function hasUnplayableRecordingSource(
+	uploadProgress: UploadProgress | null,
+): boolean {
+	return (
+		uploadProgress?.status === "error" &&
+		/^source-(?:incomplete|invalid|missing):/i.test(
+			uploadProgress.errorMessage ?? "",
+		)
 	);
 }
 

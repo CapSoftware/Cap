@@ -254,7 +254,9 @@ impl RecordingMeta {
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
 
-        if let Ok(captions_str) = std::fs::read_to_string(&captions_path) {
+        if config.captions.is_none()
+            && let Ok(captions_str) = std::fs::read_to_string(&captions_path)
+        {
             debug!("Found captions.json, attempting to parse");
             if let Ok(captions_data) = serde_json::from_str::<CaptionsData>(&captions_str) {
                 info!(
@@ -265,7 +267,7 @@ impl RecordingMeta {
             } else {
                 warn!("Failed to parse captions.json");
             }
-        } else {
+        } else if config.captions.is_none() {
             debug!("No captions.json found");
         }
 
@@ -321,7 +323,7 @@ impl RecordingMeta {
     fn normalize_paths(&mut self) {
         let normalize_video = |meta: &mut VideoMeta| normalize_relative_path(&mut meta.path);
         let normalize_audio = |meta: &mut AudioMeta| normalize_relative_path(&mut meta.path);
-        let normalize_cursor = |path: &mut Option<RelativePathBuf>| {
+        let normalize_optional_path = |path: &mut Option<RelativePathBuf>| {
             if let Some(path) = path {
                 normalize_relative_path(path);
             }
@@ -337,7 +339,7 @@ impl RecordingMeta {
                     if let Some(audio) = &mut segment.audio {
                         normalize_audio(audio);
                     }
-                    normalize_cursor(&mut segment.cursor);
+                    normalize_optional_path(&mut segment.cursor);
                 }
                 StudioRecordingMeta::MultipleSegments { inner } => {
                     for segment in &mut inner.segments {
@@ -351,7 +353,8 @@ impl RecordingMeta {
                         if let Some(system_audio) = &mut segment.system_audio {
                             normalize_audio(system_audio);
                         }
-                        normalize_cursor(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.cursor);
+                        normalize_optional_path(&mut segment.keyboard);
                     }
 
                     if let Cursors::Correct(cursors) = &mut inner.cursors {
@@ -367,6 +370,12 @@ impl RecordingMeta {
 }
 
 fn normalize_relative_path(path: &mut RelativePathBuf) {
+    // No real file name holds a NUL, and every media opener (FFmpeg, AVFoundation)
+    // converts the path to a C string, which a NUL makes fail or panic. Dropping
+    // it turns a damaged meta into an ordinary missing file.
+    if path.as_str().contains('\0') {
+        *path = RelativePathBuf::from(path.as_str().replace('\0', ""));
+    }
     let original = path.as_str();
     let normalized = original.replace('\\', "/");
 
@@ -374,6 +383,7 @@ fn normalize_relative_path(path: &mut RelativePathBuf) {
         || normalized.starts_with("screenshots/")
         || normalized.starts_with("output/")
     {
+        *path = RelativePathBuf::from(normalized);
         return;
     }
 
@@ -749,13 +759,6 @@ impl MultipleSegment {
 
         let cal_offset = calibration_offset.unwrap_or(0.0);
 
-        let camera_offset = self
-            .camera
-            .as_ref()
-            .and_then(|c| c.start_time)
-            .map(|t| (latest - t) as f32)
-            .unwrap_or(0.0);
-
         let mic_offset = self
             .mic
             .as_ref()
@@ -770,8 +773,11 @@ impl MultipleSegment {
             .map(|t| (latest - t) as f32 + cal_offset)
             .unwrap_or(0.0);
 
+        // The camera needs no clip offset: its decoder is already aligned to
+        // the latest start time (rendering's `segment_video_timing`). Adding
+        // `latest - camera.start` here as well plays the camera that far ahead.
         crate::ClipOffsets {
-            camera: camera_offset,
+            camera: 0.0,
             mic: mic_offset,
             system_audio: system_audio_offset,
         }
@@ -807,6 +813,44 @@ mod metadata_save_tests {
                 .to_string_lossy()
                 .starts_with(".recording-meta-")
         }));
+    }
+
+    #[test]
+    fn saved_caption_master_takes_precedence_over_legacy_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        let captions = |text: &str| CaptionsData {
+            source_timed: true,
+            segments: vec![crate::CaptionSegment {
+                id: "caption".into(),
+                start: 1.0,
+                end: 2.0,
+                text: text.into(),
+                words: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let config = ProjectConfiguration {
+            captions: Some(captions("edited")),
+            ..Default::default()
+        };
+        config.write(directory.path()).unwrap();
+        std::fs::write(
+            directory.path().join("captions.json"),
+            serde_json::to_vec(&captions("stale")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            meta.project_config().captions.unwrap().segments[0].text,
+            "edited"
+        );
+        ProjectConfiguration::default()
+            .write(directory.path())
+            .unwrap();
+        assert_eq!(
+            meta.project_config().captions.unwrap().segments[0].text,
+            "stale"
+        );
     }
 
     #[test]
@@ -1149,6 +1193,18 @@ mod test {
             assert!((offsets.mic - (0.6586015 - 0.5559852) as f32).abs() < 1e-6);
             assert_eq!(offsets.system_audio, 0.0);
         }
+
+        // The camera decoder is aligned to the latest start time, so an early
+        // camera must not get a clip offset on top of that alignment.
+        #[test]
+        fn early_camera_gets_no_clip_offset() {
+            let mut early = segment(0.2, Some(1.0), None);
+            early.camera = Some(video(Some(0.0)));
+            assert_eq!(early.latest_start_time(), Some(1.0));
+            let offsets = early.calculate_audio_offsets_with_calibration(Some(0.05));
+            assert_eq!(offsets.camera, 0.0);
+            assert!((offsets.mic - 0.05).abs() < 1e-6);
+        }
     }
 }
 
@@ -1469,5 +1525,17 @@ mod ordinary_media_access_tests {
                 .is_err()
         );
         assert!(diagnostics.is_dir());
+    }
+}
+
+#[cfg(test)]
+mod nul_path_tests {
+    use super::*;
+
+    #[test]
+    fn a_nul_in_a_media_path_is_dropped() {
+        let mut path = RelativePathBuf::from("content/segments/segment-0/disp\0lay.mp4");
+        normalize_relative_path(&mut path);
+        assert_eq!(path.as_str(), "content/segments/segment-0/display.mp4");
     }
 }

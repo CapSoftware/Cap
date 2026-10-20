@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use ffmpeg::{
     Packet, Rational,
@@ -7,8 +10,82 @@ use ffmpeg::{
     frame,
 };
 
+pub trait PacketSink {
+    fn stream_time_base(&self, stream_index: usize) -> Rational;
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error>;
+}
+
+impl PacketSink for format::context::Output {
+    fn stream_time_base(&self, stream_index: usize) -> Rational {
+        self.stream(stream_index).unwrap().time_base()
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        packet.write_interleaved(self)
+    }
+}
+
+pub struct PacketQueue {
+    stream_time_base: Rational,
+    packets: Vec<Packet>,
+}
+
+impl PacketQueue {
+    pub fn new(stream_time_base: Rational) -> Self {
+        Self {
+            stream_time_base,
+            packets: Vec::new(),
+        }
+    }
+
+    pub fn take(&mut self) -> Vec<Packet> {
+        std::mem::take(&mut self.packets)
+    }
+}
+
+impl PacketSink for PacketQueue {
+    fn stream_time_base(&self, _stream_index: usize) -> Rational {
+        self.stream_time_base
+    }
+
+    fn write_packet(&mut self, packet: Packet) -> Result<(), ffmpeg::Error> {
+        self.packets.push(packet);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EncodedPacket {
+    pub bytes: u64,
+    pub key: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct EncodedPacketStats {
+    packets: Mutex<Vec<EncodedPacket>>,
+}
+
+impl EncodedPacketStats {
+    pub fn record(&self, packet: &Packet) {
+        if let Ok(mut packets) = self.packets.lock() {
+            packets.push(EncodedPacket {
+                bytes: packet.size() as u64,
+                key: packet.is_key(),
+            });
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<EncodedPacket> {
+        self.packets
+            .lock()
+            .map(|packets| packets.clone())
+            .unwrap_or_default()
+    }
+}
+
 pub struct EncoderBase {
     packet: ffmpeg::Packet,
+    packet_stats: Option<Arc<EncodedPacketStats>>,
     stream_index: usize,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
@@ -27,12 +104,17 @@ impl EncoderBase {
     pub(crate) fn new(stream_index: usize) -> Self {
         Self {
             packet: Packet::empty(),
+            packet_stats: None,
             first_pts: None,
             last_frame_pts: None,
             stream_index,
             last_written_dts: None,
             held_packet: None,
         }
+    }
+
+    pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
+        self.packet_stats = Some(stats);
     }
 
     pub fn update_pts(
@@ -71,6 +153,17 @@ impl EncoderBase {
     /// whereas [`Self::update_pts`] uses the encoder's own (output) time
     /// base. Mixing the two conventions plays non-48kHz microphones at the
     /// wrong speed.
+    /// Re-expresses the stored timestamp state, kept in input-rate samples,
+    /// at a new input rate.
+    pub fn rescale_input_rate(&mut self, from: f64, to: f64) {
+        if from <= 0.0 || to <= 0.0 || from == to {
+            return;
+        }
+        let rescale = |pts: i64| (pts as f64 * to / from).round() as i64;
+        self.first_pts = self.first_pts.map(rescale);
+        self.last_frame_pts = self.last_frame_pts.map(rescale);
+    }
+
     pub fn update_pts_with_rate(
         &mut self,
         frame: &mut frame::Frame,
@@ -103,10 +196,10 @@ impl EncoderBase {
         }
     }
 
-    pub fn send_frame(
+    pub fn send_frame<S: PacketSink + ?Sized>(
         &mut self,
         frame: &frame::Frame,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_frame(frame)?;
@@ -114,16 +207,16 @@ impl EncoderBase {
         self.process_packets(output, encoder)
     }
 
-    fn process_packets(
+    fn process_packets<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         while packet_available(encoder.receive_packet(&mut self.packet))? {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),
-                output.stream(self.stream_index).unwrap().time_base(),
+                output.stream_time_base(self.stream_index),
             );
 
             match (self.packet.pts(), self.packet.dts()) {
@@ -135,7 +228,7 @@ impl EncoderBase {
             let duration_synthesized = self.packet.duration() <= 0;
             if duration_synthesized
                 && let Some(duration) = nominal_packet_duration(
-                    output.stream(self.stream_index).unwrap().time_base(),
+                    output.stream_time_base(self.stream_index),
                     encoder.frame_rate(),
                 )
             {
@@ -161,6 +254,9 @@ impl EncoderBase {
             }
 
             self.last_written_dts = self.packet.dts();
+            if let Some(stats) = &self.packet_stats {
+                stats.record(&self.packet);
+            }
 
             let current = std::mem::replace(&mut self.packet, Packet::empty());
             if let Some((mut previous, previous_synthesized)) = self.held_packet.take() {
@@ -170,7 +266,7 @@ impl EncoderBase {
                 {
                     previous.set_duration(cur_dts - prev_dts);
                 }
-                previous.write_interleaved(output)?;
+                output.write_packet(previous)?;
             }
             self.held_packet = Some((current, duration_synthesized));
         }
@@ -178,9 +274,9 @@ impl EncoderBase {
         Ok(())
     }
 
-    pub fn process_eof(
+    pub fn process_eof<S: PacketSink + ?Sized>(
         &mut self,
-        output: &mut format::context::Output,
+        output: &mut S,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
         encoder.send_eof()?;
@@ -188,7 +284,7 @@ impl EncoderBase {
         self.process_packets(output, encoder)?;
 
         if let Some((previous, _)) = self.held_packet.take() {
-            previous.write_interleaved(output)?;
+            output.write_packet(previous)?;
         }
 
         Ok(())
@@ -242,6 +338,40 @@ fn normalize_input_pts(pts: i64, last_pts: Option<i64>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guard sentinel E02 (scripts/verify/guards.toml): a stream whose first
+    /// frame carries a non-zero pts is rebased to start at 0 and keeps its
+    /// frame spacing. Exports start at 0 anyway, so removing the rebase
+    /// changes no export output today; this checks the rebase itself.
+    #[test]
+    fn guard_e02_rebases_a_stream_whose_first_pts_is_not_zero() {
+        ffmpeg::init().unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new().encoder();
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for pts in [3_000_i64, 3_512, 4_024, 4_536] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            frame.set_pts(Some(pts));
+            base.update_pts(&mut frame, Duration::MAX, &mut encoder);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(512), Some(1_024), Some(1_536)]);
+
+        // Capture timestamps (time base 1/90000) starting 2.5 s in.
+        let mut video = ffmpeg::codec::context::Context::new()
+            .encoder()
+            .video()
+            .unwrap();
+        video.set_time_base((1, 90_000));
+        let mut base = EncoderBase::new(0);
+        let mut seen = Vec::new();
+        for ms in [2_500_u64, 2_533, 2_567, 2_600] {
+            let mut frame = frame::Video::new(ffmpeg::format::Pixel::YUV420P, 2, 2);
+            base.update_pts(&mut frame, Duration::from_millis(ms), &mut video);
+            seen.push(frame.pts());
+        }
+        assert_eq!(seen, [Some(0), Some(2_970), Some(6_030), Some(9_000)]);
+    }
 
     #[test]
     fn normalize_input_pts_passes_monotonic_input_through() {

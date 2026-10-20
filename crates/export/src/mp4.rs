@@ -1,6 +1,9 @@
 use crate::{ExporterBase, Mp4ExporterBase};
-use cap_editor::{AudioRenderer, ExportAudioError, get_audio_segments, load_music_tracks_uncached};
-use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
+use cap_editor::{
+    AudioRenderer, ExportAudioError, ExportAudioRenderer, get_audio_segments,
+    load_music_tracks_uncached,
+};
+use cap_enc_ffmpeg::{AudioEncoder, PacketQueue, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{
@@ -210,6 +213,40 @@ impl Mp4ExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        use cap_utils::operation_diagnostics::{Field, observe};
+        observe(
+            "export_mp4",
+            &[
+                Field::number("requested_fps", self.fps as u64),
+                Field::number("requested_width", self.resolution_base.x as u64),
+                Field::number("requested_height", self.resolution_base.y as u64),
+                Field::identifier(
+                    "resource",
+                    cap_utils::operation_diagnostics::resource_id(&base.project_path),
+                ),
+                Field::number(
+                    "source_width",
+                    base.render_constants.options.screen_size.x as u64,
+                ),
+                Field::number(
+                    "source_height",
+                    base.render_constants.options.screen_size.y as u64,
+                ),
+                Field::number("source_segments", base.segments.len() as u64),
+                Field::number("clips", base.project_config.clips.len() as u64),
+                Field::flag("captions", base.project_config.captions.is_some()),
+                Field::flag("streaming_audio", base.streaming_audio.is_some()),
+            ],
+            self.export_inner(base, on_progress),
+        )
+        .await
+    }
+
+    async fn export_inner(
+        self,
+        base: ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
         info!("Exporting mp4 with settings: {:?}", &self);
         info!("Expected to render {} frames", base.total_frames(self.fps));
 
@@ -292,6 +329,7 @@ impl Mp4ExportSettings {
         mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
+        let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
         let mut streaming_audio = base.streaming_audio.take();
         let audio_control = base.audio_cancellation.take();
@@ -373,6 +411,7 @@ impl Mp4ExportSettings {
             #[cfg(not(target_os = "macos"))]
             let encoder_is_hw = false;
 
+            let mut detached_audio = None;
             let mut encoder = MP4File::init(
                 "output",
                 encoder_output_path.clone(),
@@ -409,24 +448,52 @@ impl Mp4ExportSettings {
                     builder.build(o)
                 },
                 |o| {
-                    has_audio.then(|| {
-                        AACEncoder::init(AudioRenderer::info(), o)
-                            .map(|v| v.boxed())
-                            .map_err(Into::into)
-                    })
+                    if !has_audio {
+                        return None;
+                    }
+                    match AACEncoder::init_for_export(AudioRenderer::info(), o) {
+                        Ok(audio) => {
+                            detached_audio = Some(audio);
+                            None
+                        }
+                        Err(error) => Some(Err(error.into())),
+                    }
                 },
             )
             .map_err(|v| v.to_string())?;
+            if let Some(timing) = &sample_timing {
+                encoder.video_mut().set_packet_stats(timing.packet_stats());
+            }
 
             info!(
                 zero_copy_input = encoder_is_hw,
                 "Created MP4File encoder (NV12, export settings)"
             );
 
-            let mut audio_renderer = if has_audio && streaming_audio.is_none() {
-                Some(AudioRenderer::new(audio_segments).with_music(music))
-            } else {
-                None
+            let mut audio_worker = match detached_audio {
+                Some(audio_encoder) => {
+                    let source = match streaming_audio.take() {
+                        Some(audio) => ExportAudioSource::Streaming(audio),
+                        None => ExportAudioSource::Renderer(AudioRenderer::new(audio_segments).with_music(music)),
+                    };
+                    let worker_cancellation = encoder_cancellation.clone();
+                    let worker_user_cancellation = encoder_user_cancellation.clone();
+                    Some(ExportAudioWorker::spawn(
+                        encoder.stream_time_base(audio_encoder.stream_index()),
+                        audio_encoder,
+                        source,
+                        ExportAudioTimeline {
+                            project: project_for_audio,
+                            fps,
+                            sampled: sample_timing.is_some(),
+                        },
+                        move || {
+                            worker_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+                                || worker_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+                        },
+                    )?)
+                }
+                None => None,
             };
 
             let mut reusable_frame = ffmpeg::frame::Video::new(
@@ -437,34 +504,20 @@ impl Mp4ExportSettings {
             let mut converted_frame: Option<ffmpeg::frame::Video> = None;
             let mut encoded_frames = 0u32;
             let encode_start = std::time::Instant::now();
-            let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
-            let fps_u64 = u64::from(fps);
-            let mut audio_sample_cursor = 0u64;
 
             let frames = first_frame
                 .into_iter()
                 .chain(std::iter::from_fn(|| frame_rx.recv().ok()));
             for input in frames {
+                if sample_timing.as_ref().is_some_and(|timing| timing.is_cancelled()) {
+                    return Err(Mp4PipelineError::Interrupted);
+                }
                 if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Err(Mp4PipelineError::Interrupted);
                 }
-                if encoded_frames == 0
-                    && let Some(audio) = &mut audio_renderer
-                {
-                    audio.set_playhead(0.0, &project_for_audio);
+                if let Some(worker) = &mut audio_worker {
+                    worker.request(input.frame_number, input.timeline_frame);
                 }
-
-                let audio_frame = audio_renderer.as_mut().and_then(|audio| {
-                    let n = u64::from(input.frame_number);
-                    let (pts, samples) =
-                        audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor)?;
-                    audio_sample_cursor = pts as u64 + samples as u64;
-                    let mut frame = audio
-                        .render_frame(samples, &project_for_audio)
-                        .unwrap_or_else(|| silent_audio_frame(samples));
-                    frame.set_pts(Some(pts));
-                    Some(frame)
-                });
 
                 match &input.payload {
                     ExportFramePayload::Cpu(nv12_data) => {
@@ -522,34 +575,13 @@ impl Mp4ExportSettings {
                         }
                     }
                 }
-                if let Some(audio) = audio_frame {
-                    encoder.queue_audio_frame(audio);
-                }
-                if has_audio && let Some(audio) = &mut streaming_audio {
-                    let n = u64::from(input.frame_number);
-                    if let Some((pts, samples)) = audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor) {
-                        audio_sample_cursor = pts as u64 + samples as u64;
-                        let rendered = audio.render_chunks(samples, &project_for_audio, |offset, data| {
-                            let mut frame = packed_audio_frame(data);
-                            frame.set_pts(Some(pts + offset as i64));
-                            encoder.try_queue_audio_frame(frame).map_err(|error| ExportAudioError::Sink(error.to_string()))
-                        }).map_err(Mp4PipelineError::from)?;
-                        if rendered.is_none() {
-                            let mut offset = 0;
-                            while offset < samples {
-                                if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                                    return Err(Mp4PipelineError::Interrupted);
-                                }
-                                let count = (samples - offset).min(4_096);
-                                let mut frame = silent_audio_frame(count);
-                                frame.set_pts(Some(pts + offset as i64));
-                                encoder.try_queue_audio_frame(frame).map_err(|error| error.to_string())?;
-                                offset += count;
-                            }
-                        }
-                    }
+                if let Some(worker) = &mut audio_worker {
+                    worker.write_ready(&mut encoder)?;
                 }
                 encoded_frames += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame(input.timeline_frame);
+                }
                 if encoded_frames == 1
                     && let Some(atom) = record_first_queued_ms.as_ref()
                 {
@@ -570,6 +602,9 @@ impl Mp4ExportSettings {
                 );
             }
 
+            if let Some(worker) = audio_worker.take() {
+                worker.finish(&mut encoder)?;
+            }
             if let Some(audio) = &mut streaming_audio {
                 audio.validate_to_end().map_err(Mp4PipelineError::from)?;
             }
@@ -634,6 +669,7 @@ impl Mp4ExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_windows.clone(),
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
             audio_cancellation.is_some(),
@@ -711,6 +747,7 @@ struct ExportFrame {
     height: u32,
     y_stride: u32,
     frame_number: u32,
+    timeline_frame: u32,
 }
 
 impl ExportFrame {
@@ -753,6 +790,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             height: frame.height,
             y_stride: frame.y_stride,
             frame_number: frame.frame_number,
+            timeline_frame: frame.frame_number,
             payload: ExportFramePayload::Surface(surface),
         };
     }
@@ -763,6 +801,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             height: frame.height,
             y_stride: frame.y_stride,
             frame_number: frame.frame_number,
+            timeline_frame: frame.frame_number,
             payload: ExportFramePayload::Cpu(frame.data),
         };
     }
@@ -798,7 +837,13 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         width,
         height,
         ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-    ) {
+    ) && cap_enc_ffmpeg::colour::use_bt709_for_rgb_input(
+        &mut converter,
+        ffmpeg::format::Pixel::RGBA,
+        ffmpeg::format::Pixel::NV12,
+    )
+    .is_ok()
+    {
         let mut nv12_frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
         if converter.run(&rgba_frame, &mut nv12_frame).is_ok() {
             let y_size = nv12_frame.stride(0) * height as usize;
@@ -831,6 +876,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
                 height,
                 y_stride: width,
                 frame_number: frame.frame_number,
+                timeline_frame: frame.frame_number,
             };
         }
     }
@@ -851,6 +897,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         height,
         y_stride: width,
         frame_number: frame.frame_number,
+        timeline_frame: frame.frame_number,
     }
 }
 
@@ -873,8 +920,226 @@ fn audio_frame_budget(
     Some((cursor as i64, (end - cursor) as usize))
 }
 
+enum ExportAudioSource {
+    Renderer(AudioRenderer),
+    Streaming(ExportAudioRenderer),
+}
+
+struct ExportAudioTimeline {
+    project: ProjectConfiguration,
+    fps: u32,
+    sampled: bool,
+}
+
+struct ExportAudioJob {
+    frame_number: u32,
+    timeline_frame: u32,
+}
+
+/// How far audio may fall behind video before the encoder thread waits for
+/// it. The muxer interleaves by timestamp only within its 10 s window, so
+/// staying well inside it keeps the file identical to a single thread's.
+const AUDIO_LAG_LIMIT_SECS: u32 = 2;
+
+/// Renders and AAC-encodes each output frame's audio on its own thread, so
+/// voice enhancement and the AAC encoder run alongside video encoding
+/// instead of after it on the encoder thread. Packets come back in encoder
+/// order, one batch per frame, and the muxer interleaves them by timestamp.
+struct ExportAudioWorker {
+    jobs: std::sync::mpsc::Sender<ExportAudioJob>,
+    packets: std::sync::mpsc::Receiver<Vec<ffmpeg::Packet>>,
+    thread: Option<std::thread::JoinHandle<Result<AACEncoder, Mp4PipelineError>>>,
+    requested: u32,
+    completed: u32,
+    lag_limit: u32,
+}
+
+impl ExportAudioWorker {
+    fn spawn(
+        stream_time_base: ffmpeg::Rational,
+        mut encoder: AACEncoder,
+        mut source: ExportAudioSource,
+        timeline: ExportAudioTimeline,
+        is_cancelled: impl Fn() -> bool + Send + 'static,
+    ) -> Result<Self, Mp4PipelineError> {
+        let (jobs, job_rx) = std::sync::mpsc::channel::<ExportAudioJob>();
+        let (packet_tx, packets) = std::sync::mpsc::channel();
+        let lag_limit = timeline.fps.max(1) * AUDIO_LAG_LIMIT_SECS;
+        let thread = std::thread::Builder::new()
+            .name("export-audio".to_string())
+            .spawn(move || {
+                let ExportAudioTimeline {
+                    project,
+                    fps,
+                    sampled,
+                } = timeline;
+                let mut queue = PacketQueue::new(stream_time_base);
+                let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
+                let fps_u64 = u64::from(fps);
+                let mut cursor = 0u64;
+                let mut last_timeline_frame: Option<u32> = None;
+                for (rendered_frames, job) in job_rx.into_iter().enumerate() {
+                    if is_cancelled() {
+                        return Err(Mp4PipelineError::Interrupted);
+                    }
+                    let frame_number = u64::from(job.frame_number);
+                    match &mut source {
+                        ExportAudioSource::Renderer(audio) => {
+                            if rendered_frames == 0 {
+                                audio.set_playhead(
+                                    if sampled {
+                                        job.timeline_frame as f64 / fps as f64
+                                    } else {
+                                        0.0
+                                    },
+                                    &project,
+                                );
+                            } else if sampled
+                                && last_timeline_frame
+                                    .is_some_and(|last| job.timeline_frame != last + 1)
+                            {
+                                audio
+                                    .set_playhead(job.timeline_frame as f64 / fps as f64, &project);
+                                cursor = frame_number * sample_rate / fps_u64;
+                            }
+                            if let Some((pts, samples)) =
+                                audio_frame_budget(frame_number, sample_rate, fps_u64, cursor)
+                            {
+                                cursor = pts as u64 + samples as u64;
+                                let mut frame = audio
+                                    .render_frame(samples, &project)
+                                    .unwrap_or_else(|| silent_audio_frame(samples));
+                                frame.set_pts(Some(pts));
+                                let _ = encoder.send_frame_to(frame, Duration::MAX, &mut queue);
+                            }
+                        }
+                        ExportAudioSource::Streaming(audio) => {
+                            if let Some((pts, samples)) =
+                                audio_frame_budget(frame_number, sample_rate, fps_u64, cursor)
+                            {
+                                cursor = pts as u64 + samples as u64;
+                                let rendered = audio
+                                    .render_chunks(samples, &project, |offset, data| {
+                                        let mut frame = packed_audio_frame(data);
+                                        frame.set_pts(Some(pts + offset as i64));
+                                        encoder
+                                            .send_frame_to(frame, Duration::MAX, &mut queue)
+                                            .map_err(|error| {
+                                                ExportAudioError::Sink(error.to_string())
+                                            })
+                                    })
+                                    .map_err(Mp4PipelineError::from)?;
+                                if rendered.is_none() {
+                                    let mut offset = 0;
+                                    while offset < samples {
+                                        if is_cancelled() {
+                                            return Err(Mp4PipelineError::Interrupted);
+                                        }
+                                        let count = (samples - offset).min(4_096);
+                                        let mut frame = silent_audio_frame(count);
+                                        frame.set_pts(Some(pts + offset as i64));
+                                        encoder
+                                            .send_frame_to(frame, Duration::MAX, &mut queue)
+                                            .map_err(|error| error.to_string())?;
+                                        offset += count;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    last_timeline_frame = Some(job.timeline_frame);
+                    if packet_tx.send(queue.take()).is_err() {
+                        return Err(Mp4PipelineError::Interrupted);
+                    }
+                }
+                if let ExportAudioSource::Streaming(audio) = &mut source {
+                    audio.validate_to_end().map_err(Mp4PipelineError::from)?;
+                }
+                Ok(encoder)
+            })
+            .map_err(|error| {
+                Mp4PipelineError::Failure(format!(
+                    "Could not start the export audio thread: {error}"
+                ))
+            })?;
+        Ok(Self {
+            jobs,
+            packets,
+            thread: Some(thread),
+            requested: 0,
+            completed: 0,
+            lag_limit,
+        })
+    }
+
+    fn request(&mut self, frame_number: u32, timeline_frame: u32) {
+        self.requested += 1;
+        let _ = self.jobs.send(ExportAudioJob {
+            frame_number,
+            timeline_frame,
+        });
+    }
+
+    fn write_ready(&mut self, output: &mut MP4File) -> Result<(), Mp4PipelineError> {
+        loop {
+            let packets = if self.requested - self.completed > self.lag_limit {
+                self.packets.recv().ok()
+            } else {
+                match self.packets.try_recv() {
+                    Ok(packets) => Some(packets),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                }
+            };
+            // The worker only hangs up before its jobs run out when it
+            // fails; surface that now rather than after the rest of the video.
+            let Some(packets) = packets else {
+                return Err(self
+                    .thread
+                    .take()
+                    .and_then(|thread| join_audio_thread(thread).err())
+                    .unwrap_or_else(|| {
+                        Mp4PipelineError::Failure("Export audio thread stopped early".to_string())
+                    }));
+            };
+            self.completed += 1;
+            output
+                .write_packets(packets)
+                .map_err(|error| Mp4PipelineError::Failure(error.to_string()))?;
+        }
+    }
+
+    fn finish(self, output: &mut MP4File) -> Result<(), Mp4PipelineError> {
+        let Self {
+            jobs,
+            packets,
+            thread,
+            ..
+        } = self;
+        drop(jobs);
+        for packets in packets.iter() {
+            output
+                .write_packets(packets)
+                .map_err(|error| Mp4PipelineError::Failure(error.to_string()))?;
+        }
+        let thread = thread.ok_or_else(|| {
+            Mp4PipelineError::Failure("Export audio thread stopped early".to_string())
+        })?;
+        output.attach_audio(join_audio_thread(thread)?.boxed());
+        Ok(())
+    }
+}
+
+fn join_audio_thread(
+    thread: std::thread::JoinHandle<Result<AACEncoder, Mp4PipelineError>>,
+) -> Result<AACEncoder, Mp4PipelineError> {
+    thread
+        .join()
+        .map_err(|_| Mp4PipelineError::Failure("Export audio thread panicked".to_string()))?
+}
+
 #[derive(Debug)]
-pub(crate) struct TemporaryMp4Output {
+pub(crate) struct TemporaryExportOutput {
     path: tempfile::TempPath,
     #[cfg(unix)]
     file: std::fs::File,
@@ -882,18 +1147,21 @@ pub(crate) struct TemporaryMp4Output {
     final_permissions: std::fs::Permissions,
 }
 
-impl AsRef<std::path::Path> for TemporaryMp4Output {
+impl AsRef<std::path::Path> for TemporaryExportOutput {
     fn as_ref(&self) -> &std::path::Path {
         self.path.as_ref()
     }
 }
 
-impl TemporaryMp4Output {
+impl TemporaryExportOutput {
     pub(crate) fn to_path_buf(&self) -> PathBuf {
         self.path.to_path_buf()
     }
 
-    fn persist_noclobber(self, output: &std::path::Path) -> Result<(), tempfile::PathPersistError> {
+    pub(crate) fn persist_noclobber(
+        self,
+        output: &std::path::Path,
+    ) -> Result<(), tempfile::PathPersistError> {
         #[cfg(unix)]
         let prepare_permissions = || {
             use std::os::unix::fs::MetadataExt;
@@ -918,11 +1186,17 @@ impl TemporaryMp4Output {
     }
 }
 
-pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<TemporaryMp4Output, String> {
+pub(crate) fn temporary_export_output(
+    output: &std::path::Path,
+) -> Result<TemporaryExportOutput, String> {
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let suffix = output
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
     let temporary = tempfile::Builder::new()
         .prefix(".cap-export-")
-        .suffix(".mp4")
+        .suffix(&suffix)
         .tempfile_in(parent)
         .map_err(|error| error.to_string())?;
     #[cfg(unix)]
@@ -944,7 +1218,7 @@ pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<Temporary
     let (file, path) = temporary.into_parts();
     #[cfg(not(unix))]
     drop(file);
-    Ok(TemporaryMp4Output {
+    Ok(TemporaryExportOutput {
         path,
         #[cfg(unix)]
         file,
@@ -1095,33 +1369,50 @@ fn fill_nv12_frame(frame: &mut ffmpeg::frame::Video, input: &Nv12ExportFrame) {
     );
 }
 
+fn rgba_into_rgb(mut pixels: Vec<u8>) -> Vec<u8> {
+    let pixel_count = pixels.len() / 4;
+    for pixel in 1..pixel_count {
+        let (src, dst) = (pixel * 4, pixel * 3);
+        pixels[dst] = pixels[src];
+        pixels[dst + 1] = pixels[src + 1];
+        pixels[dst + 2] = pixels[src + 2];
+    }
+    pixels.truncate(pixel_count * 3);
+    pixels
+}
+
+// Runs while the encoder is still draining its surface pool, so it converts in
+// place instead of holding the NV12 copy, the RGBA frame and a growing RGB copy
+// at once (measured at 4K: 48 MB of extra heap before, 27 MB after).
 fn save_screenshot_from_nv12(
-    nv12_data: &[u8],
+    nv12_data: Vec<u8>,
     width: u32,
     height: u32,
     y_stride: u32,
     project_path: &std::path::Path,
 ) {
     let y_plane_size = (y_stride as usize) * (height as usize);
-    let y_data = &nv12_data[..y_plane_size.min(nv12_data.len())];
-    let uv_data = if y_plane_size < nv12_data.len() {
-        &nv12_data[y_plane_size..]
-    } else {
+    if y_plane_size >= nv12_data.len() {
         return;
-    };
+    }
+    let (y_data, uv_data) = nv12_data.split_at(y_plane_size);
 
     let mut rgba = vec![0u8; (width * height * 4) as usize];
+    // The export's own NV12, so BT.709 like the stream it is encoded into.
     cap_rendering::cpu_yuv::nv12_to_rgba_simd(
-        y_data, uv_data, width, height, y_stride, width, &mut rgba,
-    );
-
-    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+        y_data,
+        uv_data,
         width,
         height,
-        rgba.chunks(4)
-            .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-            .collect::<Vec<_>>(),
+        y_stride,
+        width,
+        &mut rgba,
+        cap_rendering::cpu_yuv::YuvMatrix::Bt709,
     );
+    drop(nv12_data);
+
+    let rgb_img =
+        ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(width, height, rgba_into_rgb(rgba));
 
     let Some(rgb_img) = rgb_img else {
         return;
@@ -1154,6 +1445,7 @@ async fn export_render_to_channel(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
+    frame_windows: Option<cap_rendering::FrameWindows>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
     stop_on_encoder_drop: bool,
@@ -1162,7 +1454,8 @@ async fn export_render_to_channel(
 ) -> Result<(), cap_rendering::RenderingError> {
     let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
-    let screenshot_project_path = project_path;
+    let screenshot_project_path = frame_windows.is_none().then_some(project_path);
+    let sampling = frame_windows.is_some();
 
     let render_result = {
         let render_future = Box::pin(cap_rendering::render_video_to_channel_nv12(
@@ -1175,6 +1468,7 @@ async fn export_render_to_channel(
             fps,
             resolution_base,
             recordings,
+            frame_windows,
             stop_after_frames_sent,
             startup_breakdown_ms,
         ));
@@ -1183,6 +1477,7 @@ async fn export_render_to_channel(
             let mut first_frame_data: Option<FirstFrameNv12> = None;
             let mut frame_count = 0u32;
             let mut consecutive_timeouts = 0u32;
+            let mut encoder_blocked = Duration::ZERO;
 
             loop {
                 let timeout_secs = if frame_count == 0 {
@@ -1228,9 +1523,13 @@ async fn export_render_to_channel(
                     ));
                 }
 
-                let export_frame = nv12_from_rendered_frame(frame);
+                let mut export_frame = nv12_from_rendered_frame(frame);
+                if sampling {
+                    export_frame.frame_number = frame_count;
+                }
 
-                if first_frame_data.is_none()
+                if screenshot_project_path.is_some()
+                    && first_frame_data.is_none()
                     && let Some((data, y_stride)) = export_frame.materialize_nv12()
                 {
                     first_frame_data = Some(FirstFrameNv12 {
@@ -1241,7 +1540,10 @@ async fn export_render_to_channel(
                     });
                 }
 
-                if sender.send(export_frame).is_err() {
+                let send_started = std::time::Instant::now();
+                let sent = sender.send(export_frame);
+                encoder_blocked += send_started.elapsed();
+                if sent.is_err() {
                     warn!("Encoder dropped, stopping render forwarding");
                     if stop_on_encoder_drop {
                         return Err(cap_rendering::RenderingError::ImageLoadError(
@@ -1256,11 +1558,12 @@ async fn export_render_to_channel(
 
             drop(sender);
 
-            if let Some(first) = first_frame_data {
-                let pp = screenshot_project_path;
+            if let Some(first) = first_frame_data
+                && let Some(pp) = screenshot_project_path
+            {
                 let _screenshot_task = tokio::task::spawn_blocking(move || {
                     save_screenshot_from_nv12(
-                        &first.data,
+                        first.data,
                         first.width,
                         first.height,
                         first.y_stride,
@@ -1269,13 +1572,32 @@ async fn export_render_to_channel(
                 });
             }
 
-            Ok::<_, cap_rendering::RenderingError>(())
+            Ok::<_, cap_rendering::RenderingError>(encoder_blocked)
         };
 
+        cap_rendering::loop_stats::take();
         tokio::try_join!(render_future, forward_future)
     };
 
-    render_result?;
+    let (_, encoder_blocked) = render_result?;
+
+    // The loop_stats counters are process-wide, so an export that overlaps another one reports
+    // a mix of both. That is fine for profiling one export at a time; per-export numbers need
+    // the counters passed through the render loop instead of kept in statics.
+    if cap_rendering::loop_stats::enabled() {
+        let [decode, render, prefetch, join, render_send, frames] =
+            cap_rendering::loop_stats::take();
+        info!(
+            frames,
+            decode_ms = decode / 1000,
+            render_ms = render / 1000,
+            prefetch_ms = prefetch / 1000,
+            join_ms = join / 1000,
+            render_send_ms = render_send / 1000,
+            encoder_send_ms = encoder_blocked.as_millis() as u64,
+            "NV12 export loop stats"
+        );
+    }
 
     Ok(())
 }
@@ -1403,7 +1725,7 @@ mod tests {
     async fn validation_failure_releases_pending_producer_receiver_and_temp_owners() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
-        let temporary = Arc::new(temporary_mp4_output(&output).unwrap());
+        let temporary = Arc::new(temporary_export_output(&output).unwrap());
         let temporary_path = temporary.to_path_buf();
         let abort = Arc::new(AtomicBool::new(false));
         let user = AtomicBool::new(false);
@@ -1477,13 +1799,13 @@ mod tests {
     fn temporary_output_is_removed_on_failure_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("export.mp4");
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         let path = temporary.to_path_buf();
         std::fs::write(&path, b"partial").unwrap();
         drop(temporary);
         assert!(!path.exists());
         assert!(!output.exists());
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         std::fs::write(&temporary, b"completed").unwrap();
         std::fs::write(&output, b"existing").unwrap();
         drop(temporary.persist_noclobber(&output).unwrap_err());
@@ -1499,7 +1821,7 @@ mod tests {
         let output = directory.path().join("export.mp4");
         let reference = directory.path().join("reference.mp4");
         std::fs::write(&reference, b"reference").unwrap();
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         assert_eq!(
             std::fs::metadata(&temporary).unwrap().permissions().mode() & 0o077,
             0
@@ -1522,7 +1844,7 @@ mod tests {
         let private = directory.path().join("private.mp4");
         std::fs::write(&private, b"private recording").unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary = temporary_export_output(&output).unwrap();
         let temporary_path = temporary.to_path_buf();
         std::fs::remove_file(&temporary_path).unwrap();
         symlink(&private, &temporary_path).unwrap();
@@ -1551,6 +1873,20 @@ mod tests {
         assert_eq!(frame.channel_layout(), ffmpeg::ChannelLayout::STEREO);
         for plane in 0..frame.planes() {
             assert!(frame.data(plane).iter().all(|byte| *byte == 0));
+        }
+    }
+
+    #[test]
+    fn rgba_into_rgb_matches_dropping_alpha() {
+        for pixel_count in [0usize, 1, 2, 3, 7, 64] {
+            let rgba = (0..pixel_count * 4)
+                .map(|value| (value * 37 % 251) as u8)
+                .collect::<Vec<_>>();
+            let expected = rgba
+                .chunks(4)
+                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                .collect::<Vec<_>>();
+            assert_eq!(rgba_into_rgb(rgba), expected);
         }
     }
 
@@ -1616,6 +1952,8 @@ mod tests {
             format: GpuOutputFormat::Nv12,
             #[cfg(target_os = "macos")]
             surface: None,
+            #[cfg(target_os = "linux")]
+            gpu: None,
         };
 
         let result = nv12_from_rendered_frame(frame);

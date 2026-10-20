@@ -1,5 +1,9 @@
 import { createWS } from "@solid-primitives/websocket";
 import { createResource, createSignal } from "solid-js";
+import {
+	type RenderedFrameIdentity,
+	readFrameIdentity,
+} from "./frame-identity";
 import FrameWorker from "./frame-worker?worker";
 import {
 	createProducer,
@@ -34,7 +38,7 @@ const NV12_VIDEO_MAGIC = 0x4e563132;
 const NV12_FULL_MAGIC = 0x4e563146;
 const NV12_METADATA_SIZE = 28;
 
-type Nv12Metadata = {
+type Nv12Metadata = RenderedFrameIdentity & {
 	yStride: number;
 	height: number;
 	width: number;
@@ -71,6 +75,7 @@ function readNv12Metadata(buffer: ArrayBuffer): Nv12Metadata | null {
 		height,
 		width,
 		fullRange: magic === NV12_FULL_MAGIC,
+		...readFrameIdentity(meta),
 	};
 }
 
@@ -199,6 +204,7 @@ export type FrameData = {
 	width: number;
 	height: number;
 	bitmap?: ImageBitmap | null;
+	renderedFrame?: RenderedFrameIdentity;
 };
 
 export type CanvasControls = {
@@ -213,7 +219,9 @@ export type CanvasControls = {
 };
 
 export type ImageDataWSOptions = {
+	preserveAlpha?: boolean;
 	powerPreference?: GPUPowerPreference;
+	retainLastFrameOnDispose?: HTMLCanvasElement;
 };
 
 interface ReadyMessage {
@@ -222,6 +230,8 @@ interface ReadyMessage {
 
 interface FrameRenderedMessage {
 	type: "frame-rendered";
+	frameNumber?: number;
+	targetTimeNs?: bigint;
 	width: number;
 	height: number;
 }
@@ -372,6 +382,13 @@ export function createImageDataWS(
 
 	function cleanup() {
 		if (isCleanedUp) return;
+		if (options.retainLastFrameOnDispose) {
+			try {
+				canvasControls.drawLatestFrameToCanvas(
+					options.retainLastFrameOnDispose,
+				);
+			} catch {}
+		}
 		isCleanedUp = true;
 
 		ws.onmessage = null;
@@ -489,7 +506,14 @@ export function createImageDataWS(
 				timing,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame: {
+					frameNumber: metadata.frameNumber,
+					targetTimeNs: metadata.targetTimeNs,
+				},
+			});
 		}
 	}
 
@@ -544,7 +568,7 @@ export function createImageDataWS(
 				timing,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({ width, height, renderedFrame: readFrameIdentity(meta) });
 		}
 	}
 
@@ -564,6 +588,7 @@ export function createImageDataWS(
 		height: number,
 		yStride: number,
 		fullRange: boolean,
+		identity: RenderedFrameIdentity,
 		receivedAt?: number,
 	) {
 		if (!directCanvas || !directCtx) return;
@@ -602,7 +627,7 @@ export function createImageDataWS(
 			undefined,
 			receivedAt,
 		);
-		onmessage({ width, height });
+		onmessage({ width, height, renderedFrame: identity });
 	}
 
 	function renderPendingFrameCanvas2D() {
@@ -628,6 +653,10 @@ export function createImageDataWS(
 				height,
 				yStride,
 				fullRange,
+				{
+					frameNumber: metadata.frameNumber,
+					targetTimeNs: metadata.targetTimeNs,
+				},
 				receivedAt,
 			);
 		}
@@ -680,7 +709,14 @@ export function createImageDataWS(
 				false,
 			);
 			recordRender(performance.now() - renderStart, "canvas2d");
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame: {
+					frameNumber: e.data.frameNumber,
+					targetTimeNs: e.data.targetTimeNs,
+				},
+			});
 		};
 		return strideWorker;
 	}
@@ -747,13 +783,14 @@ export function createImageDataWS(
 				undefined,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({ width, height, renderedFrame: readFrameIdentity(meta) });
 			return;
 		}
 
 		ensureStrideWorker().postMessage(
 			{
 				type: "correct-stride",
+				...readFrameIdentity(meta),
 				buffer,
 				strideBytes,
 				width,
@@ -793,7 +830,10 @@ export function createImageDataWS(
 		initCanvas: (canvas: OffscreenCanvas) => {
 			if (isCleanedUp) return;
 			workerCanvasMode = true;
-			ensureWorker().postMessage({ type: "init-canvas", canvas }, [canvas]);
+			ensureWorker().postMessage(
+				{ type: "init-canvas", canvas, preserveAlpha: options.preserveAlpha },
+				[canvas],
+			);
 		},
 		resizeCanvas: (width: number, height: number) => {
 			if (isCleanedUp) return;
@@ -829,6 +869,7 @@ export function createImageDataWS(
 					initWebGPU(
 						directCanvas as unknown as OffscreenCanvas,
 						options.powerPreference,
+						options.preserveAlpha,
 					)
 						.then((renderer) => {
 							if (isCleanedUp || !directCanvas) {
@@ -856,7 +897,9 @@ export function createImageDataWS(
 							mainThreadWebGPUInitializing = false;
 							console.error("[Socket] Main thread WebGPU init failed:", e);
 							directCtx =
-								directCanvas?.getContext("2d", { alpha: false }) ?? null;
+								directCanvas?.getContext("2d", {
+									alpha: options.preserveAlpha ?? false,
+								}) ?? null;
 							if (pendingNv12Frame && directCanvas && directCtx) {
 								renderPendingFrameCanvas2D();
 							}
@@ -867,7 +910,10 @@ export function createImageDataWS(
 						});
 				} else {
 					mainThreadWebGPUInitializing = false;
-					directCtx = directCanvas?.getContext("2d", { alpha: false }) ?? null;
+					directCtx =
+						directCanvas?.getContext("2d", {
+							alpha: options.preserveAlpha ?? false,
+						}) ?? null;
 					if (pendingNv12Frame && directCanvas && directCtx) {
 						renderPendingFrameCanvas2D();
 					}
@@ -939,7 +985,9 @@ export function createImageDataWS(
 
 			if (canvas !== mirrorCanvas) {
 				mirrorCanvas = canvas;
-				mirrorCtx = canvas.getContext("2d", { alpha: false });
+				mirrorCtx = canvas.getContext("2d", {
+					alpha: options.preserveAlpha ?? false,
+				});
 				mirrorImageData = null;
 			}
 			if (!mirrorCtx) return false;
@@ -1024,7 +1072,17 @@ export function createImageDataWS(
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame:
+					e.data.frameNumber !== undefined && e.data.targetTimeNs !== undefined
+						? {
+								frameNumber: e.data.frameNumber,
+								targetTimeNs: e.data.targetTimeNs,
+							}
+						: undefined,
+			});
 			recordRender(0, "worker");
 			if (isProcessingSharedFrame) {
 				isProcessingSharedFrame = false;
@@ -1248,7 +1306,9 @@ export function createImageDataWS(
 					) as HTMLCanvasElement | null;
 					if (domCanvas && domCanvas !== directCanvas) {
 						directCanvas = domCanvas;
-						directCtx = domCanvas.getContext("2d", { alpha: false });
+						directCtx = domCanvas.getContext("2d", {
+							alpha: options.preserveAlpha ?? false,
+						});
 						if (!directCtx) {
 							console.error(
 								"[Socket] Failed to get 2D context from DOM canvas",

@@ -28,6 +28,10 @@ import { getOrganizationSSOData } from "@/actions/organization/get-organization-
 import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import {
+	clearOnboardingNextPath,
+	rememberOnboardingNextPath,
+} from "../onboarding-next";
 import { getSafeNextPath } from "../safe-next";
 import { SsoErrorNotice } from "../sso-error-notice";
 
@@ -68,6 +72,12 @@ export function SignupForm() {
 	);
 
 	useEffect(() => {
+		const nextPath = getNextPath();
+		if (nextPath) rememberOnboardingNextPath(nextPath);
+		else clearOnboardingNextPath();
+	}, [getNextPath]);
+
+	useEffect(() => {
 		signupFormMounted.current = true;
 		return () => {
 			signupFormMounted.current = false;
@@ -92,6 +102,8 @@ export function SignupForm() {
 				);
 			} else if (error === "SsoMissingProfileAttributes") {
 				setShowOrgInput(true);
+				return;
+			} else if (error === "SignupBlocked") {
 				return;
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);

@@ -15,6 +15,7 @@ import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
+import { setGeneratedAiContent } from "@/lib/ai-content-metadata";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -163,7 +164,7 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 		["$.aiTitle", LEGACY_AI_TITLE_FALLBACK],
 		["$.summary", LEGACY_AI_SUMMARY_FALLBACK],
 	] as const) {
-		processingMetadata = sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, ${metadataPath})) = ${fallback}, JSON_REMOVE(${processingMetadata}, ${metadataPath}), ${processingMetadata})`;
+		processingMetadata = sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, ${metadataPath})) = ${fallback} AND (${metadataPath} <> '$.summary' OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.summaryManuallyEdited')), 'false') <> 'true'), JSON_REMOVE(${processingMetadata}, ${metadataPath}), ${processingMetadata})`;
 	}
 
 	await db()
@@ -376,10 +377,18 @@ async function saveResults(
 		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiTitle', ${generatedTitle})`;
 	}
 	if (result.summary) {
-		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.summary', ${result.summary})`;
+		metadataUpdate = setGeneratedAiContent(
+			metadataUpdate,
+			"summary",
+			result.summary,
+		);
 	}
 	if (result.chapters) {
-		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.chapters', CAST(${JSON.stringify(result.chapters)} AS JSON))`;
+		metadataUpdate = setGeneratedAiContent(
+			metadataUpdate,
+			"chapters",
+			result.chapters,
+		);
 	}
 	metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiGenerationStatus', 'COMPLETE')`;
 

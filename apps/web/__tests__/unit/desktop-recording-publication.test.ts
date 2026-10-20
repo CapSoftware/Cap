@@ -210,6 +210,7 @@ function databaseFixture(initial: DesktopRecordingJob) {
 		storageIntegrationId: null,
 	};
 	let beforeTransaction: (() => void) | undefined;
+	let transactionTail = Promise.resolve();
 	const mutations: Mutation[] = [];
 	const rows = (table: unknown) => {
 		if (table === mocks.tables.jobs)
@@ -223,19 +224,29 @@ function databaseFixture(initial: DesktopRecordingJob) {
 		async (
 			operation: (tx: ReturnType<typeof transactionHandle>) => Promise<unknown>,
 		) => {
-			beforeTransaction?.();
-			const pending: Mutation[] = [];
-			const result = await operation(transactionHandle(pending));
-			for (const mutation of pending) {
-				mutations.push(mutation);
-				if (mutation.operation !== "update") continue;
-				if (mutation.table === mocks.tables.jobs && current) {
-					Object.assign(current, mutation.values);
-				} else if (mutation.table === mocks.tables.videos && video) {
-					Object.assign(video, mutation.values);
+			const previous = transactionTail;
+			let release = () => {};
+			transactionTail = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			await previous;
+			try {
+				beforeTransaction?.();
+				const pending: Mutation[] = [];
+				const result = await operation(transactionHandle(pending));
+				for (const mutation of pending) {
+					mutations.push(mutation);
+					if (mutation.operation !== "update") continue;
+					if (mutation.table === mocks.tables.jobs && current) {
+						Object.assign(current, mutation.values);
+					} else if (mutation.table === mocks.tables.videos && video) {
+						Object.assign(video, mutation.values);
+					}
 				}
+				return result;
+			} finally {
+				release();
 			}
-			return result;
 		},
 	);
 	function transactionHandle(pending: Mutation[]) {
@@ -273,6 +284,7 @@ function databaseFixture(initial: DesktopRecordingJob) {
 	return {
 		mutations,
 		transaction,
+		getCurrent: () => current && structuredClone(current),
 		setCurrent: (next: StoredJob | null) => {
 			current = next;
 		},
@@ -350,6 +362,241 @@ describe("recording publication attempt fence", () => {
 			expect(database.transaction).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe("recording worker ownership", () => {
+	function fixture() {
+		const { job, payload } = segmentedFixture();
+		job.remoteJobId = null;
+		const database = databaseFixture(job);
+		const claim = {
+			jobId: payload.jobId,
+			videoId,
+			generation,
+			attemptId,
+			inventorySha256,
+			manifestSha256,
+			phase: "queued" as const,
+			progress: 0,
+			recordingWorker: {
+				version: 1 as const,
+				action: "claim" as const,
+				sequence: 0,
+			},
+		};
+		const progress = {
+			...claim,
+			phase: "processing" as const,
+			progress: 60,
+			recordingWorker: {
+				version: 1 as const,
+				action: "progress" as const,
+				sequence: 2,
+			},
+		};
+		return { job, payload, database, claim, progress };
+	}
+
+	it("grants one physical replica ownership when claims race", async () => {
+		const { database, claim } = fixture();
+		const results = await Promise.all([
+			applyDesktopRecordingProgress(claim),
+			applyDesktopRecordingProgress({ ...claim, jobId: "other-replica" }),
+		]);
+		expect(results[0]?.recordingWorker).toMatchObject({
+			status: "accepted",
+			leaseDurationMs: 300_000,
+			jobId: claim.jobId,
+		});
+		expect(results[1]?.recordingWorker).toMatchObject({
+			status: "owned",
+			ownerJobId: claim.jobId,
+		});
+		expect(database.getCurrent()).toMatchObject({
+			remoteJobId: claim.jobId,
+			output: { kind: "recording-worker", sequence: 0 },
+		});
+	});
+
+	it("replays a lost claim acknowledgement without a second owner", async () => {
+		const { database, claim } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		const before = database.mutations.length;
+		expect(
+			(await applyDesktopRecordingProgress(claim)).recordingWorker,
+		).toMatchObject({ status: "accepted", leaseDurationMs: 300_000 });
+		expect(database.mutations.slice(before)).toHaveLength(1);
+		expect(database.mutations[before]?.table).toBe(mocks.tables.jobs);
+		expect(database.getCurrent()?.remoteJobId).toBe(claim.jobId);
+	});
+
+	it("rejects stale and conflicting revisions without regression or lease renewal", async () => {
+		const { database, claim, progress } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		await applyDesktopRecordingProgress(progress);
+		const before = database.mutations.length;
+		for (const stale of [
+			claim,
+			{ ...progress, progress: 1 },
+			{
+				...progress,
+				recordingWorker: { ...progress.recordingWorker, sequence: 1 },
+			},
+		]) {
+			expect(
+				(await applyDesktopRecordingProgress(stale)).recordingWorker?.status,
+			).toBe("stale");
+		}
+		expect(database.mutations).toHaveLength(before);
+		expect(database.getCurrent()?.output).toMatchObject({
+			sequence: 2,
+			progress: 60,
+		});
+		expect(
+			(await applyDesktopRecordingProgress(progress)).recordingWorker,
+		).toMatchObject({ status: "accepted", leaseDurationMs: 300_000 });
+		expect(database.mutations).toHaveLength(before + 1);
+		expect(database.mutations[before]?.values).not.toHaveProperty("output");
+	});
+
+	it.each(["generation", "attempt", "expired", "inventory", "manifest"])(
+		"rejects a claim with invalid %s ownership",
+		async (reason) => {
+			const { job, database, claim } = fixture();
+			if (reason === "generation") claim.generation = "old-generation";
+			else if (reason === "attempt") claim.attemptId = "old-attempt";
+			else if (reason === "inventory") claim.inventorySha256 = "d".repeat(64);
+			else if (reason === "manifest") claim.manifestSha256 = "d".repeat(64);
+			else
+				database.setCurrent({
+					...job,
+					leaseExpiresAt: new Date(Date.now() - 1),
+				});
+			expect(
+				(await applyDesktopRecordingProgress(claim)).recordingWorker?.status,
+			).toBe("superseded");
+			expect(database.mutations).toEqual([]);
+		},
+	);
+
+	it("rejects legacy callbacks after a versioned owner has claimed the attempt", async () => {
+		const { database, claim, progress, payload } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		const before = database.mutations.length;
+		for (const legacy of [
+			{ ...progress, recordingWorker: undefined },
+			payload,
+			{ ...payload, phase: "error" },
+		]) {
+			expect(await applyDesktopRecordingProgress(legacy)).toEqual({
+				handled: true,
+				status: 200,
+			});
+		}
+		expect(database.mutations).toHaveLength(before);
+		expect(mocks.head).not.toHaveBeenCalled();
+	});
+
+	it("does not allow a legacy error that races an ownership claim to retry the owner", async () => {
+		const { database, claim } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		const owned = database.getCurrent();
+		if (!owned) throw new Error("Missing owner");
+		database.setCurrent({ ...owned, output: null, remoteJobId: null });
+		database.beforeTransaction(() => database.setCurrent(owned));
+		const before = database.mutations.length;
+		await applyDesktopRecordingProgress({
+			...claim,
+			recordingWorker: undefined,
+			phase: "error",
+		});
+		expect(database.mutations).toHaveLength(before);
+		expect(database.getCurrent()?.state).toBe("processing");
+	});
+
+	it("commits an owner completion once and acknowledges its exact retry", async () => {
+		const { database, claim, payload } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		const complete = {
+			...payload,
+			inventorySha256,
+			manifestSha256,
+			recordingWorker: { version: 1, action: "progress", sequence: 1 },
+		};
+		expect(await applyDesktopRecordingProgress(complete)).toMatchObject({
+			published: true,
+			recordingWorker: { status: "accepted", sequence: 1 },
+		});
+		const before = database.mutations.length;
+		expect(await applyDesktopRecordingProgress(complete)).toMatchObject({
+			recordingWorker: { status: "accepted" },
+		});
+		expect(database.mutations).toHaveLength(before);
+		expect(database.getCurrent()).toMatchObject({
+			state: "verified",
+			output: { recordingWorker: { sequence: 1, phase: "complete" } },
+		});
+	});
+
+	it("cannot publish if the owner or sequence changes during output verification", async () => {
+		const { database, claim, payload, progress } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		await applyDesktopRecordingProgress(progress);
+		const complete = {
+			...payload,
+			inventorySha256,
+			manifestSha256,
+			recordingWorker: { version: 1, action: "progress", sequence: 3 },
+		};
+		const owned = database.getCurrent();
+		if (!owned || !owned.output || typeof owned.output !== "object")
+			throw new Error("Missing owner");
+		const checkpoint = owned.output;
+		database.beforeTransaction(() =>
+			database.setCurrent({
+				...owned,
+				output: { ...checkpoint, sequence: 4 },
+			}),
+		);
+		const before = database.mutations.length;
+		expect(await applyDesktopRecordingProgress(complete)).toEqual({
+			handled: true,
+			status: 503,
+		});
+		expect(database.mutations).toHaveLength(before);
+	});
+
+	it("ignores old callbacks after an edit retires a retained worker receipt", async () => {
+		const { database, claim, payload } = fixture();
+		await applyDesktopRecordingProgress(claim);
+		const complete = {
+			...payload,
+			inventorySha256,
+			manifestSha256,
+			recordingWorker: { version: 1, action: "progress", sequence: 1 },
+		};
+		await applyDesktopRecordingProgress(complete);
+		const published = database.getCurrent();
+		if (!published) throw new Error("Missing published recording");
+		database.setCurrent({
+			...published,
+			generation: "edited-generation",
+			attemptId: null,
+			remoteJobId: null,
+			state: "source-blocked",
+			errorCode: "output-replaced",
+		});
+		const before = database.mutations.length;
+		expect(await applyDesktopRecordingProgress(payload)).toEqual({
+			handled: true,
+			status: 200,
+		});
+		expect(
+			(await applyDesktopRecordingProgress(complete)).recordingWorker?.status,
+		).toBe("superseded");
+		expect(database.mutations).toHaveLength(before);
+		expect(database.getCurrent()?.output).toEqual(published.output);
+	});
 });
 
 describe("recording completion source binding", () => {

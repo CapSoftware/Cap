@@ -6,6 +6,29 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	editProcessing?: {
+		token: string;
+		startedAt: string;
+		ownerId: string;
+		bucket: string | null;
+		storageIntegrationId: string | null;
+		sourceKey: string;
+		source: string;
+		dispatch: "pending" | "dispatching" | "accepted";
+		jobId?: string;
+		resultCommitted?: boolean;
+		renderedMetadata?: {
+			duration: number;
+			width: number;
+			height: number;
+			fps: number;
+		};
+	};
+	completedVideoEdit?: {
+		token: string;
+		startedAt: string;
+		transcriptRemapped: boolean;
+	};
 	desktopRecordingUpload?: {
 		version: 1;
 		artifact:
@@ -53,10 +76,12 @@ export interface VideoMetadata {
 	 * AI generated summary of the content
 	 */
 	summary?: string;
+	summaryManuallyEdited?: boolean;
 	/**
 	 * Chapter markers generated from the transcript
 	 */
 	chapters?: { title: string; start: number }[];
+	chaptersManuallyEdited?: boolean;
 	aiGenerationStatus?:
 		| "QUEUED"
 		| "PROCESSING"
@@ -78,6 +103,14 @@ export interface VideoMetadata {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
 	};
+}
+
+export interface VideoCallToAction {
+	label: string;
+	url: string;
+	headline?: string;
+	color?: string;
+	showWhilePlaying?: boolean;
 }
 
 export type VideoEditRange = {

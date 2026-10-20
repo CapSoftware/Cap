@@ -7,6 +7,13 @@ const jobSchema = z
 		generation: z.string().optional(),
 		attemptId: z.string().optional(),
 		inventorySha256: z.string().optional(),
+		recordingWorker: z
+			.object({
+				version: z.literal(1),
+				action: z.literal("progress"),
+				sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+			})
+			.optional(),
 		phase: z.enum([
 			"queued",
 			"downloading",
@@ -34,7 +41,7 @@ type RecordingJobLookup = {
 
 export type DesktopRecordingRemoteObservation =
 	| { status: "unavailable"; delivered: false }
-	| { status: "active"; delivered: false }
+	| { status: "active"; delivered: false; workerProtocol?: 1 }
 	| { status: "terminal"; delivered: boolean };
 
 export async function observeDesktopRecordingJob({
@@ -75,7 +82,11 @@ export async function observeDesktopRecordingJob({
 			job.data.phase !== "error" &&
 			job.data.phase !== "cancelled"
 		) {
-			return { status: "active", delivered: false };
+			return {
+				status: "active",
+				delivered: false,
+				...(job.data.recordingWorker ? { workerProtocol: 1 as const } : {}),
+			};
 		}
 		const delivered = await fetch(webhookUrl, {
 			method: "POST",
@@ -83,7 +94,22 @@ export async function observeDesktopRecordingJob({
 			body: JSON.stringify(job.data),
 			signal: AbortSignal.timeout(30_000),
 		});
-		return { status: "terminal", delivered: delivered.ok };
+		if (!delivered.ok || !job.data.recordingWorker) {
+			return { status: "terminal", delivered: delivered.ok };
+		}
+		const acknowledgement = z
+			.object({
+				recordingWorker: z.object({
+					version: z.literal(1),
+					status: z.literal("accepted"),
+					generation: z.literal(job.data.generation ?? ""),
+					attemptId: z.literal(job.data.attemptId ?? ""),
+					jobId: z.literal(jobId),
+					sequence: z.literal(job.data.recordingWorker.sequence),
+				}),
+			})
+			.safeParse(await delivered.json().catch(() => null));
+		return { status: "terminal", delivered: acknowledgement.success };
 	} catch {
 		return unavailable;
 	}

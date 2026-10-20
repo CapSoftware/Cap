@@ -6,6 +6,7 @@ use cap_rendering::{
     RecordingSegmentDecoders, RenderVideoConstants, ZoomTransformTimeline,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
+use cap_utils::operation_diagnostics::{Field, Operation};
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
@@ -13,18 +14,18 @@ use std::{
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc as std_mpsc,
     },
     time::{Duration, Instant},
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
     audio_output::{AudioOutput, PlaySpec},
     editor,
-    editor_instance::SegmentMedia,
+    editor_instance::{SegmentMedia, cursor_timeline_settings},
     segments::get_audio_segments,
     telemetry::{
         PlaybackFrameSource, PlaybackSkipReason, PlaybackTelemetry, PlaybackTelemetryEvent,
@@ -47,6 +48,39 @@ const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
 const FRAME_CACHE_SIZE: usize = 4;
 const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
+
+fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfiguration) -> bool {
+    let settings = |project: &ProjectConfiguration, segment: &cap_project::TimelineSegment| {
+        let offsets = project
+            .clips
+            .iter()
+            .find(|clip| clip.index == segment.recording_clip)
+            .map(|clip| clip.offsets)
+            .unwrap_or_default();
+        (
+            segment.recording_clip,
+            segment.start,
+            segment.end,
+            segment.timescale,
+            segment.speed_audio_mode,
+            segment.volume(),
+            offsets.mic,
+            offsets.system_audio,
+        )
+    };
+    match (&previous.timeline, &next.timeline) {
+        (Some(previous_timeline), Some(next_timeline)) => !previous_timeline
+            .segments
+            .iter()
+            .map(|segment| settings(previous, segment))
+            .eq(next_timeline
+                .segments
+                .iter()
+                .map(|segment| settings(next, segment))),
+        (None, None) => false,
+        _ => true,
+    }
+}
 
 #[cfg(target_os = "windows")]
 struct WindowsTimerResolution;
@@ -109,6 +143,8 @@ fn has_playback_audio(audio_segments: &[crate::audio::AudioSegment], has_music: 
 #[derive(Debug)]
 pub enum PlaybackStartError {
     InvalidFps,
+    PreparingCleanup,
+    PreparingCandidate,
 }
 
 pub struct Playback {
@@ -131,10 +167,12 @@ pub enum PlaybackEvent {
 
 #[derive(Clone)]
 pub struct PlaybackHandle {
+    preparing_audio_released: Arc<AtomicBool>,
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
     seek_tx: Arc<watch::Sender<(u64, u32)>>,
     seek_generation: Arc<AtomicU64>,
+    adopted: Option<crate::PreparingPlaybackAdoption>,
 }
 
 struct PrefetchedFrame {
@@ -178,14 +216,33 @@ impl PrefetchedFrame {
     }
 }
 
+struct PrefetchReceiver {
+    frames: std_mpsc::Receiver<PrefetchedFrame>,
+    capacity: Arc<Notify>,
+}
+
+fn prefetch_channel(bound: usize) -> (std_mpsc::SyncSender<PrefetchedFrame>, PrefetchReceiver) {
+    let (sender, frames) = std_mpsc::sync_channel(bound);
+    (
+        sender,
+        PrefetchReceiver {
+            frames,
+            capacity: Arc::new(Notify::new()),
+        },
+    )
+}
+
 fn receive_prefetched_frame(
-    receiver: &std_mpsc::Receiver<PrefetchedFrame>,
+    receiver: &PrefetchReceiver,
     seek_generation: u64,
     timeout: Duration,
 ) -> Result<PrefetchedFrame, std_mpsc::RecvTimeoutError> {
     let deadline = Instant::now() + timeout;
     loop {
-        let frame = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        let frame = receiver
+            .frames
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        receiver.capacity.notify_one();
         // A completed decode can already be queued when the producer observes a seek.
         if frame.seek_generation == seek_generation {
             return Ok(frame);
@@ -432,9 +489,13 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
     };
     let transition = async {
         let transition = transition?;
+        let transition_decoders = if transition.segment_index == segment_index {
+            transition.decoders.transition_side().await
+        } else {
+            &transition.decoders
+        };
         let segment_frames = if is_initial {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames_initial(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -443,8 +504,7 @@ async fn decode_prefetched_frame(request: PrefetchDecodeRequest) -> PrefetchDeco
                 )
                 .await
         } else {
-            transition
-                .decoders
+            transition_decoders
                 .get_frames(
                     transition.segment_time as f32,
                     !hide_camera,
@@ -509,15 +569,60 @@ fn transition_decode_request(
 
 impl Playback {
     pub async fn start(
-        mut self,
+        self,
         fps: u32,
         resolution_base: XY<u32>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_with_diagnostics(fps, resolution_base, None)
+            .await
+    }
+
+    pub async fn start_with_adopted_audio(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        adoption: crate::PreparingPlaybackAdoption,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_inner(fps, resolution_base, None, Some(adoption))
+            .await
+    }
+
+    pub async fn start_with_diagnostics(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        resource: Option<u64>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_inner(fps, resolution_base, resource, None).await
+    }
+
+    async fn start_inner(
+        mut self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        resource: Option<u64>,
+        adopted: Option<crate::PreparingPlaybackAdoption>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
         let start_call = Instant::now();
+        let mut diagnostic = Operation::start(
+            "editor_playback",
+            &[
+                Field::number("requested_fps", fps as u64),
+                Field::number("requested_width", resolution_base.x as u64),
+                Field::number("requested_height", resolution_base.y as u64),
+                Field::number("start_frame", self.start_frame_number as u64),
+                Field::number("source_segments", self.segment_medias.len() as u64),
+                Field::flag("music", !self.music.is_empty()),
+            ],
+        );
+        if let Some(resource) = resource {
+            diagnostic.field(Field::identifier("resource", resource));
+        }
         let fps_f64 = fps as f64;
 
         if !(fps_f64.is_finite() && fps_f64 > 0.0) {
             warn!(fps, "Invalid FPS provided for playback start");
+            diagnostic.finish(false);
             return Err(PlaybackStartError::InvalidFps);
         }
 
@@ -530,18 +635,24 @@ impl Playback {
         let (seek_tx, mut seek_rx) = watch::channel((0u64, self.start_frame_number));
         seek_rx.borrow_and_update();
 
+        let preparing_audio_released = Arc::new(AtomicBool::new(false));
+        let runtime = tokio::runtime::Handle::current();
         let handle = PlaybackHandle {
+            preparing_audio_released: preparing_audio_released.clone(),
             stop_tx: stop_tx.clone(),
             event_rx,
             seek_tx: Arc::new(seek_tx),
             seek_generation: Arc::new(AtomicU64::new(0)),
+            adopted: adopted.clone(),
         };
 
-        let (prefetch_tx, prefetch_rx) =
-            std_mpsc::sync_channel::<PrefetchedFrame>(PREFETCH_CHANNEL_SIZE);
+        let (prefetch_tx, prefetch_rx) = prefetch_channel(PREFETCH_CHANNEL_SIZE);
+        let prefetch_capacity = Arc::clone(&prefetch_rx.capacity);
+        let prefetch_fallback_wait = Duration::from_secs_f64(1.0 / fps_f64);
         let (frame_request_tx, mut frame_request_rx) =
             watch::channel((0u64, self.start_frame_number));
-        let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
+        let (playback_position_tx, mut playback_position_rx) =
+            watch::channel(self.start_frame_number);
         let prefetch_frame_limit = Arc::new(AtomicUsize::new(INITIAL_PREFETCH_BUFFER_SIZE));
 
         let output_size = ProjectUniforms::get_output_size(
@@ -653,7 +764,8 @@ impl Playback {
                                     }
                                     request_changed = true;
                                 }
-                                _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                                _ = prefetch_capacity.notified() => {}
+                                _ = tokio::time::sleep(prefetch_fallback_wait) => {}
                             }
                             continue;
                         }
@@ -661,7 +773,7 @@ impl Playback {
                     }
                 }
 
-                let current_playback_frame = *playback_position_rx.borrow();
+                let current_playback_frame = *playback_position_rx.borrow_and_update();
                 let max_prefetch_ahead = producer_prefetch_frame_limit
                     .load(Ordering::Relaxed)
                     .clamp(INITIAL_PREFETCH_BUFFER_SIZE, MAX_PREFETCH_BUFFER_SIZE)
@@ -713,7 +825,7 @@ impl Playback {
                             .unwrap_or_default();
 
                         let decoders = segment_media.decoders.clone();
-                        let hide_camera = cached_project.camera.hide;
+                        let hide_camera = !cached_project.requires_camera();
                         let segment_index = segment.recording_clip;
                         let is_initial = frames_decoded < 10;
                         let transition = transition_decode_request(
@@ -787,7 +899,12 @@ impl Playback {
                         }
                     }
 
-                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                    result = playback_position_rx.changed(), if in_flight.is_empty() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(prefetch_fallback_wait), if in_flight.is_empty() => {}
                 }
             }
         });
@@ -795,6 +912,7 @@ impl Playback {
         // Resolve the background audio decodes before entering the sync
         // playback thread. This only waits when playback starts before the
         // decode kicked off at editor open has finished.
+        diagnostic.stage("waiting_for_audio_decode");
         let audio_wait_start = Instant::now();
         let audio_segments = get_audio_segments(&self.segment_medias).await;
         if let Some(telemetry) = &self.telemetry {
@@ -802,8 +920,20 @@ impl Playback {
                 elapsed: audio_wait_start.elapsed(),
             });
         }
+        // Restarts an idle-paused output stream while the video warms up, so
+        // the play request after warmup finds it already running.
+        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            self.audio_output.prewarm();
+        }
 
+        diagnostic.field(Field::number(
+            "audio_decode_wait_ms",
+            audio_wait_start.elapsed().as_millis() as u64,
+        ));
+        diagnostic.stage("preparing_playback");
         let playback_body = move || {
+            let mut adopted_guard = AdoptedPlaybackGuard(adopted);
+            let adopted = &mut adopted_guard.0;
             let duration = self
                 .project
                 .borrow()
@@ -811,6 +941,8 @@ impl Playback {
                 .as_ref()
                 .and_then(|timeline| valid_playback_duration(timeline.duration()));
             let Some(duration) = duration else {
+                diagnostic.stage("invalid_timeline");
+                diagnostic.finish(false);
                 warn!("Playback: No valid timeline duration found");
                 stop_tx.send(true).ok();
                 event_tx.send(PlaybackEvent::Stop).ok();
@@ -851,13 +983,29 @@ impl Playback {
             let mut starvation_skips = 0u64;
 
             while !*stop_rx.borrow() {
+                if adopted
+                    .as_ref()
+                    .is_some_and(|adoption| adoption.invalidated())
+                {
+                    let _ = stop_tx.send(true);
+                    break;
+                }
+                if let Some(snapshot) = adopted.as_ref().and_then(|adoption| adoption.snapshot()) {
+                    let target = crate::preparing_handoff::presentation_frame(&snapshot, fps);
+                    if target > frame_number {
+                        frame_number = target;
+                        prefetch_buffer.retain(|frame| frame.frame_number >= target);
+                        let _ = frame_request_tx.send((seek_generation, target));
+                        let _ = playback_position_tx.send(target);
+                    }
+                }
                 refresh_prefetch_limit(
                     &prefetch_frame_limit,
                     largest_prefetched_frame_bytes,
                     boost_until,
                 );
 
-                if seek_rx.has_changed().unwrap_or(false) {
+                if adopted.is_none() && seek_rx.has_changed().unwrap_or(false) {
                     (seek_generation, frame_number) = *seek_rx.borrow_and_update();
                     prefetch_buffer.clear();
                     first_frame_time = None;
@@ -1165,22 +1313,29 @@ impl Playback {
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
             // so the clock below never runs ahead of audible audio.
+            diagnostic.field(Field::number(
+                "warmup_ms",
+                warmup_start.elapsed().as_millis() as u64,
+            ));
+            diagnostic.stage("initializing_audio_output");
             let audio_spawn_start = Instant::now();
             let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
-            let audio_generation = if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            let mut audio_generation = if adopted.is_some() {
+                None
+            } else if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
                 info!("No audio segments found, skipping audio playback.");
                 None
             } else {
                 self.audio_output.play(PlaySpec {
-                    segments: audio_segments,
+                    segments: audio_segments.clone(),
                     music: self.music.clone(),
                     project: self.project.borrow().clone(),
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
-                    playhead_rx: audio_playhead_rx,
+                    playhead_rx: audio_playhead_rx.clone(),
                 })
             };
-            let has_audio = audio_generation.is_some();
+            let mut has_audio = audio_generation.is_some();
             if let Some(telemetry) = &self.telemetry {
                 telemetry.emit(PlaybackTelemetryEvent::AudioPipelineReady {
                     elapsed: audio_spawn_start.elapsed(),
@@ -1190,17 +1345,98 @@ impl Playback {
                     elapsed: start_call.elapsed(),
                 });
             }
+            diagnostic.field(Field::number(
+                "audio_output_init_ms",
+                audio_spawn_start.elapsed().as_millis() as u64,
+            ));
+            diagnostic.field(Field::number(
+                "clock_start_ms",
+                start_call.elapsed().as_millis() as u64,
+            ));
+            diagnostic.field(Field::flag("audio_output_started", has_audio));
+            diagnostic.stage("playing");
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
 
+            let mut transitioned_audio = None;
+            let mut last_adopted_frame = None;
             'playback: loop {
+                if *stop_rx.borrow() {
+                    break;
+                }
+                if adopted.as_ref().is_some_and(|adoption| adoption.is_owner()) && {
+                    let project = self.project.borrow();
+                    project.audio.improve
+                        || project.audio != cached_project.audio
+                        || clip_audio_changed(&cached_project, &project)
+                } {
+                    let adoption = adopted.as_ref().unwrap();
+                    frame_number = adoption.frame_number(fps).unwrap_or(frame_number);
+                    let cleaned = runtime.block_on(async {
+                        tokio::select! {
+                            biased;
+                            _ = stop_rx.changed() => false,
+                            result = tokio::time::timeout(Duration::from_secs(2), adoption.stop_and_wait()) => {
+                                matches!(result, Ok(Some(exit)) if !exit.cleanup_failed)
+                            }
+                        }
+                    });
+                    if !cleaned || *stop_rx.borrow() {
+                        break;
+                    }
+                    drop(adopted.take());
+                    preparing_audio_released.store(true, Ordering::Release);
+                    let project = self.project.borrow().clone();
+                    cached_project.audio = project.audio.clone();
+                    let ticket = self.audio_output.prepare_playback(PlaySpec {
+                        segments: audio_segments.clone(),
+                        music: self.music.clone(),
+                        project,
+                        duration_secs: duration,
+                        start_playhead_secs: frame_number as f64 / fps_f64,
+                        playhead_rx: audio_playhead_rx.clone(),
+                    });
+                    let started = runtime.block_on(async {
+                        tokio::select! {
+                            biased;
+                            _ = stop_rx.changed() => false,
+                            result = tokio::time::timeout(Duration::from_secs(2), ticket.wait_started()) => result.unwrap_or(false),
+                        }
+                    });
+                    if !started || *stop_rx.borrow() {
+                        break;
+                    }
+                    audio_generation = Some(ticket.generation());
+                    transitioned_audio = Some(ticket);
+                    has_audio = true;
+                    clock_anchor_frame = frame_number;
+                    start = Instant::now();
+                }
+                if let Some(adoption) = adopted {
+                    let Some(snapshot) = adoption.snapshot() else {
+                        break;
+                    };
+                    if snapshot.progress.phase == crate::PreparingEditorPhase::Unavailable {
+                        break;
+                    }
+                    let target = crate::preparing_handoff::presentation_frame(&snapshot, fps);
+                    if snapshot.playback.buffering || last_adopted_frame == Some(target) {
+                        if !snapshot.playback.playing && adoption.is_owner() {
+                            break;
+                        }
+                        std::thread::sleep(frame_duration);
+                        continue;
+                    }
+                    frame_number = target;
+                    let _ = playback_position_tx.send(target);
+                }
                 let limit_now = refresh_prefetch_limit(
                     &prefetch_frame_limit,
                     largest_prefetched_frame_bytes,
                     boost_until,
                 );
 
-                if seek_rx.has_changed().unwrap_or(false) {
+                if adopted.is_none() && seek_rx.has_changed().unwrap_or(false) {
                     let (generation, target) = *seek_rx.borrow_and_update();
                     tracing::debug!(from = frame_number, to = target, "playback live seek");
                     seek_generation = generation;
@@ -1219,23 +1455,59 @@ impl Playback {
                 }
 
                 if self.project.has_changed().unwrap_or(false) {
-                    cached_project = self.project.borrow_and_update().clone();
-                    cursor_timelines = build_cursor_timelines(&cached_project);
-                    zoom_timelines = build_zoom_timelines(&cached_project);
-                    outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    let next_project = self.project.borrow_and_update().clone();
+                    let audio_changed = cached_project.audio != next_project.audio
+                        || clip_audio_changed(&cached_project, &next_project);
+                    let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
+                        != cursor_timeline_settings(&next_project.cursor);
+                    let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
+                        &cached_project,
+                        &next_project,
+                        self.render_constants.options.screen_size,
+                    );
+                    cached_project = next_project;
+                    if adopted.is_none()
+                        && audio_changed
+                        && let Some(generation) = audio_generation
+                    {
+                        self.audio_output.refresh_playback(
+                            PlaySpec {
+                                segments: audio_segments.clone(),
+                                music: self.music.clone(),
+                                project: cached_project.clone(),
+                                duration_secs: duration,
+                                start_playhead_secs: frame_number as f64 / fps_f64,
+                                playhead_rx: audio_playhead_rx.clone(),
+                            },
+                            generation,
+                        );
+                    }
+                    if cursor_changed {
+                        cursor_timelines = build_cursor_timelines(&cached_project);
+                    }
+                    if zoom_changed {
+                        zoom_timelines = build_zoom_timelines(&cached_project);
+                        outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    }
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
                 let next_deadline = start + frame_duration.mul_f64(frame_offset);
 
-                precision_sleep_sync(next_deadline);
+                if adopted.is_none() {
+                    precision_sleep_sync(next_deadline);
+                }
 
                 if *stop_rx.borrow() {
                     break;
                 }
 
-                let overshoot = Instant::now().saturating_duration_since(next_deadline);
-                if overshoot > frame_duration + frame_duration / 2 {
+                let overshoot = if adopted.is_some() {
+                    Duration::ZERO
+                } else {
+                    Instant::now().saturating_duration_since(next_deadline)
+                };
+                if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
                     let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
@@ -1305,6 +1577,31 @@ impl Playback {
                     was_cached = true;
                     cache_hits += 1;
                     Some(cached)
+                } else if adopted.is_some() {
+                    let mut exact = prefetch_buffer
+                        .iter()
+                        .position(|frame| frame.frame_number == frame_number)
+                        .and_then(|index| prefetch_buffer.remove(index));
+                    if exact.is_none() {
+                        let _ = frame_request_tx.send((seek_generation, frame_number));
+                        match receive_prefetched_frame(
+                            &prefetch_rx,
+                            seek_generation,
+                            frame_duration,
+                        ) {
+                            Ok(frame) if frame.frame_number == frame_number => exact = Some(frame),
+                            Ok(frame) if frame.frame_number > frame_number => {
+                                prefetch_buffer.push_back(frame)
+                            }
+                            Ok(_) | Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(std_mpsc::RecvTimeoutError::Disconnected) => break 'playback,
+                        }
+                    }
+                    let Some(frame) = exact else {
+                        continue;
+                    };
+                    frame_source = PlaybackFrameSource::PrefetchWaitExact;
+                    Some(frame.into_cached())
                 } else if prefetch_buffer
                     .front()
                     .is_some_and(|f| f.frame_number == frame_number)
@@ -1523,6 +1820,9 @@ impl Playback {
                 if let Some((segment_frames, segment_index, transition)) = segment_frames_opt {
                     let Some(segment_media) = self.segment_medias.get(segment_index as usize)
                     else {
+                        if adopted.is_some() {
+                            break;
+                        }
                         frame_number = frame_number.saturating_add(1);
                         continue;
                     };
@@ -1668,6 +1968,10 @@ impl Playback {
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+                if adopted.is_some() {
+                    last_adopted_frame = Some(frame_number);
+                    continue;
+                }
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
@@ -1724,10 +2028,14 @@ impl Playback {
                 }
             }
 
+            diagnostic.field(Field::number("frames_skipped", total_frames_skipped));
+            diagnostic.stage("loop_ended");
+            diagnostic.finish(true);
             if let Some(generation) = audio_generation {
                 self.audio_output.stop_playback(generation);
             }
 
+            drop(transitioned_audio);
             stop_tx.send(true).ok();
 
             event_tx.send(PlaybackEvent::Stop).ok();
@@ -1742,8 +2050,25 @@ impl Playback {
     }
 }
 
+struct AdoptedPlaybackGuard(Option<crate::PreparingPlaybackAdoption>);
+
+impl Drop for AdoptedPlaybackGuard {
+    fn drop(&mut self) {
+        if let Some(adoption) = &self.0 {
+            adoption.cancel();
+        }
+    }
+}
+
 impl PlaybackHandle {
+    pub(crate) fn preparing_audio_released(&self) -> bool {
+        self.preparing_audio_released.load(Ordering::Acquire)
+    }
+
     pub fn stop(&self) {
+        if let Some(adoption) = &self.adopted {
+            adoption.cancel();
+        }
         self.stop_tx.send(true).ok();
     }
 
@@ -1751,6 +2076,9 @@ impl PlaybackHandle {
     /// re-attach. Returns false once the playback thread is gone, which is the
     /// caller's cue to fall back to a full restart.
     pub fn seek(&self, frame: u32) -> bool {
+        if self.adopted.is_some() && !self.preparing_audio_released() {
+            return false;
+        }
         let generation = self.seek_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.seek_tx.send((generation, frame)).is_ok()
     }
@@ -1764,6 +2092,115 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "clips": [{ "index": 1 }, { "index": 0 }],
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 },
+                { "recordingSegment": 1, "start": 1.0, "end": 3.0, "timescale": 2.0 }
+            ] }
+        }))
+        .unwrap();
+
+        for clip in 0..project.clips.len() {
+            for offset in [-0.1, 0.1] {
+                let mut next = project.clone();
+                next.clips[clip].offsets.mic = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+
+                let mut next = project.clone();
+                next.clips[clip].offsets.system_audio = offset;
+                assert!(clip_audio_changed(&project, &next));
+                assert!(clip_audio_changed(&next, &project));
+            }
+        }
+    }
+
+    #[test]
+    fn visual_and_unused_clip_offsets_do_not_refresh_playback_audio() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+            ] }
+        }))
+        .unwrap();
+        let mut next = project.clone();
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 0,
+            offsets_auto_calculated: true,
+            offsets: ClipOffsets {
+                camera: 0.1,
+                ..Default::default()
+            },
+        });
+        next.clips.push(cap_project::ClipConfiguration {
+            index: 1,
+            offsets: ClipOffsets {
+                mic: 0.1,
+                system_audio: -0.1,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(!clip_audio_changed(&project, &next));
+        next.clips.reverse();
+        assert!(!clip_audio_changed(&next, &project));
+    }
+
+    #[test]
+    fn clip_audio_changes_refresh_playback_without_refreshing_for_names() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+            ] }
+        }))
+        .unwrap();
+        let mut next = project.clone();
+        next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
+        next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
+        assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
+        assert!(clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].volume = None;
+        next.timeline.as_mut().unwrap().segments[0].speed_audio_mode =
+            Some(cap_project::ClipSpeedAudioMode::Mute);
+        assert!(clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments.clear();
+        assert!(clip_audio_changed(&project, &next));
+    }
+
+    #[test]
+    fn late_handoff_stop_only_cancels_its_original_playback() {
+        let make_handle = || {
+            let (stop_tx, stop_rx) = watch::channel(false);
+            let (_, event_rx) = watch::channel(PlaybackEvent::Start);
+            let (seek_tx, _) = watch::channel((0, 0));
+            (
+                PlaybackHandle {
+                    preparing_audio_released: Arc::new(AtomicBool::new(false)),
+                    adopted: None,
+                    stop_tx,
+                    event_rx,
+                    seek_tx: Arc::new(seek_tx),
+                    seek_generation: Arc::new(AtomicU64::new(0)),
+                },
+                stop_rx,
+            )
+        };
+        let (first, first_stop) = make_handle();
+        let handoff_owner = first.clone();
+        let (replacement, replacement_stop) = make_handle();
+        let mut current_playback = Some(first);
+        current_playback.replace(replacement).unwrap().stop();
+        handoff_owner.stop();
+        assert!(*first_stop.borrow());
+        assert!(!*replacement_stop.borrow());
+        current_playback.take().unwrap().stop();
+        assert!(*replacement_stop.borrow());
+    }
 
     fn decoded_frames(bytes: usize) -> DecodedSegmentFrames {
         DecodedSegmentFrames {
@@ -1788,7 +2225,7 @@ mod tests {
 
     #[test]
     fn backward_seek_discards_queued_frames_from_the_previous_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(4);
+        let (sender, receiver) = prefetch_channel(4);
         for (generation, frame) in [(1, 3000), (1, 480), (2, 480), (2, 481)] {
             assert!(sender.send(prefetched_frame(generation, frame)).is_ok());
         }
@@ -1802,7 +2239,7 @@ mod tests {
 
     #[test]
     fn repeated_seeks_to_the_same_frame_require_the_latest_generation() {
-        let (sender, receiver) = std_mpsc::sync_channel(3);
+        let (sender, receiver) = prefetch_channel(3);
         for generation in 0..3 {
             assert!(sender.send(prefetched_frame(generation, 480)).is_ok());
         }
@@ -1814,7 +2251,7 @@ mod tests {
 
     #[test]
     fn stale_prefetch_frames_do_not_hide_timeout_or_disconnection() {
-        let (sender, receiver) = std_mpsc::sync_channel(1);
+        let (sender, receiver) = prefetch_channel(1);
         assert!(sender.send(prefetched_frame(1, 3000)).is_ok());
         assert!(matches!(
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
@@ -1827,6 +2264,45 @@ mod tests {
             receive_prefetched_frame(&receiver, 2, Duration::ZERO),
             Err(std_mpsc::RecvTimeoutError::Disconnected)
         ));
+    }
+
+    #[tokio::test]
+    async fn draining_the_prefetch_channel_wakes_a_blocked_producer() {
+        let (sender, receiver) = prefetch_channel(1);
+        let capacity = Arc::clone(&receiver.capacity);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(matches!(
+            sender.try_send(prefetched_frame(1, 11)),
+            Err(std_mpsc::TrySendError::Full(_))
+        ));
+
+        let consumer = std::thread::spawn(move || {
+            let frame = receive_prefetched_frame(&receiver, 1, Duration::from_secs(5));
+            (frame.map(|frame| frame.frame_number), receiver)
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), capacity.notified())
+            .await
+            .expect("consumer drain should wake the producer");
+        assert!(sender.try_send(prefetched_frame(1, 11)).is_ok());
+        let (frame, _receiver) = consumer.join().unwrap();
+        assert_eq!(frame.ok(), Some(10));
+    }
+
+    #[test]
+    fn discarding_stale_prefetch_frames_signals_capacity() {
+        use futures::FutureExt;
+
+        let (sender, receiver) = prefetch_channel(1);
+        assert!(sender.try_send(prefetched_frame(1, 10)).is_ok());
+        assert!(receiver.capacity.notified().now_or_never().is_none());
+
+        assert!(matches!(
+            receive_prefetched_frame(&receiver, 2, Duration::ZERO),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(receiver.capacity.notified().now_or_never().is_some());
+        assert!(sender.try_send(prefetched_frame(2, 10)).is_ok());
     }
 
     #[tokio::test]

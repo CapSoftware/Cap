@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 use cap_project::{ClickSpringConfig, CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 
@@ -269,13 +272,14 @@ pub fn interpolate_cursor_with_click_spring(
         );
         interpolate_timeline(&timeline, time_ms)
     } else {
-        interpolate_raw_cursor(cursor, time_ms)
+        interpolate_raw_cursor(cursor, time_ms, false)
     }
 }
 
 fn interpolate_raw_cursor(
     cursor: &CursorEvents,
     time_ms: f64,
+    moves_are_ordered: bool,
 ) -> Option<InterpolatedCursorPosition> {
     if cursor.moves.is_empty() {
         return None;
@@ -306,28 +310,49 @@ fn interpolate_raw_cursor(
         });
     }
 
-    cursor.moves.windows(2).find_map(|chunk| {
-        if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
-            let c = &chunk[0];
-            let next = &chunk[1];
-            let delta_ms = (next.time_ms - c.time_ms) as f32;
-            let dt = (delta_ms / 1000.0).max(0.000_1);
-            let velocity = XY::new(((next.x - c.x) as f32) / dt, ((next.y - c.y) as f32) / dt);
-            Some(InterpolatedCursorPosition {
-                position: Coord::new(XY { x: c.x, y: c.y }),
-                velocity,
-                cursor_id: c.cursor_id.clone(),
-            })
-        } else {
-            None
-        }
+    let chunk = if moves_are_ordered {
+        let end = cursor
+            .moves
+            .partition_point(|event| event.time_ms <= time_ms);
+        cursor.moves.get(end.checked_sub(1)?..=end)?
+    } else {
+        cursor
+            .moves
+            .windows(2)
+            .find(|chunk| time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms)?
+    };
+    let c = &chunk[0];
+    let next = &chunk[1];
+    let delta_ms = (next.time_ms - c.time_ms) as f32;
+    let dt = (delta_ms / 1000.0).max(0.000_1);
+    let velocity = XY::new(((next.x - c.x) as f32) / dt, ((next.y - c.y) as f32) / dt);
+    Some(InterpolatedCursorPosition {
+        position: Coord::new(XY { x: c.x, y: c.y }),
+        velocity,
+        cursor_id: c.cursor_id.clone(),
     })
+}
+
+const CURSOR_VARIANT_CACHE_CAPACITY: usize = 2;
+
+struct CursorTimelineVariant {
+    settings: [u32; 6],
+    timeline: Arc<PrecomputedCursorTimeline>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CursorEventOrder {
+    pub moves: bool,
+    pub clicks: bool,
 }
 
 pub struct PrecomputedCursorTimeline {
     timeline: Vec<SmoothedCursorEvent>,
     raw_cursor: CursorEvents,
+    raw_moves_are_ordered: bool,
+    clicks_are_ordered: bool,
     has_smoothing: bool,
+    variants: Mutex<Vec<CursorTimelineVariant>>,
 }
 
 impl PrecomputedCursorTimeline {
@@ -336,11 +361,22 @@ impl PrecomputedCursorTimeline {
         smoothing: Option<SpringMassDamperSimulationConfig>,
         click_spring: Option<ClickSpringConfig>,
     ) -> Self {
+        let raw_moves_are_ordered = cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms);
+        let clicks_are_ordered = cursor
+            .clicks
+            .iter()
+            .try_fold(f64::NEG_INFINITY, |previous, click| {
+                (previous <= click.time_ms).then_some(click.time_ms)
+            })
+            .is_some();
         if cursor.moves.is_empty() || smoothing.is_none() {
             return Self {
                 timeline: vec![],
                 raw_cursor: cursor.clone(),
+                raw_moves_are_ordered,
+                clicks_are_ordered,
                 has_smoothing: false,
+                variants: Mutex::new(Vec::new()),
             };
         }
 
@@ -357,7 +393,50 @@ impl PrecomputedCursorTimeline {
         Self {
             timeline,
             raw_cursor: CursorEvents::default(),
+            raw_moves_are_ordered,
+            clicks_are_ordered,
             has_smoothing: true,
+            variants: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn cached_variant(
+        &self,
+        cursor: &CursorEvents,
+        smoothing: SpringMassDamperSimulationConfig,
+        click_spring: ClickSpringConfig,
+    ) -> Arc<Self> {
+        let settings = [
+            smoothing.tension.to_bits(),
+            smoothing.mass.to_bits(),
+            smoothing.friction.to_bits(),
+            click_spring.tension.to_bits(),
+            click_spring.mass.to_bits(),
+            click_spring.friction.to_bits(),
+        ];
+        let mut variants = self.variants.lock().unwrap();
+        if let Some(index) = variants.iter().position(|entry| entry.settings == settings) {
+            let entry = variants.remove(index);
+            let timeline = Arc::clone(&entry.timeline);
+            variants.push(entry);
+            return timeline;
+        }
+
+        let timeline = Arc::new(Self::new(cursor, Some(smoothing), Some(click_spring)));
+        if variants.len() == CURSOR_VARIANT_CACHE_CAPACITY {
+            variants.remove(0);
+        }
+        variants.push(CursorTimelineVariant {
+            settings,
+            timeline: Arc::clone(&timeline),
+        });
+        timeline
+    }
+
+    pub(crate) fn event_order(&self) -> CursorEventOrder {
+        CursorEventOrder {
+            moves: self.raw_moves_are_ordered,
+            clicks: self.clicks_are_ordered,
         }
     }
 
@@ -366,8 +445,21 @@ impl PrecomputedCursorTimeline {
         if self.has_smoothing {
             interpolate_timeline(&self.timeline, time_ms)
         } else {
-            interpolate_raw_cursor(&self.raw_cursor, time_ms)
+            interpolate_raw_cursor(&self.raw_cursor, time_ms, self.raw_moves_are_ordered)
         }
+    }
+
+    // Style overrides use the same source events as this timeline's constructor.
+    pub(crate) fn interpolate_raw(
+        &self,
+        cursor: &CursorEvents,
+        time_secs: f32,
+    ) -> Option<InterpolatedCursorPosition> {
+        interpolate_raw_cursor(
+            cursor,
+            (time_secs * 1000.0) as f64,
+            self.raw_moves_are_ordered,
+        )
     }
 }
 
@@ -1160,6 +1252,143 @@ mod tests {
     }
 
     #[test]
+    fn style_cursor_variants_preserve_motion_and_click_spring_output() {
+        let cursor = dense_cursor(3);
+        let base = PrecomputedCursorTimeline::new(
+            &cursor,
+            Some(DEFAULT_CLICK_SPRING),
+            Some(ClickSpringConfig::default()),
+        );
+        for changed in 0..6 {
+            let mut smoothing = DEFAULT_CLICK_SPRING;
+            let mut click = ClickSpringConfig::default();
+            match changed {
+                0 => smoothing.tension += 100.0,
+                1 => smoothing.mass += 0.5,
+                2 => smoothing.friction += 10.0,
+                3 => click.tension += 100.0,
+                4 => click.mass += 0.5,
+                _ => click.friction += 10.0,
+            }
+            let variant = base.cached_variant(&cursor, smoothing, click);
+            for time in [-0.1, 0.0, 0.175, 0.5, 1.0, 1.5, 2.9, 3.5] {
+                assert_position_bits(
+                    interpolate_cursor_with_click_spring(
+                        &cursor,
+                        time,
+                        Some(smoothing),
+                        Some(click),
+                    ),
+                    variant.interpolate(time),
+                );
+            }
+            let reused = base.cached_variant(&cursor, smoothing, click);
+            assert!(Arc::ptr_eq(&variant, &reused));
+        }
+        assert!(base.raw_cursor.moves.is_empty());
+        assert!(base.raw_cursor.clicks.is_empty());
+    }
+
+    #[test]
+    fn style_cursor_variant_cache_evicts_unused_history_and_preserves_base() {
+        let cursor = dense_cursor(2);
+        let base = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+        let original = base.interpolate(0.8);
+        let click = ClickSpringConfig::default();
+        let a = DEFAULT_CLICK_SPRING;
+        let b = SpringMassDamperSimulationConfig {
+            tension: 800.0,
+            ..a
+        };
+        let c = SpringMassDamperSimulationConfig {
+            tension: 1100.0,
+            ..a
+        };
+        let first = base.cached_variant(&cursor, a, click);
+        let second = base.cached_variant(&cursor, b, click);
+        let old_second = Arc::downgrade(&second);
+        drop(second);
+        assert!(Arc::ptr_eq(&first, &base.cached_variant(&cursor, a, click)));
+        let third = base.cached_variant(&cursor, c, click);
+        assert!(old_second.upgrade().is_none());
+        assert_eq!(
+            base.variants.lock().unwrap().len(),
+            CURSOR_VARIANT_CACHE_CAPACITY
+        );
+        assert!(Arc::ptr_eq(&third, &base.cached_variant(&cursor, c, click)));
+        assert_position_bits(original, base.interpolate(0.8));
+        let first_output = first.interpolate(0.8);
+        let weak_first = Arc::downgrade(&first);
+        drop(base.cached_variant(&cursor, b, click));
+        assert_eq!(Arc::strong_count(&first), 1);
+        assert_position_bits(first_output, first.interpolate(0.8));
+        drop(first);
+        assert!(weak_first.upgrade().is_none());
+        drop(third);
+        drop(base);
+    }
+
+    #[test]
+    fn style_cursor_variants_are_scoped_to_their_recording_source() {
+        let first = dense_cursor(2);
+        let mut second = first.clone();
+        for event in &mut second.moves {
+            event.x = 1.0 - event.x;
+        }
+        let a = PrecomputedCursorTimeline::new(&first, Some(DEFAULT_CLICK_SPRING), None);
+        let b = PrecomputedCursorTimeline::new(&second, Some(DEFAULT_CLICK_SPRING), None);
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 700.0,
+            ..DEFAULT_CLICK_SPRING
+        };
+        let click = ClickSpringConfig::default();
+        let av = a.cached_variant(&first, smoothing, click);
+        let bv = b.cached_variant(&second, smoothing, click);
+        assert!(!Arc::ptr_eq(&av, &bv));
+        for time in [0.0, 0.2, 1.0, 1.9] {
+            assert_position_bits(
+                interpolate_cursor_with_click_spring(&first, time, Some(smoothing), Some(click)),
+                av.interpolate(time),
+            );
+            assert_position_bits(
+                interpolate_cursor_with_click_spring(&second, time, Some(smoothing), Some(click)),
+                bv.interpolate(time),
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_style_cursor_queries_share_one_variant() {
+        let cursor = dense_cursor(3);
+        let base = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+        let barrier = std::sync::Barrier::new(8);
+        let variants = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        base.cached_variant(
+                            &cursor,
+                            DEFAULT_CLICK_SPRING,
+                            ClickSpringConfig::default(),
+                        )
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            variants
+                .iter()
+                .all(|variant| Arc::ptr_eq(variant, &variants[0]))
+        );
+        assert_eq!(base.variants.lock().unwrap().len(), 1);
+    }
+
+    #[test]
     fn raw_and_empty_timelines_preserve_source_events() {
         let cursor = dense_cursor(2);
         let timeline = PrecomputedCursorTimeline::new(&cursor, None, None);
@@ -1182,6 +1411,154 @@ mod tests {
         assert!(timeline.raw_cursor.moves.is_empty());
         assert_eq!(timeline.raw_cursor.clicks.len(), 1);
         assert!(timeline.interpolate(0.1).is_none());
+    }
+
+    #[test]
+    fn raw_timeline_lookup_matches_linear_reference() {
+        let cases = [
+            vec![],
+            vec![0.0],
+            vec![f64::NAN],
+            vec![0.0, 0.0, 10.0, 10.0, 20.0, 100.0, 100.0],
+            vec![-0.0, 0.0, 0.0, 10.0, 100.0],
+            vec![0.0, 20.0, 10.0, 50.0, 100.0],
+            vec![0.0, 10.0, f64::NAN, 30.0, 100.0],
+            vec![f64::NAN, 10.0, 30.0, 100.0],
+            vec![0.0, 10.0, f64::NAN],
+            vec![f64::NEG_INFINITY, 0.0, 10.0, f64::INFINITY],
+            vec![0.0, f64::INFINITY, 10.0, 100.0],
+        ];
+        for times in cases {
+            let cursor = CursorEvents {
+                moves: times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| {
+                        let mut event =
+                            cursor_move(time, index as f64 * 0.13, index as f64 * -0.07);
+                        event.cursor_id = index.to_string();
+                        event
+                    })
+                    .collect(),
+                clicks: Vec::new(),
+            };
+            let timeline = PrecomputedCursorTimeline::new(&cursor, None, None);
+            let queries = [
+                -1.0, -0.0, 0.0, 0.001, 0.009, 0.01, 0.019, 0.02, 0.05, 0.1, 1.0,
+            ]
+            .into_iter()
+            .chain([f32::NAN, f32::NEG_INFINITY, f32::INFINITY])
+            .chain(times.iter().flat_map(|&time| {
+                let time = (time / 1000.0) as f32;
+                [time.next_down(), time, time.next_up()]
+            }));
+            for time in queries {
+                assert_position_bits(
+                    interpolate_cursor(&cursor, time, None),
+                    timeline.interpolate(time),
+                );
+                assert_position_bits(
+                    interpolate_cursor(&cursor, time, None),
+                    timeline.interpolate_raw(&cursor, time),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn raw_style_lookup_reuses_smoothed_source_order_without_retaining_events() {
+        let cursor = dense_cursor(2);
+        let timeline = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+        assert!(timeline.raw_cursor.moves.is_empty());
+        assert!(timeline.raw_cursor.clicks.is_empty());
+        for time in [1.7, 0.4, 2.0, 0.0, -1.0, 0.017, 1.7] {
+            assert_position_bits(
+                interpolate_cursor(&cursor, time, None),
+                timeline.interpolate_raw(&cursor, time),
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn benchmark_raw_cursor_frame_lookup() {
+        use std::{hint::black_box, time::Instant};
+
+        for duration_secs in [60, 600, 3600] {
+            let cursor = CursorEvents {
+                moves: (0..=duration_secs * 60)
+                    .map(|index| {
+                        let mut event = cursor_move(
+                            index as f64 * 1000.0 / 60.0,
+                            (index % 479) as f64 / 479.0,
+                            (index % 283) as f64 / 283.0,
+                        );
+                        event.cursor_id = (index / 31 % 3).to_string();
+                        event
+                    })
+                    .collect(),
+                clicks: Vec::new(),
+            };
+            let started = Instant::now();
+            let timeline = PrecomputedCursorTimeline::new(&cursor, None, None);
+            println!(
+                "raw_cursor_setup duration_secs={duration_secs} moves={} setup_ms={:.3}",
+                cursor.moves.len(),
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+
+            for workload in ["start", "middle", "end", "random_seek"] {
+                let mut baseline = Vec::new();
+                let mut optimized = Vec::new();
+                for frame in 0..544 {
+                    let time = match workload {
+                        "start" => 1.0 + (frame % 120) as f32 / 60.0,
+                        "middle" => duration_secs as f32 * 0.5 + (frame % 120) as f32 / 60.0,
+                        "end" => duration_secs as f32 - 3.0 + (frame % 120) as f32 / 60.0,
+                        _ => (frame * 104729 % 1009) as f32 / 1009.0 * duration_secs as f32,
+                    };
+                    let queries = [time, (time - 1.0 / 60.0).max(0.0), (time - 0.4).max(0.0)];
+                    for query in queries {
+                        assert_position_bits(
+                            interpolate_cursor(&cursor, query, None),
+                            timeline.interpolate_raw(&cursor, query),
+                        );
+                    }
+                    let measure =
+                        |interpolate: &dyn Fn(f32) -> Option<InterpolatedCursorPosition>| {
+                            let started = Instant::now();
+                            let positions = queries.map(|time| interpolate(black_box(time)));
+                            let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                            drop(black_box(positions));
+                            elapsed
+                        };
+                    let old = |time| interpolate_cursor(black_box(&cursor), time, None);
+                    let new = |time| black_box(&timeline).interpolate_raw(black_box(&cursor), time);
+                    let (old_us, new_us) = if frame % 2 == 0 {
+                        (measure(&old), measure(&new))
+                    } else {
+                        let new_us = measure(&new);
+                        (measure(&old), new_us)
+                    };
+                    if frame >= 32 {
+                        baseline.push(old_us);
+                        optimized.push(new_us);
+                    }
+                }
+                baseline.sort_by(f64::total_cmp);
+                optimized.sort_by(f64::total_cmp);
+                let p50 = baseline.len() / 2;
+                let p95 = baseline.len() * 95 / 100;
+                println!(
+                    "raw_cursor_frame duration_secs={duration_secs} workload={workload} frames={} queries_per_frame=3 baseline_p50_us={:.3} baseline_p95_us={:.3} optimized_p50_us={:.3} optimized_p95_us={:.3}",
+                    baseline.len(),
+                    baseline[p50],
+                    baseline[p95],
+                    optimized[p50],
+                    optimized[p95],
+                );
+            }
+        }
     }
 
     #[test]

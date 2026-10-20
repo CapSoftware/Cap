@@ -413,7 +413,21 @@ fn send_segmented_frame<T>(
     frame: T,
     frame_drops: &mut FrameDropTracker,
 ) -> anyhow::Result<()> {
-    match sender.send_timeout(frame, Duration::from_millis(STALL_BUDGET_MS)) {
+    send_segmented_frame_with_timeout(
+        sender,
+        frame,
+        frame_drops,
+        Duration::from_millis(STALL_BUDGET_MS),
+    )
+}
+
+fn send_segmented_frame_with_timeout<T>(
+    sender: &flume::Sender<T>,
+    frame: T,
+    frame_drops: &mut FrameDropTracker,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    match sender.send_timeout(frame, timeout) {
         Ok(()) => frame_drops.record_frame(),
         Err(flume::SendTimeoutError::Timeout(_)) => frame_drops.record_drop(),
         Err(flume::SendTimeoutError::Disconnected(_)) => {
@@ -430,6 +444,7 @@ struct SegmentedEncoderState {
 }
 
 pub struct SegmentedVideoMuxer {
+    timed_fragments: bool,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -444,6 +459,7 @@ pub struct SegmentedVideoMuxer {
 }
 
 pub struct SegmentedVideoMuxerConfig {
+    pub timed_fragments: bool,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
@@ -454,6 +470,7 @@ pub struct SegmentedVideoMuxerConfig {
 impl Default for SegmentedVideoMuxerConfig {
     fn default() -> Self {
         Self {
+            timed_fragments: false,
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
@@ -488,6 +505,7 @@ impl Muxer for SegmentedVideoMuxer {
             .unwrap_or_else(|| SharedPauseState::new(pause_flag));
 
         Ok(Self {
+            timed_fragments: config.timed_fragments,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -651,8 +669,12 @@ impl SegmentedVideoMuxer {
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
-        let mut encoder =
-            SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
+            self.base_path.clone(),
+            self.video_config,
+            encoder_config,
+            self.timed_fragments,
+        )?;
         if let Some(tx) = &self.segment_tx {
             encoder.set_segment_callback(tx.clone());
         }
@@ -878,7 +900,10 @@ impl AudioMuxer for DashSegmentedAudioMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFmpegVideoFrame, FrameDropTracker, VideoFrame, send_segmented_frame};
+    use super::{
+        FFmpegVideoFrame, FrameDropTracker, VideoFrame, send_segmented_frame,
+        send_segmented_frame_with_timeout,
+    };
     use cap_timestamp::Timestamp;
     use std::time::Instant;
 
@@ -889,11 +914,19 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(10));
             assert_eq!(receiver.recv().unwrap(), 1);
-            receiver.recv_timeout(std::time::Duration::from_millis(200))
+            receiver.recv_timeout(std::time::Duration::from_secs(5))
         });
         let mut drops = FrameDropTracker::new();
 
-        send_segmented_frame(&sender, 2, &mut drops).unwrap();
+        // Hosted runners can deschedule either thread beyond the production stall budget.
+        // The stalled-queue test below exercises that production deadline separately.
+        send_segmented_frame_with_timeout(
+            &sender,
+            2,
+            &mut drops,
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
 
         assert_eq!(consumer.join().unwrap().unwrap(), 2);
         assert_eq!(drops.total_frames, 1);

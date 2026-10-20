@@ -15,6 +15,443 @@
 /// auto-hide reveal, below context menus.
 pub const MAIN_WINDOW_LEVEL: isize = 100;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
+pub(crate) enum LinuxFileDialogError {
+    Busy,
+    BeforeDispatch(String),
+    NativeResponse(String),
+    Indeterminate(String),
+    RestartRequired,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl LinuxFileDialogError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Busy => "A file dialog is already open. Finish or cancel it before trying again.".into(),
+            Self::BeforeDispatch(error) | Self::NativeResponse(error) => format!("The file dialog could not complete: {error}"),
+            Self::Indeterminate(_) | Self::RestartRequired => "Cap could not confirm that the file dialog closed. Close any remaining file dialog and restart Cap before trying again.".into(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+type LinuxFileDialogResult = Result<Option<std::path::PathBuf>, LinuxFileDialogError>;
+
+#[cfg(any(target_os = "linux", test))]
+struct FileDialogPermit<'a> {
+    active: &'a std::sync::atomic::AtomicU8,
+    completed: bool,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<'a> FileDialogPermit<'a> {
+    fn acquire(active: &'a std::sync::atomic::AtomicU8) -> Result<Self, LinuxFileDialogError> {
+        match active.compare_exchange(
+            0,
+            1,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(Self {
+                active,
+                completed: false,
+            }),
+            Err(2) => Err(LinuxFileDialogError::RestartRequired),
+            Err(_) => Err(LinuxFileDialogError::Busy),
+        }
+    }
+
+    fn allow_reuse(&mut self) {
+        self.completed = true;
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl Drop for FileDialogPermit<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            let _ = self.active.compare_exchange(
+                1,
+                0,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            );
+        } else {
+            self.active.store(2, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn complete_file_dialog(
+    mut permit: FileDialogPermit<'_>,
+    dialog: impl std::future::Future<Output = LinuxFileDialogResult>,
+    sender: flume::Sender<LinuxFileDialogResult>,
+) {
+    let result = dialog.await;
+    if !matches!(result, Err(LinuxFileDialogError::Indeterminate(_))) {
+        permit.allow_reuse();
+    }
+    drop(permit);
+    let _ = sender.send(result);
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxFileDialogParent {
+    Wayland(wayland_client::protocol::wl_surface::WlSurface),
+    X11(std::os::raw::c_ulong),
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxFileDialogParent {
+    fn from_window(window: &gpui::Window) -> Option<Self> {
+        if let Some(surface) = window.wayland_surface() {
+            return Some(Self::Wayland(surface));
+        }
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+            RawWindowHandle::Xlib(handle) => Some(Self::X11(handle.window)),
+            RawWindowHandle::Xcb(handle) => Some(Self::X11(handle.window.get().into())),
+            _ => None,
+        }
+    }
+
+    async fn identifier(self) -> Option<ashpd::WindowIdentifier> {
+        match self {
+            Self::Wayland(surface) => {
+                use wayland_client::Proxy;
+                if !surface.is_alive() {
+                    return None;
+                }
+                ashpd::WindowIdentifier::from_wayland(&surface).await
+            }
+            Self::X11(id) => Some(ashpd::WindowIdentifier::from_xid(id)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_linux_file_dialog<F, Fut>(
+    cx: &mut gpui::AsyncApp,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    dialog: F,
+) -> LinuxFileDialogResult
+where
+    F: FnOnce(Option<ashpd::WindowIdentifier>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = LinuxFileDialogResult> + Send + 'static,
+{
+    static ACTIVE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    let permit = FileDialogPermit::acquire(&ACTIVE)?;
+    let (ready_sender, ready_receiver) = flume::bounded(1);
+    let (approval_sender, approval_receiver) = flume::bounded(1);
+    let (sender, receiver) = flume::bounded(1);
+    // ashpd does not close dispatched requests on drop; retain the worker and
+    // admission through a native response, or disable reuse when closure is unknown.
+    gpui_tokio::Tokio::spawn(
+        cx,
+        complete_file_dialog(
+            permit,
+            async move {
+                use futures_util::{FutureExt, StreamExt};
+                let connection = ashpd::zbus::Connection::session()
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let proxy = ashpd::zbus::fdo::DBusProxy::new(&connection)
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let mut owner_changes = proxy
+                    .receive_name_owner_changed_with_args(&[(0, "org.freedesktop.portal.Desktop")])
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let identifier = match parent {
+                    Some(parent) => parent.identifier().await,
+                    None => None,
+                };
+                if ready_sender.send(()).is_err()
+                    || approval_receiver.recv_async().await != Ok(true)
+                {
+                    return Ok(None);
+                }
+                while let Some(change) = owner_changes.next().now_or_never() {
+                    let Some(change) = change else {
+                        return Err(LinuxFileDialogError::BeforeDispatch(
+                            "The desktop portal connection closed.".into(),
+                        ));
+                    };
+                    match change.args() {
+                        Ok(args) if args.old_owner().is_some() => {
+                            return Err(LinuxFileDialogError::BeforeDispatch(
+                                "The desktop portal restarted before the dialog could open.".into(),
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            return Err(LinuxFileDialogError::BeforeDispatch(error.to_string()));
+                        }
+                    }
+                }
+                let owner_lost = async {
+                    loop {
+                        let Some(change) = owner_changes.next().await else {
+                            return "The desktop portal connection closed.".to_owned();
+                        };
+                        match change.args() {
+                            Ok(args) if args.old_owner().is_some() => {
+                                return "The desktop portal restarted while the dialog was open."
+                                    .to_owned();
+                            }
+                            Ok(_) => {}
+                            Err(error) => return error.to_string(),
+                        }
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    result = dialog(identifier) => result,
+                    error = owner_lost => Err(LinuxFileDialogError::Indeterminate(error)),
+                }
+            },
+            sender,
+        ),
+    )
+    .detach();
+    if ready_receiver.recv_async().await.is_ok() {
+        let owner_exists = owner.is_none_or(|(owner, expected_root)| {
+            cx.update(|cx| {
+                owner
+                    .update(cx, |root, _, _| root.entity_id() == expected_root)
+                    .unwrap_or(false)
+            })
+        });
+        let _ = approval_sender.send(owner_exists);
+    }
+    match receiver.recv_async().await {
+        Ok(result) => result,
+        Err(error) => {
+            ACTIVE.store(2, std::sync::atomic::Ordering::Release);
+            Err(LinuxFileDialogError::Indeterminate(error.to_string()))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn portal_file_response(
+    request: ashpd::desktop::Request<ashpd::desktop::file_chooser::SelectedFiles>,
+) -> LinuxFileDialogResult {
+    match request.response() {
+        Ok(response) => response
+            .uris()
+            .first()
+            .map(|uri| {
+                uri.to_file_path().map_err(|()| {
+                    LinuxFileDialogError::NativeResponse(
+                        "The selected location is not a local file.".into(),
+                    )
+                })
+            })
+            .transpose(),
+        Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => Ok(None),
+        Err(error) => Err(LinuxFileDialogError::NativeResponse(error.to_string())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn portal_filters(filters: &[(&str, &[&str])]) -> Vec<ashpd::desktop::file_chooser::FileFilter> {
+    filters
+        .iter()
+        .map(|(name, extensions)| {
+            extensions.iter().fold(
+                ashpd::desktop::file_chooser::FileFilter::new(*name),
+                |filter, extension| {
+                    if extension.is_empty() || *extension == "*" {
+                        filter.glob("*")
+                    } else {
+                        filter.glob(&format!("*.{extension}"))
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_open_file_panel(
+    filters: &[(&str, &[&str])],
+    directory: Option<std::path::PathBuf>,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    cx: &mut gpui::AsyncApp,
+) -> LinuxFileDialogResult {
+    let filters = portal_filters(filters);
+    run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
+        let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
+            .identifier(identifier)
+            .multiple(false)
+            .filters(filters)
+            .current_folder::<&std::path::PathBuf>(directory.as_ref())
+            .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
+            .send()
+            .await
+            .map_err(|error| LinuxFileDialogError::Indeterminate(error.to_string()))?;
+        portal_file_response(request)
+    })
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_save_file_panel(
+    suggested: &str,
+    extensions: &[&str],
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    cx: &mut gpui::AsyncApp,
+) -> LinuxFileDialogResult {
+    let name = suggested.to_owned();
+    let filters = if extensions.is_empty() {
+        Vec::new()
+    } else {
+        portal_filters(&[("Export", extensions)])
+    };
+    run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
+        let request = ashpd::desktop::file_chooser::SaveFileRequest::default()
+            .identifier(identifier)
+            .current_name(name.as_str())
+            .filters(filters)
+            .send()
+            .await
+            .map_err(|error| LinuxFileDialogError::Indeterminate(error.to_string()))?;
+        portal_file_response(request)
+    })
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn finish_linux_file_dialog(
+    result: LinuxFileDialogResult,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    cx: &mut gpui::AsyncApp,
+) -> Option<std::path::PathBuf> {
+    match result {
+        Ok(path) => path.filter(|_| {
+            owner.is_none_or(|(owner, expected_root)| {
+                cx.update(|cx| {
+                    owner
+                        .update(cx, |root, _, _| root.entity_id() == expected_root)
+                        .unwrap_or(false)
+                })
+            })
+        }),
+        Err(error) => {
+            tracing::error!(?error, "native file dialog failed");
+            let message = error.message();
+            let response = cx.update(|cx| {
+                let (owner, expected_root) = owner?;
+                owner
+                    .update(cx, |root, window, cx| {
+                        if root.entity_id() != expected_root {
+                            return None;
+                        }
+                        Some(crate::editor_modal::informational_alert(
+                            "File dialog unavailable",
+                            &message,
+                            window,
+                            cx,
+                        ))
+                    })
+                    .ok()
+                    .flatten()
+            });
+            if let Some(response) = response {
+                let _ = response.await;
+            }
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_file_panel_async(
+    filters: &[(&str, &[&str])],
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    let (owner, parent) = cx
+        .update_root(|root, window, _| {
+            (
+                (window.window_handle(), root.entity_id()),
+                LinuxFileDialogParent::from_window(window),
+            )
+        })
+        .ok()?;
+    let result = linux_open_file_panel(filters, directory, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_file_panel_from_app_async(
+    filters: &[(&str, &[&str])],
+    cx: &mut gpui::AsyncApp,
+) -> Option<std::path::PathBuf> {
+    let captured = cx.update(|cx| {
+        let handle = if let Some(handle) = cx.active_window() {
+            handle
+        } else {
+            if !cx.has_global::<crate::app_windows::AppWindows>()
+                || crate::session::RecordingSession::global(cx).read(cx).phase
+                    != crate::session::Phase::Idle
+            {
+                return None;
+            }
+            let windows = cx.global::<crate::app_windows::AppWindows>();
+            if windows.main_hidden_for_picker || !windows.overlays.is_empty() {
+                return None;
+            }
+            let main = windows.main;
+            main.update(cx, |_, _, _| ()).ok()?;
+            crate::app_windows::show_main_window(cx);
+            main.into()
+        };
+        handle
+            .update(cx, |root, window, _| {
+                (
+                    (window.window_handle(), root.entity_id()),
+                    LinuxFileDialogParent::from_window(window),
+                )
+            })
+            .ok()
+    });
+    let (owner, parent) = captured?;
+    let result = linux_open_file_panel(filters, None, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+pub(crate) async fn save_file_panel_async(
+    suggested: &str,
+    extensions: &[&str],
+    _cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let (owner, parent) = _cx
+            .update_root(|root, window, _| {
+                (
+                    (window.window_handle(), root.entity_id()),
+                    LinuxFileDialogParent::from_window(window),
+                )
+            })
+            .ok()?;
+        let result = linux_save_file_panel(suggested, extensions, Some(owner), parent, _cx).await;
+        finish_linux_file_dialog(result, Some(owner), _cx).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        save_file_panel(suggested, extensions)
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 struct DockActivationTiming {
     last_show: std::time::Instant,
@@ -150,11 +587,59 @@ pub struct PanelBehavior {
 #[cfg(target_os = "macos")]
 pub use mac::*;
 
+/// GPUI keeps its own Reduce Motion flag and never reads the OS setting, so
+/// every animation ignored it until this fed it in.
+pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
+    #[cfg(target_os = "macos")]
+    mac::follow_system_reduce_motion(cx);
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
+}
+
+#[cfg(target_os = "macos")]
+mod macos_exception_guard;
+
 #[cfg(target_os = "macos")]
 mod macos_occlusion;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    pub fn follow_system_reduce_motion(cx: &mut gpui::App) {
+        use objc2_app_kit::{
+            NSWorkspace, NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+        };
+        use objc2_foundation::{NSNotification, NSOperationQueue};
+
+        let reduce_motion = || {
+            let reduce =
+                unsafe { NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() };
+            tracing::debug!(reduce, "system reduce motion");
+            reduce
+        };
+        cx.set_reduce_motion(reduce_motion());
+
+        let (changed, changes) = flume::unbounded::<()>();
+        let block = block2::RcBlock::new(move |_: std::ptr::NonNull<NSNotification>| {
+            let _ = changed.send(());
+        });
+        unsafe {
+            let center = NSWorkspace::sharedWorkspace().notificationCenter();
+            let observer = center.addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            );
+            std::mem::forget(observer);
+        }
+        cx.spawn(async move |cx| {
+            while changes.recv_async().await.is_ok() {
+                cx.update(|cx| cx.set_reduce_motion(reduce_motion()));
+            }
+        })
+        .detach();
+    }
+
     use gpui::Window;
     use objc2::rc::Id;
     use objc2::runtime::{AnyObject, Sel};
@@ -176,6 +661,11 @@ mod mac {
                 .get()
                 .is_some_and(|requests| requests.request()),
         )
+    }
+
+    /// Must run on the main thread before the run loop starts.
+    pub fn install_appkit_exception_guards() {
+        super::macos_exception_guard::install();
     }
 
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
@@ -228,13 +718,30 @@ mod mac {
     }
 
     pub fn apply_window_theme(window: &Window, appearance: ForcedAppearance) {
+        if let Some(native) = native_window(window) {
+            apply_native_window_theme(&native, appearance);
+        }
+    }
+
+    pub fn apply_window_theme_deferred(
+        window: &Window,
+        appearance: ForcedAppearance,
+        executor: &gpui::ForegroundExecutor,
+    ) {
+        let Some(native) = native_window(window) else {
+            return;
+        };
+        // AppKit synchronously invokes GPUI's appearance callback from setAppearance.
+        executor
+            .spawn(async move { apply_native_window_theme(&native, appearance) })
+            .detach();
+    }
+
+    fn apply_native_window_theme(native: &NativeWindow, appearance: ForcedAppearance) {
         use objc2_app_kit::{
             NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         };
 
-        let Some(ns) = ns_window(window) else {
-            return;
-        };
         let named = match appearance {
             ForcedAppearance::System => None,
             ForcedAppearance::Light => {
@@ -245,7 +752,7 @@ mod mac {
             }
         };
         unsafe {
-            NSAppearanceCustomization::setAppearance(&*ns, named.as_deref());
+            NSAppearanceCustomization::setAppearance(&*native.0, named.as_deref());
         }
     }
 
@@ -414,10 +921,11 @@ mod mac {
     ///
     /// The shim overrides `occlusionState` on gpui's own window subclasses
     /// (`GPUIWindow`, `GPUIPanel`) to OR the documented bit back in whenever
-    /// AppKit reports any visibility at all. gpui's gate then passes and its
-    /// own occlusion handling keeps working (a truly occluded window still
-    /// reports 0 and stops its link). Remove when the gpui pin understands the
-    /// macOS 26 bit.
+    /// AppKit reports any visibility at all (on macOS 27+, only on a window
+    /// that is ordered in). gpui's gate then passes and its own occlusion
+    /// handling keeps working (a truly occluded window still reports 0 and, on
+    /// macOS 27+, an ordered-out one keeps its raw state, so both stop their
+    /// link). Remove when the gpui pin understands the macOS 26 bit.
     ///
     /// Call once, before any window opens; [`kick_display_link`] re-fires the
     /// (self-delegating) occlusion handler for windows that opened before the
@@ -480,9 +988,22 @@ mod mac {
     pub fn kick_display_link(window: &Window) {
         install_occlusion_shim();
         if let Some(ns_window) = ns_window(window) {
-            unsafe {
-                let _: () = objc2::msg_send![&*ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
-            }
+            rerun_occlusion_handler(&ns_window);
+        }
+    }
+
+    fn rerun_occlusion_handler(ns_window: &NSWindow) {
+        unsafe {
+            let _: () = objc2::msg_send![ns_window, windowDidChangeOcclusionState: std::ptr::null_mut::<AnyObject>()];
+        }
+    }
+
+    /// Where the shim reports an ordered-out window as hidden (so its link
+    /// stops), every native show re-runs the gate rather than trusting AppKit
+    /// to post an occlusion change for the window coming back.
+    fn rerun_occlusion_handler_after_show(ns_window: &NSWindow) {
+        if super::macos_occlusion::ordered_out_windows_keep_raw_state() {
+            rerun_occlusion_handler(ns_window);
         }
     }
 
@@ -642,7 +1163,10 @@ mod mac {
         apply_fullscreen_overlay_behavior(ns_window);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
-        unsafe { ns_window.orderFrontRegardless() };
+        unsafe {
+            ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+            ns_window.orderFrontRegardless();
+        }
     }
 
     /// The window's raw AppKit frame (bottom-left origin). The dev-restore
@@ -715,12 +1239,70 @@ mod mac {
         false
     }
 
+    pub struct ScreenGeometry {
+        pub id: u32,
+        pub frame: (f64, f64, f64, f64),
+        pub visible: (f64, f64, f64, f64),
+    }
+
+    pub fn screen_geometries() -> Vec<ScreenGeometry> {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSRect, NSString};
+
+        let mut geometries = Vec::new();
+        unsafe {
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            if screens.is_null() {
+                return geometries;
+            }
+            let enumerator: *mut AnyObject = msg_send![screens, objectEnumerator];
+            if enumerator.is_null() {
+                return geometries;
+            }
+            let number_key = NSString::from_str("NSScreenNumber");
+            loop {
+                let screen: *mut AnyObject = msg_send![enumerator, nextObject];
+                if screen.is_null() {
+                    break;
+                }
+                let description: *mut AnyObject = msg_send![screen, deviceDescription];
+                if description.is_null() {
+                    continue;
+                }
+                let number: *mut AnyObject = msg_send![description, objectForKey: &*number_key];
+                if number.is_null() {
+                    continue;
+                }
+                let id: u32 = msg_send![number, unsignedIntValue];
+                let frame: NSRect = msg_send![screen, frame];
+                let visible: NSRect = msg_send![screen, visibleFrame];
+                geometries.push(ScreenGeometry {
+                    id,
+                    frame: (
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    ),
+                    visible: (
+                        visible.origin.x,
+                        visible.origin.y,
+                        visible.size.width,
+                        visible.size.height,
+                    ),
+                });
+            }
+        }
+        geometries
+    }
+
     /// `orderFrontRegardless` on the retained handle: bring a restored window
     /// forward without activating the app -- the dev loop relaunches on every
     /// rebuild and must not steal focus from whatever the user is typing in.
     /// Same task-only rule as every other ordering call here.
     pub fn order_front_native(native: &NativeWindow) {
         unsafe { native.0.orderFrontRegardless() };
+        rerun_occlusion_handler_after_show(&native.0);
     }
 
     /// The `NSWindow` behind a gpui window.
@@ -848,6 +1430,223 @@ mod mac {
     /// Reverse of [`hide_native`] -- `makeKeyAndOrderFront:`.
     pub fn show_native(native: &NativeWindow) {
         native.0.makeKeyAndOrderFront(None);
+        rerun_occlusion_handler_after_show(&native.0);
+    }
+
+    /// Start an AppKit file drag of `path` from the mouse-down being handled
+    /// right now (`NSApp.currentEvent`): what Finder hands System Settings,
+    /// which adds a dropped `.app` to a privacy list. Called from a gpui
+    /// mouse-down listener; the session runs from the event loop afterwards.
+    pub fn begin_file_drag(window: &Window, path: &std::path::Path) -> bool {
+        use objc2::{class, msg_send};
+        use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+        let Some(ns) = ns_window(window) else {
+            return false;
+        };
+        let source = file_drag_source();
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let event: *mut AnyObject = msg_send![app, currentEvent];
+            let view: *mut AnyObject = msg_send![&*ns, contentView];
+            if event.is_null() || view.is_null() || source.is_null() {
+                return false;
+            }
+            let path = NSString::from_str(&path.to_string_lossy());
+            let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*path];
+            if url.is_null() {
+                return false;
+            }
+            let item: *mut AnyObject = msg_send![class!(NSDraggingItem), alloc];
+            let item: *mut AnyObject = msg_send![item, initWithPasteboardWriter: url];
+            if item.is_null() {
+                return false;
+            }
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let icon: *mut AnyObject = msg_send![workspace, iconForFile: &*path];
+            let _: () = msg_send![icon, setSize: NSSize::new(64., 64.)];
+            let location: NSPoint = msg_send![event, locationInWindow];
+            let point: NSPoint = msg_send![view, convertPoint: location, fromView: std::ptr::null_mut::<AnyObject>()];
+            let frame = NSRect::new(
+                NSPoint::new(point.x - 32., point.y - 32.),
+                NSSize::new(64., 64.),
+            );
+            let _: () = msg_send![item, setDraggingFrame: frame, contents: icon];
+            let items: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: item];
+            let _: () = msg_send![item, release];
+            let session: *mut AnyObject = msg_send![
+                view,
+                beginDraggingSessionWithItems: items,
+                event: event,
+                source: source
+            ];
+            if session.is_null() {
+                return false;
+            }
+            let _: () = msg_send![session, setAnimatesToStartingPositionsOnCancelOrFail: true];
+            true
+        }
+    }
+
+    /// The `NSDraggingSource` for [`begin_file_drag`]: copy/link/generic when
+    /// the drag leaves the app, nothing inside it. One instance, never freed.
+    fn file_drag_source() -> *mut AnyObject {
+        use std::sync::OnceLock;
+
+        use objc2::runtime::{AnyProtocol, ClassBuilder, NSObject};
+        use objc2::{ClassType, msg_send, sel};
+
+        unsafe extern "C" fn operation_mask(
+            _receiver: *mut AnyObject,
+            _selector: Sel,
+            _session: *mut AnyObject,
+            context: isize,
+        ) -> usize {
+            const OUTSIDE_APPLICATION: isize = 0;
+            const COPY_LINK_GENERIC: usize = 1 | 2 | 4;
+            if context == OUTSIDE_APPLICATION {
+                COPY_LINK_GENERIC
+            } else {
+                0
+            }
+        }
+
+        static SOURCE: OnceLock<usize> = OnceLock::new();
+        *SOURCE.get_or_init(|| {
+            let Some(mut builder) = ClassBuilder::new("CapFileDragSource", NSObject::class())
+            else {
+                return 0;
+            };
+            unsafe {
+                builder.add_method(
+                    sel!(draggingSession:sourceOperationMaskForDraggingContext:),
+                    operation_mask
+                        as unsafe extern "C" fn(
+                            *mut AnyObject,
+                            Sel,
+                            *mut AnyObject,
+                            isize,
+                        ) -> usize,
+                );
+            }
+            if let Some(protocol) = AnyProtocol::get("NSDraggingSource") {
+                builder.add_protocol(protocol);
+            }
+            let class = builder.register();
+            let instance: *mut AnyObject = unsafe { msg_send![class, new] };
+            instance as usize
+        }) as *mut AnyObject
+    }
+
+    /// System Settings' main window in CoreGraphics coordinates (global,
+    /// top-left origin) -- bounds and owner pid are readable without Screen
+    /// Recording, titles are not, so the window is found by pid and size.
+    pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+        use core_foundation::array::{CFArray, CFArrayRef};
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::{CFString, CFStringRef};
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+            static kCGWindowOwnerPID: CFStringRef;
+            static kCGWindowLayer: CFStringRef;
+            static kCGWindowBounds: CFStringRef;
+        }
+        const ON_SCREEN_ONLY: u32 = 1 << 0;
+        const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+
+        let pid: i32 = unsafe {
+            let bundle = NSString::from_str("com.apple.systempreferences");
+            let apps: *mut AnyObject = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationsWithBundleIdentifier: &*bundle
+            ];
+            if apps.is_null() {
+                return None;
+            }
+            let app: *mut AnyObject = msg_send![apps, firstObject];
+            if app.is_null() {
+                return None;
+            }
+            msg_send![app, processIdentifier]
+        };
+
+        let list = unsafe {
+            let raw = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS, 0);
+            if raw.is_null() {
+                return None;
+            }
+            CFArray::<CFDictionary<CFString, CFType>>::wrap_under_create_rule(raw)
+        };
+        let number = |dict: &CFDictionary<CFString, CFType>, key: &CFString| -> Option<f64> {
+            dict.find(key)?.downcast::<CFNumber>()?.to_f64()
+        };
+        let (owner_key, layer_key, bounds_key) = unsafe {
+            (
+                CFString::wrap_under_get_rule(kCGWindowOwnerPID),
+                CFString::wrap_under_get_rule(kCGWindowLayer),
+                CFString::wrap_under_get_rule(kCGWindowBounds),
+            )
+        };
+        let mut best: Option<(f64, f64, f64, f64)> = None;
+        for window in list.iter() {
+            if number(&window, &owner_key) != Some(pid as f64)
+                || number(&window, &layer_key) != Some(0.)
+            {
+                continue;
+            }
+            let Some(bounds) = window
+                .find(&bounds_key)
+                .and_then(|value| value.downcast::<CFDictionary>())
+            else {
+                continue;
+            };
+            let bounds: CFDictionary<CFString, CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
+            let field = |name: &'static str| number(&bounds, &CFString::from_static_string(name));
+            let (Some(x), Some(y), Some(w), Some(h)) =
+                (field("X"), field("Y"), field("Width"), field("Height"))
+            else {
+                continue;
+            };
+            if w < 320. || h < 240. {
+                continue;
+            }
+            if best.is_none_or(|(_, _, bw, bh)| w * h > bw * bh) {
+                best = Some((x, y, w, h));
+            }
+        }
+        best
+    }
+
+    /// Whether the user is in System Settings or one of the authentication
+    /// sheets a privacy-list change raises.
+    pub fn system_settings_frontmost() -> bool {
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+            if app.is_null() {
+                return false;
+            }
+            let bundle: *mut NSString = msg_send![app, bundleIdentifier];
+            let Some(bundle) = bundle.as_ref() else {
+                return false;
+            };
+            matches!(
+                bundle.to_string().as_str(),
+                "com.apple.systempreferences"
+                    | "com.apple.SecurityAgent"
+                    | "com.apple.LocalAuthentication.UIAgent"
+            )
+        }
     }
 
     /// Close the window the way the red traffic light does: ask the
@@ -982,10 +1781,24 @@ mod mac {
         const K_EVENT_HOT_KEY_PRESSED: u32 = 5;
         const KVK_ESCAPE: u32 = 53;
         const SIGNATURE: u32 = 0x4361_7047;
+        /// `kEventParamDirectObject` (`'----'`) / `typeEventHotKeyID` (`'hkid'`) /
+        /// `eventNotHandledErr`.
+        const K_EVENT_PARAM_DIRECT_OBJECT: u32 = 0x2d2d_2d2d;
+        const TYPE_EVENT_HOT_KEY_ID: u32 = 0x686b_6964;
+        const EVENT_NOT_HANDLED_ERR: OsStatus = -9874;
 
         #[link(name = "Carbon", kind = "framework")]
         unsafe extern "C" {
             fn GetEventDispatcherTarget() -> *mut c_void;
+            fn GetEventParameter(
+                event: *mut c_void,
+                name: u32,
+                desired_type: u32,
+                actual_type: *mut u32,
+                buffer_size: usize,
+                actual_size: *mut usize,
+                data: *mut c_void,
+            ) -> OsStatus;
             fn InstallEventHandler(
                 target: *mut c_void,
                 handler: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> OsStatus,
@@ -1013,9 +1826,32 @@ mod mac {
 
         extern "C" fn escape_pressed(
             _call_ref: *mut c_void,
-            _event: *mut c_void,
+            event: *mut c_void,
             _user_data: *mut c_void,
         ) -> OsStatus {
+            // The dispatcher target sees every hot key in the process before
+            // its own target does, including global-hotkey's app shortcuts on
+            // the application target. Claiming those swallowed every shortcut
+            // once the first picker had installed this handler, so anything
+            // that is not this Escape goes on to its own handler.
+            let mut pressed = EventHotKeyId {
+                signature: 0,
+                id: 0,
+            };
+            let status = unsafe {
+                GetEventParameter(
+                    event,
+                    K_EVENT_PARAM_DIRECT_OBJECT,
+                    TYPE_EVENT_HOT_KEY_ID,
+                    std::ptr::null_mut(),
+                    std::mem::size_of::<EventHotKeyId>(),
+                    std::ptr::null_mut(),
+                    (&raw mut pressed).cast(),
+                )
+            };
+            if status != 0 || pressed.signature != SIGNATURE {
+                return EVENT_NOT_HANDLED_ERR;
+            }
             ESCAPE_TX.with(|tx| {
                 if let Some(sender) = tx.borrow().as_ref() {
                     let _ = sender.send(());
@@ -1139,11 +1975,25 @@ mod mac {
         ns_window(window).is_some_and(|ns| ns.isVisible())
     }
 
+    /// Whether the window has a close button (`NSWindowStyleMaskClosable`):
+    /// the windows ⌘W may close. gpui only sets it with a titlebar, so the
+    /// main window, camera bubble, controls bar and target overlays never
+    /// have it. A plain getter, so it is safe inside a gpui update.
+    pub fn window_is_closable(window: &Window) -> bool {
+        use objc2::msg_send;
+        const CLOSABLE: usize = 1 << 1;
+        ns_window(window).is_some_and(|ns| {
+            let mask: usize = unsafe { msg_send![&*ns, styleMask] };
+            mask & CLOSABLE != 0
+        })
+    }
+
     /// Show without stealing key status -- `orderFrontRegardless`, what the
     /// Tauri app calls on the recording controls panel.
     pub fn show_window_without_focus(window: &Window) {
         if let Some(ns_window) = ns_window(window) {
             unsafe { ns_window.orderFrontRegardless() };
+            rerun_occlusion_handler_after_show(&ns_window);
         }
     }
 
@@ -1170,13 +2020,26 @@ mod mac {
     }
 
     pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        match try_save_file_panel(suggested, extensions) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::error!(error, "Save dialog failed");
+                None
+            }
+        }
+    }
+
+    pub fn try_save_file_panel(
+        suggested: &str,
+        extensions: &[&str],
+    ) -> Result<Option<std::path::PathBuf>, String> {
         use objc2::{class, msg_send};
         use objc2_foundation::{NSArray, NSString};
 
         unsafe {
             let panel: *mut AnyObject = msg_send![class!(NSSavePanel), savePanel];
             if panel.is_null() {
-                return None;
+                return Err("The save dialog is unavailable".to_string());
             }
             let _: () = msg_send![panel, setCanCreateDirectories: true];
             let _: () = msg_send![panel, setNameFieldStringValue: &*NSString::from_str(suggested)];
@@ -1189,18 +2052,21 @@ mod mac {
                 let _: () = msg_send![panel, setAllowedFileTypes: &*types];
             }
             let response: isize = msg_send![panel, runModal];
+            if response == 0 {
+                return Ok(None);
+            }
             if response != 1 {
-                return None;
+                return Err("The save dialog could not be displayed".to_string());
             }
             let url: *mut AnyObject = msg_send![panel, URL];
             if url.is_null() {
-                return None;
+                return Err("The save dialog did not return a file path".to_string());
             }
             let path: *mut NSString = msg_send![url, path];
             if path.is_null() {
-                return None;
+                return Err("The save dialog did not return a file path".to_string());
             }
-            Some(std::path::PathBuf::from((*path).to_string()))
+            Ok(Some(std::path::PathBuf::from((*path).to_string())))
         }
     }
 
@@ -1809,6 +2675,15 @@ mod stub {
         let _ = conn.flush();
     }
     pub fn hide_native(_native: &NativeWindow) {}
+    pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
+        false
+    }
+    pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
+        None
+    }
+    pub fn system_settings_frontmost() -> bool {
+        false
+    }
     pub fn show_native(_native: &NativeWindow) {}
 
     #[cfg(target_os = "linux")]
@@ -1880,6 +2755,9 @@ mod stub {
     pub fn window_is_visible(_window: &Window) -> bool {
         false
     }
+    pub fn window_is_closable(_window: &Window) -> bool {
+        false
+    }
     pub fn show_window_without_focus(_window: &Window) {}
     pub fn window_number(_window: &Window) -> Option<isize> {
         None
@@ -1933,14 +2811,6 @@ mod stub {
     }
 
     pub fn install_url_scheme_handler() {}
-
-    pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
-        let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
-        if !extensions.is_empty() {
-            dialog = dialog.add_filter("Export", extensions);
-        }
-        dialog.save_file()
-    }
 
     pub fn copy_file_to_clipboard(path: &std::path::Path, cx: &gpui::App) -> Result<(), String> {
         let path = super::clipboard_file_path(path)?;
@@ -2091,6 +2961,126 @@ mod tests {
         assert!(!super::confirmation_accepted(
             rfd::MessageDialogResult::Yes,
             accept
+        ));
+    }
+}
+
+#[cfg(test)]
+mod file_dialog_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::atomic::AtomicU8,
+        task::{Context, Poll, Waker},
+    };
+
+    #[test]
+    fn active_native_dialog_rejects_repeated_requests() {
+        let active = AtomicU8::new(0);
+        let mut permit = FileDialogPermit::acquire(&active).unwrap();
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::Busy)
+        ));
+        permit.allow_reuse();
+        drop(permit);
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    fn complete(result: LinuxFileDialogResult) -> (AtomicU8, LinuxFileDialogResult) {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (sender, receiver) = flume::bounded(1);
+        {
+            let mut future = Box::pin(complete_file_dialog(permit, async { result }, sender));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+        }
+        (active, receiver.recv().unwrap())
+    }
+
+    #[test]
+    fn cancel_releases_admission_before_delivering_result() {
+        let (active, result) = complete(Ok(None));
+        assert_eq!(result, Ok(None));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn accept_releases_admission_before_delivering_path() {
+        let path = std::path::PathBuf::from("accepted.mp4");
+        let (active, result) = complete(Ok(Some(path.clone())));
+        assert_eq!(result, Ok(Some(path)));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn before_dispatch_failure_allows_retry() {
+        let error = LinuxFileDialogError::BeforeDispatch("invalid folder".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn terminal_native_error_allows_retry() {
+        let error = LinuxFileDialogError::NativeResponse("rejected by portal".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn ambiguous_dispatch_failure_requires_restart() {
+        let error = LinuxFileDialogError::Indeterminate("response stream lost".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::RestartRequired)
+        ));
+        assert!(
+            LinuxFileDialogError::RestartRequired
+                .message()
+                .contains("restart Cap")
+        );
+    }
+
+    #[test]
+    fn caller_drop_retains_admission_until_native_response() {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (native_sender, native_receiver) = flume::bounded(1);
+        let (sender, receiver) = flume::bounded(1);
+        let mut future = Box::pin(complete_file_dialog(
+            permit,
+            async move { native_receiver.recv_async().await.unwrap() },
+            sender,
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(receiver);
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::Busy)
+        ));
+        native_sender.send(Ok(None)).unwrap();
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn unexpected_worker_drop_does_not_reopen_admission() {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let mut future = Box::pin(complete_file_dialog(permit, std::future::pending(), sender));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(future);
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::RestartRequired)
         ));
     }
 }

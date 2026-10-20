@@ -15,17 +15,19 @@
 //!    the Tauri `NativeFrameConverter` uses (`camera_native.rs:301-310`).
 //!    Imports are cached per ring slot (keyed by pixel-buffer pointer +
 //!    ring generation), so the steady state creates no textures.
-//! 3. `BlurProcessor::process_into_encoder` runs the segmentation mask +
-//!    separable blur + composite, with the preview's 150ms inference interval
-//!    (`CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL`, `camera.rs:50`).
+//! 3. The same pixel buffer goes to Apple Vision person segmentation on its
+//!    own thread, and `BlurProcessor::process_into_encoder` composites with
+//!    the newest finished mask, refined against this frame by the guided
+//!    filter. Segmentation never blocks a preview frame.
 //! 4. `cap_rendering::RgbaToBgraSurfaceConverter` blits the RGBA output into
 //!    a BGRA IOSurface-backed CVPixelBuffer from its own ring, and
 //!    `PendingSurface::wait` blocks until the GPU has finished writing it, so
 //!    the buffer handed back to the window is always complete when painted.
 //!
 //! Everything runs on one dedicated `camera-blur` thread (the Tauri preview
-//! renders on a dedicated thread too, `camera.rs:466-490`), so the ~10ms
-//! CoreML/CPU segmentation inference every 150ms never blocks the UI thread.
+//! renders on a dedicated thread too, `camera.rs:466-490`), with the ~10ms
+//! Neural Engine segmentation on a second one, so neither touches the UI
+//! thread.
 //! The channel back to the window is how "what you see is what records" holds:
 //! this is the same `BlurProcessor` the editor/export camera layer runs
 //! (`cap-rendering/src/lib.rs:5742`), fed by the same `BackgroundBlurMode`
@@ -49,15 +51,15 @@ use cap_rendering::{
 };
 use cidre::{arc, cv};
 
-/// `CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH/HEIGHT` (`camera.rs:46-47`): with
-/// blur on, the Tauri preview processes at most 640x360 -- the blur passes
-/// and the 256x256 segmentation downsample get a bounded input no matter what
-/// the camera delivers. The `FrameConverter` applies this cap during its
-/// hardware conversion, so the scale costs nothing extra.
-pub const BLUR_MAX_DIMS: (usize, usize) = (640, 360);
+/// With an effect on, the preview processes at most 720p: enough for a crisp
+/// cutout edge in the largest bubble on a Retina display, while the guided
+/// filter and composite stay around a millisecond of GPU time. The
+/// `FrameConverter` applies this cap during its hardware conversion, so the
+/// scale costs nothing extra.
+pub const BLUR_MAX_DIMS: (usize, usize) = (1280, 720);
 
 /// `CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL` (`camera.rs:50`).
-const BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
+const BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(33);
 
 /// `LOW_SPEC_PREVIEW_RAM_THRESHOLD_BYTES` (`camera.rs:66`): machines at or
 /// under 8GB never spin up the ONNX/wgpu blur processor -- the heaviest cost
@@ -113,6 +115,8 @@ pub struct BlurJob {
 }
 
 pub struct BlurOutput {
+    pub mode: cap_camera_effects::BlurMode,
+    pub cutout: Option<std::sync::Arc<gpui::RenderImage>>,
     /// Blurred BGRA IOSurface pixel buffer, GPU work complete.
     pub buffer: SendPixelBuf,
     pub width: u32,
@@ -124,8 +128,8 @@ pub struct BlurOutput {
 /// resource is dropped on exit, the same release-on-off behaviour as
 /// `release_blur_resources` (`camera.rs:1477-1484`).
 pub fn run(jobs: flume::Receiver<BlurJob>, results: flume::Sender<BlurOutput>) {
-    // Current-thread runtime for `request_adapter` and the tokio yields
-    // inside `PendingSurface::wait`.
+    // Current-thread runtime for `request_adapter` and the timed blocking
+    // wait inside `PendingSurface::wait`.
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -257,6 +261,9 @@ impl Worker {
         let (width, height) = (job.width, job.height);
         let texture = self.input_texture(&job)?.clone();
 
+        // Vision takes the converted IOSurface directly (no GPU readback),
+        // and segmentation runs beside rendering instead of blocking it.
+        self.processor.set_segmentation_source(job.buffer.0.clone());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -275,9 +282,8 @@ impl Worker {
             .context("blur output missing")?;
 
         self.frame_number = self.frame_number.wrapping_add(1);
-        let pending = self
-            .converter
-            .encode(
+        let pending = runtime
+            .block_on(self.converter.encode(
                 &self.device,
                 &mut encoder,
                 output,
@@ -285,14 +291,28 @@ impl Worker {
                 height,
                 self.frame_number,
                 30,
-            )
+            ))
             .map_err(|error| anyhow!("{error}"))?;
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
 
         let frame = runtime
-            .block_on(pending.wait(&self.device, &self.queue))
+            .block_on(pending.wait(&self.device, submission))
             .map_err(|error| anyhow!("{error}"))?;
+        let cutout = if mode == cap_camera_effects::BlurMode::Remove {
+            use core_foundation::base::TCFType as _;
+            use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+            let raw = &*frame.pixel_buffer as *const cv::PixelBuf as CVPixelBufferRef;
+            let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+            Some(
+                crate::camera_window::snapshot_cutout(&buffer)
+                    .context("cutout preview pixels unavailable")?,
+            )
+        } else {
+            None
+        };
         Ok(BlurOutput {
+            mode,
+            cutout,
             buffer: SendPixelBuf(frame.pixel_buffer),
             width: frame.width,
             height: frame.height,
@@ -332,5 +352,96 @@ impl Worker {
         .map_err(|error| anyhow!("{error}"))?;
         self.imported.push((key, texture));
         Ok(&self.imported.last().expect("just pushed").1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_camera_effects::BlurMode;
+    use cidre::cf;
+    use core_foundation::base::TCFType as _;
+    use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "requires CAP_CAMERA_EFFECT_TEST_FRAME containing a 1280x720 RGBA webcam frame"]
+    fn native_cutout_preserves_alpha_through_iosurface_and_preview_image() {
+        let pixels = std::fs::read(std::env::var("CAP_CAMERA_EFFECT_TEST_FRAME").unwrap()).unwrap();
+        let (width, height) = BLUR_MAX_DIMS;
+        assert_eq!(pixels.len(), width * height * 4);
+        let properties = cf::Dictionary::new();
+        let attributes = cf::Dictionary::with_keys_values(
+            &[
+                cv::pixel_buffer::keys::io_surf_props().as_ref(),
+                cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+            ],
+            &[properties.as_ref(), cf::Boolean::value_true().as_ref()],
+        )
+        .unwrap();
+        let buffer =
+            cv::PixelBuf::new(width, height, cv::PixelFormat::_32_BGRA, Some(&attributes)).unwrap();
+        let raw = &*buffer as *const cv::PixelBuf as CVPixelBufferRef;
+        let wrapped = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
+        assert_eq!(wrapped.lock_base_address(0), 0);
+        let stride = wrapped.get_bytes_per_row();
+        let destination = unsafe {
+            std::slice::from_raw_parts_mut(wrapped.get_base_address().cast::<u8>(), stride * height)
+        };
+        for (source, target) in pixels
+            .chunks_exact(width * 4)
+            .zip(destination.chunks_exact_mut(stride))
+        {
+            for (source, target) in source.chunks_exact(4).zip(target.chunks_exact_mut(4)) {
+                target.copy_from_slice(&[source[2], source[1], source[0], source[3]]);
+            }
+        }
+        assert_eq!(wrapped.unlock_base_address(0), 0);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (device, queue) = shared_device(&runtime).unwrap();
+        let mut worker = Worker::new(device, queue).unwrap();
+        for mode in [
+            BlurMode::Remove,
+            BlurMode::Heavy,
+            BlurMode::Light,
+            BlurMode::Remove,
+        ] {
+            let mut timings = Vec::new();
+            for _ in 0..30 {
+                let start = Instant::now();
+                let output = worker
+                    .process(
+                        &runtime,
+                        BlurJob {
+                            buffer: SendPixelBuf(buffer.clone()),
+                            width: width as u32,
+                            height: height as u32,
+                            ring_generation: 1,
+                            mode,
+                        },
+                    )
+                    .unwrap();
+                timings.push(start.elapsed().as_secs_f64() * 1000.0);
+                assert_eq!(output.mode, mode);
+                if mode == BlurMode::Remove {
+                    let image = output.cutout.unwrap();
+                    let bytes = image.as_bytes(0).unwrap();
+                    assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 0));
+                    assert!(bytes.chunks_exact(4).any(|pixel| pixel[3] == 255));
+                } else {
+                    assert!(output.cutout.is_none());
+                }
+                std::thread::sleep(Duration::from_millis(33).saturating_sub(start.elapsed()));
+            }
+            timings.sort_by(f64::total_cmp);
+            eprintln!(
+                "native {mode:?} preview worker: p50={:.2}ms p95={:.2}ms",
+                timings[15], timings[28]
+            );
+        }
+        assert_eq!(worker.imported.len(), 1);
     }
 }

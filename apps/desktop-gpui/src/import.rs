@@ -35,6 +35,7 @@ const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
     "bmp", "tif", "tiff",
 ];
+pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 static ACTIVE_IMPORT_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -291,7 +292,8 @@ pub fn pick_and_import_video(cx: &mut App) {
     cx.spawn(async move |cx| {
         // Blocking modal, so from a spawned task with no borrow held -- the
         // `save_file_panel` rule.
-        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)]) else {
+        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)], cx).await
+        else {
             return;
         };
         cx.update(|cx| import_video_from_path(path, cx));
@@ -301,7 +303,8 @@ pub fn pick_and_import_video(cx: &mut App) {
 
 pub fn pick_and_import_image(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)]) else {
+        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)], cx).await
+        else {
             return;
         };
         cx.update(|cx| import_image_from_path(path, cx));
@@ -313,11 +316,16 @@ pub fn pick_and_import_image(cx: &mut App) {
 /// extension (`src-tauri/src/tray.rs:839-911`).
 pub fn pick_and_import_media(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[
-            ("Media Files", MEDIA_IMPORT_EXTENSIONS),
-            ("Video Files", VIDEO_IMPORT_EXTENSIONS),
-            ("Image Files", IMAGE_IMPORT_EXTENSIONS),
-        ]) else {
+        let Some(path) = pick_import_file(
+            &[
+                ("Media Files", MEDIA_IMPORT_EXTENSIONS),
+                ("Video Files", VIDEO_IMPORT_EXTENSIONS),
+                ("Image Files", IMAGE_IMPORT_EXTENSIONS),
+            ],
+            cx,
+        )
+        .await
+        else {
             return;
         };
         if is_supported_video_import_path(&path) {
@@ -354,6 +362,7 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
     let in_flight = InFlightImport::begin();
     let worker = std::thread::Builder::new()
         .name("cap-media-import".to_string())
+        .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
         .spawn(move || {
             let _in_flight = in_flight;
             work(tx);
@@ -383,7 +392,10 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
 /// `NSOpenPanel` through the platform helper on macOS (the generic file panel
 /// behind `open_image_panel`), rfd elsewhere -- the same split the delete
 /// confirms use.
-fn pick_import_file(filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+pub(crate) async fn pick_import_file(
+    filters: &[(&str, &[&str])],
+    _cx: &mut gpui::AsyncApp,
+) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let extensions: Vec<&str> = filters
@@ -392,7 +404,11 @@ fn pick_import_file(filters: &[(&str, &[&str])]) -> Option<PathBuf> {
             .collect();
         crate::platform::open_image_panel(&extensions)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::open_file_panel_from_app_async(filters, _cx).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let mut dialog = rfd::FileDialog::new();
         for (name, extensions) in filters {
@@ -818,6 +834,16 @@ fn h264_bitrate(width: u32, height: u32, frame_rate: f32) -> usize {
     (area * frame_rate_multiplier * 0.3) as usize
 }
 
+fn frame_duration_ticks(time_base: ffmpeg::Rational, fps: u32) -> i64 {
+    let ticks = f64::from(time_base.denominator())
+        / (f64::from(time_base.numerator().max(1)) * f64::from(fps.max(1)));
+    (ticks.round() as i64).max(1)
+}
+
+fn import_decode_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+}
+
 pub(crate) fn transcode_editor_video(
     source_path: &Path,
     output_path: &Path,
@@ -948,10 +974,15 @@ fn transcode_video(
             .ok_or("No video stream found in file")?
             .parameters(),
     )
-    .map_err(|e| format!("Failed to create decoder: {e}"))?
-    .decoder()
-    .video()
     .map_err(|e| format!("Failed to create decoder: {e}"))?;
+    video_decoder.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::Frame,
+        count: import_decode_threads(),
+    });
+    let mut video_decoder = video_decoder
+        .decoder()
+        .video()
+        .map_err(|e| format!("Failed to create decoder: {e}"))?;
     if strict {
         video_decoder.check(ffmpeg::codec::decoder::Check::EXPLODE);
     }
@@ -1276,6 +1307,7 @@ struct H264Output {
     stream_index: usize,
     pixel_format: avformat::Pixel,
     packet: ffmpeg::Packet,
+    frame_duration: i64,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
     last_written_dts: Option<i64>,
@@ -1339,12 +1371,14 @@ fn open_h264_encoder(
                     fps,
                     "import H264 encoder ready"
                 );
+                let frame_duration = frame_duration_ticks(encoder.time_base(), fps);
                 return Ok(H264Output {
                     strict: false,
                     encoder,
                     stream_index,
                     pixel_format,
                     packet: ffmpeg::Packet::empty(),
+                    frame_duration,
                     first_pts: None,
                     last_frame_pts: None,
                     last_written_dts: None,
@@ -1384,6 +1418,10 @@ fn open_h264_with_codec(
         "libx264" => {
             options.set("preset", "veryfast");
             options.set("tune", "zerolatency");
+            // zerolatency also switches x264 to sliced threads, which encode one
+            // frame at a time. An offline import can take frame threads' few
+            // frames of delay; the stream stays free of B-frames and lookahead.
+            options.set("x264-params", "sliced-threads=0");
             options.set("g", &keyframe_interval);
             options.set("keyint_min", &keyframe_interval);
         }
@@ -1464,6 +1502,12 @@ impl H264Output {
             "Video encode",
         )? {
             self.packet.set_stream(self.stream_index);
+            // Encoders leave this at 0, and the mp4 muxer then gives the last
+            // sample no duration, so the edit list ends one frame early and
+            // players discard the final frame.
+            if self.packet.duration() <= 0 {
+                self.packet.set_duration(self.frame_duration);
+            }
             self.packet.rescale_ts(
                 self.encoder.time_base(),
                 output.stream(self.stream_index).unwrap().time_base(),
@@ -1761,12 +1805,7 @@ fn decode_image_rgba(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> 
 }
 
 fn decode_image_with_image_crate(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let image = image::ImageReader::open(source_path)
-        .map_err(|e| format!("Failed to open image: {e}"))?
-        .with_guessed_format()
-        .map_err(|e| format!("Failed to detect image format: {e}"))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image: {e}"))?;
+    let image = cap_gpui_kernels::codec::decode_image_file(source_path)?;
 
     let (width, height) = (image.width(), image.height());
     check_image_dimensions(width, height)?;
@@ -1840,11 +1879,14 @@ fn decode_image_with_ffmpeg(source_path: &Path) -> Result<(u32, u32, Vec<u8>), S
     let height_usize = height as usize;
     let src_stride = rgba_frame.stride(0);
     let row_bytes = width_usize * 4;
-    let mut buffer = vec![0u8; height_usize * row_bytes];
-    for y in 0..height_usize {
-        let src = &rgba_frame.data(0)[y * src_stride..y * src_stride + row_bytes];
-        buffer[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(src);
-    }
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        rgba_frame.data(0),
+        row_bytes,
+        src_stride,
+        height_usize,
+        false,
+    )
+    .ok_or_else(|| "Failed to decode image".to_string())?;
 
     Ok((width, height, buffer))
 }
@@ -1853,13 +1895,16 @@ fn decode_image_with_ffmpeg(source_path: &Path) -> Result<(u32, u32, Vec<u8>), S
 fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path)
         .map_err(|e| format!("Failed to create imported image file: {e}"))?;
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        std::io::BufWriter::new(file),
+    cap_gpui_kernels::codec::write_png_file(
+        file,
+        rgba,
+        width,
+        height,
+        image::ColorType::Rgba8.into(),
         image::codecs::png::CompressionType::Default,
         image::codecs::png::FilterType::Adaptive,
-    );
-    image::ImageEncoder::write_image(encoder, rgba, width, height, image::ColorType::Rgba8.into())
-        .map_err(|e| format!("Failed to encode imported image: {e}"))
+    )
+    .map_err(|e| format!("Failed to encode imported image: {e}"))
 }
 
 #[cfg(test)]
@@ -2064,5 +2109,308 @@ mod tests {
         assert_eq!(converted.height(), 12);
         assert_eq!(converted.pts(), Some(819));
         assert_ne!(converted.data(0).as_ptr(), original.data(0).as_ptr());
+    }
+
+    fn count_video_packets(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap()
+            .index();
+        input
+            .packets()
+            .filter(|(stream, _)| stream.index() == index)
+            .count()
+    }
+
+    fn decoded_video_frames(path: &Path) -> usize {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut frames = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    frames += 1;
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            frames += 1;
+        }
+        frames
+    }
+
+    fn decoded_audio_seconds(path: &Path) -> f64 {
+        let mut input = avformat::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let index = stream.index();
+        let mut decoder = avcodec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Audio::empty();
+        let mut samples = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() == index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    samples += frame.samples();
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        while decoder.receive_frame(&mut frame).is_ok() {
+            samples += frame.samples();
+        }
+        samples as f64 / f64::from(decoder.rate())
+    }
+
+    #[test]
+    fn a_completed_conversion_keeps_every_source_frame_and_the_audio() {
+        ffmpeg::init().unwrap();
+        let root = temp_dir("complete-conversion");
+        let source = root.join("source.mp4");
+        std::fs::write(
+            &source,
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4"),
+        )
+        .unwrap();
+        std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+        let output = root.join("display.mp4");
+        let audio = root.join("audio.ogg");
+
+        let (fps, sample_rate) =
+            transcode_video(&source, &output, Some(&audio), &root, &|_| {}, None).unwrap();
+
+        assert_eq!(fps, 25);
+        assert!(sample_rate.is_some());
+        assert_eq!(count_video_packets(&source), 25);
+        assert_eq!(count_video_packets(&output), 25);
+        assert_eq!(decoded_video_frames(&output), 25);
+        let duration = media_duration(&output).unwrap().as_secs_f64();
+        assert!((duration - 1.0).abs() < 0.01, "{duration}");
+        let audio_seconds = decoded_audio_seconds(&audio);
+        assert!((0.9..=1.1).contains(&audio_seconds), "{audio_seconds}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `CAP_IMPORT_BENCH_SOURCES=a.mp4,b.mp4 cargo test --bin cap-gpui benchmark_video_import -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: transcodes the videos named by CAP_IMPORT_BENCH_SOURCES"]
+    fn benchmark_video_import() {
+        ffmpeg::init().unwrap();
+        let sources = std::env::var("CAP_IMPORT_BENCH_SOURCES")
+            .expect("CAP_IMPORT_BENCH_SOURCES must list the videos to import");
+        let runs = std::env::var("CAP_IMPORT_BENCH_RUNS")
+            .ok()
+            .and_then(|runs| runs.parse::<usize>().ok())
+            .unwrap_or(3)
+            .max(1);
+
+        println!("| source | duration | median import | slowest | realtime |");
+        println!("| --- | ---: | ---: | ---: | ---: |");
+        for source in sources.split(',').map(PathBuf::from) {
+            let duration = media_duration(&source)
+                .expect("benchmark source has a duration")
+                .as_secs_f64();
+            let mut seconds = (0..runs)
+                .map(|_| {
+                    let root = temp_dir("bench");
+                    std::fs::write(root.join("recording-meta.json"), b"{}").unwrap();
+                    let started = std::time::Instant::now();
+                    transcode_video(
+                        &source,
+                        &root.join("display.mp4"),
+                        Some(&root.join("audio.ogg")),
+                        &root,
+                        &|_| {},
+                        None,
+                    )
+                    .unwrap();
+                    let elapsed = started.elapsed().as_secs_f64();
+                    std::fs::remove_dir_all(root).unwrap();
+                    elapsed
+                })
+                .collect::<Vec<_>>();
+            seconds.sort_by(f64::total_cmp);
+            let middle = seconds.len() / 2;
+            let median = if seconds.len() % 2 == 0 {
+                (seconds[middle - 1] + seconds[middle]) / 2.0
+            } else {
+                seconds[middle]
+            };
+            println!(
+                "| {} | {duration:.1} s | {median:.2} s | {:.2} s | {:.2}x |",
+                source.file_name().unwrap().to_string_lossy(),
+                seconds[seconds.len() - 1],
+                duration / median,
+            );
+        }
+    }
+}
+
+pub(crate) struct ImportedEditorImage {
+    pub path: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub(crate) fn import_editor_image(
+    project_path: &Path,
+    source: &Path,
+) -> Result<ImportedEditorImage, String> {
+    use std::{
+        hash::BuildHasher,
+        io::{Read, Write},
+    };
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    if !project_path.is_dir() || !has_supported_extension(source, OVERLAY_IMAGE_EXTENSIONS) {
+        return Err("Choose a PNG, JPEG, WebP, GIF or BMP image for this project".into());
+    }
+    let file = std::fs::File::open(source).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return Err("Image files must be 64 MiB or smaller".into());
+    }
+    let mut encoded = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut encoded)
+        .map_err(|error| error.to_string())?;
+    if encoded.len() as u64 > MAX_BYTES {
+        return Err("Image files must be 64 MiB or smaller".into());
+    }
+    let (extension, width, height) = cap_gpui_kernels::codec::inspect_overlay_image(&encoded)?;
+    let mut bytes = [0u8; 16];
+    for chunk in bytes.chunks_exact_mut(8) {
+        chunk.copy_from_slice(
+            &std::collections::hash_map::RandomState::new()
+                .hash_one(source)
+                .to_be_bytes(),
+        );
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let id = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
+    let relative = format!("content/images/{id}.{extension}");
+    let destination = project_path.join(&relative);
+    std::fs::create_dir_all(project_path.join("content/images"))
+        .map_err(|error| error.to_string())?;
+    let mut destination_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = destination_file
+        .write_all(&encoded)
+        .and_then(|()| destination_file.sync_all())
+    {
+        drop(destination_file);
+        let _ = std::fs::remove_file(&destination);
+        return Err(format!("Failed to save image: {error}"));
+    }
+    Ok(ImportedEditorImage {
+        path: relative,
+        name: source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Image")
+            .to_string(),
+        width,
+        height,
+    })
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_import_rotates_exif_copies_source_and_keeps_relative_unique_assets() {
+        let dir = std::env::temp_dir().join(format!(
+            "cap-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.jpg");
+        image::RgbImage::from_pixel(3, 2, image::Rgb([255, 30, 20]))
+            .save(&source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let exif = b"Exif\0\0MM\0*\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
+        let mut oriented = original[..2].to_vec();
+        oriented.extend_from_slice(&[0xff, 0xe1]);
+        oriented.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        oriented.extend_from_slice(exif);
+        oriented.extend_from_slice(&original[2..]);
+        std::fs::write(&source, &oriented).unwrap();
+        let first = import_editor_image(&dir, &source).unwrap();
+        let second = import_editor_image(&dir, &source).unwrap();
+        assert_ne!(first.path, second.path);
+        assert!(first.path.starts_with("content/images/"));
+        assert!(!Path::new(&first.path).is_absolute());
+        assert_eq!((first.width, first.height), (2, 3));
+        assert_eq!(
+            image::image_dimensions(dir.join(&first.path)).unwrap(),
+            (3, 2)
+        );
+        assert_eq!(std::fs::read(dir.join(&first.path)).unwrap(), oriented);
+        assert_eq!(std::fs::read(&source).unwrap(), oriented);
+        for extension in ["gif", "bmp"] {
+            let source = dir.join(format!("source.{extension}"));
+            image::RgbaImage::from_pixel(3, 2, image::Rgba([200, 50, 80, 255]))
+                .save(&source)
+                .unwrap();
+            let imported = import_editor_image(&dir, &source).unwrap();
+            assert_eq!((imported.width, imported.height), (3, 2));
+            assert_eq!(
+                std::fs::read(dir.join(imported.path)).unwrap(),
+                std::fs::read(source).unwrap()
+            );
+        }
+        let invalid = dir.join("invalid.png");
+        std::fs::write(&invalid, b"not an image").unwrap();
+        assert!(import_editor_image(&dir, &invalid).is_err());
+        let large = dir.join("large.png");
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(64 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            import_editor_image(&dir, &large)
+                .err()
+                .unwrap()
+                .contains("64 MiB")
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.join("content/images"))
+                .unwrap()
+                .count(),
+            4
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

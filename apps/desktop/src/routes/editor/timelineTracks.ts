@@ -1,3 +1,7 @@
+import type { OverlayTrack, OverlayTrackKind } from "~/utils/tauri";
+
+export type { OverlayTrack, OverlayTrackKind } from "~/utils/tauri";
+
 type TrackSegment = {
 	start: number;
 	end: number;
@@ -93,4 +97,125 @@ export function getTrackRowsWithCount<T extends TrackSegment>(
 		rows[i] = i;
 	}
 	return rows;
+}
+
+export function moveTrackLane<T extends TrackSegment>(
+	segments: T[],
+	from: number,
+	to: number,
+) {
+	if (
+		!Number.isInteger(from) ||
+		!Number.isInteger(to) ||
+		from < 0 ||
+		to < 0 ||
+		from === to
+	)
+		return;
+	for (const segment of segments) {
+		const lane = getSegmentTrack(segment);
+		if (lane === from) segment.track = to;
+		else if (from < to && lane > from && lane <= to) segment.track = lane - 1;
+		else if (from > to && lane >= to && lane < from) segment.track = lane + 1;
+	}
+}
+
+type OverlayProject = {
+	overlayOrder?: OverlayTrack[];
+	timeline?: {
+		textSegments?: TrackSegment[];
+		imageSegments?: TrackSegment[];
+		maskSegments?: TrackSegment[];
+	} | null;
+};
+
+export function isOverlayTrackKind(kind: string): kind is OverlayTrackKind {
+	return kind === "text" || kind === "image" || kind === "mask";
+}
+
+export function sameOverlayTrack(a: OverlayTrack, b: OverlayTrack) {
+	return a.kind === b.kind && a.track === b.track;
+}
+
+export function resolveOverlayOrder(
+	available: OverlayTrack[],
+	saved: OverlayTrack[] = [],
+) {
+	const ordered: OverlayTrack[] = [];
+	for (const track of available) {
+		if (
+			!saved.some((item) => sameOverlayTrack(item, track)) &&
+			!ordered.some((item) => sameOverlayTrack(item, track))
+		)
+			ordered.push(track);
+	}
+	for (const track of saved) {
+		if (
+			available.some((item) => sameOverlayTrack(item, track)) &&
+			!ordered.some((item) => sameOverlayTrack(item, track))
+		)
+			ordered.push(track);
+	}
+	return ordered;
+}
+
+export function getOverlayTrackRows(
+	project: OverlayProject,
+	counts?: Partial<Record<OverlayTrackKind, number>>,
+) {
+	const timeline = project.timeline;
+	const available: OverlayTrack[] = [];
+	for (const kind of ["text", "image", "mask"] as const) {
+		const segments = timeline?.[`${kind}Segments`] ?? [];
+		for (const track of getTrackRowsWithCount(
+			segments,
+			counts?.[kind] ?? 0,
+		).reverse())
+			available.push({ kind, track });
+	}
+	return resolveOverlayOrder(available, project.overlayOrder);
+}
+
+export function moveOverlayTrack(
+	order: OverlayTrack[],
+	from: OverlayTrack,
+	insertionIndex: number,
+) {
+	if (!Number.isInteger(insertionIndex)) return order;
+	const source = order.find((track) => sameOverlayTrack(track, from));
+	if (!source) return order;
+	const next = order.filter((track) => !sameOverlayTrack(track, from));
+	next.splice(Math.max(0, Math.min(next.length, insertionIndex)), 0, source);
+	return next;
+}
+
+export function removeOverlayTrack(
+	order: OverlayTrack[] | undefined,
+	kind: OverlayTrackKind,
+	lane: number,
+) {
+	return (order ?? [])
+		.filter((track) => track.kind !== kind || track.track !== lane)
+		.map((track) =>
+			track.kind === kind && track.track > lane
+				? { ...track, track: track.track - 1 }
+				: track,
+		);
+}
+
+export function getOverlayZIndex(
+	project: OverlayProject,
+	kind: OverlayTrackKind,
+	track: number,
+) {
+	const order = getOverlayTrackRows(project);
+	const index = order.findIndex(
+		(item) => item.kind === kind && item.track === track,
+	);
+	return 100 + order.length - Math.max(0, index);
+}
+
+export function trackInsertionIndex(centers: number[], pointerY: number) {
+	const index = centers.findIndex((center) => pointerY < center);
+	return index < 0 ? centers.length : index;
 }

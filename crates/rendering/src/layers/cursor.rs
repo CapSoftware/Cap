@@ -17,7 +17,7 @@ const CLICK_SHRINK_SIZE: f32 = 0.8;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
-/// Smear length ceiling in output px. Screen Studio semantics: the smear
+/// Smear length ceiling in output px. Length-based semantics: the smear
 /// length equals the cursor's per-frame travel scaled by the user amount —
 /// linear, with no response curve — so this only bounds pathological
 /// single-frame teleports, not real flicks (spring motion peaks well below
@@ -34,6 +34,24 @@ const CURSOR_MAX_STRENGTH: f32 = 4.0;
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
 
 const CIRCLE_CURSOR_SIZE: u32 = 256;
+
+fn cursor_asset_shape(
+    recorded: Option<cap_cursor_info::CursorShape>,
+    use_svg: bool,
+    cursor_type: &CursorType,
+) -> Option<cap_cursor_info::CursorShape> {
+    let shape = recorded?;
+    match cursor_type.family() {
+        Some(family) => Some(shape.in_family(family)),
+        None if use_svg => Some(shape),
+        None => None,
+    }
+}
+
+fn recorded_image_shape(image: &image::RgbaImage) -> Option<cap_cursor_info::CursorShape> {
+    cap_cursor_info::CursorShapeMacOS::from_rgba(image.width(), image.height(), image.as_raw())
+        .map(Into::into)
+}
 
 pub struct CursorLayer {
     statics: Statics,
@@ -276,36 +294,31 @@ impl CursorLayer {
     ) -> Option<CursorTexture> {
         let mut loaded_cursor = None;
 
-        let recorded_shape = match &constants.recording_meta.inner {
-            RecordingMetaInner::Studio(studio) => match studio.as_ref() {
-                StudioRecordingMeta::MultipleSegments {
-                    inner:
-                        MultipleSegments {
-                            cursors: Cursors::Correct(cursors),
-                            ..
-                        },
-                } => cursors.get(cursor_id).and_then(|v| v.shape),
+        let recorded_shape = if let Some(assets) = &constants.frozen_recorded_cursors {
+            match assets.metadata(cursor_id) {
+                Ok(metadata) => metadata.shape,
+                Err(error) => {
+                    error!("{error}");
+                    return None;
+                }
+            }
+        } else {
+            match &constants.recording_meta.inner {
+                RecordingMetaInner::Studio(studio) => match studio.as_ref() {
+                    StudioRecordingMeta::MultipleSegments {
+                        inner:
+                            MultipleSegments {
+                                cursors: Cursors::Correct(cursors),
+                                ..
+                            },
+                    } => cursors.get(cursor_id).and_then(|v| v.shape),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
+            }
         };
 
-        // An explicit family cross-maps the recorded shape into it (and
-        // stands in with its arrow for recordings that carry no shape info at
-        // all, e.g. Linux PNG-only captures), so SVG assets are the only
-        // possible source and `use_svg` no longer applies.
-        let (cursor_shape, use_svg) = match cursor_type.family() {
-            Some(family) => (
-                Some(
-                    recorded_shape.map_or_else(|| family.arrow(), |shape| shape.in_family(family)),
-                ),
-                true,
-            ),
-            None => (recorded_shape, use_svg),
-        };
-
-        if let Some(cursor_shape) = cursor_shape
-            && use_svg
+        if let Some(cursor_shape) = cursor_asset_shape(recorded_shape, use_svg, cursor_type)
             && let Some(info) = cursor_shape.resolve()
         {
             loaded_cursor = CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
@@ -313,18 +326,56 @@ impl CursorLayer {
                 .ok();
         }
 
-        if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
-            && loaded_cursor.is_none()
-            && let Some(c) = inner.get_cursor_image(&constants.recording_meta, cursor_id)
-            && let Ok(img) = image::open(&c.path)
-                .map_err(|err| error!("Failed to load cursor image from {:?}: {err}", c.path))
-        {
-            loaded_cursor = Some(CursorTexture::prepare(
-                constants,
-                &img.to_rgba8(),
-                img.dimensions(),
-                c.hotspot,
-            ));
+        if loaded_cursor.is_none() {
+            let cursor = crate::recorded_cursor_assets::select_recorded_cursor_image(
+                constants.frozen_recorded_cursors.as_ref(),
+                cursor_id,
+                || {
+                    let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
+                    else {
+                        return None;
+                    };
+                    let cursor = inner.get_cursor_image(&constants.recording_meta, cursor_id)?;
+                    let image = image::open(&cursor.path)
+                        .map_err(|err| {
+                            error!("Failed to load cursor image from {:?}: {err}", cursor.path)
+                        })
+                        .ok()?;
+                    Some(crate::recorded_cursor_assets::DecodedRecordedCursor {
+                        image,
+                        hotspot: cursor.hotspot,
+                    })
+                },
+            );
+            match cursor {
+                Ok(Some(cursor)) => {
+                    let rgba = cursor.image.to_rgba8();
+                    if recorded_shape.is_none()
+                        && let Some(shape) =
+                            cursor_asset_shape(recorded_image_shape(&rgba), use_svg, cursor_type)
+                        && let Some(info) = shape.resolve()
+                    {
+                        loaded_cursor =
+                            CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
+                                .map_err(|err| {
+                                    error!(
+                                        "Error loading recovered SVG cursor {cursor_id:?}: {err}"
+                                    )
+                                })
+                                .ok();
+                    }
+                    if loaded_cursor.is_none() {
+                        loaded_cursor = Some(CursorTexture::prepare(
+                            constants,
+                            &rgba,
+                            cursor.image.dimensions(),
+                            cursor.hotspot,
+                        ));
+                    }
+                }
+                Err(error) => error!("{error}"),
+                Ok(None) => {}
+            }
         }
 
         loaded_cursor
@@ -336,6 +387,18 @@ impl CursorLayer {
         use_svg: bool,
         cursor_type: &CursorType,
     ) {
+        if let Some(assets) = &constants.frozen_recorded_cursors {
+            for cursor_id in assets.ids() {
+                if !self.cursors.contains_key(cursor_id)
+                    && let Some(texture) =
+                        Self::load_cursor_texture(constants, cursor_id, use_svg, cursor_type)
+                {
+                    self.cursors.insert(cursor_id.clone(), texture);
+                }
+            }
+            return;
+        }
+
         let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
             return;
         };
@@ -381,7 +444,8 @@ impl CursorLayer {
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
     ) {
-        if uniforms.project.cursor.hide {
+        let clip_visibility = uniforms.cursor_clip_visibility.clamp(0.0, 1.0);
+        if uniforms.project.cursor.hide || clip_visibility <= f32::EPSILON {
             self.bind_group = None;
             return;
         }
@@ -426,7 +490,7 @@ impl CursorLayer {
             child_motion
         };
 
-        // Screen Studio semantics: smear length = per-frame travel x amount,
+        // Length-based semantics: smear length = per-frame travel x amount,
         // linear all the way down (a sub-pixel kernel is the identity, so no
         // response ramp is needed to avoid popping).
         let scaled_motion = if cursor_strength > f32::EPSILON {
@@ -447,11 +511,13 @@ impl CursorLayer {
                 cursor,
                 segment_frames.recording_time as f64 * 1000.0,
                 hide_delay_ms,
+                uniforms.cursor_event_order.moves,
             );
             if cursor_opacity <= f32::EPSILON {
                 cursor_opacity = 0.0;
             }
         }
+        cursor_opacity *= clip_visibility;
 
         let cursor_type = uniforms.project.cursor.cursor_type().clone();
 
@@ -503,7 +569,11 @@ impl CursorLayer {
         };
 
         let size = {
-            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
+            let click_t = get_click_t(
+                &cursor.clicks,
+                (time_s as f64) * 1000.0,
+                uniforms.cursor_event_order.clicks,
+            );
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
             let display = &uniforms.display;
             let size = cursor_height_px(
@@ -705,6 +775,7 @@ fn compute_cursor_idle_opacity(
     cursor: &CursorEvents,
     current_time_ms: f64,
     hide_delay_ms: f64,
+    moves_ordered: bool,
 ) -> f32 {
     if cursor.moves.is_empty() {
         return 0.0;
@@ -726,19 +797,21 @@ fn compute_cursor_idle_opacity(
         return 1.0;
     }
 
-    let Some(last_index) = cursor
-        .moves
-        .iter()
-        .rposition(|event| event.time_ms <= current_time_ms)
-    else {
+    let last_index = if moves_ordered {
+        idx.checked_sub(1)
+    } else {
+        cursor
+            .moves
+            .iter()
+            .rposition(|event| event.time_ms <= current_time_ms)
+    };
+    let Some(last_index) = last_index else {
         return 1.0;
     };
 
     let last_move = &cursor.moves[last_index];
 
     let time_since_move = (current_time_ms - last_move.time_ms).max(0.0);
-
-    let mut opacity = compute_cursor_fade_in(cursor, current_time_ms, hide_delay_ms);
 
     let fade_out = if time_since_move <= hide_delay_ms {
         1.0
@@ -748,8 +821,17 @@ fn compute_cursor_idle_opacity(
         fade.clamp(0.0, 1.0) as f32
     };
 
-    opacity *= fade_out;
-    opacity.clamp(0.0, 1.0)
+    if fade_out == 0.0 {
+        return 0.0;
+    }
+
+    let elapsed_moves = if moves_ordered {
+        &cursor.moves[..idx]
+    } else {
+        &cursor.moves[..]
+    };
+    let opacity = compute_cursor_fade_in(elapsed_moves, current_time_ms, hide_delay_ms);
+    (opacity * fade_out).clamp(0.0, 1.0)
 }
 
 fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -761,9 +843,12 @@ fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_delay_ms: f64) -> f32 {
-    let resume_time = cursor
-        .moves
+fn compute_cursor_fade_in(
+    moves: &[CursorMoveEvent],
+    current_time_ms: f64,
+    hide_delay_ms: f64,
+) -> f32 {
+    let resume_time = moves
         .windows(2)
         .rev()
         .find(|pair| {
@@ -782,13 +867,17 @@ fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_dela
     smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, time_since_resume) as f32
 }
 
-fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
+fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) -> f32 {
     fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
         let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
     }
 
-    let next_click = clicks.iter().find(|c| c.time_ms > time_ms);
+    let split = clicks_ordered.then(|| clicks.partition_point(|c| c.time_ms <= time_ms));
+    let next_click = match split {
+        Some(split) => clicks.get(split).filter(|c| c.time_ms > time_ms),
+        None => clicks.iter().find(|c| c.time_ms > time_ms),
+    };
 
     if let Some(next) = next_click {
         if next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
@@ -804,7 +893,10 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
         }
     }
 
-    let prev_click = clicks.iter().rev().find(|c| c.time_ms <= time_ms);
+    let prev_click = match split {
+        Some(split) => clicks[..split].last(),
+        None => clicks.iter().rev().find(|c| c.time_ms <= time_ms),
+    };
 
     if let Some(prev) = prev_click {
         if prev.down {
@@ -1054,6 +1146,100 @@ mod tests {
     }
 
     #[test]
+    fn appearance_selection_preserves_unknown_recorded_shapes() {
+        for cursor_type in [
+            CursorType::Auto,
+            CursorType::Pointer,
+            CursorType::MacOS,
+            CursorType::MacOSTahoe,
+            CursorType::Windows,
+        ] {
+            for use_svg in [false, true] {
+                assert_eq!(cursor_asset_shape(None, use_svg, &cursor_type), None);
+            }
+        }
+    }
+
+    #[test]
+    fn appearance_selection_keeps_pointer_and_text_transitions() {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS, CursorShapeWindows};
+        for (recorded, macos, windows) in [
+            (
+                CursorShapeMacOS::TahoeArrow,
+                CursorShapeMacOS::Arrow,
+                CursorShapeWindows::Arrow,
+            ),
+            (
+                CursorShapeMacOS::TahoePointingHand,
+                CursorShapeMacOS::PointingHand,
+                CursorShapeWindows::Hand,
+            ),
+            (
+                CursorShapeMacOS::TahoeIBeam,
+                CursorShapeMacOS::IBeam,
+                CursorShapeWindows::IBeam,
+            ),
+        ] {
+            let shape = CursorShape::MacOS(recorded);
+            assert_eq!(
+                cursor_asset_shape(Some(shape), true, &CursorType::Auto),
+                Some(shape)
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::Auto),
+                None
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::MacOS),
+                Some(CursorShape::MacOS(macos))
+            );
+            assert_eq!(
+                cursor_asset_shape(Some(shape), false, &CursorType::Windows),
+                Some(CursorShape::Windows(windows))
+            );
+        }
+    }
+
+    #[test]
+    fn unclassified_recorded_hands_recover_scalable_assets() {
+        use cap_cursor_info::{CursorShape, CursorShapeMacOS};
+        let fixtures: &[(&[u8], CursorShapeMacOS)] = &[
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/pointing-hand.png"),
+                CursorShapeMacOS::TahoePointingHand,
+            ),
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/open-hand.png"),
+                CursorShapeMacOS::TahoeOpenHand,
+            ),
+            (
+                include_bytes!("../../../cursor-info/assets/mac/recorded/closed-hand.png"),
+                CursorShapeMacOS::TahoeClosedHand,
+            ),
+        ];
+        for (bytes, expected) in fixtures {
+            let mut image = image::load_from_memory(bytes).unwrap().to_rgba8();
+            let shape = recorded_image_shape(&image);
+            assert_eq!(shape, Some(CursorShape::MacOS(*expected)));
+            for cursor_type in [
+                CursorType::Auto,
+                CursorType::MacOS,
+                CursorType::MacOSTahoe,
+                CursorType::Windows,
+            ] {
+                let selected = cursor_asset_shape(shape, true, &cursor_type).unwrap();
+                let svg = selected.resolve().unwrap();
+                let raster = rasterize_svg_cursor(svg.raw).unwrap();
+                assert_eq!(raster.dimensions.1, SVG_CURSOR_RASTERIZED_HEIGHT);
+                assert!(raster.rgba.chunks_exact(4).any(|pixel| pixel[3] > 200));
+            }
+            assert_eq!(cursor_asset_shape(shape, false, &CursorType::Auto), None);
+            image.get_pixel_mut(0, 0).0 = [255; 4];
+            assert_eq!(recorded_image_shape(&image), None);
+        }
+    }
+
+    #[test]
     fn cursor_height_uses_source_relative_default() {
         let height = cursor_height_px(1964.0, 1964.0, 864.0, 100.0, 1.0);
         let expected = STANDARD_CURSOR_HEIGHT * (864.0 / 1080.0);
@@ -1168,7 +1354,7 @@ mod tests {
 
     #[test]
     fn cursor_blur_vector_is_linear_in_travel_and_amount() {
-        // Screen Studio semantics: smear length == per-frame travel x amount,
+        // Length-based semantics: smear length == per-frame travel x amount,
         // with no response curve shortening slow-to-medium motion.
         let motion = cursor_blur_vector(XY::new(40.0, -30.0), 0.5);
         assert!((motion.x - 20.0).abs() < 1e-4);
@@ -1195,7 +1381,7 @@ mod tests {
     fn opacity_stays_visible_with_recent_move() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0), (1500.0, 0.1, 0.1)]);
 
-        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0);
+        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0, true);
 
         assert_eq!(opacity, 1.0);
     }
@@ -1204,7 +1390,7 @@ mod tests {
     fn opacity_fades_once_past_delay() {
         let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
 
-        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0);
+        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0, true);
 
         assert_eq!(opacity, 0.0);
     }
@@ -1215,13 +1401,14 @@ mod tests {
 
         let hide_delay_ms = 2000.0;
 
-        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms);
+        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms, true);
         assert_eq!(at_resume, 0.0);
 
         let halfway = compute_cursor_idle_opacity(
             &cursor,
             5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
             hide_delay_ms,
+            true,
         );
         assert!((halfway - 0.5).abs() < 0.05);
 
@@ -1229,7 +1416,191 @@ mod tests {
             &cursor,
             5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
             hide_delay_ms,
+            true,
         );
         assert_eq!(after_fade, 1.0);
+    }
+
+    fn idle_opacity_both_paths(cursor: &CursorEvents, time_ms: f64, hide_delay_ms: f64) -> f32 {
+        let unordered = compute_cursor_idle_opacity(cursor, time_ms, hide_delay_ms, false);
+        if cursor.moves.is_sorted_by(|a, b| a.time_ms <= b.time_ms) {
+            let ordered = compute_cursor_idle_opacity(cursor, time_ms, hide_delay_ms, true);
+            assert_eq!(ordered.to_bits(), unordered.to_bits());
+        }
+        unordered
+    }
+
+    #[test]
+    fn opacity_handles_empty_history_and_duplicate_timestamps() {
+        assert_eq!(
+            idle_opacity_both_paths(&CursorEvents::default(), 0.0, 1000.0),
+            0.0
+        );
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5000.0, 0.6, 0.6),
+            (5010.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [(0.0, 1.0), (5000.0, 1.0), (5200.0, 0.5), (5400.0, 1.0)] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_lookahead_boundary_and_resume_fade() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
+        for (time, expected) in [
+            (4749.999, 0.0),
+            (4750.0, 1.0),
+            (4999.0, 1.0),
+            (5000.0, 0.0),
+            (5400.0, 1.0),
+        ] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_is_consistent_when_seeking_back_and_forth() {
+        let cursor = cursor_events(&[
+            (0.0, 0.0, 0.0),
+            (5000.0, 0.5, 0.5),
+            (5010.0, 0.6, 0.6),
+            (10000.0, 0.7, 0.7),
+        ]);
+        for (time, expected) in [
+            (10200.0, 0.5),
+            (8000.0, 0.0),
+            (5200.0, 0.5),
+            (5000.0, 1.0),
+            (5400.0, 1.0),
+            (10000.0, 0.0),
+            (10400.0, 1.0),
+            (5200.0, 0.5),
+        ] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+    }
+
+    #[test]
+    fn opacity_preserves_fade_out_boundary() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
+        for (time, expected) in [(1000.0, 1.0), (1200.0, 0.5), (1400.0, 0.0), (1400.001, 0.0)] {
+            assert_eq!(idle_opacity_both_paths(&cursor, time, 1000.0), expected);
+        }
+        assert!(idle_opacity_both_paths(&cursor, 1399.999, 1000.0) > 0.0);
+    }
+
+    #[test]
+    fn opacity_preserves_recent_resume_for_out_of_order_history() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5), (4000.0, 0.6, 0.6)]);
+        assert_eq!(idle_opacity_both_paths(&cursor, 5200.0, 1000.0), 0.25);
+    }
+
+    fn click_event(time_ms: f64, down: bool) -> CursorClickEvent {
+        CursorClickEvent {
+            active_modifiers: vec![],
+            cursor_num: 0,
+            cursor_id: "pointer".into(),
+            time_ms,
+            down,
+        }
+    }
+
+    fn event_time_cases() -> Vec<Vec<f64>> {
+        vec![
+            vec![],
+            vec![0.0],
+            vec![f64::NAN],
+            vec![0.0, 0.0, 10.0, 10.0, 20.0, 100.0, 100.0],
+            vec![-0.0, 0.0, 0.0, 10.0, 100.0],
+            vec![0.0, 20.0, 10.0, 50.0, 100.0],
+            vec![0.0, 10.0, f64::NAN, 30.0, 100.0],
+            vec![f64::NAN, 10.0, 30.0, 100.0],
+            vec![0.0, 10.0, f64::NAN],
+            vec![f64::NEG_INFINITY, 0.0, 10.0, f64::INFINITY],
+            vec![0.0, f64::INFINITY, 10.0, 100.0],
+            vec![
+                0.0, 16.0, 400.0, 1200.0, 1300.0, 3000.0, 3100.0, 3150.0, 6000.0, 6000.0, 9000.0,
+            ],
+        ]
+    }
+
+    fn lookup_queries(times: &[f64]) -> Vec<f64> {
+        let mut queries = vec![
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            1.0,
+            1.0e9,
+        ];
+        for &time in times {
+            for offset in [
+                0.0,
+                CURSOR_CLICK_DURATION_MS,
+                CURSOR_IDLE_RESUME_LOOKAHEAD_MS,
+                CURSOR_IDLE_FADE_OUT_MS,
+                500.0,
+                1000.0,
+                2000.0,
+            ] {
+                for base in [time - offset, time + offset] {
+                    queries.extend([base.next_down(), base, base.next_up()]);
+                }
+            }
+        }
+        queries
+    }
+
+    #[test]
+    fn ordered_cursor_lookups_match_linear_scans() {
+        let mut ordered_moves = 0;
+        let mut ordered_clicks = 0;
+        for times in event_time_cases() {
+            let mut cursor = cursor_events(
+                &times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| (time, index as f64 * 0.1, 0.5))
+                    .collect::<Vec<_>>(),
+            );
+            for all_down in [false, true] {
+                cursor.clicks = times
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &time)| click_event(time, all_down || index % 2 == 0))
+                    .collect();
+                let order = crate::cursor_interpolation::PrecomputedCursorTimeline::new(
+                    &cursor, None, None,
+                )
+                .event_order();
+                ordered_moves += usize::from(order.moves);
+                ordered_clicks += usize::from(order.clicks);
+                for time in lookup_queries(&times) {
+                    if order.clicks {
+                        assert_eq!(
+                            get_click_t(&cursor.clicks, time, true).to_bits(),
+                            get_click_t(&cursor.clicks, time, false).to_bits(),
+                            "{times:?} clicks at {time}"
+                        );
+                    }
+                    if order.moves {
+                        for delay in [500.0, 1000.0, 2000.0, 2000.5] {
+                            assert_eq!(
+                                compute_cursor_idle_opacity(&cursor, time, delay, true).to_bits(),
+                                compute_cursor_idle_opacity(&cursor, time, delay, false).to_bits(),
+                                "{times:?} moves at {time} with delay {delay}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(ordered_moves, 14);
+        assert_eq!(ordered_clicks, 12);
     }
 }

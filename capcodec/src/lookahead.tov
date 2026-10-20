@@ -1,0 +1,566 @@
+import { SideInfo, changeMap, markRects } from "./analysis"
+
+export const LIFE_ONE = 16
+export const KEEP_ONE = 64
+const INTRA_BIAS = 32
+const TAIL_POW = 12.0
+const BIG = 1 << 30
+
+export type LookaheadState = {
+  changed: Uint8Array, intra: Int32Array, keep: Uint8Array, refX: Int16Array, refY: Int16Array, coded: Int32Array,
+  nCoded: Int32Array, mvx: Int32Array, mvy: Int32Array, mvAt: Int32Array, carry: Float64Array, until: Int32Array,
+  seen: Int32Array, amount: Float64Array, epoch: Int32Array, video: Uint8Array, maps: Uint8Array, mapAt: Int32Array,
+}
+
+export class Lookahead {
+  readonly w: int
+  readonly h: int
+  readonly mbw: int
+  readonly mbh: int
+  readonly slots: int
+  readonly mapSlots: int
+  noise = 0
+  geometricTail = false
+  windowTail = false
+  pushed = 0
+  taken = 0
+  total = -1
+  changed: Uint8Array
+  intra: Int32Array
+  keep: Uint8Array
+  refX: Int16Array
+  refY: Int16Array
+  coded: Int32Array
+  nCoded: Int32Array
+  mvx: Int32Array
+  mvy: Int32Array
+  mvAt: Int32Array
+  carry: Float64Array
+  until: Int32Array
+  seen: Int32Array
+  amount: Float64Array
+  epoch: Int32Array
+  video: Uint8Array
+  maps: Uint8Array
+  mapAt: Int32Array
+  life: Int32Array
+  tailW: Float64Array = new Float64Array(KEEP_ONE + 1)
+  geoW: Float64Array = new Float64Array(KEEP_ONE + 1)
+  scX0 = 0
+  scY0 = 0
+  scX1 = 0
+  scY1 = 0
+  scDx = 0
+  scDy = 0
+
+  constructor(w: int, h: int, depth: int, worker: bool) {
+    this.w = w
+    this.h = h
+    this.mbw = (w + 15) >> 4
+    this.mbh = (h + 15) >> 4
+    this.slots = depth + 1
+    this.mapSlots = depth + 2
+    const mbs = worker ? 0 : this.mbw * this.mbh
+    const slotMbs = worker ? 0 : mbs * this.slots
+    this.changed = new Uint8Array(mbs)
+    this.intra = new Int32Array(slotMbs)
+    this.keep = new Uint8Array(slotMbs)
+    this.refX = new Int16Array(slotMbs)
+    this.refY = new Int16Array(slotMbs)
+    this.coded = new Int32Array(slotMbs)
+    this.nCoded = new Int32Array(worker ? 0 : this.slots)
+    this.mvx = new Int32Array(mbs)
+    this.mvy = new Int32Array(mbs)
+    this.mvAt = new Int32Array(mbs)
+    this.carry = new Float64Array(mbs)
+    this.until = new Int32Array(mbs)
+    this.seen = new Int32Array(mbs)
+    this.amount = new Float64Array(mbs)
+    this.epoch = new Int32Array(worker ? 0 : 1)
+    this.video = new Uint8Array(worker ? 0 : this.slots)
+    this.maps = new Uint8Array(mbs * this.mapSlots)
+    this.mapAt = new Int32Array(worker ? 0 : this.mapSlots)
+    this.mapAt.fill(-1)
+    this.life = new Int32Array(mbs)
+    for (let k = 0; k <= KEEP_ONE; k++) this.tailW[k] = Math.pow(f64(k) / f64(KEEP_ONE), TAIL_POW)
+  }
+
+  share(): LookaheadState {
+    return {
+      changed: this.changed, intra: this.intra, keep: this.keep, refX: this.refX, refY: this.refY, coded: this.coded,
+      nCoded: this.nCoded, mvx: this.mvx, mvy: this.mvy, mvAt: this.mvAt, carry: this.carry, until: this.until,
+      seen: this.seen, amount: this.amount, epoch: this.epoch, video: this.video, maps: this.maps, mapAt: this.mapAt,
+    }
+  }
+
+  attach(st: LookaheadState, pushed: int, noise: int, geometricTail: bool, windowTail: bool) {
+    this.changed = st.changed
+    this.intra = st.intra
+    this.keep = st.keep
+    this.refX = st.refX
+    this.refY = st.refY
+    this.coded = st.coded
+    this.nCoded = st.nCoded
+    this.mvx = st.mvx
+    this.mvy = st.mvy
+    this.mvAt = st.mvAt
+    this.carry = st.carry
+    this.until = st.until
+    this.seen = st.seen
+    this.amount = st.amount
+    this.epoch = st.epoch
+    this.video = st.video
+    this.maps = st.maps
+    this.mapAt = st.mapAt
+    this.pushed = pushed
+    this.noise = noise
+    this.geometricTail = geometricTail
+    this.windowTail = windowTail
+  }
+
+  push(frame: Uint8Array, off: int, prevOff: int, side: SideInfo | undefined) {
+    const mbs = this.mbw * this.mbh
+    const slot = this.pushed % this.slots
+    const ko = slot * mbs
+    if (this.pushed === 0) {
+      for (let mb = 0; mb < mbs; mb++) this.intra[ko + mb] = this.intraOf(frame, off, (mb % this.mbw) * 16, Math.trunc(mb / this.mbw) * 16)
+      this.nCoded[slot] = 0
+      this.pushed++
+      return
+    }
+    let rowLo = 0
+    let rowHi = this.mbh - 1
+    const sided = side !== undefined
+    let changed = this.changed
+    if (side !== undefined) {
+      rowLo = this.mbh
+      rowHi = -1
+      for (let i = 0; i + 3 < side.dirty.length; i += 4) {
+        if (side.dirty[i + 2]! <= 0 || side.dirty[i + 3]! <= 0) continue
+        const y0 = side.dirty[i + 1]! >> 4
+        const y1 = (side.dirty[i + 1]! + side.dirty[i + 3]! - 1) >> 4
+        if (y0 < rowLo) rowLo = y0
+        if (y1 > rowHi) rowHi = y1
+      }
+      for (const sc of side.scroll) {
+        if (sc.w <= 0 || sc.h <= 0) continue
+        if (sc.y >> 4 < rowLo) rowLo = sc.y >> 4
+        if ((sc.y + sc.h - 1) >> 4 > rowHi) rowHi = (sc.y + sc.h - 1) >> 4
+      }
+      if (rowLo < 0) rowLo = 0
+      if (rowHi >= this.mbh) rowHi = this.mbh - 1
+      markRects(this.changed, this.mbw, this.mbh, side.dirty)
+      for (const sc of side.scroll) markRects(this.changed, this.mbw, this.mbh, [sc.x, sc.y, sc.w, sc.h])
+      this.mapAt[this.pushed % this.mapSlots] = -1
+    } else {
+      changed = this.diffFrames(frame, off, prevOff)
+    }
+    this.scDx = 0
+    this.scDy = 0
+    if (side !== undefined && side.scroll.length > 0) {
+      const sc = side.scroll[0]!
+      this.scDx = sc.dx
+      this.scDy = sc.dy
+      this.scX0 = sc.x
+      this.scY0 = sc.y
+      this.scX1 = sc.x + sc.w
+      this.scY1 = sc.y + sc.h
+    }
+    const po = ((this.pushed - 1) % this.slots) * mbs
+    this.intra.set(this.intra.subarray(po, po + mbs), ko)
+    if (this.geometricTail) {
+      let cnt = 0
+      for (let mb = rowLo * this.mbw; mb < (rowHi + 1) * this.mbw; mb++) {
+        if (changed[mb]! === 1) cnt++
+      }
+      this.video[slot] = cnt * 2 >= mbs ? 1 : 0
+    }
+    let n = 0
+    for (let mby = rowLo; mby <= rowHi; mby++) {
+      for (let mbx = 0; mbx < this.mbw; mbx++) {
+        const mb = mby * this.mbw + mbx
+        if (changed[mb]! !== 1) continue
+        if (sided) this.changed[mb] = 0
+        const k = this.keepOf(frame, off, prevOff, mb, mbx * 16, mby * 16, ko + mb)
+        if (k === KEEP_ONE && this.mvx[mb]! === 0 && this.mvy[mb]! === 0) continue
+        this.keep[ko + mb] = k
+        this.refX[ko + mb] = mbx * 16 + this.mvx[mb]!
+        this.refY[ko + mb] = mby * 16 + this.mvy[mb]!
+        this.coded[ko + n] = mb
+        n++
+      }
+    }
+    this.nCoded[slot] = n
+    this.pushed++
+  }
+
+  intraOf(frame: Uint8Array, off: int, px: int, py: int): int {
+    const w = this.w
+    if (px + 16 > w) return INTRA_BIAS
+    const bh = py + 16 <= this.h ? 16 : this.h - py
+    const rows = (bh + 1) >> 1
+    const w2 = w * 2
+    const o = off + py * w + px
+    let acc = u32x4.splat(0)
+    for (let y = 0; y < rows; y++) acc = acc + u8x16.sadParts(u8x16.load(frame, o + y * w2), u8x16.splat(0))
+    const sum = acc.sum()
+    const mean = rows === 8 ? (sum + 64) >> 7 : Math.trunc((sum + rows * 8) / (rows * 16))
+    const m = u8x16.splat(mean)
+    let dev = u32x4.splat(0)
+    for (let y = 0; y < rows; y++) dev = dev + u8x16.sadParts(u8x16.load(frame, o + y * w2), m)
+    return INTRA_BIAS + dev.sum()
+  }
+
+  rowsSad(frame: Uint8Array, o: int, r: int, rows: int): int {
+    const w2 = this.w * 2
+    let acc = u32x4.splat(0)
+    for (let y = 0; y < rows; y++) acc = acc + u8x16.sadParts(u8x16.load(frame, o + y * w2), u8x16.load(frame, r + y * w2))
+    return acc.sum()
+  }
+
+  candCost(frame: Uint8Array, o: int, prevOff: int, px: int, py: int, bh: int, dx: int, dy: int): int {
+    const qx = px + dx
+    const qy = py + dy
+    if (qx < 0 || qy < 0 || qx + 16 > this.w || qy + bh > this.h) return BIG
+    return this.rowsSad(frame, o, prevOff + qy * this.w + qx, (bh + 1) >> 1)
+  }
+
+  keepOf(frame: Uint8Array, off: int, prevOff: int, mb: int, px: int, py: int, io: int): int {
+    const w = this.w
+    const intra = this.intraOf(frame, off, px, py)
+    this.intra[io] = intra
+    if (px + 16 > w) {
+      this.mvx[mb] = 0
+      this.mvy[mb] = 0
+      return 0
+    }
+    const bh = py + 16 <= this.h ? 16 : this.h - py
+    const o = off + py * w + px
+    let bx = 0
+    let by = 0
+    let best = this.candCost(frame, o, prevOff, px, py, bh, 0, 0)
+    if ((this.scDx !== 0 || this.scDy !== 0) && px >= this.scX0 && py >= this.scY0 && px + 16 <= this.scX1 &&
+      py + bh <= this.scY1) {
+      const c = this.candCost(frame, o, prevOff, px, py, bh, -this.scDx, -this.scDy)
+      if (c < best) {
+        best = c
+        bx = -this.scDx
+        by = -this.scDy
+      }
+    }
+    if (best * 8 > intra - INTRA_BIAS) {
+      for (let k = 0; k < 3; k++) {
+        const n = k === 0 ? (px > 0 ? mb - 1 : -1) : k === 1 ? (py > 0 ? mb - this.mbw : -1) : mb
+        if (n < 0) continue
+        const at = k === 2 ? this.pushed - 1 : this.pushed
+        const cx = this.mvAt[n]! === at ? this.mvx[n]! : 0
+        const cy = this.mvAt[n]! === at ? this.mvy[n]! : 0
+        if (cx === bx && cy === by) continue
+        const c = this.candCost(frame, o, prevOff, px, py, bh, cx, cy)
+        if (c < best) {
+          best = c
+          bx = cx
+          by = cy
+        }
+      }
+      for (let step = 2; step >= 1; step--) {
+        for (let it = 0; it < 2; it++) {
+          let nx = bx
+          let ny = by
+          let c = this.candCost(frame, o, prevOff, px, py, bh, bx + step, by)
+          if (c < best) {
+            best = c
+            nx = bx + step
+            ny = by
+          }
+          c = this.candCost(frame, o, prevOff, px, py, bh, bx - step, by)
+          if (c < best) {
+            best = c
+            nx = bx - step
+            ny = by
+          }
+          c = this.candCost(frame, o, prevOff, px, py, bh, bx, by + step)
+          if (c < best) {
+            best = c
+            nx = bx
+            ny = by + step
+          }
+          c = this.candCost(frame, o, prevOff, px, py, bh, bx, by - step)
+          if (c < best) {
+            best = c
+            nx = bx
+            ny = by - step
+          }
+          if (nx === bx && ny === by) break
+          bx = nx
+          by = ny
+        }
+      }
+    }
+    this.mvx[mb] = bx
+    this.mvy[mb] = by
+    this.mvAt[mb] = this.pushed
+    if (best === 0) return KEEP_ONE
+    const k = KEEP_ONE - Math.trunc(KEEP_ONE * (best + INTRA_BIAS) / intra)
+    return k < 0 ? 0 : k
+  }
+
+  diffFrames(frame: Uint8Array, off: int, prevOff: int): Uint8Array {
+    const w = this.w
+    const h = this.h
+    const cw = w >> 1
+    const uo = w * h
+    const vo = uo + cw * (h >> 1)
+    const mbs = this.mbw * this.mbh
+    const slot = this.pushed % this.mapSlots
+    const map = this.maps.subarray(slot * mbs, (slot + 1) * mbs)
+    map.fill(0)
+    changeMap(frame, prevOff, w, frame, prevOff + uo, frame, prevOff + vo, cw, frame, off, w, off + uo, off + vo, cw, w, h,
+      this.noise, map)
+    this.mapAt[slot] = this.pushed
+    return map
+  }
+
+  changesOf(index: int): Uint8Array {
+    const slot = index % this.mapSlots
+    if (index < 0 || this.mapAt[slot]! !== index) return new Uint8Array(0)
+    const mbs = this.mbw * this.mbh
+    return this.maps.subarray(slot * mbs, (slot + 1) * mbs)
+  }
+
+  finish() {
+    this.total = this.pushed
+  }
+
+  take(horizon: int): Int32Array {
+    return this.takeInto(horizon, this.life)
+  }
+
+  takeAhead(target: int, horizon: int, life: Int32Array, keep: Uint8Array) {
+    this.taken = target
+    this.takeInto(horizon, life)
+    if (keep.length > 0) this.keepMap(keep)
+  }
+
+  takeInto(horizon: int, life: Int32Array): Int32Array {
+    const mbs = this.mbw * this.mbh
+    const mbw = this.mbw
+    const mbh = this.mbh
+    const slots = this.slots
+    const t = this.taken
+    let lim = t + horizon
+    if (this.total >= 0 && this.total < lim) lim = this.total
+    const last = lim < this.pushed ? lim - 1 : this.pushed - 1
+    const carry = this.carry
+    const until = this.until
+    const seen = this.seen
+    const amount = this.amount
+    const geoW = this.geoW
+    const tag = this.epoch[0]! + 1
+    this.epoch[0] = tag
+    for (let j = last; j > t; j--) {
+      const jo = (j % slots) * mbs
+      const n = this.nCoded[j % slots]!
+      const video = this.video[j % slots]! !== 0
+      if (video && !this.windowTail) {
+        const rest = f64(lim - 1 - j)
+        for (let k = 0; k < KEEP_ONE; k++) {
+          const q = f64(k) / f64(KEEP_ONE)
+          geoW[k] = q * (1.0 - Math.pow(q, rest)) / (1.0 - q)
+        }
+        geoW[KEEP_ONE] = rest * this.tailW[KEEP_ONE]!
+      }
+      for (let i = 0; i < n; i++) {
+        const mb = this.coded[jo + i]!
+        const ib = f64(this.intra[jo + mb]!)
+        const live = seen[mb]! === tag
+        const c = live ? carry[mb]! : 0.0
+        const end = live ? until[mb]! : lim - 1
+        const k = int(this.keep[jo + mb]!)
+        const tail = live ? f64(end - j) : video ? (this.windowTail ? f64(last - j) : geoW[k]!) :
+          f64(end - j) * this.tailW[k]!
+        amount[i] = (ib + c + ib * tail) * f64(k) / f64(KEEP_ONE)
+        carry[mb] = 0
+        until[mb] = j - 1
+        seen[mb] = tag
+      }
+      for (let i = 0; i < n; i++) {
+        const a = amount[i]!
+        if (a === 0) continue
+        const mb = this.coded[jo + i]!
+        const x0 = int(this.refX[jo + mb]!)
+        const y0 = int(this.refY[jo + mb]!)
+        const bx = x0 >> 4
+        const by = y0 >> 4
+        const fx = x0 & 15
+        const fy = y0 & 15
+        for (let q = 0; q < 4; q++) {
+          const cx = bx + (q & 1)
+          const cy = by + (q >> 1)
+          const wx = (q & 1) === 0 ? 16 - fx : fx
+          const wy = (q >> 1) === 0 ? 16 - fy : fy
+          if (wx === 0 || wy === 0 || cx >= mbw || cy >= mbh) continue
+          const r = cy * mbw + cx
+          if (seen[r]! !== tag) {
+            seen[r] = tag
+            carry[r] = 0
+            until[r] = lim - 1
+          }
+          carry[r] = carry[r]! + a * f64(wx * wy) / 256.0
+        }
+      }
+    }
+    const to = (t % slots) * mbs
+    const whole = (lim - t) * LIFE_ONE
+    for (let mb = 0; mb < mbs; mb++) {
+      if (seen[mb]! !== tag) {
+        life[mb] = whole
+        continue
+      }
+      const span = until[mb]! - t + 1
+      const c = carry[mb]!
+      life[mb] = c === 0 ? span * LIFE_ONE : Math.trunc(f64(LIFE_ONE) * (f64(span) + c / f64(this.intra[to + mb]!)))
+    }
+    this.taken++
+    return life
+  }
+
+  keepMap(out: Uint8Array) {
+    const mbs = this.mbw * this.mbh
+    const t = this.taken - 1
+    const to = (t % this.slots) * mbs
+    out.fill(KEEP_ONE)
+    const n = this.nCoded[t % this.slots]!
+    for (let i = 0; i < n; i++) {
+      const mb = this.coded[to + i]!
+      out[mb] = this.keep[to + mb]!
+    }
+  }
+}
+
+test("lifetimes end where content is replaced", () => {
+  const w = 32
+  const fb = (w * 16 * 3) >> 1
+  const frames = new Uint8Array(fb * 4)
+  const vals = [10, 10, 10, 90, 50, 90, 50, 90]
+  for (let f = 0; f < 4; f++) {
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < w; x++) frames[f * fb + y * w + x] = vals[f * 2 + (x >> 4)]!
+    }
+  }
+  const la = new Lookahead(w, 16, 3, false)
+  for (let f = 0; f < 4; f++) la.push(frames, f * fb, f > 0 ? (f - 1) * fb : 0, undefined)
+  const seen: int[] = []
+  const l = la.take(60)
+  seen.push(l[0]!)
+  seen.push(l[1]!)
+  la.finish()
+  for (let f = 1; f < 4; f++) {
+    const m = la.take(60)
+    seen.push(m[0]!)
+    seen.push(m[1]!)
+  }
+  expect(seen.join(",")).toBe([32, 16, 16, 48, 32, 32, 16, 16].join(","))
+})
+
+test("unchanged content is assumed to stay until the horizon past the window", () => {
+  const w = 32
+  const fb = (w * 16 * 3) >> 1
+  const frames = new Uint8Array(fb * 2)
+  for (let y = 0; y < 16; y++) frames.fill(200, fb + y * w + 16, fb + y * w + 32)
+  const la = new Lookahead(w, 16, 1, false)
+  la.push(frames, 0, 0, undefined)
+  la.push(frames, fb, 0, undefined)
+  const l = la.take(30)
+  expect([l[0]!, l[1]!].join(",")).toBe([30 * 16, 16].join(","))
+})
+
+test("moved content passes its lifetime back to where it came from", () => {
+  const w = 48
+  const fb = (w * 16 * 3) >> 1
+  const frames = new Uint8Array(fb * 4)
+  for (let f = 0; f < 4; f++) {
+    const x0 = f === 0 ? 0 : 16
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) frames[f * fb + y * w + x0 + x] = (x * 29 + y * 47 + x * y * 3) & 255
+    }
+  }
+  const moved = new SideInfo()
+  moved.dirty = [0, 0, 32, 16]
+  moved.scroll = [{ x: 0, y: 0, w: 48, h: 16, dx: 16, dy: 0 }]
+  const la = new Lookahead(w, 16, 3, false)
+  for (let f = 0; f < 4; f++) la.push(frames, f * fb, f > 0 ? (f - 1) * fb : 0, f === 1 ? moved : new SideInfo())
+  la.finish()
+  const l = la.take(60)
+  expect([l[0]!, l[1]!, l[2]!].join(",")).toBe("64,16,64")
+})
+
+test("the geometric tail applies only past frames where most macroblocks change", () => {
+  const w = 48
+  const fb = (w * 16 * 3) >> 1
+  const lives: int[][] = []
+  for (let moving = 1; moving <= 3; moving += 2) {
+    const frames = new Uint8Array(fb * 2)
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = (x * 29 + y * 47 + x * y * 3) & 255
+        frames[y * w + x] = v
+        frames[fb + y * w + x] = x < moving * 16 && (x & 1) === 0 ? (v < 248 ? v + 8 : v - 8) : v
+      }
+    }
+    for (let g = 0; g < 2; g++) {
+      const la = new Lookahead(w, 16, 1, false)
+      la.geometricTail = g === 1
+      la.push(frames, 0, 0, undefined)
+      la.push(frames, fb, 0, undefined)
+      const l = la.take(60)
+      lives.push([l[0]!, l[1]!, l[2]!])
+    }
+  }
+  const shorter = lives[3]!.every((v, i) => v > LIFE_ONE && v < lives[2]![i]!)
+  expect(`${lives[0]!.join(",") === lives[1]!.join(",")} ${shorter}`).toBe("true true")
+})
+
+test("the window tail ends content past a video frame at the window edge", () => {
+  const w = 48
+  const fb = (w * 16 * 3) >> 1
+  const lives: int[][] = []
+  for (let moving = 1; moving <= 3; moving += 2) {
+    const frames = new Uint8Array(fb * 2)
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = (x * 29 + y * 47 + x * y * 3) & 255
+        frames[y * w + x] = v
+        frames[fb + y * w + x] = x < moving * 16 && (x & 1) === 0 ? (v < 248 ? v + 8 : v - 8) : v
+      }
+    }
+    for (let g = 0; g < 2; g++) {
+      const la = new Lookahead(w, 16, 1, false)
+      la.geometricTail = true
+      la.windowTail = g === 1
+      la.push(frames, 0, 0, undefined)
+      la.push(frames, fb, 0, undefined)
+      const l = la.take(60)
+      lives.push([l[0]!, l[1]!, l[2]!])
+    }
+  }
+  const shorter = lives[3]!.every((v, i) => v >= LIFE_ONE && v < lives[2]![i]!)
+  expect(`${lives[0]!.join(",") === lives[1]!.join(",")} ${shorter}`).toBe("true true")
+})
+
+test("pixel comparison marks the macroblocks that differ and those within the noise", () => {
+  const w = 48
+  const h = 18
+  const fb = (w * h * 3) >> 1
+  const frames = new Uint8Array(fb * 2)
+  frames[fb + 17 * w + 40] = 9
+  frames[fb + w * h + 3] = 5
+  frames[fb + 20] = 2
+  const la = new Lookahead(w, h, 2, false)
+  const exact = la.diffFrames(frames, fb, 0).join(",")
+  la.noise = 3
+  la.pushed = 1
+  const noisy = la.diffFrames(frames, fb, 0).join(",")
+  expect(`${exact} ${noisy} ${la.changesOf(0).join(",")} ${la.changesOf(2).length} ${la.changesOf(4).length}`)
+    .toBe("1,1,0,0,0,1 1,2,0,0,0,1 1,1,0,0,0,1 0 0")
+})

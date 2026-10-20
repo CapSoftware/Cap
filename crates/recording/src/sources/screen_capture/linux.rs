@@ -1,4 +1,5 @@
 use super::cadence::FrameCadenceGate;
+use super::linux_shm::{self, ShmSegment};
 use super::*;
 use crate::feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock};
 use crate::ffmpeg::FFmpegVideoFrame;
@@ -70,7 +71,8 @@ enum LinuxInputConfig {
     Wayland(WaylandInputConfig),
 }
 
-pub(crate) struct X11InputConfig {
+#[doc(hidden)]
+pub struct X11InputConfig {
     pub display_name: String,
     pub window_id: Option<u32>,
     pub x: i32,
@@ -313,11 +315,31 @@ async fn create_wayland_source_config(
 ) -> anyhow::Result<(VideoInfo, WaylandInputConfig)> {
     let portal =
         open_wayland_portal(&config.config.linux_source, config.config.show_cursor).await?;
+    if matches!(config.config.linux_source, LinuxCaptureSource::Area) {
+        let displays = Display::list();
+        let selected = displays
+            .iter()
+            .find(|display| display.id() == config.config.display)
+            .and_then(|display| display.raw_handle().logical_bounds())
+            .ok_or_else(|| anyhow!("Selected Wayland display is no longer available"))?;
+        if !wayland_area_matches_display(
+            portal.stream.position(),
+            portal.stream.size(),
+            selected,
+            displays.len() == 1,
+        ) {
+            bail!("Select the same display in the screen-sharing dialog as the recording area");
+        }
+    }
     let crop_bounds = match &config.config.linux_source {
         LinuxCaptureSource::Area => config.config.crop_bounds,
         LinuxCaptureSource::Display | LinuxCaptureSource::Window { .. } => None,
     };
-    let video_info = wayland_video_info(&portal.stream, config.video_info, crop_bounds);
+    let video_info = wayland_video_info(
+        portal.stream.size(),
+        config.video_info,
+        &config.config.linux_source,
+    );
 
     Ok((
         video_info,
@@ -405,16 +427,31 @@ fn wayland_source_type(source: &LinuxCaptureSource) -> ashpd::enumflags2::BitFla
     }
 }
 
+fn wayland_area_matches_display(
+    stream_position: Option<(i32, i32)>,
+    stream_size: Option<(i32, i32)>,
+    selected: LogicalBounds,
+    only_display: bool,
+) -> bool {
+    stream_position.map_or(only_display, |(x, y)| {
+        f64::from(x) == selected.position().x() && f64::from(y) == selected.position().y()
+    }) && stream_size.map_or(only_display, |(width, height)| {
+        f64::from(width) == selected.size().width() && f64::from(height) == selected.size().height()
+    })
+}
+
 fn wayland_video_info(
-    stream: &PortalStream,
+    stream_size: Option<(i32, i32)>,
     fallback: VideoInfo,
-    crop_bounds: Option<CropBounds>,
+    source: &LinuxCaptureSource,
 ) -> VideoInfo {
-    if crop_bounds.is_some() {
+    // Portal sizes use compositor coordinates; configured monitor sizes already
+    // include physical scaling and the requested capture resolution limit.
+    if !matches!(source, LinuxCaptureSource::Window { .. }) {
         return fallback;
     }
 
-    let Some((width, height)) = stream.size() else {
+    let Some((width, height)) = stream_size else {
         return fallback;
     };
     if width <= 0 || height <= 0 {
@@ -1997,8 +2034,11 @@ fn capture_x11(
 /// FFmpeg (spacedrive native-deps) is built without. Capturing with `x11rb`
 /// keeps us off any system FFmpeg/libavdevice and adds no new runtime
 /// shared-library dependency (`x11rb` speaks the X11 protocol over a socket).
-pub(crate) struct X11Grabber {
-    conn: RustConnection,
+// `pub` only so the x11-capture-benchmark example and x11_shm_capture tests can
+// drive it; not a supported API.
+#[doc(hidden)]
+pub struct X11Grabber {
+    conn: Arc<RustConnection>,
     root: x11rb::protocol::xproto::Window,
     window: Option<X11WindowCapture>,
     x: i16,
@@ -2006,9 +2046,17 @@ pub(crate) struct X11Grabber {
     width: u16,
     height: u16,
     source_pixel: ffmpeg::format::Pixel,
+    bits_per_pixel: u8,
+    scanline_pad: u8,
+    backend: GrabBackend,
     output: VideoInfo,
     scaler: Option<FrameScaler>,
     show_cursor: bool,
+}
+
+enum GrabBackend {
+    Shm(ShmSegment),
+    GetImage,
 }
 
 struct X11WindowCapture {
@@ -2018,7 +2066,11 @@ struct X11WindowCapture {
 }
 
 impl X11Grabber {
-    pub(crate) fn new(config: &X11InputConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &X11InputConfig) -> anyhow::Result<Self> {
+        Self::with_shm(config, true)
+    }
+
+    pub fn with_shm(config: &X11InputConfig, allow_shm: bool) -> anyhow::Result<Self> {
         ffmpeg::init().context("initialize FFmpeg")?;
 
         let (conn, screen_num) = x11rb::connect(Some(config.display_name.as_str()))
@@ -2056,11 +2108,11 @@ impl X11Grabber {
             })
             .ok_or_else(|| anyhow!("X11 visual {visual_id} not found"))?;
 
-        let bits_per_pixel = setup
+        let (bits_per_pixel, scanline_pad) = setup
             .pixmap_formats
             .iter()
             .find(|format| format.depth == depth)
-            .map(|format| format.bits_per_pixel)
+            .map(|format| (format.bits_per_pixel, format.scanline_pad))
             .ok_or_else(|| anyhow!("X11 pixmap format for depth {depth} not found"))?;
 
         let source_pixel = x11_source_pixel(
@@ -2128,7 +2180,7 @@ impl X11Grabber {
         };
 
         let mut grabber = Self {
-            conn,
+            conn: Arc::new(conn),
             root,
             window,
             x,
@@ -2136,12 +2188,73 @@ impl X11Grabber {
             width,
             height,
             source_pixel,
+            bits_per_pixel,
+            scanline_pad,
+            backend: GrabBackend::GetImage,
             output,
             scaler: None,
             show_cursor,
         };
         grabber.refresh_window_pixmap()?;
+        grabber.backend = grabber.initial_backend(allow_shm);
         Ok(grabber)
+    }
+
+    fn initial_backend(&self, allow_shm: bool) -> GrabBackend {
+        if !allow_shm {
+            tracing::info!("X11 MIT-SHM capture disabled by caller");
+            return GrabBackend::GetImage;
+        }
+        if linux_shm::shm_disabled_by_env() {
+            tracing::info!(
+                "X11 MIT-SHM capture disabled by {}",
+                linux_shm::DISABLE_SHM_ENV
+            );
+            return GrabBackend::GetImage;
+        }
+        match self.create_shm_segment() {
+            Ok(segment) => {
+                tracing::info!(bytes = segment.len(), "X11 capture using MIT-SHM");
+                GrabBackend::Shm(segment)
+            }
+            Err(error) => {
+                tracing::info!(error = %format!("{error:#}"), "X11 MIT-SHM unavailable, using GetImage");
+                GrabBackend::GetImage
+            }
+        }
+    }
+
+    fn create_shm_segment(&self) -> anyhow::Result<ShmSegment> {
+        if self.bits_per_pixel != 32 {
+            bail!(
+                "MIT-SHM capture requires 32bpp, server uses {}",
+                self.bits_per_pixel
+            );
+        }
+        linux_shm::query_shm_support(&self.conn)?;
+        ShmSegment::new(&self.conn, self.shm_image_size()?)
+    }
+
+    fn shm_image_size(&self) -> anyhow::Result<usize> {
+        linux_shm::image_size(
+            self.width,
+            self.height,
+            self.bits_per_pixel,
+            self.scanline_pad,
+        )
+        .ok_or_else(|| {
+            anyhow!(
+                "invalid X11 image layout: {}x{} at {}bpp, pad {}",
+                self.width,
+                self.height,
+                self.bits_per_pixel,
+                self.scanline_pad
+            )
+        })
+    }
+
+    pub fn uses_shm(&self) -> bool {
+        matches!(self.backend, GrabBackend::Shm(_))
     }
 
     fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
@@ -2215,7 +2328,7 @@ impl X11Grabber {
     }
 
     /// Capture one frame of the configured region as a BGRZ video frame.
-    pub(crate) fn grab(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+    pub fn grab(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
         self.refresh_window_pixmap()?;
         let (drawable, x, y) = match &self.window {
             Some(window) => {
@@ -2225,6 +2338,63 @@ impl X11Grabber {
             }
             None => (self.root, self.x, self.y),
         };
+        let mut source = ffmpeg::frame::Video::new(
+            self.source_pixel,
+            u32::from(self.width),
+            u32::from(self.height),
+        );
+        if self.uses_shm() {
+            if let Err(shm_error) = self.read_shm_image(drawable, x, y, &mut source) {
+                // Only abandon MIT-SHM once GetImage succeeds on the same frame;
+                // if both fail the cause is the drawable/region, not SHM.
+                self.read_get_image(drawable, x, y, &mut source)?;
+                tracing::warn!(
+                    error = %format!("{shm_error:#}"),
+                    "X11 MIT-SHM capture failed, switching to GetImage"
+                );
+                self.backend = GrabBackend::GetImage;
+            }
+        } else {
+            self.read_get_image(drawable, x, y, &mut source)?;
+        }
+
+        let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
+
+        if self.show_cursor
+            && let Err(error) = self.composite_cursor(&mut frame)
+        {
+            tracing::trace!(error = %error, "X11 cursor composite skipped");
+        }
+
+        Ok(frame)
+    }
+
+    fn read_shm_image(
+        &mut self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        dst: &mut ffmpeg::frame::Video,
+    ) -> anyhow::Result<()> {
+        let required = self.shm_image_size()?;
+        let GrabBackend::Shm(segment) = &mut self.backend else {
+            bail!("X11 MIT-SHM backend is not active");
+        };
+        if segment.len() != required {
+            *segment = ShmSegment::new(&self.conn, required)
+                .context("resize X11 shared-memory segment")?;
+        }
+        let data = segment.get_image(drawable, x, y, self.width, self.height)?;
+        copy_image_rows(data, usize::from(self.width), usize::from(self.height), dst)
+    }
+
+    fn read_get_image(
+        &self,
+        drawable: u32,
+        x: i16,
+        y: i16,
+        dst: &mut ffmpeg::frame::Video,
+    ) -> anyhow::Result<()> {
         let reply = self
             .conn
             .get_image(
@@ -2239,47 +2409,12 @@ impl X11Grabber {
             .context("request X11 image")?
             .reply()
             .context("read X11 image")?;
-
-        let width = usize::from(self.width);
-        let height = usize::from(self.height);
-        let row_bytes = width * 4;
-        let source_stride = reply
-            .data
-            .len()
-            .checked_div(height)
-            .filter(|stride| *stride >= row_bytes)
-            .ok_or_else(|| {
-                anyhow!(
-                    "X11 image too small: {} bytes for {}x{}",
-                    reply.data.len(),
-                    width,
-                    height
-                )
-            })?;
-
-        let mut source = ffmpeg::frame::Video::new(
-            self.source_pixel,
-            u32::from(self.width),
-            u32::from(self.height),
-        );
-        let dst_stride = source.stride(0);
-        let copy = row_bytes.min(dst_stride);
-        for row in 0..height {
-            let src_start = row * source_stride;
-            let dst_start = row * dst_stride;
-            source.data_mut(0)[dst_start..dst_start + copy]
-                .copy_from_slice(&reply.data[src_start..src_start + copy]);
-        }
-
-        let mut frame = prepare_pipewire_frame(source, &mut self.scaler, self.output)?;
-
-        if self.show_cursor
-            && let Err(error) = self.composite_cursor(&mut frame)
-        {
-            tracing::trace!(error = %error, "X11 cursor composite skipped");
-        }
-
-        Ok(frame)
+        copy_image_rows(
+            &reply.data,
+            usize::from(self.width),
+            usize::from(self.height),
+            dst,
+        )
     }
 
     /// Alpha-blend the X11 cursor onto a BGRZ frame (mirrors x11grab's
@@ -2350,6 +2485,37 @@ impl X11Grabber {
 
         Ok(())
     }
+}
+
+fn copy_image_rows(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    dst: &mut ffmpeg::frame::Video,
+) -> anyhow::Result<()> {
+    let row_bytes = width * 4;
+    let source_stride = data
+        .len()
+        .checked_div(height)
+        .filter(|stride| *stride >= row_bytes)
+        .ok_or_else(|| {
+            anyhow!(
+                "X11 image too small: {} bytes for {}x{}",
+                data.len(),
+                width,
+                height
+            )
+        })?;
+
+    let dst_stride = dst.stride(0);
+    let copy = row_bytes.min(dst_stride);
+    let dst_data = dst.data_mut(0);
+    for row in 0..height {
+        let src_start = row * source_stride;
+        let dst_start = row * dst_stride;
+        dst_data[dst_start..dst_start + copy].copy_from_slice(&data[src_start..src_start + copy]);
+    }
+    Ok(())
 }
 
 /// Map an X11 32-bit TrueColor visual (byte order + RGB masks) to the matching
@@ -2808,7 +2974,76 @@ mod system_audio_tests {
 
 #[cfg(test)]
 mod pipewire_frame_tests {
-    use super::{FrameScaler, VideoInfo, prefers_wayland_environment, prepare_pipewire_frame};
+    use super::{
+        FrameScaler, LinuxCaptureSource, VideoInfo, prefers_wayland_environment,
+        prepare_pipewire_frame, wayland_area_matches_display, wayland_video_info,
+    };
+
+    #[test]
+    fn wayland_area_requires_the_selected_monitor_in_the_portal() {
+        use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+
+        let selected = LogicalBounds::new(
+            LogicalPosition::new(960.0, 0.0),
+            LogicalSize::new(960.0, 540.0),
+        );
+        assert!(wayland_area_matches_display(
+            Some((960, 0)),
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            Some((0, 0)),
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            None,
+            Some((960, 540)),
+            selected,
+            false,
+        ));
+        assert!(!wayland_area_matches_display(
+            Some((960, 0)),
+            Some((1920, 1080)),
+            selected,
+            false,
+        ));
+        assert!(wayland_area_matches_display(None, None, selected, true));
+    }
+
+    #[test]
+    fn portal_logical_size_does_not_reduce_physical_monitor_capture() {
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 1920, 1080, 60);
+        let result = wayland_video_info(Some((960, 540)), output, &LinuxCaptureSource::Display);
+        assert_eq!((result.width, result.height), (1920, 1080));
+    }
+
+    #[test]
+    fn portal_size_does_not_override_capture_limits_or_area_dimensions() {
+        for (source, width, height) in [
+            (LinuxCaptureSource::Display, 1280, 720),
+            (LinuxCaptureSource::Area, 800, 400),
+        ] {
+            let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, width, height, 60);
+            let result = wayland_video_info(Some((1920, 1080)), output, &source);
+            assert_eq!((result.width, result.height), (width, height));
+        }
+    }
+
+    #[test]
+    fn portal_window_capture_keeps_its_selected_surface_dimensions() {
+        let output = VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRZ, 1920, 1080, 60);
+        let source = LinuxCaptureSource::Window {
+            id: "0".parse().unwrap(),
+        };
+        let result = wayland_video_info(Some((641, 481)), output, &source);
+        assert_eq!((result.width, result.height), (640, 480));
+        let result = wayland_video_info(None, output, &source);
+        assert_eq!((result.width, result.height), (1920, 1080));
+    }
 
     #[test]
     fn active_wayland_sessions_use_the_portal_even_with_xwayland() {

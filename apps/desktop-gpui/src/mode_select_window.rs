@@ -249,7 +249,7 @@ impl Render for ModeSelectWindow {
             .justify_center()
             .items_center()
             .bg(Hsla::from(theme.gray_1))
-            .font_family("Geist")
+            .font_family(crate::theme::UI_FONT)
             // `body { font-weight: 500 }` (`ui-solid/src/main.css:189-192`).
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_primary)

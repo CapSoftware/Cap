@@ -1671,9 +1671,15 @@ impl TextInput {
     /// sidebar's hex inputs.
     pub fn plain(theme: &Theme, id: impl Into<ElementId>, state: &Entity<TextInputState>) -> Self {
         Self {
-            bg: Some(theme.gray(1)),
-            border: Some(theme.gray(4)),
-            focus_border: Some(theme.gray(7)),
+            radius: px(7.),
+            text_size: px(13.),
+            bg: Some(Hsla::from(theme.editor.ctl)),
+            border: None,
+            focus_border: Some(Hsla::from(theme.editor.accent)),
+            text: Hsla::from(theme.editor.text_1),
+            muted: Hsla::from(theme.editor.text_3),
+            icon_color: Hsla::from(theme.editor.text_3),
+            caret_color: Hsla::from(theme.editor.text_1),
             ..Self::base(theme, id, state)
         }
     }

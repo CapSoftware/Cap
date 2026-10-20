@@ -100,6 +100,11 @@ impl PresetsStore {
         }
     }
 
+    /// New recordings go back to Cap's own defaults.
+    pub fn clear_default(&mut self) {
+        self.default = None;
+    }
+
     pub fn rename(&mut self, index: usize, name: String) {
         if let Some(entry) = self.presets.get_mut(index) {
             entry.name = name;
@@ -114,6 +119,23 @@ impl PresetsStore {
     }
 }
 
+/// The built-in "Default" preset: what a fresh screen recording looks like
+/// with no user preset -- `ProjectConfiguration::default()` plus the
+/// presentation defaults the recorder applies (`recording.rs`
+/// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
+/// rounding and the default screen-movement spring.
+pub fn default_project_config() -> ProjectConfiguration {
+    let mut config = ProjectConfiguration::default();
+    if config.background.padding <= f64::EPSILON {
+        config.background.padding = 10.0;
+    }
+    if config.background.rounding <= f64::EPSILON {
+        config.background.rounding = 7.5;
+    }
+    config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
+    config
+}
+
 /// What a preset stores: the whole project config with `timeline: null` and
 /// `clips: []` -- presets style a project, they never carry its cuts
 /// (`createPresets.ts:31-35`).
@@ -122,6 +144,7 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
     if let Some(map) = value.as_object_mut() {
         map.insert("timeline".into(), Value::Null);
         map.insert("clips".into(), Value::Array(Vec::new()));
+        map.remove("overlayOrder");
     }
     value
 }
@@ -135,6 +158,7 @@ pub fn apply_preset(
 ) -> Option<ProjectConfiguration> {
     let mut next: ProjectConfiguration = serde_json::from_value(config.clone()).ok()?;
     next.timeline = current.timeline.clone();
+    next.overlay_order = current.overlay_order.clone();
     next.clips = current.clips.clone();
     Some(next)
 }
@@ -208,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_keeps_the_current_timeline_and_clips() {
+    fn applying_keeps_the_current_timeline_clips_and_layer_order() {
         let current = ProjectConfiguration {
             timeline: Some(cap_project::TimelineConfiguration {
                 segments: Vec::new(),
@@ -221,7 +245,13 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
             }),
+            overlay_order: vec![cap_project::OverlayTrack {
+                kind: cap_project::OverlayTrackKind::Image,
+                track: 2,
+            }],
             ..Default::default()
         };
         let mut preset_source = ProjectConfiguration::default();
@@ -230,6 +260,7 @@ mod tests {
 
         let applied = apply_preset(&preset, &current).expect("preset deserializes");
         assert_eq!(applied.background.blur, 42.);
+        assert_eq!(applied.overlay_order, current.overlay_order);
         assert!(applied.timeline.is_some(), "current timeline is kept");
     }
 

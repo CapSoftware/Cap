@@ -31,6 +31,8 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
     "Geist.ttf",
     "Geist-Medium.ttf",
     "Geist-Bold.ttf",
+    // Adobe, SIL Open Font License 1.1 (the licence is embedded in the font).
+    "SourceSerif4-Light.ttf",
 );
 
 /// Mostly Cap's own icon set, lifted from `packages/ui-solid/icons`. gpui
@@ -83,11 +85,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "shadow.svg",
     "bg-blur.svg",
     "laptop.svg",
-    "wind.svg",
-    "image-off.svg",
     "shuffle.svg",
     "gift.svg",
-    "history.svg",
     "hotkeys.svg",
     "image.svg",
     "info.svg",
@@ -101,7 +100,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
-    "minimize.svg",
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
@@ -113,7 +111,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // originals: type, box-select (an alias of square-dashed since Lucide
     // 0.5xx), music, video, rotate-3d, clock, monitor, columns-2, panel-right.
     "box-select.svg",
-    "clock.svg",
     "columns-2.svg",
     "monitor-outline.svg",
     "music.svg",
@@ -141,8 +138,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "scan-text.svg",
     "screen.svg",
     "screenshot.svg",
-    // The onboarding permissions surface's header badge.
-    "shield.svg",
     "stop-circle.svg",
     "search.svg",
     "settings.svg",
@@ -162,30 +157,19 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "align-right.svg",
     "arrow-left-right.svg",
     "download.svg",
-    "ease-curve.svg",
     "flip-vertical-2.svg",
-    "grid.svg",
-    "grip.svg",
-    "italic.svg",
     "maximize.svg",
-    "moon.svg",
     "mouse-pointer-2.svg",
-    "mouse-pointer-click.svg",
+    "mouse-pointer-ban.svg",
     "move.svg",
     "move-right.svg",
     "palette.svg",
-    "rabbit.svg",
     "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
-    "rotate-cw.svg",
-    "sliders-horizontal.svg",
-    "sparkles.svg",
-    "timer.svg",
-    "volume-2.svg",
     "volume-x.svg",
-    "diamond.svg",
-    "x-mark.svg",
+    "gem.svg",
+    "sliders-horizontal.svg",
     "zap.svg",
     "zoom-in.svg",
     "zoom-out.svg",
@@ -203,7 +187,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // The main window's hand-drawn traffic lights: the x and expand glyphs
     // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    "traffic-zoom.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
     // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
@@ -211,6 +194,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // integrations/index.tsx's inline multi-colour logo flattened to one fill
     // (gpui's `svg()` keeps only the alpha).
     "circle-check.svg",
+    "lock.svg",
     // The screenshot editor's annotation toolbar, layers panel and header
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
@@ -221,6 +205,8 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "grip-vertical.svg",
     "chevron-up.svg",
     "arrow-left.svg",
+    "arrow-left-to-line.svg",
+    "arrow-right-to-line.svg",
     "film.svg",
     "folder-open.svg",
     "folder-down.svg",
@@ -239,33 +225,28 @@ const IMAGES: &[(&str, &[u8])] = assets!("images":
     "dark.jpg",
 );
 
-/// The background-source tiles' fallback art, copied from
-/// `apps/desktop/src/assets/illustrations/`. Full-colour, so `img()` not
-/// `svg()`, and webp because that is what the app ships -- 4 KB for the pair,
-/// against 25 MB if the wallpapers themselves were embedded (see the README).
-///
-/// **Two of `BACKGROUND_ICONS`' four are dead in the shipping app.**
-/// `renderBackgroundSourceIcon` returns a live swatch for `color` and a live
-/// gradient for `gradient` before it ever reaches the map
-/// (`ConfigSidebar.tsx:2076-2089`), so `colorBg` and `gradientBg` are imported
-/// and never drawn; only `imageBg` (desktop and wallpaper) and
-/// `transparentBg` (image) are.
-const ILLUSTRATIONS: &[(&str, &[u8])] = assets!("illustrations":
-    "image.webp",
-    "transparent.webp",
-);
-
 const ONBOARDING: &[(&str, &[u8])] = &[
-    ("onboarding/cloud-1.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-1.png")),
-    ("onboarding/cloud-2.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-2.png")),
-    ("onboarding/cloud-3.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-3.png")),
-    ("onboarding/logo.svg", include_bytes!("../../../packages/ui-solid/icons/logo.svg")),
+    // Grain is one sheet, never tiled: snapped tiles overlap and draw seams.
+    ("onboarding/clouds/cumulus-a.webp", include_bytes!("../../web/public/backgrounds/clouds/cumulus-a.webp")),
+    ("onboarding/clouds/cumulus-b.webp", include_bytes!("../../web/public/backgrounds/clouds/cumulus-b.webp")),
+    ("onboarding/clouds/tuft-a.webp", include_bytes!("../../web/public/backgrounds/clouds/tuft-a.webp")),
+    ("onboarding/clouds/bank-a.webp", include_bytes!("../../web/public/backgrounds/clouds/bank-a.webp")),
+    ("onboarding/clouds/wisp-a.webp", include_bytes!("../../web/public/backgrounds/clouds/wisp-a.webp")),
+    ("onboarding/sky.svg", br##"<svg viewBox="0 0 100 100" width="400" height="300" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="base" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#A3BFEA"/><stop offset="0.38" stop-color="#C8DBF4"/><stop offset="0.74" stop-color="#E2EAF5"/><stop offset="1" stop-color="#EDF1F6"/></linearGradient><radialGradient id="sun" cx="0.7" cy="0.02" r="0.36" gradientTransform="translate(0.7 0.02) scale(1 0.889) translate(-0.7 -0.02)"><stop offset="0" stop-color="#FFE0C0" stop-opacity="0.8"/><stop offset="0.7" stop-color="#FFE0C0" stop-opacity="0"/></radialGradient><radialGradient id="low" cx="0.5" cy="0.74" r="0.8" gradientTransform="translate(0.5 0.74) scale(1 0.525) translate(-0.5 -0.74)"><stop offset="0" stop-color="#FFF0E0" stop-opacity="0.5"/><stop offset="0.72" stop-color="#FFF0E0" stop-opacity="0"/></radialGradient></defs><rect width="100" height="100" fill="url(#base)"/><rect width="100" height="100" fill="url(#low)"/><rect width="100" height="100" fill="url(#sun)"/></svg>"##),
+    ("onboarding/grain.svg", br##"<svg viewBox="0 0 1300 1000" width="1300" height="1000" xmlns="http://www.w3.org/2000/svg"><filter id="n" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope="0.26"/></feComponentTransfer></filter><rect width="1300" height="1000" filter="url(#n)"/></svg>"##),
+    // These are drawn with their edges outside the window: gpui shows an
+    // image's edge as a faint line where it falls on screen.
+    ("onboarding/rays-far.svg", br##"<svg viewBox="0 0 100 100" width="400" height="300" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="r" gradientUnits="userSpaceOnUse" x1="84" y1="-6" x2="30" y2="104"><stop offset="0" stop-color="#FFF6E6" stop-opacity="1"/><stop offset="0.55" stop-color="#FFF6E6" stop-opacity="0.5"/><stop offset="1" stop-color="#FFF4E2" stop-opacity="0"/></linearGradient><filter id="b" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.2"/></filter></defs><g filter="url(#b)" fill="url(#r)"><polygon points="84,-6 -20,104 -8,104" opacity="0.45"/><polygon points="84,-6 2,104 10,104" opacity="0.7"/><polygon points="84,-6 18,104 24,104" opacity="0.5"/><polygon points="84,-6 30,104 38,104" opacity="0.85"/><polygon points="84,-6 46,104 50,104" opacity="0.55"/><polygon points="84,-6 58,104 66,104" opacity="0.75"/><polygon points="84,-6 74,104 78,104" opacity="0.4"/></g></svg>"##),
+    ("onboarding/rays-near.svg", br##"<svg viewBox="0 0 100 100" width="400" height="300" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="r" gradientUnits="userSpaceOnUse" x1="84" y1="-6" x2="30" y2="104"><stop offset="0" stop-color="#FFF6E6" stop-opacity="1"/><stop offset="0.55" stop-color="#FFF6E6" stop-opacity="0.5"/><stop offset="1" stop-color="#FFF4E2" stop-opacity="0"/></linearGradient><filter id="b" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.2"/></filter></defs><g filter="url(#b)" fill="url(#r)"><polygon points="84,-6 -12,104 -2,104" opacity="0.5"/><polygon points="84,-6 10,104 16,104" opacity="0.6"/><polygon points="84,-6 26,104 30,104" opacity="0.8"/><polygon points="84,-6 40,104 46,104" opacity="0.45"/><polygon points="84,-6 52,104 56,104" opacity="0.7"/><polygon points="84,-6 66,104 72,104" opacity="0.5"/></g></svg>"##),
+    ("onboarding/sun.svg", br##"<svg viewBox="0 0 200 200" width="200" height="200" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="g" r="0.1875"><stop offset="0" stop-color="#FFF8EC" stop-opacity="0.95"/><stop offset="0.35" stop-color="#FFE3C4" stop-opacity="0.5"/><stop offset="1" stop-color="#FFE3C4" stop-opacity="0"/></radialGradient></defs><rect width="200" height="200" fill="url(#g)"/></svg>"##),
+    ("onboarding/mist.svg", br##"<svg viewBox="0 0 100 150" width="300" height="450" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="m"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.8"/><stop offset="0.5" stop-color="#F4F8FD" stop-opacity="0.35"/><stop offset="1" stop-color="#F4F8FD" stop-opacity="0"/></radialGradient></defs><ellipse cx="41.7" cy="52.5" rx="66.7" ry="22.5" fill="url(#m)" opacity="0.35"/><ellipse cx="62.5" cy="84.5" rx="66.7" ry="22.5" fill="url(#m)" opacity="0.28"/></svg>"##),
+    ("onboarding/vignette.svg", br##"<svg viewBox="0 0 100 100" width="200" height="200" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="g" r="0.75"><stop offset="0.5" stop-color="#34507A" stop-opacity="0"/><stop offset="1" stop-color="#34507A" stop-opacity="0.5"/></radialGradient></defs><rect width="100" height="100" fill="url(#g)"/></svg>"##),
+    ("onboarding/wordmark.svg", br##"<svg viewBox="0 0 120 40" width="480" height="160" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill="#4785FF" d="M20 36c8.837 0 16-7.163 16-16 0-8.836-7.163-16-16-16-8.836 0-16 7.164-16 16 0 8.837 7.164 16 16 16z"/><path fill="#ADC9FF" d="M20 33c7.18 0 13-5.82 13-13S27.18 7 20 7 7 12.82 7 20s5.82 13 13 13z"/><path fill="#fff" d="M20 30c5.523 0 10-4.477 10-10s-4.477-10-10-10-10 4.477-10 10 4.477 10 10 10z"/><path fill="#1E2A40" d="M58.416 30.448c-5.404 0-9.212-3.864-9.212-10.36 0-6.384 3.668-10.416 9.268-10.416 5.068 0 7.784 2.66 8.624 7.168l-3.808.196c-.476-2.604-2.072-4.2-4.816-4.2-3.388 0-5.488 2.828-5.488 7.252 0 4.48 2.156 7.196 5.46 7.196 2.94 0 4.508-1.708 4.956-4.564l3.808.196c-.784 4.676-3.752 7.532-8.792 7.532zm16.23-.112c-3.137 0-5.209-1.484-5.209-4.088 0-2.576 1.596-3.948 4.872-4.592l4.956-.98c0-2.1-.98-3.192-2.856-3.192-1.764 0-2.716.812-3.052 2.324l-3.668-.168c.588-3.136 2.996-4.928 6.72-4.928 4.256 0 6.44 2.24 6.44 6.216v5.432c0 .812.28 1.036.84 1.036h.476V30c-.224.056-.812.112-1.288.112-1.624 0-2.828-.588-3.136-2.436-.728 1.596-2.632 2.66-5.096 2.66zm.727-2.604c2.38 0 3.892-1.512 3.892-3.78v-.84l-3.864.784c-1.596.308-2.24.98-2.24 2.016 0 1.176.784 1.82 2.212 1.82zM86.874 34.2V15.048h3.444l.056 2.212c.868-1.652 2.52-2.548 4.48-2.548 4.256 0 6.356 3.5 6.356 7.812s-2.128 7.812-6.384 7.812c-1.904 0-3.556-.924-4.368-2.38V34.2h-3.584zm7.112-6.776c2.184 0 3.5-1.82 3.5-4.9s-1.316-4.9-3.5-4.9-3.528 1.652-3.528 4.9 1.316 4.9 3.528 4.9z"/></svg>"##),
     ("onboarding/music.mp3", include_bytes!("../../desktop/src/assets/tears-and-fireflies-adi-goldstein.mp3")),
     ("onboarding/cursor-macos.svg", include_bytes!("../../../packages/ui-solid/icons/cursor-macos.svg")),
     ("onboarding/cursor-windows.svg", include_bytes!("../../../packages/ui-solid/icons/cursor-windows.svg")),
     ("onboarding/volume-2.svg", include_bytes!("../assets/icons/volume-2.svg")),
     ("onboarding/volume-x.svg", include_bytes!("../assets/icons/volume-x.svg")),
-    ("onboarding/grain.svg", br##"<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="1.5" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(#noiseFilter)"/></svg>"##),
 ];
 
 pub struct Assets;
@@ -276,7 +257,6 @@ impl Assets {
             .iter()
             .chain(ICONS.iter())
             .chain(IMAGES.iter())
-            .chain(ILLUSTRATIONS.iter())
             .chain(ONBOARDING.iter())
     }
 }
@@ -333,6 +313,7 @@ mod tests {
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
+        include_str!("editor_window/scenes.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
@@ -358,9 +339,12 @@ mod tests {
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
         include_str!("screenshot_annotations.rs"),
+        // The crop overlay's own ratio glyph.
+        include_str!("screenshot_crop.rs"),
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
+        include_str!("ui/windows_caption.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),
@@ -453,42 +437,6 @@ mod tests {
         );
     }
 
-    /// And for the background-source tiles' art, which resolves through the
-    /// same `AssetSource` and fails just as silently.
-    #[test]
-    fn every_referenced_illustration_is_embedded_and_vice_versa() {
-        let source = ICON_SOURCES.concat();
-        let source = source.as_str();
-
-        let referenced: Vec<&str> = source
-            .match_indices("\"illustrations/")
-            .filter_map(|(start, _)| source[start + 1..].split('"').next())
-            .collect();
-        assert!(
-            !referenced.is_empty(),
-            "found no illustration references to check"
-        );
-
-        let missing: Vec<&str> = referenced
-            .into_iter()
-            .filter(|path| Assets.load(path).unwrap().is_none())
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "illustrations referenced but not embedded: {missing:?}"
-        );
-
-        let unused: Vec<&str> = ILLUSTRATIONS
-            .iter()
-            .map(|(path, _)| *path)
-            .filter(|path| !source.contains(path))
-            .collect();
-        assert!(
-            unused.is_empty(),
-            "illustrations embedded but never drawn: {unused:?}"
-        );
-    }
-
     #[test]
     fn fonts_and_icons_resolve() {
         assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
@@ -498,10 +446,5 @@ mod tests {
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
         assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
-        assert!(Assets.load("illustrations/image.webp").unwrap().is_some());
-        assert_eq!(
-            Assets.list("illustrations").unwrap().len(),
-            ILLUSTRATIONS.len()
-        );
     }
 }

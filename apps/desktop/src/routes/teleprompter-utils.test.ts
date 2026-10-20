@@ -4,10 +4,63 @@ import {
 	calculatePlaybackSpeed,
 	clamp,
 	countWords,
+	preserveScrollTop,
 	type TeleprompterPlaybackState,
 	teleprompterPlaybackRunning,
 	updateTeleprompterPlayback,
 } from "./teleprompter-utils";
+
+function fakeScroller(contentHeight: number, clientHeight: number) {
+	let scrollTop = 0;
+	const clampScrollTop = (value: number) =>
+		Math.max(0, Math.min(value, contentHeight - clientHeight));
+	return {
+		get scrollTop() {
+			return scrollTop;
+		},
+		set scrollTop(value: number) {
+			scrollTop = clampScrollTop(value);
+		},
+		layout(height: number) {
+			contentHeight = height;
+			scrollTop = clampScrollTop(scrollTop);
+		},
+	};
+}
+
+describe("teleprompter editor resizing", () => {
+	it("keeps the paused position when the editor collapses to measure itself", () => {
+		const scroller = fakeScroller(2000, 500);
+		scroller.scrollTop = 800;
+
+		preserveScrollTop(scroller, () => {
+			scroller.layout(400);
+			scroller.layout(2000);
+		});
+
+		expect(scroller.scrollTop).toBe(800);
+	});
+
+	it("lets the browser clamp a position the resized script no longer reaches", () => {
+		const scroller = fakeScroller(2000, 500);
+		scroller.scrollTop = 1400;
+
+		preserveScrollTop(scroller, () => {
+			scroller.layout(400);
+			scroller.layout(1200);
+		});
+
+		expect(scroller.scrollTop).toBe(700);
+	});
+
+	it("runs the resize without a scroller", () => {
+		let resized = false;
+		preserveScrollTop(undefined, () => {
+			resized = true;
+		});
+		expect(resized).toBe(true);
+	});
+});
 
 describe("teleprompter utilities", () => {
 	it("counts words in pasted scripts", () => {

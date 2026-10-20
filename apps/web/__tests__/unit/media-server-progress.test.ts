@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	queue: vi.fn(),
 	transcribe: vi.fn(),
 	invalidateQuota: vi.fn(),
+	audio: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -26,6 +27,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => ({ db: mocks.db }));
+vi.mock("@/lib/audio-level-publication", () => ({
+	handleAudioLevelPublication: mocks.audio,
+}));
 vi.mock("@cap/database/schema", () => ({
 	videos: mocks.tables.videos,
 	videoProcessingJobs: mocks.tables.jobs,
@@ -179,7 +183,7 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	};
 	const mutations: Mutation[] = [];
 	const rows = (table: unknown) => {
-		if (table === mocks.tables.videos) return [structuredClone(video)];
+		if (table === mocks.tables.videos) return [{ ...video }];
 		if (table === mocks.tables.jobs)
 			return current ? [structuredClone(current)] : [];
 		if (table === mocks.tables.uploads) return [{ rawFileKey }];
@@ -267,6 +271,7 @@ function request(
 describe("media-server recording progress webhook", () => {
 	beforeEach(() => {
 		mocks.secret = "media-secret";
+		mocks.audio.mockReset().mockResolvedValue({ status: "prepared" });
 		mocks.storage.mockReturnValue(Effect.succeed([{ headObject: mocks.head }]));
 		mocks.head.mockImplementation((key: string) =>
 			key.endsWith(".mp4")
@@ -286,6 +291,35 @@ describe("media-server recording progress webhook", () => {
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 	});
 
+	it("authenticates audio publication before dispatching it without ordinary progress updates", async () => {
+		const body = { kind: "audio-levels", action: "prepare" };
+		expect((await request(body, "wrong-secret")).status).toBe(401);
+		expect(mocks.audio).not.toHaveBeenCalled();
+		expect(await (await request(body)).json()).toEqual({ status: "prepared" });
+		expect(mocks.audio).toHaveBeenCalledExactlyOnceWith(body);
+	});
+	it("keeps stale edit callbacks out of recording and audio publication", async () => {
+		const database = databaseFixture();
+		const response = await POST(
+			new NextRequest(
+				"https://cap.so/api/webhooks/media-server/progress?editOperation=old-edit&editStartedAt=2026-09-08T12%3A00%3A00.000Z",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": "media-secret",
+					},
+					body: JSON.stringify(fixture().payload),
+				},
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ success: true });
+		expect(database.mutations).toEqual([]);
+		expect(mocks.audio).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
 	it.each([null, "wrong-secret", "éééééééééééé"])(
 		"rejects unauthenticated callbacks before publication %s",
 		async (secret) => {
@@ -302,6 +336,46 @@ describe("media-server recording progress webhook", () => {
 		mocks.secret = undefined;
 		expect((await request()).status).toBe(401);
 		expect(mocks.getState).not.toHaveBeenCalled();
+	});
+
+	it("returns a fenced lease acknowledgement only after an authenticated worker claim", async () => {
+		const { job, payload } = fixture();
+		const database = databaseFixture({ ...job, remoteJobId: null });
+		const claim = {
+			jobId: payload.jobId,
+			videoId,
+			generation,
+			attemptId,
+			inventorySha256,
+			manifestSha256,
+			phase: "queued",
+			progress: 0,
+			recordingWorker: { version: 1, action: "claim", sequence: 0 },
+		};
+		expect((await request(claim, "wrong-secret")).status).toBe(401);
+		expect(database.mutations).toEqual([]);
+		const accepted = await request(claim);
+		expect(accepted.status).toBe(200);
+		expect(await accepted.json()).toEqual({
+			success: true,
+			recordingWorker: {
+				version: 1,
+				status: "accepted",
+				generation,
+				attemptId,
+				jobId: payload.jobId,
+				sequence: 0,
+				leaseDurationMs: 300_000,
+			},
+		});
+		const before = database.mutations.length;
+		const rejected = await request({ ...claim, jobId: "another-replica" });
+		expect(await rejected.json()).toMatchObject({
+			recordingWorker: { status: "owned", ownerJobId: payload.jobId },
+		});
+		expect(database.mutations).toHaveLength(before);
+		expect(mocks.head).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
 	it("publishes the fenced immutable output before queueing transcription", async () => {
@@ -427,16 +501,24 @@ describe("media-server recording progress webhook", () => {
 				error: "Worker failed",
 			});
 			expect(response.status).toBe(200);
-			const expected =
-				errorCode === "source-missing" ? mocks.blocked : mocks.retry;
-			expect(expected).toHaveBeenCalledWith({
-				videoId,
-				generation,
-				attemptId,
-				errorCode,
-				errorMessage: "Worker failed",
+			expect(database.mutations).toContainEqual({
+				operation: "update",
+				table: mocks.tables.jobs,
+				values: expect.objectContaining({
+					state: errorCode === "source-missing" ? "source-blocked" : "retry",
+					leaseExpiresAt: null,
+					errorCode,
+					errorMessage: "Worker failed",
+				}),
 			});
-			expect(database.mutations).toEqual([]);
+			expect(await mocks.getState()).toMatchObject({
+				source: fixture().job.source,
+			});
+			expect(
+				database.mutations.some(
+					(mutation) => mutation.table === mocks.tables.videos,
+				),
+			).toBe(false);
 			expect(mocks.transcribe).not.toHaveBeenCalled();
 		},
 	);

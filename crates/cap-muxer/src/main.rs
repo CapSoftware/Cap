@@ -25,30 +25,37 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::from(EXIT_OK),
         Err(MuxerError::Protocol(err)) => {
-            eprintln!("cap-muxer protocol error: {err}");
+            report(format_args!("cap-muxer protocol error: {err}"));
             ExitCode::from(EXIT_PROTOCOL_ERROR)
         }
         Err(MuxerError::DiskFull(err)) => {
-            eprintln!("cap-muxer disk full: {err:#}");
+            report(format_args!("cap-muxer disk full: {err:#}"));
             ExitCode::from(EXIT_DISK_FULL)
         }
         Err(MuxerError::FFmpeg(err)) => {
-            eprintln!("cap-muxer ffmpeg error: {err:#}");
+            report(format_args!("cap-muxer ffmpeg error: {err:#}"));
             ExitCode::from(EXIT_FFMPEG_ERROR)
         }
         Err(MuxerError::Init(err)) => {
-            eprintln!("cap-muxer init error: {err:#}");
+            report(format_args!("cap-muxer init error: {err:#}"));
             ExitCode::from(EXIT_INIT_ERROR)
         }
         Err(MuxerError::Abort(reason)) => {
-            eprintln!("cap-muxer parent abort: {reason}");
+            report(format_args!("cap-muxer parent abort: {reason}"));
             ExitCode::from(EXIT_ABORT)
         }
         Err(MuxerError::BadState(reason)) => {
-            eprintln!("cap-muxer bad state: {reason}");
+            report(format_args!("cap-muxer bad state: {reason}"));
             ExitCode::from(EXIT_BAD_STATE)
         }
     }
+}
+
+/// Writes to stderr without panicking: when the recorder dies, the pipe it
+/// read our stderr through is closed, and the open fragment must still be
+/// finished after that.
+fn report(message: std::fmt::Arguments) {
+    let _ = writeln!(io::stderr(), "{message}");
 }
 
 fn init_tracing() {
@@ -56,6 +63,7 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .try_init();
 }
 
@@ -344,6 +352,11 @@ impl State {
             flush_pending_packets(out, self.init_video.as_ref(), self.init_audio.as_ref())?;
         }
         if let Some(mut out) = self.output.take() {
+            if out.packets_written_video == 0 && out.packets_written_audio == 0 {
+                // FFmpeg 7.1 divides by zero when finalizing an empty DASH manifest;
+                // dropping the initialized context still closes its files and streams.
+                return Ok(());
+            }
             out.ctx.write_trailer().map_err(|e| {
                 let err = anyhow!("write_trailer: {e}");
                 if classify_io_error(&e) {
@@ -893,6 +906,66 @@ mod tests {
         };
 
         assert_eq!(nominal_audio_duration_input_tb(&init), Some(1_024));
+    }
+
+    #[test]
+    fn empty_finish_closes_initialized_files_before_state_is_dropped() {
+        ffmpeg::init().unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "cap-muxer-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut state = State::default();
+        handle_frame(
+            &mut state,
+            Frame::InitVideo(InitVideo {
+                codec: "libx264".into(),
+                width: 640,
+                height: 360,
+                frame_rate_num: 30,
+                frame_rate_den: 1,
+                time_base_num: 1,
+                time_base_den: 90_000,
+                extradata: Vec::new(),
+                segment_duration_ms: 2_000,
+            }),
+        )
+        .unwrap();
+        handle_frame(
+            &mut state,
+            Frame::Start(StartParams {
+                output_directory: directory.to_string_lossy().into_owned(),
+                init_segment_name: "init.mp4".into(),
+                media_segment_pattern: "segment_$Number%03d$.m4s".into(),
+            }),
+        )
+        .unwrap();
+        let init_path = directory.join("init.mp4");
+        assert!(init_path.is_file());
+        state.finish().unwrap();
+        for path in [init_path, directory.join("dash_manifest.mpd")] {
+            let mut options = std::fs::OpenOptions::new();
+            options.read(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.share_mode(0);
+            }
+            let file = options.open(&path).unwrap();
+            assert_eq!(file.metadata().unwrap().len(), 0);
+            drop(file);
+            let renamed = path.with_extension("closed");
+            std::fs::rename(&path, &renamed).unwrap();
+            std::fs::rename(&renamed, &path).unwrap();
+        }
+        assert!(!directory.join("dash_manifest.mpd.tmp").exists());
+        state.finish().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

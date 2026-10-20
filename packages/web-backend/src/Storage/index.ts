@@ -25,6 +25,7 @@ import {
 	getGoogleDriveFileMetadata,
 	getGoogleDriveObjectResponse,
 	getGoogleDriveObjectText,
+	getGoogleDriveRecordingDownload,
 	getGoogleDriveRecordingResponse,
 	parseVideoIdFromObjectKey,
 	syncGoogleDriveVideoNames,
@@ -1030,14 +1031,28 @@ const makeGoogleDriveAccess = ({
 				mapStorageError,
 				Effect.map((url) => toDriveUploadTarget(url, input.contentType)),
 			),
-		getObjectResponse: (
+		getInternalDownload: (
 			key: string,
-			range?: string | null,
-			verification?: GoogleDriveRecordingRead,
+			verification: { objectIdentity?: string; signal?: AbortSignal },
 		) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					verification
+					getGoogleDriveRecordingDownload(
+						config,
+						object.providerObjectId,
+						verification,
+						tokenStore,
+					),
+				),
+			),
+		getObjectResponse: (
+			key: string,
+			range?: string | null,
+			verification?: GoogleDriveRecordingRead | { signal: AbortSignal },
+		) =>
+			getObjectRecord(key).pipe(
+				Effect.flatMap((object) =>
+					verification && "objectIdentity" in verification
 						? getGoogleDriveRecordingResponse(
 								config,
 								object.providerObjectId,
@@ -1046,7 +1061,13 @@ const makeGoogleDriveAccess = ({
 								tokenStore,
 							)
 						: withRecoveredDriveFile(key, object, (fileId) =>
-								getGoogleDriveObjectResponse(config, fileId, range, tokenStore),
+								getGoogleDriveObjectResponse(
+									config,
+									fileId,
+									range,
+									tokenStore,
+									verification?.signal,
+								),
 							),
 				),
 			),
@@ -1087,6 +1108,10 @@ function withPublishedRecordingOutput<
 	};
 	if (access.provider === "googleDrive") {
 		return Object.assign({}, access, shared, {
+			getInternalDownload: (
+				key: string,
+				verification: { objectIdentity?: string; signal?: AbortSignal },
+			) => access.getInternalDownload(resolve(key), verification),
 			getObjectResponse: (
 				key: string,
 				range?: string | null,

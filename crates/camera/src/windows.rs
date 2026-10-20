@@ -29,7 +29,7 @@ impl CameraInfo {
 
         let mut ret = vec![];
 
-        for format in device.formats() {
+        for format in device.into_formats() {
             // Read before `inner` is moved out of `format`.
             let pixel_format = format!("{:?}", format.pixel_format());
             ret.push(Format {

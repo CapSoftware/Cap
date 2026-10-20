@@ -276,6 +276,8 @@ async fn load_recording(
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -298,6 +300,8 @@ async fn load_recording(
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     })
                 })
                 .collect(),
@@ -309,6 +313,8 @@ async fn load_recording(
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
                 scene_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -843,6 +849,12 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300);
     let force_ffmpeg = args.iter().any(|arg| arg == "--force-ffmpeg");
+    // The editor holds a 1ms timer resolution while playing; this measures under the same condition.
+    let timer_1ms = args.iter().any(|arg| arg == "--timer-1ms");
+    #[cfg(target_os = "windows")]
+    if timer_1ms {
+        unsafe { windows::Win32::Media::timeBeginPeriod(1) };
+    }
 
     println!("{}", "=".repeat(60));
     println!("  CAP PLAYBACK PIPELINE BENCHMARK");
@@ -852,6 +864,7 @@ async fn main() {
     println!("Target FPS: {fps}");
     println!("Max frames: {frame_count}");
     println!("Force FFmpeg: {force_ffmpeg}");
+    println!("1ms timer: {timer_1ms}");
     println!();
 
     let (recording_meta, meta, project, recordings) = match load_recording(&recording_path).await {

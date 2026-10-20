@@ -23,6 +23,7 @@ export function HomeTwoPage() {
 	// over them instead.
 	return (
 		<div
+			data-header-flat
 			className={`${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
 			style={grainBg(SHELL)}
 		>

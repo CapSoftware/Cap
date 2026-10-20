@@ -80,6 +80,30 @@ async fn attach_camera_preview_sender(
     result.map_err(|error| error.to_string())
 }
 
+#[cfg(any(target_os = "macos", test))]
+async fn await_current_input_consent(
+    permission: impl std::future::Future<Output = Result<(), String>>,
+    current_epoch: &AtomicU64,
+    epoch: u64,
+) -> Result<(), String> {
+    tokio::pin!(permission);
+    let mut changed = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        if current_epoch.load(Ordering::Acquire) != epoch {
+            return Err("Device selection changed before permission was granted".into());
+        }
+        tokio::select! {
+            _ = changed.tick() => {},
+            result = &mut permission => {
+                if current_epoch.load(Ordering::Acquire) != epoch {
+                    return Err("Device selection changed before permission was granted".into());
+                }
+                return result;
+            }
+        }
+    }
+}
+
 async fn camera_input_operation<T>(
     gate: &tokio::sync::Mutex<()>,
     current_epoch: &AtomicU64,
@@ -91,6 +115,13 @@ async fn camera_input_operation<T>(
         return Ok(None);
     }
     operation.await.map(Some)
+}
+
+fn camera_preview_frame_is_fresh(
+    timestamp: cap_timestamp::Timestamp,
+    ready_at: Option<cap_timestamp::Timestamps>,
+) -> bool {
+    ready_at.is_some_and(|ready_at| timestamp.checked_duration_since(ready_at).is_some())
 }
 
 fn configuration_result(
@@ -618,7 +649,11 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
-            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame { image, dims }) {
+            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame {
+                image,
+                dims,
+                timestamp: frame.timestamp,
+            }) {
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
                 Err(flume::TrySendError::Disconnected(_)) => {
                     #[cfg(target_os = "linux")]
@@ -643,6 +678,7 @@ pub struct Feeds {
     microphone_settings: Option<microphone::MicrophoneDeviceSettings>,
     applied_settings: crate::store::RecordingDeviceSettings,
     camera_input_pending: bool,
+    camera_preview_not_before: Option<cap_timestamp::Timestamps>,
     mic_input_pending: bool,
     mic_input_released: bool,
     microphone_error: Option<String>,
@@ -654,6 +690,7 @@ pub struct Feeds {
     pub microphone: Option<String>,
     /// Rolling 200ms max of the mic level, in dB FS. `-96` when silent/absent.
     pub mic_level_db: f64,
+    mic_level_shown: Arc<std::sync::atomic::AtomicU64>,
     pub camera_error: Option<String>,
     camera_preview_parked: bool,
     /// Bumped on every camera/mic selection change; async completions from a
@@ -676,6 +713,7 @@ pub struct Feeds {
     // Channel-holding tasks; dropping them ends the pumps.
     _frame_pump: Option<gpui::Task<()>>,
     _meter_pump: Option<gpui::Task<()>>,
+    mic_meter_tx: Option<flume::Sender<MicrophoneSamples>>,
     // The mic error channel must outlive the stream (see recording.rs).
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
 }
@@ -692,6 +730,10 @@ struct FeedsGlobal(Entity<Feeds>);
 impl Global for FeedsGlobal {}
 
 impl Feeds {
+    pub fn camera_input_pending(&self) -> bool {
+        self.camera_input_pending
+    }
+
     pub fn init(cx: &mut App) -> Entity<Self> {
         let feeds = cx.new(|_| Self {
             camera_actor: None,
@@ -704,6 +746,7 @@ impl Feeds {
             microphone_settings: None,
             applied_settings: crate::store::RecordingDeviceSettings::default(),
             camera_input_pending: false,
+            camera_preview_not_before: None,
             mic_input_pending: false,
             mic_input_released: false,
             microphone_error: None,
@@ -712,6 +755,7 @@ impl Feeds {
             camera: None,
             microphone: None,
             mic_level_db: -96.0,
+            mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
             camera_error: None,
             camera_preview_parked: false,
             camera_epoch: 0,
@@ -731,6 +775,7 @@ impl Feeds {
             camera_recording_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _frame_pump: None,
             _meter_pump: None,
+            mic_meter_tx: None,
             _mic_errors: None,
         });
         cx.set_global(FeedsGlobal(feeds.clone()));
@@ -768,6 +813,12 @@ impl Feeds {
     pub fn mic_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
         self.microphone.as_ref()?;
         self.mic_actor.clone().filter(|actor| actor.is_alive())
+    }
+
+    /// The level meter's input, for a recording that has to open its own
+    /// microphone feed.
+    pub fn mic_meter(&self) -> Option<flume::Sender<MicrophoneSamples>> {
+        self.mic_meter_tx.clone()
     }
 
     pub fn input_readiness(&self) -> InputReadiness {
@@ -808,6 +859,7 @@ impl Feeds {
                 crate::store::BlurMode::Off => 0,
                 crate::store::BlurMode::Light => 1,
                 crate::store::BlurMode::Heavy => 2,
+                crate::store::BlurMode::Remove => 0,
             },
             Ordering::Relaxed,
         );
@@ -837,6 +889,7 @@ impl Feeds {
         {
             return self.camera_epoch;
         }
+        crate::camera_window::clear_parked_camera_preview(cx);
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
@@ -845,6 +898,7 @@ impl Feeds {
         self.camera_settings = settings;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
+        self.camera_preview_not_before = None;
         self.camera_error = None;
         cx.notify();
 
@@ -859,6 +913,20 @@ impl Feeds {
             }
         }
         self.camera_epoch
+    }
+
+    pub(crate) fn camera_preview_epoch(&self) -> Option<u64> {
+        (self.camera.is_some()
+            && !self.camera_preview_parked
+            && !self.camera_input_pending
+            && self.camera_error.is_none()
+            && self.camera_preview_not_before.is_some())
+        .then_some(self.camera_epoch)
+    }
+
+    pub(crate) fn accepts_camera_preview(&self, timestamp: cap_timestamp::Timestamp) -> bool {
+        self.camera_preview_epoch().is_some()
+            && camera_preview_frame_is_fresh(timestamp, self.camera_preview_not_before)
     }
 
     pub fn camera_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
@@ -885,6 +953,7 @@ impl Feeds {
         }
 
         self.camera_preview_parked = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
         self.camera_epoch += 1;
@@ -924,6 +993,7 @@ impl Feeds {
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
         self.camera_error = None;
         self.camera_input_pending = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         let epoch = self.camera_epoch;
         let settings = self.camera_settings;
@@ -933,6 +1003,15 @@ impl Feeds {
         let current_epoch = self.camera_input_epoch.clone();
         let readiness_epoch = current_epoch.clone();
         let set = gpui_tokio::Tokio::spawn(cx, async move {
+            #[cfg(target_os = "macos")]
+            await_current_input_consent(
+                crate::permissions::ensure_capture_media_permission(
+                    crate::permissions::OSPermission::Camera,
+                ),
+                &current_epoch,
+                epoch,
+            )
+            .await?;
             let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
                 let sender = sender
                     .as_ref()
@@ -975,8 +1054,12 @@ impl Feeds {
                     return;
                 }
                 this.camera_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
-                    Ok(settings) => this.applied_settings.camera = settings.camera,
+                    Ok(settings) => {
+                        this.applied_settings.camera = settings.camera;
+                        this.camera_preview_not_before = Some(cap_timestamp::Timestamps::now());
+                    }
                     Err(error) => {
                         tracing::error!("camera input failed: {error}");
                         this.camera_error = Some(error);
@@ -1043,13 +1126,24 @@ impl Feeds {
         self.microphone_error = None;
         self.mic_input_pending = label.is_some();
         self.mic_input_released = false;
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
         let gate = self.mic_input_gate.clone();
         let current_epoch = self.mic_input_epoch.clone();
         let readiness_epoch = current_epoch.clone();
         let task = gpui_tokio::Tokio::spawn(cx, async move {
+            #[cfg(target_os = "macos")]
+            if label.is_some() {
+                await_current_input_consent(
+                    crate::permissions::ensure_capture_media_permission(
+                        crate::permissions::OSPermission::Microphone,
+                    ),
+                    &current_epoch,
+                    epoch,
+                )
+                .await?;
+            }
             let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
                 if let Some(label) = label {
                     actor
@@ -1093,6 +1187,7 @@ impl Feeds {
                     return;
                 }
                 this.mic_input_pending = false;
+                crate::media_access::MediaAccess::refresh_global(cx);
                 match result {
                     Ok(settings) => this.applied_settings.microphone = settings.microphone,
                     Err(error) => {
@@ -1144,8 +1239,13 @@ impl Feeds {
             })
             .detach();
         }
-        self.mic_level_db = -96.0;
+        self.set_mic_level(-96.0);
         cx.notify();
+    }
+
+    fn set_mic_level(&mut self, db: f64) {
+        self.mic_level_db = db;
+        self.mic_level_shown.store(db.to_bits(), Ordering::Release);
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
@@ -1194,6 +1294,7 @@ impl Feeds {
             let blur = self.camera_preview_blur.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-preview".into())
+                .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
                 .spawn(move || {
                     run_camera_preview_worker(CameraPreviewWorkerConfig {
                         frames: frame_rx,
@@ -1238,6 +1339,7 @@ impl Feeds {
         // Meter channel, attached once for the actor's lifetime -- the same
         // shape as the Tauri `mic_meter_sender`.
         let (meter_tx, meter_rx) = flume::bounded::<MicrophoneSamples>(16);
+        self.mic_meter_tx = Some(meter_tx.clone());
         {
             let actor = actor.clone();
             gpui_tokio::Tokio::spawn(cx, async move {
@@ -1248,36 +1350,31 @@ impl Feeds {
             .detach();
         }
 
-        let pump = cx.spawn(async move |this, cx| {
-            // Port of `audio_meter.rs`: a 200ms max-hold window, coalesced to
-            // ~20 updates/s so the meter does not repaint the window per audio
-            // callback.
-            let mut window_entries: Vec<(Instant, f64)> = Vec::new();
-            let mut last_push = Instant::now() - Duration::from_secs(1);
+        // Port of `audio_meter.rs`. The windowing runs off the main thread so
+        // an audio callback (50-100/s) only wakes the UI when the level it
+        // would draw has changed.
+        let (wake, wakes) = flume::bounded::<()>(1);
+        let latest = Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits()));
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: self.mic_level_shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let meter = cx.background_executor().spawn(async move {
             while let Ok(samples) = meter_rx.recv_async().await {
-                let now = Instant::now();
-                let db = db_fs(&samples);
-                window_entries.push((now, db));
-                window_entries
-                    .retain(|(at, _)| now.duration_since(*at) <= Duration::from_millis(200));
-                if now.duration_since(last_push) < Duration::from_millis(50) {
-                    continue;
-                }
-                last_push = now;
-                let max = window_entries
-                    .iter()
-                    .map(|(_, db)| *db)
-                    .fold(f64::MIN, f64::max);
-                // Quantized to 0.5dB -- under a pixel on both level mappings --
-                // so an unchanged level (a silent or absent signal pins at
-                // -96.0) stops waking every `Feeds` observer and the controls
-                // bar at 20Hz for a bar that would not visibly move.
-                let quantized = (max * 2.0).round() / 2.0;
+                sender.push(Instant::now(), db_fs(&samples));
+            }
+        });
+        let pump = cx.spawn(async move |this, cx| {
+            let _meter = meter;
+            while wakes.recv_async().await.is_ok() {
+                let level = f64::from_bits(latest.load(Ordering::Acquire));
                 let changed = this.update(cx, |this: &mut Feeds, cx| {
-                    if this.mic_level_db == quantized {
+                    if this.mic_level_db == level {
                         return false;
                     }
-                    this.mic_level_db = quantized;
+                    this.set_mic_level(level);
                     cx.notify();
                     true
                 });
@@ -1347,27 +1444,13 @@ pub(crate) fn camera_preview_image(
 
     let width = width as usize;
     let height = height as usize;
-    let row_bytes = width.checked_mul(4)?;
-    let stride = source.stride(0);
-    if stride < row_bytes {
-        return None;
-    }
-    let input = source.data(0);
-    if input.len() < height.checked_mul(stride)? {
-        return None;
-    }
-    let mut pixels = vec![0; height.checked_mul(row_bytes)?];
-    for (row, output) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        let input = &input[row * stride..row * stride + row_bytes];
-        if mirrored {
-            for (destination, source) in output.chunks_exact_mut(4).zip(input.chunks_exact(4).rev())
-            {
-                destination.copy_from_slice(source);
-            }
-        } else {
-            output.copy_from_slice(input);
-        }
-    }
+    let pixels = cap_gpui_kernels::frame::copy_rows(
+        source.data(0),
+        width.checked_mul(4)?,
+        source.stride(0),
+        height,
+        mirrored,
+    )?;
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
     let image = Arc::new(gpui::RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
@@ -1375,36 +1458,91 @@ pub(crate) fn camera_preview_image(
     Some((image, (width, height)))
 }
 
+/// A 200ms max-hold window, coalesced to ~20 updates/s and quantized to
+/// 0.5dB (under a pixel on both level mappings).
+#[derive(Default)]
+struct MeterWindow {
+    entries: Vec<(Instant, f64)>,
+    last_push: Option<Instant>,
+}
+
+impl MeterWindow {
+    fn push(&mut self, now: Instant, db: f64) -> Option<f64> {
+        self.entries.push((now, db));
+        self.entries
+            .retain(|(at, _)| now.saturating_duration_since(*at) <= Duration::from_millis(200));
+        if self
+            .last_push
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_millis(50))
+        {
+            return None;
+        }
+        self.last_push = Some(now);
+        let max = self
+            .entries
+            .iter()
+            .map(|(_, db)| *db)
+            .fold(f64::MIN, f64::max);
+        Some((max * 2.0).round() / 2.0)
+    }
+}
+
+/// Only the newest level is kept, so a UI thread that falls behind draws the
+/// current level rather than a queued one.
+struct MeterSender {
+    window: MeterWindow,
+    shown: Arc<std::sync::atomic::AtomicU64>,
+    latest: Arc<std::sync::atomic::AtomicU64>,
+    wake: flume::Sender<()>,
+}
+
+impl MeterSender {
+    fn push(&mut self, now: Instant, db: f64) {
+        let Some(level) = self.window.push(now, db) else {
+            return;
+        };
+        self.latest.store(level.to_bits(), Ordering::Release);
+        if level.to_bits() != self.shown.load(Ordering::Acquire) {
+            let _ = self.wake.try_send(());
+        }
+    }
+}
+
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
 /// clamped to [-96, 0].
 fn db_fs(samples: &MicrophoneSamples) -> f64 {
-    use cpal::SampleFormat;
+    sample_bytes_db_fs(&samples.data, samples.format)
+}
 
-    let sample_size = samples.format.sample_size();
-    if sample_size == 0 || samples.data.len() < sample_size {
+fn sample_bytes_db_fs(data: &[u8], format: cpal::SampleFormat) -> f64 {
+    use cpal::{Sample, SampleFormat};
+
+    let sample_size = format.sample_size();
+    if sample_size == 0 || data.len() < sample_size {
         return -96.0;
     }
-    let peak = samples
-        .data
+    let peak = data
         .chunks_exact(sample_size)
         .map(|data| {
-            let value: f64 = match samples.format {
+            let value: f64 = match format {
                 SampleFormat::I8 => i8::from_ne_bytes([data[0]]) as f64 / i8::MAX as f64,
-                SampleFormat::U8 => u8::from_ne_bytes([data[0]]) as f64 / u8::MAX as f64 - 0.5,
+                SampleFormat::U8 => u8::from_ne_bytes([data[0]]).to_sample::<f64>(),
                 SampleFormat::I16 => {
                     i16::from_ne_bytes([data[0], data[1]]) as f64 / i16::MAX as f64
                 }
-                SampleFormat::U16 => {
-                    u16::from_ne_bytes([data[0], data[1]]) as f64 / u16::MAX as f64 - 0.5
-                }
+                SampleFormat::U16 => u16::from_ne_bytes([data[0], data[1]]).to_sample::<f64>(),
                 SampleFormat::I32 => {
                     i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
                         / i32::MAX as f64
                 }
                 SampleFormat::U32 => {
-                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
-                        / u32::MAX as f64
-                        - 0.5
+                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]).to_sample::<f64>()
+                }
+                SampleFormat::I64 => {
+                    i64::from_ne_bytes([
+                        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                    ]) as f64
+                        / i64::MAX as f64
                 }
                 SampleFormat::F32 => {
                     f32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
@@ -1422,8 +1560,182 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 }
 
 #[cfg(test)]
+mod meter_tests {
+    use super::sample_bytes_db_fs;
+    use cpal::SampleFormat;
+
+    #[test]
+    fn unsigned_equilibrium_has_minimum_level() {
+        let cases = [
+            (SampleFormat::U8, 128u8.to_ne_bytes().to_vec()),
+            (SampleFormat::U16, 32768u16.to_ne_bytes().to_vec()),
+            (SampleFormat::U32, (1u32 << 31).to_ne_bytes().to_vec()),
+        ];
+        for (format, bytes) in cases {
+            assert_eq!(sample_bytes_db_fs(&bytes, format), -96.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_negative_peaks_have_full_scale_level() {
+        for format in [SampleFormat::U8, SampleFormat::U16, SampleFormat::U32] {
+            assert_eq!(sample_bytes_db_fs(&[0; 8], format), 0.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_half_scale_has_same_level_on_both_sides() {
+        let expected = 20.0 * 0.5f64.log10();
+        assert_eq!(sample_bytes_db_fs(&[64], SampleFormat::U8), expected);
+        assert_eq!(sample_bytes_db_fs(&[192], SampleFormat::U8), expected);
+    }
+
+    #[test]
+    fn i64_microphone_silence_has_minimum_level() {
+        assert_eq!(
+            sample_bytes_db_fs(&0i64.to_ne_bytes(), SampleFormat::I64),
+            -96.0
+        );
+    }
+
+    #[test]
+    fn i64_microphone_peaks_have_correct_level() {
+        let cases = [
+            (i64::MIN, 0.0),
+            (i64::MAX, 0.0),
+            (1i64 << 62, 20.0 * 0.5f64.log10()),
+        ];
+        for (sample, expected) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&sample.to_ne_bytes(), SampleFormat::I64),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn signed_and_float_formats_keep_existing_levels() {
+        let cases = [
+            (
+                SampleFormat::I8,
+                63i8.to_ne_bytes().to_vec(),
+                63.0 / i8::MAX as f64,
+            ),
+            (
+                SampleFormat::I16,
+                16383i16.to_ne_bytes().to_vec(),
+                16383.0 / i16::MAX as f64,
+            ),
+            (
+                SampleFormat::I32,
+                123456i32.to_ne_bytes().to_vec(),
+                123456.0 / i32::MAX as f64,
+            ),
+            (SampleFormat::F32, 0.5f32.to_ne_bytes().to_vec(), 0.5),
+            (SampleFormat::F64, 0.5f64.to_ne_bytes().to_vec(), 0.5),
+        ];
+        for (format, bytes, amplitude) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&bytes, format),
+                20.0 * amplitude.log10(),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_partial_samples_remain_silent() {
+        assert_eq!(sample_bytes_db_fs(&[], SampleFormat::U8), -96.0);
+        assert_eq!(sample_bytes_db_fs(&[128], SampleFormat::U16), -96.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meter_window_coalesces_to_one_update_per_50ms_with_a_200ms_max_hold() {
+        let start = Instant::now();
+        let mut window = MeterWindow::default();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        assert_eq!(window.push(at(0), -20.2), Some(-20.0));
+        assert_eq!(window.push(at(10), -10.0), None);
+        assert_eq!(window.push(at(49), -30.0), None);
+        assert_eq!(window.push(at(50), -40.0), Some(-10.0));
+        assert_eq!(window.push(at(205), -50.0), Some(-10.0));
+        assert_eq!(window.push(at(260), -50.0), Some(-50.0));
+    }
+
+    #[test]
+    fn the_meter_wakes_the_ui_for_new_levels_only_and_keeps_the_newest() {
+        use std::sync::atomic::AtomicU64;
+
+        let shown = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let latest = Arc::new(AtomicU64::new((-96.0f64).to_bits()));
+        let (wake, wakes) = flume::bounded(1);
+        let mut sender = MeterSender {
+            window: MeterWindow::default(),
+            shown: shown.clone(),
+            latest: latest.clone(),
+            wake,
+        };
+        let start = Instant::now();
+        let at = |callback: u64| start + Duration::from_micros(callback * 10_667);
+
+        for callback in 0..10 {
+            sender.push(at(callback), -20.0);
+        }
+        for callback in 40..50 {
+            sender.push(at(callback), -30.0);
+        }
+        assert_eq!(wakes.try_recv(), Ok(()));
+        assert!(wakes.try_recv().is_err());
+        assert_eq!(f64::from_bits(latest.load(Ordering::Acquire)), -30.0);
+
+        shown.store((-30.0f64).to_bits(), Ordering::Release);
+        for callback in 50..150 {
+            sender.push(at(callback), -30.0);
+        }
+        assert!(wakes.try_recv().is_err());
+    }
+
+    #[test]
+    fn preview_rejects_frames_queued_before_input_readiness() {
+        let ready = cap_timestamp::Timestamps::now();
+        let queued = ready
+            .instant()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(queued),
+            Some(ready)
+        ));
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            None
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            Some(ready)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preview_checks_native_camera_capture_clock() {
+        let ready = cap_timestamp::Timestamps::now();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
+                0
+            )),
+            Some(ready)
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now()),
+            Some(ready)
+        ));
+    }
 
     #[tokio::test]
     async fn same_device_format_change_discards_queued_previous_configuration() {
@@ -1839,5 +2151,90 @@ mod tests {
         let (_, recapped) =
             camera_preview_image(&frame, &mut scaler, false, Some((16, 16))).unwrap();
         assert_eq!(recapped, (16, 8));
+    }
+}
+
+#[cfg(test)]
+mod capture_consent_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stale_selection_never_starts_a_permission_request() {
+        let epoch = AtomicU64::new(2);
+        let result = await_current_input_consent(
+            async {
+                panic!("An obsolete selection must not request permission");
+            },
+            &epoch,
+            1,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("selection changed"));
+    }
+
+    #[tokio::test]
+    async fn disabled_selection_cancels_while_consent_is_unanswered() {
+        let epoch = AtomicU64::new(1);
+        let (send, receive) = tokio::sync::oneshot::channel::<()>();
+        let wait = await_current_input_consent(
+            async { receive.await.map_err(|error| error.to_string()) },
+            &epoch,
+            1,
+        );
+        tokio::pin!(wait);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        epoch.store(2, Ordering::Release);
+        let result = tokio::time::timeout(Duration::from_millis(250), &mut wait)
+            .await
+            .unwrap();
+        assert!(result.unwrap_err().contains("selection changed"));
+        assert!(send.send(()).is_err());
+    }
+
+    #[tokio::test]
+    async fn grant_arriving_with_reselection_cannot_revive_old_device() {
+        let epoch = AtomicU64::new(1);
+        let result = await_current_input_consent(
+            async {
+                epoch.store(2, Ordering::Release);
+                Ok(())
+            },
+            &epoch,
+            1,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("selection changed"));
+        assert!(
+            await_current_input_consent(async { Ok(()) }, &epoch, 2)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_wait_leaves_device_operations_unlocked() {
+        let epoch = AtomicU64::new(1);
+        let gate = tokio::sync::Mutex::new(());
+        let (send, receive) = tokio::sync::oneshot::channel::<()>();
+        let configure = async {
+            await_current_input_consent(
+                async { receive.await.map_err(|error| error.to_string()) },
+                &epoch,
+                1,
+            )
+            .await?;
+            camera_input_operation(&gate, &epoch, 1, async { Ok(()) }).await
+        };
+        tokio::pin!(configure);
+        assert!(futures_util::poll!(&mut configure).is_pending());
+        let remove = tokio::time::timeout(
+            Duration::from_millis(50),
+            camera_input_operation(&gate, &epoch, 1, async { Ok(()) }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(remove.unwrap(), Some(()));
+        send.send(()).unwrap();
+        assert_eq!(configure.await.unwrap(), Some(()));
     }
 }

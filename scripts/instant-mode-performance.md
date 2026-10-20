@@ -11,11 +11,11 @@ or executed by its production runtime.
 
 ## Files
 
-| File | Purpose |
-|---|---|
+| File                                | Purpose                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------- |
 | `instant-mode-performance-macos.py` | Orchestrates profiling runs, records phase metrics, and validates recording output |
-| `instant-mode-process-sampler.c` | Samples CPU, memory, energy, I/O, wakeups, syscalls, and related process counters |
-| `instant-mode-action-macos.swift` | Sends debug actions to the running app and reads its macOS window state |
+| `instant-mode-process-sampler.c`    | Samples CPU, memory, energy, I/O, wakeups, syscalls, and related process counters  |
+| `instant-mode-action-macos.swift`   | Sends debug actions to the running app and reads its macOS window state            |
 
 The Python harness compiles the C and Swift helpers into the selected artifact
 directory. Compiled helper binaries are not written to the repository.
@@ -83,8 +83,34 @@ location. The directory contains:
 - `run-*/result.json` with media and lifecycle validation
 - `summary.json` with medians and ranges across repetitions
 
+`prepared.json` includes executable SHA-256 hashes and checkout status. The
+checkout commit alone does not establish the running binary's source revision;
+verify the build identity before comparing runs and keep builds idle while sampling.
+
 Compare builds with identical targets, phase durations, preview settings, and
 repetition counts. Use at least three warmed repetitions and compare the
 `recording` aggregates in `summary.json`. Confirm output resolution, frame rate,
 audio, frame drops, upload completion, and validation errors before accepting a
 performance change.
+
+Process totals include Cap, its associated WebKit processes, and descendants such
+as the separate muxer. Shared macOS camera and encoder services are not attributed
+to Cap by this sampler. CPU percentages use one fully occupied core as 100%.
+Physical footprint totals sum per-process values and can include shared pages.
+
+CPU averages include the first sampled interval and weight intervals by elapsed
+time. Cumulative counter rates, including disk writes and wakeups, use the time
+between the first and last rows; `counter_elapsed_seconds` records that window.
+A single row cannot establish a cumulative counter rate.
+
+Phases with missing process samples or changed process membership are marked
+`valid_for_comparison: false` and excluded from comparison aggregates. Inspect
+their raw samples when studying startup or shutdown, where processes can appear
+or exit during a phase. A stable process list does not prove that a workload or
+foreground capture target stayed unchanged.
+
+Run the profiler's measurement regression tests with:
+
+```bash
+python3 -B scripts/test-instant-mode-performance.py
+```

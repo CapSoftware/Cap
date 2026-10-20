@@ -34,9 +34,9 @@ use cap_project::{
 use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, RenderImage, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, WindowHandle, div, img,
-    prelude::FluentBuilder, px, svg,
+    ParentElement, Pixels, Point, RenderImage, SharedString, StatefulInteractiveElement as _,
+    Styled, StyledImage as _, UniformListScrollHandle, Window, WindowHandle, div, img,
+    prelude::FluentBuilder, px, svg, uniform_list,
 };
 
 use crate::{
@@ -176,7 +176,7 @@ pub(crate) fn transitions_after_clip_move(
 }
 
 /// `rippleTimelineTrack` (`ED/clip-transitions.ts:208-221`).
-fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) {
+pub(crate) fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) {
     for item in track {
         if item.start() >= boundary {
             item.set_start(item.start() + shift);
@@ -185,6 +185,63 @@ fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) 
             item.set_end(item.start().max(item.end() + shift));
         }
     }
+}
+
+pub(crate) fn ripple_keyboard_track(
+    track: &mut [cap_project::KeyboardTrackSegment],
+    boundary: f64,
+    shift: f64,
+) {
+    for segment in track {
+        if segment.end <= boundary {
+            continue;
+        }
+        segment.remap_times(|time| if time >= boundary { time + shift } else { time });
+    }
+}
+
+/// Removes the transition on `segment_index`'s leading boundary and ripples
+/// every other track past it by the overlap the transition gave back, so
+/// nothing downstream shifts under the user (`setClipTransition(index, null)`,
+/// `ED/context.ts`). Returns false when there was no effective transition.
+pub(crate) fn drop_clip_transition(
+    timeline: &mut TimelineConfiguration,
+    segment_index: usize,
+) -> bool {
+    let Some(effective) = timeline.effective_transition(segment_index) else {
+        timeline
+            .transitions
+            .retain(|candidate| candidate.segment_index as usize != segment_index);
+        return false;
+    };
+    let boundary = clip_timeline_offsets(timeline)
+        .get(segment_index)
+        .copied()
+        .unwrap_or(0.)
+        + effective.duration;
+    let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
+    timeline
+        .transitions
+        .retain(|candidate| candidate.segment_index as usize != segment_index);
+    ripple_track(&mut timeline.style_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.image_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.text_segments, boundary, effective.duration);
+    ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
+    ripple_track(
+        &mut timeline.camera3d_segments,
+        boundary,
+        effective.duration,
+    );
+    ripple_keyboard_track(
+        &mut timeline.keyboard_segments,
+        boundary,
+        effective.duration,
+    );
+    ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
+    true
 }
 
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
@@ -216,30 +273,7 @@ pub(crate) fn move_clip(
     dropped.sort_by_key(|transition| std::cmp::Reverse(transition.segment_index));
 
     for transition in &dropped {
-        let Some(effective) = timeline.effective_transition(transition.segment_index as usize)
-        else {
-            continue;
-        };
-        let boundary = clip_timeline_offsets(timeline)
-            .get(transition.segment_index as usize)
-            .copied()
-            .unwrap_or(0.)
-            + effective.duration;
-        timeline
-            .transitions
-            .retain(|candidate| candidate.segment_index != transition.segment_index);
-        // The source ripples these seven tracks and no others (`:672-682`).
-        ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.text_segments, boundary, effective.duration);
-        ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-        ripple_track(
-            &mut timeline.keyboard_segments,
-            boundary,
-            effective.duration,
-        );
-        ripple_track(&mut timeline.audio_segments, boundary, effective.duration);
+        drop_clip_transition(timeline, transition.segment_index as usize);
     }
 
     timeline.segments = proposed;
@@ -249,12 +283,11 @@ pub(crate) fn move_clip(
 
 /// `computeDropIndex` (`ClipsSidebar.tsx:692-703`): the insertion point is
 /// after every card whose vertical midpoint the pointer has passed.
-pub(crate) fn compute_drop_index(pointer_y: Pixels, cards: &[Option<Bounds<Pixels>>]) -> usize {
-    let mut insertion = 0;
-    for (index, bounds) in cards.iter().enumerate() {
-        let Some(bounds) = bounds else { continue };
-        if pointer_y > bounds.origin.y + bounds.size.height / 2. {
-            insertion = index + 1;
+fn compute_drop_index(pointer_y: Pixels, cards: &[ClipCardBounds]) -> usize {
+    let mut insertion = cards.first().map_or(0, |card| card.index);
+    for card in cards {
+        if pointer_y > card.bounds.origin.y + card.bounds.size.height / 2. {
+            insertion = card.index + 1;
         }
     }
     insertion
@@ -262,6 +295,7 @@ pub(crate) fn compute_drop_index(pointer_y: Pixels, cards: &[Option<Bounds<Pixel
 
 /// `startClipDrag`'s activation threshold (`:729`).
 const DRAG_THRESHOLD_PX: f32 = 5.;
+const CLIP_CARD_GAP: f32 = 8.;
 
 // ---------------------------------------------------------------------------
 // State
@@ -276,6 +310,11 @@ enum ClipThumb {
     Loading,
     Ready(Arc<RenderImage>),
     Failed,
+}
+
+struct ClipCardBounds {
+    index: usize,
+    bounds: Bounds<Pixels>,
 }
 
 /// `MAX_THUMBNAIL_LOADS` (`:93`).
@@ -311,10 +350,9 @@ pub(crate) struct ClipsState {
     drag: Option<ClipDrag>,
     /// `dropIndex`.
     drop_index: Option<usize>,
-    /// Every card's painted bounds, written by a per-card canvas probe --
-    /// `getBoundingClientRect` for `computeDropIndex`.
-    card_bounds: Rc<RefCell<Vec<Option<Bounds<Pixels>>>>>,
-    scroll: ScrollHandle,
+    /// Visible card bounds retain timeline indices for scrolled drop targets.
+    card_bounds: Rc<RefCell<Vec<ClipCardBounds>>>,
+    scroll: UniformListScrollHandle,
     thumbs: HashMap<ThumbKey, ClipThumb>,
     thumbs_inflight: usize,
 }
@@ -333,7 +371,7 @@ impl Default for ClipsState {
             drag: None,
             drop_index: None,
             card_bounds: Rc::new(RefCell::new(Vec::new())),
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
             thumbs: HashMap::new(),
             thumbs_inflight: 0,
         }
@@ -343,6 +381,11 @@ impl Default for ClipsState {
 impl ClipsState {
     pub(crate) fn is_importing(&self) -> bool {
         self.importing
+    }
+
+    /// The clip whose name is being edited, and the input holding the draft.
+    pub(crate) fn rename_in_progress(&self) -> Option<(usize, Entity<ui::TextInputState>)> {
+        Some((self.editing?, self.rename_input.clone()?))
     }
 }
 
@@ -399,19 +442,17 @@ impl EditorWindow {
     /// The Clips toggle (`Header.tsx:173-187`): `Button variant={open ?
     /// "white" : "gray"}` at `flex gap-1.5 justify-center h-[40px]`, clearing
     /// the timeline selection on every press.
-    pub(crate) fn render_clips_pill(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = if self.clips.open {
-            ui::ButtonVariant::White
-        } else {
-            ui::ButtonVariant::Gray
-        };
-        ui::Button::plain(&self.theme, "clips-pill", variant, ui::ButtonSize::Md)
-            .icon("icons/clapperboard.svg")
-            .label("Clips")
+    pub(crate) fn render_clips_pill(
+        &self,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        ui::EditorButton::plain(&self.theme, "clips-pill")
+            .left_icon("icons/clapperboard.svg")
+            .when(!compact, |button| button.label("Clips"))
+            .tooltip(&self.theme, "Clips")
+            .pressed(self.clips.open)
             .disabled(!self.project_ready())
-            .height(px(40.))
-            .radius(px(12.))
-            .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
     }
 
@@ -495,7 +536,12 @@ impl EditorWindow {
     /// focus-and-select the source does through `requestAnimationFrame`. A
     /// rename already live on another card commits first -- in the DOM the
     /// old input blurs before the new one mounts.
-    fn start_clip_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_clip_rename(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.clips.editing.is_some_and(|editing| editing != index) {
             self.commit_clip_rename(window, cx);
         }
@@ -525,20 +571,12 @@ impl EditorWindow {
         let Some(input) = self.clips.rename_input.clone() else {
             return;
         };
-        let value = input.read(cx).text().trim().to_string();
-        let name = (!value.is_empty()).then_some(value);
+        let value = input.read(cx).text().to_string();
         self.edit_project("clip-rename", window, cx, move |project| {
-            let Some(timeline) = project.timeline.as_mut() else {
-                return false;
-            };
-            let Some(segment) = timeline.segments.get_mut(index) else {
-                return false;
-            };
-            if segment.name == name {
-                return false;
-            }
-            segment.name = name;
-            true
+            project
+                .timeline
+                .as_mut()
+                .is_some_and(|timeline| edits::set_clip_name(timeline, index, &value))
         });
         cx.notify();
     }
@@ -569,7 +607,12 @@ impl EditorWindow {
     /// `deleteClip`: `projectActions.deleteClipSegment(index)`, whose maths
     /// already lives in [`edits::delete_clip_segments`] -- one undo entry,
     /// selection cleared, last clip protected.
-    fn delete_clip(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn delete_clip(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.clip_segments().len() < 2 {
             return;
         }
@@ -657,78 +700,51 @@ impl EditorWindow {
 
     // -- Thumbnails ------------------------------------------------------------
 
-    /// Queue background decodes for every card without a picture, at most
-    /// [`MAX_THUMBNAIL_LOADS`] in flight -- each completion notifies, which
-    /// re-runs this and pulls the next one off the "queue".
-    fn request_clip_thumbnails(&mut self, cx: &mut Context<Self>) {
-        let wanted: Vec<(ThumbKey, f64)> = self
-            .clip_segments()
-            .iter()
-            .map(|segment| {
-                (
-                    (
-                        segment.recording_clip,
-                        (segment.start * 1000.0).round() as i64,
-                    ),
-                    segment.start,
-                )
-            })
-            .collect();
-        for (key, start) in wanted {
-            if self.clips.thumbs_inflight >= MAX_THUMBNAIL_LOADS {
-                break;
-            }
-            if self.clips.thumbs.contains_key(&key) {
-                continue;
-            }
-            self.clips.thumbs.insert(key, ClipThumb::Loading);
-            self.clips.thumbs_inflight += 1;
-            let project_path = self.project_path.clone();
-            cx.spawn(async move |this, cx| {
-                let decoded = cx
-                    .background_executor()
-                    .spawn(async move { decode_clip_thumbnail(&project_path, key.0, start) })
-                    .await;
-                this.update(cx, |this, cx| {
-                    this.clips.thumbs_inflight = this.clips.thumbs_inflight.saturating_sub(1);
-                    let entry = match decoded {
-                        Ok(image) => ClipThumb::Ready(image),
-                        Err(error) => {
-                            tracing::warn!(
-                                segment = key.0,
-                                start_ms = key.1,
-                                "clip thumbnail decode failed: {error}"
-                            );
-                            ClipThumb::Failed
-                        }
-                    };
-                    this.clips.thumbs.insert(key, entry);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
+    fn request_clip_thumbnail(&mut self, key: ThumbKey, start: f64, cx: &mut Context<Self>) {
+        if self.clips.thumbs_inflight >= MAX_THUMBNAIL_LOADS || self.clips.thumbs.contains_key(&key)
+        {
+            return;
         }
+        self.clips.thumbs.insert(key, ClipThumb::Loading);
+        self.clips.thumbs_inflight += 1;
+        let project_path = self.project_path.clone();
+        cx.spawn(async move |this, cx| {
+            let decoded = cx
+                .background_executor()
+                .spawn(async move { decode_clip_thumbnail(&project_path, key.0, start) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.clips.thumbs_inflight = this.clips.thumbs_inflight.saturating_sub(1);
+                let entry = match decoded {
+                    Ok(image) => ClipThumb::Ready(image),
+                    Err(error) => {
+                        tracing::warn!(
+                            segment = key.0,
+                            start_ms = key.1,
+                            "clip thumbnail decode failed: {error}"
+                        );
+                        ClipThumb::Failed
+                    }
+                };
+                this.clips.thumbs.insert(key, entry);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- The sidebar ------------------------------------------------------------
 
     /// The whole clips column, drawn in the config sidebar's slot while the
-    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries
-    /// (`Editor.tsx:728`); the card itself is `flex flex-col flex-1 min-h-0
-    /// rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3
-    /// overflow-hidden` (`ClipsSidebar.tsx:791-797`).
+    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
+    /// the same card.
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        self.request_clip_thumbnails(cx);
-        let theme = self.theme;
-
         div()
-            .ml(px(8.))
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
             .flex_none()
             .flex()
             .min_h_0()
-            .overflow_hidden()
             .child(
                 div()
                     .flex()
@@ -738,8 +754,9 @@ impl EditorWindow {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
+                    .border_color(self.card_line())
                     .bg(self.panel_bg())
+                    .shadow(self.theme.editor.card_shadow())
                     .child(self.render_clips_back_header(cx))
                     .child(self.render_clips_body(cx)),
             )
@@ -756,22 +773,23 @@ impl EditorWindow {
             .flex_row()
             .items_center()
             .gap(px(8.))
-            .px(px(16.))
+            .px(px(12.))
             .w_full()
-            .h(px(64.))
+            .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
             .rounded_t(px(11.))
             .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .text_size(px(14.))
+            .border_color(Hsla::from(theme.editor.line))
+            .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.gray_12))
-            .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+            .text_color(Hsla::from(theme.editor.text_1))
+            .cursor_pointer()
+            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
             .child(
                 svg()
                     .path("icons/move-left.svg")
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
+                    .text_color(Hsla::from(theme.editor.text_2)),
             )
             .child("Back to editor")
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
@@ -891,12 +909,16 @@ impl EditorWindow {
                     .min_h_0()
                     .mx(px(-4.))
                     .px(px(4.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.clips.scroll)
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .when(self.clip_segments().is_empty(), |this| {
+                        this.overflow_y_scroll()
+                    })
                     .child(if self.clip_segments().is_empty() {
                         self.render_clips_empty().into_any_element()
                     } else {
-                        self.render_clip_list(cx).into_any_element()
+                        self.render_clip_list(cx)
                     }),
             )
     }
@@ -945,15 +967,49 @@ impl EditorWindow {
     }
 
     /// The card list (`:852-964`).
-    fn render_clip_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_clip_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let count = self.clip_segments().len();
-        self.clips.card_bounds.borrow_mut().resize(count, None);
+        self.clips.card_bounds.borrow_mut().clear();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .children((0..count).map(|index| self.render_clip_card(index, cx)))
+        // Offscreen virtual rows lose their key handlers. Keep the rename input
+        // mounted until editing ends so Enter and Escape still reach it.
+        if self.clips.editing.is_some() {
+            let scroll = self.clips.scroll.0.borrow().base_handle.clone();
+            return div()
+                .id("clips-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&scroll)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(CLIP_CARD_GAP))
+                        .children((0..count).map(|index| self.render_clip_card(index, cx))),
+                )
+                .into_any_element();
+        }
+
+        uniform_list(
+            "clips-list",
+            count,
+            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                range
+                    .map(|index| {
+                        div()
+                            .pb(px(CLIP_CARD_GAP))
+                            .child(this.render_clip_card(index, cx))
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(&self.clips.scroll)
+        .flex_1()
+        .min_h_0()
+        // Clip the last row's gap so the scroll range matches the original list.
+        .mb(px(-CLIP_CARD_GAP))
+        .into_any_element()
     }
 
     fn render_clip_card(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -986,11 +1042,17 @@ impl EditorWindow {
         let group: SharedString = SharedString::from(format!("clip-card-{index}"));
         let probe = {
             let cell = self.clips.card_bounds.clone();
+            let editor = cx.weak_entity();
+            let start = segment.start;
             gpui::canvas(
-                move |bounds, _window, _cx| {
-                    let mut slots = cell.borrow_mut();
-                    if index < slots.len() {
-                        slots[index] = Some(bounds);
+                move |bounds, window, cx| {
+                    cell.borrow_mut().push(ClipCardBounds { index, bounds });
+                    if bounds.intersects(&window.content_mask().bounds) {
+                        editor
+                            .update(cx, |editor, cx| {
+                                editor.request_clip_thumbnail(thumb_key, start, cx);
+                            })
+                            .ok();
                     }
                 },
                 |_, _, _, _| {},
@@ -1479,7 +1541,7 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             // Blocking modal, so from a spawned task with no borrow held --
             // the `save_file_panel` rule.
-            let Some(path) = pick_existing_recording_path() else {
+            let Some(path) = pick_existing_recording_path(cx).await else {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
@@ -1497,7 +1559,10 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "macos")]
             let source = crate::platform::open_image_panel(&["mp4"]);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            let source =
+                crate::platform::open_file_panel_async(&[("MP4 Video", &["mp4"])], None, cx).await;
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let source = rfd::FileDialog::new()
                 .add_filter("MP4 Video", &["mp4"])
                 .pick_file();
@@ -1599,6 +1664,7 @@ impl EditorWindow {
         let (send, receive) = flume::bounded(1);
         let worker = std::thread::Builder::new()
             .name("cap-editor-import".to_string())
+            .stack_size(crate::MEDIA_THREAD_STACK_SIZE)
             .spawn(move || {
                 let result = PreparedMp4Import::prepare(
                     &target,
@@ -1928,6 +1994,8 @@ impl PreparedMp4Import {
             end: self.duration,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
         config.validate().map_err(|error| error.to_string())?;
@@ -1985,12 +2053,21 @@ impl PreparedMp4Import {
 /// a `.cap` filter on macOS (bundles are packages there), a directory picker
 /// on Windows, both rooted at the recordings directory where the dialog
 /// supports one.
-fn pick_existing_recording_path() -> Option<PathBuf> {
+async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         crate::platform::open_image_panel(&["cap"])
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::open_file_panel_async(
+            &[("Cap Recording", &["cap"])],
+            Some(crate::recording::recordings_dir()),
+            _cx,
+        )
+        .await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
@@ -2029,7 +2106,7 @@ fn show_append_error(message: &str) {
 
 /// 96px cards at 2x (`w-24` at `ClipsSidebar.tsx:881`).
 const THUMB_MAX_WIDTH: u32 = 192;
-const SEEK_DECODE_PACKET_LIMIT: usize = 240;
+const SEEK_DECODE_PACKET_LIMIT: usize = 4096;
 
 fn decode_clip_thumbnail(
     project_path: &Path,
@@ -2055,6 +2132,20 @@ fn decode_clip_thumbnail(
 }
 
 fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, String> {
+    decode_thumbnail_frame_with_budget(
+        input,
+        time,
+        SEEK_DECODE_PACKET_LIMIT,
+        std::time::Duration::from_secs(2),
+    )
+}
+
+fn decode_thumbnail_frame_with_budget(
+    input: &Path,
+    time: f64,
+    packet_limit: usize,
+    timeout: std::time::Duration,
+) -> Result<Arc<RenderImage>, String> {
     use ffmpeg::rescale::{Rescale, TIME_BASE};
 
     let mut ictx =
@@ -2065,6 +2156,14 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         .best(ffmpeg::media::Type::Video)
         .ok_or("No video stream found")?;
     let stream_index = stream.index();
+    let stream_time_base = stream.time_base();
+    let stream_start = match stream.start_time() {
+        ffmpeg::ffi::AV_NOPTS_VALUE => 0,
+        timestamp => timestamp,
+    };
+    let target_timestamp = ((time * 1_000_000.0) as i64)
+        .rescale((1, 1_000_000), stream_time_base)
+        .saturating_add(stream_start);
 
     let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| e.to_string())?
@@ -2097,17 +2196,24 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
 
     if time > 0.0 {
         let position_us = (time * 1_000_000.0) as i64;
-        let seek_target = position_us.rescale((1, 1_000_000), TIME_BASE);
+        let seek_target = target_timestamp.rescale(stream_time_base, TIME_BASE);
         decoder.flush();
         ictx.seek(seek_target, ..seek_target)
             .map_err(|e| format!("Failed to seek to {position_us}us: {e}"))?;
     }
 
     let mut frame = ffmpeg::frame::Video::empty();
+    let mut decoded = ffmpeg::frame::Video::empty();
     let mut got_frame = false;
+    let mut reached_target = false;
+    let mut decoder_finished = false;
     let mut packets_tried = 0usize;
+    let decode_started = std::time::Instant::now();
 
     'outer: for (packet_stream, packet) in ictx.packets() {
+        if decode_started.elapsed() >= timeout {
+            return Err("Thumbnail decode time budget exhausted".to_string());
+        }
         if packet_stream.index() != stream_index {
             continue;
         }
@@ -2115,43 +2221,62 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         packets_tried += 1;
 
         if decoder.send_packet(&packet).is_err() {
-            if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                break;
+            if packets_tried >= packet_limit {
+                return Err("Thumbnail decode packet budget exhausted".to_string());
             }
             continue;
         }
 
-        match decoder.receive_frame(&mut frame) {
-            Ok(()) => {
-                got_frame = true;
-                break 'outer;
+        loop {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
             }
-            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {}
-            Err(ffmpeg::Error::Eof) => break 'outer,
-            Err(e) => {
-                if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                    return Err(format!("Failed to decode frame: {e}"));
+            match decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
+                    got_frame = true;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        reached_target = true;
+                        break 'outer;
+                    }
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(ffmpeg::Error::Eof) => {
+                    decoder_finished = true;
+                    break 'outer;
+                }
+                Err(e) => {
+                    if packets_tried >= packet_limit {
+                        return Err(format!("Failed to decode frame: {e}"));
+                    }
+                    break;
                 }
             }
         }
 
-        if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-            break;
+        if packets_tried >= packet_limit {
+            return Err("Thumbnail decode packet budget exhausted".to_string());
         }
     }
 
-    if !got_frame {
+    if !reached_target && !decoder_finished {
         decoder
             .send_eof()
             .map_err(|e| format!("Failed to flush decoder: {e}"))?;
         loop {
-            match decoder.receive_frame(&mut frame) {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
+            }
+            match decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
                     got_frame = true;
-                    break;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        break;
+                    }
                 }
                 Err(ffmpeg::Error::Eof) => break,
-                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
                 Err(e) => return Err(format!("Failed to flush decoder: {e}")),
             }
         }
@@ -2175,16 +2300,27 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
             "Unexpected BGRA stride: src_stride={src_stride}, expected >= {dst_stride}"
         ));
     }
-    let mut buffer = vec![0u8; height * dst_stride];
-    for (y, row) in buffer.chunks_exact_mut(dst_stride).enumerate() {
-        row.copy_from_slice(&bgra_frame.data(0)[y * src_stride..y * src_stride + dst_stride]);
-    }
+    let buffer = cap_gpui_kernels::frame::copy_rows(
+        bgra_frame.data(0),
+        dst_stride,
+        src_stride,
+        height,
+        false,
+    )
+    .ok_or_else(|| "Failed to build thumbnail image".to_string())?;
 
     let image = image::RgbaImage::from_raw(width as u32, height as u32, buffer)
         .ok_or("Failed to build thumbnail image")?;
     Ok(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
     ])))
+}
+
+fn thumbnail_frame_reaches_target(frame: &ffmpeg::frame::Video, target_timestamp: i64) -> bool {
+    frame
+        .timestamp()
+        .or_else(|| frame.pts())
+        .is_none_or(|timestamp| timestamp >= target_timestamp)
 }
 
 // ---------------------------------------------------------------------------
@@ -2342,6 +2478,8 @@ fn full_timeline_for_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -2365,6 +2503,8 @@ fn ensure_project_timeline<'a>(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
         });
     }
 
@@ -2935,6 +3075,8 @@ fn full_timeline_for_source_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
         })
         .collect()
@@ -3023,7 +3165,9 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
-            speed_audio_mode: None,
+            speed_audio_mode: segment.speed_audio_mode,
+            hide_cursor: segment.hide_cursor,
+            volume: segment.volume,
         });
     }
 
@@ -3254,6 +3398,8 @@ pub(crate) fn append_cap_project_to_editor(
                 end: source_segment.end,
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
+                hide_cursor: source_segment.hide_cursor,
+                volume: source_segment.volume,
             });
         }
     }
@@ -3274,6 +3420,62 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[test]
+    fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-gop.mp4"
+        ));
+        for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[expected_channel] > 100,
+                "requested {time}s, got {pixel:?}"
+            );
+            for (channel, value) in pixel[..3].iter().enumerate() {
+                if channel != expected_channel {
+                    assert!(*value < 20, "requested {time}s, got {pixel:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_gop_thumbnails_reach_requested_time_and_preserve_eof_fallback() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for time in [8.5, 10.0, 11.0] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[0] > 100 && pixel[1] < 20 && pixel[2] < 20,
+                "requested {time}s, got {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_decode_budget_does_not_return_partial_thumbnail() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for (packet_limit, timeout, expected_error) in [
+            (240, std::time::Duration::from_secs(2), "packet budget"),
+            (
+                SEEK_DECODE_PACKET_LIMIT,
+                std::time::Duration::ZERO,
+                "time budget",
+            ),
+        ] {
+            let result =
+                decode_thumbnail_frame_with_budget(&fixture.source, 8.5, packet_limit, timeout);
+            assert!(result.unwrap_err().contains(expected_error));
+        }
+    }
 
     const MP4_WITHOUT_AUDIO: &[u8] =
         include_bytes!("../../media-server/src/__tests__/fixtures/test-no-audio.mp4");
@@ -3637,6 +3839,8 @@ mod tests {
             end,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         }
     }
 
@@ -3791,30 +3995,144 @@ mod tests {
             edge_snap_ratio: 0.25,
         }];
 
+        config.style_segments.push(cap_project::StyleSegment {
+            start: 15.,
+            end: 18.,
+            ..Default::default()
+        });
+        config.image_segments.push(cap_project::ImageSegment {
+            start: 15.,
+            end: 18.,
+            path: "content/images/retained.png".into(),
+            ..Default::default()
+        });
+        config.text_segments = serde_json::from_value(serde_json::json!([{
+            "start": 10.0,
+            "end": 12.0,
+            "track": 0,
+            "content": "Hold",
+            "layout": "fullscreen"
+        }]))
+        .unwrap();
+        config.keyboard_segments = serde_json::from_value(serde_json::json!([
+            {
+                "id": "before-boundary",
+                "start": 11.0,
+                "end": 12.0,
+                "displayText": "a",
+                "keys": [{ "key": "a", "timeOffset": 500.0 }]
+            },
+            {
+                "id": "spanning-boundary",
+                "start": 11.0,
+                "end": 13.0,
+                "displayText": "bc",
+                "keys": [
+                    { "key": "b", "timeOffset": 500.0 },
+                    { "key": "c", "timeOffset": 1500.0 }
+                ]
+            }
+        ]))
+        .unwrap();
+        config.camera3d_segments = [(2.0, 4.0), (11.0, 15.0), (15.0, 18.0)]
+            .into_iter()
+            .map(|(start, end)| {
+                serde_json::from_value(serde_json::json!({
+                    "start": start,
+                    "end": end,
+                    "tracks": { "zoom": [
+                        { "time": 0.0, "value": 1.0 },
+                        { "time": (end - start) / 2.0, "value": 1.5 },
+                        { "time": end - start, "value": 2.0 }
+                    ] }
+                }))
+                .unwrap()
+            })
+            .collect();
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
         assert!(config.transitions.is_empty());
         assert_eq!(config.zoom_segments[0].start, 16.0);
         assert_eq!(config.zoom_segments[0].end, 19.0);
+        assert_eq!(
+            (config.style_segments[0].start, config.style_segments[0].end),
+            (16., 19.)
+        );
+        assert_eq!(
+            (config.image_segments[0].start, config.image_segments[0].end),
+            (16., 19.)
+        );
+        assert_eq!(
+            (
+                config.keyboard_segments[0].start,
+                config.keyboard_segments[0].end,
+                config.keyboard_segments[0].keys[0].time_offset,
+            ),
+            (11.0, 12.0, 500.0)
+        );
+        assert_eq!(
+            (
+                config.keyboard_segments[1].start,
+                config.keyboard_segments[1].end,
+            ),
+            (11.0, 14.0)
+        );
+        assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
+        assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
+        for (shot, (start, end)) in
+            config
+                .camera3d_segments
+                .iter()
+                .zip([(2.0, 4.0), (11.0, 16.0), (16.0, 19.0)])
+        {
+            assert_eq!((shot.start, shot.end), (start, end));
+            for (keyframe, (time, value)) in shot.tracks.zoom.iter().zip([
+                (0.0, 1.0),
+                ((end - start) / 2.0, 1.5),
+                (end - start, 2.0),
+            ]) {
+                assert!((keyframe.time - time).abs() < 1e-9);
+                assert_eq!(keyframe.value, value);
+            }
+        }
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every
     /// card whose midpoint the pointer has passed.
     #[test]
     fn drop_index_follows_the_card_midpoints() {
-        let card = |top: f32| {
-            Some(Bounds {
+        let card = |index, top: f32| ClipCardBounds {
+            index,
+            bounds: Bounds {
                 origin: point(px(0.), px(top)),
                 size: size(px(100.), px(72.)),
-            })
+            },
         };
-        let cards = vec![card(0.), card(80.), card(160.)];
+        let cards = vec![card(0, 0.), card(1, 80.), card(2, 160.)];
         assert_eq!(compute_drop_index(px(-10.), &cards), 0);
         assert_eq!(compute_drop_index(px(35.), &cards), 0);
         assert_eq!(compute_drop_index(px(37.), &cards), 1);
         assert_eq!(compute_drop_index(px(120.), &cards), 2);
         assert_eq!(compute_drop_index(px(500.), &cards), 3);
+    }
+
+    #[test]
+    fn scrolled_drop_targets_keep_the_visible_clips_timeline_indices() {
+        let cards = [46, 47, 48].map(|index| ClipCardBounds {
+            index,
+            bounds: Bounds {
+                origin: point(px(0.), px((index - 46) as f32 * 80. - 20.)),
+                size: size(px(100.), px(72.)),
+            },
+        });
+        assert_eq!(compute_drop_index(px(0.), &cards), 46);
+        assert_eq!(compute_drop_index(px(16.), &cards), 46);
+        assert_eq!(compute_drop_index(px(17.), &cards), 47);
+        assert_eq!(compute_drop_index(px(96.), &cards), 47);
+        assert_eq!(compute_drop_index(px(97.), &cards), 48);
+        assert_eq!(compute_drop_index(px(300.), &cards), 49);
+        assert_eq!(compute_drop_index(px(0.), &[]), 0);
     }
 
     #[test]

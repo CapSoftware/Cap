@@ -393,7 +393,9 @@ export const getChildFolders = Effect.fn(function* (
 				parentId: folders.parentId,
 				organizationId: folders.organizationId,
 				createdAt: folders.createdAt,
-				videoCount,
+				// Nest the correlated query so Drizzle's single-table selection
+				// rewrite preserves the outer folders.id reference.
+				videoCount: sql<number>`${videoCount}`.mapWith(Number),
 			})
 			.from(folders)
 			.where(

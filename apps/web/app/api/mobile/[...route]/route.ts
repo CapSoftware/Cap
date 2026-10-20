@@ -6,6 +6,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
@@ -17,6 +18,7 @@ import {
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
 	CurrentUser,
@@ -389,6 +391,10 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
+	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	if (publishedThumbnail) {
+		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
+	}
 	const response = yield* bucket.listObjects({
 		prefix: `${video.ownerId}/${video.id}/`,
 	});
@@ -2385,7 +2391,7 @@ const importLoom = Effect.fn("Mobile.importLoom")(function* (
 				source: { type: "webMP4" },
 				bucket: Option.getOrNull(writable.bucketId),
 				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+				public: await getNewVideoPublic(user.activeOrganizationId),
 				duration: download.durationSeconds,
 				width: download.width,
 				height: download.height,
@@ -2472,7 +2478,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
 		source: { type: "webMP4" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,
@@ -2567,7 +2573,7 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		ownerId: user.id,
 		orgId: organizationId,
 		name: getUploadTitle(input.fileName),
-		public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+		public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
 		source: { type: "desktopSegments" },
 		bucketId: writable.bucketId,
 		storageIntegrationId: writable.storageIntegrationId,

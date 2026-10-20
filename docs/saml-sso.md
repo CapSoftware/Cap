@@ -92,7 +92,7 @@ The result **must be zero immediately before any schema deployment**. This check
 
 After that gate passes, deploy the additive migration before the application changes. Reconcile existing mapped organizations rather than silently granting them unpaid access. A successful preflight in one environment or at an earlier time does not authorize another deployment. Do not push schema directly to a shared local or production database as part of a test.
 
-The migration is generated from `packages/database/schema.ts` with `pnpm db:generate --name=saml_sso`. Commit its generated SQL and snapshot/journal metadata together; do not hand-edit the SQL. Migration `0041` follows the existing recording-jobs migration and retains its snapshot ancestry.
+The migration is generated from `packages/database/schema.ts` with `bun run db:generate --name=saml_sso`. Commit its generated SQL and snapshot/journal metadata together; do not hand-edit the SQL. Migration `0041` follows the existing recording-jobs migration and retains its snapshot ancestry.
 
 Focused tests live under `apps/web/__tests__/unit/sso-*.test.ts`, alongside the existing auth, mobile, Pro, BAA, and webhook regression suites. `apps/web/__tests__/integration/sso-database.test.ts` uses actual MySQL and requires `CAP_SSO_TEST_DATABASE_URL` to point to a local, session-scoped database named `cap_sso_*` with the generated schema. It refuses production/non-local URLs and retains its synthetic fixtures for inspection.
 

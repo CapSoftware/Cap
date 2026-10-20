@@ -7,6 +7,7 @@ import {
 	mkdtemp,
 	readdir,
 	readFile,
+	readlink,
 	realpath,
 	rename,
 	rm,
@@ -14,6 +15,7 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -21,6 +23,9 @@ import {
 	finalizeLinuxAppImage,
 	findConflictingLibraries,
 	preserveAppImageWorkingDirectory,
+	relativizeDirIcon,
+	removeWebviewRuntime,
+	selectAppImageGtkBackend,
 } from "./finalize-linux-appimage.mjs";
 
 const runtimeSize = 64;
@@ -54,6 +59,147 @@ async function fixture(t) {
 	return { root, image, plugin, originalRuntime };
 }
 
+const upstreamGtkHook =
+	"export GDK_BACKEND=x11 # Crash with Wayland backend on Wayland - We tested it without it and ended up with this: https://github.com/tauri-apps/tauri/issues/8541\n";
+
+async function gtkHook(appDir, source = upstreamGtkHook) {
+	const hook = path.join(appDir, "apprun-hooks/linuxdeploy-plugin-gtk.sh");
+	await mkdir(path.dirname(hook), { recursive: true });
+	await writeFile(hook, source, { mode: 0o755 });
+	return hook;
+}
+
+test("GTK hook backend selection follows the capture environment and preserves explicit overrides", async (t) => {
+	const { root } = await fixture(t);
+	const socketDirectory = await mkdtemp(path.join(tmpdir(), "cap-wl-"));
+	t.after(() => rm(socketDirectory, { recursive: true, force: true }));
+	const socket = path.join(socketDirectory, "wl socket");
+	const server = createServer();
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(socket, resolve);
+	});
+	t.after(() => new Promise((resolve) => server.close(resolve)));
+	const hook = await gtkHook(root);
+	await selectAppImageGtkBackend(root);
+	const patched = await readFile(hook, "utf8");
+	await selectAppImageGtkBackend(root);
+	assert.equal(await readFile(hook, "utf8"), patched);
+	assert.equal((await stat(hook)).mode & 0o777, 0o755);
+	const inherited = { ...process.env };
+	for (const key of [
+		"GDK_BACKEND",
+		"WAYLAND_DISPLAY",
+		"DISPLAY",
+		"XDG_SESSION_TYPE",
+		"XDG_RUNTIME_DIR",
+	])
+		delete inherited[key];
+	const wayland = {
+		WAYLAND_DISPLAY: "wl socket",
+		XDG_RUNTIME_DIR: socketDirectory,
+	};
+	const cases = [
+		[
+			"normal Wayland",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "wayland" },
+			"wayland",
+		],
+		[
+			"case insensitive session",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "WaYlAnD" },
+			"wayland",
+		],
+		["pure Wayland without session", wayland, "wayland"],
+		["absolute Wayland socket", { WAYLAND_DISPLAY: socket }, "wayland"],
+		["X11", { DISPLAY: ":0", XDG_SESSION_TYPE: "x11" }, "x11"],
+		["mixed without session", { ...wayland, DISPLAY: ":0" }, "x11"],
+		[
+			"mixed explicit X11",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "x11" },
+			"x11",
+		],
+		[
+			"stale socket in X11",
+			{ WAYLAND_DISPLAY: "gone", DISPLAY: ":0", XDG_SESSION_TYPE: "x11" },
+			"x11",
+		],
+		["absent Wayland variable", { XDG_SESSION_TYPE: "wayland" }, "x11"],
+		["empty DISPLAY remains present", { ...wayland, DISPLAY: "" }, "x11"],
+		["empty Wayland with X11", { WAYLAND_DISPLAY: "", DISPLAY: ":0" }, "x11"],
+		["explicit X11 override", { ...wayland, GDK_BACKEND: "x11" }, "x11"],
+		[
+			"explicit ordered override",
+			{ GDK_BACKEND: "wayland,x11" },
+			"wayland,x11",
+		],
+		[
+			"empty override selects backend",
+			{ ...wayland, GDK_BACKEND: "" },
+			"wayland",
+		],
+	];
+	for (const [name, environment, expected] of cases) {
+		const result = spawnSync(
+			"/bin/sh",
+			["-c", '. "$1"; printf "%s" "$GDK_BACKEND"', "cap-hook-test", hook],
+			{ env: { ...inherited, ...environment }, encoding: "utf8" },
+		);
+		assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+		assert.equal(result.stdout, expected, name);
+	}
+	await writeFile(path.join(socketDirectory, "regular-file"), "not a socket");
+	for (const [name, environment] of [
+		["empty advertised display", { WAYLAND_DISPLAY: "" }],
+		["relative display without runtime", { WAYLAND_DISPLAY: "wl socket" }],
+		[
+			"relative runtime",
+			{ WAYLAND_DISPLAY: "wl socket", XDG_RUNTIME_DIR: "." },
+		],
+		["missing socket", { ...wayland, WAYLAND_DISPLAY: "gone" }],
+		["regular file", { ...wayland, WAYLAND_DISPLAY: "regular-file" }],
+		[
+			"mixed Wayland missing socket",
+			{
+				...wayland,
+				WAYLAND_DISPLAY: "gone",
+				DISPLAY: ":0",
+				XDG_SESSION_TYPE: "wayland",
+			},
+		],
+	]) {
+		const result = spawnSync(
+			"/bin/sh",
+			["-c", '. "$1"; printf "unreachable"', "cap-hook-test", hook],
+			{ env: { ...inherited, ...environment }, encoding: "utf8" },
+		);
+		assert.equal(result.status, 1, name);
+		assert.equal(result.stdout, "", name);
+		assert.match(result.stderr, /advertised Wayland socket/, name);
+	}
+});
+
+test("GTK hook rejects unknown or duplicated assignments without writing", async (t) => {
+	const { root } = await fixture(t);
+	for (const source of [
+		"export GDK_BACKEND=wayland\n",
+		"export GDK_BACKEND=x11\n",
+		upstreamGtkHook + upstreamGtkHook,
+		`${upstreamGtkHook}GDK_BACKEND=wayland\n`,
+		"export GDK_BACKEND=x11\nexport GDK_BACKEND=x11\n",
+		"export GDK_BACKEND=x11\nGDK_BACKEND=wayland\n",
+		"export GDK_BACKEND=x11 # changed upstream\n",
+		"printf unchanged\n",
+	]) {
+		const hook = await gtkHook(root, source);
+		await assert.rejects(
+			selectAppImageGtkBackend(root),
+			/Unrecognized AppImage GTK backend hook/,
+		);
+		assert.equal(await readFile(hook, "utf8"), source);
+	}
+});
+
 for (const failureAt of [1, 2]) {
 	test(`replacement failure ${failureAt} preserves the original artifact`, async (t) => {
 		const { root, image, plugin } = await fixture(t);
@@ -70,6 +216,7 @@ for (const failureAt of [1, 2]) {
 				}
 				const appDir = path.join(options.cwd, "squashfs-root");
 				await mkdir(appDir);
+				await gtkHook(appDir);
 				await writeFile(path.join(appDir, "AppRun"), "launcher", {
 					mode: 0o755,
 				});
@@ -80,8 +227,8 @@ for (const failureAt of [1, 2]) {
 				assert.equal(options.env.LC_ALL, "C");
 				return { stdout: digestSectionHeaders };
 			} else {
-				assert.equal(command, "pnpm");
-				await writeFile(`${args[3]}.sig`, "new signature");
+				assert.equal(command, "bun");
+				await writeFile(`${args[4]}.sig`, "new signature");
 			}
 		};
 		await assert.rejects(
@@ -167,6 +314,7 @@ for (const failure of [false, true]) {
 				assert.deepEqual(args, ["--appimage-extract"]);
 				const libraries = path.join(options.cwd, "squashfs-root/usr/lib");
 				await mkdir(libraries, { recursive: true });
+				await gtkHook(path.join(options.cwd, "squashfs-root"));
 				await writeFile(
 					path.join(libraries, "libwayland-client.so.0"),
 					"client",
@@ -211,8 +359,8 @@ for (const failure of [false, true]) {
 				changedRuntime.fill(0xa5, digestMd5Offset, digestMd5Offset + 16);
 				await writeFile(options.env.OUTPUT, finalImage(changedRuntime));
 			} else {
-				assert.equal(command, "pnpm");
-				assert.deepEqual(args.slice(0, 3), ["tauri", "signer", "sign"]);
+				assert.equal(command, "bun");
+				assert.deepEqual(args.slice(0, 4), ["run", "tauri", "signer", "sign"]);
 				assert.equal(
 					options.env.TAURI_PRIVATE_KEY,
 					env.TAURI_SIGNING_PRIVATE_KEY,
@@ -224,9 +372,9 @@ for (const failure of [false, true]) {
 				assert.ok(!args.includes(env.TAURI_SIGNING_PRIVATE_KEY));
 				if (failure) throw new Error("signer failed");
 				const hash = createHash("sha256")
-					.update(await readFile(args[3]))
+					.update(await readFile(args[4]))
 					.digest("hex");
-				await writeFile(`${args[3]}.sig`, hash);
+				await writeFile(`${args[4]}.sig`, hash);
 			}
 		};
 		const operation = finalizeLinuxAppImage(image, {
@@ -254,7 +402,7 @@ for (const failure of [false, true]) {
 				createHash("sha256").update(finalImage(expectedRuntime)).digest("hex"),
 			);
 		}
-		assert.deepEqual(calls, [image, image, "readelf", image, plugin, "pnpm"]);
+		assert.deepEqual(calls, [image, image, "readelf", image, plugin, "bun"]);
 		assert.ok(
 			!(await readdir(root)).some((file) => file.startsWith(".cap-appimage-")),
 		);
@@ -365,6 +513,7 @@ test("runtime changes from the output plugin are rejected before signing", async
 					}
 					const appDir = path.join(options.cwd, "squashfs-root");
 					await mkdir(appDir);
+					await gtkHook(appDir);
 					await writeFile(path.join(appDir, "AppRun"), "launcher", {
 						mode: 0o755,
 					});
@@ -497,4 +646,229 @@ exit 23
 	assert.equal(result.status, 23, result.stderr.toString());
 	assert.match(result.stdout.toString(), /^GUI launched:/);
 	assert.ok(!result.stdout.toString().includes("/stale/caller"));
+});
+
+const linuxdeployLauncher = `#! /usr/bin/env bash
+
+# autogenerated by linuxdeploy
+
+# make sure errors in sourced scripts will cause this script to stop
+set -e
+
+this_dir="$(readlink -f "$(dirname "$0")")"
+
+source "$this_dir"/apprun-hooks/"linuxdeploy-plugin-gtk.sh"
+
+exec "$this_dir"/AppRun.wrapped "$@"
+`;
+
+const elf = (name) =>
+	Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.from(name)]);
+
+const webviewFixtureFiles = {
+	"usr/bin/Cap": ["libssl.so.3", "libavcodec.so.61", "libc.so.6"],
+	"usr/bin/pactl": ["libpulse.so.0"],
+	"usr/lib/cap/libavcodec.so.61": ["libva.so.2"],
+	"usr/lib/libssl.so.3": ["libcrypto.so.3"],
+	"usr/lib/libcrypto.so.3": [],
+	"usr/lib/libavcodec.so.61": ["libva.so.2"],
+	"usr/lib/libva.so.2.2100.0": [],
+	"usr/lib/libpulse.so.0": [],
+	"usr/lib/libwebkit2gtk-4.1.so.0": ["libgtk-3.so.0"],
+	"usr/lib/libgtk-3.so.0": [],
+	"usr/lib/im-xim.so": ["libgtk-3.so.0"],
+	"usr/lib/gtk-3.0/3.0.0/immodules.cache": null,
+	"usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache": null,
+	"usr/lib/girepository-1.0/Gtk-3.0.typelib": null,
+	"usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess": [
+		"libwebkit2gtk-4.1.so.0",
+	],
+	"usr/lib/x86_64-linux-gnu/gio/modules/libgiognutls.so": ["libgtk-3.so.0"],
+	"usr/share/glib-2.0/schemas/gschemas.compiled": null,
+	"usr/lib/notes.txt": null,
+	"usr/lib/Cap/assets/music/track.mp3": null,
+	"AppRun.wrapped": ["libc.so.6"],
+};
+
+async function webviewAppDir(parent, name = "AppDir") {
+	const appDir = path.join(parent, name);
+	for (const [file, libraries] of Object.entries(webviewFixtureFiles)) {
+		const filename = path.join(appDir, file);
+		await mkdir(path.dirname(filename), { recursive: true });
+		await writeFile(filename, libraries ? elf(file) : "data", {
+			mode: 0o755,
+		});
+	}
+	await symlink("libva.so.2.2100.0", path.join(appDir, "usr/lib/libva.so.2"));
+	await symlink("libgtk-3.so.0", path.join(appDir, "usr/lib/libgtk-3.so"));
+	await gtkHook(appDir);
+	await writeFile(path.join(appDir, "AppRun"), linuxdeployLauncher, {
+		mode: 0o755,
+	});
+	const readelf = [];
+	const run = async (command, args, options) => {
+		assert.equal(command, "readelf");
+		assert.deepEqual(args.slice(0, 2), ["--wide", "--dynamic"]);
+		assert.equal(options.env.LC_ALL, "C");
+		const file = path.relative(appDir, args[2]);
+		readelf.push(file);
+		const libraries =
+			webviewFixtureFiles[file === "AppRun" ? "AppRun.wrapped" : file];
+		assert.ok(libraries, `unexpected readelf of ${file}`);
+		return {
+			stdout: libraries
+				.map(
+					(library) =>
+						` 0x0000000000000001 (NEEDED)             Shared library: [${library}]`,
+				)
+				.join("\n"),
+		};
+	};
+	return { appDir, run, readelf };
+}
+
+test("webview runtime removal keeps only libraries the shipped binaries load", async (t) => {
+	const { root } = await fixture(t);
+	const { appDir, run, readelf } = await webviewAppDir(root);
+	const removed = await removeWebviewRuntime(appDir, { env: {}, run });
+	assert.deepEqual(removed.map((file) => path.relative(appDir, file)).sort(), [
+		"usr/lib/gdk-pixbuf-2.0",
+		"usr/lib/girepository-1.0",
+		"usr/lib/gtk-3.0",
+		"usr/lib/im-xim.so",
+		"usr/lib/libgtk-3.so",
+		"usr/lib/libgtk-3.so.0",
+		"usr/lib/libwebkit2gtk-4.1.so.0",
+		"usr/lib/x86_64-linux-gnu/gio",
+		"usr/lib/x86_64-linux-gnu/webkit2gtk-4.1",
+		"usr/share/glib-2.0",
+	]);
+	assert.deepEqual((await readdir(path.join(appDir, "usr/lib"))).sort(), [
+		"Cap",
+		"cap",
+		"libavcodec.so.61",
+		"libcrypto.so.3",
+		"libpulse.so.0",
+		"libssl.so.3",
+		"libva.so.2",
+		"libva.so.2.2100.0",
+		"notes.txt",
+	]);
+	assert.deepEqual((await readdir(appDir)).sort(), ["AppRun", "usr"]);
+	assert.deepEqual(
+		await readFile(path.join(appDir, "AppRun")),
+		elf("AppRun.wrapped"),
+	);
+	assert.ok(!readelf.some((file) => file.includes("webkit2gtk-4.1/")));
+	assert.ok(!readelf.includes("usr/lib/libgtk-3.so.0"));
+});
+
+for (const [name, launcher, hooks] of [
+	[
+		"an extra hook",
+		linuxdeployLauncher.replace(
+			"\nexec",
+			'\nsource "$this_dir"/apprun-hooks/"other.sh"\n\nexec',
+		),
+		["other.sh"],
+	],
+	[
+		"a different launcher target",
+		linuxdeployLauncher.replace("AppRun.wrapped", "usr/bin/Cap"),
+		[],
+	],
+]) {
+	test(`webview runtime removal refuses ${name} without changing the AppDir`, async (t) => {
+		const { root } = await fixture(t);
+		const { appDir, run } = await webviewAppDir(root);
+		await writeFile(path.join(appDir, "AppRun"), launcher);
+		for (const hook of hooks) {
+			await writeFile(path.join(appDir, "apprun-hooks", hook), "");
+		}
+		const before = (await readdir(path.join(appDir, "usr/lib"))).sort();
+		await assert.rejects(
+			removeWebviewRuntime(appDir, { env: {}, run }),
+			/Unrecognized AppImage launcher/,
+		);
+		assert.deepEqual(
+			(await readdir(path.join(appDir, "usr/lib"))).sort(),
+			before,
+		);
+		assert.equal(await readFile(path.join(appDir, "AppRun"), "utf8"), launcher);
+		await stat(path.join(appDir, "AppRun.wrapped"));
+		await stat(path.join(appDir, "apprun-hooks/linuxdeploy-plugin-gtk.sh"));
+	});
+}
+
+test(".DirIcon is rewritten to a relative link inside the AppDir", async (t) => {
+	const { root } = await fixture(t);
+	const appDir = path.join(root, "AppDir");
+	await mkdir(appDir);
+	await writeFile(path.join(appDir, "Cap.png"), "icon");
+	await symlink("/build/Cap.AppDir/Cap.png", path.join(appDir, ".DirIcon"));
+	await relativizeDirIcon(appDir);
+	assert.equal(await readlink(path.join(appDir, ".DirIcon")), "Cap.png");
+	await relativizeDirIcon(appDir);
+	assert.equal(await readFile(path.join(appDir, ".DirIcon"), "utf8"), "icon");
+});
+
+test("webview-free finalization hands the pruned AppDir to the output plugin", async (t) => {
+	const { image, plugin } = await fixture(t);
+	let extracted;
+	const run = async (command, args, options) => {
+		assert.equal(options.env.PATH, "/usr/bin");
+		for (const name of [
+			"TAURI_SIGNING_PRIVATE_KEY",
+			"TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+			"TAURI_PRIVATE_KEY",
+			"TAURI_PRIVATE_KEY_PASSWORD",
+		]) {
+			assert.equal(options.env[name], undefined, `${command} saw ${name}`);
+		}
+		if (command === image) {
+			if (args[0] === "--appimage-signature") return { stdout: "" };
+			if (args[0] === "--appimage-offset") {
+				return { stdout: `${runtimeSize}` };
+			}
+			extracted = await webviewAppDir(options.cwd, "squashfs-root");
+			return {};
+		}
+		if (command === "readelf" && args[1] === "--section-headers") {
+			return { stdout: digestSectionHeaders };
+		}
+		if (command === "readelf") return extracted.run(command, args, options);
+		assert.equal(command, plugin);
+		const appDir = args[2];
+		assert.deepEqual((await readdir(appDir)).sort(), [
+			"AppRun",
+			"AppRun.cap-original",
+			"usr",
+		]);
+		assert.deepEqual(
+			await readFile(path.join(appDir, "AppRun.cap-original")),
+			elf("AppRun.wrapped"),
+		);
+		await assert.rejects(
+			stat(path.join(appDir, "usr/lib/libwebkit2gtk-4.1.so.0")),
+		);
+		await stat(path.join(appDir, "usr/lib/libssl.so.3"));
+		await writeFile(options.env.OUTPUT, finalImage());
+		return {};
+	};
+	const excluded = await finalizeLinuxAppImage(image, {
+		outputPlugin: plugin,
+		unsigned: true,
+		webview: false,
+		env: {
+			PATH: "/usr/bin",
+			TAURI_SIGNING_PRIVATE_KEY: "key",
+			TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "password",
+			TAURI_PRIVATE_KEY: "legacy",
+			TAURI_PRIVATE_KEY_PASSWORD: "legacy-password",
+		},
+		run,
+	});
+	assert.ok(excluded.includes("usr/lib/libwebkit2gtk-4.1.so.0"));
+	assert.ok(excluded.includes("usr/share/glib-2.0"));
+	assert.deepEqual(await readFile(image), finalImage());
 });

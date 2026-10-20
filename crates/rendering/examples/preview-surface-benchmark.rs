@@ -330,8 +330,12 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
         pool.pixel_buf().expect("pixel buffer")
     }
 
-    fn submit_and_wait(device: &wgpu::Device, queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
-        queue.submit(std::iter::once(encoder.finish()));
+    fn submit_and_wait(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+    ) -> wgpu::SubmissionIndex {
+        let submission = queue.submit(std::iter::once(encoder.finish()));
         let done = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&done);
         queue.on_submitted_work_done(move || signal.store(true, Ordering::Release));
@@ -339,6 +343,7 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
             let _ = device.poll(wgpu::PollType::Poll);
             std::hint::spin_loop();
         }
+        submission
     }
 
     struct Stats {
@@ -496,15 +501,20 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     pub fn run() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::METAL,
             ..Default::default()
         });
-        let adapter = pollster_block(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .expect("adapter");
+        let adapter = runtime
+            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            }))
+            .expect("adapter");
         println!("adapter: {}", adapter.get_info().name);
         // Same optional feature set RenderVideoConstants requests; the NV12
         // path's R8/RG8 storage textures need the adapter-specific formats.
@@ -515,11 +525,12 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
         {
             required_features |= wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
         }
-        let (device, queue) = pollster_block(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features,
-            ..Default::default()
-        }))
-        .expect("device");
+        let (device, queue) = runtime
+            .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_features,
+                ..Default::default()
+            }))
+            .expect("device");
         let cache = IOSurfaceTextureCache::new().expect("metal device");
 
         println!(
@@ -583,11 +594,13 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
             nv12.encode(&device, &mut nv12_encoder, &source_view, width, height);
             submit_and_wait(&device, &queue, nv12_encoder);
             let mut bgra_encoder = device.create_command_encoder(&Default::default());
-            let pending = bgra
-                .encode(&device, &mut bgra_encoder, &source, width, height, 0, 60)
+            let pending = runtime
+                .block_on(bgra.encode(&device, &mut bgra_encoder, &source, width, height, 0, 60))
                 .expect("bgra encode");
-            submit_and_wait(&device, &queue, bgra_encoder);
-            let bgra_frame = pollster_block(pending.wait(&device, &queue)).expect("bgra frame");
+            let submission = submit_and_wait(&device, &queue, bgra_encoder);
+            let bgra_frame = runtime
+                .block_on(pending.wait(&device, submission))
+                .expect("bgra frame");
 
             // Paint-phase inputs: sampled imports of the converted surfaces,
             // mirroring what gpui's CVMetalTextureCache hands its fragment.
@@ -653,8 +666,8 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 let start = Instant::now();
                 let mut encoder = device.create_command_encoder(&Default::default());
-                let _pending = bgra
-                    .encode(&device, &mut encoder, &source, width, height, 0, 60)
+                let _pending = runtime
+                    .block_on(bgra.encode(&device, &mut encoder, &source, width, height, 0, 60))
                     .expect("bgra encode");
                 submit_and_wait(&device, &queue, encoder);
                 if measured {
@@ -691,13 +704,5 @@ fn fs_bgra(in: VertexOutput) -> @location(0) vec4<f32> {
                 );
             }
         }
-    }
-
-    fn pollster_block<F: std::future::Future>(future: F) -> F::Output {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        runtime.block_on(future)
     }
 }

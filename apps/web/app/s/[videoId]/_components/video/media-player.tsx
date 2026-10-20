@@ -47,8 +47,6 @@ import {
 	type MediaState,
 	timeUtils,
 	useMediaDispatch,
-	useMediaFullscreenRef,
-	useMediaRef,
 } from "media-chrome/react/media-store";
 import { AnimatePresence, motion } from "motion/react";
 import * as React from "react";
@@ -146,6 +144,18 @@ const selectRenditionList = (s: S) =>
 const selectRenditionSelected = (s: S) => s.mediaRenditionSelected;
 
 const EMPTY_MEDIA_STATE = Object.freeze({}) as Partial<MediaState>;
+
+function useMediaOwnerRef<T extends HTMLElement>(type: string) {
+	const store = React.useContext(MediaContext);
+	// Media Chrome recreates its ref callbacks on every render. Reattaching
+	// the same element refreshes snapshots and can loop subscribed controls.
+	return React.useCallback(
+		(element: T | null) => {
+			store?.dispatch({ type, detail: element });
+		},
+		[store, type],
+	);
+}
 
 const serverSnapshotCache = new Map<
 	(state: Partial<MediaState>) => unknown,
@@ -368,7 +378,9 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 	const descriptionId = React.useId();
 
 	const rootRef = React.useRef<HTMLDivElement | null>(null);
-	const fullscreenRef = useMediaFullscreenRef();
+	const fullscreenRef = useMediaOwnerRef<HTMLDivElement>(
+		MediaActionTypes.FULLSCREEN_ELEMENT_CHANGE_REQUEST,
+	);
 	const composedRef = useComposedRefs(ref, rootRef, fullscreenRef);
 
 	const dir = useDirection(dirProp);
@@ -906,7 +918,9 @@ const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>(
 
 		const context = useMediaPlayerContext("MediaPlayerVideo");
 		const dispatch = useMediaDispatch();
-		const mediaRefCallback = useMediaRef();
+		const mediaRefCallback = useMediaOwnerRef<HTMLVideoElement>(
+			MediaActionTypes.MEDIA_ELEMENT_CHANGE_REQUEST,
+		);
 		const composedRef = useComposedRefs(
 			ref,
 			context.mediaRef,
@@ -964,7 +978,9 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 	const { asChild, ref, ...audioProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerAudio");
-	const mediaRefCallback = useMediaRef();
+	const mediaRefCallback = useMediaOwnerRef<HTMLAudioElement>(
+		MediaActionTypes.MEDIA_ELEMENT_CHANGE_REQUEST,
+	);
 	const composedRef = useComposedRefs(ref, context.mediaRef, mediaRefCallback);
 
 	const AudioPrimitive = asChild ? Slot : "audio";
