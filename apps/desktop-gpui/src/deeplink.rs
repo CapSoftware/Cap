@@ -400,13 +400,14 @@ impl DeepLinkAction {
                         let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
                         return;
                     }
-                    let (camera_feed, mic_feed, input_readiness, device_settings) = {
+                    let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
                         let feeds = Feeds::global(cx);
                         feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
                         let feeds = feeds.read(cx);
                         (
                             feeds.camera_actor(),
                             feeds.mic_actor(),
+                            feeds.mic_meter(),
                             feeds.input_readiness(),
                             feeds.requested_device_settings(),
                         )
@@ -425,6 +426,7 @@ impl DeepLinkAction {
                                     excluded_windows: Vec::new(),
                                     camera_feed,
                                     mic_feed,
+                                    mic_meter,
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
                                     start_gate: None,

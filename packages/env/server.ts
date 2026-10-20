@@ -22,6 +22,10 @@ function createServerEnv() {
 			DATABASE_ENCRYPTION_KEY: z
 				.string()
 				.optional()
+				.refine(
+					(key) => !key || [16, 32].includes(Buffer.from(key, "hex").length),
+					"Must be 32 or 64 hex characters, e.g. from `openssl rand -hex 32`",
+				)
 				.describe(
 					"32 byte hex string for encrypting values like AWS access keys",
 				),

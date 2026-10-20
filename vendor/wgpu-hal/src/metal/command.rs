@@ -29,9 +29,38 @@ impl Default for super::CommandState {
 }
 
 impl super::CommandEncoder {
+    // Cap-local patch to the vendored wgpu-hal; reapply it whenever vendor/wgpu-hal is replaced.
+    // The other local patch is the per-wait event in dx12/device.rs `Device::wait`.
+    // wgpu-core opens a HAL command buffer for every pass, plus one for the barriers it
+    // records ahead of it. Barriers are no-ops on Metal, so the MTLCommandBuffer is only
+    // created once something is actually encoded and empty ones are never committed
+    // (https://github.com/gfx-rs/wgpu/issues/5738). begin_debug_marker still creates the
+    // buffer so a debug group pushed before the first pass is popped from the same buffer.
+    fn ensure_raw_cmd_buf(&mut self) {
+        if self.raw_cmd_buf.is_some() {
+            return;
+        }
+        let queue = &self.raw_queue.lock();
+        let retain_references = self.shared.settings.retain_command_buffer_references;
+        let label = self.pending_label.as_deref();
+        let raw = objc::rc::autoreleasepool(move || {
+            let cmd_buf_ref = if retain_references {
+                queue.new_command_buffer()
+            } else {
+                queue.new_command_buffer_with_unretained_references()
+            };
+            if let Some(label) = label {
+                cmd_buf_ref.set_label(label);
+            }
+            cmd_buf_ref.to_owned()
+        });
+        self.raw_cmd_buf = Some(raw);
+    }
+
     fn enter_blit(&mut self) -> &metal::BlitCommandEncoderRef {
         if self.state.blit.is_none() {
             debug_assert!(self.state.render.is_none() && self.state.compute.is_none());
+            self.ensure_raw_cmd_buf();
             let cmd_buf = self.raw_cmd_buf.as_ref().unwrap();
 
             // Take care of pending timer queries.
@@ -187,22 +216,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
     type A = super::Api;
 
     unsafe fn begin_encoding(&mut self, label: crate::Label) -> Result<(), crate::DeviceError> {
-        let queue = &self.raw_queue.lock();
-        let retain_references = self.shared.settings.retain_command_buffer_references;
-        let raw = objc::rc::autoreleasepool(move || {
-            let cmd_buf_ref = if retain_references {
-                queue.new_command_buffer()
-            } else {
-                queue.new_command_buffer_with_unretained_references()
-            };
-            if let Some(label) = label {
-                cmd_buf_ref.set_label(label);
-            }
-            cmd_buf_ref.to_owned()
-        });
-
-        self.raw_cmd_buf = Some(raw);
-
+        self.raw_cmd_buf = None;
+        self.pending_label = label.map(|label| label.to_owned());
         Ok(())
     }
 
@@ -217,6 +232,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             encoder.end_encoding();
         }
         self.raw_cmd_buf = None;
+        self.pending_label = None;
     }
 
     unsafe fn end_encoding(&mut self) -> Result<super::CommandBuffer, crate::DeviceError> {
@@ -232,7 +248,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         debug_assert!(self.state.pending_timer_queries.is_empty());
 
         Ok(super::CommandBuffer {
-            raw: self.raw_cmd_buf.take().unwrap(),
+            raw: self.raw_cmd_buf.take(),
         })
     }
 
@@ -519,6 +535,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
     ) {
         self.begin_pass();
+        self.ensure_raw_cmd_buf();
         self.state.index = None;
 
         assert!(self.state.blit.is_none());
@@ -883,8 +900,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
     unsafe fn begin_debug_marker(&mut self, group_label: &str) {
         if let Some(encoder) = self.active_encoder() {
             encoder.push_debug_group(group_label);
-        } else if let Some(ref buf) = self.raw_cmd_buf {
-            buf.push_debug_group(group_label);
+        } else {
+            self.ensure_raw_cmd_buf();
+            if let Some(buf) = &self.raw_cmd_buf {
+                buf.push_debug_group(group_label);
+            }
         }
     }
     unsafe fn end_debug_marker(&mut self) {
@@ -1193,6 +1213,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         debug_assert!(self.state.compute.is_none());
         debug_assert!(self.state.render.is_none());
 
+        self.ensure_raw_cmd_buf();
         let raw = self.raw_cmd_buf.as_ref().unwrap();
 
         objc::rc::autoreleasepool(|| {
