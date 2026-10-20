@@ -8,7 +8,7 @@
 //! module is that canvas pass: scale the frame-space annotations up to the
 //! export frame, re-apply the mask filters at export resolution, draw the
 //! shapes with tiny-skia and the text with cosmic-text, and expand the output
-//! to the union of the image and every annotation's box.
+//! to the union of the image and every annotation's painted extents.
 //!
 //! It also carries the share fingerprint (`screenshotProjectFingerprint`,
 //! `:419-431`) and the per-destination encodings (`exportImage`,
@@ -87,9 +87,8 @@ pub fn scale_annotations(list: &[Annotation], scale_x: f64, scale_y: f64) -> Vec
 // The composite (`renderScreenshotExportCanvas`)
 // ---------------------------------------------------------------------------
 
-/// The output canvas rect: the working canvas's own rect, unioned with every
-/// non-mask annotation's normalized box (`:307-325`). `Math.max(1,
-/// Math.round(..))` on each axis.
+/// Include stroke and glyph overhang, rounding outward to keep the frame on
+/// whole pixels when annotations extend past its edges.
 pub fn export_bounds(scaled: &[Annotation], canvas: (u32, u32)) -> ExportBounds {
     let mut min_x = 0f64;
     let mut min_y = 0f64;
@@ -100,21 +99,75 @@ pub fn export_bounds(scaled: &[Annotation], canvas: (u32, u32)) -> ExportBounds 
         if annotation.annotation_type == AnnotationType::Mask {
             continue;
         }
-        let left = annotation.x.min(annotation.x + annotation.width);
-        let right = annotation.x.max(annotation.x + annotation.width);
-        let top = annotation.y.min(annotation.y + annotation.height);
-        let bottom = annotation.y.max(annotation.y + annotation.height);
-        min_x = min_x.min(left);
-        max_x = max_x.max(right);
-        min_y = min_y.min(top);
-        max_y = max_y.max(bottom);
+        let mut include = |x: f64, y: f64, width: f64, height: f64| {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x + width);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y + height);
+        };
+        let rect = annotations::normalized_rect(annotation);
+        include(rect.x, rect.y, rect.width, rect.height);
+        let has_stroke = annotations::parse_css_rgba(&annotation.stroke_color, annotation.opacity)
+            .is_some_and(|(_, alpha)| alpha > 0.);
+        let stroke_width = if has_stroke {
+            annotation.stroke_width.max(0.)
+        } else {
+            0.
+        };
+        let radius = stroke_width / 2.;
+        match annotation.annotation_type {
+            AnnotationType::Rectangle | AnnotationType::Circle => include(
+                rect.x - radius,
+                rect.y - radius,
+                rect.width + stroke_width,
+                rect.height + stroke_width,
+            ),
+            AnnotationType::Arrow if has_stroke => {
+                let end = (
+                    annotation.x + annotation.width,
+                    annotation.y + annotation.height,
+                );
+                let angle = (end.1 - annotation.y).atan2(end.0 - annotation.x);
+                let head =
+                    annotations::arrow_head_points(end.0, end.1, angle, annotation.stroke_width);
+                for (x, y) in [(annotation.x, annotation.y), head.base] {
+                    include(
+                        f64::from(x as f32) - radius,
+                        f64::from(y as f32) - radius,
+                        stroke_width,
+                        stroke_width,
+                    );
+                }
+                for (x, y) in head.points {
+                    include(f64::from(x as f32), f64::from(y as f32), 0., 0.);
+                }
+            }
+            AnnotationType::Draw if stroke_width > 0. => {
+                for [x, y] in annotations::draw_points(annotation) {
+                    include(x - radius, y - radius, stroke_width, stroke_width);
+                }
+            }
+            AnnotationType::Text => rasterize_text(annotation, |at, size, color| {
+                if color[3] > 0 {
+                    include(
+                        at.0.round(),
+                        at.1.round(),
+                        f64::from(size.0),
+                        f64::from(size.1),
+                    );
+                }
+            }),
+            AnnotationType::Mask | AnnotationType::Arrow | AnnotationType::Draw => {}
+        }
     }
 
+    let min_x = min_x.floor();
+    let min_y = min_y.floor();
     ExportBounds {
         min_x,
         min_y,
-        width: ((max_x - min_x).round() as i64).max(1) as u32,
-        height: ((max_y - min_y).round() as i64).max(1) as u32,
+        width: (max_x.ceil() - min_x).max(1.) as u32,
+        height: (max_y.ceil() - min_y).max(1.) as u32,
     }
 }
 
@@ -546,7 +599,12 @@ fn draw_one(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
                 );
             }
         }
-        AnnotationType::Text => draw_text(pixmap, annotation),
+        AnnotationType::Text => {
+            let canvas_size = (pixmap.width(), pixmap.height());
+            rasterize_text(annotation, |at, size, color| {
+                pixels::blend_rect_premultiplied(pixmap.data_mut(), canvas_size, at, size, color);
+            });
+        }
     }
 }
 
@@ -562,7 +620,7 @@ static TEXT_STACK: OnceLock<Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCa
 /// `<text>` at `font-size = height`, baseline at `y + height`, filled with the
 /// stroke colour -- the same placement the preview's `paint_text` resolves,
 /// down to the Helvetica the renderer maps `sans-serif` to.
-fn draw_text(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
+fn rasterize_text(annotation: &Annotation, mut pixel: impl FnMut((f64, f64), (u32, u32), [u8; 4])) {
     let Some(text) = annotation.text.as_deref().filter(|text| !text.is_empty()) else {
         return;
     };
@@ -605,15 +663,11 @@ fn draw_text(pixmap: &mut tiny_skia::PixmapMut<'_>, annotation: &Annotation) {
     let origin_y = annotation.y + annotation.height - f64::from(line_y);
 
     let color = cosmic_text::Color::rgba(rgb[0], rgb[1], rgb[2], (alpha * 255.).round() as u8);
-    let (canvas_width, canvas_height) = (pixmap.width(), pixmap.height());
-    let data = pixmap.data_mut();
-    buffer.draw(font_system, swash_cache, color, |x, y, w, h, pixel| {
-        pixels::blend_rect_premultiplied(
-            data,
-            (canvas_width, canvas_height),
+    buffer.draw(font_system, swash_cache, color, |x, y, w, h, color| {
+        pixel(
             (origin_x + f64::from(x), origin_y + f64::from(y)),
             (w, h),
-            [pixel.r(), pixel.g(), pixel.b(), pixel.a()],
+            [color.r(), color.g(), color.b(), color.a()],
         );
     });
 }
@@ -717,15 +771,15 @@ mod tests {
             }
         );
 
-        let overflowing = annotation(AnnotationType::Arrow, 90., -10., 30., 15.);
+        let overflowing = annotation(AnnotationType::Rectangle, 90., -10., 30., 15.);
         let bounds = export_bounds(&[overflowing], (100, 50));
-        assert_eq!((bounds.min_x, bounds.min_y), (0., -10.));
-        assert_eq!((bounds.width, bounds.height), (120, 60));
+        assert_eq!((bounds.min_x, bounds.min_y), (0., -12.));
+        assert_eq!((bounds.width, bounds.height), (122, 62));
 
         let negative = annotation(AnnotationType::Rectangle, -5., 0., -10., 10.);
         let bounds = export_bounds(&[negative], (100, 50));
-        assert_eq!(bounds.min_x, -15.);
-        assert_eq!(bounds.width, 115);
+        assert_eq!((bounds.min_x, bounds.min_y), (-17., -2.));
+        assert_eq!((bounds.width, bounds.height), (117, 52));
 
         let mask = annotation(AnnotationType::Mask, -50., -50., 300., 300.);
         assert_eq!(
@@ -947,6 +1001,163 @@ mod tests {
                     "{}",
                     serde_json::json!({"width":width,"height":height,"opaque":opaque,"baseline_ms":before[3],"candidate_ms":after[3],"pixels_equal":true,"scope":"CPU composite and clipboard flatten; excludes GPU, PNG and native pasteboard"})
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn export_bounds_rounds_fractional_strokes_outward() {
+        let negative = annotation(AnnotationType::Rectangle, -30.25, -20.75, 20., 10.);
+        assert_eq!(
+            export_bounds(&[negative], (100, 50)),
+            ExportBounds {
+                min_x: -33.,
+                min_y: -23.,
+                width: 133,
+                height: 73
+            }
+        );
+        let positive = annotation(AnnotationType::Rectangle, 110.25, 60.75, 20., 10.);
+        assert_eq!(
+            export_bounds(&[positive], (100, 50)),
+            ExportBounds {
+                min_x: 0.,
+                min_y: 0.,
+                width: 133,
+                height: 73
+            }
+        );
+    }
+
+    #[test]
+    fn composite_exports_text_glyphs_outside_the_annotation_box() {
+        let raw = RawFrame {
+            rgba: vec![0; 100 * 100 * 4],
+            width: 100,
+            height: 100,
+            base_width: 100,
+            base_height: 100,
+        };
+        let mut text = annotation(AnnotationType::Text, 95., -5., 1., 32.);
+        text.text = Some("jÁW".into());
+        let mut config = ProjectConfiguration::default();
+        invisible_background(&mut config);
+        config.annotations.push(text.clone());
+
+        text.x += 128.;
+        text.y += 128.;
+        let mut reference = vec![0; 512 * 512 * 4];
+        draw_annotations_onto(&mut reference, 512, 512, &[text]);
+        let reference = image::RgbaImage::from_raw(512, 512, reference).unwrap();
+        let (mut left, mut top, mut right, mut bottom) = (0i64, -5i64, 100i64, 100i64);
+        for (x, y, pixel) in reference.enumerate_pixels() {
+            if pixel.0[3] > 0 {
+                let x = i64::from(x) - 128;
+                let y = i64::from(y) - 128;
+                left = left.min(x);
+                top = top.min(y);
+                right = right.max(x + 1);
+                bottom = bottom.max(y + 1);
+            }
+        }
+        assert!(right > 100);
+        let expected = image::imageops::crop_imm(
+            &reference,
+            (left + 128) as u32,
+            (top + 128) as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        )
+        .to_image();
+        let out = composite(&raw, &config);
+        assert_eq!((out.width, out.height), expected.dimensions());
+        assert_eq!(out.rgba, expected.into_raw());
+    }
+
+    #[test]
+    fn composite_keeps_frame_interior_rendering_unchanged() {
+        let raw = RawFrame {
+            rgba: [0u8, 0, 255, 255].repeat(100 * 100),
+            width: 100,
+            height: 100,
+            base_width: 100,
+            base_height: 100,
+        };
+        let mut config = ProjectConfiguration {
+            annotations: vec![
+                annotation(AnnotationType::Rectangle, 10., 10., 20., 20.),
+                annotation(AnnotationType::Circle, 40., 10., 20., 20.),
+                annotation(AnnotationType::Arrow, 10., 50., 40., 0.),
+                annotation(AnnotationType::Draw, 10., 70., 20., 20.),
+                annotation(AnnotationType::Text, 50., 70., 40., 10.),
+            ],
+            ..ProjectConfiguration::default()
+        };
+        config.annotations[3].points = Some(vec![[0., 0.], [1., 1.]]);
+        config.annotations[4].text = Some("cap".into());
+        for annotation in &mut config.annotations {
+            annotation.rotation = 45.;
+        }
+        let mut expected = raw.rgba.clone();
+        draw_annotations_onto(&mut expected, raw.width, raw.height, &config.annotations);
+        let out = composite(&raw, &config);
+        assert_eq!((out.width, out.height), (100, 100));
+        assert_eq!(out.rgba, expected);
+    }
+
+    #[test]
+    fn composite_exports_outermost_strokes_and_arrow_heads() {
+        let raw = RawFrame {
+            rgba: [0u8, 0, 255, 255].repeat(100 * 100),
+            width: 100,
+            height: 100,
+            base_width: 50,
+            base_height: 50,
+        };
+        for invisible in [false, true] {
+            for (x, y, pixel, size) in [
+                (55., 10., (131, 30), (132, 100)),
+                (-15., 10., (0, 30), (132, 100)),
+                (10., 55., (30, 131), (100, 132)),
+                (10., -15., (30, 0), (100, 132)),
+            ] {
+                let mut config = ProjectConfiguration::default();
+                if invisible {
+                    invisible_background(&mut config);
+                }
+                let mut rectangle = annotation(AnnotationType::Rectangle, x, y, 10., 10.);
+                rectangle.stroke_width = 2.;
+                rectangle.stroke_color = "#00ff00".into();
+                config.annotations.push(rectangle);
+
+                let out = composite(&raw, &config);
+                let decoded = image::load_from_memory(&encode_for_save(&out).unwrap())
+                    .unwrap()
+                    .to_rgba8();
+                assert_eq!(decoded.dimensions(), size);
+                assert_eq!(decoded.get_pixel(pixel.0, pixel.1).0, [0, 255, 0, 255]);
+            }
+
+            for (x, y, width, height, pixel, size) in [
+                (10., 2., 20., 0., (36, 0), (100, 106)),
+                (10., 48., 20., 0., (36, 105), (100, 106)),
+                (2., 10., 0., 20., (0, 36), (106, 100)),
+                (48., 10., 0., 20., (105, 36), (106, 100)),
+            ] {
+                let mut config = ProjectConfiguration::default();
+                if invisible {
+                    invisible_background(&mut config);
+                }
+                let mut arrow = annotation(AnnotationType::Arrow, x, y, width, height);
+                arrow.stroke_width = 2.;
+                arrow.stroke_color = "#00ff00".into();
+                config.annotations.push(arrow);
+                let out = composite(&raw, &config);
+                assert_eq!((out.width, out.height), size);
+                let start = (pixel.1 * out.width as usize + pixel.0) * 4;
+                assert!(out.rgba[start] < 255);
+                assert_eq!(out.rgba[start + 1], 255);
+                assert!(out.rgba[start + 3] > 0);
             }
         }
     }
