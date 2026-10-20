@@ -3,12 +3,11 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 use tokio::sync::oneshot;
 use tracing::{info, warn};
-use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
 use super::{DecodedFrame, DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage};
 
@@ -16,7 +15,6 @@ const MAX_FRAME_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 struct DecoderHealthMonitor {
     consecutive_errors: u32,
-    consecutive_texture_read_failures: u32,
     total_frames_decoded: u64,
     total_errors: u64,
     last_successful_decode: Instant,
@@ -31,7 +29,6 @@ impl DecoderHealthMonitor {
     fn new() -> Self {
         Self {
             consecutive_errors: 0,
-            consecutive_texture_read_failures: 0,
             total_frames_decoded: 0,
             total_errors: 0,
             last_successful_decode: Instant::now(),
@@ -49,7 +46,6 @@ impl DecoderHealthMonitor {
 
     fn record_success(&mut self, decode_time: Duration) {
         self.consecutive_errors = 0;
-        self.consecutive_texture_read_failures = 0;
         self.total_frames_decoded += 1;
         self.last_successful_decode = Instant::now();
 
@@ -67,18 +63,11 @@ impl DecoderHealthMonitor {
         self.total_errors += 1;
     }
 
-    fn record_texture_read_failure(&mut self) {
-        self.consecutive_texture_read_failures += 1;
-    }
-
     fn is_healthy(&self) -> bool {
         const MAX_CONSECUTIVE_ERRORS: u32 = 10;
-        const MAX_CONSECUTIVE_TEXTURE_FAILURES: u32 = 5;
         const MAX_TIME_SINCE_SUCCESS: Duration = Duration::from_secs(5);
 
-        if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS
-            || self.consecutive_texture_read_failures >= MAX_CONSECUTIVE_TEXTURE_FAILURES
-        {
+        if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
             return false;
         }
 
@@ -119,63 +108,6 @@ impl DecoderHealthMonitor {
             self.total_errors,
             self.slow_frame_count,
         )
-    }
-}
-
-#[derive(Clone)]
-struct CachedFrame {
-    number: u32,
-    _texture: Option<ID3D11Texture2D>,
-    _shared_handle: Option<HANDLE>,
-    _y_handle: Option<HANDLE>,
-    _uv_handle: Option<HANDLE>,
-    nv12_data: Option<Arc<cap_video_decode::NV12Data>>,
-    width: u32,
-    height: u32,
-}
-
-impl CachedFrame {
-    fn estimated_bytes(&self) -> usize {
-        let texture_bytes = self._texture.as_ref().map_or(0, |_| {
-            (self.width as usize)
-                .saturating_mul(self.height as usize)
-                .saturating_mul(3)
-        });
-        texture_bytes.saturating_add(self.nv12_data.as_ref().map_or(0, |data| data.data.len()))
-    }
-
-    fn to_decoded_frame(&self) -> DecodedFrame {
-        let null_ptr = std::ptr::null_mut();
-        let y_handle = self._y_handle.filter(|h| h.0 != null_ptr);
-        let uv_handle = self._uv_handle.filter(|h| h.0 != null_ptr);
-        if let (Some(texture), Some(y_handle), Some(uv_handle)) =
-            (&self._texture, y_handle, uv_handle)
-        {
-            return DecodedFrame::new_nv12_with_d3d11_texture_and_yuv_handles(
-                self.width,
-                self.height,
-                texture.clone(),
-                self._shared_handle,
-                Some(y_handle),
-                Some(uv_handle),
-            );
-        }
-
-        if let Some(nv12_data) = &self.nv12_data {
-            DecodedFrame::new_nv12_with_arc(
-                Arc::clone(&nv12_data.data),
-                self.width,
-                self.height,
-                nv12_data.y_stride,
-                nv12_data.uv_stride,
-            )
-        } else {
-            warn!(
-                "CachedFrame has no CPU data, creating black frame (D3D11 zero-copy not implemented)"
-            );
-            let black_data = vec![0u8; (self.width * self.height * 3 / 2) as usize];
-            DecodedFrame::new_nv12(black_data, self.width, self.height, self.width, self.width)
-        }
     }
 }
 
@@ -229,10 +161,8 @@ impl MFDecoder {
 
             let video_width = decoder.width();
             let video_height = decoder.height();
+            let matrix = super::probe_yuv_matrix(&path);
 
-            let mut cache = BTreeMap::<u32, CachedFrame>::new();
-            let mut cache_bytes = 0usize;
-            let mut last_decoded_frame: Option<u32> = None;
             let mut health = DecoderHealthMonitor::new();
 
             let init_result = DecoderInitResult {
@@ -242,289 +172,113 @@ impl MFDecoder {
             };
             let _ = ready_tx.send(Ok(init_result));
 
-            struct PendingRequest {
-                frame: u32,
-                time: f32,
-                sender: oneshot::Sender<DecodedFrame>,
-            }
-
-            while let Ok(r) = rx.recv() {
-                let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
-
-                let mut push_request =
-                    |requested_time: f32, sender: oneshot::Sender<DecodedFrame>| {
-                        if sender.is_closed() {
-                            return;
-                        }
-                        let frame = (requested_time * fps as f32).floor() as u32;
-                        pending_requests.push(PendingRequest {
-                            frame,
-                            time: requested_time,
-                            sender,
-                        });
-                    };
-
-                match r {
-                    VideoDecoderMessage::GetFrame(requested_time, _, sender) => {
-                        push_request(requested_time, sender);
-                    }
-                }
-
-                while let Ok(msg) = rx.try_recv() {
-                    match msg {
-                        VideoDecoderMessage::GetFrame(requested_time, _, sender) => {
-                            push_request(requested_time, sender);
-                        }
-                    }
-                }
-
-                let mut unfulfilled = Vec::with_capacity(pending_requests.len());
-                for req in pending_requests.drain(..) {
-                    if let Some(frame) = cached_frame_for(&cache, last_decoded_frame, req.frame) {
-                        let _ = req.sender.send(frame.to_decoded_frame());
-                    } else if !req.sender.is_closed() {
-                        unfulfilled.push(req);
-                    }
-                }
-                pending_requests = unfulfilled;
-
-                if pending_requests.is_empty() {
-                    continue;
-                }
-
-                pending_requests.sort_by_key(|r| r.frame);
-
-                let target_request = pending_requests.pop().unwrap();
-                let deferred_requests = pending_requests;
-
-                let requested_frame = target_request.frame;
-                let mut sender = Some(target_request.sender);
-
-                health.record_request();
-
-                if health.should_warn_unhealthy() {
-                    warn!(
-                        name = name,
-                        consecutive_errors = health.consecutive_errors,
-                        texture_failures = health.consecutive_texture_read_failures,
-                        total_decoded = health.total_frames_decoded,
-                        "MediaFoundation decoder unhealthy, performance may degrade"
-                    );
-                }
-
-                let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
-
-                let needs_seek = last_decoded_frame
-                    .map(|last| {
-                        if requested_frame <= last {
-                            last - requested_frame > FRAME_CACHE_SIZE as u32 / 2
-                        } else {
-                            requested_frame - last > FRAME_CACHE_SIZE as u32
-                        }
-                    })
-                    .unwrap_or(true);
-
-                if needs_seek {
-                    let time_100ns = frame_to_100ns(requested_frame, fps);
-                    if let Err(e) = decoder.seek(time_100ns) {
-                        warn!("MediaFoundation seek failed: {e}");
-                    }
-                    cache.clear();
-                    cache_bytes = 0;
-                    last_decoded_frame = None;
-                }
-
-                let mut last_valid_frame: Option<CachedFrame> = None;
-
-                let pixel_count = (video_width as u64) * (video_height as u64);
-                let readahead_frames = if pixel_count > 4_000_000 {
-                    8u32
-                } else if pixel_count > 2_000_000 {
-                    15u32
-                } else {
-                    30u32
-                };
-                let max_batch_duration = if pixel_count > 4_000_000 {
-                    Duration::from_millis(200)
-                } else if pixel_count > 2_000_000 {
-                    Duration::from_millis(400)
-                } else {
-                    Duration::from_millis(800)
-                };
-                let batch_start = Instant::now();
-
-                loop {
-                    if sender.as_ref().is_some_and(|s| s.is_closed()) {
-                        sender.take();
-                        break;
-                    }
-
-                    if sender.is_none() && batch_start.elapsed() > max_batch_duration {
-                        break;
-                    }
-
-                    let decode_start = Instant::now();
-                    match decoder.read_sample() {
-                        Ok(Some(mf_frame)) => {
-                            let decode_time = decode_start.elapsed();
-                            let frame_number = pts_100ns_to_frame(mf_frame.pts, fps);
-
-                            let has_valid_zero_copy_handles = {
-                                let null_ptr = std::ptr::null_mut();
-                                mf_frame.textures.y.handle.0 != null_ptr
-                                    && mf_frame.textures.uv.handle.0 != null_ptr
-                            };
-
-                            let nv12_data = if has_valid_zero_copy_handles {
-                                health.record_success(decode_time);
-                                None
-                            } else {
-                                match decoder.read_texture_to_cpu(
-                                    &mf_frame.textures.nv12.texture,
-                                    mf_frame.width,
-                                    mf_frame.height,
-                                ) {
-                                    Ok(data) => {
-                                        health.record_success(decode_time);
-                                        Some(Arc::new(data))
-                                    }
-                                    Err(e) => {
-                                        health.record_texture_read_failure();
-                                        warn!(
-                                            "Failed to read texture to CPU for frame {frame_number}: {e}"
-                                        );
-                                        None
-                                    }
-                                }
-                            };
-
-                            let cached = CachedFrame {
-                                number: frame_number,
-                                _texture: has_valid_zero_copy_handles
-                                    .then(|| mf_frame.textures.nv12.texture.clone()),
-                                _shared_handle: has_valid_zero_copy_handles
-                                    .then_some(mf_frame.textures.nv12.handle),
-                                _y_handle: has_valid_zero_copy_handles
-                                    .then_some(mf_frame.textures.y.handle),
-                                _uv_handle: has_valid_zero_copy_handles
-                                    .then_some(mf_frame.textures.uv.handle),
-                                nv12_data,
-                                width: mf_frame.width,
-                                height: mf_frame.height,
-                            };
-
-                            if !has_valid_zero_copy_handles {
-                                decoder.recycle_textures(mf_frame.textures);
-                            }
-
-                            last_decoded_frame = Some(frame_number);
-
-                            if frame_number >= cache_min && frame_number <= cache_max {
-                                let frame_bytes = cached.estimated_bytes();
-                                while !cache.is_empty()
-                                    && (cache.len() >= FRAME_CACHE_SIZE
-                                        || cache_bytes.saturating_add(frame_bytes)
-                                            > MAX_FRAME_CACHE_BYTES)
-                                {
-                                    let key_to_remove = if frame_number > requested_frame {
-                                        *cache.keys().next().unwrap()
-                                    } else {
-                                        *cache.keys().next_back().unwrap()
-                                    };
-                                    if let Some(evicted) = cache.remove(&key_to_remove) {
-                                        cache_bytes =
-                                            cache_bytes.saturating_sub(evicted.estimated_bytes());
-                                    }
-                                }
-                                if let Some(replaced) = cache.insert(frame_number, cached.clone()) {
-                                    cache_bytes =
-                                        cache_bytes.saturating_sub(replaced.estimated_bytes());
-                                }
-                                cache_bytes = cache_bytes.saturating_add(frame_bytes);
-                            }
-
-                            if frame_number <= requested_frame {
-                                last_valid_frame = Some(cached);
-                            }
-
-                            if frame_number >= requested_frame {
-                                let frame_to_send = if frame_number == requested_frame {
-                                    cache.get(&requested_frame)
-                                } else {
-                                    last_valid_frame.as_ref().or_else(|| {
-                                        cache
-                                            .range(..=requested_frame)
-                                            .next_back()
-                                            .map(|(_, f)| f)
-                                            .or_else(|| cache.get(&frame_number))
-                                    })
-                                };
-
-                                if let Some(frame) = frame_to_send
-                                    && let Some(s) = sender.take()
-                                {
-                                    let _ = s.send(frame.to_decoded_frame());
-                                }
-                            }
-
-                            let readahead_target = requested_frame + readahead_frames;
-                            if frame_number >= readahead_target || frame_number > cache_max {
-                                break;
-                            }
-                        }
-                        Ok(None) => {
-                            break;
-                        }
-                        Err(e) => {
-                            health.record_error();
-                            warn!(
-                                consecutive_errors = health.consecutive_errors,
-                                "MediaFoundation read_sample error: {e}"
-                            );
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(s) = sender.take() {
-                    let fallback = last_valid_frame.as_ref().cloned().or_else(|| {
-                        cache
-                            .range(..=requested_frame)
-                            .next_back()
-                            .or_else(|| cache.range(requested_frame..).next())
-                            .map(|(_, f)| f.clone())
-                    });
-                    if let Some(frame) = fallback {
-                        let _ = s.send(frame.to_decoded_frame());
-                    } else {
-                        let black_frame = DecodedFrame::new(
+            let pixel_count = (video_width as u64) * (video_height as u64);
+            let readahead_frames = if pixel_count > 4_000_000 {
+                8
+            } else if pixel_count > 2_000_000 {
+                15
+            } else {
+                30
+            };
+            let mut requests = FrameRequests::new(readahead_frames);
+            let answer = |sender: oneshot::Sender<DecodedFrame>,
+                          frame: Option<cap_video_decode::NV12Data>| {
+                let _ = sender.send(frame.map_or_else(
+                    || {
+                        DecodedFrame::new(
                             vec![0u8; (video_width * video_height * 4) as usize],
                             video_width,
                             video_height,
-                        );
-                        let _ = s.send(black_frame);
-                    }
-                }
+                        )
+                    },
+                    |data| {
+                        DecodedFrame::new_nv12_with_arc(
+                            data.data,
+                            video_width,
+                            video_height,
+                            data.y_stride,
+                            data.uv_stride,
+                        )
+                        .with_matrix(matrix)
+                    },
+                ));
+            };
 
-                for req in deferred_requests {
-                    if req.sender.is_closed() {
+            loop {
+                loop {
+                    let message = match requests.next_step() {
+                        Step::Wait => rx.recv().ok(),
+                        _ => match rx.try_recv() {
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            message => message.ok(),
+                        },
+                    };
+                    // Each request borrows a decoder handle, which owns the sender, so once the
+                    // channel is gone nobody is waiting for an answer.
+                    let Some(message) = message else {
+                        return;
+                    };
+                    let VideoDecoderMessage::GetFrame(time, _, sender) = message;
+                    if sender.is_closed() {
                         continue;
                     }
-                    let frame_to_send = cache
-                        .get(&req.frame)
-                        .or_else(|| cache.range(..=req.frame).next_back().map(|(_, f)| f))
-                        .or(last_valid_frame.as_ref());
-                    if let Some(frame) = frame_to_send {
-                        let _ = req.sender.send(frame.to_decoded_frame());
-                    } else {
-                        let black_frame = DecodedFrame::new(
-                            vec![0u8; (video_width * video_height * 4) as usize],
-                            video_width,
-                            video_height,
-                        );
-                        let _ = req.sender.send(black_frame);
+
+                    let frame = super::request_frame(time, fps);
+                    match requests.request(frame, sender) {
+                        Some((sender, cached)) => answer(sender, cached),
+                        None => {
+                            health.record_request();
+                            if health.should_warn_unhealthy() {
+                                warn!(
+                                    name = name,
+                                    consecutive_errors = health.consecutive_errors,
+                                    total_decoded = health.total_frames_decoded,
+                                    "MediaFoundation decoder unhealthy, performance may degrade"
+                                );
+                            }
+                        }
                     }
+                }
+                requests.waiting.retain(|(_, sender)| !sender.is_closed());
+
+                let answers = match requests.next_step() {
+                    Step::Wait => Vec::new(),
+                    Step::Seek(frame) => match decoder.seek(frame_to_100ns(frame, fps)) {
+                        Ok(()) => {
+                            requests.seeked(frame);
+                            Vec::new()
+                        }
+                        Err(e) => {
+                            warn!("MediaFoundation seek failed: {e}");
+                            requests.stopped()
+                        }
+                    },
+                    Step::Decode => {
+                        let decode_start = Instant::now();
+                        match decoder.read_nv12() {
+                            Ok(Some(sample)) => {
+                                health.record_success(decode_start.elapsed());
+                                let bytes = sample.data.data.len();
+                                requests.decoded(
+                                    pts_100ns_to_frame(sample.pts, fps),
+                                    sample.data,
+                                    bytes,
+                                )
+                            }
+                            Ok(None) => requests.stopped(),
+                            Err(e) => {
+                                health.record_error();
+                                warn!(
+                                    consecutive_errors = health.consecutive_errors,
+                                    "MediaFoundation read error: {e}"
+                                );
+                                requests.stopped()
+                            }
+                        }
+                    }
+                };
+                for (sender, cached) in answers {
+                    answer(sender, cached);
                 }
             }
         });
@@ -544,21 +298,163 @@ fn pts_100ns_to_frame(pts_100ns: i64, fps: u32) -> u32 {
     super::pts_to_frame(pts_100ns, ::ffmpeg::Rational::new(1, 10_000_000), fps)
 }
 
-// A frame the decoder has not reached yet has to be decoded; answering with
-// the cached frame before it shows a stale image at every readahead boundary.
-// Once the decoder is past a missing frame, the stream has no frame there, and
-// the latest earlier one is the hold the video really shows.
-fn cached_frame_for<T>(
-    cache: &BTreeMap<u32, T>,
-    last_decoded: Option<u32>,
-    frame: u32,
-) -> Option<&T> {
-    cache.get(&frame).or_else(|| {
-        last_decoded
-            .is_some_and(|last| last > frame)
-            .then(|| cache.range(..=frame).next_back().map(|(_, cached)| cached))
-            .flatten()
-    })
+enum Step {
+    Seek(u32),
+    Decode,
+    Wait,
+}
+
+type Answer<T, R> = (R, Option<T>);
+
+// The decoder thread's request policy, kept apart from Media Foundation so tests can drive
+// it. A request is answered with the newest sample at or below its frame once the decoder
+// has moved past that frame: a VFR stream can still have a later sample rounding to the same
+// frame (which replaces it), so answering earlier would make the choice depend on request
+// timing. Once the decoder is past a frame the stream has no sample for, the one before it is
+// the hold the video really shows.
+struct FrameRequests<T, R> {
+    // Every sample since the last seek minus the oldest evicted, so the newest entry at or
+    // below a frame is the stream's newest sample there.
+    cache: BTreeMap<u32, (T, usize)>,
+    cache_bytes: usize,
+    waiting: Vec<(u32, R)>,
+    seeked_to: Option<u32>,
+    readahead_frames: u32,
+    latest_request: Option<u32>,
+}
+
+impl<T: Clone, R> FrameRequests<T, R> {
+    fn new(readahead_frames: u32) -> Self {
+        Self {
+            cache: BTreeMap::new(),
+            cache_bytes: 0,
+            waiting: Vec::new(),
+            seeked_to: None,
+            readahead_frames,
+            latest_request: None,
+        }
+    }
+
+    fn newest(&self) -> Option<u32> {
+        self.cache.last_key_value().map(|(&frame, _)| frame)
+    }
+
+    fn newest_at(&self, frame: u32) -> Option<&T> {
+        self.cache
+            .range(..=frame)
+            .next_back()
+            .map(|(_, (sample, _))| sample)
+    }
+
+    // A seek lands on the keyframe before its target, which can be any distance below it.
+    fn position(&self) -> Option<u32> {
+        self.newest().max(self.seeked_to)
+    }
+
+    fn request(&mut self, frame: u32, reply: R) -> Option<Answer<T, R>> {
+        self.latest_request = Some(frame);
+        if self.newest().is_some_and(|newest| newest > frame)
+            && let Some(sample) = self.newest_at(frame)
+        {
+            return Some((reply, Some(sample.clone())));
+        }
+        self.waiting.push((frame, reply));
+        None
+    }
+
+    // The lowest waiting frame goes first, so each request gets its own sample instead of
+    // whatever a seek for a later one lands on. Decoding forward only reaches frames from the
+    // newest sample on, so one below it seeks back.
+    fn next_step(&self) -> Step {
+        let Some(target) = self.waiting.iter().map(|(frame, _)| *frame).min() else {
+            return if self.wants_readahead() {
+                Step::Decode
+            } else {
+                Step::Wait
+            };
+        };
+        let reachable = self
+            .newest()
+            .or(self.seeked_to)
+            .zip(self.position())
+            .is_some_and(|(from, position)| {
+                (from..=position.saturating_add(FRAME_CACHE_SIZE as u32)).contains(&target)
+            });
+        if reachable {
+            Step::Decode
+        } else {
+            Step::Seek(target)
+        }
+    }
+
+    // Readahead stops before the next sample would evict the one answering the latest
+    // request: with frames too big for the cache budget, that would send every request back
+    // to a seek.
+    fn wants_readahead(&self) -> bool {
+        let (Some(position), Some(latest)) = (self.position(), self.latest_request) else {
+            return false;
+        };
+        let full = self.cache.last_key_value().is_some_and(|(_, (_, bytes))| {
+            self.cache.len() >= FRAME_CACHE_SIZE || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES
+        });
+        let evicts_shown = full && self.cache.range(..=latest).nth(1).is_none();
+        position < latest.saturating_add(self.readahead_frames) && !evicts_shown
+    }
+
+    fn seeked(&mut self, frame: u32) {
+        self.cache.clear();
+        self.cache_bytes = 0;
+        self.seeked_to = Some(frame);
+    }
+
+    // A waiting frame the decoder jumped past has no sample at or below it since the seek, so
+    // it gets the first one after.
+    fn decoded(&mut self, frame: u32, sample: T, bytes: usize) -> Vec<Answer<T, R>> {
+        let (passed, waiting): (Vec<_>, _) = std::mem::take(&mut self.waiting)
+            .into_iter()
+            .partition(|(requested, _)| *requested < frame);
+        self.waiting = waiting;
+        let answers = passed
+            .into_iter()
+            .map(|(requested, reply)| {
+                let held = self.newest_at(requested).unwrap_or(&sample);
+                (reply, Some(held.clone()))
+            })
+            .collect();
+
+        if let Some((_, replaced)) = self.cache.remove(&frame) {
+            self.cache_bytes -= replaced;
+        }
+        while !self.cache.is_empty()
+            && (self.cache.len() >= FRAME_CACHE_SIZE
+                || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES)
+        {
+            if let Some((_, (_, evicted))) = self.cache.pop_first() {
+                self.cache_bytes -= evicted;
+            }
+        }
+        self.cache.insert(frame, (sample, bytes));
+        self.cache_bytes += bytes;
+        answers
+    }
+
+    // No sample came (end of stream or a read error), so nothing reads again until the next
+    // request.
+    fn stopped(&mut self) -> Vec<Answer<T, R>> {
+        self.latest_request = None;
+        std::mem::take(&mut self.waiting)
+            .into_iter()
+            .map(|(frame, reply)| {
+                let nearest = self.newest_at(frame).or_else(|| {
+                    self.cache
+                        .range(frame..)
+                        .next()
+                        .map(|(_, (sample, _))| sample)
+                });
+                (reply, nearest.cloned())
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -573,19 +469,218 @@ mod tests {
         assert_eq!(pts_100ns_to_frame(10_000_000, 30), 30);
     }
 
+    // Samples are their index in `frames`, which holds the frame each one rounds to.
+    struct FakeStream {
+        frames: Vec<u32>,
+        keyframe_every: usize,
+        next: usize,
+        reads: usize,
+        seeks: usize,
+        bytes: usize,
+        fail_next_read: bool,
+    }
+
+    impl FakeStream {
+        fn new(frames: impl IntoIterator<Item = u32>, keyframe_every: usize) -> Self {
+            Self {
+                frames: frames.into_iter().collect(),
+                keyframe_every,
+                next: 0,
+                reads: 0,
+                seeks: 0,
+                bytes: 1,
+                fail_next_read: false,
+            }
+        }
+
+        fn step(
+            &mut self,
+            requests: &mut FrameRequests<usize, usize>,
+        ) -> Option<Vec<Answer<usize, usize>>> {
+            match requests.next_step() {
+                Step::Wait => None,
+                Step::Seek(frame) => {
+                    let at = self.frames.iter().rposition(|&f| f <= frame).unwrap_or(0);
+                    self.next = at - at % self.keyframe_every;
+                    self.seeks += 1;
+                    assert!(self.seeks < 100, "seek loop");
+                    requests.seeked(frame);
+                    Some(Vec::new())
+                }
+                Step::Decode => {
+                    self.reads += 1;
+                    Some(if std::mem::take(&mut self.fail_next_read) {
+                        requests.stopped()
+                    } else if let Some(&frame) = self.frames.get(self.next) {
+                        self.next += 1;
+                        requests.decoded(frame, self.next - 1, self.bytes)
+                    } else {
+                        requests.stopped()
+                    })
+                }
+            }
+        }
+
+        fn run(&mut self, requests: &mut FrameRequests<usize, usize>) -> Vec<Answer<usize, usize>> {
+            let mut answers = Vec::new();
+            while let Some(step) = self.step(requests) {
+                answers.extend(step);
+            }
+            answers
+        }
+    }
+
     #[test]
-    fn an_undecoded_frame_is_not_answered_with_the_one_before_it() {
-        let cache = BTreeMap::from([(14, 'a'), (15, 'b')]);
-        assert_eq!(cached_frame_for(&cache, Some(15), 15), Some(&'b'));
-        assert_eq!(cached_frame_for(&cache, Some(15), 16), None);
-        assert_eq!(cached_frame_for(&cache, Some(15), 17), None);
+    fn a_frame_is_answered_once_the_decoder_moves_past_it() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..20, 1);
+        assert!(requests.request(15, 0).is_none());
+        assert_eq!(stream.run(&mut requests), [(0, Some(15))]);
+        assert!(requests.request(16, 1).is_none());
+        assert_eq!(requests.request(15, 2), Some((2, Some(15))));
+        assert_eq!(stream.run(&mut requests), [(1, Some(16))]);
+    }
+
+    #[test]
+    fn colliding_vfr_samples_answer_the_same_whenever_requested() {
+        let frames = [0, 1, 1, 2, 3];
+
+        let mut early = FrameRequests::new(0);
+        let mut stream = FakeStream::new(frames, 10);
+        early.request(1, 0);
+        assert_eq!(stream.run(&mut early), [(0, Some(2))]);
+
+        let mut late = FrameRequests::new(0);
+        let mut stream = FakeStream::new(frames, 10);
+        late.request(0, 0);
+        assert_eq!(stream.run(&mut late), [(0, Some(0))]);
+        assert!(late.request(1, 1).is_none());
+        assert_eq!(stream.run(&mut late), [(1, Some(2))]);
     }
 
     #[test]
     fn a_frame_the_stream_skipped_holds_the_previous_one() {
-        let cache = BTreeMap::from([(14, 'a'), (17, 'b')]);
-        assert_eq!(cached_frame_for(&cache, Some(17), 15), Some(&'a'));
-        assert_eq!(cached_frame_for(&cache, Some(17), 16), Some(&'a'));
-        assert_eq!(cached_frame_for(&cache, None, 16), None);
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new([1, 4, 5], 10);
+        requests.request(0, 0);
+        requests.request(2, 1);
+        requests.request(3, 2);
+        assert_eq!(
+            stream.run(&mut requests),
+            [(0, Some(0)), (1, Some(0)), (2, Some(0))]
+        );
+    }
+
+    #[test]
+    fn readahead_slides_with_every_request() {
+        let mut requests = FrameRequests::new(5);
+        let mut stream = FakeStream::new(0..100, 30);
+        requests.request(0, 0);
+        assert_eq!(stream.run(&mut requests), [(0, Some(0))]);
+        for frame in 1..40 {
+            let sample = frame as usize;
+            assert_eq!(
+                requests.request(frame, sample),
+                Some((sample, Some(sample)))
+            );
+            assert!(stream.run(&mut requests).is_empty());
+            assert_eq!(requests.position(), Some(frame + 5));
+        }
+        assert_eq!(stream.seeks, 1);
+    }
+
+    #[test]
+    fn readahead_never_evicts_a_frame_still_being_shown() {
+        let frames: Vec<u32> = (0..=10).chain(50..=90).collect();
+        let mut requests = FrameRequests::new(8);
+        let mut stream = FakeStream::new(frames.clone(), 100);
+        stream.bytes = MAX_FRAME_CACHE_BYTES / 2;
+        for frame in 0..70 {
+            let mut answers: Vec<_> = requests.request(frame, 0).into_iter().collect();
+            answers.extend(stream.run(&mut requests));
+            assert_eq!(answers, [(0, frames.iter().rposition(|&f| f <= frame))]);
+        }
+        assert_eq!(stream.seeks, 1);
+    }
+
+    #[test]
+    fn every_waiting_request_gets_its_own_frame() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..400, 30);
+        requests.request(300, 0);
+        requests.request(30, 1);
+        assert_eq!(stream.run(&mut requests), [(1, Some(30)), (0, Some(300))]);
+        assert_eq!(stream.seeks, 2);
+    }
+
+    #[test]
+    fn a_passed_frame_missing_from_the_cache_seeks_back() {
+        let mut requests = FrameRequests::new(30);
+        let mut stream = FakeStream::new(0..200, 10);
+        requests.request(100, 0);
+        assert_eq!(stream.run(&mut requests), [(0, Some(100))]);
+        assert!(requests.request(90, 1).is_none());
+        assert_eq!(stream.run(&mut requests), [(1, Some(90))]);
+        assert_eq!(stream.seeks, 2);
+    }
+
+    #[test]
+    fn far_requests_seek_and_near_ones_decode_through() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..400, 30);
+        requests.request(10, 0);
+        stream.run(&mut requests);
+        requests.request(90, 1);
+        assert_eq!(stream.run(&mut requests), [(1, Some(90))]);
+        assert_eq!(stream.seeks, 1);
+        requests.request(300, 2);
+        assert_eq!(stream.run(&mut requests), [(2, Some(300))]);
+        assert_eq!(stream.seeks, 2);
+    }
+
+    #[test]
+    fn a_seek_decodes_through_a_long_gop_without_seeking_again() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..400, 200);
+        requests.request(150, 0);
+        assert_eq!(stream.run(&mut requests), [(0, Some(150))]);
+        assert_eq!(stream.seeks, 1);
+    }
+
+    #[test]
+    fn a_request_inside_a_seeks_preroll_decodes_through() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..400, 30);
+        requests.request(310, 0);
+        stream.step(&mut requests);
+        stream.step(&mut requests);
+        assert_eq!(requests.newest(), Some(300));
+        requests.request(305, 1);
+        assert_eq!(stream.run(&mut requests), [(1, Some(305)), (0, Some(310))]);
+        assert_eq!(stream.seeks, 1);
+    }
+
+    #[test]
+    fn the_end_of_the_stream_holds_its_last_frame() {
+        let mut requests = FrameRequests::new(30);
+        let mut stream = FakeStream::new(0..5, 10);
+        requests.request(3, 0);
+        assert_eq!(stream.run(&mut requests), [(0, Some(3))]);
+        assert!(requests.request(4, 1).is_none());
+        assert!(requests.request(60, 2).is_none());
+        assert_eq!(stream.run(&mut requests), [(1, Some(4)), (2, Some(4))]);
+    }
+
+    #[test]
+    fn a_read_error_answers_what_waits_and_the_next_request_retries() {
+        let mut requests = FrameRequests::new(0);
+        let mut stream = FakeStream::new(0..10, 10);
+        requests.request(0, 0);
+        stream.run(&mut requests);
+        requests.request(5, 1);
+        stream.fail_next_read = true;
+        assert_eq!(stream.run(&mut requests), [(1, Some(1))]);
+        requests.request(5, 2);
+        assert_eq!(stream.run(&mut requests), [(2, Some(5))]);
     }
 }

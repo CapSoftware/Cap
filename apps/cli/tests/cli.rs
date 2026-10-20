@@ -373,6 +373,36 @@ fn record_rejects_zero_fps() {
 }
 
 #[test]
+fn record_validation_failures_emit_json_error_events() {
+    for command in [
+        &["record"][..],
+        &["record", "start"][..],
+        &["record", "start", "--detach"][..],
+    ] {
+        for json_flag in [&["--json"][..], &["--format", "json"][..]] {
+            for (params, expected_error) in [
+                (&["--duration", "0"][..], "Duration"),
+                (&["--duration", "NaN"][..], "Duration"),
+                (&["--duration", "inf"][..], "Duration"),
+                (&["--fps", "0", "--duration", "1"][..], "--fps"),
+                (&["--duration", "1"][..], "No target specified"),
+            ] {
+                let mut args = command.to_vec();
+                args.extend_from_slice(json_flag);
+                args.extend_from_slice(params);
+                let output = run(&args);
+                assert_eq!(output.status.code(), Some(1), "args: {args:?}");
+                let json = parse_json(&output);
+                assert_eq!(json["type"], "error", "args: {args:?}");
+                let error = json["error"].as_str().expect("expected an error message");
+                assert!(error.contains(expected_error), "args: {args:?}: {error}");
+                assert!(stderr(&output).contains(error), "args: {args:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn export_rejects_settings_json_with_flags() {
     let output = run(&[
         "export",
