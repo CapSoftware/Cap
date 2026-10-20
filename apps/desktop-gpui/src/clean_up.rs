@@ -211,13 +211,22 @@ pub struct TrackLevels<'a> {
     pub gain_db: f32,
 }
 
+/// Merges tracks into one envelope, never longer than the longest track.
+/// Offsets come from the project file, so they are clamped: an out-of-range
+/// offset only moves a track out of view, it can't grow the allocation.
 pub fn combined_levels(tracks: &[TrackLevels]) -> Vec<f32> {
+    let max_len = tracks
+        .iter()
+        .map(|track| track.levels.len())
+        .max()
+        .unwrap_or(0);
+    let bound = isize::try_from(max_len).unwrap_or(isize::MAX);
     let shifts: Vec<isize> = tracks
         .iter()
         .map(|track| {
             let shift = track.offset_secs / ENVELOPE_STEP_SECS;
             if shift.is_finite() {
-                shift.round() as isize
+                shift.round().clamp(-(bound as f64), bound as f64) as isize
             } else {
                 0
             }
@@ -226,7 +235,7 @@ pub fn combined_levels(tracks: &[TrackLevels]) -> Vec<f32> {
     let len = tracks
         .iter()
         .zip(&shifts)
-        .map(|(track, shift)| (track.levels.len() as isize - shift).max(0))
+        .map(|(track, shift)| (track.levels.len() as isize - shift).clamp(0, bound))
         .max()
         .unwrap_or(0) as usize;
     (0..len)
@@ -874,6 +883,19 @@ mod tests {
         assert_eq!(combined[49], -66.);
         assert_eq!(combined[50], -26.);
         assert_eq!(combined[150], -90.);
+    }
+
+    #[test]
+    fn extreme_offsets_never_grow_the_envelope_past_the_longest_track() {
+        let mic = levels(&[(1.0, -20.)]);
+        for offset_secs in [-1.0e12, 1.0e12, f64::MIN, f64::MAX, f64::NAN, f64::INFINITY] {
+            let combined = combined_levels(&[TrackLevels {
+                levels: &mic,
+                offset_secs,
+                gain_db: 0.,
+            }]);
+            assert!(combined.len() <= mic.len(), "offset {offset_secs}");
+        }
     }
 
     #[test]
