@@ -14,10 +14,10 @@ import type {
 import { MultipartClient } from "./upload/multipart-client";
 
 export type {
+	RecorderEventMap,
 	RecorderOptions,
 	RecorderPhase,
 	RecordingResult,
-	RecorderEventMap,
 };
 
 const DEFAULT_API_BASE = "https://cap.so";
@@ -124,7 +124,7 @@ export class CapRecorder {
 				systemAudio: this.options.systemAudio,
 			});
 
-			const composite = buildCompositeStream(this.streams);
+			const composite = await buildCompositeStream(this.streams);
 			if (composite.getTracks().length === 0) {
 				throw new Error("No media tracks available");
 			}
