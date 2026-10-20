@@ -109,7 +109,9 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					}),
 				);
 				started += result.importedCount;
-				failures.push(...result.results.filter((row) => !row.success));
+				failures.push(
+					...result.results.filter((row) => !row.success || row.error),
+				);
 				setProcessedRows(index + batch.length);
 				setStartedRows(started);
 				setFailedRows([...failures]);
@@ -275,15 +277,19 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				</Button>
 				{processedRows > 0 && (
 					<p className="mt-2 text-xs text-gray-10">
-						{startedRows} jobs started; {failedRows.length} rows failed to
-						start.
+						{startedRows} jobs started;{" "}
+						{failedRows.filter((row) => !row.success).length} rows failed to
+						start; {failedRows.filter((row) => row.success).length} started rows
+						need space mapping.
 					</p>
 				)}
 				{failedRows.length > 0 && (
-					<ul className="mt-3 max-h-48 list-inside list-disc overflow-y-auto text-xs text-red-11">
+					<ul className="mt-3 max-h-48 list-inside list-disc overflow-y-auto text-xs text-red-400">
 						{failedRows.map((row) => (
 							<li key={row.rowNumber}>
-								Row {row.rowNumber}: {row.error || "Could not start import."}
+								Row {row.rowNumber}
+								{row.success && row.spaceName ? ` (${row.spaceName})` : ""}:{" "}
+								{row.error || "Could not start import."}
 							</li>
 						))}
 					</ul>
@@ -520,7 +526,7 @@ export function LoomMigrationQueue() {
 				</p>
 			)}
 			{queueQuery.isError && (
-				<div className="rounded-lg border border-red-7 bg-red-3 p-4 text-sm text-red-11">
+				<div className="rounded-lg border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-400">
 					Could not load the queue. {queueQuery.error.message}
 					<button
 						className="ml-2 underline"

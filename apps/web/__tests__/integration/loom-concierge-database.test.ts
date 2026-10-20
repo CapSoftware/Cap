@@ -10,8 +10,14 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { Organisation, User, Video } from "@cap/web-domain";
+import {
+	Organisation,
+	type Storage as StorageDomain,
+	User,
+	Video,
+} from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { createConnection } from "mysql2/promise";
 import {
 	afterAll,
 	beforeAll,
@@ -64,6 +70,8 @@ vi.mock("@cap/database/auth/session", () => ({
 
 const OPERATOR_EMAIL = "richie@cap.so";
 const realFetch = globalThis.fetch;
+
+type StorageUploadTarget = StorageDomain.UploadTarget;
 
 function id() {
 	return randomUUID().replaceAll("-", "").slice(0, 15);
@@ -173,6 +181,31 @@ async function setUploadPhase(
 		.update(videoUploads)
 		.set({ phase })
 		.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
+}
+
+async function uploadToTarget(target: StorageUploadTarget) {
+	const body = new Uint8Array(4096).fill(7);
+	if (target.type === "put") {
+		const response = await realFetch(target.url, {
+			method: "PUT",
+			headers: target.headers,
+			body,
+		});
+		expect(response.ok).toBe(true);
+	} else if (target.type === "s3Post") {
+		const form = new FormData();
+		for (const [key, value] of Object.entries(target.fields)) {
+			form.append(key, value);
+		}
+		form.append("file", new Blob([body], { type: "video/mp4" }));
+		const response = await realFetch(target.url, {
+			method: "POST",
+			body: form,
+		});
+		expect(response.ok).toBe(true);
+	} else {
+		throw new Error(`Unexpected upload target ${target.type}`);
+	}
 }
 
 function stubLoomFetch() {
@@ -764,29 +797,7 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 			}),
 		).rejects.toThrow("already in the Cap import inventory");
 
-		const target = retry.uploadTarget;
-		const body = new Uint8Array(4096).fill(7);
-		if (target.type === "put") {
-			const response = await realFetch(target.url, {
-				method: "PUT",
-				headers: target.headers,
-				body,
-			});
-			expect(response.ok).toBe(true);
-		} else if (target.type === "s3Post") {
-			const form = new FormData();
-			for (const [key, value] of Object.entries(target.fields)) {
-				form.append(key, value);
-			}
-			form.append("file", new Blob([body], { type: "video/mp4" }));
-			const response = await realFetch(target.url, {
-				method: "POST",
-				body: form,
-			});
-			expect(response.ok).toBe(true);
-		} else {
-			throw new Error(`Unexpected upload target ${target.type}`);
-		}
+		await uploadToTarget(retry.uploadTarget);
 
 		fixture.start.mockClear();
 		const finished = await loom.finishConciergeLoomFileUpload({
@@ -811,6 +822,105 @@ describe.skipIf(!databaseUrl)("Loom concierge migration database", () => {
 				videoTitle: "Kickoff",
 			}),
 		).rejects.toThrow("already in the Cap import inventory");
+	});
+
+	it("recovers a failed automatic import with a restricted MP4", async () => {
+		const { ownerId, organizationId } = await makeOrganization();
+		const requestId = await requestMigration(organizationId, ownerId);
+		const ownerEmail = `${id()}@example.com`;
+		const loomUrl = `https://www.loom.com/share/${loomId()}`;
+
+		signInAs(operatorId);
+		const imported = await loom.importFromLoomCsvForConcierge({
+			requestId,
+			rows: [{ rowNumber: 2, loomUrl, userEmail: ownerEmail, spaceName: "" }],
+		});
+		const videoId = imported.results[0]?.videoId;
+		if (!videoId) throw new Error("Missing automatic import");
+		await setUploadPhase(videoId, "error");
+		const [failed] = await db()
+			.select({ rawFileKey: videoUploads.rawFileKey })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId));
+		expect(failed?.rawFileKey).toBeNull();
+
+		const prepared = await loom.createConciergeLoomFileUpload({
+			requestId,
+			loomUrl,
+			userEmail: ownerEmail,
+			spaceName: "",
+			videoTitle: "Recovered",
+		});
+		expect(prepared.videoId).toBe(videoId);
+		const [video] = await db()
+			.select({ ownerId: videos.ownerId })
+			.from(videos)
+			.where(eq(videos.id, videoId));
+		const [recovering] = await db()
+			.select({ rawFileKey: videoUploads.rawFileKey })
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId));
+		expect(recovering?.rawFileKey).toBe(
+			`${video?.ownerId}/${videoId}/raw-upload.mp4`,
+		);
+		expect((await getRequest(requestId)).queuedVideoCount).toBe(1);
+
+		await uploadToTarget(prepared.uploadTarget);
+		fixture.start.mockClear();
+		const finished = await loom.finishConciergeLoomFileUpload({
+			requestId,
+			videoId,
+		});
+		expect(finished.status).toBe("started");
+		expect(fixture.start).toHaveBeenCalledTimes(1);
+	});
+
+	it("waits for an in-flight import transaction before completing", async () => {
+		const { ownerId, organizationId } = await makeOrganization();
+		const requestId = await requestMigration(organizationId, ownerId);
+		if (!databaseUrl) throw new Error("Missing test database");
+		const connection = await createConnection(databaseUrl);
+		const videoId = id();
+		try {
+			await connection.beginTransaction();
+			await connection.query(
+				"SELECT id FROM loom_migration_requests WHERE id = ? FOR UPDATE",
+				[requestId],
+			);
+			await connection.query(
+				"INSERT INTO videos (id, ownerId, orgId, name, source, createdAt, updatedAt) VALUES (?, ?, ?, 'In flight', ?, NOW(), NOW())",
+				[videoId, ownerId, organizationId, JSON.stringify({ type: "webMP4" })],
+			);
+			await connection.query(
+				"INSERT INTO video_uploads (video_id, phase, mode) VALUES (?, 'uploading', 'singlepart')",
+				[videoId],
+			);
+			await connection.query(
+				"INSERT INTO loom_migration_imports (videoId, requestId, createdAt) VALUES (?, ?, NOW())",
+				[videoId, requestId],
+			);
+
+			signInAs(operatorId);
+			const completion = actions.updateLoomMigrationStatus({
+				requestId,
+				nextStatus: "completed",
+				message: "",
+				verified: true,
+				expectedVideoCount: 0,
+				importedVideoCount: 0,
+			});
+			const settled = completion.then(
+				() => "completed",
+				(error: Error) => error.message,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			await connection.commit();
+
+			expect(await settled).toContain("still processing");
+			expect((await getRequest(requestId)).status).toBe("pending");
+		} finally {
+			await connection.end();
+		}
 	});
 
 	it("refuses to map another request's video", async () => {

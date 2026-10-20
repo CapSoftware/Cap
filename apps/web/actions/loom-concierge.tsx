@@ -16,7 +16,7 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray, isNotNull, lte, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
 	getCustomerMigrationRequests,
@@ -272,72 +272,83 @@ async function saveMigrationStatus({
 	) {
 		return;
 	}
-	if (nextStatus === "completed") {
-		const [unfinishedImport] = await db()
-			.select({ videoId: videoUploads.videoId })
-			.from(loomMigrationImports)
-			.innerJoin(
-				videoUploads,
-				eq(videoUploads.videoId, loomMigrationImports.videoId),
-			)
-			.where(
-				and(
-					eq(loomMigrationImports.requestId, requestId),
-					inArray(videoUploads.phase, [
-						"uploading",
-						"processing",
-						"generating_thumbnail",
-						"error",
-					]),
-				),
-			)
-			.limit(1);
-		if (unfinishedImport) {
-			throw new LoomMigrationError(
-				"Loom imports are still processing or have errors. Resolve them before completion.",
-			);
-		}
-	}
 	const [organization] = await db()
 		.select({ name: organizations.name })
 		.from(organizations)
 		.where(eq(organizations.id, request.organizationId))
 		.limit(1);
-	const result = await db()
-		.update(loomMigrationRequests)
-		.set({
-			status: nextStatus,
-			capMessage: normalizedMessage || null,
-			expectedVideoCount,
-			importedVideoCount,
-			activeImportCount: nextStatus === "completed" ? 0 : undefined,
-			activeImportLeaseToken: nextStatus === "completed" ? null : undefined,
-			activeImportLeaseUntil: nextStatus === "completed" ? null : undefined,
-			activeOrganizationId:
-				nextStatus === "completed" ? null : request.organizationId,
-			completedAt: nextStatus === "completed" ? new Date() : null,
-			lastOperatorUserId: operator.id,
-			lastOperatorAt: new Date(),
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(loomMigrationRequests.id, requestId),
-				eq(loomMigrationRequests.status, request.status),
-				isNotNull(loomMigrationRequests.activeOrganizationId),
-				nextStatus === "completed"
-					? or(
-							eq(loomMigrationRequests.activeImportCount, 0),
-							lte(loomMigrationRequests.activeImportLeaseUntil, new Date()),
-						)
-					: undefined,
-			),
-		);
-	if (affectedRows(result) === 0) {
-		throw new LoomMigrationError(
-			"The migration request changed or imports are starting. Refresh and try again.",
-		);
-	}
+	await db().transaction(async (tx) => {
+		const now = new Date();
+		const [current] = await tx
+			.select({
+				status: loomMigrationRequests.status,
+				activeOrganizationId: loomMigrationRequests.activeOrganizationId,
+				activeImportCount: loomMigrationRequests.activeImportCount,
+				activeImportLeaseUntil: loomMigrationRequests.activeImportLeaseUntil,
+			})
+			.from(loomMigrationRequests)
+			.where(eq(loomMigrationRequests.id, requestId))
+			.limit(1)
+			.for("update");
+		const importStarting =
+			!!current &&
+			current.activeImportCount > 0 &&
+			(!current.activeImportLeaseUntil || current.activeImportLeaseUntil > now);
+		if (
+			!current?.activeOrganizationId ||
+			current.status !== request.status ||
+			(nextStatus === "completed" && importStarting)
+		) {
+			throw new LoomMigrationError(
+				"The migration request changed or imports are starting. Refresh and try again.",
+			);
+		}
+		if (nextStatus === "completed") {
+			const [unfinishedImport] = await tx
+				.select({ videoId: videoUploads.videoId })
+				.from(loomMigrationImports)
+				.innerJoin(
+					videoUploads,
+					eq(videoUploads.videoId, loomMigrationImports.videoId),
+				)
+				.where(
+					and(
+						eq(loomMigrationImports.requestId, requestId),
+						inArray(videoUploads.phase, [
+							"uploading",
+							"processing",
+							"generating_thumbnail",
+							"error",
+						]),
+					),
+				)
+				.limit(1)
+				.for("share");
+			if (unfinishedImport) {
+				throw new LoomMigrationError(
+					"Loom imports are still processing or have errors. Resolve them before completion.",
+				);
+			}
+		}
+		await tx
+			.update(loomMigrationRequests)
+			.set({
+				status: nextStatus,
+				capMessage: normalizedMessage || null,
+				expectedVideoCount,
+				importedVideoCount,
+				activeImportCount: nextStatus === "completed" ? 0 : undefined,
+				activeImportLeaseToken: nextStatus === "completed" ? null : undefined,
+				activeImportLeaseUntil: nextStatus === "completed" ? null : undefined,
+				activeOrganizationId:
+					nextStatus === "completed" ? null : request.organizationId,
+				completedAt: nextStatus === "completed" ? now : null,
+				lastOperatorUserId: operator.id,
+				lastOperatorAt: now,
+				updatedAt: now,
+			})
+			.where(eq(loomMigrationRequests.id, requestId));
+	});
 
 	const customerVisibleChange =
 		nextStatus !== request.status ||

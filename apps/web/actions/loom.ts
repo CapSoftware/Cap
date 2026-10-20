@@ -1204,11 +1204,16 @@ async function prepareConciergeLoomFileUpload({
 			)
 			.limit(1);
 		if (existing) {
+			const existingRawFileKey =
+				existing.rawFileKey ??
+				(existing.phase === "error" && existing.ownerId
+					? `${existing.ownerId}/${existing.id}/raw-upload.mp4`
+					: null);
 			if (
 				!existing.ownerId ||
 				!existing.ownerEmail ||
 				normalizeImportEmail(existing.ownerEmail) !== normalizedEmail ||
-				!existing.rawFileKey ||
+				!existingRawFileKey ||
 				(existing.phase !== "error" &&
 					(existing.phase !== "uploading" ||
 						existing.processingMessage !== "Uploading Loom video..."))
@@ -1219,7 +1224,7 @@ async function prepareConciergeLoomFileUpload({
 			}
 			const retryUpload = await Storage.createUploadTargetForUser(
 				existing.ownerId,
-				existing.rawFileKey,
+				existingRawFileKey,
 				{
 					contentType: "video/mp4",
 					videoTitle: normalizedTitle,
@@ -1249,7 +1254,7 @@ async function prepareConciergeLoomFileUpload({
 					"This Loom import belongs to another migration request.",
 				);
 			}
-			if (!mapped) {
+			if (!mapped || !existing.rawFileKey) {
 				await db().transaction(async (tx) => {
 					const [reservation] = await tx
 						.select({
@@ -1271,6 +1276,19 @@ async function prepareConciergeLoomFileUpload({
 							"The concierge import expired. Retry this video.",
 						);
 					}
+					if (!existing.rawFileKey) {
+						await tx
+							.update(videoUploads)
+							.set({ rawFileKey: existingRawFileKey, updatedAt: new Date() })
+							.where(
+								and(
+									eq(videoUploads.videoId, Video.VideoId.make(existing.id)),
+									eq(videoUploads.phase, "error"),
+									isNull(videoUploads.rawFileKey),
+								),
+							);
+					}
+					if (mapped) return;
 					await tx.insert(loomMigrationImports).values({
 						videoId: Video.VideoId.make(existing.id),
 						requestId,

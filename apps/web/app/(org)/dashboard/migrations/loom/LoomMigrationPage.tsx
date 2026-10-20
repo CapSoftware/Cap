@@ -191,7 +191,7 @@ export function LoomMigrationPage() {
 				</div>
 			)}
 			{migrationQuery.isError && (
-				<div className="rounded-lg border border-red-7 bg-red-3 p-4 text-sm text-red-11">
+				<div className="rounded-lg border border-red-400/30 bg-red-400/10 p-4 text-sm text-red-400">
 					Could not load your migration. {migrationQuery.error.message}
 					<button
 						className="ml-2 underline"
