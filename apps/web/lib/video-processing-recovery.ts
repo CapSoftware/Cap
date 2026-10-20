@@ -14,6 +14,7 @@ import {
 	sql,
 } from "drizzle-orm";
 import { start } from "workflow/api";
+import { markLoomImportRetrying } from "@/lib/loom-import/retry";
 import { setVideoProcessingError } from "@/lib/video-processing";
 import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "@/lib/workflow-recovery";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
@@ -181,6 +182,7 @@ async function recoverLoomCandidate({
 				reuseExistingRawUpload: phase === "error",
 			},
 		]);
+		if (phase === "error") await markLoomImportRetrying(videoId);
 		return "started";
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

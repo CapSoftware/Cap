@@ -102,7 +102,10 @@ describe("Cap for Agents docs", () => {
 		expect(drive).toContain("organization manages storage");
 
 		const migration = getDocBySlug("migrating-to-cap")?.content ?? "";
-		expect(migration).toContain("no more than 500 data rows");
+		expect(migration).toContain("no more than 2,000 videos");
+		expect(migration).toContain(
+			"generated the first time each video is opened",
+		);
 		expect(migration).toContain("one Cap space label");
 		expect(migration).toContain("cap jobs wait <operation-id> --json");
 		expect(migration).toContain("hundreds of users");
@@ -294,7 +297,7 @@ describe("Cap for Agents docs", () => {
 		expect(llms).toContain("explicit confirmation before every mutation");
 		expect(llms).toContain("https://cap.so/docs/teams/google-drive");
 		expect(llms).toContain("https://cap.so/docs/migrating-to-cap");
-		expect(llms).toContain("up to 500 rows per self-serve batch");
+		expect(llms).toContain("up to 2,000 rows per self-serve batch");
 	});
 
 	it("keeps the reviewed documentation free of em dashes", () => {

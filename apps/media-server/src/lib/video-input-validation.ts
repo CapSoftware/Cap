@@ -1,13 +1,23 @@
 import { spawn } from "bun";
-import { PROCESS_TIMEOUT_MS, withTimeout } from "./media-common";
+import {
+	PROCESS_TIMEOUT_MS,
+	withIdleTimeout,
+	withTimeout,
+} from "./media-common";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 
 const MAX_DIAGNOSTIC_LENGTH = 8_192;
+
+export interface ValidationProgress {
+	idleTimeoutMs: number;
+	onProgress: () => void;
+}
 
 export async function validateVideoInput(
 	inputPath: string,
 	abortSignal?: AbortSignal,
 	timeoutMs = PROCESS_TIMEOUT_MS,
+	progress?: ValidationProgress,
 ): Promise<void> {
 	abortSignal?.throwIfAborted();
 	const proc = registerSubprocess(
@@ -35,11 +45,12 @@ export async function validateVideoInput(
 				"demux",
 				"-abort_on",
 				"empty_output",
+				...(progress ? ["-progress", "pipe:1"] : []),
 				"-f",
 				"null",
 				"-",
 			],
-			stdout: "ignore",
+			stdout: progress ? "pipe" : "ignore",
 			stderr: "pipe",
 		}),
 	);
@@ -65,13 +76,52 @@ export async function validateVideoInput(
 			reader.releaseLock();
 		}
 	};
-	const completion = Promise.all([proc.exited, readDiagnostics()]);
+	const readProgress = async (touch: () => void) => {
+		if (!progress) return;
+		const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+		const decoder = new TextDecoder();
+		let buffered = "";
+		let decodedUs = -1;
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffered += decoder.decode(value, { stream: true });
+				const lines = buffered.split("\n");
+				buffered = lines.pop() ?? "";
+				for (const line of lines) {
+					const match = line.match(/^out_time_us=(\d+)/);
+					const outTimeUs = match ? Number.parseInt(match[1] ?? "0", 10) : -1;
+					if (outTimeUs <= decodedUs) continue;
+					decodedUs = outTimeUs;
+					touch();
+					progress.onProgress();
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	};
+	let completion: Promise<unknown> = Promise.resolve();
+	const run = (touch: () => void) => {
+		const settled = Promise.all([
+			proc.exited,
+			readDiagnostics(),
+			readProgress(touch),
+		]);
+		completion = settled;
+		return settled;
+	};
 	try {
-		const [exitCode, diagnostics] = await withTimeout(
-			completion,
-			timeoutMs,
-			() => terminateProcess(proc),
-		);
+		const [exitCode, diagnostics] = progress
+			? await withIdleTimeout(run, progress.idleTimeoutMs, () =>
+					terminateProcess(proc),
+				)
+			: await withTimeout(
+					run(() => {}),
+					timeoutMs,
+					() => terminateProcess(proc),
+				);
 		abortSignal?.throwIfAborted();
 		if (diagnostics) {
 			console.warn("[video/input-validation] Source decoding diagnostics", {

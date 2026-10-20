@@ -188,6 +188,37 @@ describe("recoverStalledVideoPipeline", () => {
 		expect(result.ai.statuses).toEqual({ started: 1 });
 	});
 
+	it("leaves never-watched Loom imports for their first view instead of transcribing them", async () => {
+		const chains: ReturnType<typeof makeSelectChain>[] = [];
+		mockDb.mockImplementation(() => {
+			const chain = makeSelectChain([]);
+			chains.push(chain);
+			return chain;
+		});
+
+		const { recoverStalledVideoPipeline } = await import(
+			"@/lib/video-pipeline-recovery"
+		);
+		await recoverStalledVideoPipeline({ now, concurrency: 1 });
+
+		const transcriptionQuery = chains[1];
+		expect(transcriptionQuery?.leftJoin).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "importedVideos.id" }),
+			expect.anything(),
+		);
+		const conditions = JSON.stringify(transcriptionQuery?.where.mock.calls[0]);
+		expect(conditions).toContain(
+			JSON.stringify(["videos.transcriptionStatus", "importedVideos.id"]),
+		);
+		expect(conditions).toContain(
+			JSON.stringify({
+				left: "videos.transcriptionStatus",
+				right: "PROCESSING",
+			}),
+		);
+		expect(mockTranscribeVideo).not.toHaveBeenCalled();
+	});
+
 	it("does not start a duplicate media workflow after a lost claim", async () => {
 		const mediaCandidate = {
 			videoId: "video-media",

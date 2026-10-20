@@ -13,21 +13,22 @@ A successful migration is not just a count of accepted URLs. It preserves owners
 | Library | Recommended path |
 |---------|------------------|
 | One Loom video | Paste the Loom URL in **Dashboard > Import > Loom** |
-| Up to 500 mapped videos | Use the organization CSV importer |
-| More than 500 videos or a complex hierarchy | Run controlled batches with an agent or contact [hello@cap.so](mailto:hello@cap.so) for a managed migration |
+| Up to 2,000 videos | Use the CSV importer |
+| More than 2,000 videos | Split the list into several CSVs and import each one. Imports can run side by side |
+| A complex hierarchy | Run controlled batches with an agent or contact [hello@cap.so](mailto:hello@cap.so) for a managed migration |
 
-Loom import is a Cap Pro feature. Bulk CSV import is available to organization owners and admins.
+Anyone can upload a CSV and have Cap check the whole library for free. Copying the videos into Cap needs Cap Pro, and the import starts as soon as the upgrade is confirmed. Organization owners and admins can import for teammates and spaces; everyone else imports into their own library.
 
 ## Prepare the source inventory
 
-Export or prepare one row per unique Loom recording. The CSV importer expects:
+Loom workspace admins can export every video from **Settings > Workspace > Data > Export engagement insights**. You can also prepare one row per unique Loom recording yourself:
 
 ```csv
 loom_video_url,user_email,space_name
 https://www.loom.com/share/example,owner@example.com,Customer Success
 ```
 
-`loom_video_url` and `user_email` are required. `space_name` is optional.
+Only the Loom link column is required. The importer finds it by its contents, so Loom's own export, comma, semicolon or tab separated files, and a plain list of links all work. `user_email` and `space_name` are optional. Rows without an owner are imported into your own library.
 
 The importer treats `space_name` as one Cap space label. It does not interpret slashes or other separators as a nested folder hierarchy. If your source library has nested folders, agree on an explicit mapping before importing.
 
@@ -35,13 +36,14 @@ Cap can provision a missing organization user during a mapped migration without 
 
 ## Run a self-serve CSV migration
 
-1. Open **Dashboard > Import > Loom**.
-2. Select the CSV option.
-3. Upload a CSV with no more than 500 data rows.
-4. Map the Loom URL, owner email, and optional space-name columns.
-5. Review invalid rows and the preview.
-6. Confirm the import.
-7. Keep the result report. The UI runs imports in controlled batches and reports completed and failed rows.
+1. Open **Dashboard > Import > Loom** and choose **Bulk Import**.
+2. Drop a CSV with up to 2,000 videos, or paste Loom links.
+3. Check the columns Cap picked for Loom links, owners and spaces. Rows that are not Loom links and duplicate videos are listed before anything starts.
+4. Start the import. Cap checks every link with Loom first, so private, password-protected and deleted videos are flagged straight away with the reason.
+5. Follow each video on the import page. Videos copy a few at a time in the background, keep their Loom title and original recording date, and land in their owner's library. You can close the tab.
+6. Retry failed videos from the import page, then download the Loom to Cap link list to update links in your docs and wikis.
+
+Transcripts, AI titles, summaries and chapters for imported videos are generated the first time each video is opened.
 
 Private, expired, password-protected, deleted, or otherwise unavailable Loom URLs cannot be imported until the source is accessible. Keep those rows in a separate exception list instead of silently dropping them.
 
@@ -89,7 +91,7 @@ This has allowed Cap to move organizations with hundreds of users and libraries 
 - Every owner email has an intentional mapping
 - Every `space_name` is one Cap space label
 - Nested folders have a separate explicit plan
-- Batches contain no more than 500 rows in the self-serve UI
+- Each self-serve CSV holds no more than 2,000 videos
 - Every accepted import reaches a terminal result
 - Completed totals are reconciled with failures and unavailable sources
 - A playback and permissions sample passes before the source system is retired

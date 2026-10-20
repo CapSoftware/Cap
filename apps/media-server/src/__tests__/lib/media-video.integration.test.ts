@@ -32,6 +32,7 @@ import {
 	repairContainer,
 	uploadFileToS3,
 	uploadFileToStorage,
+	uploadTimeoutMs,
 	uploadToS3,
 } from "../../lib/media-video";
 
@@ -1007,6 +1008,80 @@ describe("processVideo integration tests", () => {
 		await tempFile.cleanup();
 		expect(existsSync(tempFile.path)).toBe(false);
 	}, 60000);
+
+	test("lets an encode run past its idle limit while frames keep advancing", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "advancing-encode-"));
+		const longInput = join(dir, "input.mp4");
+		execFileSync("ffmpeg", [
+			"-hide_banner",
+			"-v",
+			"error",
+			"-f",
+			"lavfi",
+			"-i",
+			"testsrc2=size=1280x720:rate=30",
+			"-t",
+			"60",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"ultrafast",
+			"-pix_fmt",
+			"yuv420p",
+			"-y",
+			longInput,
+		]);
+		const idleTimeoutMs = 1_500;
+		try {
+			const metadata = await probeVideo(`file://${longInput}`);
+			const progressUpdates: number[] = [];
+			const started = performance.now();
+
+			const tempFile = await processVideo(
+				longInput,
+				metadata,
+				{ maxWidth: 960, maxHeight: 540, preset: "medium", idleTimeoutMs },
+				(progress) => progressUpdates.push(progress),
+			);
+			tempFiles.push(tempFile.path);
+
+			expect(performance.now() - started).toBeGreaterThan(idleTimeoutMs * 2);
+			expect(progressUpdates.length).toBeGreaterThan(2);
+			for (let index = 1; index < progressUpdates.length; index++) {
+				expect(progressUpdates[index]).toBeGreaterThan(
+					progressUpdates[index - 1] ?? -1,
+				);
+			}
+			await tempFile.cleanup();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 120000);
+
+	test("stops an encode whose input stops producing frames", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const dir = mkdtempSync(join(tmpdir(), "stalled-encode-"));
+		const stalledInput = join(dir, "input.mp4");
+		execFileSync("mkfifo", [stalledInput]);
+		try {
+			const started = performance.now();
+			await expect(
+				processVideo(stalledInput, metadata, {
+					remuxOnly: true,
+					idleTimeoutMs: 1_000,
+				}),
+			).rejects.toThrow("Stopped making progress");
+			expect(performance.now() - started).toBeLessThan(15_000);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30000);
+
+	test("gives large uploads time in proportion to their size", () => {
+		expect(uploadTimeoutMs(0)).toBe(10 * 60 * 1000);
+		expect(uploadTimeoutMs(200 * 1024 * 1024)).toBe(10 * 60 * 1000);
+		expect(uploadTimeoutMs(3 * 1024 ** 3)).toBe(3 * 1024 * 1000);
+	});
 
 	test("respects CRF setting", async () => {
 		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
