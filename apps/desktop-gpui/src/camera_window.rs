@@ -1861,7 +1861,6 @@ impl CameraWindow {
                 // the next frame.
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
                 Err(flume::TrySendError::Disconnected(job)) => {
-                    // The thread could not start: convert here, as before.
                     let settings = job.settings;
                     let max_dims = settings.blur_mode.map(|_| camera_blur::BLUR_MAX_DIMS);
                     let force_rebuild = self
