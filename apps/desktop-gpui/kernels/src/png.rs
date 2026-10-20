@@ -706,6 +706,7 @@ mod tests {
     // Expected costs must not come from `sum_abs`: this PR gives it a NEON path
     // built from the same `vabsq_s8`/`vaddlvq_u8` pair the filters use, so a wrong
     // absolute-value or reduction would cancel out on both sides of the assert.
+    #[cfg(target_arch = "aarch64")]
     fn scalar_filter_cost(buf: &[u8]) -> u64 {
         let mut total = 0u64;
         for &b in buf {
