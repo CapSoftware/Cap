@@ -24,9 +24,11 @@ import {
 	requireCustomerMigrationAccess,
 	requireMigrationOperator,
 	requireProCustomerMigrationAccess,
+	toLoomMigrationResult,
 } from "@/lib/loom-concierge";
 import {
 	LOOM_MIGRATION_STATUS_LABELS,
+	LoomMigrationError,
 	type LoomMigrationStatus,
 	normalizeMigrationText,
 	validateOperatorMigrationUpdate,
@@ -51,14 +53,14 @@ function refreshMigrationPages() {
 
 async function findMigration(requestId: string) {
 	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
-		throw new Error("Invalid migration request.");
+		throw new LoomMigrationError("Invalid migration request.");
 	}
 	const [request] = await db()
 		.select()
 		.from(loomMigrationRequests)
 		.where(eq(loomMigrationRequests.id, requestId))
 		.limit(1);
-	if (!request) throw new Error("Migration request not found.");
+	if (!request) throw new LoomMigrationError("Migration request not found.");
 	return request;
 }
 
@@ -73,15 +75,21 @@ export async function getLoomMigrationDashboard(
 	return { isPro, requests };
 }
 
-export async function requestLoomMigration({
-	organizationId,
-	workspaceName,
-	note,
-}: {
+type LoomMigrationRequestInput = {
 	organizationId: Organisation.OrganisationId;
 	workspaceName: string;
 	note: string;
-}) {
+};
+
+export async function requestLoomMigration(input: LoomMigrationRequestInput) {
+	return toLoomMigrationResult(() => createMigrationRequest(input));
+}
+
+async function createMigrationRequest({
+	organizationId,
+	workspaceName,
+	note,
+}: LoomMigrationRequestInput) {
 	const user = await requireProCustomerMigrationAccess(organizationId);
 	const normalizedWorkspaceName = normalizeMigrationText(
 		workspaceName,
@@ -154,10 +162,14 @@ export async function requestLoomMigration({
 }
 
 export async function confirmLoomMigrationInvite(requestId: string) {
+	return toLoomMigrationResult(() => markMigrationInviteSent(requestId));
+}
+
+async function markMigrationInviteSent(requestId: string) {
 	const request = await findMigration(requestId);
 	await requireCustomerMigrationAccess(request.organizationId);
 	if (request.status === "completed") {
-		throw new Error("This migration is already complete.");
+		throw new LoomMigrationError("This migration is already complete.");
 	}
 	if (request.invitedAt) return;
 	const result = await db()
@@ -170,23 +182,30 @@ export async function confirmLoomMigrationInvite(requestId: string) {
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error("The migration request changed. Refresh and try again.");
+		throw new LoomMigrationError(
+			"The migration request changed. Refresh and try again.",
+		);
 	}
 	refreshMigrationPages();
 }
 
-export async function answerLoomMigrationQuestion({
+type LoomMigrationAnswerInput = { requestId: string; answer: string };
+
+export async function answerLoomMigrationQuestion(
+	input: LoomMigrationAnswerInput,
+) {
+	return toLoomMigrationResult(() => saveMigrationAnswer(input));
+}
+
+async function saveMigrationAnswer({
 	requestId,
 	answer,
-}: {
-	requestId: string;
-	answer: string;
-}) {
+}: LoomMigrationAnswerInput) {
 	const request = await findMigration(requestId);
 	await requireCustomerMigrationAccess(request.organizationId);
 	const normalizedAnswer = normalizeMigrationText(answer, "Answer", 2000);
 	if (!normalizedAnswer)
-		throw new Error("Enter the information Cap asked for.");
+		throw new LoomMigrationError("Enter the information Cap asked for.");
 	const result = await db()
 		.update(loomMigrationRequests)
 		.set({
@@ -201,7 +220,9 @@ export async function answerLoomMigrationQuestion({
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error("The migration request changed. Refresh and try again.");
+		throw new LoomMigrationError(
+			"The migration request changed. Refresh and try again.",
+		);
 	}
 	refreshMigrationPages();
 }
@@ -210,21 +231,29 @@ export async function getLoomMigrationOperatorQueue() {
 	return getOperatorMigrationQueue();
 }
 
-export async function updateLoomMigrationStatus({
-	requestId,
-	nextStatus,
-	message,
-	verified,
-	expectedVideoCount,
-	importedVideoCount,
-}: {
+type LoomMigrationStatusInput = {
 	requestId: string;
 	nextStatus: LoomMigrationStatus;
 	message: string;
 	verified: boolean;
 	expectedVideoCount: number | null;
 	importedVideoCount: number;
-}) {
+};
+
+export async function updateLoomMigrationStatus(
+	input: LoomMigrationStatusInput,
+) {
+	return toLoomMigrationResult(() => saveMigrationStatus(input));
+}
+
+async function saveMigrationStatus({
+	requestId,
+	nextStatus,
+	message,
+	verified,
+	expectedVideoCount,
+	importedVideoCount,
+}: LoomMigrationStatusInput) {
 	const operator = await requireMigrationOperator();
 	const request = await findMigration(requestId);
 	const normalizedMessage = validateOperatorMigrationUpdate({
@@ -264,7 +293,7 @@ export async function updateLoomMigrationStatus({
 			)
 			.limit(1);
 		if (unfinishedImport) {
-			throw new Error(
+			throw new LoomMigrationError(
 				"Loom imports are still processing or have errors. Resolve them before completion.",
 			);
 		}
@@ -305,16 +334,21 @@ export async function updateLoomMigrationStatus({
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error(
+		throw new LoomMigrationError(
 			"The migration request changed or imports are starting. Refresh and try again.",
 		);
 	}
 
-	const [requester] = await db()
-		.select({ email: users.email })
-		.from(users)
-		.where(eq(users.id, request.requestedByUserId))
-		.limit(1);
+	const customerVisibleChange =
+		nextStatus !== request.status ||
+		(normalizedMessage || null) !== request.capMessage;
+	const [requester] = customerVisibleChange
+		? await db()
+				.select({ email: users.email })
+				.from(users)
+				.where(eq(users.id, request.requestedByUserId))
+				.limit(1)
+		: [];
 	if (requester) {
 		try {
 			const delivery = await sendEmail({

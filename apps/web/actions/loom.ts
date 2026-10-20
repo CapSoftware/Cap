@@ -46,8 +46,13 @@ import {
 	renewConciergeImport,
 	requireMigrationOperator,
 	reserveConciergeImport,
+	toLoomMigrationResult,
 } from "@/lib/loom-concierge";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
+import {
+	LoomMigrationError,
+	type LoomMigrationResult,
+} from "@/lib/loom-migration-state";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
@@ -438,7 +443,9 @@ async function importLoomVideoForOwner({
 				!reservation.leaseUntil ||
 				reservation.leaseUntil <= new Date()
 			) {
-				throw new Error("The concierge import expired. Retry this video.");
+				throw new LoomMigrationError(
+					"The concierge import expired. Retry this video.",
+				);
 			}
 		}
 		await tx.insert(videos).values({
@@ -891,7 +898,9 @@ async function processLoomCsvRows({
 	for (const row of normalizedRows) {
 		if (migrationRequestId) {
 			if (!migrationLeaseToken) {
-				throw new Error("The concierge import is missing its reservation.");
+				throw new LoomMigrationError(
+					"The concierge import is missing its reservation.",
+				);
 			}
 			await renewConciergeImport(migrationRequestId, migrationLeaseToken);
 		}
@@ -1028,7 +1037,14 @@ async function processLoomCsvRows({
 	};
 }
 
-export async function importFromLoomCsvForConcierge({
+export async function importFromLoomCsvForConcierge(input: {
+	requestId: string;
+	rows: LoomCsvImportRow[];
+}): Promise<LoomMigrationResult<LoomCsvImportResult>> {
+	return toLoomMigrationResult(() => importConciergeCsvRows(input));
+}
+
+async function importConciergeCsvRows({
 	requestId,
 	rows,
 }: {
@@ -1037,7 +1053,7 @@ export async function importFromLoomCsvForConcierge({
 }): Promise<LoomCsvImportResult> {
 	const operator = await requireMigrationOperator();
 	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
-		throw new Error("Invalid migration request.");
+		throw new LoomMigrationError("Invalid migration request.");
 	}
 	const [request] = await db()
 		.select({
@@ -1059,13 +1075,15 @@ export async function importFromLoomCsvForConcierge({
 		)
 		.limit(1);
 	if (!request || request.status === "completed") {
-		throw new Error("The migration request is no longer active.");
+		throw new LoomMigrationError("The migration request is no longer active.");
 	}
 	if (!(await isOrganizationOwnerPro(request.organizationId))) {
-		throw new Error("The destination workspace needs Cap Pro.");
+		throw new LoomMigrationError("The destination workspace needs Cap Pro.");
 	}
 	if (!Array.isArray(rows) || rows.length > 10) {
-		throw new Error("Concierge CSV imports run in batches of 10 videos.");
+		throw new LoomMigrationError(
+			"Concierge CSV imports run in batches of 10 videos.",
+		);
 	}
 	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
@@ -1084,39 +1102,52 @@ export async function importFromLoomCsvForConcierge({
 	}
 }
 
-export async function createConciergeLoomFileUpload({
-	requestId,
-	loomUrl,
-	userEmail,
-	spaceName,
-	videoTitle,
-}: {
+type ConciergeLoomFileUploadInput = {
 	requestId: string;
 	loomUrl: string;
 	userEmail: string;
 	spaceName: string;
 	videoTitle: string;
-}): Promise<{
+};
+
+type ConciergeLoomFileUpload = {
 	videoId: Video.VideoId;
 	uploadTarget: StorageDomain.UploadTarget;
-}> {
+};
+
+export async function createConciergeLoomFileUpload(
+	input: ConciergeLoomFileUploadInput,
+): Promise<LoomMigrationResult<ConciergeLoomFileUpload>> {
+	return toLoomMigrationResult(() => prepareConciergeLoomFileUpload(input));
+}
+
+async function prepareConciergeLoomFileUpload({
+	requestId,
+	loomUrl,
+	userEmail,
+	spaceName,
+	videoTitle,
+}: ConciergeLoomFileUploadInput): Promise<ConciergeLoomFileUpload> {
 	const operator = await requireMigrationOperator();
 	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
-		throw new Error("Invalid migration request.");
+		throw new LoomMigrationError("Invalid migration request.");
 	}
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
-	if (!loomVideoId) throw new Error("Enter a valid Loom video URL.");
+	if (!loomVideoId)
+		throw new LoomMigrationError("Enter a valid Loom video URL.");
 	const normalizedEmail = normalizeImportEmail(userEmail);
 	if (!isValidImportEmail(normalizedEmail)) {
-		throw new Error("Enter a valid destination owner email.");
+		throw new LoomMigrationError("Enter a valid destination owner email.");
 	}
 	const normalizedSpaceName = normalizeImportSpaceName(spaceName);
 	if (!isValidImportSpaceName(normalizedSpaceName)) {
-		throw new Error("Space name is too long.");
+		throw new LoomMigrationError("Space name is too long.");
 	}
 	const normalizedTitle = videoTitle.trim();
 	if (!normalizedTitle || normalizedTitle.length > 255) {
-		throw new Error("Enter a video title of 255 characters or fewer.");
+		throw new LoomMigrationError(
+			"Enter a video title of 255 characters or fewer.",
+		);
 	}
 	const [request] = await db()
 		.select({
@@ -1136,9 +1167,10 @@ export async function createConciergeLoomFileUpload({
 			),
 		)
 		.limit(1);
-	if (!request) throw new Error("The migration request is no longer active.");
+	if (!request)
+		throw new LoomMigrationError("The migration request is no longer active.");
 	if (!(await isOrganizationOwnerPro(request.organizationId))) {
-		throw new Error("The destination workspace needs Cap Pro.");
+		throw new LoomMigrationError("The destination workspace needs Cap Pro.");
 	}
 	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
@@ -1181,7 +1213,7 @@ export async function createConciergeLoomFileUpload({
 					(existing.phase !== "uploading" ||
 						existing.processingMessage !== "Uploading Loom video..."))
 			) {
-				throw new Error(
+				throw new LoomMigrationError(
 					"This Loom video is already in the Cap import inventory.",
 				);
 			}
@@ -1201,7 +1233,7 @@ export async function createConciergeLoomFileUpload({
 				Option.getOrNull(retryUpload.storageIntegrationId) !==
 					existing.storageIntegrationId
 			) {
-				throw new Error(
+				throw new LoomMigrationError(
 					"The Cap storage destination changed. Review this upload before retrying.",
 				);
 			}
@@ -1213,7 +1245,7 @@ export async function createConciergeLoomFileUpload({
 				)
 				.limit(1);
 			if (mapped && mapped.requestId !== requestId) {
-				throw new Error(
+				throw new LoomMigrationError(
 					"This Loom import belongs to another migration request.",
 				);
 			}
@@ -1235,7 +1267,9 @@ export async function createConciergeLoomFileUpload({
 						!reservation.leaseUntil ||
 						reservation.leaseUntil <= new Date()
 					) {
-						throw new Error("The concierge import expired. Retry this video.");
+						throw new LoomMigrationError(
+							"The concierge import expired. Retry this video.",
+						);
 					}
 					await tx.insert(loomMigrationImports).values({
 						videoId: Video.VideoId.make(existing.id),
@@ -1310,7 +1344,9 @@ export async function createConciergeLoomFileUpload({
 				!reservation.leaseUntil ||
 				reservation.leaseUntil <= new Date()
 			) {
-				throw new Error("The concierge import expired. Retry this video.");
+				throw new LoomMigrationError(
+					"The concierge import expired. Retry this video.",
+				);
 			}
 			await tx.insert(videos).values({
 				id: videoId,
@@ -1360,7 +1396,14 @@ export async function createConciergeLoomFileUpload({
 	}
 }
 
-export async function finishConciergeLoomFileUpload({
+export async function finishConciergeLoomFileUpload(input: {
+	requestId: string;
+	videoId: Video.VideoId;
+}) {
+	return toLoomMigrationResult(() => startConciergeLoomFileProcessing(input));
+}
+
+async function startConciergeLoomFileProcessing({
 	requestId,
 	videoId,
 }: {
@@ -1369,7 +1412,7 @@ export async function finishConciergeLoomFileUpload({
 }) {
 	const operator = await requireMigrationOperator();
 	if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{15}$/.test(requestId)) {
-		throw new Error("Invalid migration request.");
+		throw new LoomMigrationError("Invalid migration request.");
 	}
 	const leaseToken = await reserveConciergeImport(requestId, operator.id);
 	try {
@@ -1416,20 +1459,27 @@ export async function finishConciergeLoomFileUpload({
 				(record.phase !== "uploading" ||
 					record.processingMessage !== "Uploading Loom video..."))
 		) {
-			throw new Error("This Loom upload is no longer available.");
+			throw new LoomMigrationError("This Loom upload is no longer available.");
 		}
 		const [bucket] = await Storage.getAccessForVideo(
 			decodeStorageVideo(record.video),
 		).pipe(runPromise);
-		const head = await bucket.headObject(record.rawFileKey).pipe(
-			Effect.retry({
-				times: 3,
-				schedule: Schedule.exponential("100 millis"),
-			}),
-			runPromise,
-		);
+		const head = await bucket
+			.headObject(record.rawFileKey)
+			.pipe(
+				Effect.retry({
+					times: 3,
+					schedule: Schedule.exponential("100 millis"),
+				}),
+				runPromise,
+			)
+			.catch(() => {
+				throw new LoomMigrationError(
+					"The uploaded file was not found in storage. Upload it again.",
+				);
+			});
 		if ((head.ContentLength ?? 0) <= 0)
-			throw new Error("The uploaded file is empty.");
+			throw new LoomMigrationError("The uploaded file is empty.");
 		const status = await startVideoProcessingWorkflow({
 			videoId,
 			userId: record.video.ownerId,

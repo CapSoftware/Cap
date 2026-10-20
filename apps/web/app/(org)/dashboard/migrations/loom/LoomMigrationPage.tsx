@@ -17,6 +17,7 @@ import type { LoomMigrationView } from "@/lib/loom-concierge";
 import {
 	LOOM_MIGRATION_STATUS_LABELS,
 	type LoomMigrationStatus,
+	unwrapLoomMigrationResult,
 } from "@/lib/loom-migration-state";
 
 const STATUS_STYLE: Record<LoomMigrationStatus, string> = {
@@ -117,9 +118,11 @@ export function LoomMigrationPage() {
 			queryKey: ["loom-concierge", organizationId],
 		});
 	const requestMutation = useMutation({
-		mutationFn: () => {
+		mutationFn: async () => {
 			if (!organizationId) throw new Error("Select a Cap workspace.");
-			return requestLoomMigration({ organizationId, workspaceName, note });
+			return unwrapLoomMigrationResult(
+				await requestLoomMigration({ organizationId, workspaceName, note }),
+			);
 		},
 		onSuccess: async (result) => {
 			await refresh();
@@ -133,7 +136,8 @@ export function LoomMigrationPage() {
 		onError: (error) => toast.error(error.message),
 	});
 	const inviteMutation = useMutation({
-		mutationFn: confirmLoomMigrationInvite,
+		mutationFn: async (requestId: string) =>
+			unwrapLoomMigrationResult(await confirmLoomMigrationInvite(requestId)),
 		onSuccess: async () => {
 			await refresh();
 			toast.success("Thanks. Cap can now review your Loom invite.");
@@ -141,7 +145,8 @@ export function LoomMigrationPage() {
 		onError: (error) => toast.error(error.message),
 	});
 	const answerMutation = useMutation({
-		mutationFn: answerLoomMigrationQuestion,
+		mutationFn: async (input: { requestId: string; answer: string }) =>
+			unwrapLoomMigrationResult(await answerLoomMigrationQuestion(input)),
 		onSuccess: async () => {
 			setAnswer("");
 			await refresh();

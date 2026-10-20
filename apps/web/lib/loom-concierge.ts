@@ -26,7 +26,11 @@ import {
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
-import type { LoomMigrationStatus } from "./loom-migration-state";
+import {
+	LoomMigrationError,
+	type LoomMigrationResult,
+	type LoomMigrationStatus,
+} from "./loom-migration-state";
 
 type MigrationRecord = typeof loomMigrationRequests.$inferSelect;
 const IMPORT_LEASE_MS = 60 * 60 * 1000;
@@ -53,6 +57,19 @@ export type OperatorLoomMigrationView = LoomMigrationView & {
 	organizationName: string;
 	requestedByEmail: string;
 };
+
+export async function toLoomMigrationResult<T>(
+	run: () => Promise<T>,
+): Promise<LoomMigrationResult<T>> {
+	try {
+		return { ok: true, value: await run() };
+	} catch (error) {
+		if (error instanceof LoomMigrationError) {
+			return { ok: false, error: error.message };
+		}
+		throw error;
+	}
+}
 
 export function migrationToView(record: MigrationRecord): LoomMigrationView {
 	return {
@@ -82,7 +99,7 @@ export async function requireCustomerMigrationAccess(
 	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
-	if (!user) throw new Error("Unauthorized");
+	if (!user) throw new LoomMigrationError("Unauthorized");
 	await requireOrganizationSettingsManager(user.id, organizationId);
 	return user;
 }
@@ -92,10 +109,12 @@ export async function requireProCustomerMigrationAccess(
 ) {
 	const user = await requireCustomerMigrationAccess(organizationId);
 	if (!buildEnv.NEXT_PUBLIC_IS_CAP) {
-		throw new Error("Concierge migration is available on Cap Cloud.");
+		throw new LoomMigrationError(
+			"Concierge migration is available on Cap Cloud.",
+		);
 	}
 	if (!(await isOrganizationOwnerPro(organizationId))) {
-		throw new Error("Concierge Loom migration requires Cap Pro.");
+		throw new LoomMigrationError("Concierge Loom migration requires Cap Pro.");
 	}
 	return user;
 }
@@ -107,7 +126,7 @@ export async function requireMigrationOperator() {
 		!user ||
 		user.email.toLowerCase() !== MESSENGER_ADMIN_EMAIL
 	) {
-		throw new Error("Unauthorized");
+		throw new LoomMigrationError("Unauthorized");
 	}
 	return user;
 }
@@ -133,7 +152,7 @@ export async function reserveConciergeImport(
 			activeImportCount: 1,
 			activeImportLeaseToken: token,
 			activeImportLeaseUntil: new Date(now.getTime() + IMPORT_LEASE_MS),
-			status: "in_progress",
+			status: sql`CASE WHEN ${loomMigrationRequests.status} = 'pending' THEN 'in_progress' ELSE ${loomMigrationRequests.status} END`,
 			lastOperatorUserId: operatorId,
 			lastOperatorAt: now,
 			updatedAt: now,
@@ -149,7 +168,7 @@ export async function reserveConciergeImport(
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error(
+		throw new LoomMigrationError(
 			"The migration request changed or another import is starting. Refresh and try again.",
 		);
 	}
@@ -191,7 +210,9 @@ export async function renewConciergeImport(requestId: string, token: string) {
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error("The concierge import expired. Refresh and retry.");
+		throw new LoomMigrationError(
+			"The concierge import expired. Refresh and retry.",
+		);
 	}
 }
 

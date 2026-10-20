@@ -21,6 +21,7 @@ import { parseConciergeLoomCsv } from "@/lib/loom-csv";
 import {
 	LOOM_MIGRATION_STATUS_LABELS,
 	type LoomMigrationStatus,
+	unwrapLoomMigrationResult,
 } from "@/lib/loom-migration-state";
 import { uploadWithTarget } from "@/utils/upload-target";
 
@@ -71,16 +72,20 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 	const refresh = () =>
 		queryClient.invalidateQueries({ queryKey: ["loom-migration-queue"] });
 	const statusMutation = useMutation({
-		mutationFn: () =>
-			updateLoomMigrationStatus({
-				requestId: request.id,
-				nextStatus,
-				message,
-				verified,
-				expectedVideoCount:
-					expectedVideoCount.trim() === "" ? null : Number(expectedVideoCount),
-				importedVideoCount: Number(importedVideoCount),
-			}),
+		mutationFn: async () =>
+			unwrapLoomMigrationResult(
+				await updateLoomMigrationStatus({
+					requestId: request.id,
+					nextStatus,
+					message,
+					verified,
+					expectedVideoCount:
+						expectedVideoCount.trim() === ""
+							? null
+							: Number(expectedVideoCount),
+					importedVideoCount: Number(importedVideoCount),
+				}),
+			),
 		onSuccess: async () => {
 			await refresh();
 			toast.success("Migration status updated.");
@@ -97,10 +102,12 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 			const failures: LoomCsvImportRowResult[] = [];
 			for (let index = 0; index < csvRows.length; index += BATCH_SIZE) {
 				const batch = csvRows.slice(index, index + BATCH_SIZE);
-				const result = await importFromLoomCsvForConcierge({
-					requestId: request.id,
-					rows: batch,
-				});
+				const result = unwrapLoomMigrationResult(
+					await importFromLoomCsvForConcierge({
+						requestId: request.id,
+						rows: batch,
+					}),
+				);
 				started += result.importedCount;
 				failures.push(...result.results.filter((row) => !row.success));
 				setProcessedRows(index + batch.length);
@@ -132,13 +139,15 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				throw new Error("Choose an MP4 downloaded from Loom.");
 			}
 			if (file.size === 0) throw new Error("The MP4 file is empty.");
-			const prepared = await createConciergeLoomFileUpload({
-				requestId: request.id,
-				loomUrl: fileLoomUrl,
-				userEmail: fileOwnerEmail,
-				spaceName: fileSpaceName,
-				videoTitle: fileTitle.trim() || file.name.replace(/\.mp4$/i, ""),
-			});
+			const prepared = unwrapLoomMigrationResult(
+				await createConciergeLoomFileUpload({
+					requestId: request.id,
+					loomUrl: fileLoomUrl,
+					userEmail: fileOwnerEmail,
+					spaceName: fileSpaceName,
+					videoTitle: fileTitle.trim() || file.name.replace(/\.mp4$/i, ""),
+				}),
+			);
 			setUploadPercent(0);
 			await uploadWithTarget({
 				target: prepared.uploadTarget,
@@ -148,10 +157,12 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					if (total > 0) setUploadPercent(Math.round((loaded / total) * 100));
 				},
 			});
-			return finishConciergeLoomFileUpload({
-				requestId: request.id,
-				videoId: prepared.videoId,
-			});
+			return unwrapLoomMigrationResult(
+				await finishConciergeLoomFileUpload({
+					requestId: request.id,
+					videoId: prepared.videoId,
+				}),
+			);
 		},
 		onSuccess: async (result) => {
 			await refresh();
