@@ -284,15 +284,34 @@ impl RecoveryManager {
             return Ok(false);
         }
 
+        // Without a preparing editor nothing reads the originals once they are
+        // published, so the backup goes with the stop instead of doubling the
+        // recording's size on disk for good.
+        let unread = preparing.is_none();
+        let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
             RecoveryPurpose::Finalize,
             copy_recovery_input_with_durability,
             |_, _| Ok(()),
-            publish_recovery,
+            |project, workspace| {
+                publish_recovery(project, workspace)?;
+                *published_workspace.borrow_mut() = Some(workspace.to_path_buf());
+                Ok(())
+            },
             RecoveryLock::acquire,
             preparing,
         )?;
+        #[cfg(unix)]
+        if unread && let Some(workspace) = published_workspace.into_inner() {
+            let retired = RecoveryLock::acquire(project_path)
+                .and_then(|_lock| retirement::retire_unread_originals(project_path, &workspace));
+            if let Err(error) = retired {
+                warn!(path = %workspace.display(), %error, "Original media backup retained");
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = (unread, published_workspace);
         Ok(true)
     }
 
@@ -5076,6 +5095,34 @@ mod clean_studio_snapshot_tests {
         assert!(RecoveryLock::acquire(project).is_ok());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_without_a_preparing_editor_retires_the_original_media_backup() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+
+        assert!(RecoveryManager::remux_if_needed(project).unwrap());
+
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].join("original-segments").exists());
+        let meta = RecordingMeta::load_for_project(project).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = meta.studio_meta().unwrap() else {
+            panic!()
+        };
+        let display = meta.path(&inner.segments[0].display.path);
+        assert!(cap_enc_ffmpeg::remux::get_video_fps(&display).is_some());
+    }
+
     #[test]
     fn studio_finalization_keeps_the_recorded_display_fps() {
         let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
@@ -5135,7 +5182,6 @@ mod clean_studio_snapshot_tests {
         let project = directory.path();
         let microphone = add_fragmented_audio(project, "audio-input", 90);
         let system_audio = add_fragmented_audio(project, "system_audio", 90);
-        let original_bytes = fs::read(&microphone).unwrap();
         let original_audio = cap_audio::AudioData::from_file(&microphone).unwrap();
         let mut meta = RecordingMeta::load_for_project(project).unwrap();
         let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
@@ -5190,10 +5236,9 @@ mod clean_studio_snapshot_tests {
                     .starts_with(".recovery-")
             })
             .unwrap();
-        assert_eq!(
-            fs::read(backup.join("original-segments/segment-0/audio-input.m4a")).unwrap(),
-            original_bytes
-        );
+        // A stop without a preparing editor retires the original backup once
+        // the published tracks above are in place.
+        assert!(!backup.join("original-segments").exists());
     }
 
     #[test]
