@@ -1,25 +1,54 @@
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 0294b7d..6fe853b 100644
+index 0294b7d..09adcdd 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -843,6 +843,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -793,6 +793,18 @@ pub enum TextInputStateChange {
+     ContentChanged,
+ }
+ 
++/// What [`PlatformWindow::frame_request_toggle`] asks of the platform.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum FrameRequests {
++    /// Stop requesting frames.
++    Stop,
++    /// Request a frame every display refresh again.
++    Start,
++    /// Deliver one frame as soon as possible without restarting the
++    /// per-refresh requests.
++    Once,
++}
++
+ #[expect(missing_docs)]
+ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     #[cfg(all(target_os = "linux", feature = "wayland"))]
+@@ -843,6 +855,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      fn toggle_fullscreen(&self);
      fn is_fullscreen(&self) -> bool;
      fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
-+    /// Returns a switch that stops (`false`) and restarts (`true`) the frame
-+    /// requests delivered to [`Self::on_request_frame`]. Windows stop them while
-+    /// they have nothing to draw. Platforms without one keep requesting frames.
-+    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(bool)>> {
++    /// Returns a switch over the frame requests delivered to
++    /// [`Self::on_request_frame`]. Windows stop them while they have nothing to
++    /// draw. Platforms without one keep requesting frames.
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(FrameRequests)>> {
 +        None
 +    }
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
      fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
      fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 393e517..18a4e73 100644
+index 393e517..de95b7d 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -120,6 +120,53 @@ struct WindowInvalidatorInner {
+@@ -9,7 +9,8 @@ use crate::{
+     Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+     MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
++    FrameRequests, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
++    PolychromeSprite,
+     Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, BackdropBlur, ScaledPixels, Scene, Shadow, SharedString, Size,
+@@ -120,6 +121,69 @@ struct WindowInvalidatorInner {
      pub dirty_views: FxHashSet<EntityId>,
      pub update_count: usize,
      pub frame_dirty: FrameDirtyAccumulator,
@@ -27,12 +56,16 @@ index 393e517..18a4e73 100644
 +}
 +
 +/// Stops the platform's frame requests once a window has had nothing to draw
-+/// for [`FramePacer::IDLE_DELAY`], and restarts them as soon as anything
-+/// invalidates the window or schedules a next-frame callback. Without this an
-+/// idle window still wakes the main thread on every display refresh.
++/// for [`FramePacer::IDLE_DELAY`]. While stopped, an invalidation or a
++/// next-frame callback asks for a single frame, and the per-refresh requests
++/// only restart if work is still pending after it (an animation). Without this
++/// an idle window wakes the main thread on every display refresh, and a window
++/// that redraws a few times a second (a level meter, a clock) keeps the
++/// requests running between its redraws.
 +pub(crate) struct FramePacer {
-+    toggle: Option<Box<dyn Fn(bool)>>,
++    toggle: Option<Box<dyn Fn(FrameRequests)>>,
 +    paused: Cell<bool>,
++    once_pending: Cell<bool>,
 +    busy_at: Cell<Instant>,
 +}
 +
@@ -41,39 +74,51 @@ index 393e517..18a4e73 100644
 +    /// stop and restart the frame source between frames.
 +    const IDLE_DELAY: Duration = Duration::from_millis(100);
 +
-+    fn new(toggle: Option<Box<dyn Fn(bool)>>) -> Self {
++    fn new(toggle: Option<Box<dyn Fn(FrameRequests)>>) -> Self {
 +        FramePacer {
 +            toggle,
 +            paused: Cell::new(false),
++            once_pending: Cell::new(false),
 +            busy_at: Cell::new(Instant::now()),
 +        }
 +    }
 +
 +    fn wake(&self) {
 +        if let Some(toggle) = &self.toggle
-+            && self.paused.replace(false)
++            && self.paused.get()
++            && !self.once_pending.replace(true)
 +        {
-+            self.busy_at.set(Instant::now());
-+            toggle(true);
++            toggle(FrameRequests::Once);
 +        }
 +    }
 +
-+    fn frame_finished(&self, busy: bool, now: Instant) {
++    /// `busy`: the frame did work. `pending`: work is left for the next frame.
++    fn frame_finished(&self, busy: bool, pending: bool, now: Instant) {
 +        let Some(toggle) = &self.toggle else {
 +            return;
 +        };
-+        if busy {
++        if self.paused.get() {
++            self.once_pending.set(false);
++            if pending {
++                self.paused.set(false);
++                self.busy_at.set(now);
++                toggle(FrameRequests::Start);
++            } else {
++                // Also stops a link the platform restarted on its own (a window
++                // shown again while it had nothing to draw).
++                toggle(FrameRequests::Stop);
++            }
++        } else if busy || pending {
 +            self.busy_at.set(now);
-+        } else if now.duration_since(self.busy_at.get()) >= Self::IDLE_DELAY
-+            && !self.paused.replace(true)
-+        {
-+            toggle(false);
++        } else if now.duration_since(self.busy_at.get()) >= Self::IDLE_DELAY {
++            self.paused.set(true);
++            toggle(FrameRequests::Stop);
 +        }
 +    }
  }
  
  /// Per-frame invalidation bookkeeping, drained at draw time and emitted to the
-@@ -138,7 +185,7 @@ pub(crate) struct WindowInvalidator {
+@@ -138,7 +202,7 @@ pub(crate) struct WindowInvalidator {
  }
  
  impl WindowInvalidator {
@@ -82,7 +127,7 @@ index 393e517..18a4e73 100644
          WindowInvalidator {
              inner: Rc::new(RefCell::new(WindowInvalidatorInner {
                  dirty: true,
-@@ -146,6 +193,7 @@ impl WindowInvalidator {
+@@ -146,6 +210,7 @@ impl WindowInvalidator {
                  dirty_views: FxHashSet::default(),
                  update_count: 0,
                  frame_dirty: FrameDirtyAccumulator::default(),
@@ -90,7 +135,7 @@ index 393e517..18a4e73 100644
              })),
          }
      }
-@@ -157,6 +205,9 @@ impl WindowInvalidator {
+@@ -157,6 +222,9 @@ impl WindowInvalidator {
          if inner.draw_phase == DrawPhase::None {
              Self::record_frame_dirty(&mut inner);
              inner.dirty = true;
@@ -100,7 +145,7 @@ index 393e517..18a4e73 100644
              cx.push_effect(Effect::Notify { emitter: entity });
              true
          } else {
-@@ -174,6 +225,9 @@ impl WindowInvalidator {
+@@ -174,6 +242,9 @@ impl WindowInvalidator {
          if dirty {
              inner.update_count += 1;
              Self::record_frame_dirty(&mut inner);
@@ -110,7 +155,7 @@ index 393e517..18a4e73 100644
          }
      }
  
-@@ -1390,7 +1444,8 @@ impl Window {
+@@ -1390,7 +1461,8 @@ impl Window {
          let scale_factor = platform_window.scale_factor();
          let appearance = platform_window.appearance();
          let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
@@ -120,7 +165,7 @@ index 393e517..18a4e73 100644
          let active = Rc::new(Cell::new(platform_window.is_active()));
          let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
          let needs_present = Rc::new(Cell::new(false));
-@@ -1507,12 +1562,17 @@ impl Window {
+@@ -1507,12 +1579,17 @@ impl Window {
              let invalidator = invalidator.clone();
              let active = active.clone();
              let needs_present = needs_present.clone();
@@ -142,7 +187,13 @@ index 393e517..18a4e73 100644
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
-@@ -1551,8 +1611,11 @@ impl Window {
+@@ -1546,13 +1623,17 @@ impl Window {
+                         handle
+                             .update(&mut cx, |_, window, _| window.complete_frame())
+                             .log_err();
++                        frame_pacer.frame_finished(true, true, now);
+                         return;
+                     }
                  }
                  last_frame_time.set(Some(now));
  
@@ -154,7 +205,7 @@ index 393e517..18a4e73 100644
                      handle
                          .update(&mut cx, |_, window, cx| {
                              for callback in next_frame_callbacks {
-@@ -1570,6 +1633,7 @@ impl Window {
+@@ -1570,6 +1651,7 @@ impl Window {
                      || (active.get() && input_rate_tracker.borrow_mut().is_high_rate());
  
                  if invalidator.is_dirty() || request_frame_options.force_render {
@@ -162,7 +213,7 @@ index 393e517..18a4e73 100644
                      measure("frame duration", || {
                          handle
                              .update(&mut cx, |_, window, cx| {
-@@ -1585,6 +1649,7 @@ impl Window {
+@@ -1585,6 +1667,7 @@ impl Window {
                              .log_err();
                      })
                  } else if needs_present {
@@ -170,17 +221,17 @@ index 393e517..18a4e73 100644
                      handle
                          .update(&mut cx, |_, window, _| window.present())
                          .log_err();
-@@ -1595,6 +1660,9 @@ impl Window {
+@@ -1595,6 +1678,9 @@ impl Window {
                          window.complete_frame();
                      })
                      .log_err();
 +
-+                busy |= invalidator.is_dirty() || !pending_frame_callbacks.borrow().is_empty();
-+                frame_pacer.frame_finished(busy, now);
++                let pending = invalidator.is_dirty() || !pending_frame_callbacks.borrow().is_empty();
++                frame_pacer.frame_finished(busy, pending, now);
              }
          }));
          platform_window.on_resize(Box::new({
-@@ -2263,6 +2331,8 @@ impl Window {
+@@ -2263,6 +2349,8 @@ impl Window {
      /// Schedule the given closure to be run directly after the current frame is rendered.
      pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
          RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
@@ -189,84 +240,99 @@ index 393e517..18a4e73 100644
      }
  
      /// Schedule a frame to be drawn on the next animation frame.
-@@ -6807,6 +6877,83 @@ pub fn outline(
+@@ -6807,6 +6895,98 @@ pub fn outline(
      }
  }
  
 +#[cfg(test)]
 +mod frame_pacer_tests {
-+    use super::{FramePacer, Instant};
++    use super::{FramePacer, FrameRequests, Instant};
 +    use std::{cell::RefCell, rc::Rc, time::Duration};
 +
-+    fn recording_pacer() -> (FramePacer, Rc<RefCell<Vec<bool>>>, Instant) {
++    fn recording_pacer() -> (FramePacer, Rc<RefCell<Vec<FrameRequests>>>, Instant) {
 +        let calls = Rc::new(RefCell::new(Vec::new()));
 +        let recorded = calls.clone();
-+        let pacer = FramePacer::new(Some(Box::new(move |enabled| {
-+            recorded.borrow_mut().push(enabled)
++        let pacer = FramePacer::new(Some(Box::new(move |request| {
++            recorded.borrow_mut().push(request)
 +        })));
 +        let created = pacer.busy_at.get();
 +        (pacer, calls, created)
 +    }
 +
++    fn stopped_pacer() -> (FramePacer, Rc<RefCell<Vec<FrameRequests>>>, Instant) {
++        let (pacer, calls, start) = recording_pacer();
++        pacer.frame_finished(false, false, start + FramePacer::IDLE_DELAY);
++        calls.borrow_mut().clear();
++        (pacer, calls, start + FramePacer::IDLE_DELAY)
++    }
++
 +    #[test]
 +    fn idle_frames_stop_requests_only_after_the_delay() {
 +        let (pacer, calls, start) = recording_pacer();
-+        pacer.frame_finished(false, start + Duration::from_millis(99));
++        pacer.frame_finished(false, false, start + Duration::from_millis(99));
 +        assert!(calls.borrow().is_empty());
-+        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
-+        assert_eq!(*calls.borrow(), [false]);
++        pacer.frame_finished(false, false, start + FramePacer::IDLE_DELAY);
++        assert_eq!(*calls.borrow(), [FrameRequests::Stop]);
 +    }
 +
 +    #[test]
-+    fn a_busy_frame_restarts_the_delay() {
++    fn busy_or_pending_frames_restart_the_delay() {
 +        let (pacer, calls, start) = recording_pacer();
-+        pacer.frame_finished(true, start + Duration::from_millis(90));
-+        pacer.frame_finished(false, start + Duration::from_millis(150));
++        pacer.frame_finished(true, false, start + Duration::from_millis(90));
++        pacer.frame_finished(false, true, start + Duration::from_millis(150));
++        pacer.frame_finished(false, false, start + Duration::from_millis(240));
 +        assert!(calls.borrow().is_empty());
-+        pacer.frame_finished(false, start + Duration::from_millis(190));
-+        assert_eq!(*calls.borrow(), [false]);
++        pacer.frame_finished(false, false, start + Duration::from_millis(250));
++        assert_eq!(*calls.borrow(), [FrameRequests::Stop]);
 +    }
 +
 +    #[test]
-+    fn repeated_idle_frames_stop_requests_once() {
-+        let (pacer, calls, start) = recording_pacer();
-+        for ms in [100, 120, 500] {
-+            pacer.frame_finished(false, start + Duration::from_millis(ms));
-+        }
-+        assert_eq!(*calls.borrow(), [false]);
++    fn a_stopped_window_asks_for_one_frame_per_wake() {
++        let (pacer, calls, now) = stopped_pacer();
++        pacer.wake();
++        pacer.wake();
++        assert_eq!(*calls.borrow(), [FrameRequests::Once]);
++        // The single frame drew everything: requests stay stopped.
++        pacer.frame_finished(true, false, now + Duration::from_millis(50));
++        pacer.wake();
++        assert_eq!(
++            *calls.borrow(),
++            [FrameRequests::Once, FrameRequests::Stop, FrameRequests::Once]
++        );
 +    }
 +
 +    #[test]
-+    fn wake_restarts_requests_once_and_only_when_stopped() {
-+        let (pacer, calls, start) = recording_pacer();
++    fn work_left_after_a_single_frame_restarts_requests() {
++        let (pacer, calls, now) = stopped_pacer();
 +        pacer.wake();
-+        assert!(calls.borrow().is_empty());
-+        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        pacer.frame_finished(true, true, now + Duration::from_millis(5));
++        assert_eq!(*calls.borrow(), [FrameRequests::Once, FrameRequests::Start]);
++        // Running again: wakes ask for nothing, and the idle delay applies anew.
 +        pacer.wake();
-+        pacer.wake();
-+        assert_eq!(*calls.borrow(), [false, true]);
++        pacer.frame_finished(false, false, now + Duration::from_millis(50));
++        assert_eq!(*calls.borrow(), [FrameRequests::Once, FrameRequests::Start]);
++        pacer.frame_finished(false, false, now + Duration::from_millis(105));
++        assert_eq!(
++            *calls.borrow(),
++            [FrameRequests::Once, FrameRequests::Start, FrameRequests::Stop]
++        );
 +    }
 +
 +    #[test]
-+    fn a_woken_window_waits_a_full_delay_before_stopping_again() {
-+        let (pacer, calls, start) = recording_pacer();
-+        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
-+        pacer.wake();
-+        let woken = pacer.busy_at.get();
-+        pacer.frame_finished(false, woken + Duration::from_millis(50));
-+        assert_eq!(*calls.borrow(), [false, true]);
-+        pacer.frame_finished(false, woken + FramePacer::IDLE_DELAY);
-+        assert_eq!(*calls.borrow(), [false, true, false]);
++    fn a_frame_from_a_link_the_platform_restarted_stops_it_again() {
++        let (pacer, calls, now) = stopped_pacer();
++        pacer.frame_finished(false, false, now + Duration::from_millis(8));
++        assert_eq!(*calls.borrow(), [FrameRequests::Stop]);
 +    }
 +
 +    #[test]
 +    fn without_a_platform_toggle_nothing_is_tracked() {
 +        let pacer = FramePacer::new(None);
 +        let start = pacer.busy_at.get();
-+        pacer.frame_finished(false, start + FramePacer::IDLE_DELAY);
++        pacer.frame_finished(false, false, start + FramePacer::IDLE_DELAY);
 +        assert!(!pacer.paused.get());
 +        pacer.wake();
-+        assert!(!pacer.paused.get());
++        assert!(!pacer.once_pending.get());
 +    }
 +}
 +
@@ -274,9 +340,18 @@ index 393e517..18a4e73 100644
  mod tests {
      use crate::{
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index f5b2c1a..e3e4b34 100644
+index f5b2c1a..96f7826 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
+@@ -24,7 +24,7 @@ use cocoa::{
+ };
+ use dispatch2::DispatchQueue;
+ use gpui::{
+-    AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalPaths,
++    AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalPaths, FrameRequests,
+     FileDropEvent, ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent,
+     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas,
+     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
 @@ -499,6 +499,7 @@ struct MacWindowState {
      frame_source: Option<WindowFrameSource>,
      renderer: renderer::Renderer,
@@ -303,49 +378,58 @@ index f5b2c1a..e3e4b34 100644
                  event_callback: None,
                  activate_callback: None,
                  resize_callback: None,
-@@ -1670,6 +1675,48 @@ impl PlatformWindow for MacWindow {
+@@ -1670,6 +1675,57 @@ impl PlatformWindow for MacWindow {
          self.0.as_ref().lock().request_frame_callback = Some(callback);
      }
  
-+    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(bool)>> {
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(FrameRequests)>> {
 +        let window_state = Arc::downgrade(&self.0);
-+        Some(Box::new(move |enabled| {
++        Some(Box::new(move |request| {
 +            let Some(window_state) = window_state.upgrade() else {
 +                return;
 +            };
 +            let mut lock = window_state.lock();
-+            lock.frame_requests_paused = !enabled;
-+            if !enabled {
-+                lock.stop_display_link();
-+                return;
-+            }
-+            lock.start_display_link();
-+            // A hidden window draws nothing until it is shown again, when the
-+            // occlusion handler restarts its display link.
-+            let visible = unsafe {
-+                lock.native_window
-+                    .occlusionState()
-+                    .contains(NSWindowOcclusionState::NSWindowOcclusionStateVisible)
-+            };
-+            if !visible {
-+                return;
-+            }
-+            // A restarted display link first fires a refresh or two later, so
-+            // draw the frame that woke the window right away instead.
-+            let window_state = Arc::downgrade(&window_state);
-+            lock.foreground_executor
-+                .spawn(async move {
-+                    let Some(window_state) = window_state.upgrade() else {
-+                        return;
++            match request {
++                FrameRequests::Stop => {
++                    lock.frame_requests_paused = true;
++                    lock.stop_display_link();
++                }
++                FrameRequests::Start => {
++                    lock.frame_requests_paused = false;
++                    lock.start_display_link();
++                }
++                FrameRequests::Once => {
++                    let visible = unsafe {
++                        lock.native_window
++                            .occlusionState()
++                            .contains(NSWindowOcclusionState::NSWindowOcclusionStateVisible)
 +                    };
-+                    let Some(mut callback) = window_state.lock().request_frame_callback.take()
-+                    else {
++                    if !visible {
++                        // A hidden window draws nothing now; let the occlusion
++                        // handler start its link when it is shown, and the
++                        // first frame after that draws what changed meanwhile.
++                        lock.frame_requests_paused = false;
 +                        return;
-+                    };
-+                    callback(Default::default());
-+                    window_state.lock().request_frame_callback = Some(callback);
-+                })
-+                .detach();
++                    }
++                    // Draw the frame that woke the window now: a restarted
++                    // display link first fires a refresh or two later.
++                    let window_state = Arc::downgrade(&window_state);
++                    lock.foreground_executor
++                        .spawn(async move {
++                            let Some(window_state) = window_state.upgrade() else {
++                                return;
++                            };
++                            let Some(mut callback) =
++                                window_state.lock().request_frame_callback.take()
++                            else {
++                                return;
++                            };
++                            callback(Default::default());
++                            window_state.lock().request_frame_callback = Some(callback);
++                        })
++                        .detach();
++                }
++            }
 +        }))
 +    }
 +
