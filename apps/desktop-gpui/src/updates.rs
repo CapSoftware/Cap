@@ -91,6 +91,18 @@ fn qualifies(
             && remote != current)
 }
 
+/// A check the user asked for answers now; a scheduled one waits for the
+/// work in flight to finish before showing its modal prompt.
+fn holds_scheduled_prompt(manual: bool, busy: bool) -> bool {
+    !manual && busy
+}
+
+/// A manual check or a channel change queued while an automatic prompt waits
+/// replaces it, so neither has to wait for the work in flight to finish.
+fn supersedes_held_prompt(pending: &PendingUpdateRequests) -> bool {
+    pending.manual || pending.channel.is_some()
+}
+
 fn current_version() -> Result<Version, String> {
     Version::parse(env!("CARGO_PKG_VERSION")).map_err(|error| error.to_string())
 }
@@ -370,6 +382,30 @@ pub(crate) fn schedule_startup_check(cx: &mut App) {
             };
 
             if !manual && ignored_version.as_ref() == Some(&release.version) {
+                continue;
+            }
+
+            // The prompt is modal and brings Cap forward, so an automatic
+            // check holds it until a recording, export, import or
+            // transcription has finished rather than interrupting it.
+            let mut superseded = false;
+            while holds_scheduled_prompt(manual, cx.update(work_in_flight)) {
+                let timer = cx.background_executor().timer(BUSY_RETRY_DELAY);
+                let request = requests.recv_async();
+                futures_util::pin_mut!(timer, request);
+                if let Either::Right((Err(_), _)) = select(timer, request).await {
+                    return;
+                }
+                superseded = cx.update(|cx| {
+                    supersedes_held_prompt(&cx.global::<UpdateScheduler>().pending)
+                });
+                if superseded {
+                    break;
+                }
+            }
+            if superseded {
+                // Run the queued manual check or channel change straight away.
+                delay = Some(Duration::ZERO);
                 continue;
             }
 
@@ -698,6 +734,27 @@ mod tests {
             signature: "c2ln".to_string(),
             notes: None,
         }
+    }
+
+    #[test]
+    fn only_scheduled_checks_wait_for_work_in_flight() {
+        assert!(holds_scheduled_prompt(false, true));
+        assert!(!holds_scheduled_prompt(false, false));
+        assert!(!holds_scheduled_prompt(true, true));
+        assert!(!holds_scheduled_prompt(true, false));
+    }
+
+    #[test]
+    fn queued_manual_checks_and_channel_changes_replace_a_held_prompt() {
+        assert!(!supersedes_held_prompt(&PendingUpdateRequests::default()));
+        assert!(supersedes_held_prompt(&PendingUpdateRequests {
+            manual: true,
+            ..PendingUpdateRequests::default()
+        }));
+        assert!(supersedes_held_prompt(&PendingUpdateRequests {
+            channel: Some(UpdateChannel::Nightly),
+            ..PendingUpdateRequests::default()
+        }));
     }
 
     #[test]

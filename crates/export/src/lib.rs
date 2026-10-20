@@ -59,6 +59,8 @@ pub enum ExporterBuildError {
     MediaLoad(String),
     #[error("IO error at path '{0}': {1}")]
     IO(PathBuf, std::io::Error),
+    #[error("There is nothing to export: the timeline is empty")]
+    NothingToExport,
 }
 
 pub struct ExporterBuilder {
@@ -85,14 +87,18 @@ impl ExporterBuilder {
     }
 
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
-        self.build_inner(None).await
+        self.build_inner(None, true).await
+    }
+
+    pub async fn build_video_only(self) -> Result<ExporterBase, ExporterBuildError> {
+        self.build_inner(None, false).await
     }
 
     pub async fn build_for_mp4(
         self,
         cancellation: Arc<AtomicBool>,
     ) -> Result<Mp4ExporterBase, ExporterBuildError> {
-        self.build_inner(Some(cancellation))
+        self.build_inner(Some(cancellation), true)
             .await
             .map(Mp4ExporterBase)
     }
@@ -110,6 +116,7 @@ impl ExporterBuilder {
     async fn build_inner(
         mut self,
         cancellation: Option<Arc<AtomicBool>>,
+        include_audio: bool,
     ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
@@ -133,6 +140,14 @@ impl ExporterBuilder {
             studio_meta,
         );
 
+        cap_project::clamp_timeline_to_sources(
+            &mut project_config,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(
             &mut project_config,
@@ -142,6 +157,12 @@ impl ExporterBuilder {
                 .map(|segment| segment.display.duration)
                 .collect::<Vec<_>>(),
         );
+
+        let duration =
+            cap_rendering::get_duration(&recordings, &recording_meta, studio_meta, &project_config);
+        if duration.is_nan() || duration <= 0.0 {
+            return Err(Error::NothingToExport);
+        }
 
         let output_path = self
             .output_path
@@ -184,6 +205,15 @@ impl ExporterBuilder {
             let (segments, audio) =
                 finish_audio_preparation(segments, preparation, &control.stop).await?;
             (segments, Some(audio))
+        } else if !include_audio {
+            let segments = cap_editor::create_segments_without_audio(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await
+            .map_err(Error::MediaLoad)?;
+            (segments, None)
         } else {
             let segments = cap_editor::create_segments(
                 &recording_meta,
