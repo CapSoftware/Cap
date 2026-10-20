@@ -779,6 +779,33 @@ impl Feeds {
             _mic_errors: None,
         });
         cx.set_global(FeedsGlobal(feeds.clone()));
+        if std::env::var_os("CAP_PERF_FAKE_MIC").is_some() {
+            let notify = std::env::var_os("CAP_PERF_FAKE_MIC_NO_NOTIFY").is_none();
+            let weak = feeds.downgrade();
+            cx.spawn(async move |cx| {
+                let mut tick = 0u64;
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                    tick += 1;
+                    let level = -40.0 + 20.0 * ((tick as f64) * 0.7).sin();
+                    let Ok(()) = weak.update(cx, |this, cx| {
+                        this.microphone = Some("Fake Mic".into());
+                        this.set_mic_level(level);
+                        if notify {
+                            cx.notify();
+                        }
+                    }) else {
+                        return;
+                    };
+                    if notify {
+                        cx.update(crate::app_windows::refresh_controls_window);
+                    }
+                }
+            })
+            .detach();
+        }
         feeds
     }
 

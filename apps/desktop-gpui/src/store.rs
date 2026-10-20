@@ -1193,6 +1193,9 @@ pub fn set_has_completed_onboarding(value: bool) -> bool {
 /// `should_show_onboarding` (`lib.rs:463-477`): first-run flags or missing
 /// macOS screen-recording + accessibility.
 pub fn should_show_onboarding() -> bool {
+    if std::env::var("CAP_PERF_SKIP_ONBOARDING").is_ok() {
+        return false;
+    }
     !has_completed_startup()
         || !has_completed_onboarding()
         || !crate::permissions::necessary_granted()

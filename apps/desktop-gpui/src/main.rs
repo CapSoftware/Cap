@@ -345,7 +345,7 @@ fn main() {
         // store read rather than the gate's TCC queries -- so the main window
         // starts hidden instead of flashing up before onboarding replaces it.
         // Linux keeps the gate: its main window tracks retained visibility.
-        let first_run = cfg!(not(target_os = "linux"))
+        let first_run = std::env::var("CAP_PERF_SKIP_ONBOARDING").is_err() && cfg!(not(target_os = "linux"))
             && (!crate::store::has_completed_startup()
                 || !crate::store::has_completed_onboarding());
         let window_handle = cx
