@@ -44,7 +44,7 @@ import {
 	planAutoClean,
 	planPauseCut,
 	planWordCuts,
-	recordingSilence,
+	recordingAudio,
 	type SourceRange,
 	type TranscriptCutEdit,
 	type TranscriptItem,
@@ -96,10 +96,10 @@ export function TranscriptPanel() {
 
 	const recordingSegments = () => editorInstance.recordings.segments;
 
-	const audioSilence = createMemo(() => {
+	const recordedAudio = createMemo(() => {
 		const mic = micWaveforms();
 		const system = systemAudioWaveforms();
-		return recordingSilence(
+		return recordingAudio(
 			recordingSegments(),
 			recordingSegments().map((_, index) => {
 				const offsets = project.clips?.find(
@@ -151,7 +151,7 @@ export function TranscriptPanel() {
 			project,
 			recordingSegments(),
 			allWords(),
-			audioSilence(),
+			recordedAudio(),
 		),
 	);
 

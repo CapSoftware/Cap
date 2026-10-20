@@ -157,6 +157,13 @@ export function timelineSourceCoverage(
 
 export type RecordedAudioTrack = { levels: readonly number[]; offset: number };
 
+export type RecordingAudio = {
+	silence: readonly SourceRange[];
+	audible: readonly SourceRange[];
+};
+
+const UNKNOWN_AUDIO: RecordingAudio = { silence: [], audible: [] };
+
 function waveformLevel(value: number | undefined) {
 	return typeof value === "number" && Number.isFinite(value)
 		? Math.max(value, WAVEFORM_FLOOR_DB)
@@ -197,15 +204,40 @@ function recordingBlockLevels(
 	return levels;
 }
 
+function levelRuns(
+	levels: ReadonlyArray<number | null>,
+	offset: number,
+	duration: number,
+	matches: (level: number) => boolean,
+) {
+	const runs: SourceRange[] = [];
+	let runStart = -1;
+	for (let block = 0; block <= levels.length; block++) {
+		const level = levels[block];
+		if (typeof level === "number" && matches(level)) {
+			if (runStart === -1) runStart = block;
+			continue;
+		}
+		if (runStart === -1) continue;
+		runs.push({
+			start: offset + runStart / WAVEFORM_BLOCKS_PER_SECOND,
+			end: offset + Math.min(block / WAVEFORM_BLOCKS_PER_SECOND, duration),
+		});
+		runStart = -1;
+	}
+	return runs;
+}
+
 /**
- * Source ranges where every recorded track is quiet, from the editor's 100 ms
- * waveform peaks. The threshold follows the recording's noise floor; when
- * speech doesn't stand clearly above it, nothing counts as silence.
+ * Source ranges where every recorded track is quiet, and where one is
+ * audible, from the editor's 100 ms waveform peaks. The threshold follows the
+ * recording's noise floor; when speech doesn't stand clearly above it, neither
+ * is known. Time without a waveform is neither.
  */
-export function recordingSilence(
+export function recordingAudio(
 	recordingSegments: SegmentRecordings[],
 	tracks: ReadonlyArray<readonly RecordedAudioTrack[]>,
-): SourceRange[] {
+): RecordingAudio {
 	const offsets = recordingOffsets(recordingSegments);
 	const blocks = recordingSegments.map((recording, index) =>
 		recordingBlockLevels(recording.display.duration, tracks[index] ?? []),
@@ -214,33 +246,29 @@ export function recordingSilence(
 		.flat()
 		.filter((level): level is number => level !== null)
 		.sort((a, b) => a - b);
-	if (known.length === 0) return [];
+	if (known.length === 0) return UNKNOWN_AUDIO;
 	const threshold = Math.min(
 		percentile(known, 0.1) + SILENCE_ABOVE_NOISE_DB,
 		MAX_SILENCE_DB,
 	);
-	if (percentile(known, 0.9) - threshold < MIN_SPEECH_HEADROOM_DB) return [];
+	if (percentile(known, 0.9) - threshold < MIN_SPEECH_HEADROOM_DB)
+		return UNKNOWN_AUDIO;
 
-	const silence: SourceRange[] = [];
-	blocks.forEach((levels, index) => {
-		const offset = offsets[index];
-		const duration = recordingSegments[index].display.duration;
-		let runStart = -1;
-		for (let block = 0; block <= levels.length; block++) {
-			const level = levels[block];
-			if (typeof level === "number" && level < threshold) {
-				if (runStart === -1) runStart = block;
-				continue;
-			}
-			if (runStart === -1) continue;
-			silence.push({
-				start: offset + runStart / WAVEFORM_BLOCKS_PER_SECOND,
-				end: offset + Math.min(block / WAVEFORM_BLOCKS_PER_SECOND, duration),
-			});
-			runStart = -1;
-		}
-	});
-	return mergeSourceRanges(silence);
+	const runs = (matches: (level: number) => boolean) =>
+		mergeSourceRanges(
+			blocks.flatMap((levels, index) =>
+				levelRuns(
+					levels,
+					offsets[index],
+					recordingSegments[index].display.duration,
+					matches,
+				),
+			),
+		);
+	return {
+		silence: runs((level) => level < threshold),
+		audible: runs((level) => level >= threshold),
+	};
 }
 
 function silenceAround(silence: readonly SourceRange[], time: number) {
@@ -1578,13 +1606,17 @@ export function buildTranscriptItems(
 	cuts: readonly TranscriptCut[],
 	coverage: readonly SourceRange[],
 	speech: readonly SourceRange[] = [],
-	audioSilence: readonly SourceRange[] = [],
+	audio: RecordingAudio = UNKNOWN_AUDIO,
 	threshold = PAUSE_DETECTION_THRESHOLD,
 ): TranscriptItem[] {
 	const cutPauses = cuts
 		.filter((cut) => cut.kind === "pause")
 		.sort((a, b) => a.start - b.start);
-	const silence = subtractSourceRanges(coverage, [...cutPauses, ...speech]);
+	const silence = subtractSourceRanges(coverage, [
+		...cutPauses,
+		...speech,
+		...audio.audible,
+	]);
 	const items: TranscriptItem[] = [];
 	let nextCutPause = 0;
 	const flushCutPauses = (before: number) => {
@@ -1599,8 +1631,8 @@ export function buildTranscriptItems(
 	tokens.forEach((token, index) => {
 		const previous = tokens[index - 1];
 		const gap = {
-			start: previous ? tokenSpeechEnd(previous, audioSilence) : 0,
-			end: tokenSpeechStart(token, audioSilence),
+			start: previous ? tokenSpeechEnd(previous, audio.silence) : 0,
+			end: tokenSpeechStart(token, audio.silence),
 		};
 		const pauses =
 			gap.end - gap.start >= threshold
@@ -1662,7 +1694,7 @@ export type PlanContext = {
 	segmentIds: readonly (string | undefined)[];
 	coverage: readonly SourceRange[];
 	speech: readonly SourceRange[];
-	audioSilence?: readonly SourceRange[];
+	audio?: RecordingAudio;
 	blocked?: (range: SourceRange) => boolean;
 	createId?: () => string;
 };
@@ -1721,6 +1753,7 @@ function planCuts(
 	},
 ): { edit: TranscriptCutEdit | null; skipped: number } {
 	const createId = context.createId ?? newTranscriptCutId;
+	const audio = context.audio ?? UNKNOWN_AUDIO;
 	const tokens = tokenItems(context.items);
 	const silence = subtractSourceRanges(context.coverage, [
 		...context.items.flatMap((item) =>
@@ -1745,41 +1778,66 @@ function planCuts(
 		item.type === "cut-word" || records.has(item.token);
 	const gapPauses: Array<{ range: SourceRange; beside: number[] }> = [];
 	const bufferedFrom = new Map<number, number>();
+	const join = (
+		start: number,
+		end: number,
+		previous: TokenItem | undefined,
+		current: TokenItem | undefined,
+	) => {
+		const previousRecord = previous && records.get(previous.token);
+		const currentRecord = current && records.get(current.token);
+		const gap = end - start;
+		if ((!currentRecord && !previousRecord) || gap <= RANGE_EPSILON) return;
+		if (gap < PAUSE_DETECTION_THRESHOLD) {
+			if (current && currentRecord) {
+				currentRecord.bufferStart = gap;
+				if (previous && previousRecord)
+					bufferedFrom.set(current.token, previous.token);
+			} else if (previousRecord) previousRecord.bufferEnd = gap;
+			return;
+		}
+		if (!options.joinKeepers && !(currentRecord && previousRecord)) return;
+		const beside = [previous?.token, current?.token].filter(
+			(token): token is number => token !== undefined && records.has(token),
+		);
+		for (const range of clipToRange(silence, { start, end }))
+			gapPauses.push({ range, beside });
+	};
 	for (let index = 0; index < tokens.length; index++) {
 		const current = tokens[index];
 		const previous = index > 0 ? tokens[index - 1] : undefined;
 		const currentRecord = records.get(current.token);
 		const previousRecord = previous ? records.get(previous.token) : undefined;
 		if (!currentRecord && !previousRecord) continue;
-		const joinsRemoved =
-			previous !== undefined && removedAfter(previous) && removedAfter(current);
-		if (!joinsRemoved && !options.joinKeepers) continue;
+		const previousRemoved = previous !== undefined && removedAfter(previous);
+		const currentRemoved = removedAfter(current);
+		if (!(previousRemoved && currentRemoved) && !options.joinKeepers) continue;
 
 		const gapStart = !previous
 			? 0
 			: previous.type === "word" && !previousRecord
-				? audibleWordEnd(previous.word, context.audioSilence ?? [])
+				? audibleWordEnd(previous.word, audio.silence)
 				: itemEnd(previous);
 		const gapEnd =
 			current.type === "word" && !currentRecord
-				? audibleWordStart(current.word, context.audioSilence ?? [])
+				? audibleWordStart(current.word, audio.silence)
 				: itemStart(current);
-		const gap = gapEnd - gapStart;
-		if (gap <= RANGE_EPSILON) continue;
-		if (gap < PAUSE_DETECTION_THRESHOLD) {
-			if (currentRecord) {
-				currentRecord.bufferStart = gap;
-				if (previous && previousRecord)
-					bufferedFrom.set(current.token, previous.token);
-			} else if (previousRecord) previousRecord.bufferEnd = gap;
-			continue;
-		}
-		if (!options.joinKeepers && !(currentRecord && previousRecord)) continue;
-		const beside = [previous?.token, current.token].filter(
-			(token): token is number => token !== undefined && records.has(token),
+		// Transcription can miss speech, so audio heard between two words stays
+		// as if it were a word nobody cut. Audio running into a removed word is
+		// that word's own and goes with it; audio a cut already took is gone.
+		const heard = intersectSourceRanges(
+			clipToRange(audio.audible, { start: gapStart, end: gapEnd }).filter(
+				(run) =>
+					!(previousRemoved && run.start <= gapStart + RANGE_EPSILON) &&
+					!(currentRemoved && run.end >= gapEnd - RANGE_EPSILON),
+			),
+			context.coverage,
 		);
-		for (const range of clipToRange(silence, { start: gapStart, end: gapEnd }))
-			gapPauses.push({ range, beside });
+		if (heard.length === 0) join(gapStart, gapEnd, previous, current);
+		else if (options.joinKeepers) {
+			join(gapStart, heard[0].start, previous, undefined);
+			join(heard[heard.length - 1].end, gapEnd, undefined, current);
+		}
 	}
 
 	for (const record of records.values()) {
@@ -1916,7 +1974,7 @@ export function transcriptPlanContext(
 	project: TranscriptProject,
 	recordingSegments: SegmentRecordings[],
 	words?: readonly FlatWord[],
-	audioSilence: readonly SourceRange[] = [],
+	audio: RecordingAudio = UNKNOWN_AUDIO,
 ): PlanContext {
 	const segments = project.captions?.segments ?? [];
 	const cuts = project.captions?.transcriptCuts ?? [];
@@ -1939,12 +1997,12 @@ export function transcriptPlanContext(
 			cuts,
 			coverage,
 			speech,
-			audioSilence,
+			audio,
 		),
 		segmentIds: segments.map((segment) => segment.id),
 		coverage,
 		speech,
-		audioSilence,
+		audio,
 		blocked: (range) =>
 			timeline
 				? sourceRangeBlockedByTransition(timeline, range, recordingSegments)

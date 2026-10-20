@@ -28,7 +28,8 @@ import {
 	planAutoClean,
 	planPauseCut,
 	planWordCuts,
-	recordingSilence,
+	type RecordingAudio,
+	recordingAudio,
 	type SourceRange,
 	subtractSourceRanges,
 	type TranscriptItem,
@@ -748,7 +749,7 @@ describe("pauses heard in the recording", () => {
 	}
 
 	function heard(recs: SegmentRecordings[], speech: Array<[number, number]>) {
-		return recordingSilence(recs, [
+		return recordingAudio(recs, [
 			[{ levels: levels(recs[0].display.duration, speech), offset: 0 }],
 		]);
 	}
@@ -756,10 +757,10 @@ describe("pauses heard in the recording", () => {
 	function audioContext(
 		p: Project,
 		recs: SegmentRecordings[],
-		silence: SourceRange[],
+		audio: RecordingAudio,
 	) {
 		return {
-			...transcriptPlanContext(p, recs, undefined, silence),
+			...transcriptPlanContext(p, recs, undefined, audio),
 			createId,
 		};
 	}
@@ -772,15 +773,15 @@ describe("pauses heard in the recording", () => {
 		);
 	}
 
-	const rounded = (ranges: SourceRange[]) =>
+	const rounded = (ranges: readonly SourceRange[]) =>
 		ranges.map((range) => [
 			Number(range.start.toFixed(6)),
 			Number(range.end.toFixed(6)),
 		]);
 
-	it("finds where every track is quiet, across recordings and clip offsets", () => {
-		const recs = recordings(4, 2);
-		const silence = recordingSilence(recs, [
+	it("finds where every track is quiet and where one is audible, across recordings and clip offsets", () => {
+		const recs = recordings(4, 2, 1);
+		const audio = recordingAudio(recs, [
 			[
 				{
 					levels: levels(4, [
@@ -792,29 +793,39 @@ describe("pauses heard in the recording", () => {
 				{ levels: levels(4, [[1.5, 1.7]]), offset: 0.2 },
 			],
 			[{ levels: levels(2, [[0.5, 1]]), offset: 0 }],
+			[],
 		]);
-		expect(rounded(silence)).toEqual([
+		expect(rounded(audio.silence)).toEqual([
 			[1, 1.3],
 			[1.5, 2],
 			[2.5, 4.5],
 			[5, 6],
 		]);
+		expect(rounded(audio.audible)).toEqual([
+			[0, 1],
+			[1.3, 1.5],
+			[2, 2.5],
+			[4.5, 5],
+		]);
 	});
 
-	it("reports no silence without waveforms or without speech clearly above the noise", () => {
+	it("knows neither silence nor sound without waveforms or without speech clearly above the noise", () => {
 		const recs = recordings(4);
-		expect(recordingSilence(recs, [])).toEqual([]);
-		expect(recordingSilence(recs, [[{ levels: [], offset: 0 }]])).toEqual([]);
+		const unknown = { silence: [], audible: [] };
+		expect(recordingAudio(recs, [])).toEqual(unknown);
+		expect(recordingAudio(recs, [[{ levels: [], offset: 0 }]])).toEqual(
+			unknown,
+		);
 		expect(
-			recordingSilence(recs, [
+			recordingAudio(recs, [
 				[{ levels: levels(4, [[1, 3]], -50, -50), offset: 0 }],
 			]),
-		).toEqual([]);
+		).toEqual(unknown);
 		expect(
-			recordingSilence(recs, [
+			recordingAudio(recs, [
 				[{ levels: levels(4, [[1, 3]], ROOM_DB, -48), offset: 0 }],
 			]),
-		).toEqual([]);
+		).toEqual(unknown);
 	});
 
 	it("starts the pause where the audio goes quiet, even under a word stamped late", () => {
@@ -828,7 +839,7 @@ describe("pauses heard in the recording", () => {
 			],
 			[clip(0, 8)],
 		);
-		const silence = heard(recs, [
+		const audio = heard(recs, [
 			[1.0, 1.2],
 			[5.0, 5.8],
 		]);
@@ -836,7 +847,7 @@ describe("pauses heard in the recording", () => {
 			[0, 1],
 			[3.8, 5],
 		]);
-		const ctx = audioContext(p, recs, silence);
+		const ctx = audioContext(p, recs, audio);
 		expect(pauses(ctx.items)).toEqual([
 			[0, 1],
 			[1.4, 5],
@@ -877,12 +888,12 @@ describe("pauses heard in the recording", () => {
 			],
 			[clip(0, 4)],
 		);
-		const silence = heard(recs, [
+		const audio = heard(recs, [
 			[1.0, 1.4],
 			[2.4, 2.8],
 		]);
 		expect(pauses(context(p, recs).items)).toEqual([[0, 1]]);
-		expect(pauses(audioContext(p, recs, silence).items)).toEqual([
+		expect(pauses(audioContext(p, recs, audio).items)).toEqual([
 			[0, 1],
 			[1.5, 2.4],
 		]);
@@ -917,7 +928,7 @@ describe("pauses heard in the recording", () => {
 			["um", 2.0, 2.3],
 			["right", 2.3, 2.7],
 		];
-		const silence = heard(recs, [
+		const audio = heard(recs, [
 			[1.0, 1.3],
 			[2.0, 2.7],
 		]);
@@ -932,7 +943,7 @@ describe("pauses heard in the recording", () => {
 		]);
 
 		const p = project(words, [clip(0, 5)]);
-		const { edit } = planAutoClean(audioContext(p, recs, silence), 5);
+		const { edit } = planAutoClean(audioContext(p, recs, audio), 5);
 		if (!edit) throw new Error("Nothing planned");
 		expect(commitTranscriptCutEdit(p, edit, recs)).toBe("applied");
 		expect(clips(p)).toEqual([
@@ -941,6 +952,144 @@ describe("pauses heard in the recording", () => {
 		]);
 		expect(liveWords(p)).toEqual(["so", "right"]);
 		expect(p.captions?.segments[0].words?.[0].end).toBeCloseTo(1.4);
+	});
+
+	it("keeps speech the transcript missed out of the pauses Auto Clean cuts", () => {
+		const recs = recordings(6);
+		const p = project(
+			[
+				["hello", 1.0, 1.4],
+				["again", 4.0, 4.4],
+			],
+			[clip(0, 6)],
+		);
+		expect(pauses(context(p, recs).items)).toEqual([
+			[0, 1],
+			[1.4, 4],
+		]);
+		const ctx = audioContext(
+			p,
+			recs,
+			heard(recs, [
+				[1.0, 1.3],
+				[2.0, 3.0],
+				[4.0, 4.4],
+			]),
+		);
+		expect(pauses(ctx.items)).toEqual([
+			[0, 1],
+			[1.4, 2],
+			[3, 4],
+		]);
+		expect(planAutoClean(ctx, 1.5)).toEqual({ edit: null, skipped: 0 });
+
+		const { edit } = planAutoClean(ctx, 0.5);
+		if (!edit) throw new Error("Nothing planned");
+		expect(commitTranscriptCutEdit(p, edit, recs)).toBe("applied");
+		expect(clips(p)).toEqual([
+			[1, 1.4],
+			[2, 3],
+			[4, 6],
+		]);
+	});
+
+	it("cuts a filler with only the quiet beside it, not speech the transcript missed", () => {
+		const recs = recordings(6);
+		const words: Array<[string, number, number]> = [
+			["hello", 1.0, 1.4],
+			["um", 4.0, 4.3],
+			["right", 4.4, 4.8],
+		];
+
+		const transcriptOnly = project(words, [clip(0, 6)]);
+		const plain = planAutoClean(context(transcriptOnly, recs), 5).edit;
+		if (!plain) throw new Error("Nothing planned");
+		commitTranscriptCutEdit(transcriptOnly, plain, recs);
+		expect(clips(transcriptOnly)).toEqual([
+			[0, 1.4],
+			[4.4, 6],
+		]);
+
+		const p = project(words, [clip(0, 6)]);
+		const audio = heard(recs, [
+			[1.0, 1.3],
+			[2.0, 3.0],
+			[3.9, 4.8],
+		]);
+		const { edit } = planAutoClean(audioContext(p, recs, audio), 5);
+		if (!edit) throw new Error("Nothing planned");
+		expect(commitTranscriptCutEdit(p, edit, recs)).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 3],
+			[4.4, 6],
+		]);
+		expect(liveWords(p)).toEqual(["hello", "right"]);
+	});
+
+	it("leaves a kept word's audible end to it when the filler after it is cut", () => {
+		const recs = recordings(5);
+		const p = project(
+			[
+				["hello", 1.0, 1.3],
+				["um", 2.0, 2.3],
+				["right", 2.3, 2.7],
+			],
+			[clip(0, 5)],
+		);
+		const audio = heard(recs, [
+			[1.0, 1.6],
+			[2.0, 2.7],
+		]);
+		const { edit } = planAutoClean(audioContext(p, recs, audio), 5);
+		if (!edit) throw new Error("Nothing planned");
+		expect(commitTranscriptCutEdit(p, edit, recs)).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 1.6],
+			[2.3, 5],
+		]);
+	});
+
+	it("joins cut words across audio an earlier cut already took", () => {
+		const recs = recordings(5);
+		const p = project(
+			[
+				["hello", 1.0, 1.4],
+				["big", 1.5, 1.8],
+				["world", 2.2, 2.5],
+			],
+			[clip(0, 5)],
+		);
+		const audio = heard(recs, [
+			[1.0, 1.8],
+			[1.9, 2.0],
+			[2.2, 2.5],
+		]);
+		const cutWord = (text: string) => {
+			const ctx = audioContext(p, recs, audio);
+			const edit = planWordCuts(ctx, [token(ctx.items, text)]);
+			if (!edit) throw new Error(`Nothing to cut for ${text}`);
+			return commitTranscriptCutEdit(p, edit, recs);
+		};
+		expect(cutWord("big")).toBe("applied");
+		commitTranscriptCutEdit(
+			p,
+			{
+				padding: [
+					{ id: cutRecord(p, "big").id, bufferStart: 0, bufferEnd: 0.2 },
+				],
+			},
+			recs,
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.5],
+			[2, 5],
+		]);
+
+		expect(cutWord("world")).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 1.5],
+			[2.5, 5],
+		]);
 	});
 
 	it("finds the pause after a stretched word when the next word starts between waveform blocks", () => {
@@ -953,11 +1102,11 @@ describe("pauses heard in the recording", () => {
 				],
 				[clip(0, 5)],
 			);
-			const silence = heard(recs, [
+			const audio = heard(recs, [
 				[1.0, 1.3],
 				[next, next + 0.4],
 			]);
-			expect(pauses(audioContext(p, recs, silence).items)).toEqual([
+			expect(pauses(audioContext(p, recs, audio).items)).toEqual([
 				[0, 1],
 				[1.4, 2.5],
 			]);
