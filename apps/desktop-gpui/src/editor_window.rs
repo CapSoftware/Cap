@@ -1393,6 +1393,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    copied_scene: Option<cap_project::SceneSegment>,
     focus: FocusHandle,
 
     // -- Transport ----------------------------------------------------------
@@ -2076,6 +2077,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            copied_scene: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -3184,6 +3186,61 @@ impl EditorWindow {
 
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
+    /// Shift+Mod+C on a selected scene: remember its look (layout, framing
+    /// and transitions) without its timing.
+    fn copy_scene_settings(&mut self) -> bool {
+        let Some(selection) = self.selection.as_ref() else {
+            return false;
+        };
+        if selection.track != TrackKind::Scene {
+            return false;
+        }
+        let Some(&index) = selection.indices.first() else {
+            return false;
+        };
+        let Some(scene) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.scene_segments.get(index))
+        else {
+            return false;
+        };
+        self.copied_scene = Some(scene.clone());
+        true
+    }
+
+    /// Shift+Mod+V: give every selected scene the copied look, keeping each
+    /// scene where it is on the timeline.
+    fn paste_scene_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(copied) = self.copied_scene.clone() else {
+            return false;
+        };
+        let Some(selection) = self.selection.clone() else {
+            return false;
+        };
+        if selection.track != TrackKind::Scene {
+            return false;
+        }
+        self.edit(
+            |timeline| {
+                let mut changed = false;
+                for &index in &selection.indices {
+                    if let Some(scene) = timeline.scene_segments.get_mut(index) {
+                        scene.mode = copied.mode;
+                        scene.split_layout = copied.split_layout;
+                        scene.transition_in = copied.transition_in;
+                        scene.transition_out = copied.transition_out;
+                        changed = true;
+                    }
+                }
+                changed
+            },
+            window,
+            cx,
+        )
+    }
+
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
@@ -3546,6 +3603,19 @@ impl EditorWindow {
                     cx.stop_propagation();
                     self.redo(window, cx);
                     window.refresh();
+                    return;
+                }
+                "c" if keystroke.modifiers.shift => {
+                    if self.copy_scene_settings() {
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                "v" if keystroke.modifiers.shift => {
+                    if self.paste_scene_settings(window, cx) {
+                        cx.stop_propagation();
+                        window.refresh();
+                    }
                     return;
                 }
                 // `Cmd/Ctrl+A` expands the selection to the whole track.
