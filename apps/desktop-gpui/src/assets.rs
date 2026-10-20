@@ -315,6 +315,7 @@ mod tests {
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
         include_str!("editor_window/scenes.rs"),
+        include_str!("editor_window/safe_zones.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
