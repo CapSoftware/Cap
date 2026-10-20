@@ -80,6 +80,17 @@ class Job:
         ):
             raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
 
+    def resume(self, process):
+        if self.handle is None:
+            return
+        from ctypes import wintypes
+
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        status = ntdll.NtResumeProcess(wintypes.HANDLE(int(process._handle)))
+        if status != 0:
+            raise OSError(status, "NtResumeProcess failed")
+
     def stats(self):
         if self.handle is None:
             return {}
@@ -149,9 +160,13 @@ if os.name == "nt":
         ]
 
 
+CREATE_SUSPENDED = 0x4
+
+
 def run_measured(argv, timeout, env=None, cwd=None, affinity=None):
     job = Job(affinity)
     started = time.perf_counter()
+    # Started suspended so nothing it spawns can run before it is in the job.
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -161,9 +176,16 @@ def run_measured(argv, timeout, env=None, cwd=None, affinity=None):
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=CREATE_SUSPENDED if job.handle is not None else 0,
     )
     try:
-        job.assign(process)
+        try:
+            job.assign(process)
+            job.resume(process)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
         lines = []
 
         def pump():
@@ -451,6 +473,8 @@ BENCHES = {
     "export-1080p60": export_bench(60, "1920x1080", "maximum"),
     "export-4k60": export_bench(60, "3840x2160", "maximum"),
     "export-720p30": export_bench(30, "1280x720", "social"),
+    # The editor decodes with FFmpeg on Windows (editor_instance.rs), so playback measures that path;
+    # Media Foundation is covered by decode-display and the exports.
     "playback-pipeline": example_bench(
         "playback-pipeline-benchmark",
         lambda ctx: ["--recording-path", str(ctx.fixture), "--fps", "60", "--frames", "300", "--force-ffmpeg"],
