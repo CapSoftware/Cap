@@ -18,18 +18,22 @@ use tokio::sync::watch;
 
 const BLOCK_FRAMES: usize = 32_768;
 
-pub fn waveform_peaks<'a>(samples: impl Iterator<Item = &'a f32>, channels: u16) -> Vec<f32> {
+pub fn waveform_peaks<'a>(slices: impl IntoIterator<Item = &'a [f32]>, channels: u16) -> Vec<f32> {
     let block_samples = AudioData::SAMPLE_RATE as usize / 10 * usize::from(channels.max(1));
     let mut peaks = Vec::new();
     let mut sum = 0.0_f32;
     let mut count = 0;
-    for sample in samples {
-        sum += sample.abs();
-        count += 1;
-        if count == block_samples {
-            peaks.push(sum / count as f32);
-            sum = 0.0;
-            count = 0;
+    for mut slice in slices {
+        while !slice.is_empty() {
+            let (window, rest) = slice.split_at((block_samples - count).min(slice.len()));
+            sum = window.iter().fold(sum, |sum, sample| sum + sample.abs());
+            count += window.len();
+            slice = rest;
+            if count == block_samples {
+                peaks.push(sum / count as f32);
+                sum = 0.0;
+                count = 0;
+            }
         }
     }
     if count > 0 {
@@ -924,7 +928,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(
-                    waveform_peaks(audio.sample_slices().flatten(), audio.channels()),
+                    waveform_peaks(audio.sample_slices(), audio.channels()),
                     expected
                 );
                 for (position, offset, mode) in [

@@ -196,7 +196,34 @@ impl FrameDropTracker {
     fn record_drop(&mut self) {
         self.drops_in_window += 1;
         self.total_drops += 1;
+        if self.total_drops == 1 {
+            warn!(
+                source = self.source,
+                total_frames = self.total_frames,
+                "MP4 muxer encoder queue full, first frame dropped"
+            );
+            if let Some(tx) = &self.health_tx {
+                emit_health(
+                    tx,
+                    PipelineHealthEvent::FrameDropRateHigh {
+                        source: self.source.to_string(),
+                        rate_pct: 100.0 / (self.total_frames + 1) as f64,
+                    },
+                );
+            }
+        }
         self.check_drop_rate();
+    }
+
+    fn log_totals(&self) {
+        if self.total_drops > 0 {
+            warn!(
+                source = self.source,
+                total_frames = self.total_frames,
+                total_drops = self.total_drops,
+                "MP4 muxer dropped frames during the recording"
+            );
+        }
     }
 
     fn check_drop_rate(&mut self) {
@@ -226,11 +253,13 @@ impl FrameDropTracker {
                         self.health_emitted = true;
                     }
                 } else if self.drops_in_window > 0 {
-                    debug!(
+                    warn!(
+                        source = self.source,
                         frames = self.frames_in_window,
                         drops = self.drops_in_window,
                         drop_rate_pct = format!("{:.1}%", drop_rate),
-                        "MP4 muxer frame stats"
+                        total_drops = self.total_drops,
+                        "MP4 muxer dropped frames"
                     );
                 }
             }
@@ -685,6 +714,7 @@ impl Muxer for AVFoundationMp4Muxer {
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let mut finish_error: Option<anyhow::Error> = None;
+        self.frame_drops.log_totals();
 
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -1287,6 +1317,7 @@ impl Muxer for AVFoundationCameraMuxer {
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let mut finish_error: Option<anyhow::Error> = None;
+        self.frame_drops.log_totals();
 
         if let Some(mut state) = self.state.take() {
             if let Err(e) = state.video_tx.send(None) {

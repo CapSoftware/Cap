@@ -1,0 +1,31 @@
+name: Status app
+
+on:
+  pull_request:
+    paths:
+      - "apps/status/**"
+      - "bun.lock"
+      - ".github/workflows/status.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/status/**"
+      - "bun.lock"
+      - ".github/workflows/status.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd apps/status test
+      - run: bun run --cwd apps/status build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"

@@ -1,0 +1,606 @@
+import { ByteWriter, asciiBytes } from "./bytes"
+
+export const TIMESCALE = 90000
+
+export function nalUnits(s: u8[]): int[] {
+  let out: int[] = []
+  const n = s.length
+  let i = 0
+  let start = -1
+  while (i + 2 < n) {
+    if (s[i]! === u8(0) && s[i + 1]! === u8(0) && s[i + 2]! === u8(1)) {
+      if (start >= 0) {
+        let end = i
+        while (end > start && s[end - 1]! === u8(0)) end--
+        out.push(start)
+        out.push(end - start)
+      }
+      i += 3
+      start = i
+    } else {
+      i++
+    }
+  }
+  if (start >= 0 && start < n) {
+    out.push(start)
+    out.push(n - start)
+  }
+  return out
+}
+
+function writeMatrix(w: ByteWriter) {
+  w.u32(0x00010000)
+  w.u32(0)
+  w.u32(0)
+  w.u32(0)
+  w.u32(0x00010000)
+  w.u32(0)
+  w.u32(0)
+  w.u32(0)
+  w.u32(0x40000000)
+}
+
+export class Mp4Muxer {
+  readonly width: int
+  readonly height: int
+  readonly fpsNum: int
+  readonly fpsDen: int
+  sps: u8[] = []
+  pps: u8[] = []
+  data: u8[] = []
+  sizes: int[] = []
+  frameIdx: int[] = []
+  sync: int[] = []
+  disposable: int[] = []
+  reorder = false
+  reorderFrames = 1
+  fragStart = 0
+  dataStart = 0
+  seq = 0
+  lastFragmentTicks = 0
+  lastFragmentStart = 0
+
+  constructor(width: int, height: int, fpsNum: int, fpsDen: int) {
+    this.width = width
+    this.height = height
+    this.fpsNum = fpsNum
+    this.fpsDen = fpsDen
+  }
+
+  ts(frame: int): int {
+    return Math.trunc(f64(frame) * f64(TIMESCALE) * f64(this.fpsDen) / f64(this.fpsNum))
+  }
+
+  addSample(annexb: u8[], inputIndex: int, idr: bool) {
+    const nals = nalUnits(annexb)
+    let size = 0
+    let refIdc = 0
+    for (let k = 0; k < nals.length; k += 2) {
+      const o = nals[k]!
+      const len = nals[k + 1]!
+      if (len <= 0) continue
+      const t = int(annexb[o]!) & 31
+      if ((t === 1 || t === 5) && ((int(annexb[o]!) >> 5) & 3) > refIdc) refIdc = (int(annexb[o]!) >> 5) & 3
+      if (t === 7) {
+        if (this.sps.length === 0) this.sps = annexb.slice(o, o + len)
+        continue
+      }
+      if (t === 8) {
+        if (this.pps.length === 0) this.pps = annexb.slice(o, o + len)
+        continue
+      }
+      if (t === 9) continue
+      this.data.push(u8((len >> 24) & 255))
+      this.data.push(u8((len >> 16) & 255))
+      this.data.push(u8((len >> 8) & 255))
+      this.data.push(u8(len & 255))
+      for (let i = 0; i < len; i++) this.data.push(annexb[o + i]!)
+      size += 4 + len
+    }
+    this.sizes.push(size)
+    this.frameIdx.push(inputIndex)
+    this.sync.push(idr ? 1 : 0)
+    this.disposable.push(refIdc === 0 ? 1 : 0)
+  }
+
+  decodeFrames(a: int, b: int): int[] {
+    let s: int[] = []
+    for (let k = a; k < b; k++) {
+      const v = this.frameIdx[k]!
+      let j = s.length
+      s.push(v)
+      while (j > 0 && s[j - 1]! > v) {
+        s[j] = s[j - 1]!
+        j--
+      }
+      s[j] = v
+    }
+    return s
+  }
+
+  duration(dec: int[], i: int, nextFrame: int): int {
+    const next = i + 1 < dec.length ? dec[i + 1]! : nextFrame
+    return this.ts(next) - this.ts(dec[i]!)
+  }
+
+  sampleFlags(k: int): int {
+    if (this.sync[k]! === 1) return 0x02000000
+    return this.disposable[k]! === 1 ? 0x01810000 : 0x01010000
+  }
+
+  writeAvcC(w: ByteWriter) {
+    const at = w.begin("avcC")
+    w.u8(1)
+    w.u8(int(this.sps[1]!))
+    w.u8(int(this.sps[2]!))
+    w.u8(int(this.sps[3]!))
+    w.u8(0xff)
+    w.u8(0xe1)
+    w.u16(this.sps.length)
+    w.bytes(this.sps, 0, this.sps.length)
+    w.u8(1)
+    w.u16(this.pps.length)
+    w.bytes(this.pps, 0, this.pps.length)
+    const profile = int(this.sps[1]!)
+    if (profile === 100 || profile === 110 || profile === 122 || profile === 244) {
+      w.u8(0xfc | 1)
+      w.u8(0xf8)
+      w.u8(0xf8)
+      w.u8(0)
+    }
+    w.end(at)
+  }
+
+  writeStsd(w: ByteWriter) {
+    const at = w.beginFull("stsd", 0, 0)
+    w.u32(1)
+    const e = w.begin("avc1")
+    w.zeros(6)
+    w.u16(1)
+    w.zeros(16)
+    w.u16(this.width)
+    w.u16(this.height)
+    w.u32(0x00480000)
+    w.u32(0x00480000)
+    w.u32(0)
+    w.u16(1)
+    w.u8(8)
+    w.fourcc("capc")
+    w.fourcc("odec")
+    w.zeros(23)
+    w.u16(0x18)
+    w.u16(0xffff)
+    this.writeAvcC(w)
+    const c = w.begin("colr")
+    w.fourcc("nclx")
+    w.u16(1)
+    w.u16(1)
+    w.u16(1)
+    w.u8(0)
+    w.end(c)
+    const p = w.begin("pasp")
+    w.u32(1)
+    w.u32(1)
+    w.end(p)
+    w.end(e)
+    w.end(at)
+  }
+
+  writeMoovHead(w: ByteWriter, durTicks: int) {
+    const mv = w.beginFull("mvhd", 0, 0)
+    w.u32(0)
+    w.u32(0)
+    w.u32(TIMESCALE)
+    w.u32(durTicks)
+    w.u32(0x00010000)
+    w.u16(0x0100)
+    w.zeros(10)
+    writeMatrix(w)
+    w.zeros(24)
+    w.u32(2)
+    w.end(mv)
+  }
+
+  writeTrackHead(w: ByteWriter, durTicks: int) {
+    const tk = w.beginFull("tkhd", 0, 3)
+    w.u32(0)
+    w.u32(0)
+    w.u32(1)
+    w.u32(0)
+    w.u32(durTicks)
+    w.zeros(8)
+    w.u16(0)
+    w.u16(0)
+    w.u16(0)
+    w.u16(0)
+    writeMatrix(w)
+    w.u32(this.width << 16)
+    w.u32(this.height << 16)
+    w.end(tk)
+  }
+
+  writeEditList(w: ByteWriter, durTicks: int, mediaTime: int) {
+    const edts = w.begin("edts")
+    const elst = w.beginFull("elst", 0, 0)
+    w.u32(1)
+    w.u32(durTicks)
+    w.u32(mediaTime)
+    w.u16(1)
+    w.u16(0)
+    w.end(elst)
+    w.end(edts)
+  }
+
+  fragmentDelay(): int {
+    return Math.ceil(f64(this.reorderFrames) * f64(TIMESCALE) * f64(this.fpsDen) / f64(this.fpsNum))
+  }
+
+  writeMdiaHead(w: ByteWriter, durTicks: int) {
+    const md = w.beginFull("mdhd", 0, 0)
+    w.u32(0)
+    w.u32(0)
+    w.u32(TIMESCALE)
+    w.u32(durTicks)
+    w.u16(0x55c4)
+    w.u16(0)
+    w.end(md)
+    const hd = w.beginFull("hdlr", 0, 0)
+    w.u32(0)
+    w.fourcc("vide")
+    w.zeros(12)
+    const name = asciiBytes("capcodec video")
+    w.bytes(name, 0, name.length)
+    w.u8(0)
+    w.end(hd)
+  }
+
+  writeMinfHead(w: ByteWriter) {
+    const vm = w.beginFull("vmhd", 0, 1)
+    w.zeros(8)
+    w.end(vm)
+    const di = w.begin("dinf")
+    const dr = w.beginFull("dref", 0, 0)
+    w.u32(1)
+    const u = w.beginFull("url ", 0, 1)
+    w.end(u)
+    w.end(dr)
+    w.end(di)
+  }
+
+  writeFtyp(w: ByteWriter, fragmented: bool) {
+    const ft = w.begin("ftyp")
+    w.fourcc(fragmented ? "iso6" : "isom")
+    w.u32(0x200)
+    w.fourcc("isom")
+    w.fourcc(fragmented ? "iso6" : "iso2")
+    w.fourcc("avc1")
+    w.fourcc("mp41")
+    w.end(ft)
+  }
+
+  progressive(totalFrames: int): u8[] {
+    const n = this.sizes.length
+    const dec = this.decodeFrames(0, n)
+    let total = 0
+    for (let k = 0; k < n; k++) total += this.duration(dec, k, totalFrames)
+    let shift = 0
+    for (let k = 0; k < n; k++) {
+      const s = this.ts(dec[k]!) - this.ts(this.frameIdx[k]!)
+      if (s > shift) shift = s
+    }
+    const large = this.data.length > 0x7fff0000
+    let moovSize = 0
+    let w = new ByteWriter()
+    for (let pass = 0; pass < 2; pass++) {
+      w = new ByteWriter()
+      this.writeFtyp(w, false)
+      const ftypSize = w.length()
+      const moov = w.begin("moov")
+      this.writeMoovHead(w, total)
+      const trak = w.begin("trak")
+      this.writeTrackHead(w, total)
+      if (this.reorder) this.writeEditList(w, total, shift)
+      const mdia = w.begin("mdia")
+      this.writeMdiaHead(w, total)
+      const minf = w.begin("minf")
+      this.writeMinfHead(w)
+      const stbl = w.begin("stbl")
+      this.writeStsd(w)
+      const stts = w.beginFull("stts", 0, 0)
+      const cntAt = w.length()
+      w.u32(0)
+      let runs = 0
+      let k = 0
+      while (k < n) {
+        const d = this.duration(dec, k, totalFrames)
+        let j = k + 1
+        while (j < n && this.duration(dec, j, totalFrames) === d) j++
+        w.u32(j - k)
+        w.u32(d)
+        runs++
+        k = j
+      }
+      w.patch32(cntAt, runs)
+      w.end(stts)
+      if (this.reorder) {
+        const ctts = w.beginFull("ctts", 0, 0)
+        const ctAt = w.length()
+        w.u32(0)
+        let cruns = 0
+        let c = 0
+        while (c < n) {
+          const o = this.ts(this.frameIdx[c]!) - this.ts(dec[c]!) + shift
+          let j = c + 1
+          while (j < n && this.ts(this.frameIdx[j]!) - this.ts(dec[j]!) + shift === o) j++
+          w.u32(j - c)
+          w.u32(o)
+          cruns++
+          c = j
+        }
+        w.patch32(ctAt, cruns)
+        w.end(ctts)
+      }
+      const stss = w.beginFull("stss", 0, 0)
+      let ns = 0
+      for (let i = 0; i < n; i++) ns += this.sync[i]!
+      w.u32(ns)
+      for (let i = 0; i < n; i++) {
+        if (this.sync[i]! === 1) w.u32(i + 1)
+      }
+      w.end(stss)
+      const stsc = w.beginFull("stsc", 0, 0)
+      w.u32(1)
+      w.u32(1)
+      w.u32(1)
+      w.u32(1)
+      w.end(stsc)
+      const stsz = w.beginFull("stsz", 0, 0)
+      w.u32(0)
+      w.u32(n)
+      for (let i = 0; i < n; i++) w.u32(this.sizes[i]!)
+      w.end(stsz)
+      const co = w.beginFull(large ? "co64" : "stco", 0, 0)
+      w.u32(n)
+      let off = ftypSize + moovSize + (large ? 16 : 8)
+      for (let i = 0; i < n; i++) {
+        if (large) {
+          w.u64(off)
+        } else {
+          w.u32(off)
+        }
+        off += this.sizes[i]!
+      }
+      w.end(co)
+      w.end(stbl)
+      w.end(minf)
+      w.end(mdia)
+      w.end(trak)
+      w.end(moov)
+      moovSize = w.length() - ftypSize
+    }
+    if (large) {
+      w.u32(1)
+      w.fourcc("mdat")
+      w.u64(this.data.length + 16)
+    } else {
+      w.u32(this.data.length + 8)
+      w.fourcc("mdat")
+    }
+    w.bytes(this.data, 0, this.data.length)
+    return w.buf
+  }
+
+  initSegment(): u8[] {
+    const w = new ByteWriter()
+    this.writeFtyp(w, true)
+    const moov = w.begin("moov")
+    this.writeMoovHead(w, 0)
+    const trak = w.begin("trak")
+    this.writeTrackHead(w, 0)
+    if (this.reorder) this.writeEditList(w, 0, this.fragmentDelay())
+    const mdia = w.begin("mdia")
+    this.writeMdiaHead(w, 0)
+    const minf = w.begin("minf")
+    this.writeMinfHead(w)
+    const stbl = w.begin("stbl")
+    this.writeStsd(w)
+    for (const kind of ["stts", "stsc", "stsz", "stco"]) {
+      const b = w.beginFull(kind, 0, 0)
+      if (kind === "stsz") w.u32(0)
+      w.u32(0)
+      w.end(b)
+    }
+    w.end(stbl)
+    w.end(minf)
+    w.end(mdia)
+    w.end(trak)
+    const mvex = w.begin("mvex")
+    const trex = w.beginFull("trex", 0, 0)
+    w.u32(1)
+    w.u32(1)
+    w.u32(0)
+    w.u32(0)
+    w.u32(0)
+    w.end(trex)
+    w.end(mvex)
+    w.end(moov)
+    return w.buf
+  }
+
+  pendingSamples(): int {
+    return this.sizes.length - this.fragStart
+  }
+
+  fragment(endExclusive: int, totalFrames: int): u8[] {
+    const a = this.fragStart
+    const b = endExclusive
+    const w = new ByteWriter()
+    this.seq++
+    const moof = w.begin("moof")
+    const mfhd = w.beginFull("mfhd", 0, 0)
+    w.u32(this.seq)
+    w.end(mfhd)
+    const traf = w.begin("traf")
+    const tfhd = w.beginFull("tfhd", 0, 0x020000)
+    w.u32(1)
+    w.end(tfhd)
+    const dec = this.decodeFrames(a, b)
+    const tfdt = w.beginFull("tfdt", 1, 0)
+    w.u64(this.ts(dec[0]!))
+    w.end(tfdt)
+    const trun = w.beginFull("trun", 0, this.reorder ? 0x000f01 : 0x000701)
+    w.u32(b - a)
+    const doff = w.length()
+    w.u32(0)
+    const delay = this.fragmentDelay()
+    let ticks = 0
+    let bytes = 0
+    for (let k = a; k < b; k++) {
+      const d = this.duration(dec, k - a, totalFrames)
+      ticks += d
+      bytes += this.sizes[k]!
+      w.u32(d)
+      w.u32(this.sizes[k]!)
+      w.u32(this.sampleFlags(k))
+      if (this.reorder) w.u32(this.ts(this.frameIdx[k]!) - this.ts(dec[k - a]!) + delay)
+    }
+    w.end(trun)
+    w.end(traf)
+    w.end(moof)
+    w.patch32(doff, w.length() - moof + 8)
+    w.u32(bytes + 8)
+    w.fourcc("mdat")
+    w.bytes(this.data, this.dataStart, bytes)
+    this.lastFragmentTicks = ticks
+    this.lastFragmentStart = this.ts(dec[0]!)
+    this.data = this.data.slice(this.dataStart + bytes)
+    this.dataStart = 0
+    this.fragStart = b
+    return w.buf
+  }
+}
+
+function boxAt(buf: u8[], kind: string): int {
+  const k = asciiBytes(kind)
+  for (let i = 4; i + 4 <= buf.length; i++) {
+    if (buf[i]! === k[0]! && buf[i + 1]! === k[1]! && buf[i + 2]! === k[2]! && buf[i + 3]! === k[3]!) return i - 4
+  }
+  return -1
+}
+
+function be32(buf: u8[], at: int): int {
+  const v = (int(buf[at]!) << 24) | (int(buf[at + 1]!) << 16) | (int(buf[at + 2]!) << 8) | int(buf[at + 3]!)
+  return v >= 0x80000000 ? v - 0x100000000 : v
+}
+
+test("reordered fragments get sorted decode times and composition offsets delayed by the init edit list", () => {
+  const m = new Mp4Muxer(16, 16, 30, 1)
+  m.reorder = true
+  const idr: u8[] = [u8(0), u8(0), u8(1), u8(0x67), u8(0x64), u8(0), u8(0x28), u8(0), u8(0), u8(1), u8(0x68), u8(0xee),
+    u8(0), u8(0), u8(1), u8(0x65), u8(0x88)]
+  const p: u8[] = [u8(0), u8(0), u8(1), u8(0x41), u8(0x9a)]
+  const b: u8[] = [u8(0), u8(0), u8(1), u8(0x01), u8(0x9e)]
+  m.addSample(idr, 0, true)
+  m.addSample(p, 3, false)
+  m.addSample(b, 1, false)
+  m.addSample(b, 2, false)
+  expect(m.decodeFrames(0, 4)).toEqual([0, 1, 2, 3])
+  expect(m.disposable).toEqual([0, 0, 1, 1])
+  const init = m.initSegment()
+  const elst = boxAt(init, "elst")
+  expect(be32(init, elst + 12)).toBe(1)
+  expect(be32(init, elst + 16)).toBe(0)
+  expect(be32(init, elst + 20)).toBe(3000)
+  m.reorder = false
+  expect(boxAt(m.initSegment(), "edts")).toBe(-1)
+  m.reorder = true
+  const frag = m.fragment(4, 4)
+  const trun = boxAt(frag, "trun")
+  expect(int(frag[trun + 8]!)).toBe(0)
+  expect(be32(frag, trun + 8) & 0xffffff).toBe(0x000f01)
+  let offsets: int[] = []
+  let flags: int[] = []
+  for (let k = 0; k < 4; k++) {
+    flags.push(be32(frag, trun + 20 + k * 16 + 8))
+    offsets.push(be32(frag, trun + 20 + k * 16 + 12))
+  }
+  expect(offsets).toEqual([3000, 9000, 0, 0])
+  expect(flags).toEqual([0x02000000, 0x01010000, 0x01810000, 0x01810000])
+  const tfdt = boxAt(frag, "tfdt")
+  expect(be32(frag, tfdt + 16)).toBe(0)
+})
+
+test("fractional frame rates keep fragment composition offsets non-negative and presentation exact", () => {
+  const m = new Mp4Muxer(16, 16, 24000, 1001)
+  m.reorder = true
+  const idr: u8[] = [u8(0), u8(0), u8(1), u8(0x65), u8(0x88)]
+  const p: u8[] = [u8(0), u8(0), u8(1), u8(0x41), u8(0x9a)]
+  const order = [0, 2, 1, 5, 3, 4, 7, 6]
+  m.addSample(idr, 0, true)
+  for (let k = 1; k < order.length; k++) m.addSample(p, order[k]!, false)
+  const delay = m.fragmentDelay()
+  expect(delay).toBe(3754)
+  const frag = m.fragment(order.length, 8)
+  const trun = boxAt(frag, "trun")
+  let dts = be32(frag, boxAt(frag, "tfdt") + 16)
+  for (let k = 0; k < order.length; k++) {
+    const off = be32(frag, trun + 20 + k * 16 + 12)
+    expect(off >= 0).toBe(true)
+    expect(dts + off - delay).toBe(m.ts(order[k]!))
+    dts += be32(frag, trun + 20 + k * 16)
+  }
+})
+
+test("b-pyramid fragments delay composition by two frames and keep the reference b-frame", () => {
+  const m = new Mp4Muxer(16, 16, 30, 1)
+  m.reorder = true
+  m.reorderFrames = 2
+  const idr: u8[] = [u8(0), u8(0), u8(1), u8(0x65), u8(0x88)]
+  const ref: u8[] = [u8(0), u8(0), u8(1), u8(0x41), u8(0x9a)]
+  const b: u8[] = [u8(0), u8(0), u8(1), u8(0x01), u8(0x9e)]
+  const order = [0, 4, 2, 1, 3, 8, 6, 5, 7]
+  m.addSample(idr, 0, true)
+  for (let k = 1; k < order.length; k++) m.addSample(order[k]! % 2 === 0 ? ref : b, order[k]!, false)
+  expect(m.disposable).toEqual([0, 0, 0, 1, 1, 0, 0, 1, 1])
+  const delay = m.fragmentDelay()
+  expect(delay).toBe(6000)
+  const frag = m.fragment(order.length, 9)
+  const trun = boxAt(frag, "trun")
+  let dts = be32(frag, boxAt(frag, "tfdt") + 16)
+  let least = delay
+  for (let k = 0; k < order.length; k++) {
+    const off = be32(frag, trun + 20 + k * 16 + 12)
+    if (off < least) least = off
+    expect(dts + off - delay).toBe(m.ts(order[k]!))
+    dts += be32(frag, trun + 20 + k * 16)
+  }
+  expect(least).toBe(0)
+})
+
+test("progressive files shift reordered composition offsets with an edit list", () => {
+  const m = new Mp4Muxer(16, 16, 30, 1)
+  m.reorder = true
+  const idr: u8[] = [u8(0), u8(0), u8(1), u8(0x67), u8(0x64), u8(0), u8(0x28), u8(0), u8(0), u8(1), u8(0x68), u8(0xee),
+    u8(0), u8(0), u8(1), u8(0x65), u8(0x88)]
+  const p: u8[] = [u8(0), u8(0), u8(1), u8(0x41), u8(0x9a)]
+  const b: u8[] = [u8(0), u8(0), u8(1), u8(0x01), u8(0x9e)]
+  m.addSample(idr, 0, true)
+  m.addSample(p, 2, false)
+  m.addSample(b, 1, false)
+  const file = m.progressive(3)
+  const elst = boxAt(file, "elst")
+  expect(be32(file, elst + 12)).toBe(1)
+  expect(be32(file, elst + 16)).toBe(9000)
+  expect(be32(file, elst + 20)).toBe(3000)
+  const ctts = boxAt(file, "ctts")
+  expect(be32(file, ctts + 12)).toBe(3)
+  expect(be32(file, ctts + 20)).toBe(3000)
+  expect(be32(file, ctts + 28)).toBe(6000)
+  expect(be32(file, ctts + 36)).toBe(0)
+})
+
+test("annex b splitting finds each nal", () => {
+  const s: u8[] = [u8(0), u8(0), u8(0), u8(1), u8(0x67), u8(1), u8(0), u8(0), u8(1), u8(0x68), u8(2), u8(0), u8(0), u8(1), u8(0x65), u8(9)]
+  const n = nalUnits(s)
+  expect(n).toEqual([4, 2, 9, 2, 14, 2])
+})

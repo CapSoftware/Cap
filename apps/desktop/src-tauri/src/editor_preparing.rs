@@ -773,6 +773,7 @@ impl Runner {
                 preview: PreparingPreviewOptions {
                     use_hardware_decoding: !cfg!(target_os = "windows"),
                     frame_format: EditorFrameFormat::Rgba,
+                    shared_device: None,
                 },
                 fps: crate::EDITOR_PREVIEW_FPS,
                 resolution: crate::default_editor_preview_resolution(),
