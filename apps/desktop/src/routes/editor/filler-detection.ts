@@ -33,9 +33,22 @@ const ENGLISH_MARKERS = new Set([
 	"there",
 ]);
 
+// "err" is a verb and an all-caps "ER" an acronym, yet both collapse to the
+// filler "er". Drawn-out forms like "errr" or "UMMM" still count.
+const NOT_FILLERS = new Set(["err"]);
+
 export function isFillerWord(text: string): boolean {
-	const letters = text.toLowerCase().replace(/[^a-z]/g, "");
-	return FILLER_WORDS.has(letters.replace(/(.)\1+/g, "$1"));
+	const letters = text.replace(/[^a-z]/gi, "");
+	if (
+		letters.length > 1 &&
+		letters === letters.toUpperCase() &&
+		!/(.)\1/.test(letters)
+	)
+		return false;
+	const lower = letters.toLowerCase();
+	return (
+		!NOT_FILLERS.has(lower) && FILLER_WORDS.has(lower.replace(/(.)\1+/g, "$1"))
+	);
 }
 
 // "um" is a Portuguese article and a German preposition, and "er" is German

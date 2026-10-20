@@ -18,6 +18,7 @@ import {
 import { transitionsAfterClipMerge } from "./clip-merge";
 import {
 	type ClipTransition,
+	clipCutPreservesTransitionGeometry,
 	clipDuration,
 	clipTimelineDuration,
 	clipTimelineOffsets,
@@ -56,6 +57,7 @@ const MAX_SILENCE_DB = -45;
 const MIN_SPEECH_HEADROOM_DB = 15;
 const SPEECH_RELEASE = 0.1;
 const MIN_WORD_SPEECH = 0.1;
+const NEXT_ONSET = 0.25;
 
 export type SourceRange = TranscriptRange;
 
@@ -241,7 +243,7 @@ export function recordingSilence(
 	return mergeSourceRanges(silence);
 }
 
-function silenceBefore(silence: readonly SourceRange[], time: number) {
+function silenceAround(silence: readonly SourceRange[], time: number) {
 	let low = 0;
 	let high = silence.length;
 	while (low < high) {
@@ -253,22 +255,60 @@ function silenceBefore(silence: readonly SourceRange[], time: number) {
 	return range && range.start < time - RANGE_EPSILON ? range : undefined;
 }
 
+function silenceEndingBefore(silence: readonly SourceRange[], time: number) {
+	let low = 0;
+	let high = silence.length;
+	while (low < high) {
+		const mid = (low + high) >>> 1;
+		if (silence[mid].end <= time + RANGE_EPSILON) low = mid + 1;
+		else high = mid;
+	}
+	const range = silence[low - 1];
+	return range && range.end >= time - NEXT_ONSET ? range : undefined;
+}
+
 // parakeet-rs ends each token where the next begins, so a word's end runs
 // through the silence after it (up to MAX_CAPTION_WORD_DURATION); only the
 // audio shows where speech stopped. Its timestamps also drift ~0.2s either
 // way, so a word can sit wholly in that silence: it keeps a sliver so a cut
-// there trims it rather than swallowing it.
+// there trims it rather than swallowing it. The waveform comes in 100 ms
+// blocks, so the next word's start (where this word's end was stretched to)
+// usually lands in the block where it becomes audible, just past the silence.
 function audibleWordEnd(
 	word: { start: number; end: number },
 	silence: readonly SourceRange[],
 ) {
 	const end = spokenWordEnd(word);
-	const quiet = silenceBefore(silence, end);
+	const quiet =
+		silenceAround(silence, end) ?? silenceBeforeOnset(word, end, silence);
 	if (!quiet) return end;
 	return Math.min(
 		end,
 		Math.max(quiet.start + SPEECH_RELEASE, word.start + MIN_WORD_SPEECH),
 	);
+}
+
+function silenceBeforeOnset(
+	word: { start: number; end: number },
+	end: number,
+	silence: readonly SourceRange[],
+) {
+	const quiet = silenceEndingBefore(silence, end);
+	if (!quiet || quiet.start <= word.start + RANGE_EPSILON) return undefined;
+	const heard = sourceRangesDuration(
+		subtractSourceRanges([{ start: word.start, end: quiet.start }], silence),
+	);
+	return end - quiet.end > heard ? undefined : quiet;
+}
+
+// A word stamped after it became audible starts where the silence before it
+// ends, so a pause cut stops short of its first syllable.
+function audibleWordStart(
+	word: { start: number; end: number },
+	silence: readonly SourceRange[],
+) {
+	if (silenceAround(silence, word.start)) return word.start;
+	return silenceEndingBefore(silence, word.start)?.end ?? word.start;
 }
 
 export function cutClaim(
@@ -320,6 +360,10 @@ function paddingRoom(
 			before = Math.min(before, cut.start - range.end);
 		else if (range.start >= cut.end - RANGE_EPSILON)
 			after = Math.min(after, range.start - cut.end);
+		else {
+			if (range.start < cut.start) before = 0;
+			if (range.end > cut.end) after = 0;
+		}
 	}
 	return { before: Math.max(0, before), after: Math.max(0, after) };
 }
@@ -366,28 +410,59 @@ function clampCutPadding(cut: TranscriptCut, room: PaddingRoom): TranscriptCut {
 	return { ...cut, bufferStart, bufferEnd };
 }
 
+// Restoring a cut brings its footage back even where another cut's padding
+// had reached over it, so that padding gives way.
+function clearOf(
+	cut: TranscriptCut,
+	ranges: readonly SourceRange[],
+): TranscriptCut {
+	let bufferStart = cut.bufferStart ?? 0;
+	let bufferEnd = cut.bufferEnd ?? 0;
+	for (const range of ranges) {
+		if (range.start < cut.start - RANGE_EPSILON)
+			bufferStart = Math.min(bufferStart, Math.max(0, cut.start - range.end));
+		if (range.end > cut.end + RANGE_EPSILON)
+			bufferEnd = Math.min(bufferEnd, Math.max(0, range.start - cut.end));
+	}
+	return bufferStart === (cut.bufferStart ?? 0) &&
+		bufferEnd === (cut.bufferEnd ?? 0)
+		? cut
+		: { ...cut, bufferStart, bufferEnd };
+}
+
+function coverClaim(cut: TranscriptCut, range: SourceRange): TranscriptCut {
+	const claim = cutClaim(cut);
+	if (!claim) return cut;
+	const before = claim.start - range.start;
+	const after = range.end - claim.end;
+	if (before <= RANGE_EPSILON && after <= RANGE_EPSILON) return cut;
+	return {
+		...cut,
+		bufferStart: (cut.bufferStart ?? 0) + (before > RANGE_EPSILON ? before : 0),
+		bufferEnd: (cut.bufferEnd ?? 0) + (after > RANGE_EPSILON ? after : 0),
+	};
+}
+
 function cutConflictsWithTransition(
 	segments: TimelineSegment[],
 	transitions: ClipTransition[],
-	offsets: number[],
 	range: MappedTimeRange,
 ) {
-	if (
-		rangeIntersectsClipTransition(segments, transitions, range.start, range.end)
-	)
-		return true;
-	const incoming =
-		getClipTransition(segments, transitions, range.segmentIndex)?.duration ?? 0;
-	const outgoing =
-		getClipTransition(segments, transitions, range.segmentIndex + 1)
-			?.duration ?? 0;
-	if (incoming === 0 && outgoing === 0) return false;
-	const localStart = range.start - offsets[range.segmentIndex];
-	const localEnd = range.end - offsets[range.segmentIndex];
-	const duration = clipDuration(segments[range.segmentIndex]);
 	return (
-		localStart + RANGE_EPSILON < incoming * 2 ||
-		duration - localEnd + RANGE_EPSILON < outgoing * 2
+		rangeIntersectsClipTransition(
+			segments,
+			transitions,
+			range.start,
+			range.end,
+		) ||
+		!clipCutPreservesTransitionGeometry(
+			segments,
+			transitions,
+			range.segmentIndex,
+			range.start,
+			range.end,
+			RANGE_EPSILON,
+		)
 	);
 }
 
@@ -451,7 +526,7 @@ export function sourceRangeBlockedByTransition(
 		recordingSegments,
 		offsets,
 	).some((edited) =>
-		cutConflictsWithTransition(timeline.segments, transitions, offsets, edited),
+		cutConflictsWithTransition(timeline.segments, transitions, edited),
 	);
 }
 
@@ -653,11 +728,12 @@ function laterOverlayEdits(
 	const found = new Set<TranscriptCutPiece>();
 	const queue = [...restoring];
 	for (let piece = queue.pop(); piece; piece = queue.pop()) {
+		const everyLater = deletesOverlayPastItself(piece);
 		for (const other of staying) {
 			if (
 				found.has(other) ||
 				other.sequence <= piece.sequence ||
-				!editsOverlayAfter(piece, other)
+				!(everyLater || editsOverlayAfter(piece, other))
 			)
 				continue;
 			found.add(other);
@@ -665,6 +741,23 @@ function laterOverlayEdits(
 		}
 	}
 	return [...found];
+}
+
+// A keyboard segment goes once a cut takes all its key presses, even where it
+// reaches past the cut. Its snapshot then sits on a timeline that later cuts
+// under that reach change without touching it, so they all come back first.
+function deletesOverlayPastItself(piece: TranscriptCutPiece) {
+	const length =
+		(piece.end - piece.start) / piece.clip.timescale + (piece.held ?? 0);
+	const changes: OverlayChanges = piece.overlays ?? {};
+	return OVERLAY_TRACKS.some((key) =>
+		(changes[key] ?? []).some(
+			(entry) =>
+				!entry.after &&
+				(entry.before.start < -RANGE_EPSILON ||
+					entry.before.end > length + RANGE_EPSILON),
+		),
+	);
 }
 
 function removeTimelineRange(
@@ -678,8 +771,18 @@ function removeTimelineRange(
 	const clipStart = clipTimelineOffsets(timeline.segments, transitions)[
 		range.segmentIndex
 	];
-	const start = Math.max(range.start, clipStart);
-	const end = Math.min(range.end, clipStart + clipDuration(clip));
+	const clipEnd = clipStart + clipDuration(clip);
+	const requestedStart = Math.max(range.start, clipStart);
+	const requestedEnd = Math.min(range.end, clipEnd);
+	// cutClipSegmentsForRange drops a leftover of 1 ms or less, so the cut
+	// takes it too and the piece matches the footage that actually leaves.
+	const keepsBefore =
+		clip.start + (requestedStart - clipStart) * clip.timescale >
+		clip.start + 0.001;
+	const keepsAfter =
+		clip.end > clip.start + (requestedEnd - clipStart) * clip.timescale + 0.001;
+	const start = keepsBefore ? requestedStart : clipStart;
+	const end = keepsAfter ? requestedEnd : clipEnd;
 	snapHoldsTo(timeline, start);
 	snapHoldsTo(timeline, end);
 	const holds = holdWindows(timeline.textSegments);
@@ -702,8 +805,12 @@ function removeTimelineRange(
 	return {
 		sequence,
 		clip: original,
-		start: original.start + (start - clipStart) * original.timescale,
-		end: original.start + (end - clipStart) * original.timescale,
+		start: keepsBefore
+			? original.start + (start - clipStart) * original.timescale
+			: original.start,
+		end: keepsAfter
+			? original.start + (end - clipStart) * original.timescale
+			: original.end,
 		held: held > RANGE_EPSILON ? held : 0,
 		heldAfter: heldAfter > RANGE_EPSILON ? heldAfter : 0,
 		overlays: overlayChanges(timeline, touched, overlayStart),
@@ -745,12 +852,7 @@ function cutTimelineSourceRanges(
 
 	if (
 		removals.some(({ range }) =>
-			cutConflictsWithTransition(
-				timeline.segments,
-				transitions,
-				offsets,
-				range,
-			),
+			cutConflictsWithTransition(timeline.segments, transitions, range),
 		)
 	)
 		return "transition";
@@ -1095,22 +1197,29 @@ function restoreTrimmedWords(
 	trimmed: readonly TranscriptTrimmedWord[],
 	claims: readonly SourceRange[],
 ) {
+	const unapplied: TranscriptTrimmedWord[] = [];
+	const stillTrimmed: TranscriptTrimmedWord[] = [];
 	for (const record of trimmed) {
-		for (const segment of captions.segments) {
-			const word = segment.words?.find(
-				(candidate) =>
-					Math.abs(candidate.start - record.start) <= WORD_TIME_EPSILON &&
-					Math.abs(candidate.end - record.trimmedEnd) <= WORD_TIME_EPSILON,
-			);
-			if (!word) continue;
-			const limit =
-				claims.find((claim) => claim.end > record.trimmedEnd + RANGE_EPSILON)
-					?.start ?? record.end;
-			word.end = Math.max(word.end, Math.min(record.end, limit));
-			segment.end = Math.max(segment.end, word.end);
-			break;
+		const matches = (candidate: { start: number; end: number }) =>
+			Math.abs(candidate.start - record.start) <= WORD_TIME_EPSILON &&
+			Math.abs(candidate.end - record.trimmedEnd) <= WORD_TIME_EPSILON;
+		const segment = captions.segments.find((candidate) =>
+			candidate.words?.some(matches),
+		);
+		const word = segment?.words?.find(matches);
+		if (!segment || !word) {
+			unapplied.push(record);
+			continue;
 		}
+		const limit =
+			claims.find((claim) => claim.end > record.trimmedEnd + RANGE_EPSILON)
+				?.start ?? record.end;
+		word.end = Math.max(word.end, Math.min(record.end, limit));
+		segment.end = Math.max(segment.end, word.end);
+		if (word.end < record.end - RANGE_EPSILON)
+			stillTrimmed.push({ ...record, trimmedEnd: word.end });
 	}
+	return { unapplied, stillTrimmed };
 }
 
 export type TranscriptCutEdit = {
@@ -1157,21 +1266,25 @@ export function applyTranscriptCutEdit(
 	if (restored.length === 0 && added.length === 0 && repadded.length === 0)
 		return "empty";
 
+	const freed = restored.map((cut) => ({ start: cut.start, end: cut.end }));
 	const nextCuts = [
 		...currentCuts.flatMap((cut) => {
 			if (restoreIds.has(cut.id)) return [];
 			const change = padding.get(cut.id);
 			return [
-				change
-					? clampCutPadding(
-							{
-								...cut,
-								bufferStart: change.bufferStart,
-								bufferEnd: change.bufferEnd,
-							},
-							cutPaddingRoom(captions, cut),
-						)
-					: cut,
+				clearOf(
+					change
+						? clampCutPadding(
+								{
+									...cut,
+									bufferStart: change.bufferStart,
+									bufferEnd: change.bufferEnd,
+								},
+								cutPaddingRoom(captions, cut),
+							)
+						: cut,
+					freed,
+				),
 			];
 		}),
 		...added,
@@ -1275,6 +1388,8 @@ export function applyTranscriptCutEdit(
 			);
 			for (const { owner, piece } of pieces) {
 				removedPieces.set(owner, [...(removedPieces.get(owner) ?? []), piece]);
+				const source = pieceSourceRange(piece, offsets);
+				if (source) nextCuts[owner] = coverClaim(nextCuts[owner], source);
 			}
 		}
 	}
@@ -1295,8 +1410,45 @@ export function applyTranscriptCutEdit(
 	removeCaptionWords(captions, edit.cutWords ?? []);
 	for (const cut of restored) {
 		if (cut.kind === "word") restoreCaptionWord(captions, cut);
-		restoreTrimmedWords(captions, cut.trimmedWords ?? [], nextClaims);
 	}
+	// A word trimmed by several cuts only matches the latest trim, so the trims
+	// go back newest first. Whatever stays trimmed moves to the cut that still
+	// holds it: a cut claiming the rest of the word, or the word's own cut when
+	// it is cut right now, so restoring that cut later gives back the rest.
+	let unapplied = restored.flatMap((cut) => cut.trimmedWords ?? []);
+	const stillTrimmed: TranscriptTrimmedWord[] = [];
+	for (let left = -1; unapplied.length !== left; ) {
+		left = unapplied.length;
+		const result = restoreTrimmedWords(captions, unapplied, nextClaims);
+		unapplied = result.unapplied;
+		stillTrimmed.push(...result.stillTrimmed);
+	}
+	const handOver = (record: TranscriptTrimmedWord, owner: number) => {
+		if (owner !== -1)
+			trimmedWords.set(owner, [...(trimmedWords.get(owner) ?? []), record]);
+	};
+	for (const record of unapplied)
+		handOver(
+			record,
+			nextCuts.findIndex(
+				(other) =>
+					other.kind === "word" &&
+					Math.abs(other.start - record.start) <= WORD_TIME_EPSILON &&
+					Math.abs(other.end - record.trimmedEnd) <= WORD_TIME_EPSILON,
+			),
+		);
+	for (const record of stillTrimmed)
+		handOver(
+			record,
+			nextCuts.findIndex((other) => {
+				const claim = cutClaim(other);
+				return (
+					!!claim &&
+					claim.start <= record.trimmedEnd + RANGE_EPSILON &&
+					claim.end > record.trimmedEnd + RANGE_EPSILON
+				);
+			}),
+		);
 
 	const stillRemoved = (piece: TranscriptCutPiece) => {
 		const source = pieceSourceRange(piece, offsets);
@@ -1371,6 +1523,15 @@ function tokenSpeechEnd(
 		: token.cut.end;
 }
 
+function tokenSpeechStart(
+	token: TranscriptToken,
+	audioSilence: readonly SourceRange[],
+) {
+	return token.type === "word"
+		? audibleWordStart(token.word, audioSilence)
+		: token.cut.start;
+}
+
 export function transcriptTokens(
 	words: readonly FlatWord[],
 	cuts: readonly TranscriptCut[],
@@ -1439,7 +1600,7 @@ export function buildTranscriptItems(
 		const previous = tokens[index - 1];
 		const gap = {
 			start: previous ? tokenSpeechEnd(previous, audioSilence) : 0,
-			end: tokenStart(token),
+			end: tokenSpeechStart(token, audioSilence),
 		};
 		const pauses =
 			gap.end - gap.start >= threshold
@@ -1599,7 +1760,11 @@ function planCuts(
 			: previous.type === "word" && !previousRecord
 				? audibleWordEnd(previous.word, context.audioSilence ?? [])
 				: itemEnd(previous);
-		const gap = itemStart(current) - gapStart;
+		const gapEnd =
+			current.type === "word" && !currentRecord
+				? audibleWordStart(current.word, context.audioSilence ?? [])
+				: itemStart(current);
+		const gap = gapEnd - gapStart;
 		if (gap <= RANGE_EPSILON) continue;
 		if (gap < PAUSE_DETECTION_THRESHOLD) {
 			if (currentRecord) {
@@ -1613,10 +1778,7 @@ function planCuts(
 		const beside = [previous?.token, current.token].filter(
 			(token): token is number => token !== undefined && records.has(token),
 		);
-		for (const range of clipToRange(silence, {
-			start: gapStart,
-			end: itemStart(current),
-		}))
+		for (const range of clipToRange(silence, { start: gapStart, end: gapEnd }))
 			gapPauses.push({ range, beside });
 	}
 

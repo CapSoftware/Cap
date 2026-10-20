@@ -185,6 +185,7 @@ export function clipCutPreservesTransitionGeometry(
 	segmentIndex: number,
 	cutStart: number,
 	cutEnd: number,
+	tolerance = Number.EPSILON,
 ) {
 	const segment = segments[segmentIndex];
 	if (!segment) return false;
@@ -193,15 +194,19 @@ export function clipCutPreservesTransitionGeometry(
 	const duration = clipDuration(segment);
 	const localStart = cutStart - segmentStart;
 	const localEnd = cutEnd - segmentStart;
-	if (localStart < 0 || localEnd > duration || localStart >= localEnd)
+	if (
+		localStart < -tolerance ||
+		localEnd > duration + tolerance ||
+		localStart >= localEnd
+	)
 		return false;
 	const incomingDuration =
 		getClipTransition(segments, transitions, segmentIndex)?.duration ?? 0;
 	const outgoingDuration =
 		getClipTransition(segments, transitions, segmentIndex + 1)?.duration ?? 0;
 	return (
-		localStart + Number.EPSILON >= incomingDuration * 2 &&
-		duration - localEnd + Number.EPSILON >= outgoingDuration * 2
+		localStart + tolerance >= incomingDuration * 2 &&
+		duration - localEnd + tolerance >= outgoingDuration * 2
 	);
 }
 

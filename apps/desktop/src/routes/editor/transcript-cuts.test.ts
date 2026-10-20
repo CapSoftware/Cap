@@ -20,6 +20,7 @@ import { defaultMaskSegment } from "./masks";
 import { defaultTextSegment } from "./text";
 import {
 	commitTranscriptCutEdit,
+	cutClaim,
 	cutPaddingLimits,
 	cutPaddingRoom,
 	intersectSourceRanges,
@@ -316,14 +317,10 @@ describe("transcript word cuts", () => {
 			[1.9, 6.0],
 			[6.3, 10],
 		]);
-		expect(p.timeline?.textSegments[0]).toMatchObject({
-			start: expect.closeTo(4.7),
-			end: expect.closeTo(6.7),
-		});
-		expect(p.timeline?.zoomSegments[0]).toMatchObject({
-			start: expect.closeTo(7.9),
-			end: expect.closeTo(8.4),
-		});
+		expect(p.timeline?.textSegments[0].start).toBeCloseTo(4.7);
+		expect(p.timeline?.textSegments[0].end).toBeCloseTo(6.7);
+		expect(p.timeline?.zoomSegments[0].start).toBeCloseTo(7.9);
+		expect(p.timeline?.zoomSegments[0].end).toBeCloseTo(8.4);
 
 		commitTranscriptCutEdit(
 			p,
@@ -900,17 +897,17 @@ describe("pauses heard in the recording", () => {
 			],
 			[clip(0, 4)],
 		);
-		for (const speech of [
-			[[1.0, 2.8]],
-			[
-				[1.0, 1.4],
-				[2.3, 2.8],
-			],
-		] as Array<Array<[number, number]>>) {
-			expect(pauses(audioContext(p, recs, heard(recs, speech)).items)).toEqual([
-				[0, 1],
-			]);
-		}
+		expect(
+			pauses(audioContext(p, recs, heard(recs, [[1.0, 2.8]])).items),
+		).toEqual([[0, 1]]);
+		const early: Array<[number, number]> = [
+			[1.0, 1.4],
+			[2.3, 2.8],
+		];
+		expect(pauses(audioContext(p, recs, heard(recs, early)).items)).toEqual([
+			[0, 1],
+			[1.5, 2.3],
+		]);
 	});
 
 	it("lets Auto Clean take the silence a stretched word hides before a filler", () => {
@@ -944,6 +941,103 @@ describe("pauses heard in the recording", () => {
 		]);
 		expect(liveWords(p)).toEqual(["so", "right"]);
 		expect(p.captions?.segments[0].words?.[0].end).toBeCloseTo(1.4);
+	});
+
+	it("finds the pause after a stretched word when the next word starts between waveform blocks", () => {
+		const recs = recordings(5);
+		for (const next of [2.5, 2.53, 2.58]) {
+			const p = project(
+				[
+					["the", 1.0, next],
+					["and", next, next + 0.4],
+				],
+				[clip(0, 5)],
+			);
+			const silence = heard(recs, [
+				[1.0, 1.3],
+				[next, next + 0.4],
+			]);
+			expect(pauses(audioContext(p, recs, silence).items)).toEqual([
+				[0, 1],
+				[1.4, 2.5],
+			]);
+		}
+	});
+
+	it("ends a pause where the next word becomes audible, not at its late stamp", () => {
+		const recs = recordings(5);
+		const p = project(
+			[
+				["so", 1.0, 1.3],
+				["and", 3.2, 3.6],
+			],
+			[clip(0, 5)],
+		);
+		const ctx = audioContext(
+			p,
+			recs,
+			heard(recs, [
+				[1.0, 1.3],
+				[3.0, 3.6],
+			]),
+		);
+		expect(pauses(ctx.items)).toEqual([
+			[0, 1],
+			[1.3, 3],
+		]);
+		const pause = ctx.items.find(
+			(item) => item.type === "pause" && item.start > 1,
+		);
+		if (pause?.type !== "pause") throw new Error("No pause");
+		expect(commitTranscriptCutEdit(p, planPauseCut(ctx, pause), recs)).toBe(
+			"applied",
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.3],
+			[3, 5],
+		]);
+	});
+
+	it("gives a word back its full length when it was cut after a pause cut trimmed it", () => {
+		const recs = recordings(6);
+		const speech: Array<[number, number]> = [
+			[1.0, 1.3],
+			[2.0, 2.5],
+			[4.5, 4.9],
+		];
+		for (const together of [false, true]) {
+			const p = project(
+				[
+					["the", 1.0, 1.3],
+					["that", 2.0, 4.5],
+					["and", 4.5, 4.9],
+				],
+				[clip(0, 6)],
+			);
+			const ctx = audioContext(p, recs, heard(recs, speech));
+			const pause = ctx.items.find(
+				(item) => item.type === "pause" && item.start > 2,
+			);
+			if (pause?.type !== "pause") throw new Error("No pause");
+			commitTranscriptCutEdit(p, planPauseCut(ctx, pause), recs);
+			expect(p.captions?.segments[0].words?.[1].end).toBeCloseTo(2.6);
+			expect(cut(p, recs, "that")).toBe("applied");
+
+			const [pauseCut, wordCut] = (p.captions?.transcriptCuts ?? []).map(
+				(record) => record.id,
+			);
+			if (together) {
+				commitTranscriptCutEdit(p, { restore: [pauseCut, wordCut] }, recs);
+			} else {
+				commitTranscriptCutEdit(p, { restore: [pauseCut] }, recs);
+				commitTranscriptCutEdit(p, { restore: [wordCut] }, recs);
+			}
+			expect(clips(p)).toEqual([[0, 6]]);
+			expect(p.captions?.segments[0].words?.[1]).toMatchObject({
+				text: "that",
+				end: 4.5,
+			});
+		}
 	});
 });
 
@@ -1850,6 +1944,153 @@ describe("exact restore", () => {
 			spans(before?.zoomSegments),
 		);
 	});
+
+	it("restores a keyboard segment one cut at a time after a cut took all its keys", () => {
+		const recs = recordings(20);
+		for (const order of [
+			["w1", "w3", "w2"],
+			["w3", "w1", "w2"],
+		]) {
+			const p = project(
+				[
+					["w1", 2.9, 3.4],
+					["w2", 3.6, 4.0],
+					["w3", 4.4, 4.6],
+					["tail", 9.0, 9.5],
+				],
+				[clip(0, 20)],
+				{
+					keyboardSegments: [
+						{
+							id: "keys",
+							start: 3,
+							end: 6,
+							displayText: "ab",
+							keys: [
+								{ key: "a", timeOffset: 0 },
+								{ key: "b", timeOffset: 1500 },
+							],
+						},
+					],
+				},
+			);
+			for (const word of order) cut(p, recs, word);
+			expect(p.timeline?.keyboardSegments).toEqual([]);
+
+			expect(restore(p, recs, cutRecord(p, order[0]).id)).toBe("applied");
+			expect(restore(p, recs, ...cutIds(p))).toBe("applied");
+			expect(clips(p)).toEqual([[0, 20]]);
+			expect(
+				p.timeline?.keyboardSegments?.map((segment) => [
+					...spans([segment])[0],
+					segment.displayText,
+				]),
+			).toEqual([[3, 6, "ab"]]);
+		}
+	});
+
+	it("takes the sub-millisecond leftover a cut drops at a clip edge and gives it back", () => {
+		const recs = recordings(20);
+		const p = project(
+			[
+				["start", 1.0, 1.4],
+				["edge", 11.952, 12.236],
+				["after", 14.0, 14.4],
+			],
+			[clip(0, 12.237), clip(12.998, 20)],
+			{ zoomSegments: [zoom(11, 15)] },
+		);
+		expect(cut(p, recs, "edge")).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 11.952],
+			[12.998, 20],
+		]);
+		expect(cutClaim(cutRecord(p, "edge"))?.end).toBeCloseTo(12.237, 6);
+
+		expect(restore(p, recs, cutRecord(p, "edge").id)).toBe("applied");
+		expect(clips(p)).toEqual([
+			[0, 12.237],
+			[12.998, 20],
+		]);
+		expect(spans(p.timeline?.zoomSegments)).toEqual([[11, 15]]);
+	});
+
+	it("gives a restored word its footage back from padding that reached over it", () => {
+		const recs = recordings(20);
+		const p = project(
+			[
+				["hello", 1.0, 1.4],
+				["it", 3.0, 3.5],
+				["world", 6.0, 6.5],
+			],
+			[clip(0, 20)],
+		);
+		cut(p, recs, "it");
+		expect(cutPauseAt(p, recs, 1.4)).toBe("applied");
+		const gap = p.captions?.transcriptCuts?.find(
+			(record) => record.kind === "pause",
+		);
+		if (!gap) throw new Error("No pause cut");
+		commitTranscriptCutEdit(
+			p,
+			{ padding: [{ id: gap.id, bufferStart: 0, bufferEnd: 0.5 }] },
+			recs,
+		);
+		expect(clips(p)).toEqual([
+			[0, 1.4],
+			[3.5, 20],
+		]);
+
+		expect(restore(p, recs, cutRecord(p, "it").id)).toBe("applied");
+		expect(liveWords(p)).toEqual(["hello", "it", "world"]);
+		expect(clips(p)).toEqual([
+			[0, 1.4],
+			[3, 20],
+		]);
+	});
+
+	it("gives a word the rest of its length once the cut still holding it comes back", () => {
+		const recs = recordings(10);
+		const p = project(
+			[
+				["it", 1.0, 4.0],
+				["next", 4.0, 4.5],
+			],
+			[clip(0, 10)],
+		);
+		const cutRange = (start: number, end: number) =>
+			commitTranscriptCutEdit(
+				p,
+				planPauseCut(context(p, recs), { start, end }),
+				recs,
+			);
+		expect(cutRange(2.0, 3.0)).toBe("applied");
+		expect(cutRange(3.0, 3.5)).toBe("applied");
+		const [first, second] = cutIds(p);
+
+		expect(restore(p, recs, first)).toBe("applied");
+		expect(p.captions?.segments[0].words?.[0].end).toBeCloseTo(3.0);
+		expect(restore(p, recs, second)).toBe("applied");
+		expect(clips(p)).toEqual([[0, 10]]);
+		expect(p.captions?.segments[0].words?.[0]).toMatchObject({
+			text: "it",
+			end: 4,
+		});
+	});
+
+	it("gives a cut no padding room into a kept word that overlaps it", () => {
+		const p = project(
+			[
+				["um", 3.0, 5.5],
+				["and", 5.5, 5.9],
+			],
+			[clip(0, 8)],
+		);
+		expect(cutPaddingRoom(p.captions, { start: 3.6, end: 5.5 })).toEqual({
+			before: 0,
+			after: 0,
+		});
+	});
 });
 
 describe("re-transcription", () => {
@@ -1932,6 +2173,13 @@ describe("filler words", () => {
 			expect(isFillerWord(word)).toBe(true);
 		for (const word of ["under", "the", "hello", "am", "uh-huh", ""])
 			expect(isFillerWord(word)).toBe(false);
+	});
+
+	it("keeps real words that collapse to a filler", () => {
+		for (const word of ["err", "Err,", "ER"])
+			expect(isFillerWord(word)).toBe(false);
+		for (const word of ["Errr", "er", "UMMM"])
+			expect(isFillerWord(word)).toBe(true);
 	});
 
 	it("only treats words longer than any spoken word as stretched", () => {
