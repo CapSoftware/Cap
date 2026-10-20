@@ -1305,6 +1305,7 @@ fn mix_music(
     let sample_rate = AudioData::SAMPLE_RATE as f64;
     let frame_start = frame_start as i64;
     let frame_end = frame_start + samples as i64;
+    let mut mixed = vec![false; samples];
 
     for segment in &timeline.audio_segments {
         if !segment.enabled || segment.end <= segment.start {
@@ -1375,14 +1376,24 @@ fn mix_music(
                 (*l, *r)
             };
 
-            let out_index = ((out_sample - frame_start) as usize) * 2;
-            out[out_index] += l * g;
-            out[out_index + 1] += r * g;
+            let frame = (out_sample - frame_start) as usize;
+            out[frame * 2] += l * g;
+            out[frame * 2 + 1] += r * g;
+            mixed[frame] = true;
         }
     }
 
-    for sample in &mut out[..samples * 2] {
-        *sample = sample.clamp(-1.0, 1.0);
+    // Only frames that received music are clipped: recording audio can sit
+    // above 1.0 (clip volume goes to 2x) and must not change because music
+    // plays elsewhere on the timeline.
+    for (frame, _) in out[..samples * 2]
+        .chunks_exact_mut(2)
+        .zip(&mixed)
+        .filter(|(_, mixed)| **mixed)
+    {
+        for sample in frame {
+            *sample = sample.clamp(-1.0, 1.0);
+        }
     }
 }
 
@@ -3678,6 +3689,20 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn music_mixing_leaves_recording_only_frames_unclipped() {
+        let music: MusicTracks = [(
+            "a.wav".to_string(),
+            Arc::new(AudioData::from_raw_f32(vec![0.25, 0.25, 0.25, 0.25], 2)),
+        )]
+        .into_iter()
+        .collect();
+        let project = music_project(vec![music_track_segment("a.wav", 0.0, 3.0, 0.0, 0.0)]);
+        let mut out = [1.5, -1.5].repeat(4);
+        mix_music(&music, project.timeline.as_ref().unwrap(), 0, 4, &mut out);
+        assert_eq!(out, [1.0, -1.0, 1.0, -1.0, 1.5, -1.5, 1.5, -1.5]);
     }
 
     #[test]
