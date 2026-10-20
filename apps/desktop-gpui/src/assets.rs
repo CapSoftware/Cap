@@ -195,6 +195,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (gpui's `svg()` keeps only the alpha).
     "circle-check.svg",
     "lock.svg",
+    "smartphone.svg",
     // The screenshot editor's annotation toolbar, layers panel and header
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
