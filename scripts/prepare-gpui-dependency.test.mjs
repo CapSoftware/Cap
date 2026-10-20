@@ -252,7 +252,11 @@ test("dependency verification handles overlapping patches without changing the c
 	await t.test(
 		"a checkout prepared before a patch was added gains the new patch",
 		() => {
-			const addedPatch = path.join(cap, patchDirectory, "zed-idle-frames.patch");
+			const addedPatch = path.join(
+				cap,
+				patchDirectory,
+				"zed-idle-frames.patch",
+			);
 			const addedPatchBytes = readFileSync(addedPatch);
 			git(zed, "apply", "--reverse", addedPatch);
 			git(cap, "rm", "--quiet", addedPatch);
