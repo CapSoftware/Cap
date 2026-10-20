@@ -58,13 +58,10 @@ pub fn active(window: &Window, cx: &App) -> bool {
 }
 
 pub fn pointer_used(window: &mut Window, cx: &mut App) {
-    if !active(window, cx) {
-        return;
+    let id = window.window_handle().window_id();
+    if cx.has_global::<KeyboardWindows>() && cx.global_mut::<KeyboardWindows>().0.remove(&id) {
+        window.refresh();
     }
-    cx.global_mut::<KeyboardWindows>()
-        .0
-        .remove(&window.window_handle().window_id());
-    window.refresh();
 }
 
 /// Route Tab in `window` to focus navigation. `blocked` lets the owner keep
