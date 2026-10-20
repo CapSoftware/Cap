@@ -5385,6 +5385,7 @@ fn load_editor_project_candidate(
 
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
+        crate::editor_bench::run(handle, cx).await;
         drive_auto_export(handle, cx).await;
         crate::editor_hover_bench::run(handle, cx).await;
     })

@@ -2294,6 +2294,7 @@ impl EditorWindow {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let waveform_paths = self.timeline.waveform_paths.clone();
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
             self.has_camera,
@@ -2302,6 +2303,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.waveform_paths = waveform_paths;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -3318,6 +3320,26 @@ impl EditorWindow {
         self.stop_playback(cx);
     }
 
+    pub(crate) fn has_waveforms(&self) -> (bool, bool) {
+        let present = |tables: &[Arc<Vec<f32>>]| tables.iter().any(|peaks| !peaks.is_empty());
+        (
+            present(&self.timeline.mic_waveforms),
+            present(&self.timeline.system_waveforms),
+        )
+    }
+
+    pub(crate) fn waveform_cache_stats(&self) -> crate::editor_timeline::WaveformPathStats {
+        self.timeline.waveform_paths.stats()
+    }
+
+    pub(crate) fn bench_zoom_to(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        self.view
+            .transform
+            .update_zoom(seconds, self.playhead, total);
+        cx.notify();
+    }
+
     fn capture_playback_key(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -3761,7 +3783,11 @@ impl EditorWindow {
         cx.notify();
     }
 
-    fn invalidate_playback_chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn invalidate_playback_chrome(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
         self.transport_controls.update(cx, |_, cx| cx.notify());
         // While playing, nothing else the parent renders reads the playhead:
@@ -10225,6 +10251,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        self.timeline.waveform_paths.sweep();
         if !self.project_ready() {
             if self
                 .preparing_presentation
