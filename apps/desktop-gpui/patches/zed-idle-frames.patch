@@ -1,0 +1,250 @@
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 0294b7d..6fe853b 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -843,6 +843,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn toggle_fullscreen(&self);
+     fn is_fullscreen(&self) -> bool;
+     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
++    /// Returns a switch that stops (`false`) and restarts (`true`) the frame
++    /// requests delivered to [`Self::on_request_frame`]. Windows stop them while
++    /// they have nothing to draw. Platforms without one keep requesting frames.
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(bool)>> {
++        None
++    }
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
+     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 393e517..74f7d32 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -120,6 +120,53 @@ struct WindowInvalidatorInner {
+     pub dirty_views: FxHashSet<EntityId>,
+     pub update_count: usize,
+     pub frame_dirty: FrameDirtyAccumulator,
++    pub frame_pacer: Rc<FramePacer>,
++}
++
++/// Stops the platform's frame requests once a window has had nothing to draw
++/// for [`FramePacer::IDLE_DELAY`], and restarts them as soon as anything
++/// invalidates the window or schedules a next-frame callback. Without this an
++/// idle window still wakes the main thread on every display refresh.
++pub(crate) struct FramePacer {
++    toggle: Option<Box<dyn Fn(bool)>>,
++    paused: Cell<bool>,
++    busy_at: Cell<Instant>,
++}
++
++impl FramePacer {
++    /// Long enough that steady low-rate redraws (30fps video, timers) never
++    /// stop and restart the frame source between frames.
++    const IDLE_DELAY: Duration = Duration::from_millis(100);
++
++    fn new(toggle: Option<Box<dyn Fn(bool)>>) -> Self {
++        FramePacer {
++            toggle,
++            paused: Cell::new(false),
++            busy_at: Cell::new(Instant::now()),
++        }
++    }
++
++    fn wake(&self) {
++        if let Some(toggle) = &self.toggle
++            && self.paused.replace(false)
++        {
++            self.busy_at.set(Instant::now());
++            toggle(true);
++        }
++    }
++
++    fn frame_finished(&self, busy: bool, now: Instant) {
++        let Some(toggle) = &self.toggle else {
++            return;
++        };
++        if busy {
++            self.busy_at.set(now);
++        } else if now.duration_since(self.busy_at.get()) >= Self::IDLE_DELAY
++            && !self.paused.replace(true)
++        {
++            toggle(false);
++        }
++    }
+ }
+ 
+ /// Per-frame invalidation bookkeeping, drained at draw time and emitted to the
+@@ -138,7 +185,7 @@ pub(crate) struct WindowInvalidator {
+ }
+ 
+ impl WindowInvalidator {
+-    pub fn new() -> Self {
++    pub fn new(frame_pacer: Rc<FramePacer>) -> Self {
+         WindowInvalidator {
+             inner: Rc::new(RefCell::new(WindowInvalidatorInner {
+                 dirty: true,
+@@ -146,6 +193,7 @@ impl WindowInvalidator {
+                 dirty_views: FxHashSet::default(),
+                 update_count: 0,
+                 frame_dirty: FrameDirtyAccumulator::default(),
++                frame_pacer,
+             })),
+         }
+     }
+@@ -157,6 +205,9 @@ impl WindowInvalidator {
+         if inner.draw_phase == DrawPhase::None {
+             Self::record_frame_dirty(&mut inner);
+             inner.dirty = true;
++            let frame_pacer = inner.frame_pacer.clone();
++            drop(inner);
++            frame_pacer.wake();
+             cx.push_effect(Effect::Notify { emitter: entity });
+             true
+         } else {
+@@ -174,6 +225,9 @@ impl WindowInvalidator {
+         if dirty {
+             inner.update_count += 1;
+             Self::record_frame_dirty(&mut inner);
++            let frame_pacer = inner.frame_pacer.clone();
++            drop(inner);
++            frame_pacer.wake();
+         }
+     }
+ 
+@@ -1390,7 +1444,8 @@ impl Window {
+         let scale_factor = platform_window.scale_factor();
+         let appearance = platform_window.appearance();
+         let text_system = Arc::new(WindowTextSystem::new(cx.text_system().clone()));
+-        let invalidator = WindowInvalidator::new();
++        let frame_pacer = Rc::new(FramePacer::new(platform_window.frame_request_toggle()));
++        let invalidator = WindowInvalidator::new(frame_pacer.clone());
+         let active = Rc::new(Cell::new(platform_window.is_active()));
+         let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
+         let needs_present = Rc::new(Cell::new(false));
+@@ -1507,9 +1562,10 @@ impl Window {
+             let invalidator = invalidator.clone();
+             let active = active.clone();
+             let needs_present = needs_present.clone();
+-            let next_frame_callbacks = next_frame_callbacks.clone();
++            let pending_frame_callbacks = next_frame_callbacks.clone();
+             let input_rate_tracker = input_rate_tracker.clone();
+             move |request_frame_options| {
++                let next_frame_callbacks = &pending_frame_callbacks;
+                 let thermal_state = handle
+                     .update(&mut cx, |_, _, cx| cx.thermal_state())
+                     .log_err();
+@@ -1551,8 +1607,11 @@ impl Window {
+                 }
+                 last_frame_time.set(Some(now));
+ 
++                let mut busy = request_frame_options.force_render
++                    || request_frame_options.require_presentation;
+                 let next_frame_callbacks = next_frame_callbacks.take();
+                 if !next_frame_callbacks.is_empty() {
++                    busy = true;
+                     handle
+                         .update(&mut cx, |_, window, cx| {
+                             for callback in next_frame_callbacks {
+@@ -1570,6 +1629,7 @@ impl Window {
+                     || (active.get() && input_rate_tracker.borrow_mut().is_high_rate());
+ 
+                 if invalidator.is_dirty() || request_frame_options.force_render {
++                    busy = true;
+                     measure("frame duration", || {
+                         handle
+                             .update(&mut cx, |_, window, cx| {
+@@ -1585,6 +1645,7 @@ impl Window {
+                             .log_err();
+                     })
+                 } else if needs_present {
++                    busy = true;
+                     handle
+                         .update(&mut cx, |_, window, _| window.present())
+                         .log_err();
+@@ -1595,6 +1656,9 @@ impl Window {
+                         window.complete_frame();
+                     })
+                     .log_err();
++
++                busy |= invalidator.is_dirty() || !pending_frame_callbacks.borrow().is_empty();
++                frame_pacer.frame_finished(busy, now);
+             }
+         }));
+         platform_window.on_resize(Box::new({
+@@ -2263,6 +2327,8 @@ impl Window {
+     /// Schedule the given closure to be run directly after the current frame is rendered.
+     pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
+         RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
++        let frame_pacer = self.invalidator.inner.borrow().frame_pacer.clone();
++        frame_pacer.wake();
+     }
+ 
+     /// Schedule a frame to be drawn on the next animation frame.
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+index f5b2c1a..1d8d41b 100644
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -499,6 +499,7 @@ struct MacWindowState {
+     frame_source: Option<WindowFrameSource>,
+     renderer: renderer::Renderer,
+     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
++    frame_requests_paused: bool,
+     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
+     activate_callback: Option<Box<dyn FnMut(bool)>>,
+     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
+@@ -657,6 +658,9 @@ impl MacWindowState {
+ 
+     fn start_display_link(&mut self) {
+         self.stop_display_link();
++        if self.frame_requests_paused {
++            return;
++        }
+         unsafe {
+             if !self
+                 .native_window
+@@ -896,6 +900,7 @@ impl MacWindow {
+                 frame_source: None,
+                 renderer,
+                 request_frame_callback: None,
++                frame_requests_paused: false,
+                 event_callback: None,
+                 activate_callback: None,
+                 resize_callback: None,
+@@ -1670,6 +1675,38 @@ impl PlatformWindow for MacWindow {
+         self.0.as_ref().lock().request_frame_callback = Some(callback);
+     }
+ 
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(bool)>> {
++        let window_state = Arc::downgrade(&self.0);
++        Some(Box::new(move |enabled| {
++            let Some(window_state) = window_state.upgrade() else {
++                return;
++            };
++            let mut lock = window_state.lock();
++            lock.frame_requests_paused = !enabled;
++            if !enabled {
++                lock.stop_display_link();
++                return;
++            }
++            lock.start_display_link();
++            // A restarted display link first fires a refresh or two later, so
++            // draw the frame that woke the window right away instead.
++            let window_state = Arc::downgrade(&window_state);
++            lock.foreground_executor
++                .spawn(async move {
++                    let Some(window_state) = window_state.upgrade() else {
++                        return;
++                    };
++                    let Some(mut callback) = window_state.lock().request_frame_callback.take()
++                    else {
++                        return;
++                    };
++                    callback(Default::default());
++                    window_state.lock().request_frame_callback = Some(callback);
++                })
++                .detach();
++        }))
++    }
++
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
+         self.0.as_ref().lock().event_callback = Some(callback);
+     }
