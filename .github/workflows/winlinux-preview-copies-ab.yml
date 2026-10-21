@@ -1,0 +1,144 @@
+name: winlinux-preview-copies-ab
+# Scratch A/B for perf/winlinux-preview-single-copy. Not for main.
+on:
+  push:
+    branches: [ci/winlinux-preview-copies-ab]
+  workflow_dispatch:
+jobs:
+  gpui:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: blacksmith-8vcpu-windows-2025
+    runs-on: ${{ matrix.settings.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          workspaces: apps/desktop-gpui -> target
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Machine
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-List Name,AdapterCompatibility,DriverVersion,VideoProcessor; Get-CimInstance Win32_Processor | Format-List Name,NumberOfLogicalProcessors"
+          else
+            lscpu | head -20
+            (vulkaninfo --summary 2>/dev/null || true) | head -40
+            dpkg -l | grep -E "mesa-vulkan|libvulkan" || true
+          fi
+      - name: Parity tests
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          run() {
+            if [[ "$RUNNER_OS" == "Linux" ]]; then
+              xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" "$@"
+            else
+              "$@"
+            fi
+          }
+          run cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui bgra_ -- --nocapture --test-threads 1
+      - name: Synthetic readback benchmark
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          for round in 1 2 3; do
+            echo "## round $round" | tee -a "$RUNNER_TEMP/bench.md"
+            cargo +1.95.0 run --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
+              --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
+              --example preview-readback-benchmark | tee -a "$RUNNER_TEMP/bench.md"
+          done
+          { echo "### ${{ matrix.settings.target }} synthetic"; grep -E '^(adapter|\||## )' "$RUNNER_TEMP/bench.md"; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Editor A/B on generated recordings
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.settings.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          export CAP_GPUI_MUTE_AUDIO=1
+          cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} \
+            --config 'profile.dev.package.cap-desktop-gpui.opt-level=2' \
+            --bin cap-gpui editor_preview_copies_ab -- --ignored --nocapture --test-threads 1 | tee "$RUNNER_TEMP/editor.md"
+          { echo "### ${{ matrix.settings.target }} editor"; grep -E '^(adapter|\|)' "$RUNNER_TEMP/editor.md"; } >> "$GITHUB_STEP_SUMMARY"
+  engine:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: blacksmith-8vcpu-windows-2025
+    runs-on: ${{ matrix.settings.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-winlinux-preview-engine
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+      - name: Engine tests
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            debug_path="$(cygpath "$GITHUB_WORKSPACE/target/debug")"
+            export PATH="$debug_path:$PATH"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cargo +1.95.0 test --locked -p cap-rendering --lib readback_output_tests
+          cargo +1.95.0 test --locked -p cap-editor --lib native_preparing_bgra_readback_matches_default_editor_frame -- --nocapture --test-threads 1
+          cargo +1.95.0 test --locked -p cap-editor --lib native_preparing_png_cursor_zoom_camera_and_relocation_match_finalized_render -- --nocapture --test-threads 1 || echo "rgba sibling failed"

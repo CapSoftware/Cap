@@ -24,6 +24,8 @@ mod doodle;
 mod draw_bench;
 mod editor_audio;
 mod editor_bench;
+#[cfg(test)]
+mod preview_ab_tests;
 mod editor_canvas;
 mod editor_clips;
 mod editor_color;
