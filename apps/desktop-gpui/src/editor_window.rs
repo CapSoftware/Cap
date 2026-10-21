@@ -202,6 +202,8 @@ impl EditorVerticalLayout {
     }
 }
 
+/// The History dropdown's width.
+const HISTORY_MENU_WIDTH: f32 = 256.;
 const PRESETS_MENU_WIDTH: f32 = 288.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
 const PRESET_SUBMENU_HEIGHT: f32 = 5. * 32. + 4. * 2. + 8.;
@@ -1572,6 +1574,8 @@ pub struct EditorWindow {
     /// of its three dialogs is up. The dialog closes the menu when it opens,
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
+    /// The header's History dropdown: where it opens.
+    history_menu: Option<(gpui::Point<Pixels>, gpui::ScrollHandle)>,
     preset_dialog: Option<PresetDialog>,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
@@ -2129,6 +2133,7 @@ impl EditorWindow {
             initial_timeline_rows: None,
             timeline_resize: None,
             presets_menu: None,
+            history_menu: None,
             preset_dialog: None,
             caption_sync_signature: None,
             export: None,
@@ -2530,6 +2535,20 @@ impl EditorWindow {
         };
         self.apply_history(config, window, cx);
         self.note_edit("redo", None);
+    }
+
+    /// A History menu row: walk the undo stack straight to step `index`.
+    fn jump_to_history(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.history_menu = None;
+        self.close_frame_controls(window, cx);
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        let Some(config) = self.history.jump_to(index).cloned() else {
+            cx.notify();
+            return;
+        };
+        self.apply_history(config, window, cx);
+        self.note_edit("history-jump", None);
     }
 
     /// The `ignoreNext` half of `move()`: applying a history entry must not
@@ -3463,6 +3482,12 @@ impl EditorWindow {
         if self.sidebar.color_picker.is_some() && event.keystroke.key.as_str() == "escape" {
             self.close_color_picker(cx);
             cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key.as_str() == "escape" && self.history_menu.is_some() {
+            self.history_menu = None;
+            cx.stop_propagation();
+            cx.notify();
             return;
         }
         if event.keystroke.key.as_str() == "escape"
@@ -8749,6 +8774,127 @@ impl EditorWindow {
     /// (`rounded-xl border-gray-3 bg-gray-1 shadow-s`), a scrollable row list,
     /// and a bordered footer with "Create new preset". Each row applies on
     /// click; its gear opens the five-item submenu.
+    fn open_history_menu(
+        &mut self,
+        anchor: gpui::Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history_menu.take().is_some() || !self.project_ready() {
+            cx.notify();
+            return;
+        }
+        self.presets_menu = None;
+        self.toolbar_menu = None;
+        let viewport = window.viewport_size();
+        let x = f32::from(anchor.x)
+            .min(f32::from(viewport.width) - HISTORY_MENU_WIDTH - 12.)
+            .max(12.);
+        self.history_menu = Some((
+            point(px(x), px(f32::from(anchor.y) + 8.)),
+            gpui::ScrollHandle::new(),
+        ));
+        cx.notify();
+    }
+
+    /// The History dropdown: every undo step, newest first. Steps after the
+    /// current one (undone, still redoable) are dimmed.
+    fn render_history_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let (origin, scroll) = self.history_menu.as_ref()?;
+        let theme = self.theme;
+        let cursor = self.history.cursor();
+        let rows = self
+            .history
+            .labels()
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, label)| {
+                let current = index == cursor;
+                div()
+                    .id(SharedString::from(format!("history-{index}")))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .flex_none()
+                    .gap(px(8.))
+                    .h(px(30.))
+                    .px(px(8.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(if current {
+                        theme.editor.text_1
+                    } else {
+                        theme.editor.text_2
+                    }))
+                    .when(current, |row| row.bg(Hsla::from(theme.editor.ctl)))
+                    .when(index > cursor, |row| row.opacity(0.45))
+                    .hover(|row| row.bg(Hsla::from(theme.editor.ctl_hover)))
+                    .child(
+                        div()
+                            .size(px(6.))
+                            .flex_none()
+                            .rounded_full()
+                            .when(current, |dot| dot.bg(Hsla::from(theme.editor.accent))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .child(SharedString::from(label.clone())),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.jump_to_history(index, window, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .id("history-backdrop")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .occlude()
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.history_menu = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id("history-list")
+                        .absolute()
+                        .left(origin.x)
+                        .top(origin.y)
+                        .w(px(HISTORY_MENU_WIDTH))
+                        .max_h(px(360.))
+                        .occlude()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .p(px(6.))
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(Hsla::from(theme.editor.line))
+                        .bg(Hsla::from(theme.editor.card))
+                        .shadow(theme.editor.pop_shadow())
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .children(rows),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_presets_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.presets_menu.as_ref()?;
         let theme = self.theme;
@@ -9434,6 +9580,16 @@ impl EditorWindow {
                     .when(cfg!(target_os = "windows"), |group| group.occlude())
                     .child(self.history_button("editor-undo", "icons/undo.svg", true, cx))
                     .child(self.history_button("editor-redo", "icons/redo.svg", false, cx))
+                    .child(
+                        ui::EditorButton::plain(&theme, "editor-history")
+                            .left_icon("icons/history.svg")
+                            .tooltip(&theme, "History")
+                            .disabled(!self.project_ready() || self.history.labels().len() < 2)
+                            .pressed(self.history_menu.is_some())
+                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                                this.open_history_menu(bounds.bottom_left(), window, cx);
+                            })),
+                    )
                     .child(self.header_divider())
                     .child(
                         ui::EditorButton::plain(&theme, "presets")
@@ -11696,6 +11852,7 @@ impl Render for EditorWindow {
             }))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
+            .children(self.render_history_menu(cx))
             .children(self.render_preset_dialog(cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
