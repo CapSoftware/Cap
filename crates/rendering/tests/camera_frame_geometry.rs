@@ -71,10 +71,11 @@ async fn camera_geometry_matches_a_project_with_the_current_clips_dimensions() {
                 for number in [56, 90, 145] {
                     let zoom =
                         ZoomTransformTimeline::from_project(&project, &cursor, 6.0, screen_size);
+                    let shared = std::sync::Arc::new(project.clone());
                     constants.options.camera_size = Some(first_camera_size);
                     let actual = ProjectUniforms::new(
                         &constants,
-                        &project,
+                        &shared,
                         number,
                         30,
                         screen_size,
@@ -86,7 +87,7 @@ async fn camera_geometry_matches_a_project_with_the_current_clips_dimensions() {
                     constants.options.camera_size = Some(camera_size);
                     let expected = ProjectUniforms::new(
                         &constants,
-                        &project,
+                        &shared,
                         number,
                         30,
                         screen_size,
