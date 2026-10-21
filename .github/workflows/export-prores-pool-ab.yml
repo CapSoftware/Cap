@@ -1,0 +1,242 @@
+name: export-prores-pool-ab
+# Scratch A/B for perf/export-prores-pool-nv12-bindgroups. Not for main.
+on:
+  push:
+    branches: [ci/export-prores-pool-ab]
+  workflow_dispatch:
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+          - target: x86_64-pc-windows-msvc
+            runner: blacksmith-8vcpu-windows-2025
+          - target: aarch64-apple-darwin
+            runner: blacksmith-6vcpu-macos-15
+    runs-on: ${{ matrix.settings.runner }}
+    timeout-minutes: 200
+    env:
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      RUST_BACKTRACE: "1"
+    steps:
+      - name: Keep the session unlocked
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0
+          nohup caffeinate -dimsu > /dev/null 2>&1 &
+          sudo mdutil -a -i off || true
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-export-prores-pool-ab
+          save-cache: "true"
+          cache-on-failure: "true"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+      - name: Build head and base
+        shell: bash
+        run: |
+          set +e
+          bin="$RUNNER_TEMP/abbin"
+          mkdir -p "$bin/head" "$bin/base"
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          if [[ "$RUNNER_OS" == "macOS" ]]; then ln -sfn "$GITHUB_WORKSPACE/target/native-deps" "$bin/Frameworks"; fi
+          build() {
+            cargo +1.95.0 build --locked --release -p cap-export --example export-cli --example mov-export-benchmark --example export-benchmark-runner
+            echo "build $1 exit $?"
+            for e in export-cli mov-export-benchmark export-benchmark-runner; do cp "target/release/examples/$e$ext" "$bin/$1/"; done
+          }
+          build head
+          case "$RUNNER_OS" in
+            Windows) PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH" cargo +1.95.0 test --locked --release -p cap-rendering --lib -- recycled_readback alternating_sources --nocapture ;;
+            Linux) LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" cargo +1.95.0 test --locked --release -p cap-rendering --lib -- recycled_readback alternating_sources --nocapture ;;
+            macOS) DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" cargo +1.95.0 test --locked --release -p cap-rendering --lib -- recycled_readback alternating_sources --nocapture ;;
+          esac
+          echo "head unit tests exit $?"
+          git fetch origin ci/export-prores-pool-base
+          git diff --stat HEAD FETCH_HEAD -- crates
+          git checkout FETCH_HEAD -- crates
+          build base
+          git checkout HEAD -- crates
+          ls -la "$bin/head" "$bin/base"
+      - name: Machine and tools
+        shell: bash
+        run: |
+          set +e
+          case "$RUNNER_OS" in
+            Windows) powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-List Name,AdapterCompatibility,DriverVersion; Get-CimInstance Win32_Processor | Format-List Name,NumberOfLogicalProcessors" ;;
+            Linux)
+              sudo apt-get install -y --no-install-recommends ffmpeg mesa-vulkan-drivers vulkan-tools
+              lscpu | head -20
+              (vulkaninfo --summary 2>/dev/null || true) | grep -E "deviceName|driverName" || true ;;
+            macOS)
+              command -v ffmpeg || brew install ffmpeg
+              sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+              system_profiler SPDisplaysDataType | head -20 ;;
+          esac
+          ffmpeg -hide_banner -version | head -1
+      - name: Output identity, base vs head
+        shell: bash
+        run: |
+          set +e
+          case "$RUNNER_OS" in
+            Windows) export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$(cygpath "$GITHUB_WORKSPACE/target/ffmpeg/bin"):$PATH" ;;
+            Linux) export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+            macOS) export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" ;;
+          esac
+          ab="$RUNNER_TEMP/ab"
+          bin="$RUNNER_TEMP/abbin"
+          mkdir -p "$ab"
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=duration=6:size=1920x1080:rate=30" -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p "$ab/display.mp4"
+          for project in plain mask; do
+            proj="$ab/$project"
+            mkdir -p "$proj/content"
+            cp "$ab/display.mp4" "$proj/content/display.mp4"
+            echo '{"pretty_name":"Export AB","sharing":null,"display":{"path":"content/display.mp4","fps":30},"camera":null,"audio":null,"cursor":null}' > "$proj/recording-meta.json"
+            masks='[]'
+            if [[ "$project" == mask ]]; then masks='[{"start":0.0,"end":6.0,"maskType":"sensitive","center":{"x":0.5,"y":0.5},"size":{"x":0.3,"y":0.3},"fadeDuration":0.0}]'; fi
+            echo '{"aspectRatio":null,"background":{"source":{"type":"color","value":[30,30,46]},"blur":0.0,"padding":8.0,"rounding":20.0,"inset":0,"shadow":50.0},"camera":{"hide":true,"mirror":false,"position":{},"rounding":100.0,"shadow":40.0,"size":30.0},"audio":{"mute":true},"cursor":{"hideWhenIdle":false,"size":100,"type":"pointer","tension":170.0,"mass":1.0,"friction":18.0,"raw":false},"hotkeys":{"show":true},"timeline":{"segments":[{"recordingSegment":0,"timescale":1.0,"start":0.0,"end":6.0}],"zoomSegments":[],"maskSegments":'"$masks"'}}' > "$proj/project-config.json"
+          done
+          ok=1
+          echo "| project | format | size | compared | lines | base vs head | base vs base |" > "$ab/identity.md"
+          echo "|---|---|---|---|---|---|---|" >> "$ab/identity.md"
+          kinds="mov mp4"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then kinds="mov mp4 mp4x264"; fi
+          for project in plain mask; do
+            proj="$ab/$project"
+            for kind in $kinds; do
+              for res in 1920x1080 1280x720; do
+                w="${res%x*}"; h="${res#*x}"
+                case "$kind" in
+                  mov) fmt=mov; out=result.mov; settings="{\"fps\":30,\"resolution_base\":{\"x\":$w,\"y\":$h},\"cursor_only\":false}" ;;
+                  mp4) fmt=mp4; out=result.mp4; settings="{\"fps\":30,\"resolution_base\":{\"x\":$w,\"y\":$h},\"compression\":\"Maximum\",\"custom_bpp\":null}" ;;
+                  mp4x264) fmt=mp4; out=result.mp4; settings="{\"fps\":30,\"resolution_base\":{\"x\":$w,\"y\":$h},\"compression\":\"Maximum\",\"custom_bpp\":null,\"optimize_filesize\":true}" ;;
+                esac
+                tag="$project-$kind-$res"
+                for variant in base head base2; do
+                  rm -rf "$proj/output"
+                  CAP_AB_TAG="$tag" CAP_AB_REPORT="$ab/identity-$variant.txt" RUST_LOG=warn \
+                    "$bin/${variant%2}/export-cli" "$proj" "$fmt" "$settings" > "$ab/$variant-$tag.log" 2>&1
+                  echo "$variant $tag exit $?"
+                  tr '\r' '\n' < "$ab/$variant-$tag.log" | grep -v "^Exporting frame" | tail -15
+                  f="$proj/output/$out"
+                  ffmpeg -hide_banner -loglevel error -i "$f" -map 0:v:0 -c copy -f md5 - > "$ab/$variant-$tag.stream"
+                  ffmpeg -hide_banner -loglevel error -i "$f" -map 0:v:0 -f framemd5 - | grep -v '^#' > "$ab/$variant-$tag.frames"
+                done
+                for cmpkind in stream frames; do
+                  lines=$(wc -l < "$ab/head-$tag.$cmpkind" | tr -d ' ')
+                  if [[ -s "$ab/head-$tag.$cmpkind" ]] && cmp -s "$ab/base-$tag.$cmpkind" "$ab/head-$tag.$cmpkind"; then r=identical; else r=DIFFERENT; ok=0; fi
+                  if cmp -s "$ab/base-$tag.$cmpkind" "$ab/base2-$tag.$cmpkind"; then r2=identical; else r2=different; fi
+                  echo "| $project | $kind | $res | $cmpkind | $lines | $r | $r2 |" | tee -a "$ab/identity.md"
+                done
+              done
+            done
+          done
+          {
+            echo "### ${{ matrix.settings.target }} identity"
+            cat "$ab/identity.md"
+            echo
+            echo '```'
+            cat "$ab/identity-base.txt" "$ab/identity-head.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$ok" != 1 ]]; then echo "::error::base and head outputs differ"; fi
+      - name: Benchmarks, base vs head
+        shell: bash
+        run: |
+          set +e
+          case "$RUNNER_OS" in
+            Windows) export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$(cygpath "$GITHUB_WORKSPACE/target/ffmpeg/bin"):$PATH" ;;
+            Linux) export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+            macOS) export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" ;;
+          esac
+          ab="$RUNNER_TEMP/ab"
+          bin="$RUNNER_TEMP/abbin"
+          export CAP_RENDER_LOOP_STATS=1
+          sizes="1920x1080 3840x2160"
+          for round in 1 2; do
+            for res in $sizes; do
+              w="${res%x*}"; h="${res#*x}"
+              for variant in base head; do
+                echo "## mov round $round $variant $res"
+                CAP_AB_REPORT="$ab/bench-$variant.txt" RUST_LOG=warn \
+                  "$bin/$variant/mov-export-benchmark" --width "$w" --height "$h" --duration 10 --runs 3 > "$ab/mov-$variant-$res-$round.log" 2>&1
+                echo "exit $?"
+                grep -E "^run=|^mov_export|^AB |panicked" "$ab/mov-$variant-$res-$round.log"
+              done
+            done
+            for variant in base head; do
+              for project in plain mask; do
+                echo "## mp4 cli round $round $variant $project"
+                rm -rf "$ab/$project/output"
+                CAP_AB_TAG="$project" CAP_AB_REPORT="$ab/bench-$variant.txt" RUST_LOG=warn \
+                  "$bin/$variant/export-cli" "$ab/$project" mp4 '{"fps":30,"resolution_base":{"x":1920,"y":1080},"compression":"Maximum","custom_bpp":null}' > "$ab/mp4cli-$variant-$project-$round.log" 2>&1
+                echo "exit $?"
+                tr '\r' '\n' < "$ab/mp4cli-$variant-$project-$round.log" | grep -E "^AB |panicked"
+              done
+              echo "## export-benchmark-runner round $round $variant"
+              RUST_LOG="cap_export=info,cap_rendering=info" "$bin/$variant/export-benchmark-runner" quick --duration 10 > "$ab/runner-$variant-$round.log" 2>&1
+              echo "exit $?"
+              grep -E "Completed in|export loop stats|^AB |Status:|panicked" "$ab/runner-$variant-$round.log" | head -40
+            done
+          done
+          cat > "$ab/summarize.py" <<'PY'
+          import sys, statistics
+          rows = {}
+          for variant in ("base", "head"):
+              try:
+                  lines = open(sys.argv[1] + f"/bench-{variant}.txt").read().splitlines()
+              except FileNotFoundError:
+                  continue
+              for line in lines:
+                  tokens = line.split()[1:]
+                  kind = tokens[0]
+                  fields = dict(t.split("=", 1) for t in tokens[1:] if "=" in t)
+                  key = (kind, fields.get("size") or fields.get("format", "") + "/" + fields.get("tag", ""), variant)
+                  rows.setdefault(key, []).append(fields)
+          keys = ["fps", "wall_ms", "secs", "readback_frames", "readback_us_per_frame", "readback_copy_bytes_per_frame", "readback_alloc_bytes_per_frame", "bind_calls", "bind_groups_created", "bind_us_per_call", "peak_rss_mb", "cpu_ms", "page_faults"]
+          present = [k for k in keys if any(k in r for runs in rows.values() for r in runs)]
+          print("| kind | size | variant | runs | " + " | ".join(present) + " |")
+          print("|---|---|---|---|" + "---|" * len(present))
+          for (kind, size, variant), runs in sorted(rows.items()):
+              cells = []
+              for k in present:
+                  values = [float(r[k]) for r in runs if k in r]
+                  cells.append(f"{statistics.median(values):.1f}" if values else "")
+              print(f"| {kind} | {size} | {variant} | {len(runs)} | " + " | ".join(cells) + " |")
+          PY
+          py=python3; command -v python3 >/dev/null || py=python
+          { echo "### ${{ matrix.settings.target }} benchmarks (median)"; $py "$ab/summarize.py" "$ab"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          cat "$ab/bench-base.txt" "$ab/bench-head.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ab-${{ matrix.settings.runner }}
+          path: |
+            ${{ runner.temp }}/ab/*.txt
+            ${{ runner.temp }}/ab/*.md
+            ${{ runner.temp }}/ab/*.log
+            ${{ runner.temp }}/ab/*.stream
+            ${{ runner.temp }}/ab/*.frames

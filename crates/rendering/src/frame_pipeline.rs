@@ -735,6 +735,7 @@ impl RgbaToNv12Converter {
                 },
             ],
         });
+        crate::loop_stats::AB_BIND_GROUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.source_bind_groups.len() >= 2 {
             self.source_bind_groups.remove(0);
         }
@@ -761,9 +762,11 @@ impl RgbaToNv12Converter {
 
         self.ensure_buffers(device, width, height);
 
+        let ab_bind_started = Instant::now();
         let Some(bind_group) = self.source_bind_group(device, source_texture) else {
             return Ok(false);
         };
+        crate::loop_stats::ab_bind(ab_bind_started.elapsed(), 0);
         let Some(nv12_buffer) = self.nv12_buffer.as_ref() else {
             return Ok(false);
         };
@@ -1718,13 +1721,21 @@ impl PendingReadback {
         };
         let buffer_slice = self.buffer.slice(..active_bytes as u64);
         let data = buffer_slice.get_mapped_range();
+        let ab_started = Instant::now();
         let mut data_vec = if self.export_deadlines {
             recycled.take().unwrap_or_default()
         } else {
             Vec::new()
         };
+        let ab_capacity = data_vec.capacity();
         data_vec.reserve_exact(active_bytes + 24);
+        let ab_allocated = if data_vec.capacity() == ab_capacity {
+            0
+        } else {
+            data_vec.capacity()
+        };
         data_vec.extend_from_slice(&data);
+        crate::loop_stats::ab_readback(ab_started.elapsed(), active_bytes, ab_allocated);
 
         drop(data);
         self.unmap();

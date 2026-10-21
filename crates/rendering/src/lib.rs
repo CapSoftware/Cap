@@ -1297,6 +1297,129 @@ pub mod loop_stats {
     pub static JOIN: AtomicU64 = AtomicU64::new(0);
     pub static SEND: AtomicU64 = AtomicU64::new(0);
     pub static FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static AB_READBACK_FRAMES: AtomicU64 = AtomicU64::new(0);
+    pub static AB_READBACK_NS: AtomicU64 = AtomicU64::new(0);
+    pub static AB_READBACK_COPY_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub static AB_READBACK_ALLOC_BYTES: AtomicU64 = AtomicU64::new(0);
+    pub static AB_BIND_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static AB_BIND_NS: AtomicU64 = AtomicU64::new(0);
+    pub static AB_BIND_GROUPS: AtomicU64 = AtomicU64::new(0);
+    static AB_LAST: std::sync::Mutex<(u64, u64)> = std::sync::Mutex::new((0, 0));
+
+    pub fn ab_readback(elapsed: std::time::Duration, copied: usize, allocated: usize) {
+        AB_READBACK_FRAMES.fetch_add(1, Ordering::Relaxed);
+        AB_READBACK_NS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        AB_READBACK_COPY_BYTES.fetch_add(copied as u64, Ordering::Relaxed);
+        AB_READBACK_ALLOC_BYTES.fetch_add(allocated as u64, Ordering::Relaxed);
+    }
+
+    pub fn ab_bind(elapsed: std::time::Duration, created: u64) {
+        AB_BIND_CALLS.fetch_add(1, Ordering::Relaxed);
+        AB_BIND_NS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        AB_BIND_GROUPS.fetch_add(created, Ordering::Relaxed);
+    }
+
+    pub fn ab_report(label: &str) {
+        let take = |counter: &AtomicU64| counter.swap(0, Ordering::Relaxed);
+        let frames = take(&AB_READBACK_FRAMES);
+        let per = |value: u64| value as f64 / frames.max(1) as f64;
+        let readback_ns = take(&AB_READBACK_NS);
+        let copied = take(&AB_READBACK_COPY_BYTES);
+        let allocated = take(&AB_READBACK_ALLOC_BYTES);
+        let bind_calls = take(&AB_BIND_CALLS);
+        let bind_ns = take(&AB_BIND_NS);
+        let bind_groups = take(&AB_BIND_GROUPS);
+        let (peak_rss, cpu_us, faults) = process_usage();
+        let (cpu_delta, faults_delta) = {
+            let mut last = AB_LAST.lock().unwrap();
+            let delta = (cpu_us.saturating_sub(last.0), faults.saturating_sub(last.1));
+            *last = (cpu_us, faults);
+            delta
+        };
+        let line = format!(
+            "AB {label} readback_frames={frames} readback_us_per_frame={:.1} readback_copy_bytes_per_frame={:.0} readback_alloc_bytes_per_frame={:.0} bind_calls={bind_calls} bind_groups_created={bind_groups} bind_us_per_call={:.2} peak_rss_mb={:.1} cpu_ms={} page_faults={faults_delta}",
+            per(readback_ns) / 1000.0,
+            per(copied),
+            per(allocated),
+            bind_ns as f64 / bind_calls.max(1) as f64 / 1000.0,
+            peak_rss as f64 / 1048576.0,
+            cpu_delta / 1000,
+        );
+        eprintln!("{line}");
+        if let Some(path) = std::env::var_os("CAP_AB_REPORT")
+            && let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_usage() -> (u64, u64, u64) {
+        unsafe extern "C" {
+            fn getrusage(who: i32, usage: *mut [i64; 18]) -> i32;
+        }
+        let mut usage = [0i64; 18];
+        if unsafe { getrusage(0, &mut usage) } != 0 {
+            return (0, 0, 0);
+        }
+        let micros = |sec: i64, usec: i64| sec as u64 * 1_000_000 + (usec & 0xffff_ffff) as u64;
+        let cpu = micros(usage[0], usage[1]) + micros(usage[2], usage[3]);
+        let rss_unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+        (usage[4] as u64 * rss_unit, cpu, usage[8] as u64)
+    }
+
+    #[cfg(windows)]
+    fn process_usage() -> (u64, u64, u64) {
+        #[repr(C)]
+        #[derive(Default)]
+        struct Counters {
+            cb: u32,
+            page_faults: u32,
+            peak_working_set: usize,
+            working_set: usize,
+            quota_peak_paged: usize,
+            quota_paged: usize,
+            quota_peak_nonpaged: usize,
+            quota_nonpaged: usize,
+            pagefile: usize,
+            peak_pagefile: usize,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn K32GetProcessMemoryInfo(
+                process: *mut std::ffi::c_void,
+                counters: *mut Counters,
+                cb: u32,
+            ) -> i32;
+            fn GetProcessTimes(
+                process: *mut std::ffi::c_void,
+                creation: *mut u64,
+                exit: *mut u64,
+                kernel: *mut u64,
+                user: *mut u64,
+            ) -> i32;
+        }
+        let mut counters = Counters {
+            cb: std::mem::size_of::<Counters>() as u32,
+            ..Default::default()
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+        unsafe {
+            let process = GetCurrentProcess();
+            K32GetProcessMemoryInfo(process, &mut counters, counters.cb);
+            GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user);
+        }
+        (
+            counters.peak_working_set as u64,
+            (kernel + user) / 10,
+            counters.page_faults as u64,
+        )
+    }
 
     pub fn enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();

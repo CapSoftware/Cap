@@ -128,6 +128,12 @@ async fn main() {
             "run={run} frames={frames} secs={:.3} fps={fps:.1} bytes={bytes}",
             elapsed.as_secs_f64()
         );
+        cap_rendering::loop_stats::ab_report(&format!(
+            "mov size={}x{} run={run} frames={frames} secs={:.3} fps={fps:.1}",
+            cli.width,
+            cli.height,
+            elapsed.as_secs_f64()
+        ));
         fps_samples.push(fps);
     }
     fps_samples.sort_by(f64::total_cmp);
