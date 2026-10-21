@@ -819,7 +819,7 @@ index e41b097..dac72f9 100644
 +    }
  }
 diff --git a/crates/gpui_macos/src/metal_atlas.rs b/crates/gpui_macos/src/metal_atlas.rs
-index d007abb..f418f88 100644
+index d007abb..007b965 100644
 --- a/crates/gpui_macos/src/metal_atlas.rs
 +++ b/crates/gpui_macos/src/metal_atlas.rs
 @@ -4,11 +4,21 @@ use derive_more::{Deref, DerefMut};
@@ -1140,7 +1140,7 @@ index d007abb..f418f88 100644
      use std::borrow::Cow;
  
      fn create_atlas() -> Option<MetalAtlas> {
-@@ -396,4 +619,355 @@ mod tests {
+@@ -396,4 +619,365 @@ mod tests {
          let key = make_image_key(999, 0);
          atlas.remove(&key);
      }
@@ -1170,8 +1170,7 @@ index d007abb..f418f88 100644
 +            .expect("stream upload returns a tile")
 +    }
 +
-+    fn stream_slot_textures(atlas: &MetalAtlas, image: &StreamingImage) -> Vec<usize> {
-+        use metal::foreign_types::ForeignType as _;
++    fn stream_slot_textures(atlas: &MetalAtlas, image: &StreamingImage) -> Vec<metal::Texture> {
 +        let lock = atlas.0.lock();
 +        let stream = lock
 +            .streams
@@ -1181,8 +1180,13 @@ index d007abb..f418f88 100644
 +        stream
 +            .slots
 +            .iter()
-+            .map(|slot| slot.texture.as_ptr() as usize)
++            .map(|slot| slot.texture.0.clone())
 +            .collect()
++    }
++
++    fn texture_ptrs(textures: &[metal::Texture]) -> Vec<*mut metal::MTLTexture> {
++        use metal::foreign_types::ForeignType as _;
++        textures.iter().map(|texture| texture.as_ptr()).collect()
 +    }
 +
 +    fn stream_textures_created(atlas: &MetalAtlas) -> u64 {
@@ -1251,7 +1255,10 @@ index d007abb..f418f88 100644
 +
 +        assert_eq!(first.texture_id.kind, AtlasTextureKind::Stream);
 +        assert_eq!(first.bounds.size, size);
-+        assert_eq!(stream_slot_textures(&atlas, &image), textures);
++        assert_eq!(
++            texture_ptrs(&stream_slot_textures(&atlas, &image)),
++            texture_ptrs(&textures)
++        );
 +        assert_eq!(textures.len(), 1);
 +        assert_eq!(stream_textures_created(&atlas), 1);
 +        let (texture, _lease) = atlas.lease_stream_texture(first.texture_id).unwrap();
@@ -1308,8 +1315,11 @@ index d007abb..f418f88 100644
 +
 +        assert_eq!(large.texture_id, small.texture_id);
 +        assert_eq!(large.bounds.size, large_size);
-+        assert_ne!(large_textures, small_textures);
-+        assert_eq!(stream_slot_textures(&atlas, &image), large_textures);
++        assert_ne!(texture_ptrs(&large_textures), texture_ptrs(&small_textures));
++        assert_eq!(
++            texture_ptrs(&stream_slot_textures(&atlas, &image)),
++            texture_ptrs(&large_textures)
++        );
 +        assert_eq!(stream_textures_created(&atlas), 2);
 +    }
 +
