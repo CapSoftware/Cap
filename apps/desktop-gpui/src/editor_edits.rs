@@ -1101,14 +1101,9 @@ pub fn reorder_track_lane(
     }
 }
 
-/// `deleteClipSegment` (`ED/context.ts:581-600`), including the guard that
-/// makes it the one track a selection cannot empty: **the last clip cannot be
-/// deleted**. The Delete binding sorts descending and deletes one at a time
-/// (`TL/index.tsx:993-1000`), so the guard is re-checked per clip and a
-/// "select all + delete" leaves exactly one behind.
 /// Runs a clip edit that ripples the other tracks, then puts the segments of
 /// every locked track back where they were, so locked tracks keep their
-/// timing when clips are deleted, merged or retimed.
+/// timing when clips are deleted, merged, retimed or reordered.
 pub fn with_locked_tracks(
     timeline: &mut TimelineConfiguration,
     locked: &[LockableTimelineTrack],
@@ -1160,6 +1155,11 @@ pub fn lockable_track(kind: TrackKind) -> Option<LockableTimelineTrack> {
     })
 }
 
+/// `deleteClipSegment` (`ED/context.ts:581-600`), including the guard that
+/// makes it the one track a selection cannot empty: **the last clip cannot be
+/// deleted**. The Delete binding sorts descending and deletes one at a time
+/// (`TL/index.tsx:993-1000`), so the guard is re-checked per clip and a
+/// "select all + delete" leaves exactly one behind.
 pub fn delete_clip_segments(timeline: &mut TimelineConfiguration, indices: &[usize]) -> bool {
     let mut deleted = false;
     for index in descending_indices(indices, timeline.segments.len()) {

@@ -2680,7 +2680,7 @@ pub struct ProjectConfiguration {
     #[serde(default)]
     pub text_anim_version: u32,
     /// Timeline tracks that keep their segments in place when clips are
-    /// deleted, trimmed, retimed or given transitions, instead of rippling.
+    /// deleted, merged, retimed or reordered, instead of rippling.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked_tracks: Vec<LockableTimelineTrack>,
 }
