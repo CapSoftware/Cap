@@ -1,0 +1,150 @@
+name: stop-thumb-ab
+
+# Scratch A/B: Studio stop-to-idle latency, main vs perf/gpui-stop-thumbnail-off-critical-path, each with and without PR #2813. Not for main.
+
+on:
+  push:
+    branches: [ci/stop-thumbnail-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+  FIX_SHA: fabb0ca6c319e3f63bceee254b1d78c4b2c115d7
+
+jobs:
+  ab:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: blacksmith-6vcpu-macos-15
+            target: aarch64-apple-darwin
+          - runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage harness and check out main
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/ab"
+          cp -R scripts/stop-thumb-ab/. "$RUNNER_TEMP/ab/"
+          git checkout -f "$MAIN_SHA"
+          cp apps/web/public/illustrations/homepage-animation.mp4 "$RUNNER_TEMP/ab/fixtures/homepage-1368x810.mp4"
+          ls -la "$RUNNER_TEMP/ab/fixtures"
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: false
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build variants
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          build() {
+            local variant=$1 sha=$2 patch=$3
+            git checkout -f "$MAIN_SHA" -- apps/desktop-gpui/src
+            git checkout -f "$sha" -- apps/desktop-gpui/src
+            if [[ "$patch" == 1 ]]; then git apply "$RUNNER_TEMP/ab/pr2813.patch"; fi
+            git diff --stat "$MAIN_SHA" -- apps/desktop-gpui/src
+            cat "$RUNNER_TEMP/ab/bench.rs" >> apps/desktop-gpui/src/recording.rs
+            cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }} --bin cap-gpui --no-run --message-format=json > "$RUNNER_TEMP/build-$variant.json"
+            local exe
+            exe=$("$PY" -I -c 'import json, sys
+          for line in open(sys.argv[1], encoding="utf-8"):
+              try:
+                  m = json.loads(line)
+              except ValueError:
+                  continue
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "cap-gpui" and m["profile"]["test"]:
+                  print(m["executable"])' "$RUNNER_TEMP/build-$variant.json" | tail -1)
+            echo "$variant -> $exe"
+            local ext=""
+            [[ "$RUNNER_OS" == "Windows" ]] && ext=".exe"
+            cp "$exe" "$(dirname "$exe")/stopbench-$variant$ext"
+            echo "$(dirname "$exe")" > "$RUNNER_TEMP/bindir"
+            git checkout -f "$MAIN_SHA" -- apps/desktop-gpui/src
+          }
+          build main "$MAIN_SHA" 0
+          build head "$FIX_SHA" 0
+          build main2813 "$MAIN_SHA" 1
+          build head2813 "$FIX_SHA" 1
+
+      - name: Measure
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+            ext=".exe"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.target }}/debug/Frameworks"
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+            sw_vers; sysctl -n machdep.cpu.brand_string
+            ext=""
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            lscpu | head -20
+            ext=""
+          fi
+          bindir=$(cat "$RUNNER_TEMP/bindir")
+          fx="$RUNNER_TEMP/ab/fixtures"
+          export CAP_STOP_BENCH_SOURCES="$fx/fhd-1920x1080.mp4,$fx/homepage-1368x810.mp4,$fx/qhd-2560x1440.mp4,$fx/smartscreen-2286x2160.mp4,$fx/uhd-3840x2160.mp4"
+          export CAP_STOP_BENCH_RUNS=4
+          export CAP_STOP_BENCH_DIR="$RUNNER_TEMP/bench"
+          export CAP_GPUI_APP_DATA_DIR="$RUNNER_TEMP/appdata"
+          mkdir -p "$CAP_STOP_BENCH_DIR" "$CAP_GPUI_APP_DATA_DIR" "$RUNNER_TEMP/out"
+          for round in 1 2 3 4 5 6 7 8; do
+            case $((round % 4)) in
+              0) order="main head main2813 head2813" ;;
+              1) order="head main head2813 main2813" ;;
+              2) order="main2813 head2813 main head" ;;
+              3) order="head2813 main2813 head main" ;;
+            esac
+            for variant in $order; do
+              CAP_STOP_BENCH_LABEL=$variant CAP_STOP_BENCH_ROUND=$round \
+                "$bindir/stopbench-$variant$ext" stop_bench::bench_studio_stop_to_idle --ignored --nocapture --test-threads=1 \
+                >> "$RUNNER_TEMP/out/log.txt" 2>&1 || { tail -50 "$RUNNER_TEMP/out/log.txt"; exit 1; }
+            done
+          done
+          grep STOPBENCH "$RUNNER_TEMP/out/log.txt" | head -5
+          PY=$(command -v python3 || command -v python)
+          "$PY" -I "$RUNNER_TEMP/ab/aggregate.py" "$RUNNER_TEMP/out/log.txt" | tee "$RUNNER_TEMP/out/summary.md"
+          { echo "## ${{ matrix.runner }}"; cat "$RUNNER_TEMP/out/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stop-thumb-ab-${{ matrix.target }}
+          path: ${{ runner.temp }}/out
