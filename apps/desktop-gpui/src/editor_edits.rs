@@ -732,15 +732,52 @@ fn descending_indices(indices: &[usize], length: usize) -> Vec<usize> {
     sorted
 }
 
-/// Splice out every listed index, highest first.
 fn delete_indices<T>(segments: &mut Vec<T>, indices: &[usize]) -> bool {
+    if let &[index] = indices {
+        if index >= segments.len() {
+            return false;
+        }
+        segments.remove(index);
+        return true;
+    }
+
     let sorted = descending_indices(indices, segments.len());
     if sorted.is_empty() {
         return false;
     }
-    for index in sorted {
-        segments.remove(index);
+    if sorted.len() == 1 {
+        segments.remove(sorted[0]);
+        return true;
     }
+    let first = sorted[sorted.len() - 1];
+    let last = sorted[0];
+    if last - first == sorted.len() - 1 {
+        if last == segments.len() - 1 {
+            segments.truncate(first);
+        } else {
+            segments.drain(first..=last).for_each(drop);
+        }
+        return true;
+    }
+    if sorted.len() == 2 && last == segments.len() - 1 {
+        segments.truncate(last);
+        segments.remove(first);
+        return true;
+    }
+
+    let mut sorted = sorted.into_iter().rev();
+    let mut next = sorted.next();
+    let mut index = first;
+    segments
+        .extract_if(first..=last, |_| {
+            let delete = next == Some(index);
+            if delete {
+                next = sorted.next();
+            }
+            index += 1;
+            delete
+        })
+        .for_each(drop);
     true
 }
 
@@ -3772,6 +3809,82 @@ mod tests {
     }
 
     // -- Delete -------------------------------------------------------------
+
+    #[test]
+    fn selections_preserve_survivors_and_report_changes() {
+        for length in 0..=8 {
+            for mask in 0..(1 << length) {
+                let source: Vec<usize> = (0..length).collect();
+                let selected: Vec<usize> = (0..length)
+                    .rev()
+                    .filter(|index| mask & (1 << index) != 0)
+                    .collect();
+                let expected: Vec<usize> = source
+                    .iter()
+                    .copied()
+                    .filter(|index| !selected.contains(index))
+                    .collect();
+                let indices: Vec<usize> = selected
+                    .iter()
+                    .copied()
+                    .chain(selected.iter().copied())
+                    .chain([length, usize::MAX])
+                    .collect();
+                for indices in [&selected[..], &indices[..]] {
+                    let mut actual = source.clone();
+                    assert_eq!(delete_indices(&mut actual, indices), !selected.is_empty());
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_copy_values_are_dropped_exactly_once() {
+        use std::{cell::RefCell, rc::Rc};
+
+        struct Tracked {
+            index: usize,
+            drops: Rc<RefCell<Vec<usize>>>,
+        }
+
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.drops.borrow_mut()[self.index] += 1;
+            }
+        }
+
+        for indices in [
+            &[4, 1, 4, usize::MAX][..],
+            &[1, 3][..],
+            &[2][..],
+            &[2, 2][..],
+            &[0, 1, 2, 3, 4][..],
+        ] {
+            let drops = Rc::new(RefCell::new(vec![0; 5]));
+            let mut values: Vec<Tracked> = (0..5)
+                .map(|index| Tracked {
+                    index,
+                    drops: drops.clone(),
+                })
+                .collect();
+            assert!(delete_indices(&mut values, indices));
+            assert_eq!(
+                *drops.borrow(),
+                (0..5)
+                    .map(|index| usize::from(indices.contains(&index)))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                values.iter().map(|value| value.index).collect::<Vec<_>>(),
+                (0..5)
+                    .filter(|index| !indices.contains(index))
+                    .collect::<Vec<_>>()
+            );
+            drop(values);
+            assert_eq!(*drops.borrow(), vec![1; 5]);
+        }
+    }
 
     #[test]
     fn deleting_several_indices_removes_exactly_them() {

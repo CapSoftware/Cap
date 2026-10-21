@@ -1304,6 +1304,9 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Task<()>> {
+        if target_thumbnails::captures_paused() {
+            return None;
+        }
         match kind {
             TargetType::Display => {
                 if self.thumbnails.display_inflight() {
@@ -1346,9 +1349,13 @@ impl MainWindow {
                     // `setDisplayThumbnailsSignature` runs
                     // (`new-main/index.tsx:2617-2620`). Committing the
                     // signature at `Listed` time instead would mark a sweep
-                    // that never landed as up to date.
+                    // that never landed as up to date. Likewise a sweep that a
+                    // capture hang cut short: it stays stale so the picker
+                    // retries it once the pause lifts.
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_display_signature(signature);
                         }
                         this.thumbnails.set_display_inflight(false);
@@ -1393,7 +1400,9 @@ impl MainWindow {
                         }
                     }
                     this.update(cx, |this, cx| {
-                        if let Some(signature) = swept {
+                        if let Some(signature) = swept
+                            && !target_thumbnails::captures_paused()
+                        {
                             this.thumbnails.set_window_signature(signature);
                         }
                         this.thumbnails.set_window_inflight(false);
