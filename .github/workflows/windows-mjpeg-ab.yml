@@ -1,0 +1,174 @@
+name: windows-mjpeg-ab
+
+# Scratch A/B: Windows MJPEG camera decode, main vs perf/recording-windows-mjpeg-single-decode. Not for main.
+
+on:
+  push:
+    branches: [ci/windows-mjpeg-single-decode-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+  FIX_REF: perf/recording-windows-mjpeg-single-decode
+
+jobs:
+  bench:
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 150
+    env:
+      RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Stage bench and check out main
+        shell: bash
+        run: |
+          cp -R scripts/windows-mjpeg-ab "$RUNNER_TEMP/windows-mjpeg-ab"
+          git checkout -f "$MAIN_SHA"
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-windows-mjpeg-ab
+          save-cache: "true"
+          cache-on-failure: "true"
+
+      - name: Setup
+        shell: bash
+        run: node scripts/setup.js
+
+      - name: Machine
+        shell: bash
+        run: |
+          set +e
+          powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Format-List Name,NumberOfCores,NumberOfLogicalProcessors"
+          true
+
+      - name: Build both variants
+        shell: bash
+        run: |
+          set +e
+          stage="$RUNNER_TEMP/windows-mjpeg-ab"
+          build() {
+            local variant=$1
+            cp "$stage/mjpeg_ab_bench.rs" crates/recording/src/output_pipeline/mjpeg_ab_bench.rs
+            cp "$stage/attach_$variant.rs" crates/recording/src/output_pipeline/mjpeg_ab_attach.rs
+            printf '\n#[cfg(test)]\n#[path = "mjpeg_ab_bench.rs"]\nmod mjpeg_ab_bench;\n' >> crates/recording/src/output_pipeline/win.rs
+            cargo test --release --locked -p cap-recording --lib --no-run --message-format=json > "$RUNNER_TEMP/build-$variant.json"
+            echo "build $variant exit $?"
+            python3 -I -c 'import json,sys
+          for line in open(sys.argv[1]):
+              try: m = json.loads(line)
+              except ValueError: continue
+              if m.get("reason") == "compiler-message" and m["message"]["level"] == "error":
+                  print(m["message"]["rendered"])' "$RUNNER_TEMP/build-$variant.json"
+            exe=$(python3 -I -c 'import json,sys
+          for line in open(sys.argv[1]):
+              try: m = json.loads(line)
+              except ValueError: continue
+              if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "cap_recording" and m["profile"]["test"]:
+                  print(m["executable"])' "$RUNNER_TEMP/build-$variant.json" | tail -1)
+            echo "$variant executable: $exe"
+            mkdir -p "$RUNNER_TEMP/bin-$variant"
+            cp "$exe" "$RUNNER_TEMP/bin-$variant/bench.exe"
+          }
+          build main
+          git checkout -f "$MAIN_SHA" -- crates/recording
+          git fetch origin "$FIX_REF"
+          git diff --stat "$MAIN_SHA" FETCH_HEAD -- crates
+          git checkout -f FETCH_HEAD -- crates/recording
+          build fix
+          ls -la "$RUNNER_TEMP"/bin-*
+
+      - name: Unit tests (fix)
+        shell: bash
+        run: |
+          set +e
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH"
+          "$RUNNER_TEMP/bin-fix/bench.exe" shared_mjpeg_tests mjpeg::tests --test-threads=1 2>&1 | tee "$RUNNER_TEMP/unit.txt"
+          status=${PIPESTATUS[0]}
+          { echo "### Unit tests (fix)"; echo '```'; grep -E "^test |test result" "$RUNNER_TEMP/unit.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Measure
+        shell: bash
+        run: |
+          set +e
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/release"):$PATH"
+          out="$RUNNER_TEMP/mjpeg-out"
+          mkdir -p "$out"
+          export CAP_AB_OUT="$(cygpath -w "$out")"
+          status=0
+          bench() {
+            "$RUNNER_TEMP/bin-$1/bench.exe" mjpeg_ab_bench --ignored --nocapture --test-threads=1 2>&1 | tee -a "$out/log.txt" | grep -E "^(RESULT|VERIFY)" | tee -a "$out/results.txt"
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+          }
+          for round in 1 2 3 4 5; do
+            for res in 1280x720 1920x1080; do
+              for preview in 1 0; do
+                for variant in main fix; do
+                  CAP_AB_VARIANT=$variant CAP_AB_MODE=cpu CAP_AB_RES=$res CAP_AB_PREVIEW=$preview CAP_AB_ENCODE=0 CAP_AB_FRAMES=600 bench $variant
+                done
+              done
+            done
+          done
+          for round in 1 2 3; do
+            for variant in main fix; do
+              CAP_AB_VARIANT=$variant CAP_AB_MODE=cpu CAP_AB_RES=1920x1080 CAP_AB_PREVIEW=1 CAP_AB_ENCODE=1 CAP_AB_FRAMES=600 bench $variant
+            done
+          done
+          for res in 1280x720 1920x1080; do
+            for preview in 1 0; do
+              for variant in main fix; do
+                CAP_AB_VARIANT=$variant CAP_AB_MODE=verify CAP_AB_RES=$res CAP_AB_PREVIEW=$preview CAP_AB_FRAMES=300 bench $variant
+              done
+            done
+          done
+          python3 -I "$RUNNER_TEMP/windows-mjpeg-ab/aggregate.py" "$out/results.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Compare outputs
+        shell: bash
+        run: |
+          set +e
+          out="$RUNNER_TEMP/mjpeg-out"
+          status=0
+          {
+            echo "### Output identity (main vs fix)"
+            echo
+            for res in 1280x720 1920x1080; do
+              for preview in preview nopreview; do
+                tag="$res-$preview-enc"
+                for kind in input decoded; do
+                  a="$out/main-$tag-$kind.txt"; b="$out/fix-$tag-$kind.txt"
+                  if [ -s "$a" ] && cmp -s "$a" "$b"; then
+                    echo "- $tag $kind frame digests: identical ($(wc -l < "$b") frames)"
+                  else
+                    echo "- $tag $kind frame digests: DIFFER or missing"; status=1
+                  fi
+                done
+                echo "- $tag mp4 md5: main $(md5sum < "$out/main-$tag.mp4" | cut -c1-12), fix $(md5sum < "$out/fix-$tag.mp4" | cut -c1-12)"
+              done
+            done
+            echo
+            echo '```'
+            grep "^VERIFY" "$out/results.txt"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-mjpeg-ab
+          path: ${{ runner.temp }}/mjpeg-out
