@@ -30,6 +30,9 @@
 //!
 //! Deliberate deviations:
 //!
+//! * Windows and Linux capture at full resolution, so a source more than
+//!   eight times the thumbnail is box-averaged before the Lanczos3 pass
+//!   (`cap_gpui_kernels::thumbnail::fit_centered_capture`).
 //! * No base64 and no PNG round-trip. The Tauri command has to hand bytes to a
 //!   webview; here the RGBA buffer goes straight to `RenderImage`, which skips
 //!   a PNG encode and a base64 encode per target per refresh.
@@ -527,6 +530,7 @@ pub fn fitted_capture_size(source: Option<(f64, f64)>) -> (usize, usize) {
 }
 
 /// `normalize_thumbnail_dimensions` (`thumbnails/mod.rs:44-87`), verbatim.
+#[cfg(any(target_os = "macos", test))]
 pub fn normalize_thumbnail_dimensions(image: &RgbaImage) -> RgbaImage {
     cap_gpui_kernels::thumbnail::fit_centered(image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
 }
@@ -1030,8 +1034,6 @@ mod platform {
     use cap_recording::sources::screen_capture::ScreenCaptureTarget;
     use image::RgbaImage;
 
-    use super::normalize_thumbnail_dimensions;
-
     #[derive(Clone)]
     pub struct ShareableContent;
 
@@ -1066,7 +1068,7 @@ mod platform {
         }
 
         let image = match capture_screenshot(target).await {
-            Ok(image) => image.into_rgba8(),
+            Ok(image) => image,
             Err(error) => {
                 tracing::warn!(%error, "target thumbnail capture failed");
                 return None;
@@ -1077,7 +1079,11 @@ mod platform {
             return None;
         }
 
-        Some(normalize_thumbnail_dimensions(&image))
+        Some(cap_gpui_kernels::thumbnail::fit_centered_capture(
+            image,
+            super::THUMBNAIL_WIDTH,
+            super::THUMBNAIL_HEIGHT,
+        ))
     }
 }
 
@@ -1588,6 +1594,7 @@ mod tests {
             assert!(window_needs_capture(&current, changed));
         }
 
+        cache.set_window_signature(window_signature(&list[..2]));
         let reordered = [list[1].clone(), list[0].clone()];
         assert!(cache.windows_stale(&reordered));
         assert!(
