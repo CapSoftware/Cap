@@ -1,0 +1,124 @@
+name: camera-fanout-ab
+
+# Scratch A/B: camera feed fan-out copies, main vs perf/recording-camera-fanout-copies. Not for main.
+
+on:
+  push:
+    branches: [ci/camera-fanout-ab]
+  workflow_dispatch:
+
+env:
+  MAIN_SHA: d16fd199bbe8bd2a1c52fb19bcb3d383e9a2ff61
+  FIX_REF: perf/recording-camera-fanout-copies
+
+jobs:
+  bench:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    env:
+      RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage bench and check out main
+        run: |
+          cp -R scripts/camera-fanout-ab "$RUNNER_TEMP/camera-fanout-ab"
+          git checkout -f "$MAIN_SHA"
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-camera-fanout-ab
+          save-cache: "true"
+
+      - name: Setup
+        run: node scripts/setup.js
+
+      - name: Build both variants
+        run: |
+          set +e
+          build() {
+            local variant=$1
+            cp "$RUNNER_TEMP/camera-fanout-ab/camera-fanout-bench.rs" crates/recording/examples/camera-fanout-bench.rs
+            cargo build --release --locked -p cap-recording --example camera-fanout-bench --features test-utils || exit 1
+            mkdir -p "$RUNNER_TEMP/bin-$variant"
+            cp target/release/examples/camera-fanout-bench "$RUNNER_TEMP/bin-$variant/" || exit 1
+          }
+          build main
+          git fetch origin "$FIX_REF" || exit 1
+          git diff --stat "$MAIN_SHA" FETCH_HEAD -- crates/recording
+          git checkout -f FETCH_HEAD -- crates/recording || exit 1
+          build fix
+
+      - name: Measure
+        run: |
+          set +e
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          out="$RUNNER_TEMP/camera-fanout-out"
+          mkdir -p "$out"
+          nproc; lscpu | grep -E "Model name|^CPU\(s\)" || true
+          status=0
+          for round in 1 2 3 4 5; do
+            for res in "1280 720" "1920 1080"; do
+              for senders in 2 3; do
+                for variant in main fix; do
+                  "$RUNNER_TEMP/bin-$variant/camera-fanout-bench" cpu $res $senders 600 $variant "$out" | tee -a "$out/results.txt" || status=1
+                done
+              done
+            done
+          done
+          for res in "1280 720" "1920 1080"; do
+            for variant in main fix; do
+              "$RUNNER_TEMP/bin-$variant/camera-fanout-bench" verify $res 4 240 $variant "$out" | tee -a "$out/verify.txt" || status=1
+            done
+          done
+          python3 -I "$RUNNER_TEMP/camera-fanout-ab/aggregate.py" "$out/results.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Compare outputs
+        run: |
+          set +e
+          sudo apt-get install -y --no-install-recommends ffmpeg > /dev/null
+          out="$RUNNER_TEMP/camera-fanout-out"
+          status=0
+          {
+            echo "### Output identity"
+            echo
+            for res in 1280x720 1920x1080; do
+              if cmp -s "$out/main-$res-digests.txt" "$out/fix-$res-digests.txt"; then
+                echo "- $res consumer digests (raw, encoder input, BGRA preview): identical ($(wc -l < "$out/fix-$res-digests.txt") frame digests)"
+              else
+                echo "- $res consumer digests: DIFFER"; status=1
+              fi
+              ffmpeg -v error -i "$out/main-$res.mp4" -f framemd5 - > "$out/main-$res.framemd5"
+              ffmpeg -v error -i "$out/fix-$res.mp4" -f framemd5 - > "$out/fix-$res.framemd5"
+              frames=$(grep -vc '^#' "$out/fix-$res.framemd5")
+              if cmp -s "$out/main-$res.framemd5" "$out/fix-$res.framemd5" && [ "$frames" -gt 0 ]; then
+                echo "- $res decoded recording frames (framemd5): identical ($frames frames)"
+              else
+                echo "- $res decoded recording frames: DIFFER"; status=1
+              fi
+              echo "- $res mp4 md5: main $(md5sum < "$out/main-$res.mp4" | cut -c1-12), fix $(md5sum < "$out/fix-$res.mp4" | cut -c1-12)"
+            done
+            echo
+            echo '```'
+            cat "$out/verify.txt"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: camera-fanout-ab
+          path: ${{ runner.temp }}/camera-fanout-out
