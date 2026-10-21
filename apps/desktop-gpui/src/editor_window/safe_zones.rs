@@ -45,14 +45,20 @@ impl SafeZonePlatform {
     }
 }
 
+/// Whether the output is portrait enough for the platform guides to mean
+/// anything: 9:16-ish, not 4:5, square or landscape.
+pub(crate) fn is_portrait_output(output: [u32; 2]) -> bool {
+    let (width, height) = (output[0] as f32, output[1].max(1) as f32);
+    width / height <= 0.7
+}
+
 /// The safe area as fractions of the frame `(x, y, w, h)`, or `None` when the
-/// output isn't portrait enough for the platform guides to mean anything.
+/// output isn't portrait.
 pub(crate) fn safe_zone_rect(
     platform: SafeZonePlatform,
     output: [u32; 2],
 ) -> Option<(f32, f32, f32, f32)> {
-    let (width, height) = (output[0] as f32, output[1].max(1) as f32);
-    if width / height > 0.7 {
+    if !is_portrait_output(output) {
         return None;
     }
     let [top, bottom, left, right] = platform.insets();
@@ -65,16 +71,22 @@ pub(crate) fn safe_zone_rect(
 }
 
 impl EditorWindow {
+    /// The button only exists for portrait output; on any other aspect there
+    /// is nothing for it to draw.
     pub(super) fn render_safe_zone_button(
         &self,
         narrow: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> Option<impl IntoElement> {
+        let output = self.frame_layout?.output_size;
+        if !is_portrait_output(output) {
+            return None;
+        }
         let theme = self.theme;
         let label = self
             .safe_zone
             .map_or("Safe zones", SafeZonePlatform::short_label);
-        ui::EditorButton::plain(&theme, "safe-zones")
+        Some(ui::EditorButton::plain(&theme, "safe-zones")
             .text(&theme)
             .left_icon("icons/smartphone.svg")
             .when(!narrow, |button| button.label(label))
@@ -85,7 +97,7 @@ impl EditorWindow {
                 this.safe_zone = SafeZonePlatform::next(this.safe_zone);
                 cx.notify();
                 window.refresh();
-            }))
+            })))
     }
 
     pub(super) fn render_safe_zone_overlay(&self) -> Option<gpui::AnyElement> {
@@ -99,7 +111,10 @@ impl EditorWindow {
         );
         let origin_x = player.frame.origin.x - player.container.origin.x;
         let origin_y = player.frame.origin.y - player.container.origin.y;
-        let shade = gpui::hsla(0., 0.84, 0.6, 0.22);
+        let theme = self.theme;
+        // Outside the safe area: the playhead's red, faint enough to keep
+        // the frame readable underneath.
+        let shade = Hsla::from(theme.editor.playhead).opacity(0.22);
         let band = |left: f32, top: f32, width: f32, height: f32| {
             div()
                 .absolute()
@@ -130,14 +145,17 @@ impl EditorWindow {
                         .w(px(zw))
                         .h(px(zh))
                         .border_1()
-                        .border_color(gpui::hsla(0., 0., 1., 0.8))
+                        .border_color(Hsla::from(theme.editor.accent))
                         .child(
                             div()
                                 .absolute()
                                 .left(px(6.))
                                 .top(px(4.))
+                                .px(px(4.))
+                                .rounded(px(4.))
+                                .bg(Hsla::from(theme.editor.card).opacity(0.85))
                                 .text_size(px(10.))
-                                .text_color(gpui::hsla(0., 0., 1., 0.9))
+                                .text_color(Hsla::from(theme.editor.text_1))
                                 .child(format!("{} safe zone", platform.label())),
                         ),
                 )
@@ -152,6 +170,10 @@ mod tests {
 
     #[test]
     fn safe_zones_only_apply_to_portrait_output() {
+        assert!(!is_portrait_output([1920, 1080]));
+        assert!(!is_portrait_output([1080, 1080]));
+        assert!(!is_portrait_output([1080, 1350]));
+        assert!(is_portrait_output([1080, 1920]));
         assert!(safe_zone_rect(SafeZonePlatform::Reels, [1920, 1080]).is_none());
         let (x, y, w, h) = safe_zone_rect(SafeZonePlatform::Reels, [1080, 1920]).unwrap();
         assert!((x - 60. / 1080.).abs() < 1e-6);

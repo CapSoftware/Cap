@@ -9808,7 +9808,7 @@ impl EditorWindow {
                     })),
             )
             .child(self.render_frame_button(narrow, cx))
-            .child(self.render_safe_zone_button(narrow, cx))
+            .children(self.render_safe_zone_button(narrow, cx))
     }
 
     /// The preview-resolution control: a segmented `Full | Half | Quarter`.
