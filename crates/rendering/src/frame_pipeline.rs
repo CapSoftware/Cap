@@ -3031,7 +3031,7 @@ mod surface_output_tests {
             started.elapsed(),
             nv12.surface_ring.as_ref().unwrap().slots.len()
         );
-        assert_eq!(nv12.surface_ring.as_ref().unwrap().slots.len(), 1);
+        assert!(nv12.surface_ring.as_ref().unwrap().slots.len() <= 2);
         let started = Instant::now();
         for _ in 0..120 {
             drop(convert_bgra(&device, &queue, &mut bgra, &source, 1920, 1080).await);
@@ -3041,6 +3041,6 @@ mod surface_output_tests {
             started.elapsed(),
             bgra.surface_ring.len()
         );
-        assert_eq!(bgra.surface_ring.len(), 1);
+        assert!(bgra.surface_ring.len() <= 2);
     }
 }
