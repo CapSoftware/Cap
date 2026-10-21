@@ -329,6 +329,7 @@ impl Mp4ExportSettings {
         mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
+        let ab_start = ab_stats::reset();
         let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
         let mut streaming_audio = base.streaming_audio.take();
@@ -521,6 +522,8 @@ impl Mp4ExportSettings {
 
                 match &input.payload {
                     ExportFramePayload::Cpu(nv12_data) => {
+                        let ab_started = std::time::Instant::now();
+                        let mut ab_copied = 0u64;
                         let mut wrapped = wrap_packed_nv12_frame(
                             nv12_data,
                             input.width,
@@ -539,9 +542,11 @@ impl Mp4ExportSettings {
                                     input.y_stride,
                                     input.frame_number as i64,
                                 );
+                                ab_copied = input.width as u64 * input.height as u64 * 3 / 2;
                                 &mut reusable_frame
                             }
                         };
+                        ab_stats::record(ab_started.elapsed(), ab_copied, frame);
                         encoder
                             .queue_video_frame_reusable(frame, &mut converted_frame, Duration::MAX)
                             .map_err(|err| err.to_string())?;
@@ -740,6 +745,7 @@ impl Mp4ExportSettings {
                 .map_err(Mp4PipelineError::message)?;
         }
 
+        ab_stats::report(output_size.0, output_size.1, ab_start);
         Ok(output_path)
     }
 }
@@ -2106,5 +2112,119 @@ mod tests {
             savings_pct > 62.0 && savings_pct < 63.0,
             "NV12 should save ~62.5% vs RGBA, got {savings_pct:.1}%"
         );
+    }
+}
+
+pub(crate) mod ab_stats {
+    use std::io::Write;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static PREP_NS: AtomicU64 = AtomicU64::new(0);
+    static COPY_BYTES: AtomicU64 = AtomicU64::new(0);
+    static FRAMES: AtomicU64 = AtomicU64::new(0);
+    static WRAPPED: AtomicU64 = AtomicU64::new(0);
+    static HASHES: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+    pub fn record(elapsed: std::time::Duration, copied_bytes: u64, frame: &ffmpeg::frame::Video) {
+        PREP_NS.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+        COPY_BYTES.fetch_add(copied_bytes, Ordering::Relaxed);
+        FRAMES.fetch_add(1, Ordering::Relaxed);
+        if copied_bytes == 0 {
+            WRAPPED.fetch_add(1, Ordering::Relaxed);
+        }
+        if std::env::var_os("CAP_AB_HASH_FILE").is_some() {
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let width = frame.width() as usize;
+            for (plane, rows) in [(0usize, frame.height() as usize), (1usize, frame.height() as usize / 2)] {
+                let stride = frame.stride(plane);
+                let data = frame.data(plane);
+                for row in 0..rows {
+                    hasher.write(&data[row * stride..row * stride + width]);
+                }
+            }
+            hasher.write_i64(frame.pts().unwrap_or(-1));
+            HASHES.lock().unwrap().push(hasher.finish());
+        }
+    }
+
+    pub fn reset() -> (std::time::Instant, u64) {
+        PREP_NS.store(0, Ordering::Relaxed);
+        COPY_BYTES.store(0, Ordering::Relaxed);
+        FRAMES.store(0, Ordering::Relaxed);
+        WRAPPED.store(0, Ordering::Relaxed);
+        HASHES.lock().unwrap().clear();
+        cap_rendering::loop_stats::READBACK_COPY_NS.store(0, Ordering::Relaxed);
+        cap_rendering::loop_stats::READBACK_COPY_BYTES.store(0, Ordering::Relaxed);
+        (std::time::Instant::now(), cpu_time_us())
+    }
+
+    pub fn report(width: u32, height: u32, start: (std::time::Instant, u64)) {
+        let wall_ms = start.0.elapsed().as_secs_f64() * 1000.0;
+        let cpu_ms = cpu_time_us().saturating_sub(start.1) as f64 / 1000.0;
+        let frames = FRAMES.load(Ordering::Relaxed);
+        let per = |value: u64| value as f64 / frames.max(1) as f64;
+        let readback_ns = cap_rendering::loop_stats::READBACK_COPY_NS.load(Ordering::Relaxed);
+        let readback_bytes = cap_rendering::loop_stats::READBACK_COPY_BYTES.load(Ordering::Relaxed);
+        let line = format!(
+            "AB_EXPORT size={width}x{height} frames={frames} wrapped={} wall_ms={wall_ms:.0} cpu_ms={cpu_ms:.0} prep_us_per_frame={:.1} avframe_copy_bytes_per_frame={:.0} readback_copy_us_per_frame={:.1} readback_copy_bytes_per_frame={:.0}",
+            WRAPPED.load(Ordering::Relaxed),
+            per(PREP_NS.load(Ordering::Relaxed)) / 1000.0,
+            per(COPY_BYTES.load(Ordering::Relaxed)),
+            per(readback_ns) / 1000.0,
+            per(readback_bytes),
+        );
+        eprintln!("{line}");
+        if let Some(path) = std::env::var_os("CAP_AB_REPORT")
+            && let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+        if let Some(path) = std::env::var_os("CAP_AB_HASH_FILE")
+            && let Ok(mut file) = std::fs::File::create(path)
+        {
+            for hash in HASHES.lock().unwrap().iter() {
+                let _ = writeln!(file, "{hash:016x}");
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cpu_time_us() -> u64 {
+        let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
+            return 0;
+        };
+        let Some(rest) = stat.rsplit_once(')').map(|(_, rest)| rest) else {
+            return 0;
+        };
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        let ticks = |index: usize| fields.get(index).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        (ticks(11) + ticks(12)) * 10_000
+    }
+
+    #[cfg(windows)]
+    fn cpu_time_us() -> u64 {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn GetProcessTimes(
+                process: *mut std::ffi::c_void,
+                creation: *mut u64,
+                exit: *mut u64,
+                kernel: *mut u64,
+                user: *mut u64,
+            ) -> i32;
+        }
+        let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+        unsafe {
+            GetProcessTimes(GetCurrentProcess(), &mut creation, &mut exit, &mut kernel, &mut user);
+        }
+        (kernel + user) / 10
+    }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    fn cpu_time_us() -> u64 {
+        0
     }
 }
