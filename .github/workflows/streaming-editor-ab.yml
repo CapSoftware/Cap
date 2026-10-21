@@ -1,0 +1,90 @@
+name: Streaming editor A/B
+
+on:
+  push:
+    branches:
+      - ci/streaming-editor-ab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  editor-ab:
+    name: Editor A/B (${{ matrix.settings.name }})
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: Windows
+            runner: blacksmith-8vcpu-windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: Linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install software GPU drivers and audio
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri libglx-mesa0 pulseaudio
+
+      - uses: ./.github/actions/engine-verify-setup
+        with:
+          target: ${{ matrix.settings.target }}
+          tier: fast
+
+      - name: Fixture
+        shell: bash
+        run: |
+          cargo run --profile ci-verify -p cap-verify --example streaming-editor-fixture -- "$RUNNER_TEMP/streaming-editor.cap"
+          ls -R "$RUNNER_TEMP/streaming-editor.cap" | head -30
+
+      - name: Rust setup for GPUI
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          prefix-key: v1-rust-gpui
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build
+        shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.settings.target }} --bin cap-gpui
+
+      - name: A/B (Linux, lavapipe and llvmpipe)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          pulseaudio --start --exit-idle-time=-1 || true
+          binary="apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui"
+          xvfb=(xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset")
+          python3 .github/scripts/streaming-editor-ab.py "$binary" "$RUNNER_TEMP/streaming-editor.cap" 3 "Linux lavapipe (Vulkan)" "${xvfb[@]}"
+          echo '{"file_format_version":"1.0.0","ICD":{"library_path":"/nonexistent","api_version":"1.0.0"}}' > "$RUNNER_TEMP/no-vulkan.json"
+          VK_ICD_FILENAMES="$RUNNER_TEMP/no-vulkan.json" VK_DRIVER_FILES="$RUNNER_TEMP/no-vulkan.json" \
+            python3 .github/scripts/streaming-editor-ab.py "$binary" "$RUNNER_TEMP/streaming-editor.cap" 3 "Linux llvmpipe (GL)" "${xvfb[@]}"
+
+      - name: A/B (Windows, WARP)
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          python .github/scripts/streaming-editor-ab.py "apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui.exe" "$(cygpath -w "$RUNNER_TEMP/streaming-editor.cap")" 3 "Windows WARP (D3D11)"

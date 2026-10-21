@@ -158,7 +158,19 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let mut draw_us = Vec::with_capacity(MEASURED_FRAMES);
         let mut built = 0;
         let mut reused = 0;
+        let stats = handle
+            .update(cx, |view, _, _| view.pump_stats())
+            .ok()
+            .flatten();
+        let mut measured_from = None;
         for iteration in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+            if iteration == WARMUP_FRAMES {
+                measured_from = Some((
+                    Instant::now(),
+                    process_cpu_seconds(),
+                    stats.as_ref().map(|stats| stats.snapshot()),
+                ));
+            }
             cx.background_executor().timer(FRAME_INTERVAL).await;
             let elapsed = cx.update(|cx| {
                 let before = handle
@@ -195,6 +207,24 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
             std::process::exit(1);
         }
         draw_bench::report("timeline-bench", scenario.label(), &mut draw_us);
+        if let Some((started, cpu_before, before)) = measured_from {
+            let wall = started.elapsed().as_secs_f64();
+            let cpu = process_cpu_seconds() - cpu_before;
+            let delta = match (stats.as_ref(), before) {
+                (Some(stats), Some(before)) => Some(stats.snapshot().since(before)),
+                _ => None,
+            };
+            println!(
+                "timeline-bench-ab: {} presented={} rendered={} convert_avg_us={:.1} cpu_s={:.3} wall_s={:.3} cpu_pct={:.1}",
+                scenario.label(),
+                delta.map_or(0, |delta| delta.presented),
+                delta.map_or(0, |delta| delta.rendered),
+                delta.map_or(0.0, |delta| delta.convert_micros()),
+                cpu,
+                wall,
+                cpu / wall.max(0.001) * 100.0,
+            );
+        }
         println!(
             "timeline-bench: {} waveform paths built {built} / reused {reused} in {} timed draws",
             scenario.label(),
@@ -203,4 +233,37 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
     }
 
     std::process::exit(0);
+}
+
+#[cfg(unix)]
+fn process_cpu_seconds() -> f64 {
+    let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1e6;
+    seconds(usage.ru_utime) + seconds(usage.ru_stime)
+}
+
+#[cfg(windows)]
+fn process_cpu_seconds() -> f64 {
+    use windows_sys::Win32::{
+        Foundation::FILETIME,
+        System::Threading::{GetCurrentProcess, GetProcessTimes},
+    };
+    let mut creation = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut exit = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut kernel = unsafe { std::mem::zeroed::<FILETIME>() };
+    let mut user = unsafe { std::mem::zeroed::<FILETIME>() };
+    unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    let seconds = |time: FILETIME| {
+        ((time.dwHighDateTime as u64) << 32 | time.dwLowDateTime as u64) as f64 / 1e7
+    };
+    seconds(kernel) + seconds(user)
 }

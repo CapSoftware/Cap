@@ -3145,6 +3145,10 @@ impl EditorWindow {
         cx.notify();
     }
 
+    pub(crate) fn pump_stats(&self) -> Option<Arc<PumpStats>> {
+        self.stats.clone()
+    }
+
     /// The perf gate's line, emitted every time playback stops.
     fn report_playback(&mut self) {
         let (Some((started, before)), Some(stats)) = (self.play_mark.take(), self.stats.as_ref())
