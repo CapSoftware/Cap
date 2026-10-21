@@ -1,0 +1,595 @@
+diff --git a/crates/gpui_macos/src/metal_atlas.rs b/crates/gpui_macos/src/metal_atlas.rs
+index f418f88..0fb4801 100644
+--- a/crates/gpui_macos/src/metal_atlas.rs
++++ b/crates/gpui_macos/src/metal_atlas.rs
+@@ -17,6 +17,9 @@ use std::{
+ };
+ 
+ const MAX_STREAM_TEXTURE_SIZE: i32 = 16384;
++
++pub(crate) static AB_TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
++    std::sync::atomic::AtomicU64::new(0);
+ const SINGLE_SLOT_STREAM_BYTES: u64 = 32 * 1024 * 1024;
+ const SPARE_SLOT_RELEASE_UPLOADS: u32 = 120;
+ 
+@@ -239,6 +242,7 @@ impl MetalAtlasState {
+             metal::MTLStorageMode::Managed
+         });
+         let metal_texture = self.device.new_texture(&texture_descriptor);
++        AB_TEXTURES_CREATED.fetch_add(1, Ordering::Relaxed);
+ 
+         let texture_list = match kind {
+             AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+@@ -436,6 +440,7 @@ impl MetalAtlasStream {
+         } else {
+             metal::MTLStorageMode::Managed
+         });
++        AB_TEXTURES_CREATED.fetch_add(1, Ordering::Relaxed);
+         MetalStreamSlot {
+             texture: AssertSend(device.new_texture(&descriptor)),
+             in_flight: Arc::default(),
+@@ -970,4 +975,149 @@ mod tests {
+         assert!(read_texture(&device, &held).iter().all(|&byte| byte == 1));
+         drop(lease);
+     }
++    mod ab {
++        use std::alloc::{GlobalAlloc, Layout, System};
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        pub static LARGE_ALLOCS: AtomicU64 = AtomicU64::new(0);
++        const LARGE: usize = 64 * 1024;
++
++        struct Counting;
++
++        unsafe impl GlobalAlloc for Counting {
++            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc(layout) }
++            }
++
++            unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc_zeroed(layout) }
++            }
++
++            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++                unsafe { System.dealloc(ptr, layout) }
++            }
++
++            unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++                if new_size >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.realloc(ptr, layout, new_size) }
++            }
++        }
++
++        #[global_allocator]
++        static GLOBAL: Counting = Counting;
++
++        pub const SIZES: [(i32, i32); 5] = [
++            (960, 540),
++            (1248, 702),
++            (1920, 1080),
++            (3840, 2160),
++            (5120, 2880),
++        ];
++        pub const FRAMES: usize = 600;
++
++        pub fn large_allocs() -> u64 {
++            LARGE_ALLOCS.load(Ordering::Relaxed)
++        }
++
++        pub fn report(
++            backend: &str,
++            mode: &str,
++            size: (i32, i32),
++            mut micros: Vec<f64>,
++            large_allocs: u64,
++            textures_created: u64,
++        ) {
++            micros.sort_by(f64::total_cmp);
++            let percentile =
++                |q: f64| micros[((micros.len() - 1) as f64 * q).round() as usize];
++            println!(
++                "AB backend={backend} mode={mode} size={}x{} frames={} p50_us={:.1} p95_us={:.1} large_allocs_per_frame={:.2} textures_created={textures_created}",
++                size.0,
++                size.1,
++                micros.len(),
++                percentile(0.5),
++                percentile(0.95),
++                large_allocs as f64 / micros.len() as f64,
++            );
++        }
++    }
++
++    #[test]
++    #[ignore]
++    fn streaming_image_ab_bench() {
++        let Some(device) = metal::Device::system_default() else {
++            println!("AB backend=metal skipped: no Metal device");
++            return;
++        };
++        let is_apple_gpu = device.supports_family(metal::MTLGPUFamily::Apple1);
++        let backend = if is_apple_gpu {
++            format!("metal-shared({})", device.name())
++        } else {
++            format!("metal-managed({})", device.name())
++        };
++        for (width, height) in ab::SIZES {
++            let size = stream_size(width, height);
++            let source = vec![0x7fu8; (width * height * 4) as usize];
++
++            let atlas = MetalAtlas::new(device.clone(), is_apple_gpu);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            let mut previous: Option<AtlasKey> = None;
++            for frame in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                let mut bytes = Some(source.clone());
++                let key = make_image_key(frame + 1, 0);
++                atlas
++                    .get_or_insert_with(&key, &mut || {
++                        Ok(Some((size, Cow::Owned(bytes.take().unwrap()))))
++                    })
++                    .unwrap();
++                if let Some(previous) = previous.replace(key) {
++                    atlas.remove(&previous);
++                }
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            ab::report(
++                &backend,
++                "old",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++
++            let atlas = MetalAtlas::new(device.clone(), is_apple_gpu);
++            let image = StreamingImage::new(StreamingImageFormat::Bgra8);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            for _ in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                image
++                    .copy_frame(size, width as usize * 4, &source)
++                    .unwrap();
++                let frame = image.current().unwrap();
++                atlas.get_or_update_stream(image.id(), &frame).unwrap();
++                drop(frame);
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            ab::report(
++                &backend,
++                "stream",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++        }
++    }
+ }
+diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
+index 413add7..bff9869 100644
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -23,6 +23,9 @@ fn etagere_point_to_device(point: etagere::Point) -> Point<DevicePixels> {
+ 
+ pub struct WgpuAtlas(Mutex<WgpuAtlasState>);
+ 
++pub(crate) static AB_TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
++    std::sync::atomic::AtomicU64::new(0);
++
+ #[cfg(not(test))]
+ const STREAM_TEXTURE_USAGES: wgpu::TextureUsages =
+     wgpu::TextureUsages::TEXTURE_BINDING.union(wgpu::TextureUsages::COPY_DST);
+@@ -266,6 +269,7 @@ impl WgpuAtlasState {
+         format: wgpu::TextureFormat,
+         swizzle: bool,
+     ) -> WgpuAtlasStream {
++        AB_TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+             label: Some("streaming_image"),
+             size: wgpu::Extent3d {
+@@ -337,6 +341,7 @@ impl WgpuAtlasState {
+             AtlasTextureKind::Stream => unreachable!(),
+         };
+ 
++        AB_TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+             label: Some("atlas"),
+             size: wgpu::Extent3d {
+@@ -1102,4 +1107,206 @@ mod tests {
+             vec![0x30, 0x20, 0x10, 0x40, 0xCC, 0xBB, 0xAA, 0xDD]
+         );
+     }
++    mod ab {
++        use std::alloc::{GlobalAlloc, Layout, System};
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        pub static LARGE_ALLOCS: AtomicU64 = AtomicU64::new(0);
++        const LARGE: usize = 64 * 1024;
++
++        struct Counting;
++
++        unsafe impl GlobalAlloc for Counting {
++            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc(layout) }
++            }
++
++            unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc_zeroed(layout) }
++            }
++
++            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++                unsafe { System.dealloc(ptr, layout) }
++            }
++
++            unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++                if new_size >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.realloc(ptr, layout, new_size) }
++            }
++        }
++
++        #[global_allocator]
++        static GLOBAL: Counting = Counting;
++
++        pub const SIZES: [(i32, i32); 5] = [
++            (960, 540),
++            (1248, 702),
++            (1920, 1080),
++            (3840, 2160),
++            (5120, 2880),
++        ];
++        pub const FRAMES: usize = 600;
++
++        pub fn large_allocs() -> u64 {
++            LARGE_ALLOCS.load(Ordering::Relaxed)
++        }
++
++        pub fn report(
++            backend: &str,
++            mode: &str,
++            size: (i32, i32),
++            mut micros: Vec<f64>,
++            large_allocs: u64,
++            textures_created: u64,
++        ) {
++            micros.sort_by(f64::total_cmp);
++            let percentile =
++                |q: f64| micros[((micros.len() - 1) as f64 * q).round() as usize];
++            println!(
++                "AB backend={backend} mode={mode} size={}x{} frames={} p50_us={:.1} p95_us={:.1} large_allocs_per_frame={:.2} textures_created={textures_created}",
++                size.0,
++                size.1,
++                micros.len(),
++                percentile(0.5),
++                percentile(0.95),
++                large_allocs as f64 / micros.len() as f64,
++            );
++        }
++    }
++
++    #[test]
++    #[ignore]
++    fn streaming_image_ab_bench() {
++        use std::sync::atomic::Ordering;
++        let (device, queue, backend, color_format) = match block_on(async {
++            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
++                backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
++                flags: wgpu::InstanceFlags::default(),
++                backend_options: wgpu::BackendOptions::default(),
++                memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
++                display: None,
++            });
++            let adapter = instance
++                .request_adapter(&wgpu::RequestAdapterOptions {
++                    power_preference: wgpu::PowerPreference::LowPower,
++                    compatible_surface: None,
++                    force_fallback_adapter: false,
++                })
++                .await
++                .map_err(|error| anyhow::anyhow!("{error}"))?;
++            let usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
++            let color_format = if adapter
++                .get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm)
++                .allowed_usages
++                .contains(usages)
++            {
++                wgpu::TextureFormat::Bgra8Unorm
++            } else {
++                wgpu::TextureFormat::Rgba8Unorm
++            };
++            let info = adapter.get_info();
++            let backend = format!("wgpu-{:?}({},{:?})", info.backend, info.name, color_format);
++            let (device, queue) = adapter
++                .request_device(&wgpu::DeviceDescriptor {
++                    label: Some("ab"),
++                    required_features: wgpu::Features::empty(),
++                    required_limits: wgpu::Limits::downlevel_defaults()
++                        .using_resolution(adapter.limits())
++                        .using_alignment(adapter.limits()),
++                    memory_hints: wgpu::MemoryHints::MemoryUsage,
++                    trace: wgpu::Trace::Off,
++                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
++                })
++                .await
++                .map_err(|error| anyhow::anyhow!("{error}"))?;
++            anyhow::Ok((Arc::new(device), Arc::new(queue), backend, color_format))
++        }) {
++            Ok(result) => result,
++            Err(error) => {
++                println!("AB backend=wgpu skipped: {error}");
++                return;
++            }
++        };
++        let finish_frame = || {
++            queue.submit(std::iter::empty());
++            device.poll(wgpu::PollType::Poll).ok();
++        };
++        for (width, height) in ab::SIZES {
++            let size = stream_size(width, height);
++            if width as u32 > device.limits().max_texture_dimension_2d {
++                println!("AB backend={backend} size={width}x{height} skipped: above texture limit");
++                continue;
++            }
++            let source = vec![0x7fu8; (width * height * 4) as usize];
++
++            let atlas = WgpuAtlas::new(device.clone(), queue.clone(), color_format);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            let mut previous: Option<AtlasKey> = None;
++            for frame in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                let mut bytes = Some(source.clone());
++                let key = AtlasKey::Image(RenderImageParams {
++                    image_id: ImageId(frame + 1),
++                    frame_index: 0,
++                });
++                atlas
++                    .get_or_insert_with(&key, &mut || {
++                        Ok(Some((size, Cow::Owned(bytes.take().unwrap()))))
++                    })
++                    .unwrap();
++                if let Some(previous) = previous.replace(key) {
++                    atlas.remove(&previous);
++                }
++                atlas.before_frame();
++                finish_frame();
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            device.poll(wgpu::PollType::wait_indefinitely()).ok();
++            ab::report(
++                &backend,
++                "old",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++
++            let atlas = WgpuAtlas::new(device.clone(), queue.clone(), color_format);
++            let image = StreamingImage::new(StreamingImageFormat::Bgra8);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            for _ in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                image
++                    .copy_frame(size, width as usize * 4, &source)
++                    .unwrap();
++                let frame = image.current().unwrap();
++                atlas.get_or_update_stream(image.id(), &frame).unwrap();
++                drop(frame);
++                atlas.before_frame();
++                finish_frame();
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            device.poll(wgpu::PollType::wait_indefinitely()).ok();
++            ab::report(
++                &backend,
++                "stream",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++        }
++    }
+ }
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index cea181d..56b0b4a 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -16,6 +16,9 @@ use gpui::{
+ 
+ const MAX_STREAM_TEXTURE_SIZE: i32 = 16384;
+ 
++pub(crate) static AB_TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
++    std::sync::atomic::AtomicU64::new(0);
++
+ pub(crate) struct DirectXAtlas(Mutex<DirectXAtlasState>);
+ 
+ struct DirectXAtlasState {
+@@ -265,6 +268,7 @@ impl DirectXAtlasState {
+         };
+         let mut texture: Option<ID3D11Texture2D> = None;
+         unsafe {
++            AB_TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+             // This only returns None if the device is lost, which we will recreate later.
+             // So it's ok to return None here.
+             self.device
+@@ -408,6 +412,7 @@ impl DirectXAtlasState {
+         };
+         let mut texture: Option<ID3D11Texture2D> = None;
+         let mut view = None;
++        AB_TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         unsafe {
+             self.device
+                 .CreateTexture2D(&texture_desc, None, Some(&mut texture))
+@@ -884,4 +889,147 @@ mod tests {
+             1
+         );
+     }
++    mod ab {
++        use std::alloc::{GlobalAlloc, Layout, System};
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        pub static LARGE_ALLOCS: AtomicU64 = AtomicU64::new(0);
++        const LARGE: usize = 64 * 1024;
++
++        struct Counting;
++
++        unsafe impl GlobalAlloc for Counting {
++            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc(layout) }
++            }
++
++            unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++                if layout.size() >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.alloc_zeroed(layout) }
++            }
++
++            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++                unsafe { System.dealloc(ptr, layout) }
++            }
++
++            unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
++                if new_size >= LARGE {
++                    LARGE_ALLOCS.fetch_add(1, Ordering::Relaxed);
++                }
++                unsafe { System.realloc(ptr, layout, new_size) }
++            }
++        }
++
++        #[global_allocator]
++        static GLOBAL: Counting = Counting;
++
++        pub const SIZES: [(i32, i32); 5] = [
++            (960, 540),
++            (1248, 702),
++            (1920, 1080),
++            (3840, 2160),
++            (5120, 2880),
++        ];
++        pub const FRAMES: usize = 600;
++
++        pub fn large_allocs() -> u64 {
++            LARGE_ALLOCS.load(Ordering::Relaxed)
++        }
++
++        pub fn report(
++            backend: &str,
++            mode: &str,
++            size: (i32, i32),
++            mut micros: Vec<f64>,
++            large_allocs: u64,
++            textures_created: u64,
++        ) {
++            micros.sort_by(f64::total_cmp);
++            let percentile =
++                |q: f64| micros[((micros.len() - 1) as f64 * q).round() as usize];
++            println!(
++                "AB backend={backend} mode={mode} size={}x{} frames={} p50_us={:.1} p95_us={:.1} large_allocs_per_frame={:.2} textures_created={textures_created}",
++                size.0,
++                size.1,
++                micros.len(),
++                percentile(0.5),
++                percentile(0.95),
++                large_allocs as f64 / micros.len() as f64,
++            );
++        }
++    }
++
++    #[test]
++    #[ignore]
++    fn streaming_image_ab_bench() {
++        use std::sync::atomic::Ordering;
++        let Some((device, device_context)) = create_device() else {
++            println!("AB backend=d3d11 skipped: no WARP device");
++            return;
++        };
++        let backend = "d3d11-warp";
++        for (width, height) in ab::SIZES {
++            let size = stream_size(width, height);
++            let source = vec![0x7fu8; (width * height * 4) as usize];
++
++            let atlas = DirectXAtlas::new(&device, &device_context);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            let mut previous: Option<AtlasKey> = None;
++            for frame in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                let mut bytes = Some(source.clone());
++                let key = make_image_key(frame + 1);
++                atlas
++                    .get_or_insert_with(&key, &mut || {
++                        Ok(Some((size, Cow::Owned(bytes.take().unwrap()))))
++                    })
++                    .unwrap();
++                if let Some(previous) = previous.replace(key) {
++                    atlas.remove(&previous);
++                }
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            unsafe { device_context.Flush() };
++            ab::report(
++                backend,
++                "old",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++
++            let atlas = DirectXAtlas::new(&device, &device_context);
++            let image = StreamingImage::new(StreamingImageFormat::Bgra8);
++            let mut micros = Vec::with_capacity(ab::FRAMES);
++            let textures = AB_TEXTURES_CREATED.load(Ordering::Relaxed);
++            let large = ab::large_allocs();
++            for _ in 0..ab::FRAMES {
++                let started = std::time::Instant::now();
++                image
++                    .copy_frame(size, width as usize * 4, &source)
++                    .unwrap();
++                let frame = image.current().unwrap();
++                atlas.get_or_update_stream(image.id(), &frame).unwrap();
++                drop(frame);
++                micros.push(started.elapsed().as_secs_f64() * 1e6);
++            }
++            unsafe { device_context.Flush() };
++            ab::report(
++                backend,
++                "stream",
++                (width, height),
++                micros,
++                ab::large_allocs() - large,
++                AB_TEXTURES_CREATED.load(Ordering::Relaxed) - textures,
++            );
++        }
++    }
+ }

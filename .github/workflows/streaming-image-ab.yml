@@ -1,0 +1,65 @@
+name: Streaming image A/B
+
+on:
+  push:
+    branches:
+      - ci/streaming-image-ab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atlas-bench:
+    name: Atlas A/B (${{ matrix.settings.name }})
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS Apple
+            runner: blacksmith-6vcpu-macos-15
+          - name: macOS Intel
+            runner: macos-26-intel
+          - name: Windows
+            runner: blacksmith-8vcpu-windows-2025
+          - name: Linux
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    env:
+      CARGO_PROFILE_RELEASE_FAST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install software GPU drivers
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 libegl1 libegl-mesa0 libgl1-mesa-dri
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: ./scripts/prepare-gpui-dependency.sh
+
+      - name: Run atlas A/B
+        shell: bash
+        working-directory: ../zed-cap
+        run: |
+          run() { cargo +1.95.0 test --profile release-fast "$@" streaming_image_ab -- --ignored --nocapture --test-threads=1 | tee -a "$RUNNER_TEMP/ab.txt"; }
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            run -p gpui_macos --lib
+            run -p gpui_wgpu --lib
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            run -p gpui_windows --lib
+            run -p gpui_wgpu --lib
+          else
+            WGPU_BACKEND=vulkan run -p gpui_wgpu --lib
+            WGPU_BACKEND=gl run -p gpui_wgpu --lib
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep '^AB ' "$RUNNER_TEMP/ab.txt" >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
