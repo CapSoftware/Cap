@@ -1,4 +1,5 @@
 import { DISCORD_URL } from "@/components/pages/about/content";
+import { homepageOgImageUrl } from "@/components/pages/HomeTwo/metadata";
 
 export const discordLinkPreview = {
 	component: {
@@ -18,6 +19,10 @@ export const discordLinkPreview = {
 					type: 11,
 					media: { url: "https://cap.so/apple-touch-icon.png" },
 				},
+			},
+			{
+				type: 12,
+				items: [{ media: { url: homepageOgImageUrl } }],
 			},
 			{
 				type: 1,

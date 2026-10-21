@@ -8,7 +8,10 @@ import {
 	DiscordLinkPreview,
 	discordLinkPreview,
 } from "@/components/pages/HomeTwo/DiscordLinkPreview";
-import { homePageMetadata } from "@/components/pages/HomeTwo/metadata";
+import {
+	homePageMetadata,
+	homepageOgImageUrl,
+} from "@/components/pages/HomeTwo/metadata";
 import { HomeTwoSchema } from "@/components/pages/HomeTwo/Schema";
 import { homepageSchema, homepageSeo } from "@/components/pages/HomeTwo/seo";
 import { PRICING } from "@/data/pricing";
@@ -96,5 +99,6 @@ describe("homepage SEO", () => {
 		expect(JSON.parse(json ?? "")).toEqual(discordLinkPreview);
 		expect(JSON.stringify(discordLinkPreview)).toContain("Join our Discord");
 		expect(JSON.stringify(discordLinkPreview)).toContain(DISCORD_URL);
+		expect(JSON.stringify(discordLinkPreview)).toContain(homepageOgImageUrl);
 	});
 });
