@@ -616,21 +616,12 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
         .collect()
 }
 
-/// `kCGWindowLevelForKey(kCGFloatingWindowLevelKey)`: the level a regular app
-/// window moves to when it is raised with "Stay on Top" (NSFloatingWindowLevel).
+// NSFloatingWindowLevel is 3; Stay On Top moves Simulator windows to this level.
 #[cfg(target_os = "macos")]
-pub const MACOS_FLOATING_WINDOW_LEVEL: i32 = 3;
-
-/// Whether a window at `level` is a regular, pickable app window on macOS:
-/// the normal level or a floating ("Stay on Top") one. Menu bar extras,
-/// overlays and other system levels sit above that.
-#[cfg(target_os = "macos")]
-pub fn is_pickable_macos_window_level(level: Option<i32>) -> bool {
-    matches!(level, Some(level) if (0..=MACOS_FLOATING_WINDOW_LEVEL).contains(&level))
-}
+const MACOS_FLOATING_WINDOW_LEVEL: i32 = 3;
 
 #[cfg(target_os = "macos")]
-fn is_listable_macos_window(
+pub fn is_listable_macos_window(
     level: Option<i32>,
     owner_name: &str,
     bundle_identifier: Option<&str>,
@@ -655,7 +646,7 @@ fn is_listable_macos_window(
             && is_third_party_bundle;
     }
 
-    is_pickable_macos_window_level(level)
+    level == Some(MACOS_FLOATING_WINDOW_LEVEL)
         && bundle_identifier.is_some_and(|identifier| !identifier.starts_with("so.cap.desktop"))
 }
 
@@ -899,17 +890,72 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn macos_pickable_levels_are_normal_and_floating_only() {
-        assert!(is_pickable_macos_window_level(Some(0)));
-        assert!(is_pickable_macos_window_level(Some(
-            MACOS_FLOATING_WINDOW_LEVEL
-        )));
-        assert!(!is_pickable_macos_window_level(Some(
-            MACOS_FLOATING_WINDOW_LEVEL + 1
-        )));
-        assert!(!is_pickable_macos_window_level(Some(-1)));
-        assert!(!is_pickable_macos_window_level(Some(25)));
-        assert!(!is_pickable_macos_window_level(None));
+    fn macos_window_filter_preserves_normal_windows_and_rejects_other_levels() {
+        for accessory in [false, true] {
+            assert!(is_listable_macos_window(
+                Some(0),
+                "Example",
+                None,
+                false,
+                accessory
+            ));
+        }
+        for level in [None, Some(-1), Some(1), Some(2), Some(4), Some(25)] {
+            for include_accessory_panels in [false, true] {
+                assert!(!is_listable_macos_window(
+                    level,
+                    "Example",
+                    Some("com.example.app"),
+                    include_accessory_panels,
+                    false,
+                ));
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_window_filter_preserves_accessory_panel_exclusions() {
+        for level in [Some(3), Some(25)] {
+            for bundle in [
+                None,
+                Some("com.apple.controlcenter"),
+                Some("so.cap.desktop.dev"),
+            ] {
+                for include_accessory_panels in [false, true] {
+                    assert!(!is_listable_macos_window(
+                        level,
+                        "Panel",
+                        bundle,
+                        include_accessory_panels,
+                        true,
+                    ));
+                }
+            }
+            assert!(!is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                false,
+                true,
+            ));
+            assert!(is_listable_macos_window(
+                level,
+                "Panel",
+                Some("com.example.app"),
+                true,
+                true,
+            ));
+        }
+        for level in [Some(0), Some(3)] {
+            assert!(!is_listable_macos_window(
+                level,
+                "Window Server",
+                Some("com.example.app"),
+                false,
+                false,
+            ));
+        }
     }
 
     #[test]
