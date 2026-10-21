@@ -11,6 +11,7 @@ mod display;
 mod frame;
 mod image;
 mod keyboard;
+mod keycap;
 mod mask;
 mod notch;
 mod text;

@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::XY;
+use cap_project::{KeyboardSettings, KeyboardStyle, XY};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -7,7 +7,10 @@ use glyphon::{
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
-use super::captions::{CaptionOverlayLayout, CaptionPosition};
+use super::{
+    captions::{CaptionOverlayLayout, CaptionPosition},
+    keycap::{KeycapUniform, KeycapUniforms, keycap_palette, layout_keycaps, parse_keycaps},
+};
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 #[repr(C)]
@@ -149,6 +152,38 @@ fn resolve_background_top(
     adjusted_top.clamp(0.0, max_top)
 }
 
+fn place_overlay(
+    position: KeyboardPosition,
+    caption_layout: Option<CaptionOverlayLayout>,
+    (width, height): (f32, f32),
+    margin: f32,
+    (box_width, box_height): (f32, f32),
+    bounce_offset: f32,
+) -> (f32, f32) {
+    let resolved_position = resolve_keyboard_position(position, caption_layout);
+
+    let left = match resolved_position {
+        KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => margin,
+        KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+            (width - margin - box_width).max(0.0)
+        }
+        _ => ((width - box_width) / 2.0).max(0.0),
+    };
+
+    let center_y = height * resolved_position.y_factor();
+    let max_top = (height - box_height).max(0.0);
+    let base_top = (center_y - box_height / 2.0).clamp(0.0, max_top);
+    let top = resolve_background_top(
+        (base_top + bounce_offset).clamp(0.0, max_top),
+        box_height,
+        height,
+        position,
+        caption_layout,
+    );
+
+    (left, top)
+}
+
 #[derive(PartialEq)]
 struct ShapedKeyboardText {
     text: String,
@@ -158,6 +193,39 @@ struct ShapedKeyboardText {
     weight: Weight,
 }
 
+#[derive(PartialEq)]
+struct ShapedKeycapLegends {
+    labels: Vec<String>,
+    font_sizes: Vec<u32>,
+    family: Family<'static>,
+    weight: Weight,
+}
+
+struct KeycapDraw {
+    count: u32,
+    scissor: [u32; 4],
+}
+
+const KEYCAP_LEGEND_UNITS: f32 = 26.0;
+const KEYCAP_BLEED_UNITS: f32 = 10.0;
+const KEYCAP_SYMBOL_BOOST: f32 = 1.35;
+const KEYCAP_LEGEND_AXIS: f32 = 0.35;
+
+struct KeycapRequest<'a> {
+    settings: &'a KeyboardSettings,
+    text: &'a str,
+    font_size: f32,
+    opacity: f32,
+    bounce_offset: f32,
+    position: KeyboardPosition,
+    caption_layout: Option<CaptionOverlayLayout>,
+    output_size: (u32, u32),
+    margin: f32,
+    family: Family<'static>,
+    weight: Weight,
+    constants: &'a RenderVideoConstants,
+}
+
 pub struct KeyboardLayer {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -165,6 +233,12 @@ pub struct KeyboardLayer {
     text_renderer: TextRenderer,
     text_buffer: Buffer,
     shaped: Option<ShapedKeyboardText>,
+    keycap_buffers: Vec<Buffer>,
+    shaped_keycaps: Option<ShapedKeycapLegends>,
+    keycap_pipeline: wgpu::RenderPipeline,
+    keycap_bind_group: wgpu::BindGroup,
+    keycap_uniform_buffer: wgpu::Buffer,
+    keycap_draw: Option<KeycapDraw>,
     viewport: Viewport,
     background_pipeline: wgpu::RenderPipeline,
     background_bind_group: wgpu::BindGroup,
@@ -271,7 +345,82 @@ impl KeyboardLayer {
             cache: None,
         });
 
+        let keycap_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Keycap Uniform Buffer"),
+            size: std::mem::size_of::<KeycapUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let keycap_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Keycap Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let keycap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Keycap Bind Group"),
+            layout: &keycap_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: keycap_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let keycap_shader = device.create_shader_module(include_wgsl!("../shaders/keycap.wgsl"));
+
+        let keycap_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Keycap Pipeline Layout"),
+                bind_group_layouts: &[&keycap_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let keycap_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Keycap Pipeline"),
+            layout: Some(&keycap_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &keycap_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &keycap_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
+            keycap_buffers: Vec::new(),
+            shaped_keycaps: None,
+            keycap_pipeline,
+            keycap_bind_group,
+            keycap_uniform_buffer,
+            keycap_draw: None,
             font_system,
             swash_cache,
             text_atlas,
@@ -298,6 +447,7 @@ impl KeyboardLayer {
     ) {
         self.has_content = false;
         self.background_scissor = None;
+        self.keycap_draw = None;
         self.output_size = (output_size.x, output_size.y);
 
         let Some(keyboard_data) = &uniforms.project.keyboard else {
@@ -433,6 +583,24 @@ impl KeyboardLayer {
             (text_alpha * 255.0) as u8,
         );
 
+        if settings.style == KeyboardStyle::Apple {
+            self.prepare_keycaps(KeycapRequest {
+                settings,
+                text: &visible_text,
+                font_size,
+                opacity: text_alpha,
+                bounce_offset: bounce_offset as f32,
+                position,
+                caption_layout,
+                output_size: (width, height),
+                margin,
+                family: font_family,
+                weight,
+                constants,
+            });
+            return;
+        }
+
         let shaped = ShapedKeyboardText {
             text: visible_text,
             font_size: font_size.to_bits(),
@@ -474,25 +642,13 @@ impl KeyboardLayer {
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
         let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
 
-        let resolved_position = resolve_keyboard_position(position, caption_layout);
-
-        let background_left = match resolved_position {
-            KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => margin,
-            KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
-                (width as f32 - margin - box_width).max(0.0)
-            }
-            _ => ((width as f32 - box_width) / 2.0).max(0.0),
-        };
-
-        let center_y = height as f32 * resolved_position.y_factor();
-        let max_background_top = (height as f32 - box_height).max(0.0);
-        let base_background_top = (center_y - box_height / 2.0).clamp(0.0, max_background_top);
-        let background_top = resolve_background_top(
-            (base_background_top + bounce_offset as f32).clamp(0.0, max_background_top),
-            box_height,
-            height as f32,
+        let (background_left, background_top) = place_overlay(
             position,
             caption_layout,
+            (width as f32, height as f32),
+            margin,
+            (box_width, box_height),
+            bounce_offset as f32,
         );
 
         let text_left = background_left + padding;
@@ -583,12 +739,177 @@ impl KeyboardLayer {
         self.has_content = true;
     }
 
+    fn prepare_keycaps(&mut self, request: KeycapRequest<'_>) {
+        let (width, height) = request.output_size;
+        let keys = parse_keycaps(request.text);
+        if keys.is_empty() {
+            return;
+        }
+
+        let key_height = request.font_size * 1.5;
+        let available_width = (width as f32 - request.margin * 2.0).max(1.0);
+        let layout = layout_keycaps(&keys, key_height, available_width);
+        let (left, top) = place_overlay(
+            request.position,
+            request.caption_layout,
+            (width as f32, height as f32),
+            request.margin,
+            (layout.width, layout.height),
+            request.bounce_offset,
+        );
+
+        let device = &request.constants.device;
+        let queue = &request.constants.queue;
+        let legend_sizes: Vec<f32> = keys
+            .iter()
+            .map(|key| {
+                let boost = if key.is_symbol() {
+                    KEYCAP_SYMBOL_BOOST
+                } else {
+                    1.0
+                };
+                (layout.scale * KEYCAP_LEGEND_UNITS * boost).max(1.0)
+            })
+            .collect();
+
+        let shaped = ShapedKeycapLegends {
+            labels: keys.iter().map(|key| key.label.clone()).collect(),
+            font_sizes: legend_sizes.iter().map(|size| size.to_bits()).collect(),
+            family: request.family,
+            weight: request.weight,
+        };
+        if self.shaped_keycaps.as_ref() != Some(&shaped) {
+            self.keycap_buffers = shaped
+                .labels
+                .iter()
+                .zip(&legend_sizes)
+                .map(|(label, &legend_size)| {
+                    let mut buffer = Buffer::new(
+                        &mut self.font_system,
+                        Metrics::new(legend_size, legend_size * 1.2),
+                    );
+                    buffer.set_size(&mut self.font_system, None, None);
+                    buffer.set_text(
+                        &mut self.font_system,
+                        label,
+                        &Attrs::new().family(request.family).weight(request.weight),
+                        Shaping::Advanced,
+                    );
+                    buffer
+                })
+                .collect();
+            self.shaped_keycaps = Some(shaped);
+        }
+
+        let mut uniforms = KeycapUniforms::zeroed();
+        uniforms.viewport = [width as f32, height as f32, 0.0, 0.0];
+
+        let mut text_areas = Vec::with_capacity(keys.len());
+        for (index, (((key, placed), buffer), &legend_size)) in keys
+            .iter()
+            .zip(&layout.keys)
+            .zip(&self.keycap_buffers)
+            .zip(&legend_sizes)
+            .enumerate()
+        {
+            let palette = keycap_palette(request.settings.keycap_theme, key.modifier);
+            uniforms.keys[index] =
+                KeycapUniform::new(*placed, left, top, layout.scale, &palette, request.opacity);
+
+            let legend_width: f32 = glyphon::cosmic_text::LayoutRunIter::new(buffer)
+                .map(|run| run.line_w)
+                .fold(0.0, f32::max);
+            let legend_left = left + placed.x + (placed.width - legend_width) / 2.0;
+            let baseline = glyphon::cosmic_text::LayoutRunIter::new(buffer)
+                .next()
+                .map_or(legend_size, |run| run.line_y);
+            let legend_top =
+                top + layout.cap_center_y() + legend_size * KEYCAP_LEGEND_AXIS - baseline;
+            text_areas.push(TextArea {
+                buffer,
+                left: legend_left,
+                top: legend_top,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: (left + placed.x).floor() as i32,
+                    top: top.floor() as i32,
+                    right: (left + placed.x + placed.width).ceil() as i32,
+                    bottom: (top + layout.height).ceil() as i32,
+                },
+                default_color: Color::rgba(
+                    (palette.text[0] * 255.0) as u8,
+                    (palette.text[1] * 255.0) as u8,
+                    (palette.text[2] * 255.0) as u8,
+                    (request.opacity.clamp(0.0, 1.0) * 255.0) as u8,
+                ),
+                custom_glyphs: &[],
+            });
+        }
+
+        self.viewport.update(queue, Resolution { width, height });
+
+        if let Err(e) = self.text_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.text_atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+        ) {
+            warn!("Error preparing keycap legends: {e:?}");
+        }
+
+        queue.write_buffer(
+            &self.keycap_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        let bleed = KEYCAP_BLEED_UNITS * layout.scale;
+        let scissor_x = (left - bleed).max(0.0).floor() as u32;
+        let scissor_y = (top - bleed).max(0.0).floor() as u32;
+        let scissor_width =
+            ((layout.width + bleed * 2.0).ceil() as u32).min(width.saturating_sub(scissor_x));
+        let scissor_height =
+            ((layout.height + bleed * 2.0).ceil() as u32).min(height.saturating_sub(scissor_y));
+        if scissor_width == 0 || scissor_height == 0 {
+            return;
+        }
+
+        self.keycap_draw = Some(KeycapDraw {
+            count: keys.len() as u32,
+            scissor: [scissor_x, scissor_y, scissor_width, scissor_height],
+        });
+        self.has_content = true;
+    }
+
     pub fn has_content(&self) -> bool {
         self.has_content
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_content {
+            return;
+        }
+
+        if let Some(draw) = &self.keycap_draw {
+            let [x, y, width, height] = draw.scissor;
+            pass.set_scissor_rect(x, y, width, height);
+            pass.set_pipeline(&self.keycap_pipeline);
+            pass.set_bind_group(0, &self.keycap_bind_group, &[]);
+            pass.draw(0..6, 0..draw.count);
+
+            if let Err(e) = self
+                .text_renderer
+                .render(&self.text_atlas, &self.viewport, pass)
+            {
+                warn!("Error rendering keycap legends: {e:?}");
+            }
+
+            if self.output_size.0 > 0 && self.output_size.1 > 0 {
+                pass.set_scissor_rect(0, 0, self.output_size.0, self.output_size.1);
+            }
             return;
         }
 
@@ -1029,6 +1350,40 @@ mod gpu_tests {
         let pixels = readback.slice(..).get_mapped_range().to_vec();
         readback.unmap();
         pixels
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn keycap_style_draws_keys_instead_of_the_text_pill() {
+        let size = XY::new(1280, 720);
+        let constants = constants(size);
+        let segments = [typed_segment("shortcut", 0.0, "⌘⇧T", 90.0)];
+        let mut uniforms = uniforms(&constants, &segments, size);
+        uniforms.frame_number = (0.3 * FPS as f64) as u32;
+        let frames = frames(size);
+
+        let mut text_layer = KeyboardLayer::new(&constants.device, &constants.queue);
+        text_layer.prepare(&uniforms, &frames, size, &constants, None);
+        let text_pixels = render_pixels(&constants, &text_layer, size);
+
+        for theme in [
+            cap_project::KeycapTheme::Black,
+            cap_project::KeycapTheme::White,
+        ] {
+            let keyboard = std::sync::Arc::make_mut(&mut uniforms.project)
+                .keyboard
+                .as_mut()
+                .unwrap();
+            keyboard.settings.style = cap_project::KeyboardStyle::Apple;
+            keyboard.settings.keycap_theme = theme;
+
+            let mut keycap_layer = KeyboardLayer::new(&constants.device, &constants.queue);
+            keycap_layer.prepare(&uniforms, &frames, size, &constants, None);
+            assert!(keycap_layer.has_content());
+            let keycap_pixels = render_pixels(&constants, &keycap_layer, size);
+            assert_ne!(keycap_pixels, text_pixels);
+            assert!(keycap_pixels.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        }
     }
 
     #[test]
